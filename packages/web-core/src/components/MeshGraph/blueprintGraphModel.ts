@@ -19,7 +19,7 @@ import { queueTaskDisplayText } from '../../utils/queue-task-label'
  * Task tone — the node colour. `dead` = pending but can never start on its own
  * because a dependency (directly or transitively) failed/was cancelled.
  */
-export type BlueprintGraphTaskTone = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'dead'
+export type BlueprintGraphTaskTone = 'pending' | 'running' | 'completed' | 'blocked' | 'failed' | 'cancelled' | 'dead'
 
 /** satisfied: source done · waiting: source in flight · dead: target can never start. */
 export type BlueprintGraphEdgeState = 'satisfied' | 'waiting' | 'dead'
@@ -82,6 +82,7 @@ export interface BlueprintGraphGroupCounts {
     pending: number
     dead: number
     completed: number
+    blocked: number
     failed: number
     cancelled: number
 }
@@ -125,6 +126,7 @@ export function queueStatusTone(status: string): BlueprintGraphTaskTone {
     switch (status) {
         case 'assigned': return 'running'
         case 'completed': return 'completed'
+        case 'blocked': return 'blocked'
         case 'failed': return 'failed'
         case 'cancelled': return 'cancelled'
         default: return 'pending'
@@ -134,7 +136,7 @@ export function queueStatusTone(status: string): BlueprintGraphTaskTone {
 /** A node that will not advance again on its own. */
 export function isTerminalGraphNode(node: BlueprintGraphNode): boolean {
     if (node.kind === 'fold') return true
-    return node.tone === 'completed' || node.tone === 'failed' || node.tone === 'cancelled'
+    return node.tone === 'completed' || node.tone === 'blocked' || node.tone === 'failed' || node.tone === 'cancelled'
 }
 
 /** Source is finished successfully — the edge out of it is satisfied. */
@@ -146,7 +148,7 @@ function isSatisfiedSource(node: BlueprintGraphNode): boolean {
 /** Source ended in a way that can never satisfy a dependent. */
 function isDeadSource(node: BlueprintGraphNode): boolean {
     if (node.kind === 'fold') return false
-    return node.tone === 'failed' || node.tone === 'cancelled' || node.tone === 'dead'
+    return node.tone === 'blocked' || node.tone === 'failed' || node.tone === 'cancelled' || node.tone === 'dead'
 }
 
 function taskNodeId(taskId: string): string {
@@ -273,7 +275,7 @@ export function buildBlueprintGraphModel(
     const groups: BlueprintGraphGroup[] = []
     for (const head of groupHeads.values()) {
         const members = nodes.filter(node => node.groupKey === head.key)
-        const counts: BlueprintGraphGroupCounts = { total: members.length, running: 0, pending: 0, dead: 0, completed: 0, failed: 0, cancelled: 0 }
+        const counts: BlueprintGraphGroupCounts = { total: members.length, running: 0, pending: 0, dead: 0, completed: 0, blocked: 0, failed: 0, cancelled: 0 }
         let lastActivityAt = ''
         let newestCreatedAt = ''
         for (const node of members) {
@@ -283,6 +285,7 @@ export function buildBlueprintGraphModel(
             else if (node.tone === 'pending') counts.pending += 1
             else if (node.tone === 'dead') counts.dead += 1
             else if (node.tone === 'completed') counts.completed += 1
+            else if (node.tone === 'blocked') counts.blocked += 1
             else if (node.tone === 'failed') counts.failed += 1
             else if (node.tone === 'cancelled') counts.cancelled += 1
             const at = node.updatedAt || node.createdAt || ''
@@ -449,7 +452,7 @@ export function taskNodeTimeReading(
 ): TaskNodeTimeReading | undefined {
     const kind: TaskNodeTimeReading['kind'] = node.tone === 'running'
         ? 'running'
-        : node.tone === 'completed' || node.tone === 'failed' || node.tone === 'cancelled'
+        : node.tone === 'completed' || node.tone === 'blocked' || node.tone === 'failed' || node.tone === 'cancelled'
             ? 'finished'
             : 'queued'
     const at = kind === 'running'

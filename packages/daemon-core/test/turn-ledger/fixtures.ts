@@ -8,7 +8,7 @@ export const NOW = 1_000_000;
 export const REF = { topic: 'mesh.m1.handoff', writer: 'w1', seq: 3 };
 
 export function makeAttempt(state: TurnState, overrides: Partial<TurnAttempt> = {}): TurnAttempt {
-    const terminal = state === 'completed' || state === 'failed' || state === 'cancelled'
+    const terminal = state === 'completed' || state === 'blocked' || state === 'failed' || state === 'cancelled'
         ? { outcome: state, reason: 'turn_end' as const, source: 'fsm_edge' as const, strength: 'genuine' as const, at: NOW - 10 }
         : null;
     return {

@@ -29,6 +29,7 @@ const ROW_DOT: Record<string, { dot: string; pulse?: boolean }> = {
     generating: { dot: 'bg-accent', pulse: true },
     assigned: { dot: 'bg-accent', pulse: true },
     pending: { dot: 'bg-text-muted' },
+    blocked: { dot: 'bg-status-warning' },
     completed: { dot: 'bg-status-online' },
     failed: { dot: 'bg-status-error' },
     cancelled: { dot: 'bg-status-offline' },

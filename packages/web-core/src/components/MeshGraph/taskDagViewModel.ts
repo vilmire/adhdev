@@ -47,6 +47,7 @@ export interface TaskDagStats {
     pending: number
     assigned: number
     completed: number
+    reviewBlocked: number
     failed: number
     cancelled: number
     /** Tasks currently gated behind at least one unmet dependency. */
@@ -156,7 +157,7 @@ export function buildTaskDag(tasks: RepoMeshQueueTask[] | null | undefined): Tas
     const missionIds = new Set<string>()
     let waitingCount = 0
     let blockedCount = 0
-    const statusCounts: Record<string, number> = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 }
+    const statusCounts: Record<string, number> = { pending: 0, assigned: 0, completed: 0, blocked: 0, failed: 0, cancelled: 0 }
 
     for (const task of list) {
         const deps = normalizeDeps(task.dependsOn)
@@ -197,6 +198,7 @@ export function buildTaskDag(tasks: RepoMeshQueueTask[] | null | undefined): Tas
             pending: statusCounts.pending,
             assigned: statusCounts.assigned,
             completed: statusCounts.completed,
+            reviewBlocked: statusCounts.blocked,
             failed: statusCounts.failed,
             cancelled: statusCounts.cancelled,
             waiting: waitingCount,

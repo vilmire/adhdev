@@ -343,7 +343,7 @@ function textOf(payload: Record<string, unknown> | null): string | null {
     return str(payload.text) ?? str(payload.summary) ?? str(payload.coordinatorMessage) ?? null;
 }
 
-const STATUS_LINE_KINDS: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['completed', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'late_completion']);
+const STATUS_LINE_KINDS: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['completed', 'blocked', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'late_completion']);
 
 function stopReasonOf(attempt: TurnAttempt | null): FormatStopReason {
     if (isUnredeliveredDirectFailure(attempt)) return 'direct_not_redelivered';

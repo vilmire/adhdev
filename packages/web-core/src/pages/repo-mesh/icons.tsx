@@ -50,6 +50,7 @@ const NODE_HEALTH_COLORS: Record<string, string> = {
     pending: '#a855f7',
     assigned: '#3b82f6',
     completed: '#22c55e',
+    blocked: '#f59e0b',
     failed: '#ef4444',
     unknown: '#6b7280',
 }

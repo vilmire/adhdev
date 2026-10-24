@@ -18,7 +18,7 @@ import { readString } from '@adhdev/mesh-shared';
 // past the same age, so a row this view flags stale is the row that sweep reclaims.
 const OLD_HISTORICAL_QUEUE_RECORD_MS = 7 * 24 * 60 * 60_000;
 export const ACTIVE_QUEUE_STATUSES = new Set(['pending', 'assigned']);
-export const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+export const HISTORICAL_QUEUE_STATUSES = new Set(['completed', 'blocked', 'failed', 'cancelled']);
 export type QueueViewMode = 'all' | 'active' | 'historical';
 
 type QueueLivenessIndex = {
@@ -103,7 +103,7 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
     const held = queue.filter(task => task.status === 'pending' && task.hold);
     const heldReasons: Record<string, number> = {};
     for (const task of held) heldReasons[task.hold.reason] = (heldReasons[task.hold.reason] || 0) + 1;
-    const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+    const counts = { pending: 0, assigned: 0, completed: 0, blocked: 0, failed: 0, cancelled: 0 };
     let staleAssigned = 0;
     for (const task of queue) {
         const status = typeof task?.status === 'string' ? task.status : undefined;
@@ -118,7 +118,7 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
         heldReasons,
         totalCount: queue.length,
         activeCount: counts.pending + liveAssigned,
-        historicalCount: counts.completed + counts.failed + counts.cancelled,
+        historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
         counts,
         activeCounts: {
             pending: counts.pending,
@@ -131,6 +131,7 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
         },
         historicalCounts: {
             completed: counts.completed,
+            blocked: counts.blocked,
             failed: counts.failed,
             cancelled: counts.cancelled,
         },
@@ -149,7 +150,7 @@ export function buildQueueStatusSummaryFromCounts(
     allowed?: ReadonlySet<string>,
 ): Record<string, unknown> {
     const pick = (status: string) => (!allowed || allowed.has(status) ? statusCounts[status] ?? 0 : 0);
-    const counts = { pending: pick('pending'), assigned: pick('assigned'), completed: pick('completed'), failed: pick('failed'), cancelled: pick('cancelled') };
+    const counts = { pending: pick('pending'), assigned: pick('assigned'), completed: pick('completed'), blocked: pick('blocked'), failed: pick('failed'), cancelled: pick('cancelled') };
     let totalCount = 0;
     for (const [status, n] of Object.entries(statusCounts)) {
         if (!allowed || allowed.has(status)) totalCount += n;
@@ -166,12 +167,12 @@ export function buildQueueStatusSummaryFromCounts(
         heldReasons: (!allowed || allowed.has('pending')) ? buildQueueStatusSummary(activeRows).heldReasons : {},
         totalCount,
         activeCount: counts.pending + liveAssigned,
-        historicalCount: counts.completed + counts.failed + counts.cancelled,
+        historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
         counts,
         activeCounts: { pending: counts.pending, assigned: liveAssigned },
         staleAssignedCount: staleAssigned,
         rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
-        historicalCounts: { completed: counts.completed, failed: counts.failed, cancelled: counts.cancelled },
+        historicalCounts: { completed: counts.completed, blocked: counts.blocked, failed: counts.failed, cancelled: counts.cancelled },
     };
 }
 
@@ -280,7 +281,7 @@ export function buildQueueMaintenanceReport(queue: any[]): Record<string, unknow
         mutationPerformed: false,
         sourceOfTruth: 'mesh_work_queue_file',
         staleAssignedDefinition: 'Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.',
-        historicalDefinition: 'completed/failed/cancelled rows are historical ledger records and never active assignments.',
+        historicalDefinition: 'completed/blocked/failed/cancelled rows are historical ledger records and never active assignments.',
         staleAssignedTasks,
         staleAssignedCount: staleAssignedTasks.length,
         historicalRecordCount: historicalTasks.length,
@@ -391,7 +392,7 @@ export function annotateQueueStaleness(queue: any[], mesh?: LocalMeshEntry, live
             isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
             dispatchedAt: task?.createdAt,
             ...(taskStatus === 'assigned' ? { activeTaskId: task.id } : {}),
-            ...(taskStatus === 'completed' || taskStatus === 'failed' ? {
+            ...(taskStatus === 'completed' || taskStatus === 'blocked' || taskStatus === 'failed' ? {
                 completedAt: task.updatedAt,
             } : {}),
         };

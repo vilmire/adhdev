@@ -3,6 +3,7 @@ import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shar
 import { getMachineId } from '../../config/config.js';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
+import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 import { queueTaskHoldView } from '../../mesh/mesh-queue-hold.js';
 /**
  * mesh-store-ipc — daemon-side responders for the IPC commands through which
@@ -289,7 +290,13 @@ const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) =
     const req = decodeQueueQueryRequest(args);
     if (!req) return badRequest('queue_query');
     try {
-        let entries = getQueue(req.meshId, req.statuses ? { status: [...req.statuses] as MeshTaskStatus[] } : undefined);
+        const readStatuses = req.view && req.statuses?.some(status => status === 'blocked' || status === 'failed')
+            ? [...new Set([...req.statuses, 'failed', 'blocked'])] : req.statuses;
+        let entries = getQueue(req.meshId, readStatuses ? { status: [...readStatuses] as MeshTaskStatus[] } : undefined);
+        if (req.view) {
+            entries = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), req.meshId, entries);
+            if (req.statuses?.length) entries = entries.filter(entry => req.statuses!.includes(entry.status));
+        }
         if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
         const holdStore = MeshRuntimeStore.getInstance();
         const blockerIds = [...new Set(entries.flatMap(entry => entry.hold?.blockingTaskIds || []))];
@@ -303,8 +310,9 @@ const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) =
             const olderThanIso = req.historicalOlderThanMs !== undefined
                 ? new Date(Date.now() - req.historicalOlderThanMs).toISOString()
                 : undefined;
-            const { counts, oldHistoricalCount } = store.getQueueStatusCounts(req.meshId, olderThanIso);
+            const { counts, oldHistoricalCount, legacyReportedBlockedCount } = store.getQueueStatusCounts(req.meshId, olderThanIso);
             response.counts = counts;
+            if (legacyReportedBlockedCount) response.legacyReportedBlockedCount = legacyReportedBlockedCount;
             if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
         }
         if (store && req.withDependencyHeads) {

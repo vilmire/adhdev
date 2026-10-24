@@ -84,6 +84,7 @@ interface QueueActiveView {
     counts: Record<string, number>;
     /** Terminal rows last updated more than OLD_HISTORICAL_QUEUE_RECORD_MS ago. */
     oldHistoricalCount: number;
+    legacyReportedBlockedCount?: number;
     /** Dependency rows the active rows point at that are not themselves active. */
     dependencyHeads: QueueDependencyHeadWire[];
 }
@@ -106,6 +107,7 @@ export async function readQueueActiveView(ctx: MeshContext): Promise<QueueActive
         activeRows: res.entries as unknown as Record<string, unknown>[],
         counts: res.counts ?? {},
         oldHistoricalCount: res.oldHistoricalCount ?? 0,
+        ...(res.legacyReportedBlockedCount ? { legacyReportedBlockedCount: res.legacyReportedBlockedCount } : {}),
         dependencyHeads: [...(res.dependencyHeads ?? [])],
     };
 }

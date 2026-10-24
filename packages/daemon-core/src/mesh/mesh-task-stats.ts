@@ -29,7 +29,7 @@ export interface MeshTaskStats {
     status: string;
     dispatchedAt: string | null;
     terminalAt: string | null;
-    terminalKind: 'task_completed' | 'task_failed' | 'task_cancelled' | null;
+    terminalKind: 'task_completed' | 'task_blocked' | 'task_failed' | 'task_cancelled' | null;
     /** dispatched → terminal wall clock; null when evidence is incomplete. */
     durationMs: number | null;
     /** Number of task_dispatched ledger entries observed for this task. */
@@ -44,6 +44,7 @@ export interface MeshMissionStats {
     missionId: string;
     taskCount: number;
     completed: number;
+    blocked: number;
     failed: number;
     /** Sum of per-task durations with complete evidence. */
     totalDurationMs: number;
@@ -100,7 +101,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
     const queueById = new Map(queue.map(task => [task.id, task]));
     const targetSet = new Set(targetIds);
     const dispatches = new Map<string, { first: string; count: number }>();
-    const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_failed' | 'task_cancelled' }>();
+    const terminals = new Map<string, { at: string; kind: 'task_completed' | 'task_blocked' | 'task_failed' | 'task_cancelled' }>();
     for (const entry of entries) {
         const taskId = readPayloadTaskId(entry);
         if (!taskId || !targetSet.has(taskId)) continue;
@@ -108,7 +109,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
             const existing = dispatches.get(taskId);
             if (existing) existing.count += 1;
             else dispatches.set(taskId, { first: entry.timestamp, count: 1 });
-        } else if (entry.kind === 'task_completed' || entry.kind === 'task_failed' || entry.kind === 'task_cancelled') {
+        } else if (entry.kind === 'task_completed' || entry.kind === 'task_blocked' || entry.kind === 'task_failed' || entry.kind === 'task_cancelled') {
             // Last terminal wins (requeued tasks can have multiple terminals).
             terminals.set(taskId, { at: entry.timestamp, kind: entry.kind });
         }
@@ -124,7 +125,7 @@ function taskStatsFromFacts(queue: readonly MeshQueueFacts[], entries: readonly 
         // even though its task_completed event fired (see mesh-events-coordinator Fix B attribution).
         const status = queueEntry?.status
             ?? (terminal
-                ? (terminal.kind === 'task_completed' ? 'completed' : 'failed')
+                ? (terminal.kind === 'task_completed' ? 'completed' : terminal.kind === 'task_blocked' ? 'blocked' : 'failed')
                 : 'unknown');
         const isTerminalStatus = isMeshTerminalTaskStatus(status);
         const dispatchTime = parseTime(dispatch?.first ?? queueEntry?.dispatchTimestamp);
@@ -188,6 +189,7 @@ export function rollupMissionStats(missionId: string, tasks: readonly MeshTaskSt
         missionId,
         taskCount: tasks.length,
         completed: 0,
+        blocked: 0,
         failed: 0,
         totalDurationMs: 0,
         wallClockMs: null,
@@ -198,6 +200,7 @@ export function rollupMissionStats(missionId: string, tasks: readonly MeshTaskSt
     let lastTerminal: number | null = null;
     for (const task of tasks) {
         if (task.status === 'completed') stats.completed += 1;
+        else if (task.status === 'blocked') stats.blocked += 1;
         else if (task.status === 'failed') stats.failed += 1;
         stats.retries += task.requeueCount;
         if (task.incompleteEvidence) {

@@ -1490,6 +1490,7 @@
             "statAssigned": "Assigned",
             "statPending": "Pending",
             "statFailed": "Failed",
+            "legacyWorkerBlocked": "Worker reported blocked; stored legacy status: failed",
             "statBlocked": "Blocked",
             "statCancelled": "Cancelled",
             "statWallClock": "Wall clock",

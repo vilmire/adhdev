@@ -149,7 +149,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
 
 export const MESH_VIEW_QUEUE_TOOL = {
     name: 'mesh_view_queue',
-    description: 'View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
+    description: 'View the mesh work queue with source-of-truth active counts separated from historical completed/blocked/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -157,14 +157,14 @@ export const MESH_VIEW_QUEUE_TOOL = {
             status: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows.',
+                description: 'Explicit row filter by task status: pending, assigned, completed, blocked, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows.',
             },
             view: {
                 type: 'string',
                 enum: ['all', 'active', 'historical'],
-                description: 'Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
+                description: 'Optional row view. active returns pending/assigned rows, historical returns completed/blocked/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
             },
-            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/blocked/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
             verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },

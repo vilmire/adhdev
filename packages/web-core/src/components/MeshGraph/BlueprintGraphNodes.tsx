@@ -30,6 +30,7 @@ import { BLUEPRINT_GRAPH_SIZES } from './blueprintGraphLayout'
 export const TASK_TONE_STYLE: Record<BlueprintGraphTaskTone, { dot: string; pulse?: boolean; border: string }> = {
     pending: { dot: 'bg-text-muted', border: 'border-border-default' },
     running: { dot: 'bg-accent', pulse: true, border: 'border-border-default' },
+    blocked: { dot: 'bg-status-warning', border: 'border-status-warning/40' },
     completed: { dot: 'bg-status-online', border: 'border-border-subtle' },
     failed: { dot: 'bg-status-error', border: 'border-status-error/40' },
     cancelled: { dot: 'bg-status-offline', border: 'border-border-subtle' },

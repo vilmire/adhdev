@@ -478,7 +478,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
     // finalSummary lives in the append-only mesh_task_outputs ledger, not on the
     // queue row (docs/design/2026-09-02-blueprint-followups.md §1) — fetched on
     // demand over P2P, same seam as MissionDetail's full-goal fetch below.
-    const isTerminal = task.status === 'completed' || task.status === 'failed'
+    const isTerminal = task.status === 'completed' || task.status === 'blocked' || task.status === 'failed'
     const [output, setOutput] = useState<{ finalSummary?: string; providerType?: string } | null>(null)
     const [fetchingOutput, setFetchingOutput] = useState(false)
     const [outputError, setOutputError] = useState<string | null>(null)
@@ -532,6 +532,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
         <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge meshTheme={meshTheme} label={queueTaskStatusLabel(task.status, t)} tone={queueTaskTone(task.status)} />
+                {task.statusProvenance && <span className="text-xs text-text-secondary">{t('mesh.overview.legacyWorkerBlocked')}</span>}
                 {task.difficulty && <StatusBadge meshTheme={meshTheme} label={difficultyLabel(task.difficulty, t)} tone={difficultyTone()} />}
                 {completingProvider && <StatusBadge meshTheme={meshTheme} label={completingProvider} tone="muted" />}
                 {(task.requeueCount ?? 0) > 0 && <StatusBadge meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeued', { count: task.requeueCount })} tone="amber" />}

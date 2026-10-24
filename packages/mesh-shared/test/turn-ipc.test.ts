@@ -624,6 +624,7 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeQueueQueryResponse({ entries: [{ status: 'pending' }] })).toBeNull()
         expect(decodeQueueQueryRequest({ v, meshId: 'm', statuses: ['pending'], withCounts: true, historicalOlderThanMs: 1000, withDependencyHeads: true })).not.toBeNull()
         expect(decodeQueueQueryRequest({ v, meshId: 'm', historicalOlderThanMs: -1 })).toBeNull()
+        expect(decodeQueueQueryResponse({ entries: [row], counts: { blocked: 1, failed: 0 }, legacyReportedBlockedCount: 1 })).not.toBeNull()
         expect(decodeQueueQueryResponse({ entries: [row], counts: { completed: 3 }, oldHistoricalCount: 1, dependencyHeads: [{ id: 'd', status: 'failed', cancelReason: 'x' }] })).not.toBeNull()
         expect(decodeQueueQueryResponse({ entries: [row], dependencyHeads: [{ id: 'd' }] })).toBeNull()
         expect(decodeQueueEnqueueRequest({ v, meshId: 'm', message: 'do it', options: { difficulty: 'easy' } })).not.toBeNull()

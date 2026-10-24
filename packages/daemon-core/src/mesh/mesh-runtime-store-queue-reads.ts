@@ -15,6 +15,7 @@
  * mesh-runtime-store-*.ts modules; the class keeps thin delegators.
  */
 
+import { projectWorkerOutcomeViews, legacyWorkerBlockedTasks } from './mesh-worker-outcome-view.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshTaskStatus, MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -285,7 +286,7 @@ export function getQueueFacts(self: MeshRuntimeStore, meshId: string): MeshQueue
         `SELECT id, status, CASE WHEN json_valid(payload) THEN json_extract(payload, ${FACT_PATHS}) END AS f
          FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC`
     ).all(meshId) as Array<{ id: string; status: MeshTaskStatus; f: string | null }>;
-    return rows.map(readFactsRow);
+    return projectWorkerOutcomeViews(self, meshId, rows.map(readFactsRow));
 }
 
 /** Row count per status over the whole mesh queue, plus terminal rows last updated before `olderThanIso`. */
@@ -293,11 +294,11 @@ export function getQueueStatusCounts(
     self: MeshRuntimeStore,
     meshId: string,
     olderThanIso?: string,
-): { counts: Record<string, number>; oldHistoricalCount: number } {
+): { counts: Record<string, number>; oldHistoricalCount: number; legacyReportedBlockedCount?: number } {
     self.ensureLegacyQueueMigrated(meshId);
     const rows = self.db.prepare(
         `SELECT status, COUNT(*) AS n,
-                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
+                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'blocked', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
          FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
     ).all(olderThanIso ?? null, olderThanIso ?? null, meshId) as Array<{ status: string; n: number; old: number | null }>;
     const counts: Record<string, number> = {};
@@ -306,7 +307,12 @@ export function getQueueStatusCounts(
         counts[row.status] = row.n;
         oldHistoricalCount += row.old ?? 0;
     }
-    return { counts, oldHistoricalCount };
+    const proven = legacyWorkerBlockedTasks(self, meshId);
+    if (proven.size) {
+        counts.failed = (counts.failed ?? 0) - proven.size;
+        counts.blocked = (counts.blocked ?? 0) + proven.size;
+    }
+    return { counts, oldHistoricalCount, ...(proven.size ? { legacyReportedBlockedCount: proven.size } : {}) };
 }
 
 /** id / status / cancelReason for the given row ids (missing ids are absent). */

@@ -135,6 +135,8 @@ export interface QueueQueryResponse {
     counts?: Record<string, number>
     /** `withCounts` + `historicalOlderThanMs`: terminal rows older than that age. */
     oldHistoricalCount?: number
+    /** Included in counts.blocked, derived from proven worker reports; stored failed rows stay unchanged. */
+    legacyReportedBlockedCount?: number
     /** `withDependencyHeads`. */
     dependencyHeads?: readonly QueueDependencyHeadWire[]
 }
@@ -159,9 +161,10 @@ function isQueueDependencyHeadWire(value: unknown): value is QueueDependencyHead
 }
 
 function isQueueQueryResponse(value: unknown): value is QueueQueryResponse {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['entries', 'counts', 'oldHistoricalCount', 'dependencyHeads'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['entries', 'counts', 'oldHistoricalCount', 'legacyReportedBlockedCount', 'dependencyHeads'])) return false
     if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire)) return false
     if (value.counts !== undefined && (!isRecord(value.counts) || !Object.values(value.counts).every(isNonNegativeInt))) return false
+    if (value.legacyReportedBlockedCount !== undefined && !isNonNegativeInt(value.legacyReportedBlockedCount)) return false
     if (value.oldHistoricalCount !== undefined && !isNonNegativeInt(value.oldHistoricalCount)) return false
     if (value.dependencyHeads !== undefined && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire))) return false
     return true

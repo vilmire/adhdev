@@ -1490,6 +1490,7 @@
             "statAssigned": "已分配",
             "statPending": "待处理",
             "statFailed": "失败",
+            "legacyWorkerBlocked": "工作者报告为阻塞；旧版存储状态为失败",
             "statBlocked": "已阻塞",
             "statCancelled": "已取消",
             "statWallClock": "实际耗时",

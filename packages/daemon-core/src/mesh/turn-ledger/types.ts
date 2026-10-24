@@ -26,11 +26,11 @@ export type { HoldReason, TurnScope } from '@adhdev/mesh-shared';
 
 export const TURN_STATES = [
     'accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing', 'stopping',
-    'completed', 'failed', 'cancelled',
+    'completed', 'blocked', 'failed', 'cancelled',
 ] as const;
 export type TurnState = typeof TURN_STATES[number];
 
-export const TERMINAL_TURN_STATES = ['completed', 'failed', 'cancelled'] as const satisfies readonly TurnOutcome[];
+export const TERMINAL_TURN_STATES = ['completed', 'blocked', 'failed', 'cancelled'] as const satisfies readonly TurnOutcome[];
 type TerminalTurnState = typeof TERMINAL_TURN_STATES[number];
 
 export function isTerminalTurnState(state: TurnState): state is TerminalTurnState {

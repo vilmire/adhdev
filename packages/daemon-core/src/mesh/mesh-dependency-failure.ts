@@ -33,7 +33,7 @@ export function resolveOnDependencyFailurePolicy(value: unknown): MeshOnDependen
 
 export interface MeshDependencyFailure {
     taskId: string;
-    status: 'failed' | 'cancelled';
+    status: 'blocked' | 'failed' | 'cancelled';
     reason?: string;
 }
 
@@ -51,7 +51,7 @@ export function deriveDependencyFailures(
     for (const taskId of deps) {
         const meta = depMetaById?.get(taskId);
         const status = statusById.get(taskId) ?? meta?.status;
-        if (status !== 'failed' && status !== 'cancelled') continue;
+        if (status !== 'blocked' && status !== 'failed' && status !== 'cancelled') continue;
         const reason = meta?.cancelReason;
         failures.push({
             taskId,

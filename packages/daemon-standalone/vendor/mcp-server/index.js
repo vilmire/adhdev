@@ -25898,9 +25898,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecord2(value) && hasOnlyKeys22(value, ["id", "status", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
     }
     function isQueueQueryResponse2(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["entries", "counts", "oldHistoricalCount", "legacyReportedBlockedCount", "dependencyHeads"])) return false;
       if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire2)) return false;
       if (value.counts !== void 0 && (!isRecord2(value.counts) || !Object.values(value.counts).every(isNonNegativeInt2))) return false;
+      if (value.legacyReportedBlockedCount !== void 0 && !isNonNegativeInt2(value.legacyReportedBlockedCount)) return false;
       if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt2(value.oldHistoricalCount)) return false;
       if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire2))) return false;
       return true;
@@ -27231,8 +27232,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         };
         SESSION_STATUS_SET2 = new Set(SESSION_STATUSES2);
         TERMINAL_SESSION_RECORD_STATUSES = ["stopped", "failed", "terminated", "exited", "closed"];
-        MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "failed", "cancelled"];
-        MESH_TERMINAL_TASK_STATUSES2 = ["completed", "failed", "cancelled"];
+        MESH_TASK_STATUSES2 = ["pending", "assigned", "completed", "blocked", "failed", "cancelled"];
+        MESH_TERMINAL_TASK_STATUSES2 = ["completed", "blocked", "failed", "cancelled"];
         MESH_TASK_MODES2 = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
         MESH_TASK_PRIORITIES2 = ["low", "normal", "high"];
         MESH_THINKING_LEVELS2 = ["low", "medium", "high"];
@@ -27470,7 +27471,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           "await_end",
           "report_correction"
         ];
-        TURN_OUTCOMES2 = ["completed", "failed", "cancelled"];
+        TURN_OUTCOMES2 = ["completed", "blocked", "failed", "cancelled"];
         COMMIT_STRENGTHS2 = ["genuine", "weak", "tool_report", "operator"];
         TURN_REASONS2 = [
           // commits
@@ -27515,6 +27516,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         ];
         NOTIFY_KINDS2 = [
           "completed",
+          "blocked",
           "failed",
           "cancelled",
           "stopped",
@@ -27670,7 +27672,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         TURN_IPC_PROTOCOL_VERSION2 = 1;
         TURN_OBSERVE_VERDICTS2 = ["applied", "recorded", "rejected"];
         isTurnObserveVerdict2 = makeGuard32(TURN_OBSERVE_VERDICTS2);
-        TURN_OUTCOMES_LOCAL2 = ["completed", "failed", "cancelled"];
+        TURN_OUTCOMES_LOCAL2 = ["completed", "blocked", "failed", "cancelled"];
         MESH_RECORD_PAYLOAD_KEYS2 = [
           // Identifiers
           "taskId",
@@ -42243,7 +42245,7 @@ ${error.message || ""}`;
       if (r === "reassigned:reclaim_after_unknown_grace") return pick("session_dead", "scheduler");
       if (r.startsWith("reassigned:")) return pick("assigned_stranded_dispatch_unconfirmed", "scheduler");
       if (r === "superseded_by_attempt" || r === "superseded_by_queue_terminal") return pick("superseded", "scheduler", "operator");
-      const fallback = { completed: "turn_end", failed: "session_error", cancelled: "operator_cancel" };
+      const fallback = { blocked: "worker_reported", completed: "turn_end", failed: "session_error", cancelled: "operator_cancel" };
       return {
         reason: fallback[outcome],
         source: outcome === "cancelled" ? "operator" : "scheduler",
@@ -43341,7 +43343,7 @@ ${error.message || ""}`;
       for (const taskId of deps) {
         const meta2 = depMetaById?.get(taskId);
         const status = statusById.get(taskId) ?? meta2?.status;
-        if (status !== "failed" && status !== "cancelled") continue;
+        if (status !== "blocked" && status !== "failed" && status !== "cancelled") continue;
         const reason = meta2?.cancelReason;
         failures.push({
           taskId,
@@ -43517,6 +43519,48 @@ ${error.message || ""}`;
         };
       }
     });
+    function legacyWorkerBlockedTasks(store2, meshId) {
+      if (store2.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('mesh_queue', 'mesh_task_outputs', 'turn_attempts', 'turn_events')").get().n !== 4) return /* @__PURE__ */ new Map();
+      const rows = store2.db.prepare(`
+        SELECT q.id, a.attempt_id, a.generation, a.attempt_no, a.session_id, a.data_json,
+               o.version, o.attempt, o.envelope_json
+        FROM mesh_queue q
+        JOIN turn_attempts a ON a.mesh_id = q.mesh_id AND a.task_id = q.id
+        JOIN mesh_task_outputs o ON o.mesh_id = q.mesh_id AND o.task_id = q.id
+        WHERE q.mesh_id = ? AND q.status = 'failed'
+          AND a.attempt_no = (SELECT MAX(x.attempt_no) FROM turn_attempts x WHERE x.mesh_id = q.mesh_id AND x.task_id = q.id)
+          AND a.terminal_outcome = 'failed' AND a.terminal_reason = 'worker_reported' AND a.terminal_strength = 'tool_report'
+          AND o.version = (SELECT MAX(x.version) FROM mesh_task_outputs x WHERE x.task_id = q.id)
+          AND o.status = 'failed'
+          AND EXISTS (SELECT 1 FROM turn_events e WHERE e.attempt_id = a.attempt_id AND e.generation = a.generation
+                      AND e.kind = 'worker_tool_report' AND e.source = 'worker_tool' AND e.verdict = 'recorded'
+                      AND e.session_id = a.session_id AND CASE WHEN json_valid(e.payload_json) THEN json_extract(e.payload_json, '$.outcome') END = 'blocked')
+    `).all(meshId);
+      const out = /* @__PURE__ */ new Map();
+      for (const row2 of rows) {
+        try {
+          const data = JSON.parse(row2.data_json);
+          const envelope = JSON.parse(row2.envelope_json);
+          if (envelope.task_id !== row2.id || data.report?.generation !== row2.generation || data.report?.outcome !== "blocked" || row2.attempt !== row2.attempt_no + 1 || envelope.status !== "failed" || envelope.evidence?.summarySource !== "tool_report" || envelope.evidence?.reportedOutcome !== "blocked" || envelope.evidence?.mayBeTruncated !== false || envelope.source?.session_id !== row2.session_id) continue;
+          out.set(row2.id, { storedStatus: "failed", derivedFrom: "worker_tool_report", attemptId: row2.attempt_id, generation: row2.generation, outputVersion: row2.version });
+        } catch {
+        }
+      }
+      return out;
+    }
+    function projectWorkerOutcomeViews(store2, meshId, tasks) {
+      if (!tasks.some((t) => t.status === "failed")) return [...tasks];
+      const proven = legacyWorkerBlockedTasks(store2, meshId);
+      return tasks.map((task) => {
+        const statusProvenance = proven.get(task.id);
+        return task.status === "failed" && statusProvenance ? { ...task, status: "blocked", statusProvenance } : task;
+      });
+    }
+    var init_mesh_worker_outcome_view = __esm2({
+      "src/mesh/mesh-worker-outcome-view.ts"() {
+        "use strict";
+      }
+    });
     function parseQueuePayloadByRowid(self, rowid) {
       const row2 = self.db.prepare("SELECT payload FROM mesh_queue WHERE rowid = ?").get(rowid);
       if (!row2) return null;
@@ -43671,13 +43715,13 @@ ${error.message || ""}`;
         `SELECT id, status, CASE WHEN json_valid(payload) THEN json_extract(payload, ${FACT_PATHS}) END AS f
          FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC`
       ).all(meshId);
-      return rows.map(readFactsRow);
+      return projectWorkerOutcomeViews(self, meshId, rows.map(readFactsRow));
     }
     function getQueueStatusCounts(self, meshId, olderThanIso) {
       self.ensureLegacyQueueMigrated(meshId);
       const rows = self.db.prepare(
         `SELECT status, COUNT(*) AS n,
-                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
+                SUM(CASE WHEN ? IS NOT NULL AND status IN ('completed', 'blocked', 'failed', 'cancelled') AND updated_at < ? THEN 1 ELSE 0 END) AS old
          FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
       ).all(olderThanIso ?? null, olderThanIso ?? null, meshId);
       const counts = {};
@@ -43686,7 +43730,12 @@ ${error.message || ""}`;
         counts[row2.status] = row2.n;
         oldHistoricalCount += row2.old ?? 0;
       }
-      return { counts, oldHistoricalCount };
+      const proven = legacyWorkerBlockedTasks(self, meshId);
+      if (proven.size) {
+        counts.failed = (counts.failed ?? 0) - proven.size;
+        counts.blocked = (counts.blocked ?? 0) + proven.size;
+      }
+      return { counts, oldHistoricalCount, ...proven.size ? { legacyReportedBlockedCount: proven.size } : {} };
     }
     function getQueueDependencyHeads(self, meshId, ids) {
       const unique = [...new Set(ids.filter((id4) => typeof id4 === "string" && id4))];
@@ -43715,6 +43764,7 @@ ${error.message || ""}`;
     var init_mesh_runtime_store_queue_reads = __esm2({
       "src/mesh/mesh-runtime-store-queue-reads.ts"() {
         "use strict";
+        init_mesh_worker_outcome_view();
         init_dist();
         PRE_TURN_STATES = /* @__PURE__ */ new Set(["accepted", "delivered"]);
         FACT_PATHS = "'$.missionId', '$.dependsOn', '$.cancelReason', '$.updatedAt', '$.dispatchTimestamp', '$.requeueCount'";
@@ -48180,7 +48230,7 @@ ${rendered.join("\n\n")}`,
           ] },
           // g is running (or already terminal): never mutate g; record g−1's verdict
           // and tell the coordinator, who decides whether to salvage g−1's work.
-          { id: "R27", lane: "stale", from: [C, G, S, F, "completed", "failed", "cancelled"], on: ["turn_end", "worker_report", "transcript_final"], guard: "prev_generation_completion", to: "same", verdict: "recorded", effects: [
+          { id: "R27", lane: "stale", from: [C, G, S, F, "completed", "blocked", "failed", "cancelled"], on: ["turn_end", "worker_report", "transcript_final"], guard: "prev_generation_completion", to: "same", verdict: "recorded", effects: [
             { e: "record", note: "late_completion_prev_generation" },
             { e: "notify", notify: "late_completion", generation: "evidence" }
           ] },
@@ -48544,7 +48594,7 @@ ${rendered.join("\n\n")}`,
           ] }
         ];
         NONTERMINAL = [A2, D, C, G, S, F];
-        TERMINAL = ["completed", "failed", "cancelled"];
+        TERMINAL = ["completed", "blocked", "failed", "cancelled"];
       }
     });
     function isTerminalTurnState(state2) {
@@ -48554,7 +48604,7 @@ ${rendered.join("\n\n")}`,
     var init_types2 = __esm2({
       "src/mesh/turn-ledger/types.ts"() {
         "use strict";
-        TERMINAL_TURN_STATES = ["completed", "failed", "cancelled"];
+        TERMINAL_TURN_STATES = ["completed", "blocked", "failed", "cancelled"];
       }
     });
     function classifyLane(attempt, evidence, holds = []) {
@@ -48998,7 +49048,7 @@ ${rendered.join("\n\n")}`,
     }
     function adoptedTerminal(ev) {
       if (ev.kind === "worker_report") {
-        return { outcome: ev.outcome === "completed" ? "completed" : "failed", strength: "tool_report", reason: "worker_reported" };
+        return { outcome: ev.outcome, strength: "tool_report", reason: "worker_reported" };
       }
       if (ev.kind === "transcript_final") return { outcome: "completed", strength: "genuine", reason: "transcript_final" };
       return { outcome: "completed", strength: "genuine", reason: "turn_end" };
@@ -49037,7 +49087,7 @@ ${rendered.join("\n\n")}`,
         case "no_progress":
           return "completed";
         case "worker_report":
-          return ev.outcome === "completed" ? "completed" : "failed";
+          return ev.outcome;
         case "session_error":
           return "failed";
         case "process_exit":
@@ -49113,9 +49163,9 @@ ${rendered.join("\n\n")}`,
         case "commit": {
           let outcome;
           if (template.outcome === "from_report") {
-            outcome = ev.outcome === "completed" ? "completed" : "failed";
+            outcome = ev.outcome;
           } else if (template.outcome === "from_recorded_report") {
-            outcome = draft.attempt.data.report?.outcome === "completed" ? "completed" : "failed";
+            outcome = draft.attempt.data.report.outcome;
           } else if (template.outcome === "from_operator") {
             outcome = ev.status;
           } else {
@@ -49411,7 +49461,7 @@ ${rendered.join("\n\n")}`,
         ];
         WRITER_STOP_RETRY_MS = 3e4;
         WRITER_STOP_MAX_TRIES = 3;
-        TERMINAL_NOTIFY_KINDS = ["completed", "failed", "cancelled", "stopped"];
+        TERMINAL_NOTIFY_KINDS = ["completed", "blocked", "failed", "cancelled", "stopped"];
         ACTIONS = {
           open_dispatch: (draft) => {
             const ev = draft.ctx.evidence;
@@ -49861,6 +49911,8 @@ ${summary}`;
         RECOVERY_PROMPT_TRUNCATE_CHARS = 300;
         REFINE_NODE_ERROR_TRUNCATE_CHARS = 200;
         RENDERERS = {
+          blocked: (input, missing) => `[System] Worker task ${input.scalars.taskId ?? ""} reported blocked. External follow-up is required; do not automatically retry or close the mission.
+${resolve19(input.refs.summary, input.resolveRef, missing) ?? ""}`,
           completed: renderCompleted,
           failed: (input, missing) => renderStopped(input, missing),
           cancelled: (input) => renderCancelled(input),
@@ -49930,6 +49982,7 @@ ${summary}`;
         case "no_progress":
         case "progress":
           return isTerminalTurnState(attempt.state) ? "attempt_terminal" : null;
+        case "blocked":
         case "completed":
         case "failed":
         case "cancelled":
@@ -50977,7 +51030,7 @@ ${line}`;
         } };
         NOTICE_DEDUPE_BUCKET_MS = 5 * 60 * 1e3;
         LOCAL_TOPIC = "local";
-        STATUS_LINE_KINDS = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "stopped", "approval", "choice", "late_completion"]);
+        STATUS_LINE_KINDS = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled", "stopped", "approval", "choice", "late_completion"]);
         REAL_TIMERS = {
           setTimeout: (fn, ms3) => setTimeout(fn, ms3),
           clearTimeout: (handle) => clearTimeout(handle)
@@ -61453,34 +61506,39 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function readOwnTaskLifecycle(index, turnStore2, meshId, opts) {
       const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : 1e3;
       const dispatched = opts.ownWriter ? index.query(meshId, { writer: { scope: "own", writer: opts.ownWriter }, kinds: ["task_dispatched"], tail }) : [];
+      const proven = legacyWorkerBlockedTasks({ db: turnStore2.db }, meshId);
       const terminals = turnStore2.db.prepare(`SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_at
-            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed', 'cancelled')
+            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'blocked', 'failed', 'cancelled')
             ORDER BY terminal_at DESC LIMIT ?`).all(meshId, tail).map((row2) => {
         const atMs = row2.terminal_at ?? 0;
+        const statusProvenance = proven.get(row2.task_id);
+        const legacyBlocked = statusProvenance?.attemptId === row2.attempt_id ? statusProvenance : void 0;
+        const outcome = legacyBlocked ? "blocked" : row2.terminal_outcome;
         return {
           writer: opts.ownWriter ?? "",
           seq: 0,
           id: `${row2.attempt_id}#committed`,
           timestamp: new Date(atMs).toISOString(),
           atMs,
-          kind: row2.terminal_outcome === "completed" ? "task_completed" : row2.terminal_outcome === "cancelled" ? "task_cancelled" : "task_failed",
+          kind: committedKind(outcome),
           sessionId: row2.session_id,
           nodeId: row2.node_id ?? void 0,
           providerType: row2.provider_type ?? void 0,
           taskId: row2.task_id,
-          payload: { taskId: row2.task_id, outcome: row2.terminal_outcome }
+          payload: { taskId: row2.task_id, outcome, ...legacyBlocked ? { storedOutcome: "failed", derivedFrom: "worker_tool_report", outputVersion: legacyBlocked.outputVersion } : {} }
         };
       });
       return [...dispatched, ...terminals].sort((a, b) => a.atMs - b.atMs);
     }
     function committedKind(outcome) {
       if (outcome === "completed") return "task_completed";
+      if (outcome === "blocked") return "task_blocked";
       if (outcome === "failed") return "task_failed";
       if (outcome === "cancelled") return "task_cancelled";
       return null;
     }
     function readFleetTaskActivity(index, meshId, kinds, tail) {
-      const wantTerminal = kinds.includes("task_completed") || kinds.includes("task_failed");
+      const wantTerminal = kinds.includes("task_completed") || kinds.includes("task_blocked") || kinds.includes("task_failed");
       const rows = index.query(meshId, {
         writer: { scope: "fleet" },
         kinds: wantTerminal ? [...kinds, "turn.committed"] : kinds,
@@ -61520,6 +61578,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_topic_index = __esm2({
       "src/mesh/mesh-topic-index.ts"() {
         "use strict";
+        init_mesh_worker_outcome_view();
         MESH_INDEX_CONSUMER = "mesh.index";
         MESH_RECORD_APPEND_KIND = "adhdev.mesh.ledger";
         MeshTopicIndex = class {
@@ -61667,7 +61726,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const existing = dispatches2.get(taskId);
           if (existing) existing.count += 1;
           else dispatches2.set(taskId, { first: entry.timestamp, count: 1 });
-        } else if (entry.kind === "task_completed" || entry.kind === "task_failed" || entry.kind === "task_cancelled") {
+        } else if (entry.kind === "task_completed" || entry.kind === "task_blocked" || entry.kind === "task_failed" || entry.kind === "task_cancelled") {
           terminals.set(taskId, { at: entry.timestamp, kind: entry.kind });
         }
       }
@@ -61675,7 +61734,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const queueEntry = queueById.get(taskId);
         const dispatch2 = dispatches2.get(taskId);
         const terminal = terminals.get(taskId);
-        const status = queueEntry?.status ?? (terminal ? terminal.kind === "task_completed" ? "completed" : "failed" : "unknown");
+        const status = queueEntry?.status ?? (terminal ? terminal.kind === "task_completed" ? "completed" : terminal.kind === "task_blocked" ? "blocked" : "failed" : "unknown");
         const isTerminalStatus = isMeshTerminalTaskStatus2(status);
         const dispatchTime = parseTime(dispatch2?.first ?? queueEntry?.dispatchTimestamp);
         const terminalTime = parseTime(terminal?.at);
@@ -61723,6 +61782,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         missionId,
         taskCount: tasks.length,
         completed: 0,
+        blocked: 0,
         failed: 0,
         totalDurationMs: 0,
         wallClockMs: null,
@@ -61733,6 +61793,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       let lastTerminal = null;
       for (const task of tasks) {
         if (task.status === "completed") stats.completed += 1;
+        else if (task.status === "blocked") stats.blocked += 1;
         else if (task.status === "failed") stats.failed += 1;
         stats.retries += task.requeueCount;
         if (task.incompleteEvidence) {
@@ -61917,6 +61978,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (task.status === "pending") aggregate.pending += 1;
       else if (task.status === "assigned") aggregate.assigned += 1;
       else if (task.status === "completed") aggregate.completed += 1;
+      else if (task.status === "blocked") aggregate.blocked += 1;
       else if (task.status === "failed") aggregate.failed += 1;
       else if (task.status === "cancelled") aggregate.cancelled += 1;
       if (task.status === "pending" && deriveDependencyFailures(task.dependsOn, statusById, depMetaById).length > 0) {
@@ -61945,7 +62007,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return summaries.map((summary) => stats.has(summary.id) ? { ...summary, stats: stats.get(summary.id) } : summary);
     }
     function isMissionAllTasksTerminal(aggregate) {
-      return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0;
+      return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0 && aggregate.blocked === 0;
     }
     function maybeEmitMissionCloseCandidate(meshId, missionId) {
       try {
@@ -62585,25 +62647,26 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return MeshRuntimeStore.getInstance().getQueueEntries(meshId, ["pending"]).some((entry) => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(taskId));
     }
     function getMeshQueueStats(meshId) {
-      const rows = MeshRuntimeStore.getInstance().getQueueStatsByStatus(meshId);
-      const counts = {};
-      for (const r of rows) counts[r.status] = r.count;
+      const { counts, legacyReportedBlockedCount } = MeshRuntimeStore.getInstance().getQueueStatusCounts(meshId);
       const pending = counts["pending"] ?? 0;
       const assigned = counts["assigned"] ?? 0;
       const completed = counts["completed"] ?? 0;
       const failed = counts["failed"] ?? 0;
+      const blocked = counts["blocked"] ?? 0;
       const cancelled = counts["cancelled"] ?? 0;
       return {
-        total: pending + assigned + completed + failed + cancelled,
+        total: pending + assigned + completed + blocked + failed + cancelled,
         active: pending + assigned,
-        historical: completed + failed + cancelled,
+        historical: completed + blocked + failed + cancelled,
         pending,
         assigned,
         completed,
+        blocked,
         failed,
         cancelled,
         activeCounts: { pending, assigned },
-        historicalCounts: { completed, failed, cancelled },
+        historicalCounts: { completed, blocked, failed, cancelled },
+        ...legacyReportedBlockedCount ? { legacyReportedBlockedCount } : {},
         activeAssignments: MeshRuntimeStore.getInstance().getActiveAssignmentDetails(meshId)
       };
     }
@@ -63231,7 +63294,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         summary: report.summary,
         recordedAtMs: nowMs2
       }));
-      const terminalStatus = report.outcome === "completed" ? "completed" : "failed";
+      const terminalStatus = report.outcome;
       let fence;
       try {
         fence = fenceWorkerReportOnLedger(store2, identity3, terminalStatus);
@@ -64845,6 +64908,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         case "stopping":
           return "finalizing";
         case "completed":
+        case "blocked":
           return "idle";
         case "failed":
           return "error";
@@ -64979,7 +65043,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "use strict";
         init_mesh_runtime_store();
         init_normalize();
-        TURN_TERMINAL_STAGES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+        TURN_TERMINAL_STAGES = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
         STALE_TURN_ATTEMPT_AUTHORITY_MAX_AGE_MS = 30 * 60 * 1e3;
         STALE_GATED_STAGES = /* @__PURE__ */ new Set(["generating", "consumed"]);
         FUTURE_UPDATED_AT_SKEW_TOLERANCE_MS = 2e3;
@@ -67461,10 +67525,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return claimNextQueueTask(this, meshId, nodeId, sessionId, capabilityTags, opts);
           }
           getQueueStatsByStatus(meshId) {
-            this.ensureLegacyQueueMigrated(meshId);
-            return this.db.prepare(
-              `SELECT status, COUNT(*) as count FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
-            ).all(meshId);
+            const { counts } = this.getQueueStatusCounts(meshId);
+            return Object.entries(counts).map(([status, count]) => ({ status, count }));
           }
           getActiveAssignmentDetails(meshId) {
             this.ensureLegacyQueueMigrated(meshId);
@@ -68635,7 +68697,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       };
     }
     function isTerminalLedgerKind(kind) {
-      return kind === "task_completed" || kind === "task_failed" || kind === "task_cancelled";
+      return kind === "task_completed" || kind === "task_blocked" || kind === "task_failed" || kind === "task_cancelled";
     }
     function resolveNodeEvidence(nodeId, ledgerEntries) {
       let evidence = { available: false };
@@ -70923,17 +70985,44 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       return MeshRuntimeStore.getInstance().localRecordStore();
     }
     function readTurnTerminalViews(meshId, opts = {}) {
+      const db2 = opts.db ?? MeshRuntimeStore.getInstance().db;
+      const wantCompleted = !opts.kinds?.length || opts.kinds.includes("task_completed");
+      const wantBlocked = !opts.kinds?.length || opts.kinds.includes("task_blocked");
+      const wantFailed = !opts.kinds?.length || opts.kinds.includes("task_failed");
+      const wantCancelled = !opts.kinds?.length || opts.kinds.includes("task_cancelled");
+      if (!wantCompleted && !wantBlocked && !wantFailed && !wantCancelled) return [];
+      const proven = wantBlocked || wantFailed ? legacyWorkerBlockedTasks({ db: db2 }, meshId) : /* @__PURE__ */ new Map();
+      const legacyAttemptIds = [...new Set([...proven.values()].map((p) => p.attemptId))];
+      const inlineProvenance = legacyAttemptIds.length <= MAX_INLINE_PROVENANCE_IDS;
       const where = ["mesh_id = ?", "task_id IS NOT NULL", "terminal_outcome IS NOT NULL"];
       const args = [meshId];
       if (opts.kinds && opts.kinds.length > 0) {
-        const outcomes = [
-          ...opts.kinds.includes("task_completed") ? ["completed"] : [],
-          ...opts.kinds.includes("task_failed") ? ["failed"] : [],
-          ...opts.kinds.includes("task_cancelled") ? ["cancelled"] : []
-        ];
-        if (outcomes.length === 0) return [];
-        where.push(`terminal_outcome IN (${outcomes.map(() => "?").join(", ")})`);
-        args.push(...outcomes);
+        if (wantBlocked !== wantFailed && legacyAttemptIds.length > 0 && inlineProvenance) {
+          const directOutcomes = [
+            ...wantCompleted ? ["completed"] : [],
+            ...wantBlocked ? ["blocked"] : [],
+            ...wantCancelled ? ["cancelled"] : []
+          ];
+          const legacyPlaceholders = legacyAttemptIds.map(() => "?").join(", ");
+          const failedClause = wantBlocked ? `(terminal_outcome = 'failed' AND attempt_id IN (${legacyPlaceholders}))` : `(terminal_outcome = 'failed' AND attempt_id NOT IN (${legacyPlaceholders}))`;
+          if (directOutcomes.length > 0) {
+            where.push(`(terminal_outcome IN (${directOutcomes.map(() => "?").join(", ")}) OR ${failedClause})`);
+            args.push(...directOutcomes, ...legacyAttemptIds);
+          } else {
+            where.push(failedClause);
+            args.push(...legacyAttemptIds);
+          }
+        } else {
+          const outcomes = [
+            ...wantCompleted ? ["completed"] : [],
+            ...wantFailed || wantBlocked && legacyAttemptIds.length > 0 ? ["failed"] : [],
+            ...wantBlocked ? ["blocked"] : [],
+            ...wantCancelled ? ["cancelled"] : []
+          ];
+          if (outcomes.length === 0) return [];
+          where.push(`terminal_outcome IN (${outcomes.map(() => "?").join(", ")})`);
+          args.push(...outcomes);
+        }
       }
       if (opts.sinceMs !== void 0) {
         where.push("terminal_at >= ?");
@@ -70947,20 +71036,17 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         where.push(`attempt_id || '#committed' NOT IN (${opts.excludeIds.map(() => "?").join(",")})`);
         args.push(...opts.excludeIds);
       }
-      const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : null;
-      const rows = (opts.db ?? MeshRuntimeStore.getInstance().db).prepare(
-        `SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_reason, terminal_strength,
-                terminal_source, terminal_at
-         FROM turn_attempts WHERE ${where.join(" AND ")} ORDER BY terminal_at ${opts.oldestFirst ? "ASC, attempt_id ASC" : "DESC, attempt_id DESC"}${tail ? ` LIMIT ${tail}` : ""}`
-      ).all(...args);
-      return (opts.oldestFirst ? rows : rows.reverse()).map((row2) => {
+      const toView = (row2) => {
         const completed = row2.terminal_outcome === "completed";
         const cancelled = row2.terminal_outcome === "cancelled";
+        const provenance = proven.get(row2.task_id);
+        const legacyBlocked = provenance?.attemptId === row2.attempt_id ? provenance : void 0;
+        const blocked = row2.terminal_outcome === "blocked" || !!legacyBlocked;
         return {
           id: `${row2.attempt_id}#committed`,
           meshId,
           timestamp: new Date(row2.terminal_at ?? 0).toISOString(),
-          kind: completed ? "task_completed" : cancelled ? "task_cancelled" : "task_failed",
+          kind: completed ? "task_completed" : blocked ? "task_blocked" : cancelled ? "task_cancelled" : "task_failed",
           sessionId: row2.session_id,
           ...row2.node_id ? { nodeId: row2.node_id } : {},
           ...row2.provider_type ? { providerType: row2.provider_type } : {},
@@ -70969,22 +71055,48 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
             taskId: row2.task_id,
             attemptId: row2.attempt_id,
             source: "turn_ledger",
-            outcome: row2.terminal_outcome,
+            outcome: blocked ? "blocked" : row2.terminal_outcome,
+            ...legacyBlocked ? { statusProvenance: legacyBlocked } : {},
             ...row2.terminal_reason ? { reason: row2.terminal_reason } : {},
             ...row2.terminal_strength ? { strength: row2.terminal_strength } : {},
             ...row2.terminal_source ? { terminalSource: row2.terminal_source } : {},
             ...completed && row2.terminal_strength === "weak" ? { evidenceLevel: "weak" } : {},
-            ...!completed && !cancelled && row2.terminal_reason ? { error: row2.terminal_reason } : {},
+            ...!completed && !blocked && !cancelled && row2.terminal_reason ? { error: row2.terminal_reason } : {},
             ...cancelled ? { intentional: true, intentionalStopReason: "operator_cleanup" } : {}
           }
         };
-      });
+      };
+      const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : null;
+      const baseSql = `SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_reason, terminal_strength,
+                terminal_source, terminal_at
+         FROM turn_attempts WHERE ${where.join(" AND ")} ORDER BY terminal_at ${opts.oldestFirst ? "ASC, attempt_id ASC" : "DESC, attempt_id DESC"}`;
+      if (!tail) {
+        const rows = db2.prepare(baseSql).all(...args);
+        return (opts.oldestFirst ? rows : rows.reverse()).map(toView).filter((view) => !opts.kinds?.length || opts.kinds.includes(view.kind));
+      }
+      const pageSize = inlineProvenance ? tail : Math.min(Math.max(tail * 2, 32), 256);
+      const stmt = db2.prepare(`${baseSql} LIMIT ? OFFSET ?`);
+      const matched = [];
+      for (let offset = 0; matched.length < tail; ) {
+        const rows = stmt.all(...args, pageSize, offset);
+        if (rows.length === 0) break;
+        for (const row2 of rows) {
+          const view = toView(row2);
+          if (!opts.kinds?.length || opts.kinds.includes(view.kind)) {
+            matched.push(view);
+            if (matched.length >= tail) break;
+          }
+        }
+        if (rows.length < pageSize) break;
+        offset += rows.length;
+      }
+      return opts.oldestFirst ? matched : matched.reverse();
     }
     function byTime(a, b) {
       return a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0;
     }
     function withTurnTerminals(meshId, local, kinds, opts) {
-      const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ["task_completed", "task_failed", "task_cancelled"];
+      const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ["task_completed", "task_blocked", "task_failed", "task_cancelled"];
       if (wanted.length === 0) return local;
       let views;
       try {
@@ -71055,6 +71167,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       const recentFailureCutoff = Date.now() - RECENT_FAILURE_WINDOW_MS;
       let taskCompleted = counts.get("task_completed") ?? 0;
+      let taskBlocked = counts.get("task_blocked") ?? 0;
       let taskFailed = 0;
       let taskStalled = 0;
       let recentFailures = 0;
@@ -71085,6 +71198,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
           taskCompleted++;
           continue;
         }
+        if (view.kind === "task_blocked") {
+          taskBlocked++;
+          continue;
+        }
         if (isIntentionalCleanupStopEntry(view)) continue;
         taskFailed++;
         if (at >= recentFailureCutoff) recentFailures++;
@@ -71094,6 +71211,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         totalEntries: total,
         taskDispatched: counts.get("task_dispatched") ?? 0,
         taskCompleted,
+        taskBlocked,
         taskFailed,
         taskStalled,
         sessionLaunched: counts.get("session_launched") ?? 0,
@@ -71230,17 +71348,20 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
     var MAX_LOCAL_RECORD_SLICE_LIMIT;
     var RECENT_FAILURE_WINDOW_MS;
     var TERMINAL_KINDS;
+    var MAX_INLINE_PROVENANCE_IDS;
     var CLEANUP_STOP_PROJECTION;
     var init_mesh_local_records = __esm2({
       "src/mesh/mesh-local-records.ts"() {
         "use strict";
+        init_mesh_worker_outcome_view();
         init_dist();
         init_mesh_runtime_store();
         init_mesh_ledger();
         DEFAULT_LOCAL_RECORD_SLICE_LIMIT = 100;
         MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
         RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1e3;
-        TERMINAL_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_failed", "task_cancelled"]);
+        TERMINAL_KINDS = /* @__PURE__ */ new Set(["task_completed", "task_blocked", "task_failed", "task_cancelled"]);
+        MAX_INLINE_PROVENANCE_IDS = 500;
         CLEANUP_STOP_PROJECTION = {
           name: "cleanup_stop",
           paths: ["$.intentional", "$.reason", "$.intentionalStopReason", "$.source"]
@@ -83586,6 +83707,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         case "stopping":
           return { status: "finalizing", attemptId: presentation.attemptId, stage };
         case "completed":
+        case "blocked":
           return { status: "idle", attemptId: presentation.attemptId, stage };
         case "failed":
         case "cancelled":
@@ -149249,6 +149371,7 @@ ${output}` : "";
       });
     }
     init_mesh_queue_assignment();
+    init_mesh_worker_outcome_view();
     init_mesh_queue_hold();
     init_dist();
     init_mesh_record();
@@ -149415,7 +149538,12 @@ ${output}` : "";
       const req = decodeQueueQueryRequest(args);
       if (!req) return badRequest("queue_query");
       try {
-        let entries = getQueue(req.meshId, req.statuses ? { status: [...req.statuses] } : void 0);
+        const readStatuses = req.view && req.statuses?.some((status) => status === "blocked" || status === "failed") ? [.../* @__PURE__ */ new Set([...req.statuses, "failed", "blocked"])] : req.statuses;
+        let entries = getQueue(req.meshId, readStatuses ? { status: [...readStatuses] } : void 0);
+        if (req.view) {
+          entries = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), req.meshId, entries);
+          if (req.statuses?.length) entries = entries.filter((entry) => req.statuses.includes(entry.status));
+        }
         if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
         const holdStore = MeshRuntimeStore.getInstance();
         const blockerIds = [...new Set(entries.flatMap((entry) => entry.hold?.blockingTaskIds || []))];
@@ -149425,8 +149553,9 @@ ${output}` : "";
         const store2 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
         if (store2 && req.withCounts) {
           const olderThanIso = req.historicalOlderThanMs !== void 0 ? new Date(Date.now() - req.historicalOlderThanMs).toISOString() : void 0;
-          const { counts, oldHistoricalCount } = store2.getQueueStatusCounts(req.meshId, olderThanIso);
+          const { counts, oldHistoricalCount, legacyReportedBlockedCount } = store2.getQueueStatusCounts(req.meshId, olderThanIso);
           response.counts = counts;
+          if (legacyReportedBlockedCount) response.legacyReportedBlockedCount = legacyReportedBlockedCount;
           if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
         }
         if (store2 && req.withDependencyHeads) {
@@ -154411,6 +154540,8 @@ ${output}` : "";
       clone_mesh_node: { invalidates: ["daemon.metadata"], meshSender: "any_member_mesh" },
       retry_mesh_node_bootstrap: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
+    init_mesh_runtime_store();
+    init_mesh_worker_outcome_view();
     init_logger();
     init_command_registry();
     init_daemon_components_port();
@@ -154464,8 +154595,8 @@ ${output}` : "";
         try {
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, describeTaskDependencyState: describeTaskDependencyState22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const status = Array.isArray(args?.status) ? args.status.map((s2) => typeof s2 === "string" ? s2.trim() : "").filter(Boolean) : void 0;
-          const rawQueue = getQueue2(meshId, { status });
-          const allQueue = getQueue2(meshId);
+          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId)).filter((task) => !status?.length || status.includes(task.status));
+          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId));
           const statusById = new Map(allQueue.map((task) => [task.id, task.status]));
           const depMetaById = new Map(allQueue.map((task) => [task.id, task]));
           const queue = rawQueue.map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
@@ -156103,6 +156234,8 @@ ${ptyResult.output.slice(-2e3)}`);
       }
     };
     var meshCoordinatorLaunchSpecs = defineCommandSpecs("high", meshCoordinatorLaunchHandlers, {}, { meshSender: "authenticated_peer" });
+    init_mesh_runtime_store();
+    init_mesh_worker_outcome_view();
     init_mesh_queue_hold();
     var fs88 = __toESM2(require("fs"));
     var import_os6 = require("os");
@@ -156371,7 +156504,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const refreshReason = refreshRequested ? "explicit_refresh" : rebuildFromHeld ? "held_state_rebuild" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const rawQueue = getQueue2(meshId);
-          const queue = rawQueue.map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
+          const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
           const queueSummary = getMeshQueueStats2(meshId);
           const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime2 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
           const schedulingRuntime = buildMeshSchedulingRuntime2(mesh, queue);
@@ -190132,7 +190265,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function isPublishableAttempt(attempt) {
       return !!attempt && attempt.scope !== "plain" && typeof attempt.meshId === "string" && attempt.meshId.length > 0;
     }
-    var TERMINAL_NOTIFY = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "stopped"]);
+    var TERMINAL_NOTIFY = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled", "stopped"]);
     function commitEventId(evidenceEventId) {
       return `${evidenceEventId}#committed`;
     }
@@ -196927,8 +197060,8 @@ var SESSION_STATUSES = [
   "disconnected"
 ];
 var SESSION_STATUS_SET = new Set(SESSION_STATUSES);
-var MESH_TASK_STATUSES = ["pending", "assigned", "completed", "failed", "cancelled"];
-var MESH_TERMINAL_TASK_STATUSES = ["completed", "failed", "cancelled"];
+var MESH_TASK_STATUSES = ["pending", "assigned", "completed", "blocked", "failed", "cancelled"];
+var MESH_TERMINAL_TASK_STATUSES = ["completed", "blocked", "failed", "cancelled"];
 var MESH_TASK_MODES = ["code_change", "validation", "live_debug_readonly", "launch_app", "convergence"];
 var MESH_TASK_PRIORITIES = ["low", "normal", "high"];
 var MESH_THINKING_LEVELS = ["low", "medium", "high"];
@@ -197267,7 +197400,7 @@ var HOLD_REASONS = [
   "await_end",
   "report_correction"
 ];
-var TURN_OUTCOMES = ["completed", "failed", "cancelled"];
+var TURN_OUTCOMES = ["completed", "blocked", "failed", "cancelled"];
 var COMMIT_STRENGTHS = ["genuine", "weak", "tool_report", "operator"];
 var TURN_REASONS = [
   // commits
@@ -197312,6 +197445,7 @@ var TURN_REASONS = [
 ];
 var NOTIFY_KINDS = [
   "completed",
+  "blocked",
   "failed",
   "cancelled",
   "stopped",
@@ -197455,7 +197589,7 @@ function isTurnAttemptRefValue(value) {
 function isTurnObserveResponse(value) {
   return isRecord(value) && hasOnlyKeys2(value, ["verdict", "attemptRef", "outcome"]) && isTurnObserveVerdict(value.verdict) && isTurnAttemptRefValue(value.attemptRef) && (value.outcome === void 0 || isTurnOutcomeValue(value.outcome));
 }
-var TURN_OUTCOMES_LOCAL = ["completed", "failed", "cancelled"];
+var TURN_OUTCOMES_LOCAL = ["completed", "blocked", "failed", "cancelled"];
 function isTurnOutcomeValue(value) {
   return typeof value === "string" && TURN_OUTCOMES_LOCAL.includes(value);
 }
@@ -197668,9 +197802,10 @@ function isQueueDependencyHeadWire(value) {
   return isRecord(value) && hasOnlyKeys2(value, ["id", "status", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
 }
 function isQueueQueryResponse(value) {
-  if (!isRecord(value) || !hasOnlyKeys2(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["entries", "counts", "oldHistoricalCount", "legacyReportedBlockedCount", "dependencyHeads"])) return false;
   if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire)) return false;
   if (value.counts !== void 0 && (!isRecord(value.counts) || !Object.values(value.counts).every(isNonNegativeInt))) return false;
+  if (value.legacyReportedBlockedCount !== void 0 && !isNonNegativeInt(value.legacyReportedBlockedCount)) return false;
   if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt(value.oldHistoricalCount)) return false;
   if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire))) return false;
   return true;
@@ -198580,6 +198715,7 @@ async function readQueueActiveView(ctx) {
     activeRows: res.entries,
     counts: res.counts ?? {},
     oldHistoricalCount: res.oldHistoricalCount ?? 0,
+    ...res.legacyReportedBlockedCount ? { legacyReportedBlockedCount: res.legacyReportedBlockedCount } : {},
     dependencyHeads: [...res.dependencyHeads ?? []]
   };
 }
@@ -200541,7 +200677,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
 };
 var MESH_VIEW_QUEUE_TOOL = {
   name: "mesh_view_queue",
-  description: "View the mesh work queue with source-of-truth active counts separated from historical completed/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
+  description: "View the mesh work queue with source-of-truth active counts separated from historical completed/blocked/failed/cancelled records. Do not repeatedly call this to wait for generating assigned work; wait for pendingCoordinatorEvents/completion events or an explicit user status request.",
   inputSchema: {
     type: "object",
     properties: {
@@ -200549,14 +200685,14 @@ var MESH_VIEW_QUEUE_TOOL = {
       status: {
         type: "array",
         items: { type: "string" },
-        description: "Explicit row filter by task status: pending, assigned, completed, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows."
+        description: "Explicit row filter by task status: pending, assigned, completed, blocked, failed, cancelled. Overall counts stay unfiltered; the visible* counts and visibleSummary (compact mode: only when a view or status filter is applied) describe the returned rows."
       },
       view: {
         type: "string",
         enum: ["all", "active", "historical"],
-        description: "Optional row view. active returns pending/assigned rows, historical returns completed/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility."
+        description: "Optional row view. active returns pending/assigned rows, historical returns completed/blocked/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility."
       },
-      compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Drops large historical (completed/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload." },
+      compact: { type: "boolean", description: "Slim payload for LLM callers. Default true. Drops large historical (completed/blocked/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload." },
       verbose: { type: "boolean", description: "Force the full payload; overrides compact." }
     }
   }
@@ -201392,7 +201528,7 @@ Object.assign(ALL_MESH_TOOLS, annotateAll(ALL_MESH_TOOLS));
 var import_daemon_core7 = __toESM(require_dist3());
 var OLD_HISTORICAL_QUEUE_RECORD_MS2 = 7 * 24 * 60 * 6e4;
 var ACTIVE_QUEUE_STATUSES = /* @__PURE__ */ new Set(["pending", "assigned"]);
-var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+var HISTORICAL_QUEUE_STATUSES = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
 function buildQueueLivenessIndex(mesh, liveVerifiedNodes) {
   const nodeIds = /* @__PURE__ */ new Set();
   const nodeSessionIds = /* @__PURE__ */ new Map();
@@ -201439,7 +201575,7 @@ function buildQueueStatusSummary(queue) {
   const held = queue.filter((task) => task.status === "pending" && task.hold);
   const heldReasons = {};
   for (const task of held) heldReasons[task.hold.reason] = (heldReasons[task.hold.reason] || 0) + 1;
-  const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
+  const counts = { pending: 0, assigned: 0, completed: 0, blocked: 0, failed: 0, cancelled: 0 };
   let staleAssigned = 0;
   for (const task of queue) {
     const status = typeof task?.status === "string" ? task.status : void 0;
@@ -201454,7 +201590,7 @@ function buildQueueStatusSummary(queue) {
     heldReasons,
     totalCount: queue.length,
     activeCount: counts.pending + liveAssigned,
-    historicalCount: counts.completed + counts.failed + counts.cancelled,
+    historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
     counts,
     activeCounts: {
       pending: counts.pending,
@@ -201467,6 +201603,7 @@ function buildQueueStatusSummary(queue) {
     },
     historicalCounts: {
       completed: counts.completed,
+      blocked: counts.blocked,
       failed: counts.failed,
       cancelled: counts.cancelled
     }
@@ -201474,7 +201611,7 @@ function buildQueueStatusSummary(queue) {
 }
 function buildQueueStatusSummaryFromCounts(statusCounts, activeRows, allowed) {
   const pick = (status) => !allowed || allowed.has(status) ? statusCounts[status] ?? 0 : 0;
-  const counts = { pending: pick("pending"), assigned: pick("assigned"), completed: pick("completed"), failed: pick("failed"), cancelled: pick("cancelled") };
+  const counts = { pending: pick("pending"), assigned: pick("assigned"), completed: pick("completed"), blocked: pick("blocked"), failed: pick("failed"), cancelled: pick("cancelled") };
   let totalCount = 0;
   for (const [status, n] of Object.entries(statusCounts)) {
     if (!allowed || allowed.has(status)) totalCount += n;
@@ -201491,12 +201628,12 @@ function buildQueueStatusSummaryFromCounts(statusCounts, activeRows, allowed) {
     heldReasons: !allowed || allowed.has("pending") ? buildQueueStatusSummary(activeRows).heldReasons : {},
     totalCount,
     activeCount: counts.pending + liveAssigned,
-    historicalCount: counts.completed + counts.failed + counts.cancelled,
+    historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
     counts,
     activeCounts: { pending: counts.pending, assigned: liveAssigned },
     staleAssignedCount: staleAssigned,
     rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
-    historicalCounts: { completed: counts.completed, failed: counts.failed, cancelled: counts.cancelled }
+    historicalCounts: { completed: counts.completed, blocked: counts.blocked, failed: counts.failed, cancelled: counts.cancelled }
   };
 }
 function queueViewStatusSet(view, statuses) {
@@ -201585,7 +201722,7 @@ function buildQueueMaintenanceReport(queue) {
     mutationPerformed: false,
     sourceOfTruth: "mesh_work_queue_file",
     staleAssignedDefinition: "Only active assigned queue rows are stale candidates, and only when the assigned node/session is absent from the current live mesh snapshot.",
-    historicalDefinition: "completed/failed/cancelled rows are historical ledger records and never active assignments.",
+    historicalDefinition: "completed/blocked/failed/cancelled rows are historical ledger records and never active assignments.",
     staleAssignedTasks,
     staleAssignedCount: staleAssignedTasks.length,
     historicalRecordCount: historicalTasks.length,
@@ -201665,7 +201802,7 @@ function annotateQueueStaleness(queue, mesh, liveVerifiedNodes) {
       isHistorical: taskStatus ? HISTORICAL_QUEUE_STATUSES.has(taskStatus) : false,
       dispatchedAt: task?.createdAt,
       ...taskStatus === "assigned" ? { activeTaskId: task.id } : {},
-      ...taskStatus === "completed" || taskStatus === "failed" ? {
+      ...taskStatus === "completed" || taskStatus === "blocked" || taskStatus === "failed" ? {
         completedAt: task.updatedAt
       } : {}
     };
@@ -204195,7 +204332,7 @@ async function meshViewQueue(ctx, args) {
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
     const activeView = compact ? await readQueueActiveView(ctx) : null;
-    const rawQueue = activeView ? activeView.activeRows : await readQueueFromDaemon(ctx);
+    const rawQueue = activeView ? activeView.activeRows : await readQueueFromDaemon(ctx, { view: true });
     const dependencyRows = activeView ? [...rawQueue, ...activeView.dependencyHeads] : rawQueue;
     const statusById = new Map(dependencyRows.map((task) => [task.id, task.status]));
     const depMetaById = new Map(dependencyRows.map((task) => [task.id, task]));
@@ -204254,11 +204391,12 @@ async function meshViewQueue(ctx, args) {
     return JSON.stringify({
       success: true,
       payloadMode: compact ? "compact" : "full",
+      ...activeView?.legacyReportedBlockedCount ? { legacyReportedBlockedCount: activeView.legacyReportedBlockedCount, legacyStatusProvenance: "worker_tool_report; stored failed rows unchanged" } : {},
       sourceOfTruth: {
         kind: "mesh_work_queue_file",
         activeStatuses: ["pending", "assigned"],
-        historicalStatuses: ["completed", "failed", "cancelled"],
-        notes: "pending/assigned are active work; completed/failed/cancelled are historical ledger records and never stale assignments."
+        historicalStatuses: ["completed", "blocked", "failed", "cancelled"],
+        notes: "pending/assigned are active work; completed/blocked/failed/cancelled are historical ledger records and never stale assignments."
       },
       filter: {
         view,
@@ -204266,7 +204404,7 @@ async function meshViewQueue(ctx, args) {
         filtered
       },
       queue: visibleQueue,
-      ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
+      ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/blocked/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
       ...compact && compactQueueResult.omitted > 0 ? {
         activeRowsOmitted: compactQueueResult.omitted,
         activeRowsHint: `Showing the first ${COMPACT_MAX_ACTIVE_QUEUE_ROWS} active rows (per-row messages truncated). ${compactQueueResult.omitted} more active row(s) omitted \u2014 see activeCount/activeCounts for the complete total or use verbose=true.`

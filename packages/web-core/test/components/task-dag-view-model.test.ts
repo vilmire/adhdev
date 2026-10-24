@@ -133,3 +133,15 @@ describe('scopeTaskDagTasks', () => {
         expect(all.hiddenCount).toBe(0)
     })
 })
+
+it('worker blocked remains distinct from failed and never satisfies a dependent', () => {
+    const dag = buildTaskDag([
+        task({ id: 'review-blocked', status: 'blocked' }),
+        task({ id: 'runtime-failed', status: 'failed' }),
+        task({ id: 'review-completed', status: 'completed' }),
+        task({ id: 'dependent', dependsOn: ['review-blocked'] }),
+    ])
+    expect(dag.stats).toMatchObject({ reviewBlocked: 1, failed: 1, completed: 1 })
+    expect(dag.edges[0].state).toBe('waiting')
+    expect(dag.nodes.find(node => node.id === 'dependent')?.waitingOn).toEqual(['review-blocked'])
+})

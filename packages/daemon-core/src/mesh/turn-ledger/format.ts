@@ -590,6 +590,7 @@ function renderMeshEvent(input: RenderTurnNotifyInput, missing: SummaryRef[]): s
 // ─── dispatch table ─────────────────────────────────────────────────────────
 
 const RENDERERS: Record<NotifyKind, (input: RenderTurnNotifyInput, missing: SummaryRef[]) => string> = {
+    blocked: (input, missing) => `[System] Worker task ${input.scalars.taskId ?? ''} reported blocked. External follow-up is required; do not automatically retry or close the mission.\n${resolve(input.refs.summary, input.resolveRef, missing) ?? ''}`,
     completed: renderCompleted,
     failed: (input, missing) => renderStopped(input, missing),
     cancelled: (input) => renderCancelled(input),

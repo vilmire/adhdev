@@ -1,3 +1,4 @@
+import { legacyWorkerBlockedTasks } from './mesh-worker-outcome-view.js';
 // ---------------------------------------------------------------------------
 // mesh-topic-index — the durable SQL index of `mesh.<id>.events` (C3, C-W3)
 // ---------------------------------------------------------------------------
@@ -286,25 +287,29 @@ export function readOwnTaskLifecycle(
     const dispatched = opts.ownWriter
         ? index.query(meshId, { writer: { scope: 'own', writer: opts.ownWriter }, kinds: ['task_dispatched'], tail })
         : [];
+    const proven = legacyWorkerBlockedTasks({ db: turnStore.db }, meshId);
     const terminals = (turnStore.db.prepare(`SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_at
-            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'failed', 'cancelled')
+            FROM turn_attempts WHERE mesh_id = ? AND task_id IS NOT NULL AND terminal_outcome IN ('completed', 'blocked', 'failed', 'cancelled')
             ORDER BY terminal_at DESC LIMIT ?`).all(meshId, tail) as Array<{
         attempt_id: string; task_id: string; session_id: string; node_id: string | null; provider_type: string | null;
         terminal_outcome: string; terminal_at: number | null;
     }>).map((row): MeshIndexView => {
         const atMs = row.terminal_at ?? 0;
+        const statusProvenance = proven.get(row.task_id);
+        const legacyBlocked = statusProvenance?.attemptId === row.attempt_id ? statusProvenance : undefined;
+        const outcome = legacyBlocked ? 'blocked' : row.terminal_outcome;
         return {
             writer: opts.ownWriter ?? '',
             seq: 0,
             id: `${row.attempt_id}#committed`,
             timestamp: new Date(atMs).toISOString(),
             atMs,
-            kind: row.terminal_outcome === 'completed' ? 'task_completed' : (row.terminal_outcome === 'cancelled' ? 'task_cancelled' : 'task_failed'),
+            kind: committedKind(outcome)!,
             sessionId: row.session_id,
             nodeId: row.node_id ?? undefined,
             providerType: row.provider_type ?? undefined,
             taskId: row.task_id,
-            payload: { taskId: row.task_id, outcome: row.terminal_outcome },
+            payload: { taskId: row.task_id, outcome, ...(legacyBlocked ? { storedOutcome: 'failed', derivedFrom: 'worker_tool_report', outputVersion: legacyBlocked.outputVersion } : {}) },
         };
     });
     return [...dispatched, ...terminals].sort((a, b) => a.atMs - b.atMs);
@@ -313,8 +318,9 @@ export function readOwnTaskLifecycle(
 // ─── fleet task activity (C3: worker-peer-context reads `fleet`) ───────────
 
 /** The ledger kind a committed turn projects to for lifecycle readers. */
-function committedKind(outcome: unknown): 'task_completed' | 'task_failed' | 'task_cancelled' | null {
+function committedKind(outcome: unknown): 'task_completed' | 'task_blocked' | 'task_failed' | 'task_cancelled' | null {
     if (outcome === 'completed') return 'task_completed';
+    if (outcome === 'blocked') return 'task_blocked';
     if (outcome === 'failed') return 'task_failed';
     if (outcome === 'cancelled') return 'task_cancelled';
     return null;
@@ -328,7 +334,7 @@ function committedKind(outcome: unknown): 'task_completed' | 'task_failed' | 'ta
  * not ledger records). Filter-before-tail in SQL; ascending order.
  */
 export function readFleetTaskActivity(index: MeshTopicIndex, meshId: string, kinds: readonly string[], tail: number): MeshIndexView[] {
-    const wantTerminal = kinds.includes('task_completed') || kinds.includes('task_failed');
+    const wantTerminal = kinds.includes('task_completed') || kinds.includes('task_blocked') || kinds.includes('task_failed');
     const rows = index.query(meshId, {
         writer: { scope: 'fleet' },
         kinds: wantTerminal ? [...kinds, 'turn.committed'] : kinds,

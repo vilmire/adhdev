@@ -691,10 +691,8 @@ export class MeshRuntimeStore {
         }): MeshWorkQueueEntry | null { return claimNextQueueTask(this, meshId, nodeId, sessionId, capabilityTags, opts); }
 
     getQueueStatsByStatus(meshId: string): { status: string; count: number }[] {
-        this.ensureLegacyQueueMigrated(meshId);
-        return this.db.prepare(
-            `SELECT status, COUNT(*) as count FROM mesh_queue WHERE mesh_id = ? GROUP BY status`
-        ).all(meshId) as { status: string; count: number }[];
+        const { counts } = this.getQueueStatusCounts(meshId);
+        return Object.entries(counts).map(([status, count]) => ({ status, count }));
     }
 
     getActiveAssignmentDetails(meshId: string): Array<{ id: string; nodeId?: string; sessionId?: string; message: string }> {
@@ -749,7 +747,7 @@ export class MeshRuntimeStore {
     }
 
     /** Whole-queue per-status counts (+ terminal rows older than `olderThanIso`) — columns only. */
-    getQueueStatusCounts(meshId: string, olderThanIso?: string): { counts: Record<string, number>; oldHistoricalCount: number } {
+    getQueueStatusCounts(meshId: string, olderThanIso?: string): { counts: Record<string, number>; oldHistoricalCount: number; legacyReportedBlockedCount?: number } {
         return getQueueStatusCountsImpl(this, meshId, olderThanIso);
     }
 

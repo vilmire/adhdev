@@ -332,7 +332,7 @@ type WorkerReportFence = 'ok' | 'unknown_attempt' | 'stale_attempt' | 'session_m
 export function fenceWorkerReportOnLedger(
     store: MeshRuntimeStore,
     identity: { meshId: string; taskId: string; attemptId?: string; sessionId?: string },
-    terminalStatus: 'completed' | 'failed',
+    terminalStatus: 'completed' | 'blocked' | 'failed',
 ): WorkerReportFence {
     const turns = store.turnStore();
     const current = turns.findLatestAttemptForTask(identity.meshId, identity.taskId);
@@ -849,7 +849,7 @@ export function acceptWorkerCompletionReportForIdentity(
     // attempt, from that attempt's session, and may not flip an attempt the
     // ledger already committed to a different outcome. An unknown attempt has
     // no row to hang the evidence on, so it is refused before anything is written.
-    const terminalStatus = report.outcome === 'completed' ? 'completed' : 'failed';
+    const terminalStatus = report.outcome;
     let fence: WorkerReportFence;
     try {
         fence = fenceWorkerReportOnLedger(store, identity, terminalStatus);
@@ -923,10 +923,8 @@ export function acceptWorkerCompletionReportForIdentity(
         handoffNoteError = noteResult.error;
     }
 
-    // (4) Terminal. 'blocked' is NOT a terminal outcome the ledger knows — it
-    // maps to 'failed' with a reason, because a blocked task genuinely did not
-    // succeed and must not unblock its dependents as though it had. The blockers list
-    // carries the why, and the coordinator reads it from the envelope.
+    // (4) A blocked report ends this task attempt without succeeding or failing.
+    // Claim/retry fences treat it as terminal; only completed satisfies dependencies.
     if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
     if (identity.attemptId && store.turnStore().getAttempt(identity.attemptId)?.state === 'stopping') {
         const ledger = getActiveTurnLedger();

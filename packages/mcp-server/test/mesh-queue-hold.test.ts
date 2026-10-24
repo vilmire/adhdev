@@ -38,3 +38,12 @@ describe('compact hold visibility and enqueue advice', () => {
         assert.equal(broadOwnedPathsWarning({ ...own, taskMode: 'live_debug_readonly' }, queue), undefined);
     });
 });
+
+it('review blocked is historical and counted separately from failure in both summary paths', () => {
+    const rows = [task('review', [], 'blocked'), task('runtime', [], 'failed'), task('review-complete', [], 'completed')];
+    for (const summary of [buildQueueStatusSummary(rows), buildQueueStatusSummaryFromCounts({ blocked: 1, failed: 1, completed: 1 }, [])]) {
+        assert.deepEqual(summary.counts, { pending: 0, assigned: 0, completed: 1, blocked: 1, failed: 1, cancelled: 0 });
+        assert.equal(summary.historicalCount, 3);
+        assert.equal(summary.activeCount, 0);
+    }
+});

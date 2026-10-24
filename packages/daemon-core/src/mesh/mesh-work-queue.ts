@@ -1039,25 +1039,26 @@ export function hasPendingDependents(meshId: string, taskId: string): boolean {
  * Return aggregate queue statistics for the given mesh.
  */
 export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
-    const rows = MeshRuntimeStore.getInstance().getQueueStatsByStatus(meshId);
-    const counts: Record<string, number> = {};
-    for (const r of rows) counts[r.status] = r.count;
+    const { counts, legacyReportedBlockedCount } = MeshRuntimeStore.getInstance().getQueueStatusCounts(meshId);
     const pending = counts['pending'] ?? 0;
     const assigned = counts['assigned'] ?? 0;
     const completed = counts['completed'] ?? 0;
     const failed = counts['failed'] ?? 0;
+    const blocked = counts['blocked'] ?? 0;
     const cancelled = counts['cancelled'] ?? 0;
     return {
-        total: pending + assigned + completed + failed + cancelled,
+        total: pending + assigned + completed + blocked + failed + cancelled,
         active: pending + assigned,
-        historical: completed + failed + cancelled,
+        historical: completed + blocked + failed + cancelled,
         pending,
         assigned,
         completed,
+        blocked,
         failed,
         cancelled,
         activeCounts: { pending, assigned },
-        historicalCounts: { completed, failed, cancelled },
+        historicalCounts: { completed, blocked, failed, cancelled },
+        ...(legacyReportedBlockedCount ? { legacyReportedBlockedCount } : {}),
         activeAssignments: MeshRuntimeStore.getInstance().getActiveAssignmentDetails(meshId),
     };
 }

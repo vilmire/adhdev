@@ -382,6 +382,8 @@ export interface RepoMeshQueueTask {
     meshId: string;
     message: string;
     status: RepoMeshQueueTaskStatus;
+    /** Read-only derivation for proven legacy worker blocked reports; history stays failed. */
+    statusProvenance?: { storedStatus: 'failed'; derivedFrom: 'worker_tool_report'; attemptId: string; generation: number; outputVersion: number };
     /**
      * SLOT-ROUTING difficulty classification ('easy'|'medium'|'difficult'|'freeform')
      * carried on {@link MeshWorkQueueEntry} — already on the wire, just untyped here
@@ -449,12 +451,15 @@ export interface RepoMeshQueueTask {
 }
 
 export interface RepoMeshQueueSummary {
+    /** Included in blocked; derived from matching legacy worker reports, with stored failed rows unchanged. */
+    legacyReportedBlockedCount?: number;
     total: number;
     active: number;
     historical: number;
     pending: number;
     assigned: number;
     completed: number;
+    blocked?: number;
     failed: number;
     cancelled: number;
     activeCounts: {
@@ -495,6 +500,7 @@ export interface RepoMeshLedgerSummaryStatus {
     totalEntries: number;
     taskDispatched: number;
     taskCompleted: number;
+    taskBlocked?: number;
     taskFailed: number;
     taskStalled: number;
     sessionLaunched: number;
