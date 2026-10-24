@@ -38,9 +38,12 @@ export type OwnedLockResult =
 export interface OwnedLockOptions {
     isPidAlive?: (pid: number) => boolean;
     now?: () => number;
-    /** Opt-in expiry for bounded synchronous transactions. Other callers retain
-     * the default of never reclaiming a known live owner. */
+    /** Opt-in expiry, including known live owners. Requires external writer
+     * fencing: a synchronous transaction can stall and resume after expiry. */
     maxAgeMs?: number;
+    /** Expiry for missing/torn owner records only. Does not expire live owners;
+     * defaults to maxAgeMs, then OWNERLESS_STALE_MS. */
+    ownerlessMaxAgeMs?: number;
     /** Opt into peer probes for stale-looking locks. Never enable in receipt transactions. */
     probePeerIdentity?: boolean;
     /** Process start identity probe (injectable for tests). */
@@ -105,13 +108,13 @@ function readOwner(lock: string): Observed {
     catch { return { kind: 'gone' }; }
 }
 
-function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, maxAgeMs: number | undefined,
+function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, options: OwnedLockOptions,
     startOf: (pid: number) => string | undefined): boolean {
     if (observed.kind === 'owner') return !alive(observed.owner.pid)
         || ((observed.owner.pid === process.pid || now - observed.owner.acquiredAt >= OWNERLESS_STALE_MS)
             && pidReused(observed.owner, startOf))
-        || (maxAgeMs !== undefined && now - observed.owner.acquiredAt >= maxAgeMs);
-    if (observed.kind === 'ownerless') return now - observed.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
+        || (options.maxAgeMs !== undefined && now - observed.owner.acquiredAt >= options.maxAgeMs);
+    if (observed.kind === 'ownerless') return now - observed.mtimeMs >= (options.ownerlessMaxAgeMs ?? options.maxAgeMs ?? OWNERLESS_STALE_MS);
     return false;
 }
 
@@ -128,17 +131,17 @@ function sameInstance(a: Observed, b: Observed): boolean {
 }
 
 /** Remove an abandoned lock under the reclaim guard. True when the caller should retry mkdir. */
-function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, maxAgeMs: number | undefined,
+function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, options: OwnedLockOptions,
     startOf: (pid: number) => string | undefined): boolean {
     const observed = readOwner(lock);
     if (observed.kind === 'gone') return true;
-    if (!abandoned(observed, alive, now(), maxAgeMs, startOf)) return false;
+    if (!abandoned(observed, alive, now(), options, startOf)) return false;
     const guard = `${lock}.reclaim`;
     try { mkdirSync(guard, { mode: 0o700 }); } catch { return false; }
     try {
         const recheck = readOwner(lock);
         if (recheck.kind === 'gone') return true;
-        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), maxAgeMs, startOf)) return false;
+        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), options, startOf)) return false;
         try { unlinkSync(join(lock, OWNER_FILE)); } catch { /* ownerless or torn record */ }
         try { rmdirSync(lock); return true; } catch { return false; }
     } finally {
@@ -162,7 +165,7 @@ export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): 
         catch (error) {
             const errno = (error as NodeJS.ErrnoException).code;
             if (errno !== 'EEXIST') return { ok: false, busy: false, ...(errno ? { errno } : {}), reason: `write_lock_unavailable: ${lock}` };
-            if (!reclaim(lock, alive, now, options.maxAgeMs, startOf)) return held();
+            if (!reclaim(lock, alive, now, options, startOf)) return held();
             continue;
         }
         const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,12 +44,23 @@ describe('acquireOwnedLock process start identity', () => {
         expect(acquireOwnedLock(b, { processStartId: () => 'anything' }).ok).toBe(false);
     });
 
-    it('still honours the opt-in maxAgeMs for receipt-style locks', () => {
+    it('still honours opt-in live-owner expiry for callers with external fencing', () => {
         const lock = join(dir, 'f.lock');
         plant(lock, { acquiredAt: 1_000 });
         expect(acquireOwnedLock(lock, { now: () => 40_000, maxAgeMs: 30_000, processStartId: () => undefined }).ok).toBe(true);
         const young = join(dir, 'g.lock'); plant(young, { acquiredAt: 39_000 });
         expect(acquireOwnedLock(young, { now: () => 40_000, maxAgeMs: 30_000, processStartId: () => undefined }).ok).toBe(false);
+    });
+
+    it('expires ownerless records at the configured age without expiring a live owner', () => {
+        const options = { now: () => 40_000, ownerlessMaxAgeMs: 30_000, processStartId: () => undefined };
+        const live = join(dir, 'live.lock'); plant(live, { acquiredAt: 1_000 });
+        expect(acquireOwnedLock(live, options)).toMatchObject({ ok: false, busy: true });
+        const ownerless = join(dir, 'ownerless.lock'); mkdirSync(ownerless);
+        utimesSync(ownerless, new Date(10_001), new Date(10_001));
+        expect(acquireOwnedLock(ownerless, options)).toMatchObject({ ok: false, busy: true });
+        utimesSync(ownerless, new Date(10_000), new Date(10_000));
+        expect(acquireOwnedLock(ownerless, options).ok).toBe(true);
     });
 });
 
