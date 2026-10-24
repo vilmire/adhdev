@@ -81,13 +81,15 @@ describe('mobile inbox — "…" row menu, hide with Undo', () => {
     }
 
     const menuButton = () => container.querySelector<HTMLButtonElement>('.mobile-inbox-row-menu-button')!
-    const menuItem = (cls: string) => container.querySelector<HTMLButtonElement>(`[role="menu"] .${cls}`)
+    const menuItem = (cls: string) => document.body.querySelector<HTMLButtonElement>(`[role="menu"] .${cls}`)
 
-    it('one "…" per row; Mute, Hide and Stop appear only inside the opened menu', () => {
+    it('one "…" per row; Mute, Hide and Stop appear only inside the opened body-portaled menu', () => {
         render({ onHideConversation: vi.fn(), onStopCli: vi.fn(), onToggleMuteConversation: vi.fn(), isConversationMuted: () => false })
         expect(container.querySelectorAll('.mobile-inbox-row-menu-button')).toHaveLength(1)
         expect(menuItem('mobile-inbox-hide-button')).toBeNull()
         act(() => menuButton().click())
+        expect(container.querySelector('[role="menu"]')).toBeNull()
+        expect(document.body.querySelector('[role="menu"]')).not.toBeNull()
         expect(menuItem('mobile-inbox-mute-button')).not.toBeNull()
         expect(menuItem('mobile-inbox-hide-button')).not.toBeNull()
         expect(menuItem('mobile-inbox-stop-button')).not.toBeNull()

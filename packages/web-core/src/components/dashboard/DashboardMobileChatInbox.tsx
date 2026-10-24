@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { IconAssistant, IconBell, IconBellOff, IconSettings, IconChat, IconEyeOff, IconMesh, IconMoreHorizontal, IconX } from '../Icons'
 import InstallCommand from '../InstallCommand'
@@ -22,6 +23,11 @@ import StartAssistantButton from './StartAssistantButton'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
 import DashboardMobileApprovalsLink from './DashboardMobileApprovalsLink'
 import DashboardHiddenConversationsList from './DashboardHiddenConversationsList'
+import {
+    computeAnchoredMenuPlacement,
+    resolveVisibleViewport,
+    type AnchoredMenuPlacement,
+} from './anchored-menu-position'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -143,7 +149,36 @@ function MobileEmptyHero({ icon, title, subtitle, children }: {
  * Row overflow ("…") for one inbox conversation: Mute, Hide and Stop in one
  * small menu instead of three always-visible icon buttons. Hide acts at once
  * (with an Undo toast from the parent); only Stop keeps its confirmation.
+ *
+ * The menu is portaled to <body> and positioned `fixed`: the rows and list
+ * sections keep `overflow-hidden` for their rounded card visuals, so an inline
+ * `absolute` popup was clipped on the last card of a bucket — Hide ended up
+ * painted (and hit-tested) under the next group. Placement comes from
+ * anchored-menu-position (flip up near the bottom nav, clamp into the visible
+ * viewport, cap height with in-menu scrolling), mirroring the existing
+ * ConversationActionsMenu / languageMenuPosition primitives.
  */
+const useIsomorphicMenuLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect
+
+/** CSS env(safe-area-inset-*) is only reachable through a computed style. */
+function readSafeAreaInsets(): { top: number; right: number; bottom: number; left: number } {
+    const probe = document.createElement('div')
+    probe.style.cssText =
+        'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+        'padding-top:env(safe-area-inset-top,0px);padding-right:env(safe-area-inset-right,0px);' +
+        'padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px)'
+    document.body.appendChild(probe)
+    const style = getComputedStyle(probe)
+    const insets = {
+        top: parseFloat(style.paddingTop) || 0,
+        right: parseFloat(style.paddingRight) || 0,
+        bottom: parseFloat(style.paddingBottom) || 0,
+        left: parseFloat(style.paddingLeft) || 0,
+    }
+    probe.remove()
+    return insets
+}
+
 function MobileInboxRowMenu({
     title,
     isMuted,
@@ -159,33 +194,200 @@ function MobileInboxRowMenu({
 }) {
     const { t } = useTranslation()
     const [open, setOpen] = useState(false)
-    const rootRef = useRef<HTMLDivElement | null>(null)
-    useEffect(() => {
-        if (!open) return
-        const onPointerDown = (event: Event) => {
-            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    const [placement, setPlacement] = useState<AnchoredMenuPlacement | null>(null)
+    const triggerRef = useRef<HTMLButtonElement | null>(null)
+    const menuRef = useRef<HTMLDivElement | null>(null)
+    const openAnchorRef = useRef<{ top: number; left: number } | null>(null)
+    const openVisualViewportRef = useRef<{ offsetTop: number; offsetLeft: number } | null>(null)
+    const didFocusOnOpenRef = useRef(false)
+    const menuId = useId()
+
+    const close = useCallback((restoreFocus = false) => {
+        setOpen(false)
+        // Escape (and actions whose row survives) return focus to the trigger
+        // without scrolling the list under the user.
+        if (restoreFocus && triggerRef.current?.isConnected) {
+            triggerRef.current.focus({ preventScroll: true })
         }
-        const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
+    }, [])
+
+    const updatePlacement = useCallback(() => {
+        if (typeof window === 'undefined') return null
+        const triggerEl = triggerRef.current
+        const menuEl = menuRef.current
+        if (!triggerEl || !triggerEl.isConnected || !menuEl) return null
+        const triggerRect = triggerEl.getBoundingClientRect()
+        let viewport = resolveVisibleViewport({
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            visualViewport: window.visualViewport ?? null,
+            safeAreaInsets: readSafeAreaInsets(),
+        })
+        const menuSize = {
+            width: menuEl.offsetWidth || 192,
+            height: menuEl.offsetHeight || 96,
+        }
+        // When the trigger sits inside the inbox scroll region, the docked bottom
+        // navigation bar is immediately below that scroller. Bound the bottom of
+        // the available region to the scroller bottom (when the scroller can fit
+        // the menu) so a card near the bottom nav flips up instead of painting
+        // over the bottom nav.
+        const scrollerEl = triggerEl.closest<HTMLElement>('.overflow-y-auto')
+        if (scrollerEl) {
+            const scrollerRect = scrollerEl.getBoundingClientRect()
+            const currentBottom = viewport.top + viewport.height
+            if (scrollerRect.height > 0 && scrollerRect.bottom > viewport.top && scrollerRect.bottom < currentBottom) {
+                const candidateHeight = scrollerRect.bottom - viewport.top
+                if (candidateHeight >= menuSize.height + 16) {
+                    viewport = { ...viewport, height: candidateHeight }
+                }
+            }
+        }
+        const next = computeAnchoredMenuPlacement({
+            trigger: triggerRect,
+            menu: menuSize,
+            viewport,
+        })
+        setPlacement(next)
+        return next
+    }, [])
+
+    // Measure the just-opened menu while it is still hidden offscreen, then
+    // place it against the visible viewport (visualViewport offsets and
+    // safe-area insets combined exactly once in resolveVisibleViewport).
+    useIsomorphicMenuLayoutEffect(() => {
+        if (!open || typeof window === 'undefined') {
+            setPlacement(null)
+            openAnchorRef.current = null
+            openVisualViewportRef.current = null
+            didFocusOnOpenRef.current = false
+            return
+        }
+        const triggerRect = triggerRef.current?.getBoundingClientRect()
+        if (!triggerRect || !menuRef.current) return
+        if (!openAnchorRef.current) {
+            openAnchorRef.current = { top: triggerRect.top, left: triggerRect.left }
+        }
+        if (!openVisualViewportRef.current && window.visualViewport) {
+            openVisualViewportRef.current = {
+                offsetTop: window.visualViewport.offsetTop,
+                offsetLeft: window.visualViewport.offsetLeft,
+            }
+        }
+        updatePlacement()
+    }, [open, updatePlacement])
+
+    // Keyboard opening lands in the menu; preventScroll so focusing can never
+    // scroll the list (which the scroll listener would read as dismissal).
+    useIsomorphicMenuLayoutEffect(() => {
+        if (!open || !placement || didFocusOnOpenRef.current) return
+        didFocusOnOpenRef.current = true
+        menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true })
+    }, [open, placement])
+
+    useEffect(() => {
+        if (!open || typeof window === 'undefined') return
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault()
+                event.stopPropagation()
+                close(true)
+            } else if (event.key === 'Tab') {
+                close(false)
+            }
+        }
+        const onPointerDown = (event: Event) => {
+            const target = event.target as Node | null
+            if (!target) return
+            // The menu lives in a body portal, so both the trigger AND the
+            // portal contents count as "inside".
+            if (triggerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+            close(false)
+        }
+        const onScroll = (event: Event) => {
+            // The menu's own overflow scrolling must not close it.
+            if (event.target instanceof Node && menuRef.current?.contains(event.target)) return
+            const triggerEl = triggerRef.current
+            if (!triggerEl || !triggerEl.isConnected) {
+                close(false)
+                return
+            }
+            const rect = triggerEl.getBoundingClientRect()
+            if (rect.width === 0 && rect.height === 0 && triggerEl.offsetWidth === 0 && triggerEl.offsetHeight === 0) {
+                // In non-layout environments (e.g. jsdom), any external scroll closes the menu.
+                close(false)
+                return
+            }
+            const scrollerEl = triggerEl.closest<HTMLElement>('.overflow-y-auto')
+            if (scrollerEl) {
+                const scrollerRect = scrollerEl.getBoundingClientRect()
+                if (scrollerRect.height > 0 && (rect.bottom <= scrollerRect.top || rect.top >= scrollerRect.bottom)) {
+                    close(false)
+                    return
+                }
+            }
+            const anchor = openAnchorRef.current
+            const drift = anchor ? Math.hypot(rect.top - anchor.top, rect.left - anchor.left) : 0
+            if (drift <= 6) {
+                updatePlacement()
+                return
+            }
+            close(false)
+        }
+        const onViewportResize = () => close(false)
+        const onVisualViewportScroll = () => {
+            const vv = window.visualViewport
+            const openVv = openVisualViewportRef.current
+            if (vv && openVv && Math.hypot(vv.offsetTop - openVv.offsetTop, vv.offsetLeft - openVv.offsetLeft) <= 6) {
+                updatePlacement()
+                return
+            }
+            close(false)
+        }
+        window.addEventListener('keydown', onKeyDown, true)
         document.addEventListener('pointerdown', onPointerDown, true)
         document.addEventListener('mousedown', onPointerDown, true)
-        window.addEventListener('keydown', onKeyDown)
+        window.addEventListener('scroll', onScroll, true)
+        window.addEventListener('resize', onViewportResize)
+        window.visualViewport?.addEventListener('resize', onViewportResize)
+        window.visualViewport?.addEventListener('scroll', onVisualViewportScroll)
         return () => {
+            window.removeEventListener('keydown', onKeyDown, true)
             document.removeEventListener('pointerdown', onPointerDown, true)
             document.removeEventListener('mousedown', onPointerDown, true)
-            window.removeEventListener('keydown', onKeyDown)
+            window.removeEventListener('scroll', onScroll, true)
+            window.removeEventListener('resize', onViewportResize)
+            window.visualViewport?.removeEventListener('resize', onViewportResize)
+            window.visualViewport?.removeEventListener('scroll', onVisualViewportScroll)
         }
-    }, [open])
+    }, [close, open, updatePlacement])
+
     if (!onToggleMute && !onHide && !onStop) return null
-    const itemClass = 'flex w-full items-center gap-2.5 rounded-lg border-none bg-transparent px-3 py-2.5 text-left text-sm font-medium text-text-secondary hover:bg-bg-secondary hover:text-text-primary'
+    const itemClass = 'flex min-h-[44px] w-full items-center gap-2.5 rounded-lg border-none bg-transparent px-3 py-2.5 text-left text-sm font-medium text-text-secondary hover:bg-bg-secondary hover:text-text-primary focus-visible:bg-bg-secondary focus-visible:text-text-primary focus-visible:outline-none'
     const run = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault()
         event.stopPropagation()
         setOpen(false)
         action()
+        if (triggerRef.current?.isConnected) triggerRef.current.focus({ preventScroll: true })
+    }
+    const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+        event.preventDefault()
+        const buttons = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+        if (buttons.length === 0) return
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        const next = event.key === 'Home'
+            ? buttons[0]
+            : event.key === 'End'
+                ? buttons[buttons.length - 1]
+                : buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]
+        next?.focus({ preventScroll: true })
     }
     return (
-        <div ref={rootRef} className="relative">
+        <>
             <button
+                ref={triggerRef}
                 type="button"
                 className={`mobile-inbox-row-menu-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
                     isMuted
@@ -199,15 +401,23 @@ function MobileInboxRowMenu({
                 }}
                 aria-haspopup="menu"
                 aria-expanded={open}
+                aria-controls={menuId}
                 aria-label={t('mobileInbox.moreActionsFor', { title })}
                 title={t('dashboard.header.moreActions')}
             >
                 {isMuted ? <IconBellOff size={13} /> : <IconMoreHorizontal size={14} />}
             </button>
-            {open && (
+            {open && typeof document !== 'undefined' && createPortal(
                 <div
+                    ref={menuRef}
+                    id={menuId}
                     role="menu"
-                    className="absolute right-0 top-full z-[var(--z-popover)] mt-1 flex w-48 flex-col rounded-xl border border-border-default bg-bg-card p-1 shadow-xl"
+                    aria-label={t('dashboard.header.moreActions')}
+                    onKeyDown={onMenuKeyDown}
+                    className="fixed z-[var(--z-popover)] flex w-48 flex-col overflow-y-auto rounded-xl border border-border-default bg-bg-card p-1 shadow-xl"
+                    style={placement
+                        ? { top: placement.top, left: placement.left, width: placement.width, maxHeight: placement.maxHeight }
+                        : { top: -9999, left: -9999, visibility: 'hidden' }}
                 >
                     {onToggleMute && (
                         <button type="button" role="menuitem" className={`mobile-inbox-mute-button ${itemClass}`} onClick={run(onToggleMute)}>
@@ -227,9 +437,10 @@ function MobileInboxRowMenu({
                             {t('mobileInbox.stopSessionTitle')}
                         </button>
                     )}
-                </div>
+                </div>,
+                document.body,
             )}
-        </div>
+        </>
     )
 }
 
