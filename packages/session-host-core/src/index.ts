@@ -1,4 +1,7 @@
 export type {
+  MeshWriterAssignment,
+  MeshWriterStopTarget,
+  StopMeshWriterPayload,
   HostUpgradeLeasePayload,
   AcquireWritePayload,
   AttachSessionPayload,

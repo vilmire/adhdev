@@ -375,6 +375,7 @@ const queueCancel: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
         // MESH-DISPATCH-MISROUTE: the PRE-cancel row carries the assignment a caller must stop.
         const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
         const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, await ownQueueRole(_ctx, req.meshId)));
+        if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', task: queueWire(task) };
         const response: QueueCancelResponse = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
     } catch (e) {

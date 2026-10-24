@@ -928,6 +928,13 @@ export function acceptWorkerCompletionReportForIdentity(
     // succeed and must not unblock its dependents as though it had. The blockers list
     // carries the why, and the coordinator reads it from the envelope.
     if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
+    if (identity.attemptId && store.turnStore().getAttempt(identity.attemptId)?.state === 'stopping') {
+        const ledger = getActiveTurnLedger();
+        if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
+        observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,
+            hasHandoffNotes: !!report.handoffNotes, atMs: nowMs });
+        return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report retained; physical writer stop is unconfirmed' };
+    }
     let commit: ReturnType<typeof commitTaskTerminal>;
     try {
         commit = commitTaskTerminal({

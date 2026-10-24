@@ -157,6 +157,15 @@ export interface ResizeSessionPayload {
 export interface StopSessionPayload {
   sessionId: string;
 }
+export interface MeshWriterAssignment {
+  meshId: string; nodeId: string; taskId: string; attemptId: string;
+  generation: number; dispatchNonce: number; ownerDaemonId: string;
+}
+export interface MeshWriterStopTarget {
+  runtimeKey: string; startedAt: number; osPid: number; providerType: string;
+  assignment: MeshWriterAssignment;
+}
+export interface StopMeshWriterPayload extends MeshWriterStopTarget { sessionId: string; clientId: string }
 
 export interface DeleteSessionPayload {
   sessionId: string;
@@ -317,6 +326,7 @@ export type SessionHostRequest =
   | { type: 'send_input'; payload: SendInputPayload }
   | { type: 'resize_session'; payload: ResizeSessionPayload }
   | { type: 'stop_session'; payload: StopSessionPayload }
+  | { type: 'stop_mesh_writer'; payload: StopMeshWriterPayload }
   | { type: 'delete_session'; payload: DeleteSessionPayload }
   | { type: 'resume_session'; payload: ResumeSessionPayload }
   | { type: 'acquire_write'; payload: AcquireWritePayload }
@@ -344,6 +354,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'send_input',
   'resize_session',
   'stop_session',
+  'stop_mesh_writer',
   'delete_session',
   'resume_session',
   'acquire_write',

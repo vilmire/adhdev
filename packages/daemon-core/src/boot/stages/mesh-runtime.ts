@@ -42,6 +42,7 @@ import { formatTurnLedgerMigrationLine, importLegacyPendingEventsJsonl } from '.
 import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-v2.js';
 import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
 import { createMeshRuntimeTurnLedger, revokeCutSessionWorkerBind } from '../../mesh/turn-ledger/runtime-ledger.js';
+import { resumePendingHolderReconciles } from '../../mesh/mesh-holder-reconcile.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttempts, reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
@@ -269,10 +270,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         bus: (event, at) => { components.bus.emit({ ...event, at }); },
         cancelDispatch: (request) => {
             if (!request.meshId) return;
-            stopStaleMeshWorker(components, {
+            if (!request.stopRequestId) return { success: false, code: 'writer_checkpoint_pending', reason: 'uncaptured_legacy_stop_identity' };
+            return stopStaleMeshWorker(components, {
                 meshId: request.meshId,
                 sessionId: request.sessionId,
                 ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+                ...(request.providerType ? { providerType: request.providerType } : {}),
+                writerStop: request,
                 reason: 'turn_ledger_cancel_dispatch',
             });
         },
@@ -599,6 +603,10 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     // provider event already has a ledger to observe into.
     const turn = wireTurnLedger(components);
     components.turnLedger = turn.ledger;
+    // One read-only settlement pass recovers a reply lost across owner restart.
+    // Normal stopping holds own the bounded destructive retry budget.
+    void turn.ledger.resumeStoppingWriters();
+    void resumePendingHolderReconciles(components);
     components.turnProbePort = turn.probePort;
     components.meshTurn = turn;
     // The command plane (built in S5, before these components existed) gets the

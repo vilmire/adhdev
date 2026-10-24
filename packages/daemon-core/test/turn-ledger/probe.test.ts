@@ -298,7 +298,7 @@ describe('remote presence from the coordinator-held runtime', () => {
         expect(dispatchMeshCommand).not.toHaveBeenCalled();
     });
 
-    it('a complete empty remote session list after startup grace proves death; a listed worker stays live', async () => {
+    it('remote absence starts a proof-fenced stop; a listed worker stays live', async () => {
         const { comps, dispatchMeshCommand } = components();
         const held = { sessions: [] as { id: string; status: string }[], observedAt: T0 + EMPTY_HELD_ABSENCE_GRACE_MS + 1000 };
         const reader = createComponentsProbeReader(comps, { analyzer: () => obs(), readHeldSessions: () => held });
@@ -310,7 +310,7 @@ describe('remote presence from the coordinator-held runtime', () => {
         const a = r.getAttempt('a1')!;
         const read = await reader.read(a, loc, []);
         for (const e of probeEvidence(a, read, { ...ctx, nowMs: held.observedAt })) r.observe(e);
-        expect(r.getAttempt('a1')).toMatchObject({ generation: 1, reclaimCount: 1, state: 'accepted' });
+        expect(r.getAttempt('a1')).toMatchObject({ generation: 0, reclaimCount: 0, state: 'stopping', terminal: null });
         held.sessions = [{ id: 's1', status: 'generating' }];
         expect(await reader.read(attempt(), loc, [])).toEqual({ presence: 'present', status: 'generating', observedAtMs: held.observedAt });
         expect(dispatchMeshCommand).not.toHaveBeenCalled();

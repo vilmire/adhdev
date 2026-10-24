@@ -6,6 +6,8 @@
  * Split out of cli-manager.ts (file-size gate).
  */
 import { bridgeDispatchFrozen } from '../mesh/worker-bridge.js';
+import { reconcileMeshHolder, isHolderAttachPending } from './mesh-holder-attach.js';
+import { isWriterStopPending } from './mesh-writer-stop-journal.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import { DuplicateMeshDispatchError } from '../mesh/mesh-duplicate-dispatch.js';
@@ -32,6 +34,9 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
     const bridgeMesh = readMeshContext(args)?.meshId;
     if (action === 'send_chat' && bridgeMesh && bridgeDispatchFrozen(MeshRuntimeStore.getInstance().db, bridgeMesh)) throw new Error('worker_bridge_dispatch_frozen');
     if (!agentType || !action) throw new Error('agentType and action required');
+    if (action === 'mesh_writer_stop_capability') return { success: true, meshWriterStopProtocol: 1,
+        stopRequestId: args.meshWriterStop?.stopRequestId };
+    if (action === 'reconcile_mesh_holder') return reconcileMeshHolder(host, args);
 
     // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)
     // but resolved no explicit session must be scoped to THAT node's
@@ -112,6 +117,8 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
 
 /** `send_chat`: stamp the mesh assignment (when dispatched by a mesh), then the ONE submit. */
 async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, key: string): Promise<CommandResult> {
+    if (readMeshContext(args) && isWriterStopPending(key)) throw new Error('mesh_writer_stopping_checkpoint_pending');
+    if (readMeshContext(args) && isHolderAttachPending(key)) throw new Error('mesh_holder_attach_checkpoint_pending');
     // Stamp mesh direct-dispatch assignment on the target
     // instance BEFORE sending the prompt so the completion
     // event has a routing marker by the time it fires.
@@ -142,7 +149,7 @@ async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, 
                 // this daemon (see attachMeshAssignment's coordinatorSessionId).
                 ...(typeof meshContext.coordinatorSessionId === 'string' && meshContext.coordinatorSessionId ? { coordinatorSessionId: meshContext.coordinatorSessionId } : {}),
             });
-        } catch { /* best-effort — stamping is a routing aid, not a hard requirement */ }
+        } catch { throw new Error('mesh_assignment_attach_failed'); }
         // DOUBLE-DISPATCH stamp guard: the instance manager refused this stamp because
         // the SAME task is already running on another live session on this daemon.
         // Sending the prompt anyway would double-execute the task — fail closed so the
@@ -176,6 +183,7 @@ async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, 
                 sessionId: targetInstanceId,
             });
         }
+        if (!stampResult?.stamped) throw new Error(`mesh_assignment_attach_failed:${stampResult?.reason ?? 'instance_manager_unavailable'}`);
         // COORDINATOR-SILENT-IDLE (opt-in): the coordinator's mesh policy is
         // 'auto_silent_on_dispatch', so arm a ONE-SHOT transient mute on THIS
         // worker session for the single completion that follows this dispatch.

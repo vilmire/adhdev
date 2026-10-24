@@ -482,8 +482,13 @@ export class CliProviderInstance implements ProviderInstance {
      * match against.
      */
     attachMeshAssignment(assignment: { meshId: string; nodeId?: string; taskId?: string; dispatchNonce?: number; attemptId?: string; attemptGeneration?: number; coordinatorDaemonId?: string; coordinatorSessionId?: string }): void {
-        meshAssignment.attachMeshAssignment(this, assignment);
+        const before = meshAssignment.captureMeshAssignment(this);
+        try { meshAssignment.attachMeshAssignment(this, assignment); }
+        catch (error) { meshAssignment.restoreMeshAssignment(this, before); throw error; }
     }
+
+    captureMeshAssignment() { return meshAssignment.captureMeshAssignment(this); }
+    restoreMeshAssignment(snapshot: meshAssignment.MeshAssignmentSnapshot) { meshAssignment.restoreMeshAssignment(this, snapshot); }
 
     detachMeshAssignment(): void {
         meshAssignment.detachMeshAssignment(this);

@@ -303,6 +303,9 @@ export interface CliAdapter {
     getLaunchInfo?(): CliLaunchInfo;
     // ── Runtime metadata used by CliProviderInstance for session tracking ──
     getRuntimeMetadata?(): unknown;
+    /** Fresh host acknowledgement after queued metadata writes; unknown is false. */
+    verifyRuntimeMeta?(expected: Record<string, unknown>): Promise<boolean>;
+    stopMeshWriter?(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean>;
     /** OS PID of the PTY child process (undefined when not running / no PTY, e.g. the codex app-server adapter). */
     getPid?(): number | undefined;
     updateRuntimeMeta?(meta: Record<string, unknown>): void;

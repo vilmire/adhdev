@@ -87,11 +87,12 @@ function claims(db: ReturnType<typeof memDb>): number {
     return (db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE event_id LIKE 'delivered:%'`).get() as { n: number }).n;
 }
 
-function fixture(self = 'dc'): Fixture {
+function fixture(self = 'dc', confirmStop = false): Fixture {
     const db = memDb();
     const publisher = fakePublisher(`w-${self}`);
     const clock = { now: T0 };
-    const ledger = ledgerOn(db, { publisher, now: () => clock.now, selfDaemonId: self });
+    const ledger = ledgerOn(db, { publisher, now: () => clock.now, selfDaemonId: self,
+        ...(confirmStop ? { ports: { cancelDispatch: (r: any) => ({ ...r, success: true, quiescent: true, incarnation: 'fixture-native-writer' }) } } : {}) });
     const port = fakePort();
     const waiter = manualWaiter(clock);
     const coordinators: CoordinatorSessionView[] = [{ sessionId: 'coord', idle: true, modalParked: false }];
@@ -144,10 +145,12 @@ describe('turn.deliver — local commit → one submit, exactly once', () => {
     });
 
     it('a direct dispatch that failed instead of being reclaimed renders the resend notice with its cause (one submit)', async () => {
-        const f = fixture();
+        const f = fixture('dc', true);
         f.ledger.observe(dispatch());
         const failed = f.ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch' }));
-        expect(failed.attempt?.terminal?.reason).toBe('dispatch_failed');
+        expect(failed.attempt?.state).toBe('stopping');
+        await flush();
+        expect(f.ledger.getAttempt('a1')?.terminal?.reason).toBe('dispatch_failed');
         await f.ledger.flushPublish();
         expect(f.entries().filter((e) => e.kind === 'turn.notify')).toHaveLength(1);
         await createTurnDeliverHandler(f.deps)(notifyEntry(f), new AbortController().signal);

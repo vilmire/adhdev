@@ -439,6 +439,7 @@ export function renderNotice(ctx: RenderContext, meshId: string, entry: Record<s
         ? 'completed'
         : notify;
     const scalars: TurnNotifyScalars = {
+        ...(attempt?.state === 'stopping' ? { writerCheckpointPending: true } : {}),
         nodeLabel: nodeLabelFor(attempt, notice),
         ...(attempt?.taskId ? { taskId: attempt.taskId } : str(entry.taskId) ? { taskId: str(entry.taskId)! } : {}),
         ...(attempt ? { attemptId: attempt.attemptId, generation: attempt.generation, sessionId: attempt.sessionId } : {}),

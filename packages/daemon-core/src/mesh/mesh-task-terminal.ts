@@ -87,6 +87,9 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
     const result = store.transaction((): MeshTerminalCommitResult => {
         const entry = store.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false };
+        if (store.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId)?.state === 'stopping') {
+            return { entry, committed: false, duplicate: false };
+        }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
         applyTaskTerminalSteps(store, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false };

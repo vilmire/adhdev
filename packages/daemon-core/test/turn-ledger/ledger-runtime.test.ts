@@ -35,7 +35,7 @@ import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-
 import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
 import { acceptWorkerCompletionReport } from '../../src/mesh/worker-report.js';
 import { __resetWorkerTaskTokensForTest, mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js';
-import { SUMMARY, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
+import { SUMMARY, T0, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
 
 function meshId(): string {
     return `mesh_tl_${randomUUID().slice(0, 8)}`;
@@ -85,13 +85,22 @@ describe('runtime ledger over mesh-runtime.db', () => {
         }
     });
 
-    it('a reclaim requeues the row (assignment cleared, nonce bumped) and cuts the old session', () => {
+    it('a reclaim retains assignment until the stop port confirms quiescence, then requeues once', async () => {
         const mesh = meshId();
         try {
             const { task, store, ledger, ref, ports } = setup(mesh);
             const before = store.findQueueEntryById(mesh, task.id)!;
             const result = ledger.observe(evd('process_exit', { exitCode: 137 }, { ...ref, source: 'pty_exit' }));
-            expect(result).toMatchObject({ rule: 'R20', attempt: { generation: 1, state: 'accepted' } });
+            expect(result).toMatchObject({ rule: 'R20', attempt: { generation: 0, state: 'stopping' } });
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('assigned');
+            // The fixture now obtains exact native quiescence; an RPC ack alone
+            // was intentionally insufficient above.
+            ports.cancelDispatch = r => ({ ...r, success: true, quiescent: true, incarnation: 'fixture-native-writer' });
+            // setup passes the port by value, so drive a fresh ledger over the
+            // same durable stop intent, as a real owner boot does.
+            const restored = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => T0 + 10_000, publisher: fakePublisher(), ports });
+            await restored.resumeStoppingWriters();
+            expect(restored.getAttempt(ref.attemptRef.attemptId)).toMatchObject({ generation: 1, state: 'accepted' });
             const row = store.findQueueEntryById(mesh, task.id)!;
             expect(row.status).toBe('pending');
             expect(row.assignedSessionId).toBeUndefined();

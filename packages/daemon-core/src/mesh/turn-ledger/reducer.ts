@@ -70,6 +70,8 @@ import {
 } from './types.js';
 
 export interface ReduceInput {
+    /** Local executor capability, never derived from received evidence fields. */
+    stopConfirmed?: boolean;
     attempt: TurnAttempt | null;
     /** Active holds of this attempt. */
     holds: readonly TurnHold[];
@@ -544,21 +546,33 @@ function commit(
     text?: { summary?: SummaryRef; textEventId?: string },
 ): void {
     const attempt = draft.attempt!;
+    if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && (reason === 'hard_ceiling'
+        || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
+        || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit')) {
+        beginWriterStop(draft, reason);
+        attempt.data.writerStop!.terminal = { outcome, strength, source: draft.ctx.evidence.source,
+            ...(summaryOf(draft.ctx.evidence) ? { summary: summaryOf(draft.ctx.evidence) } : {}), textEventId: draft.ctx.evidence.eventId };
+        return;
+    }
     const ev = draft.ctx.evidence;
     const held = text ?? heldText(draft);
     const summary = text ? text.summary : summaryOf(ev) ?? held.summary;
     attempt.state = outcome;
     attempt.suspension = null;
-    attempt.terminal = { outcome, reason, source: ev.source, strength, at: ev.at, ...(summary ? { summary } : {}) };
+    const source = attempt.data.writerStop?.terminal?.source ?? ev.source;
+    attempt.terminal = { outcome, reason, source, strength, at: ev.at, ...(summary ? { summary } : {}) };
     draft.effects.push({
         kind: 'commit', attemptId: attempt.attemptId, generation: attempt.generation,
-        outcome, strength, reason, source: ev.source, ...(summary ? { summary } : {}),
+        outcome, strength, reason, source, ...(summary ? { summary } : {}),
     });
     releaseHolds(draft, '*');
     // A queue requeue retiring the attempt (cancel/superseded, mesh-queue-attempt-
     // guard.ts): only the ATTEMPT ends — the row is going back to pending, so no
     // queue terminal and no coordinator "task cancelled" notice.
-    const attemptOnly = ev.kind === 'cancel' && ev.reason === 'superseded' && attempt.scope === 'mesh_queue';
+    const attemptOnly = reason === 'superseded' && attempt.scope === 'mesh_queue';
+    if (attemptOnly && attempt.data.writerStop?.confirmed && attempt.meshId && attempt.taskId) {
+        draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: 'pending', reason });
+    }
     // Both mesh scopes carry a queue row: `mesh_queue` owns one, and a
     // `mesh_direct` dispatch materialises one pre-assigned
     // (`recordDirectDispatchTask`) for mission attribution + status. Gating this
@@ -601,57 +615,22 @@ export function isUnredeliveredDirectFailure(attempt: Pick<TurnAttempt, 'scope' 
         && isReclaimTurnReason(attempt.terminal.reason);
 }
 
-/**
- * generation + 1 and back to `accepted` — or `failed` when the reclaim budget
- * is spent. A plain attempt has no dispatcher to re-claim it, so its
- * "reclaim" is a failure too.
- *
- * A `mesh_direct` attempt has no re-claimer either (owner decision
- * 2026-09-24): a `mesh_queue` reclaim puts the row back to `pending` and the
- * scheduler re-claims + redelivers it, but a direct dispatch is only ever sent
- * by the coordinator calling mesh_send_task. Re-arming it left the attempt
- * `accepted` g+1 spinning await_delivery expiries (or until hard_ceiling, 90
- * min) with its materialised queue row `assigned`, blocking the node's
- * one-active gate (live: two refused direct dispatches sat `accepted` g2 for
- * hours). So every reclaim trigger commits a direct attempt `failed` right
- * away, the reclaim cause as its terminal reason: commit releases every hold,
- * flips the row terminal (queue_status + task_terminal), sends the ONE
- * coordinator notice and releases the attempt ref. The session is cut exactly
- * as a reclaim cuts g (cancel_dispatch + revokeBind, same already-cut skip), so
- * a prompt still queued in the worker cannot start late and the task token
- * dies; a never-delivered placeholder session is skipped by the executor. The
- * row is deliberately NOT made `pending`: the scheduler would then auto-
- * redispatch a coordinator-chosen dispatch (double attempts). R2's redrive
- * (same session, same generation) is not a reclaim and is untouched.
- *
- * Reclaim CUTS the old generation first (owner revision 2026-09-23): the
- * `cancel_dispatch` for g−1's session is emitted unconditionally — an
- * `accepted` attempt's prompt may still sit in the worker's input queue, and
- * withdrawing it by messageId is exactly what stops a late start — and it
- * carries `revokeBind`, so g−1's worker can no longer report through the MCP.
- * A late g−1 completion can then only arrive inside the window between this
- * txn and the cancel landing (R27/R27a).
- *
- * The one skip: an `accepted` generation ≥ 1 that was never delivered still
- * names the ALREADY-CUT previous session (a reclaim does not rebind; the next
- * `delivered` does) — cutting it again would stop a session that is no longer
- * this attempt's, so no cancel is emitted for it.
- */
+/** A mesh reclaim first retains its exact writer in stopping. Only a
+ * confirmed native settlement advances the generation and requeues it. Direct
+ * attempts fail after settlement because no scheduler redelivers them. */
 function reclaim(draft: Draft, reason: TurnReason): void {
     const attempt = draft.attempt!;
     if (attempt.scope === 'plain') {
         commit(draft, 'failed', 'genuine', reason);
         return;
     }
+    if (!attempt.data.writerStop?.confirmed) {
+        beginWriterStop(draft, reason);
+        return;
+    }
     const prevSession = attempt.sessionId;
-    const prevMessageId = attempt.messageId;
     const fromGeneration = attempt.generation;
-    const alreadyCut = attempt.state === 'accepted' && attempt.prevGeneration !== null
-        && sessionIdsEquivalent(attempt.sessionId, attempt.prevGeneration.sessionId);
     if (attempt.scope === 'mesh_direct') {
-        if (!alreadyCut) {
-            draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession, messageId: prevMessageId, revokeBind: true });
-        }
         commit(draft, 'failed', 'genuine', reason);
         return;
     }
@@ -670,11 +649,9 @@ function reclaim(draft: Draft, reason: TurnReason): void {
     attempt.redriveCount = 0;
     attempt.livenessFailStreak = 0;
     attempt.lastLiveness = null;
+    delete attempt.data.writerStop;
     draft.effects.push({ kind: 'reclaim', attemptId: attempt.attemptId, fromGeneration, toGeneration: attempt.generation, reason });
     releaseHolds(draft, '*', ['hard_ceiling']);
-    if (!alreadyCut) {
-        draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: fromGeneration, sessionId: prevSession, messageId: prevMessageId, revokeBind: true });
-    }
     if (attempt.scope === 'mesh_queue' && attempt.meshId && attempt.taskId) {
         draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: 'pending', reason });
     }
@@ -682,6 +659,66 @@ function reclaim(draft: Draft, reason: TurnReason): void {
         holdId: holdId(attempt.attemptId, 'await_delivery'), attemptId: attempt.attemptId, generation: attempt.generation,
         reason: 'await_delivery', until: draft.ctx.nowMs + awaitDeliveryMs(draft.ctx.policy), onExpire: 'reclaim', data: {}, createdAt: draft.ctx.nowMs,
     });
+}
+
+const WRITER_STOP_RETRY_MS = 30_000;
+const WRITER_STOP_MAX_TRIES = 3;
+
+function requestWriterStop(draft: Draft): void {
+    const a = draft.attempt!, stop = a.data.writerStop!;
+    draft.effects.push({ kind: 'cancel_dispatch', attemptId: a.attemptId, generation: a.generation,
+        sessionId: a.sessionId, messageId: a.messageId, stopRequestId: stop.requestId });
+    addHold(draft, { holdId: holdId(a.attemptId, 'liveness'), attemptId: a.attemptId, generation: a.generation,
+        reason: 'liveness', until: draft.ctx.nowMs + WRITER_STOP_RETRY_MS, onExpire: 'escalate', data: {}, createdAt: draft.ctx.nowMs });
+}
+
+function beginWriterStop(draft: Draft, reason: TurnReason): void {
+    const a = draft.attempt!;
+    if (a.data.writerStop) return;
+    a.state = 'stopping';
+    a.data.writerStop = { requestId: `${draft.ctx.evidence.eventId}:writer-stop`, reason,
+        requestedAt: draft.ctx.nowMs, tries: 1, escalated: false };
+    releaseHolds(draft, '*', reason === 'hard_ceiling' ? [] : ['hard_ceiling']);
+    requestWriterStop(draft);
+}
+
+/** Stopping is exclusive and nonterminal. All ordinary lifecycle proposals
+ * remain evidence; neither a late idle nor an operator requeue releases it. */
+function reduceStopping(input: ReduceInput): ReduceResult {
+    const a = cloneAttempt(input.attempt!), ev = input.evidence;
+    a.data.writerStop = { ...a.data.writerStop! };
+    const draft: Draft = { attempt: a, holds: new Map(input.holds.map(h => [h.holdId, h])), effects: [],
+        ctx: { ...input, effectiveGeneration: a.generation }, rule: TRANSITIONS[0]!, committed: false };
+    const stop = a.data.writerStop!;
+    if (input.nowMs >= a.acceptedAt + input.policy.hardCeilingMs) {
+        stop.reason = 'hard_ceiling';
+        stop.terminal = { outcome: 'failed', strength: 'genuine', source: 'scheduler' };
+        releaseHolds(draft, ['hard_ceiling']);
+    }
+    if (input.stopConfirmed) {
+        stop.confirmed = true;
+        if (stop.terminal) {
+            if (stop.terminal.adoptSessionId) {
+                a.sessionId = stop.terminal.adoptSessionId;
+                a.consumedAt ??= stop.requestedAt;
+            }
+            commit(draft, stop.terminal.outcome, stop.terminal.strength, stop.reason, stop.terminal);
+        }
+        else if (stop.reason === 'hard_ceiling') commit(draft, 'failed', 'genuine', stop.reason);
+        else reclaim(draft, stop.reason);
+    } else if (ev.kind === 'hold_expired' && holdIs(draft.ctx, 'liveness') && (expiredHold(draft.ctx)?.until ?? Infinity) <= input.nowMs) {
+        releaseHolds(draft, ['liveness']);
+        if (stop.tries < WRITER_STOP_MAX_TRIES) {
+            stop.tries++;
+            requestWriterStop(draft);
+        } else if (!stop.escalated) {
+            stop.escalated = true;
+            notify(draft, 'no_progress');
+            draft.effects.push({ kind: 'record', note: 'writer_stop_unconfirmed_checkpoint_pending' });
+        }
+    } else if (ev.kind === 'worker_report') ACTIONS.record_report(draft);
+    else draft.effects.push({ kind: 'record', note: 'writer_stop_checkpoint_pending' });
+    return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : 'WR' };
 }
 
 function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAttempt, 'attemptId' | 'scope'>): TurnAttempt {
@@ -1027,10 +1064,11 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             // the g−1 session (not yet re-delivered) → there is no g session to cut,
             // and the g−1 session is the one whose work is being adopted.
             if (!sessionIdsEquivalent(attempt.sessionId, prev.sessionId)) {
-                draft.effects.push({
-                    kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: attempt.generation,
-                    sessionId: attempt.sessionId, messageId: attempt.messageId, revokeBind: true,
-                });
+                const adopted = adoptedTerminal(ev);
+                beginWriterStop(draft, adopted.reason);
+                attempt.data.writerStop!.terminal = { outcome: adopted.outcome, strength: adopted.strength, adoptSessionId: prev.sessionId,
+                    source: ev.source, summary: summaryOf(ev), textEventId: ev.eventId };
+                return;
             }
             attempt.sessionId = prev.sessionId;
             attempt.consumedAt = attempt.consumedAt ?? ev.at;
@@ -1048,6 +1086,9 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             return;
         case 'cancel_dispatch': {
             const attempt = draft.attempt!;
+            // The following commit records a durable stop intent and owns its
+            // proof-fenced executor. Never send an unfenced stop ahead of it.
+            if (ev.kind === 'cancel' && isMeshScope(attempt)) return;
             if (template.when === 'not_intentional_cleanup' && ev.kind === 'cancel' && ev.reason === 'intentional_cleanup') return;
             if (template.target === 'evidence_session') {
                 draft.effects.push({ kind: 'cancel_dispatch', attemptId: attempt.attemptId, generation: draft.ctx.effectiveGeneration ?? attempt.generation, sessionId: ev.sessionId });
@@ -1084,6 +1125,7 @@ export function reduce(input: ReduceInput): ReduceResult {
     if ('rejection' in lane) {
         return { attempt, holds: [...holds], effects: [{ kind: 'record', note: lane.rejection }], verdict: 'rejected', rejection: lane.rejection };
     }
+    if (attempt?.state === 'stopping' && lane.lane === 'current') return reduceStopping(input);
     const matches = matchingRules(input);
     const rule = matches[0];
     if (!rule) {

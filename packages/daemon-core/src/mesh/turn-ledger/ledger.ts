@@ -48,6 +48,7 @@ import {
     isPublishableAttempt,
     recordNotes,
     runPostCommitEffects,
+    type CancelDispatchRequest,
     type TurnCompletionEnvelope,
     type TurnLedgerPorts,
     type TurnTxnHost,
@@ -170,6 +171,8 @@ export interface TurnLedger {
      */
     readonly incarnationStartedAt: number;
     observe(evidence: TurnEvidence, opts?: ObserveOptions): ObserveResult;
+    /** Bounded boot/manual inspection; never issues another kill. */
+    resumeStoppingWriters(): Promise<void>;
     /** Attempt-less coordinator notice (`turn.notify{notify:'mesh_event'}`); replaces the legacy pending-events outbox insert. */
     notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean };
     /** `turn.deliver` exactly-once claim: inserts the mesh-scoped deliveryClaimId row; false = already delivered. */
@@ -210,6 +213,9 @@ function forceLiveFalse(evidence: TurnEvidence, eventId: string): TurnEvidence |
 }
 
 export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
+    // This capability exists only around a validated reply from the locally
+    // configured stop port. Received topics and operator evidence cannot mint it.
+    const confirmedStops = new Set<string>();
     const store = deps.store ?? new TurnStore(deps.db);
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
     const now = deps.now ?? (() => Date.now());
@@ -223,6 +229,30 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     };
 
     const txn = <T>(fn: () => T): T => deps.db.transaction(fn).immediate();
+
+    function settleWriterStop(request: CancelDispatchRequest, receipt: unknown): void {
+        const r = receipt as Record<string, unknown> | null;
+        const current = store.getAttempt(request.attemptId);
+        if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== 'string' || !r.incarnation
+            || current?.state !== 'stopping' || current.generation !== request.generation
+            || current.sessionId !== request.sessionId || current.data.writerStop?.requestId !== request.stopRequestId
+            || current.meshId !== request.meshId || current.taskId !== request.taskId || current.nodeId !== request.nodeId
+            || current.providerType !== request.providerType || current.dispatchNonce !== request.dispatchNonce
+            || r.stopRequestId !== request.stopRequestId || r.attemptId !== request.attemptId
+            || r.generation !== request.generation || r.sessionId !== request.sessionId
+            || r.meshId !== request.meshId || r.taskId !== request.taskId || r.nodeId !== request.nodeId
+            || r.dispatchNonce !== request.dispatchNonce
+            || r.providerType !== request.providerType || r.ownerDaemonId !== request.ownerDaemonId) return; // canon-ok: Exact echoed request tuple; the source journal binds these bytes, not daemon membership.
+        const eventId = `writer_settled:${request.stopRequestId}:${randomUUID()}`;
+        confirmedStops.add(eventId);
+        try {
+            const settled = observe({ eventId, kind: 'operator_status', source: 'scheduler', at: now(),
+                observedBy: deps.selfDaemonId, sessionId: request.sessionId,
+                attemptRef: { attemptId: request.attemptId, generation: request.generation },
+                status: 'failed', reason: 'operator_update' });
+            if (settled.rule === 'writer_settled') ports.revokeWorkerBind?.(request);
+        } finally { confirmedStops.delete(eventId); }
+    }
 
     function resolveAttempt(evidence: TurnEvidence): TurnAttempt | null {
         if (evidence.attemptRef) return store.getAttempt(evidence.attemptRef.attemptId);
@@ -351,7 +381,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 }
             }
         }
-        let result = reduce({ attempt, holds, evidence, policy, nowMs });
+        let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId) });
         if (triggerBackgroundWorkProbe && attempt) {
             result = {
                 ...result,
@@ -494,6 +524,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             logReportGate(step.result.rule, step.result.attempt);
             afterBridgeCommit(deps.db, () => {
             const post = runPostCommitEffects(ports, step.result.effects, {
+                settleWriterStop,
                 attempt: step.result.attempt,
                 nowMs,
                 terminalTasks: step.host.terminalTasks,
@@ -666,6 +697,18 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
         observe,
+        async resumeStoppingWriters() {
+            for (const a of store.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
+                if (a.state !== 'stopping' || !a.data.writerStop) continue;
+                const request: CancelDispatchRequest = { attemptId: a.attemptId, generation: a.generation,
+                    sessionId: a.sessionId, meshId: a.meshId, taskId: a.taskId, nodeId: a.nodeId,
+                    dispatchNonce: a.dispatchNonce,
+                    providerType: a.providerType, ownerDaemonId: a.ownerDaemonId, messageId: a.messageId,
+                    revokeBind: false, stopRequestId: a.data.writerStop.requestId, inspectOnly: true };
+                try { settleWriterStop(request, await ports.cancelDispatch?.(request)); }
+                catch (error) { log.warn(`writer checkpoint remains pending: ${String(error)}`); }
+            }
+        },
         notifyMeshEvent,
         claimDelivery,
         isTerminal: (attemptId) => store.isTerminal(attemptId),

@@ -20,6 +20,7 @@ import { awaitWithWarmupDeadline, resolveWarmupDeadlineOpts } from './mesh-warmu
 import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import { dispatchMessageId } from './mesh-queue-dispatch-evidence.js';
 import { classifyDuplicateMeshDispatch } from './mesh-duplicate-dispatch.js';
+import { reconcileDuplicateHolder } from './mesh-holder-reconcile.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { notifyCoordinatorOfPinnedDispatchFailure } from './mesh-dispatch-failed-notify.js';
 
@@ -67,7 +68,8 @@ function warnDispatchWarmupGetterMissingOnce(daemonId: string): void {
     LOG.warn('MeshQueue', `Mesh peer connection getter unavailable for ${String(daemonId).slice(0, 12)}; remote task-dispatch warmup deadline degraded to the combined connect+response window. Avoids a cold-open false-timeout but loses warm/cold precision — wire getMeshPeerConnectionStatus on this daemon.`);
 }
 
-interface DeliverTaskContext {
+export interface DeliverTaskContext {
+    remoteDaemonId?: string;
     meshId: string;
     nodeId: string;
     sessionId: string;
@@ -292,6 +294,7 @@ export function deliverTaskToSession(
 
     // Invoke the transport synchronously (preserves the prior fire-and-forget timing,
     // and lets a synchronous throw fall into the same failure path as a rejection).
+    if (warmup?.daemonId) ctx = { ...ctx, remoteDaemonId: warmup.daemonId };
     let dispatchPromise: Promise<unknown>;
     try {
         dispatchPromise = Promise.resolve(dispatchThunk());
@@ -419,38 +422,14 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
         // completion be accepted, which is precisely what session_mismatch must keep out.
         const duplicate = classifyDuplicateMeshDispatch(e);
         if (duplicate?.holderSessionId) {
-            // DUP-CLAIM-REBIND / DUP-REFUSAL-IS-CONSUMPTION: the node refused because a
-            // live session is ALREADY working this exact task — the prompt was taken
-            // up. Not a dispatch failure: the task stays assigned.
-            LOG.info('MeshQueue', `Duplicate dispatch of task ${ctx.task.id} refused by node ${ctx.nodeId}: it is already being worked by live session ${duplicate.holderSessionId}. Task stays assigned${ctx.attemptRef ? `; attempt ${ctx.attemptRef.attemptId} rebinds to that session` : ''}.`);
-            // DUP-REFUSAL-IS-CONSUMPTION (attempt half, C2): duplicate_dispatch_refusal
-            // naming THIS attempt as the holder → R25 rebinds the attempt to the
-            // holder session AND marks it consumed in one reducer step (the old
-            // rebind-then-promote ordering is now a single transition).
-            if (ctx.attemptRef) {
-                observeDispatchEvidence(ctx.components, {
-                    ...dispatchEvidenceBase(ctx, 'dispatch'),
-                    eventId: `dispatch-dup:${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`,
-                    kind: 'duplicate_dispatch_refusal',
-                    holderSessionId: duplicate.holderSessionId,
-                    holderAttemptId: ctx.attemptRef.attemptId,
-                } as TurnEvidence);
-            }
-            try {
-                meshRecord(ctx.meshId, 'dispatch_duplicate_rebound', {
-                    nodeId: ctx.nodeId,
-                    sessionId: duplicate.holderSessionId,
-                    payload: {
-                        taskId: ctx.task.id,
-                        deliveryId: delivery.id,
-                        transport: ctx.transport,
-                        attemptedSessionId: ctx.sessionId,
-                        holderSessionId: duplicate.holderSessionId,
-                        ...(ctx.attemptRef ? { attemptId: ctx.attemptRef.attemptId } : {}),
-                        rebound: true,
-                    },
-                }, { local: true });
-            } catch { /* ledger write is best-effort */ }
+            // A holder name only locates a possible writer. Source attach must
+            // succeed before the paired queue/attempt rebind can be committed.
+            void reconcileDuplicateHolder(ctx, duplicate.holderSessionId,
+                `dispatch-dup:${ctx.attemptRef?.attemptId}:g${ctx.attemptRef?.generation}:${delivery.id}`)
+                .then(rebound => {
+                    meshRecord(ctx.meshId, 'dispatch_duplicate_rebound', { nodeId: ctx.nodeId,
+                        sessionId: duplicate.holderSessionId, payload: { taskId: ctx.task.id, rebound } }, { local: true });
+                }).catch(error => LOG.warn('MeshQueue', `Holder reconciliation pending: ${String(error)}`));
             return;
         }
         // A dispatch failure (transport reject OR hang timeout) is most often transient —

@@ -89,10 +89,15 @@ export interface CancelDispatchRequest {
     attemptId: string;
     generation: number;
     sessionId: string;
+    dispatchNonce: number | null;
     messageId: string | null;
     meshId: string | null;
     taskId: string | null;
     nodeId: string | null;
+    providerType: string | null;
+    ownerDaemonId: string | null;
+    stopRequestId?: string;
+    inspectOnly?: boolean;
     revokeBind: boolean;
 }
 
@@ -101,7 +106,7 @@ export interface TurnLedgerPorts {
     /** B1 bus emit of a turn phase (C-W5 projects `committed` onto the wire). */
     bus?(event: TurnBusEvent, at: number): void;
     /** Local `SessionInputService.withdraw(messageId)` / `stop_cli`, or remote `dispatchMeshCommand(..., 'stop_cli')`. */
-    cancelDispatch?(request: CancelDispatchRequest): void | Promise<void>;
+    cancelDispatch?(request: CancelDispatchRequest): unknown | Promise<unknown>;
     /** Worker-bind + task-token revoke for a cut session (default: worker-mcp-isolation). */
     revokeWorkerBind?(request: CancelDispatchRequest): void;
     /** The instance drops its `attemptRef` (C-W5). */
@@ -317,6 +322,7 @@ interface PostCommitCounters {
 }
 
 interface PostCommitContext {
+    settleWriterStop?(request: CancelDispatchRequest, receipt: unknown): void;
     attempt: TurnAttempt | null;
     nowMs: number;
     terminalTasks: TxnHostResult['terminalTasks'];
@@ -354,6 +360,10 @@ function cancelRequest(effect: CancelDispatchEffect, attempt: TurnAttempt | null
         meshId: attempt?.meshId ?? null,
         taskId: attempt?.taskId ?? null,
         nodeId: attempt?.nodeId ?? null,
+        providerType: attempt?.providerType ?? null,
+        ownerDaemonId: attempt?.ownerDaemonId ?? null,
+        dispatchNonce: attempt?.dispatchNonce ?? null,
+        ...(effect.stopRequestId ? { stopRequestId: effect.stopRequestId } : {}),
         revokeBind: effect.revokeBind === true,
     };
 }
@@ -397,7 +407,11 @@ export function runPostCommitEffects(ports: TurnLedgerPorts, effects: readonly T
                     ctx.onSkip?.('cancel_dispatch', `attempt ${request.attemptId} g${request.generation} was never delivered to a session (placeholder session = task ${request.taskId}); no worker to stop`);
                     break;
                 }
-                run('cancel_dispatch', ports.cancelDispatch ? () => ports.cancelDispatch!(request) : undefined);
+                run('cancel_dispatch', ports.cancelDispatch ? () => {
+                    const result = ports.cancelDispatch!(request);
+                    if (request.stopRequestId) return Promise.resolve(result).then(receipt => ctx.settleWriterStop?.(request, receipt));
+                    return result;
+                } : undefined);
                 break;
             }
             case 'release_attempt_ref':

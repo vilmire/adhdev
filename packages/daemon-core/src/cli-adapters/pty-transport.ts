@@ -65,6 +65,8 @@ export interface PtyRuntimeClientInfo {
 }
 
 export interface PtyRuntimeMetadata {
+  osPid?: number;
+  startedAt?: number;
   runtimeId: string;
   runtimeKey?: string;
   displayName?: string;
@@ -76,6 +78,10 @@ export interface PtyRuntimeMetadata {
   restoredFromStorage?: boolean;
   recoveryState?: string | null;
   recoveryError?: string | null;
+}
+export interface PtyRuntimeControl {
+  verifyMeta(expected: Record<string, unknown>): Promise<boolean>;
+  stopMeshWriter(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean>;
 }
 
 /**
@@ -102,6 +108,8 @@ export interface PtyRuntimeTransport {
   detach?(): void;
   updateMeta?(meta: Record<string, unknown>, replace?: boolean): void;
   getMetadata?(): PtyRuntimeMetadata | null;
+  verifyMeta?(expected: Record<string, unknown>): Promise<boolean>;
+  stopMeshWriter?(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean>;
   onData(callback: (data: string) => void): void;
   onExit(callback: (info: PtyRuntimeExitInfo) => void): void;
 }

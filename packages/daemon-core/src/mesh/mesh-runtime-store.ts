@@ -391,6 +391,14 @@ export class MeshRuntimeStore {
     updateQueueEntry(entry: MeshWorkQueueEntry): void {
         this.transaction(() => {
             const persisted = this.findQueueEntryById(entry.meshId, entry.id);
+            const attempt = this.turnStore().findLatestAttemptForTask(entry.meshId, entry.id);
+            if (attempt?.state === 'stopping') {
+                if (persisted && (entry.status !== persisted.status || entry.assignedSessionId !== persisted.assignedSessionId
+                    || entry.assignedNodeId !== persisted.assignedNodeId || entry.attemptId !== persisted.attemptId
+                    || entry.dispatchNonce !== persisted.dispatchNonce || entry.assignedProviderType !== persisted.assignedProviderType)) {
+                    throw new Error('writer_checkpoint_pending: the physical writer claim cannot be released or rebound');
+                }
+            }
             if (persisted?.phase !== entry.phase || JSON.stringify(persisted?.dependsOn ?? []) !== JSON.stringify(entry.dependsOn ?? [])) {
                 assertSourceDependencyGraph(this.getQueueEntries(entry.meshId).map(t => t.id === entry.id ? entry : t));
             }

@@ -894,6 +894,12 @@ export class SpecCliAdapter implements CliAdapter {
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
         };
     }
+    verifyRuntimeMeta(expected: Record<string, unknown>): Promise<boolean> {
+        return this.driver.getRuntimeControl?.()?.verifyMeta(expected) ?? Promise.resolve(false);
+    }
+    stopMeshWriter(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean> {
+        return this.driver.getRuntimeControl?.()?.stopMeshWriter(target) ?? Promise.resolve(false);
+    }
     updateRuntimeMeta(meta?: Record<string, unknown>): void {
         if (!meta) return;
         if (typeof meta.providerSessionId === 'string') {

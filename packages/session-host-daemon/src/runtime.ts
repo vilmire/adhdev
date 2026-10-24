@@ -440,9 +440,10 @@ export class PtySessionRuntime {
     this.screenMirror?.resize(cols, rows);
   }
 
-  stop(): void {
+  stop(signal?: 'SIGKILL'): void {
     if (!this.ptyProcess) return;
-    this.ptyProcess.kill();
+    if (signal) this.ptyProcess.kill(signal);
+    else this.ptyProcess.kill();
   }
 
   sendSignal(signal: string): void {

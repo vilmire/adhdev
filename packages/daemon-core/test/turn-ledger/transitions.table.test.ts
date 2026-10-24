@@ -27,6 +27,7 @@ const TERMINAL_ILLEGAL: TurnEvidenceKind[] = [
 
 /** Explicitly enumerated illegal (state, kind) pairs in the current lane. */
 const ILLEGAL: Record<TurnState, TurnEvidenceKind[]> = {
+    stopping: [],
     accepted: PRE_TURN_ILLEGAL,
     delivered: PRE_TURN_ILLEGAL,
     consumed: IN_TURN_ILLEGAL,
@@ -58,16 +59,16 @@ const FIRES: Record<string, Fixture> = {
     R0a: { attempt: null, evidence: ev('turn_started', { retro: false }, noRef), state: 'generating', effects: ['bus'] },
     R0b: { attempt: null, evidence: ev('turn_started', { retro: false }), state: null, effects: ['record'] },
     R0: { attempt: null, evidence: ev('liveness', { result: 'alive' }), state: null, effects: ['record'] },
-    R27a: { attempt: makeAttempt('delivered'), evidence: ev('turn_end', { strength: 'genuine', summary: REF }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'completed', generation: 1, effects: ['cancel_dispatch', 'commit', 'queue_status', 'task_terminal', 'notify_coordinator', 'release_attempt_ref'] },
+    R27a: { attempt: makeAttempt('delivered'), evidence: ev('turn_end', { strength: 'genuine', summary: REF }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R27: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'notify_coordinator'] },
     R28a: { attempt: G(), evidence: ev('turn_started', { retro: false }, { sessionId: 's0', attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record', 'cancel_dispatch'] },
     R28: { attempt: G(), evidence: ev('liveness', { result: 'dead' }, { attemptRef: { attemptId: 'a1', generation: 0 } }), state: 'generating', effects: ['record'] },
     R2s: { attempt: makeAttempt('accepted', { data: { providerSuspension: { generation: 1, modalKey: 'modal:setup', providerSetup: true, at: NOW, resolvedAt: null } } }), holds: [makeHold('suspension_before_consumed')], evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'local' }), state: 'delivered' },
     R2: { attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'p2p' }), state: 'delivered', effects: ['release_hold', 'hold', 'hold'] },
     R2a: { attempt: G(), evidence: ev('delivered', { messageId: 'msg1', outcome: 'delivered', via: 'p2p' }), state: 'generating', effects: ['record'] },
-    R3: { attempt: makeAttempt('delivered'), evidence: ev('delivery_refused', { messageId: 'msg1', reason: 'session_exited' }), state: 'accepted', generation: 2, effects: ['reclaim', 'cancel_dispatch', 'queue_status', 'hold'] },
+    R3: { attempt: makeAttempt('delivered'), evidence: ev('delivery_refused', { messageId: 'msg1', reason: 'session_exited' }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R3a: { attempt: makeAttempt('delivered'), evidence: ev('delivery_refused', { messageId: 'msg1', reason: 'send_in_flight' }), state: 'delivered', effects: ['record'] },
-    R24: { attempt: makeAttempt('accepted'), evidence: ev('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }), state: 'accepted', generation: 2, effects: ['reclaim'] },
+    R24: { attempt: makeAttempt('accepted'), evidence: ev('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R25: { attempt: makeAttempt('delivered'), evidence: ev('duplicate_dispatch_refusal', { holderSessionId: 's9', holderAttemptId: 'a1' }), state: 'consumed', effects: ['hold'] },
     R25a: { attempt: makeAttempt('delivered'), evidence: ev('duplicate_dispatch_refusal', { holderSessionId: 's9', holderAttemptId: 'a2' }), state: 'delivered', effects: ['record'] },
     R26: { attempt: G(), evidence: ev('session_rebound', { toSessionId: 's2', reason: 'restart' }), state: 'generating' },
@@ -110,31 +111,33 @@ const FIRES: Record<string, Fixture> = {
     R17g: { attempt: G(), evidence: ev('worker_report', { outcome: 'completed', summary: REF, hasHandoffNotes: true }, { source: 'worker_tool' }), state: 'generating', effects: ['hold', 'record'] },
     R9t: { attempt: G(REPORTED), holds: [makeHold('await_end')], evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }), state: 'completed', effects: ['commit', 'release_hold', 'notify_coordinator'] },
     R13t: { attempt: G(REPORTED), holds: [makeHold('await_end')], evidence: expired('await_end'), state: 'completed', effects: ['commit', 'notify_coordinator'] },
-    R17p: { attempt: G(), evidence: ev('worker_progress', { note: REF }, { source: 'worker_tool' }), state: 'generating', effects: ['bus', 'notify_coordinator'] },
+    WR: { attempt: makeAttempt('stopping', { data: { writerStop: { requestId: 'stop-1', reason: 'hard_ceiling', requestedAt: NOW, tries: 1, escalated: false } } }), evidence: ev('worker_progress', {}, { source: 'worker_tool' }), state: 'stopping', effects: ['record'] },
+    R17ps: { attempt: makeAttempt('delivered'), evidence: ev('worker_progress', {}, { source: 'worker_tool' }), state: 'consumed', effects: ['hold', 'bus'] },
+    R17p: { attempt: G(), evidence: ev('worker_progress', { note: REF }, { source: 'worker_tool' }), state: 'generating', effects: ['bus', 'hold'] },
     R18: { attempt: makeAttempt('completed', { terminal: { outcome: 'completed', reason: 'worker_reported', source: 'worker_tool', strength: 'tool_report', at: NOW - 5 } }), evidence: ev('transcript_final', { selfAttributing: false, nativeRead: false, live: LIVE_IDLE, summary: REF }), state: 'completed', effects: ['record'] },
     R19: { attempt: makeAttempt('completed'), evidence: ev('turn_end', { strength: 'genuine' }), state: 'completed', effects: ['record'] },
     R34: { attempt: makeAttempt('completed'), evidence: ev('coordinator_ack', { notify: 'completed', outcome: 'delivered' }), state: 'completed' },
-    R20: { attempt: G(), evidence: ev('process_exit', { exitCode: 137 }), state: 'accepted', generation: 2, effects: ['reclaim', 'cancel_dispatch'] },
-    R20f: { attempt: G(), evidence: ev('process_exit', { exitCode: 1, providerFailure: 'billing_failed' }), state: 'failed', effects: ['commit'] },
-    R21: { attempt: G(), evidence: ev('session_error', { reason: 'adapter_error' }), state: 'failed', effects: ['commit'] },
-    R22: { attempt: G(), evidence: ev('cancel', { reason: 'operator_cancel' }, { source: 'operator' }), state: 'cancelled', effects: ['cancel_dispatch', 'commit'] },
-    R23: { attempt: G(), evidence: ev('operator_status', { status: 'failed', reason: 'refine_terminal' }, { source: 'operator' }), state: 'failed', effects: ['commit'] },
+    R20: { attempt: G(), evidence: ev('process_exit', { exitCode: 137 }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
+    R20f: { attempt: G(), evidence: ev('process_exit', { exitCode: 1, providerFailure: 'billing_failed' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    R21: { attempt: G(), evidence: ev('session_error', { reason: 'adapter_error' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    R22: { attempt: G(), evidence: ev('cancel', { reason: 'operator_cancel' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
+    R23: { attempt: G(), evidence: ev('operator_status', { status: 'failed', reason: 'refine_terminal' }, { source: 'operator' }), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     R29: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'idle', finalAssistantPresent: true }), state: 'finalizing', effects: ['hold'] },
     R30: { attempt: G(), evidence: ev('no_progress', { stalledMs: 200_000, observedStatus: 'generating', finalAssistantPresent: false }), state: 'generating', effects: ['notify_coordinator'] },
-    R31: { attempt: G(), evidence: ev('liveness', { result: 'dead' }), state: 'accepted', generation: 2, effects: ['reclaim'] },
+    R31: { attempt: G(), evidence: ev('liveness', { result: 'dead' }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R31a: { attempt: G(), evidence: ev('liveness', { result: 'read_failed' }), state: 'generating' },
     R32: { attempt: G(), evidence: ev('liveness', { result: 'alive' }), state: 'generating', effects: ['hold'] },
     R32u: { attempt: G(), evidence: ev('liveness', { result: 'unknown' }), state: 'generating', effects: ['hold'] },
-    R33: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', hollow: true }), state: 'accepted', generation: 2, effects: ['reclaim'] },
+    R33: { attempt: G(), evidence: ev('turn_end', { strength: 'genuine', hollow: true }), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     R33f: { attempt: G({ hollowCount: 1 }), evidence: ev('turn_end', { strength: 'genuine', hollow: true }), state: 'failed', effects: ['commit'] },
     R35: { attempt: G(), evidence: ev('git_side_effect', { dirty: false, commitsSinceDispatch: 0, attributable: true }), state: 'generating' },
     H0: { attempt: G(), holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), state: 'generating', effects: ['record'] },
-    H1: { attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: expired('await_delivery'), state: 'accepted', generation: 2, effects: ['reclaim'] },
+    H1: { attempt: makeAttempt('accepted'), holds: [makeHold('await_delivery')], evidence: expired('await_delivery'), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     H2: { attempt: makeAttempt('delivered'), holds: [makeHold('await_consume')], evidence: expired('await_consume'), state: 'delivered', effects: ['redeliver', 'hold'] },
-    H2r: { attempt: makeAttempt('delivered', { redriveCount: 1 }), holds: [makeHold('await_consume')], evidence: expired('await_consume'), state: 'accepted', generation: 2, effects: ['reclaim'] },
-    H3: { attempt: makeAttempt('delivered'), holds: [makeHold('await_turn')], evidence: expired('await_turn'), state: 'accepted', generation: 2, effects: ['reclaim'] },
+    H2r: { attempt: makeAttempt('delivered', { redriveCount: 1 }), holds: [makeHold('await_consume')], evidence: expired('await_consume'), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
+    H3: { attempt: makeAttempt('delivered'), holds: [makeHold('await_turn')], evidence: expired('await_turn'), state: 'stopping', generation: 1, effects: ['cancel_dispatch', 'hold'] },
     H4: { attempt: G(), holds: [makeHold('liveness')], evidence: expired('liveness'), state: 'generating', effects: ['probe', 'hold'] },
-    H5: { attempt: G(), holds: [makeHold('hard_ceiling')], evidence: expired('hard_ceiling'), state: 'failed', effects: ['commit'] },
+    H5: { attempt: G(), holds: [makeHold('hard_ceiling')], evidence: expired('hard_ceiling'), state: 'stopping', effects: ['cancel_dispatch', 'hold'] },
     H6: { attempt: makeAttempt('delivered'), holds: [makeHold('suspension_before_consumed')], evidence: expired('suspension_before_consumed'), state: 'delivered', effects: ['release_hold'] },
     H7: { attempt: G(), holds: [makeHold('live_pending')], evidence: expired('live_pending'), state: 'generating', effects: ['release_hold', 'reevaluate'] },
 };
@@ -157,7 +160,7 @@ describe('TRANSITIONS table', () => {
             expect(result.rule).toBe(rule.id);
             expect(result.verdict).toBe(rule.verdict);
             expect(result.attempt?.state ?? null).toBe(fx.state ?? null);
-            if (rule.to !== 'same' && rule.to !== 'outcome') expect(result.attempt?.state).toBe(rule.to);
+            if (result.attempt?.state !== 'stopping' && rule.to !== 'same' && rule.to !== 'outcome') expect(result.attempt?.state).toBe(rule.to);
             if (rule.to === 'same' && fx.attempt) expect(result.attempt?.state).toBe(fx.attempt.state);
             if (rule.verdict === 'recorded') {
                 // A recorded verdict never changes the attempt.
@@ -213,7 +216,7 @@ describe('rule matching is unambiguous', () => {
         // × (1 no-attempt + 52 attempt variants (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
         expect(variantCount).toBe(65);
-        expect(visited).toBe(65 * (1 + 52 * 2));
+        expect(visited).toBe(65 * (1 + 57 * 2));
     });
 });
 

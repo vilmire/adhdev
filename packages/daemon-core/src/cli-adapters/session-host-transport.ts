@@ -269,6 +269,31 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         });
     }
 
+    async verifyMeta(expected: Record<string, unknown>): Promise<boolean> {
+        const incarnation = this.metadata;
+        if (!incarnation?.runtimeKey || !incarnation.startedAt) return false;
+        try {
+            await this.operationChain;
+            const reply = await this.client.request<SessionHostRecord[]>({ type: 'list_sessions', payload: {} });
+            const record = reply.success && Array.isArray(reply.result)
+                ? reply.result.find(r => r.sessionId === this.options.runtimeId) : undefined;
+            return !!record && record.runtimeKey === incarnation.runtimeKey && record.startedAt === incarnation.startedAt
+                && record.writeOwner?.clientId === this.options.clientId && record.writeOwner.ownerType === 'agent'
+                && Object.entries(expected).every(([key, value]) => JSON.stringify(record.meta[key]) === JSON.stringify(value));
+        } catch { return false; }
+    }
+    async stopMeshWriter(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean> {
+        try {
+            assertMaintenanceAdmission();
+            await this.operationChain;
+            assertMaintenanceAdmission();
+            const result = await this.client.request({ type: 'stop_mesh_writer', payload: {
+                ...target, sessionId: this.options.runtimeId, clientId: this.options.clientId,
+            } });
+            return result.success === true;
+        } catch { return false; }
+    }
+
     private async boot(): Promise<void> {
         if (typeof this.options.ensureReady === 'function') {
             await this.options.ensureReady();
@@ -467,6 +492,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     private updateMetadata(record: SessionHostRecord): void {
         this.metadata = {
+            osPid: record.osPid,
+            startedAt: record.startedAt,
             runtimeId: record.sessionId,
             runtimeKey: record.runtimeKey,
             displayName: record.displayName,
