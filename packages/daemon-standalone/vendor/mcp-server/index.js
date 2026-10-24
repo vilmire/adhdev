@@ -63348,7 +63348,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         handoffNoteError = noteResult.error;
       }
       if (fence !== "ok") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      if (identity3.attemptId && store2.turnStore().getAttempt(identity3.attemptId)?.state === "stopping") {
+      if (evidenceAttemptId && store2.turnStore().getAttempt(evidenceAttemptId)?.state === "stopping") {
         const ledger2 = getActiveTurnLedger();
         if (!ledger2) return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:no_owner_ledger" };
         observeAcceptedWorkerReport(ledger2, {
@@ -67041,6 +67041,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     var import_fs18;
     var import_path13;
+    var ACTIVE_WRITER_CLAIM_SQL;
     var DatabaseCtor;
     var loggedStrayCleanup;
     var MeshRuntimeStore;
@@ -67069,6 +67070,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_runtime_store_schema();
         init_mesh_runtime_store_claim();
         init_mesh_runtime_store_turn_rows();
+        ACTIVE_WRITER_CLAIM_SQL = "(status = 'assigned' OR EXISTS (SELECT 1 FROM turn_attempts a WHERE a.mesh_id = mesh_queue.mesh_id AND a.task_id = mesh_queue.id AND a.state = 'stopping'))";
         loggedStrayCleanup = false;
         MeshRuntimeStore = class _MeshRuntimeStore {
           static instance;
@@ -67331,7 +67333,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             this.ensureLegacyQueueMigrated(meshId);
             const row2 = this.db.prepare(`
             SELECT 1 FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned'
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
               AND (assigned_session_id = ? OR assigned_node_id = ?)
             LIMIT 1
         `).get(meshId, sessionId, nodeId);
@@ -67341,7 +67343,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           hasActiveSessionAssignment(meshId, sessionId) {
             const row2 = this.db.prepare(`
             SELECT 1 FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_session_id = ?
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_session_id = ?
             LIMIT 1
         `).get(meshId, sessionId);
             return row2 !== void 0;
@@ -67359,12 +67361,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const placeholders = nodeIdForms.map(() => "?").join(", ");
             const rows = this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...nodeIdForms);
             return rows.some((row2) => !isTaskReadonly3(JSON.parse(row2.payload)));
           }
           /**
-           * Count active (status='assigned') tasks on a node, regardless of provider or
+           * Count active writer claims on a node, regardless of provider or
            * task mode. This is the load metric for least-loaded / round-robin ranking:
            * the scheduler prefers the node with the fewest active assignments so
            * untargeted work spreads instead of piling onto whichever node asks first.
@@ -67372,7 +67374,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           nodeActiveAssignmentCount(meshId, nodeId) {
             const row2 = this.db.prepare(`
             SELECT COUNT(*) as count FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id = ?
         `).get(meshId, nodeId);
             return row2?.count ?? 0;
           }
@@ -67482,11 +67484,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const placeholders = forms.map(() => "?").join(",");
             return this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...forms);
           }
           /**
-           * Every `assigned` row in the mesh, on ANY node/daemon — the scope H1
+           * Every active writer claim in the mesh, on ANY node/daemon — the scope H1
            * path-ownership needs (wiring-unification §7c). Unlike
            * {@link assignedRowsForDaemon} (capacity gates: provider/slot maxParallel,
            * node-busy — all correctly scoped to ONE machine's resources), path
@@ -67498,15 +67500,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
            * daemon did not stop an overlapping enqueued task from being claimed on a
            * completely different daemon).
            *
-           * Filters on the same indexed `(mesh_id, status, created_at)` prefix as the
-           * candidate queries above — `status = 'assigned'` mesh-wide is a single
-           * indexed range scan, not a table scan, and excludes every terminal status
-           * (`done`/`failed`/`cancelled`/pending) by construction.
+           * Includes terminal queue rows whose native writer is still stopping. Those
+           * claims remain exclusive until the ledger confirms writer quiescence.
            */
           assignedRowsMeshWide(meshId) {
             return this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned'
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
         `).all(meshId);
           }
           activeProviderAssignmentCount(meshId, nodeId, providerType, daemonNodeIds) {

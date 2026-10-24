@@ -56,7 +56,7 @@ describe('generation rule — older/other-generation evidence is recorded, never
         expect(classifyLane(attempt, report)).toEqual({ lane: 'stale', effectiveGeneration: 0 });
         const result = step(attempt, report);
         expect(result.rule).toBe('R27a');
-        expect(result.attempt?.terminal).toMatchObject({ outcome: 'failed', strength: 'tool_report', reason: 'worker_reported' });
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'blocked', strength: 'tool_report', reason: 'worker_reported' });
     });
 
     it('R27: g already running — the g−1 completion is recorded and a late_completion notice names g−1 with its summary', () => {
@@ -140,9 +140,9 @@ describe('F2 — the worker report is primary; a later scrape adds nothing', () 
         }
     });
 
-    it('a blocked report commits failed', () => {
+    it('a blocked report commits blocked', () => {
         const r = step(makeAttempt('finalizing'), ev('worker_report', { outcome: 'blocked', summary: REF, hasHandoffNotes: false }, { source: 'worker_tool' }));
-        expect(r.attempt?.terminal?.outcome).toBe('failed');
+        expect(r.attempt?.terminal?.outcome).toBe('blocked');
     });
 
     it('a scrape-committed terminal records a later duplicate (R19 duplicate vs already_terminal)', () => {

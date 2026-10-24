@@ -31,10 +31,11 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js';
 import { TURN_IPC_PROTOCOL_VERSION } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { evaluateTaskOwnedPathsAdmission } from '../../src/mesh/mesh-runtime-store-claim.js';
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
-import { acceptWorkerCompletionReport } from '../../src/mesh/worker-report.js';
+import { acceptWorkerCompletionReport, acceptWorkerCompletionReportForIdentity } from '../../src/mesh/worker-report.js';
 import { __resetWorkerTaskTokensForTest, mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js';
 import { claimNextTask, getMeshQueueStats, updateTaskStatus, requeueTaskForLedgerReclaim } from '../../src/mesh/mesh-work-queue.js';
 import { summarizeMissionTasks, isMissionAllTasksTerminal, upsertMeshMission, maybeEmitMissionCloseCandidate, getMeshMission } from '../../src/mesh/mesh-missions.js';
@@ -42,7 +43,7 @@ import { createTurnScheduler } from '../../src/mesh/turn-ledger/scheduler.js';
 import { getLocalRecordSummary, readLocalRecords, readTurnTerminalViews } from '../../src/mesh/mesh-local-records.js';
 import { computeMeshTaskStats, rollupMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { legacyWorkerBlockedTasks, projectWorkerOutcomeViews } from '../../src/mesh/mesh-worker-outcome-view.js';
-import { SUMMARY, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
+import { SUMMARY, T0, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
 
 function meshId(): string {
     return `mesh_tl_${randomUUID().slice(0, 8)}`;
@@ -193,13 +194,19 @@ describe('RC28 recovery and compatibility in an isolated fixture database', () =
 
     it('a runtime error after an accepted blocked report remains failed', async () => {
         const mesh = meshId();
-        const { task, store, ledger, ref } = setup(mesh);
+        const { task, store, ledger, ref, ports } = setup(mesh);
         setActiveTurnLedger(ledger);
         const token = mintWorkerTaskToken({ meshId: mesh, taskId: task.id, attemptId: ref.attemptRef.attemptId, sessionId: 's1' });
         expect(acceptWorkerCompletionReport({ token: token.token }, { outcome: 'blocked', summary: 'Review required', branchState: 'blocked_review' }).accepted).toBe(true);
         ledger.observe(evd('session_error', { reason: 'provider_error' }, ref));
+        expect(ledger.getAttempt(ref.attemptRef.attemptId)).toMatchObject({ state: 'stopping', terminal: null });
+        expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('blocked');
+        expect(store.hasActiveAssignment(mesh, 's1', 'n1')).toBe(true);
+        ports.cancelDispatch = (req) => ({ ...req, success: true, quiescent: true, incarnation: 'fixture-native-writer' });
+        const restored = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => T0 + 1_000, publisher: fakePublisher(), ports });
+        await restored.resumeStoppingWriters();
         expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('failed');
-        expect(ledger.getAttempt(ref.attemptRef.attemptId)?.terminal).toMatchObject({ outcome: 'failed', reason: 'session_error' });
+        expect(restored.getAttempt(ref.attemptRef.attemptId)?.terminal).toMatchObject({ outcome: 'failed', reason: 'session_error' });
         expect(legacyWorkerBlockedTasks(store, mesh).size).toBe(0);
         await ledger.flushPublish();
     });
@@ -297,4 +304,78 @@ describe('RC28 recovery and compatibility in an isolated fixture database', () =
         expect(wrongSession.store.getLatestTaskOutput(wrongSession.task.id)).toBeNull();
         await wrongSession.ledger.flushPublish();
     });
+});
+
+
+describe('combined composition physical writer checkpoints', () => {
+    for (const outcome of ['blocked', 'completed', 'failed'] as const) {
+        it(`${outcome}: stopping retains assignment, ownership and capacity until exact quiescence`, async () => {
+            const mesh = meshId();
+            const { task, store, ledger, ref, ports } = setup(mesh);
+            const row = store.findQueueEntryById(mesh, task.id)!;
+            store.updateQueueEntry({ ...row, assignedProviderType: 'codex', assignedModel: 'fixture-model', ownedPaths: { paths: [{ path: 'src/shared.ts', subtree: false }] } });
+            const candidate = { ...row, id: 'other-task', ownedPaths: { paths: [{ path: 'src/shared.ts', subtree: false }] } };
+            const checkClaims = (held: boolean) => {
+                expect(store.hasActiveAssignment(mesh, 's1', 'n1')).toBe(held);
+                expect(store.hasActiveSessionAssignment(mesh, 's1')).toBe(held);
+                expect(store.hasActiveNodeWriteAssignment(mesh, 'n1')).toBe(held);
+                expect(store.nodeActiveAssignmentCount(mesh, 'n1')).toBe(held ? 1 : 0);
+                expect(store.activeProviderAssignmentCount(mesh, 'n1', 'codex')).toBe(held ? 1 : 0);
+                expect(store.activeSlotAssignmentCount(mesh, 'n1', 'codex', 'fixture-model')).toBe(held ? 1 : 0);
+                expect(store.assignedRowsMeshWide(mesh)).toHaveLength(held ? 1 : 0);
+                expect(evaluateTaskOwnedPathsAdmission(store, mesh, candidate).allowed).toBe(!held);
+                expect(store.hasActiveAssignment(mesh, 'other-session', 'other-node')).toBe(false);
+                expect(store.hasActiveSessionAssignment(mesh, 'other-session')).toBe(false);
+                expect(store.hasActiveNodeWriteAssignment(mesh, 'other-node')).toBe(false);
+                expect(store.activeProviderAssignmentCount(mesh, 'other-node', 'codex')).toBe(0);
+                expect(store.activeProviderAssignmentCount(mesh, 'n1', 'other-provider')).toBe(0);
+                expect(store.activeSlotAssignmentCount(mesh, 'n1', 'codex', 'other-model')).toBe(0);
+                expect(store.assignedRowsMeshWide('other-mesh')).toHaveLength(0);
+            };
+            checkClaims(true); // Assigned rows still reserve the physical writer.
+            setActiveTurnLedger(ledger);
+            const token = mintWorkerTaskToken({ meshId: mesh, taskId: task.id, attemptId: ref.attemptRef.attemptId, sessionId: 's1' });
+            expect(acceptWorkerCompletionReport({ token: token.token }, { outcome, summary: 'Pre-idle report', touchedFiles: [] }).accepted).toBe(true);
+            ledger.observe(evd('session_error', { reason: 'provider_error' }, ref));
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe(outcome);
+            checkClaims(true);
+            const stoppedRow = store.findQueueEntryById(mesh, task.id)!;
+            expect(() => store.updateQueueEntry({ ...stoppedRow, status: 'pending' })).toThrow('writer_checkpoint_pending');
+            expect(() => store.updateQueueEntry({ ...stoppedRow, assignedSessionId: 'replacement' })).toThrow('writer_checkpoint_pending');
+            // A successful reply for another generation cannot release this writer.
+            ports.cancelDispatch = req => ({ ...req, generation: req.generation + 1, success: true, quiescent: true, incarnation: 'fixture-native-writer' });
+            const wrongGeneration = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => T0 + 1_000, publisher: fakePublisher(), ports });
+            await wrongGeneration.resumeStoppingWriters();
+            expect(wrongGeneration.getAttempt(ref.attemptRef.attemptId)).toMatchObject({ generation: 0, state: 'stopping', terminal: null });
+            checkClaims(true);
+            ports.cancelDispatch = req => ({ ...req, success: true, quiescent: true, incarnation: 'fixture-native-writer' });
+            const restored = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => T0 + 1_000, publisher: fakePublisher(), ports });
+            await restored.resumeStoppingWriters();
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('failed');
+            expect(restored.getAttempt(ref.attemptRef.attemptId)?.terminal).toMatchObject({ outcome: 'failed', reason: 'session_error' });
+            checkClaims(false); // Settled terminal rows no longer reserve anything.
+        });
+    }
+
+    for (const explicitAttempt of [true, false]) {
+        it(`stopping report with attemptId ${explicitAttempt ? 'present' : 'omitted'} returns checkpoint_pending`, () => {
+            const mesh = meshId();
+            const { task, store, ledger, ref } = setup(mesh);
+            ledger.observe(evd('session_error', { reason: 'provider_error' }, ref));
+            setActiveTurnLedger(ledger);
+            const identity = { token: 'fixture-identity', meshId: mesh, taskId: task.id, sessionId: 's1', ...(explicitAttempt ? { attemptId: ref.attemptRef.attemptId } : {}) };
+            const report = { outcome: 'blocked' as const, summary: 'Report during stop' };
+            const result = acceptWorkerCompletionReportForIdentity(identity, report, {});
+            expect(result).toMatchObject({ accepted: false, refusal: 'rejected_by_reducer', detail: expect.stringContaining('checkpoint_pending:report retained') });
+            expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('assigned');
+            expect(ledger.getAttempt(ref.attemptRef.attemptId)).toMatchObject({ state: 'stopping', terminal: null });
+            expect(store.getLatestTaskOutput(task.id)).toBeNull();
+            const events = store.db.prepare("SELECT kind FROM turn_events WHERE attempt_id = ? AND kind = 'worker_report'").all(ref.attemptRef.attemptId);
+            expect(events).toHaveLength(1);
+            expect(acceptWorkerCompletionReportForIdentity({ ...identity, sessionId: 'other-session' }, report, {})).toMatchObject({ accepted: false, detail: 'session_mismatch' });
+            setActiveTurnLedger(null);
+            expect(acceptWorkerCompletionReportForIdentity(identity, report, {})).toMatchObject({ accepted: false, detail: 'checkpoint_pending:no_owner_ledger' });
+            expect(store.hasActiveSessionAssignment(mesh, 's1')).toBe(true);
+        });
+    }
 });

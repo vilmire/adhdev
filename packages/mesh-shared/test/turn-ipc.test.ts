@@ -45,6 +45,7 @@ import {
     decodeQueueCancelRequest,
     decodeQueueCancelResponse,
     decodeQueueRequeueRequest,
+    decodeQueueReviseRequest,
     decodeQueueRequeueResponse,
     decodeDirectDispatchRecordRequest,
     decodeDirectDispatchRecordResponse,
@@ -97,21 +98,21 @@ describe('turn-ipc — command registry', () => {
     // Twenty-three became thirty-one. Graph orchestration retired (2026-09-30):
     // graph_audit_record and the five graph_gate/node/view commands went with it,
     // and queue_enqueue_graph became queue_enqueue_batch. Thirty-one became
-    // twenty-five.
-    it('declares exactly twenty-five commands', () => {
-        expect(TURN_IPC_COMMANDS).toHaveLength(25)
+    // twenty-five. Product A adds queue_revise, making twenty-six.
+    it('declares exactly twenty-six commands', () => {
+        expect(TURN_IPC_COMMANDS).toHaveLength(26)
         expect([...TURN_IPC_COMMANDS].sort()).toEqual([
             'active_work_query', 'direct_dispatch_record',
             'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
             'note_forget', 'note_upsert', 'operator_status', 'orphaned_pin_notify',
             'prune_stale_direct',
-            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue', 'queue_revise',
             'record_local', 'recovery_context_query', 'task_stats_query',
             'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ])
     })
 
-    it('isTurnIpcCommand accepts only the twenty-five names', () => {
+    it('isTurnIpcCommand accepts only the twenty-six names', () => {
         for (const name of TURN_IPC_COMMANDS) expect(isTurnIpcCommand(name)).toBe(true)
         expect(isTurnIpcCommand('mesh_status')).toBe(false)
         expect(isTurnIpcCommand('appendLedgerEntry')).toBe(false)
@@ -637,6 +638,8 @@ describe('turn-ipc — C-W9a record / queue / active-work commands', () => {
         expect(decodeQueueCancelResponse({ task: null })).toBeNull()
         expect(decodeQueueRequeueRequest({ v, meshId: 'm', taskId: 't-1', options: { force: true } })).not.toBeNull()
         expect(decodeQueueRequeueResponse({ task: null })).not.toBeNull()
+        const revise = { v, meshId: 'm', taskId: 't-1', expectedRevision: 0, patch: { message: 'Revised work' } }
+        expect(decodeQueueReviseRequest(revise)).toEqual(revise)
     })
 
     it('queue_enqueue_batch: specs only; the response is ok|refusal', () => {

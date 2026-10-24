@@ -214,10 +214,11 @@ describe('rule matching is unambiguous', () => {
         expect(ambiguous).toEqual([]);
         // 65 evidence variants (all 24 kinds; +correction request/expiry, +6 report-gate variants 2026-09-24, +1 await_end expiry 2026-09-25,
         // +3 auth-failed turn_end variants 2026-10-06 — R9f, +2 owner-scraped transcript_final 2026-10-08 — R15p)
-        // × (1 no-attempt + 57 attempt variants (including blocked terminal) (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
+        // × (1 no-attempt + 62 attempt variants (including stopping and blocked terminal) (+6 reported, 2026-09-25; +18 liveness-gated, 2026-10-13) × 2 lanes).
         const variantCount = TURN_EVIDENCE_KINDS.reduce((n, kind) => n + variantsFor(kind).length, 0);
         expect(variantCount).toBe(65);
-        expect(visited).toBe(65 * (1 + 57 * 2));
+        expect(TURN_STATES).toHaveLength(11);
+        expect(visited).toBe(65 * (1 + 62 * 2));
     });
 });
 

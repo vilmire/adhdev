@@ -38,6 +38,10 @@ import {
 } from './mesh-runtime-store-schema.js';
 import { claimNextQueueTask } from './mesh-runtime-store-claim.js';
 
+// A pre-idle terminal report cannot release a writer still awaiting quiescence.
+const ACTIVE_WRITER_CLAIM_SQL =
+    "(status = 'assigned' OR EXISTS (SELECT 1 FROM turn_attempts a WHERE a.mesh_id = mesh_queue.mesh_id AND a.task_id = mesh_queue.id AND a.state = 'stopping'))";
+
 let DatabaseCtor: typeof BetterSqlite3 | undefined;
 
 function loadDatabaseCtor(): typeof BetterSqlite3 {
@@ -432,7 +436,7 @@ export class MeshRuntimeStore {
         this.ensureLegacyQueueMigrated(meshId);
         const row = this.db.prepare(`
             SELECT 1 FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned'
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
               AND (assigned_session_id = ? OR assigned_node_id = ?)
             LIMIT 1
         `).get(meshId, sessionId, nodeId);
@@ -443,7 +447,7 @@ export class MeshRuntimeStore {
     hasActiveSessionAssignment(meshId: string, sessionId: string): boolean {
         const row = this.db.prepare(`
             SELECT 1 FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_session_id = ?
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_session_id = ?
             LIMIT 1
         `).get(meshId, sessionId);
         return row !== undefined;
@@ -471,13 +475,13 @@ export class MeshRuntimeStore {
         const placeholders = nodeIdForms.map(() => '?').join(', ');
         const rows = this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>;
         return rows.some(row => !isTaskReadonly(JSON.parse(row.payload) as MeshWorkQueueEntry));
     }
 
     /**
-     * Count active (status='assigned') tasks on a node, regardless of provider or
+     * Count active writer claims on a node, regardless of provider or
      * task mode. This is the load metric for least-loaded / round-robin ranking:
      * the scheduler prefers the node with the fewest active assignments so
      * untargeted work spreads instead of piling onto whichever node asks first.
@@ -485,7 +489,7 @@ export class MeshRuntimeStore {
     nodeActiveAssignmentCount(meshId: string, nodeId: string): number {
         const row = this.db.prepare(`
             SELECT COUNT(*) as count FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id = ?
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id = ?
         `).get(meshId, nodeId) as { count: number } | undefined;
         return row?.count ?? 0;
     }
@@ -611,12 +615,12 @@ export class MeshRuntimeStore {
         const placeholders = forms.map(() => '?').join(',');
         return this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned' AND assigned_node_id IN (${placeholders})
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...forms) as Array<{ payload: string }>;
     }
 
     /**
-     * Every `assigned` row in the mesh, on ANY node/daemon — the scope H1
+     * Every active writer claim in the mesh, on ANY node/daemon — the scope H1
      * path-ownership needs (wiring-unification §7c). Unlike
      * {@link assignedRowsForDaemon} (capacity gates: provider/slot maxParallel,
      * node-busy — all correctly scoped to ONE machine's resources), path
@@ -628,15 +632,13 @@ export class MeshRuntimeStore {
      * daemon did not stop an overlapping enqueued task from being claimed on a
      * completely different daemon).
      *
-     * Filters on the same indexed `(mesh_id, status, created_at)` prefix as the
-     * candidate queries above — `status = 'assigned'` mesh-wide is a single
-     * indexed range scan, not a table scan, and excludes every terminal status
-     * (`done`/`failed`/`cancelled`/pending) by construction.
+     * Includes terminal queue rows whose native writer is still stopping. Those
+     * claims remain exclusive until the ledger confirms writer quiescence.
      */
     assignedRowsMeshWide(meshId: string): Array<{ payload: string }> {
         return this.db.prepare(`
             SELECT payload FROM mesh_queue
-            WHERE mesh_id = ? AND status = 'assigned'
+            WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL}
         `).all(meshId) as Array<{ payload: string }>;
     }
 

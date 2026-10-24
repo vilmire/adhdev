@@ -926,7 +926,7 @@ export function acceptWorkerCompletionReportForIdentity(
     // (4) A blocked report ends this task attempt without succeeding or failing.
     // Claim/retry fences treat it as terminal; only completed satisfies dependencies.
     if (fence !== 'ok') return { accepted: false, refusal: 'rejected_by_reducer', detail: fence };
-    if (identity.attemptId && store.turnStore().getAttempt(identity.attemptId)?.state === 'stopping') {
+    if (evidenceAttemptId && store.turnStore().getAttempt(evidenceAttemptId)?.state === 'stopping') {
         const ledger = getActiveTurnLedger();
         if (!ledger) return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:no_owner_ledger' };
         observeAcceptedWorkerReport(ledger, { ...identity, outcome: report.outcome, summary: report.summary,

@@ -28,7 +28,7 @@ function rig() {
     const ledger = ledgerOn(db, { now: () => now, ports, host, publisher: fakePublisher() });
     const scheduler = createTurnScheduler({ ledger, now: () => now, log: { info: () => {}, warn: () => {}, error: () => {} }, claim: vi.fn() });
     return {
-        db, ledger, host, scheduler,
+        db, ledger, host, scheduler, ports,
         /** Moves the ledger clock to T0 + ms. */
         at(ms: number) { now = T0 + ms; return now; },
     };
@@ -168,13 +168,19 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
         expect(r.ledger.store.activeHolds('a1').find((h) => h.reason === 'await_end')!.until).toBe(T0 + 344 * S + P.awaitEndMs);
     });
 
-    it('a report of a reclaimed generation no longer satisfies the guard (R9t is generation-scoped)', () => {
+    it('a report of a reclaimed generation no longer satisfies the guard (R9t is generation-scoped)', async () => {
         const r = rig();
         toResumed(r, 'mesh_queue');
         expect(report(r, 344).rule).toBe('R17g');
-        // The session dies before the idle edge: reclaim to generation 1.
+        // The session dies before the idle edge: retain generation 0 until writer quiescence.
         r.at(346 * S);
         expect(r.ledger.observe(evd('liveness', { result: 'dead' }, { source: 'coordinator_probe' })).rule).toBe('R31');
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 0, state: 'stopping', terminal: null });
+        // An idle ACK is not proof that the native writer has stopped.
+        r.ledger.observe(evd('turn_end', { strength: 'genuine' }));
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 0, state: 'stopping', terminal: null });
+        r.ports.cancelDispatch = (req) => ({ ...req, success: true, quiescent: true, incarnation: 'fixture-native-writer' });
+        await r.ledger.resumeStoppingWriters();
         const reclaimed = r.ledger.getAttempt('a1')!;
         expect(reclaimed).toMatchObject({ generation: 1, state: 'accepted' });
         expect(r.ledger.store.activeHolds('a1').some((h) => h.reason === 'await_end')).toBe(false);
@@ -182,7 +188,7 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
         const g1 = { attemptRef: { attemptId: 'a1', generation: 1 }, sessionId: 's2' };
         r.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'p2p' }, { ...g1, source: 'dispatch' }));
         expect(r.ledger.observe(evd('turn_started', { retro: false }, g1)).rule).toBe('R4');
-        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine' }, g1)).rule).toBe('R9');
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ strength: 'genuine', reason: 'turn_end' });
+        expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, g1)).rule).toBe('R9r');
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'finalizing', terminal: null });
     });
 });
