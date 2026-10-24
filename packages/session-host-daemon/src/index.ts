@@ -18,7 +18,6 @@ import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-a
 import {
   SessionHostServer,
   isManagedSessionHostCommandLine,
-  readVerifiedReplacementProvenance,
   sessionHostInstanceArg,
 } from './server.js';
 import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
@@ -152,20 +151,8 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
     storageRootDir: getSessionHostStorageRoot(),
     instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
-    replacementProvenance: () =>
-      readVerifiedReplacementProvenance({
-        provenanceFile: getSessionHostReplacementProvenanceFile(SESSION_HOST_APP_NAME),
-        instanceConfigDir: INSTANCE_CONFIG_DIR,
-        appName: SESSION_HOST_APP_NAME,
-        endpointPath: endpoint.path,
-        leaseStateDir: path.join(INSTANCE_CONFIG_DIR, 'session-host'),
-      }),
   });
-  try {
-    await server.start();
-  } finally {
-    removeSessionHostReplacementProvenance(SESSION_HOST_APP_NAME);
-  }
+  await server.start();
   writeSessionHostPid(SESSION_HOST_APP_NAME);
 
   const shutdown = async () => {

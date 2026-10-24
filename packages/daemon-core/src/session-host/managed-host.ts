@@ -1,7 +1,6 @@
 import { readCooperativeMaintenance, assertMaintenanceLifecycle, verifyRetainedMaintenanceHost } from '../maintenance/cooperative-gate.js';
 import { assertWorkerBridgeLifecycleAdmission } from '../commands/worker-bridge-lifecycle-admission.js';
 import { spawn, type StdioOptions } from 'child_process';
-import { createHash, randomUUID } from 'crypto';
 import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -23,7 +22,6 @@ import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
 import {
     ensureSessionHostReady as ensureSharedSessionHostReady,
     isResourceExhaustionError,
-    isValidReplacementAuthorizationShape,
     SESSION_HOST_PROBE_TIMEOUT_MS,
     recordSessionHostProbeFailure,
     recordSessionHostProbeSuccess,
@@ -102,9 +100,8 @@ export interface ManagedSessionHostOptions {
      */
     resolveEntryOverride?: () => string;
     /**
-     * Grace period in ms between SIGTERM and SIGKILL when stopping an unresponsive
-     * managed session-host before spawning a replacement (defaults to 4000ms so the
-     * old host has time to flush persistence cleanly).
+     * Legacy option retained for source compatibility; automatic live eviction
+     * and escalation are unsupported.
      */
     evictGraceMs?: number;
     /**
@@ -113,8 +110,8 @@ export interface ManagedSessionHostOptions {
      */
     onHostReplaced?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
     /**
-     * Explicit idle-replacement authorization required before evicting any live
-     * managed session-host process.
+     * Legacy option retained for compatibility. It never authorizes automatic
+     * replacement of a live or unknown host.
      */
     replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
     /** Optional process birth probe override (`ps -o lstart=`). */
@@ -212,199 +209,47 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return path.join(instance().configDir, `${appName}-session-host-replacement.json`);
     }
 
-    function removeReplacementProvenanceFile(): void {
-        try {
-            fs.unlinkSync(getReplacementProvenanceFile());
-        } catch {
-            // noop
-        }
+    function assertManagedHostBridgeAdmission(operation: string): void {
+        // The canonical gate checks current AND target namespaces and remembers
+        // strict observations even after their on-disk artifacts disappear.
+        assertWorkerBridgeLifecycleAdmission(operation, instance().configDir);
     }
 
-    function writeReplacementProvenanceFile(params: {
-        endpoint: SessionHostEndpoint;
-        expectedEndpointInode?: bigint;
-        auth: SessionHostReplacementAuthorization;
-    }): void {
-        const dir = instance().configDir;
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        const target = getReplacementProvenanceFile();
-        const tmp = `${target}.${randomUUID()}.tmp`;
-        const expectedTokenHash = params.auth.expectedTokenHash
-            ?? (params.auth.leaseToken ? createHash('sha256').update(params.auth.leaseToken).digest('hex') : undefined);
-        const nowMs = Date.now();
-        const payload = {
-            schema: 1,
-            schemaVersion: 1,
-            appName,
-            instanceConfigDir: dir,
-            instanceConfigKey: sessionHostInstanceArg(dir),
-            endpointPath: params.endpoint.path,
-            expectedEndpointInode: params.expectedEndpointInode !== undefined ? String(params.expectedEndpointInode) : null,
-            expectedPid: params.auth.expectedPid,
-            expectedBirth: params.auth.expectedBirth.trim(),
-            expectedBootId: params.auth.expectedBootId,
-            expectedEpoch: params.auth.expectedEpoch,
-            expectedOwner: params.auth.expectedOwner,
-            expectedTokenHash: expectedTokenHash ?? null,
-            activeRuntimeCount: 0,
-            issuedAt: nowMs,
-            issuedAtMs: nowMs,
-        };
-        const fd = fs.openSync(tmp, 'wx', 0o600);
+    function pathIdentity(file: string): string {
         try {
-            fs.writeFileSync(fd, JSON.stringify(payload), 'utf8');
-        } finally {
-            fs.closeSync(fd);
-        }
-        fs.renameSync(tmp, target);
-    }
-
-    let inFlightReplacementAuth: SessionHostReplacementAuthorization | undefined;
-
-    function verifyLeaseJournalForReplacement(
-        endpoint: SessionHostEndpoint,
-        auth: SessionHostReplacementAuthorization,
-    ): boolean {
-        const leaseJournal = path.join(instance().configDir, 'session-host', 'upgrade-lease.json');
-        if (!fs.existsSync(leaseJournal)) return true;
-        try {
-            const stat = fs.lstatSync(leaseJournal);
-            if (
-                !stat.isFile()
-                || stat.isSymbolicLink()
-                || stat.nlink !== 1
-                || (stat.mode & 0o077) !== 0
-                || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
-            ) {
-                return false;
-            }
-            const parsed = JSON.parse(fs.readFileSync(leaseJournal, 'utf8')) as {
-                schema?: unknown;
-                bootId?: unknown;
-                pid?: unknown;
-                endpoint?: unknown;
-                epoch?: unknown;
-                held?: unknown;
-                owner?: unknown;
-                tokenHash?: unknown;
-                expiresAt?: unknown;
-            };
-            const canonicalEndpointDir = fs.existsSync(path.dirname(endpoint.path))
-                ? fs.realpathSync(path.dirname(endpoint.path))
-                : path.resolve(path.dirname(endpoint.path));
-            const canonicalEndpointPath = path.join(canonicalEndpointDir, path.basename(endpoint.path));
-            const leaseEndpointDir = typeof parsed?.endpoint === 'string' && fs.existsSync(path.dirname(parsed.endpoint))
-                ? fs.realpathSync(path.dirname(parsed.endpoint))
-                : typeof parsed?.endpoint === 'string'
-                    ? path.resolve(path.dirname(parsed.endpoint))
-                    : '';
-            const leaseEndpointPath = typeof parsed?.endpoint === 'string'
-                ? path.join(leaseEndpointDir, path.basename(parsed.endpoint))
-                : '';
-            if (
-                parsed?.schema !== 1
-                || parsed.held !== true
-                || leaseEndpointPath !== canonicalEndpointPath
-                || parsed.epoch !== auth.expectedEpoch
-                || parsed.owner !== auth.expectedOwner
-                || typeof parsed.tokenHash !== 'string'
-                || !/^[a-f0-9]{64}$/.test(parsed.tokenHash)
-            ) {
-                return false;
-            }
-            if (parsed.bootId !== undefined && parsed.bootId !== auth.expectedBootId) {
-                return false;
-            }
-            if (parsed.pid !== undefined && parsed.pid !== auth.expectedPid) {
-                return false;
-            }
-            if (
-                parsed.expiresAt !== undefined
-                && (typeof parsed.expiresAt !== 'number' || !Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now())
-            ) {
-                return false;
-            }
-            if (auth.expectedTokenHash === undefined && auth.leaseToken === undefined) {
-                return false;
-            }
-            if (auth.expectedTokenHash !== undefined && parsed.tokenHash !== auth.expectedTokenHash) {
-                return false;
-            }
-            if (auth.leaseToken !== undefined) {
-                const tokenDigest = createHash('sha256').update(auth.leaseToken).digest('hex');
-                if (parsed.tokenHash !== tokenDigest) return false;
-            }
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    function hasNonLeaseStrictBridgeArtifact(configDir: string): boolean {
-        try {
-            let root = path.resolve(configDir);
-            let rootStat: fs.Stats | undefined;
-            try {
-                rootStat = fs.lstatSync(root);
-            } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
-            }
-            if (rootStat) {
-                if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return true;
-                root = fs.realpathSync(root);
-            }
-            for (const name of [
-                'worker-bridge-supervisor.json',
-                'worker-bridge-launchd-exclusion.json',
-                'worker-bridge-lifecycle-fence.json',
-            ]) {
-                try {
-                    fs.lstatSync(path.join(root, name));
-                    return true;
-                } catch (error) {
-                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
-                }
-            }
-            const ledgerDir = path.join(root, 'mesh-ledger');
-            try {
-                fs.lstatSync(ledgerDir);
-                return true;
-            } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
-            }
-            return false;
-        } catch {
-            return true;
-        }
-    }
-
-    function assertManagedHostBridgeAdmission(
-        operation: string,
-        authorizedReplacement?: SessionHostReplacementAuthorization,
-    ): void {
-        const configDir = instance().configDir;
-        const leaseJournal = path.join(configDir, 'session-host', 'upgrade-lease.json');
-        let leaseExists = false;
-        try {
-            fs.lstatSync(leaseJournal);
-            leaseExists = true;
+            const stat = fs.lstatSync(file, { bigint: true });
+            return `${stat.dev}:${stat.ino}:${stat.mode}`;
         } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                assertWorkerBridgeLifecycleAdmission(operation, configDir);
-                return;
-            }
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+            throw error;
         }
-        if (
-            !leaseExists
-            || !authorizedReplacement
-            || authorizedReplacement.isCancelled?.()
-            || !verifyLeaseJournalForReplacement(getEndpoint(), authorizedReplacement)
-            || hasNonLeaseStrictBridgeArtifact(configDir)
-        ) {
-            assertWorkerBridgeLifecycleAdmission(operation, configDir);
-            return;
+    }
+
+    function getExistingHostGeneration(): string {
+        const context = instance();
+        const endpoint = getEndpoint();
+        const pidState = readPidFileState();
+        const pid = pidState.status === 'ok' ? pidState.pid : null;
+        return JSON.stringify([
+            context.configDir, context.canonicalConfigDir, context.ipcKey,
+            pathIdentity(context.configDir), pidState,
+            pid === null ? null : getProcessBirth(pid),
+            pid === null ? false : isPidAlive(pid),
+            endpoint.kind, endpoint.path, pathIdentity(endpoint.path),
+            instance().canonicalConfigDir, readPidFileState(),
+        ]);
+    }
+
+    function assertAutomaticStart(generation: string, isCancelled?: () => boolean, deadline = Infinity): void {
+        assertManagedHostBridgeAdmission('session_host_spawn');
+        const state = inspectExistingHostState();
+        const currentGeneration = getExistingHostGeneration();
+        assertManagedHostBridgeAdmission('session_host_spawn');
+        // Check cancellation after all blocking native/disk reads, immediately
+        // before the caller's effect. A dead receipt never authorizes a new PID.
+        if (state !== 'dead' || generation !== currentGeneration || Date.now() >= deadline || isCancelled?.()) {
+            throw new SessionHostUnavailableTransientError(getEndpoint());
         }
-        assertMaintenanceLifecycle(operation, configDir);
     }
 
     function readPidFileState(): { status: 'missing' } | { status: 'corrupt' } | { status: 'ok'; pid: number } {
@@ -414,7 +259,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             const raw = fs.readFileSync(pidFile, 'utf8').trim();
             if (!/^\d+$/.test(raw)) return { status: 'corrupt' };
             const pid = Number.parseInt(raw, 10);
-            return Number.isFinite(pid) && pid > 0 ? { status: 'ok', pid } : { status: 'corrupt' };
+            return Number.isSafeInteger(pid) && pid > 0 ? { status: 'ok', pid } : { status: 'corrupt' };
         } catch {
             return { status: 'corrupt' };
         }
@@ -457,9 +302,8 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             const lines = out.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
             if (lines.length === 0) return [];
             if (!lines.every((line) => /^\d+$/.test(line))) return null;
-            return lines
-                .map((line) => Number.parseInt(line, 10))
-                .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+            const pids = lines.map((line) => Number.parseInt(line, 10));
+            return pids.every(pid => Number.isSafeInteger(pid) && pid > 0) ? pids : null;
         } catch (error: any) {
             if (
                 (error?.status === 1 && String(error?.stdout ?? '').trim() === '')
@@ -478,6 +322,11 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return birth ? `pid-${pid}:birth-${birth}` : `pid-${pid}:birth-unknown`;
     }
 
+    function isKnownDeadPid(pid: number): boolean {
+        try { process.kill(pid, 0); return false; }
+        catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+    }
+
     function inspectExistingHostState(): 'alive' | 'dead' | 'unknown' {
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
@@ -485,30 +334,30 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             return 'unknown';
         }
         if (pidState.status === 'missing') {
-            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+            if (fs.existsSync(endpoint.path)) {
                 return 'unknown';
             }
             return 'dead';
         }
         const existingPid = pidState.pid;
         if (existingPid === process.pid) return 'unknown';
-        if (!isPidAlive(existingPid)) {
+        if (isKnownDeadPid(existingPid)) {
             if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
                 if (process.platform !== 'win32') {
                     const owners = getSocketOwnerPids(endpoint.path);
                     if (owners === null) {
                         return 'unknown';
                     }
-                    if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+                    if (owners.length !== 0) {
                         return 'unknown';
                     }
                 }
             }
             return 'dead';
         }
-        if (!canSignalPid(existingPid)) return 'unknown';
+        if (!isPidAlive(existingPid) || !canSignalPid(existingPid)) return 'unknown';
         const birth = getProcessBirth(existingPid);
-        if (!birth || birth === 'win32' || birth === 'unknown') return 'unknown';
+        if (!birth || birth.toLowerCase() === 'win32' || birth.toLowerCase() === 'unknown') return 'unknown';
         if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
             if (process.platform !== 'win32') {
                 const owners = getSocketOwnerPids(endpoint.path);
@@ -627,11 +476,13 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         LOG.info('SessionHost', `conpty prebuild verified before spawn at ${found}`);
     }
 
-    function spawnHost(): void {
-        const activeReplacementAuth = inFlightReplacementAuth;
-        inFlightReplacementAuth = undefined;
+    function spawnHost(startFence?: { generation: string; isCancelled: () => boolean; deadline: number }): void {
+        assertManagedHostBridgeAdmission('session_host_spawn');
+        const generation = startFence?.generation ?? getExistingHostGeneration();
+        const assertStart = () => assertAutomaticStart(generation, startFence?.isCancelled, startFence?.deadline);
+        assertStart();
         assertMaintenanceLifecycle('session_host_spawn', instance().configDir);
-        assertManagedHostBridgeAdmission('session_host_spawn', activeReplacementAuth);
+        assertManagedHostBridgeAdmission('session_host_spawn');
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
         // Fail loudly on a full volume BEFORE spawning. A session host started
@@ -645,12 +496,15 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         let logFd: number | null = null;
         if (options.spawnStdio === 'logfile') {
             const logDir = path.join(instance().configDir, 'logs');
+            assertStart();
             fs.mkdirSync(logDir, { recursive: true });
+            assertStart();
             logFd = fs.openSync(path.join(logDir, 'session-host.log'), 'a');
             stdio = ['ignore', logFd, logFd];
         }
         // The host owns IPC/snapshots: keep it normal priority. Only its agent
         // PTY children are lowered in session-host-daemon/runtime.ts.
+        assertStart();
         const child = spawn(nodeExecutable, [entry, 'serve', sessionHostInstanceArg(instance().configDir)], {
             detached: true,
             stdio,
@@ -768,22 +622,8 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return stopped;
     }
 
-    /**
-     * Ask a reachable session-host for its own entry path and stop it when it
-     * does not match this install's.
-     *
-     * Deliberately independent of every process-inspection API: the answer comes
-     * from the host itself over the socket it is already serving. That is the
-     * whole point — the boxes where this defect reproduces are exactly the ones
-     * where `getProcessCommandLine` cannot answer.
-     *
-     * Conservative by construction. It only stops the host on a POSITIVE
-     * mismatch (both paths known and different). A connect failure, a
-     * diagnostics error, or a host too old to report the field all leave the
-     * host untouched, so this can never take down a healthy setup and can never
-     * loop: the replacement host reports the current entry and matches.
-     */
-    async function stopHostRunningFromForeignEntry(deadline: number, probeInvocation: number, options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
+    /** Diagnose a reachable incompatible prefix without mutating its host. */
+    async function checkHostRunningFromForeignEntry(deadline: number, probeInvocation: number, options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
         let currentEntry: string;
         try {
             currentEntry = resolveEntry();
@@ -847,10 +687,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             'SessionHost',
             `Reachable session-host reports it is running from ${reported}` +
                 `${reportedExists ? '' : ' (which no longer exists)'}, but this install runs from ${currentEntry}. ` +
-                'That host would fail every create_session loading node-pty from its own prefix; stopping it so a ' +
-                'current one is spawned in its place.',
+                'Automatic replacement is unsupported; retaining the existing host.',
         );
-        stopManagedSessionHostProcess();
+        throw new SessionHostUnavailableTransientError(endpoint, new Error('session_host_foreign_entry'));
     }
 
     async function ensureReady(ensureOptions?: {
@@ -885,484 +724,73 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 return endpoint;
             } finally { await client.close().catch(() => {}); }
         }
+        if (inspectExistingHostState() === 'dead') assertManagedHostBridgeAdmission('session_host_spawn');
+        const generation = getExistingHostGeneration();
         options.beforeEnsureReady?.();
 
-        // A stale prefix is actionable only when argv proves this instance.
-        // Unreadable and pre-identity hosts remain untouched.
+        // An argv mismatch diagnoses incompatibility without stopping the host.
         if (process.platform === 'win32') {
             const existingPid = getPid();
             if (existingPid !== null) {
                 const runningPath = getRunningSessionHostScriptPath(existingPid);
                 if (runningPath !== null && !pathsEquivalent(runningPath, resolveEntry())) {
-                    LOG.warn('SessionHost', `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${resolveEntry()}`);
-                    stopManagedSessionHostProcess();
+                    LOG.warn('SessionHost', `Detected host pid ${existingPid} running from ${runningPath}; retaining the existing host`);
+                    throw new SessionHostUnavailableTransientError(getEndpoint(), new Error('session_host_foreign_entry'));
                 }
             }
         }
 
-        // D5: ask the reachable host WHICH install it is running from.
-        //
-        // Every earlier stale-host guard (D1 above, `isManagedSessionHostPid`,
-        // `listOwnedNodeProcesses`) routes through `getProcessCommandLine`, which
-        // is blocked outright on the boxes this defect keeps recurring on: AV/EDR
-        // denies `Get-CimInstance`, and `wmic` no longer ships. On those boxes all
-        // three silently answer "nothing to see" and the stale host is reused.
-        //
-        // D4-b below catches the case where the CURRENT prefix lost its prebuild,
-        // but not this one: after a successful upgrade the current prefix is
-        // perfectly healthy — it is the HOST that is running from a prefix the
-        // upgrade deleted. Its lazy `require` of node-pty then fails inside
-        // create_session with `Cannot find module './prebuilds/win32-x64/
-        // conpty.node'`, in ~1ms, naming a directory that no longer exists.
-        //
-        // The host itself always knows its own path, so ask it. No privileges
-        // required, so it works exactly where the process probe does not. A host
-        // too old to report `hostEntryPath` yields undefined and is left alone —
-        // unknown is never treated as a mismatch.
+        // Probe through an isolated client; never disconnect retained clients.
         if (process.platform === 'win32') {
-            await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation);
+            await checkHostRunningFromForeignEntry(ensureDeadline, probeInvocation);
         } else {
-            // POSIX, same shape (2026-10-01, Homebrew): `brew upgrade adhdev`
-            // deletes the previous versioned Cellar prefix, and the 1.0.62 daemon
-            // reattached to the 1.0.61 host still serving the socket. node-pty's
-            // spawn helper lived in the deleted prefix, so every create_session
-            // failed with `posix_spawn failed: No such file or directory`. An
-            // in-place npm update keeps the same entry path and never trips this.
-            await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation, { onlyWhenEntryMissing: true });
+            await checkHostRunningFromForeignEntry(ensureDeadline, probeInvocation, { onlyWhenEntryMissing: true });
         }
 
-        // D4-b: re-verify conpty on the REUSE path, not just the spawn path.
-        //
-        // `ensureSharedSessionHostReady` returns the endpoint immediately when a
-        // host answers on the socket, so `spawnHost()` — and with it the D4-a
-        // pre-spawn conpty gate — is never reached. A zombie session-host from a
-        // deleted prefix answers that socket perfectly well: it only fails later,
-        // inside `create_session`, when it lazily requires node-pty and the
-        // conpty.node under its own (now deleted) prefix is gone. That is the
-        // exact production incident this guards: a host spawned from a prefix
-        // deleted on 07-24 kept serving the socket and failing every session
-        // start in 4ms, and manually killing it restored service.
-        //
-        // The pid-based guards above cannot catch it, because all three of them
-        // (`getRunningSessionHostScriptPath`, `isManagedPid`, and
-        // `listOwnedNodeProcesses`) depend on `getProcessCommandLine`, which
-        // fails structurally on the affected boxes (`Get-CimInstance` access
-        // denied plus no `wmic`). This check deliberately uses an INDEPENDENT
-        // signal — the presence of conpty.node in the currently active prefix —
-        // so it works with no process-inspection privileges at all.
-        //
-        // `resolveEntry()` always names the CURRENT install's entry (recomputed
-        // from this module's own location), so on a healthy install this passes
-        // and nothing is stopped. It only fires when the active prefix genuinely
-        // has no usable conpty prebuild, i.e. when every session start is already
-        // doomed — see the loop-safety note below.
-        if (process.platform === 'win32') {
-            try {
-                verifyConptyPrebuildBeforeSpawn(resolveEntry());
-            } catch (error) {
-                // Anti-loop: stopping here does NOT create a kill/respawn cycle.
-                // The subsequent spawn runs the same check inside `spawnHost()`
-                // (D4-a) and throws before spawning, so `ensureReady` fails fast
-                // and loudly instead of respawning. And in this state the host is
-                // useless by construction — every `create_session` would crash
-                // requiring node-pty — so stopping it costs nothing that was
-                // working. Repair means restoring the prebuild, not retrying.
-                LOG.warn(
-                    'SessionHost',
-                    `conpty prebuild missing in the active prefix; a reachable session-host would fail every ` +
-                        `create_session. Stopping it rather than reusing it: ${error instanceof Error ? error.message : String(error)}`,
-                );
-                stopManagedSessionHostProcess();
-            }
-        }
+        // A missing local prebuild is an incompatibility, never stop authority.
+        if (process.platform === 'win32') verifyConptyPrebuildBeforeSpawn(resolveEntry());
 
         const isExistingHostAlive = (): boolean => inspectExistingHostState() === 'alive';
 
-        const resolveRawReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
+        if (getExistingHostGeneration() !== generation) throw new SessionHostUnavailableTransientError(getEndpoint());
+        const isCancelled = (): boolean => {
             const source = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
-            return typeof source === 'function' ? source() : source;
+            const auth = typeof source === 'function' ? source() : source;
+            return Boolean(auth?.isCancelled?.());
         };
-
-        const resolveVerifiedReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
-            const raw = resolveRawReplacementAuthority();
-            if (!isValidReplacementAuthorizationShape(raw)) return undefined;
-            if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
-                return undefined;
-            }
-            const expectedBirth = raw.expectedBirth.trim();
-            const canonicalIdentity = `pid-${raw.expectedPid}:birth-${expectedBirth}`;
-            const currentPid = getPid();
-            if (currentPid === null || currentPid !== raw.expectedPid) return undefined;
-            if (!isPidAlive(currentPid)) return undefined;
-            if (!canSignalPid(currentPid)) return undefined;
-            const currentBirth = getProcessBirth(currentPid);
-            if (!currentBirth || currentBirth !== expectedBirth) return undefined;
-            const endpoint = getEndpoint();
-            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
-                if (raw.expectedEndpointInode !== undefined) {
-                    try {
-                        if (fs.lstatSync(endpoint.path, { bigint: true }).ino !== raw.expectedEndpointInode) {
-                            return undefined;
-                        }
-                    } catch {
-                        return undefined;
-                    }
-                }
-                if (process.platform !== 'win32') {
-                    const owners = getSocketOwnerPids(endpoint.path);
-                    if (owners === null) return undefined;
-                    if (owners.length > 0 && !owners.includes(currentPid)) return undefined;
-                    if (owners.some((ownerPid) => ownerPid !== currentPid && isPidAlive(ownerPid))) return undefined;
-                }
-            }
-            if (!verifyLeaseJournalForReplacement(endpoint, raw)) {
-                return undefined;
-            }
-            const latestRaw = resolveRawReplacementAuthority();
-            if (!isValidReplacementAuthorizationShape(latestRaw) || latestRaw.isCancelled?.()) {
-                return undefined;
-            }
-            if (
-                latestRaw.expectedPid !== raw.expectedPid
-                || latestRaw.expectedBirth.trim() !== expectedBirth
-                || latestRaw.expectedBootId !== raw.expectedBootId
-                || latestRaw.expectedEpoch !== raw.expectedEpoch
-                || latestRaw.expectedOwner !== raw.expectedOwner
-            ) {
-                return undefined;
-            }
-            return {
-                ...latestRaw,
-                expectedBirth,
-                expectedIdentity: canonicalIdentity,
-            };
+        const beforeSpawnHost = (): void => {
+            assertAutomaticStart(generation, isCancelled, ensureDeadline);
+            // Keep the verified-dead PID: the child must independently validate
+            // it together with empty socket owners and endpoint dev/ino.
         };
-
-        const disconnectEndpointClients = (endpoint: SessionHostEndpoint): void => {
-            (SessionHostClient as { disconnectClients?: (ep?: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
-        };
-
-        const evictGraceMs = options.evictGraceMs ?? 4_000;
-
-        const beforeSpawnHost = async (endpoint: SessionHostEndpoint): Promise<void> => {
-            inFlightReplacementAuth = undefined;
-            const state = inspectExistingHostState();
-            if (state === 'unknown') {
-                throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            if (state === 'alive') {
-                const existingPid = getPid();
-                if (existingPid === null || existingPid === process.pid) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                const initialEndpointStat = endpoint.kind === 'unix' && fs.existsSync(endpoint.path)
-                    ? (() => {
-                        try {
-                            const s = fs.lstatSync(endpoint.path, { bigint: true });
-                            return { dev: s.dev, ino: s.ino };
-                        } catch {
-                            return null;
-                        }
-                    })()
-                    : null;
-                const cmd = getProcessCommandLine(existingPid);
-                if (!isManagedPid(existingPid) || !isManagedSessionHostCommandLine(cmd, instance().configDir)) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                const initialBirth = getProcessBirth(existingPid);
-                if (!initialBirth) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                const auth = resolveVerifiedReplacementAuthority();
-                if (
-                    !auth
-                    || auth.expectedPid !== existingPid
-                    || auth.expectedBirth !== initialBirth
-                    || auth.isCancelled?.()
-                    || getPid() !== existingPid
-                ) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                if (initialEndpointStat !== null) {
-                    try {
-                        const currentStat = fs.lstatSync(endpoint.path, { bigint: true });
-                        if (currentStat.dev !== initialEndpointStat.dev || currentStat.ino !== initialEndpointStat.ino) {
-                            throw new SessionHostUnavailableTransientError(endpoint);
-                        }
-                    } catch {
-                        throw new SessionHostUnavailableTransientError(endpoint);
-                    }
-                }
-                const preTermAuth = resolveRawReplacementAuthority();
-                if (!isValidReplacementAuthorizationShape(preTermAuth) || preTermAuth.isCancelled?.()) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                assertMaintenanceLifecycle('session_host_kill', instance().configDir);
-                assertManagedHostBridgeAdmission('session_host_stop', auth);
-                writeReplacementProvenanceFile({
-                    endpoint,
-                    expectedEndpointInode: initialEndpointStat?.ino ?? auth.expectedEndpointInode,
-                    auth,
-                });
-                disconnectEndpointClients(endpoint);
-                LOG.warn(
-                    'SessionHost',
-                    `Stopping unresponsive session-host pid ${existingPid} before spawning replacement ` +
-                        `(endpoint=${endpoint.path}, cmd=${cmd || 'unverified'})`,
-                );
-                try {
-                    if (process.platform === 'win32') {
-                        hiddenExecFileSync('taskkill', ['/PID', String(existingPid), '/T', '/F'], { stdio: 'ignore' });
-                    } else {
-                        process.kill(existingPid, 'SIGTERM');
-                    }
-                } catch {
-                    // noop
-                }
-                if (!isPidAlive(existingPid)) {
-                    const postTermRaw = resolveRawReplacementAuthority();
-                    if (!isValidReplacementAuthorizationShape(postTermRaw) || postTermRaw.isCancelled?.()) {
-                        removeReplacementProvenanceFile();
-                        throw new SessionHostUnavailableTransientError(endpoint);
-                    }
-                    try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
-                    inFlightReplacementAuth = auth;
-                    return;
-                }
-                if (process.platform !== 'win32' && isPidAlive(existingPid)) {
-                    const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
-                    while (Date.now() < deadline && isPidAlive(existingPid)) {
-                        const graceBirth = getProcessBirth(existingPid);
-                        const graceSignalable = canSignalPid(existingPid);
-                        const graceAuth = resolveVerifiedReplacementAuthority();
-                        if (
-                            !graceAuth
-                            || graceAuth.isCancelled?.()
-                            || getPid() !== existingPid
-                            || graceBirth !== initialBirth
-                            || !graceSignalable
-                        ) {
-                            removeReplacementProvenanceFile();
-                            throw new SessionHostUnavailableTransientError(endpoint);
-                        }
-                        await new Promise((resolve) => setTimeout(resolve, 25));
-                    }
-                    if (isPidAlive(existingPid)) {
-                        const killBirth = getProcessBirth(existingPid);
-                        const killSignalable = canSignalPid(existingPid);
-                        const killAuth = resolveVerifiedReplacementAuthority();
-                        if (
-                            !killAuth
-                            || killAuth.isCancelled?.()
-                            || getPid() !== existingPid
-                            || killBirth !== initialBirth
-                            || !killSignalable
-                        ) {
-                            removeReplacementProvenanceFile();
-                            throw new SessionHostUnavailableTransientError(endpoint);
-                        }
-                        LOG.warn(
-                            'SessionHost',
-                            `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
-                        );
-                        try { process.kill(existingPid, 'SIGKILL'); } catch { /* noop */ }
-                    }
-                }
-                if (isPidAlive(existingPid)) {
-                    removeReplacementProvenanceFile();
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                const postKillRaw = resolveRawReplacementAuthority();
-                if (!isValidReplacementAuthorizationShape(postKillRaw) || postKillRaw.isCancelled?.()) {
-                    removeReplacementProvenanceFile();
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
-                inFlightReplacementAuth = auth;
-                return;
-            }
-            const deadPidState = readPidFileState();
-            if (
-                deadPidState.status === 'corrupt'
-                || (deadPidState.status === 'missing' && endpoint.kind === 'unix' && fs.existsSync(endpoint.path))
-                || (deadPidState.status === 'ok' && isPidAlive(deadPidState.pid))
-            ) {
-                throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path) && process.platform !== 'win32') {
-                const owners = getSocketOwnerPids(endpoint.path);
-                if (
-                    owners === null
-                    || (deadPidState.status === 'ok' && owners.some((ownerPid) => ownerPid !== deadPidState.pid && isPidAlive(ownerPid)))
-                ) {
-                    throw new SessionHostUnavailableTransientError(endpoint);
-                }
-            }
-            disconnectEndpointClients(endpoint);
-            if (deadPidState.status === 'ok' && !isPidAlive(deadPidState.pid)) {
-                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
-            }
-        };
-
-        try {
-            return await ensureSharedSessionHostReady({
-                appName,
-                probeInvocation,
-                endpoint: getEndpoint(),
-                spawnHost,
-                beforeSpawnHost,
-                onHostReplaced: options.onHostReplaced,
-                isExistingHostAlive,
-                existingHostState: inspectExistingHostState,
-                existingHostIdentity: getExistingHostIdentity,
-                replacementAuthority: resolveVerifiedReplacementAuthority,
-                timeoutMs: Math.max(1, ensureDeadline - Date.now()),
-                requiredRequestTypes: options.requiredRequestTypes,
-            });
-        } finally {
-            inFlightReplacementAuth = undefined;
-            removeReplacementProvenanceFile();
-        }
+        return ensureSharedSessionHostReady({
+            appName, probeInvocation, endpoint: getEndpoint(),
+            spawnHost: () => {
+                assertAutomaticStart(generation, isCancelled, ensureDeadline);
+                spawnHost({ generation, isCancelled, deadline: ensureDeadline });
+            },
+            beforeSpawnHost,
+            assertLifecycleAdmission: beforeSpawnHost,
+            onHostReplaced: options.onHostReplaced,
+            isExistingHostAlive,
+            existingHostState: inspectExistingHostState,
+            existingHostIdentity: getExistingHostIdentity,
+            existingHostGeneration: getExistingHostGeneration,
+            isCancelled,
+            timeoutMs: Math.max(1, ensureDeadline - Date.now()),
+            requiredRequestTypes: options.requiredRequestTypes,
+        });
     }
 
-    async function acquireIdleReplacementAuthority(leaseOptions: {
+    async function acquireIdleReplacementAuthority(_leaseOptions: {
         owner: string;
         token: string;
         timeoutMs?: number;
         isCancelled?: () => boolean;
     }): Promise<SessionHostReplacementAuthorization> {
-        if (!leaseOptions || typeof leaseOptions !== 'object') {
-            throw new Error('session_host_replacement_authority_invalid');
-        }
-        if (typeof leaseOptions.owner !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(leaseOptions.owner)) {
-            throw new Error('session_host_replacement_owner_invalid');
-        }
-        if (typeof leaseOptions.token !== 'string' || !/^[a-f0-9]{64}$/.test(leaseOptions.token)) {
-            throw new Error('session_host_replacement_token_invalid');
-        }
-        if (leaseOptions.isCancelled !== undefined && typeof leaseOptions.isCancelled !== 'function') {
-            throw new Error('session_host_replacement_authority_invalid');
-        }
-        if (leaseOptions.isCancelled?.()) {
-            throw new Error('session_host_replacement_cancelled');
-        }
-        const endpoint = getEndpoint();
-        if (inspectExistingHostState() !== 'alive') {
-            throw new Error('session_host_replacement_target_not_verified_alive');
-        }
-        const existingPid = getPid();
-        if (existingPid === null || existingPid === process.pid || !isPidAlive(existingPid) || !canSignalPid(existingPid)) {
-            throw new Error('session_host_replacement_target_not_verified_alive');
-        }
-        const expectedBirth = getProcessBirth(existingPid);
-        if (!expectedBirth || expectedBirth === 'win32' || expectedBirth === 'unknown') {
-            throw new Error('session_host_replacement_birth_unverified');
-        }
-        const expectedEndpointInode = endpoint.kind === 'unix' && fs.existsSync(endpoint.path)
-            ? fs.lstatSync(endpoint.path, { bigint: true }).ino
-            : undefined;
-        const rpcBudget = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, leaseOptions.timeoutMs ?? SESSION_HOST_PROBE_TIMEOUT_MS));
-        const client = new SessionHostClient({ endpoint, requestTimeoutMs: rpcBudget, registerAsShared: false });
-        try {
-            await client.connect(rpcBudget);
-            const leaseStateResp = await client.request<{
-                bootId: string;
-                pid: number;
-                endpoint: string;
-                epoch: number;
-                held: boolean;
-                owner: string | null;
-            }>({ type: 'get_upgrade_lease', payload: {} }, { timeoutMs: rpcBudget });
-            if (!leaseStateResp.success || !leaseStateResp.result) {
-                throw new Error(leaseStateResp.error || 'session_host_upgrade_lease_unavailable');
-            }
-            const proof = leaseStateResp.result;
-            if (
-                proof.pid !== existingPid
-                || proof.endpoint !== endpoint.path
-                || typeof proof.bootId !== 'string'
-                || !proof.bootId.trim()
-                || typeof proof.epoch !== 'number'
-                || !Number.isSafeInteger(proof.epoch)
-                || proof.epoch < 0
-            ) {
-                throw new Error('session_host_upgrade_lease_identity_mismatch');
-            }
-            const acquireResp = await client.request<{
-                bootId: string;
-                pid: number;
-                endpoint: string;
-                epoch: number;
-                held: boolean;
-                owner: string | null;
-            }>({
-                type: 'acquire_upgrade_lease',
-                payload: {
-                    bootId: proof.bootId,
-                    epoch: proof.epoch,
-                    owner: leaseOptions.owner,
-                    token: leaseOptions.token,
-                },
-            }, { timeoutMs: rpcBudget });
-            if (!acquireResp.success || !acquireResp.result || acquireResp.result.held !== true) {
-                throw new Error(acquireResp.error || 'session_host_upgrade_lease_not_acquired');
-            }
-            if (
-                acquireResp.result.pid !== existingPid
-                || acquireResp.result.bootId !== proof.bootId
-                || acquireResp.result.epoch !== proof.epoch
-                || acquireResp.result.owner !== leaseOptions.owner
-            ) {
-                throw new Error('session_host_upgrade_lease_identity_mismatch');
-            }
-            const diagResp = await client.request<SessionHostDiagnostics>({
-                type: 'get_host_diagnostics',
-                payload: { includeSessions: false },
-            }, { timeoutMs: rpcBudget });
-            if (!diagResp.success || !diagResp.result) {
-                throw new Error(diagResp.error || 'session_host_diagnostics_unavailable');
-            }
-            recordSessionHostProbeSuccess(endpoint, diagResp.result);
-            if (typeof diagResp.result.runtimeCount !== 'number' || diagResp.result.runtimeCount !== 0) {
-                throw new Error('session_host_not_idle');
-            }
-            if (
-                getPid() !== existingPid
-                || !isPidAlive(existingPid)
-                || !canSignalPid(existingPid)
-                || getProcessBirth(existingPid) !== expectedBirth
-            ) {
-                throw new Error('session_host_replacement_target_changed');
-            }
-            if (leaseOptions.isCancelled?.()) {
-                throw new Error('session_host_replacement_cancelled');
-            }
-            const expectedTokenHash = createHash('sha256').update(leaseOptions.token).digest('hex');
-            const authRecord: SessionHostReplacementAuthorization = {
-                reason: 'idle_maintenance_upgrade',
-                expectedIdentity: `pid-${existingPid}:birth-${expectedBirth}`,
-                expectedPid: existingPid,
-                expectedBirth,
-                expectedInstanceConfigDir: instance().configDir,
-                expectedBootId: proof.bootId,
-                expectedEpoch: proof.epoch,
-                expectedOwner: leaseOptions.owner,
-                leaseToken: leaseOptions.token,
-                expectedTokenHash,
-                expectedEndpointInode,
-                expectedHostStartedAt: diagResp.result.hostStartedAt,
-                activeRuntimeCount: 0,
-                isCancelled: () =>
-                    Boolean(leaseOptions.isCancelled?.())
-                    || !verifyLeaseJournalForReplacement(endpoint, authRecord),
-            };
-            if (!verifyLeaseJournalForReplacement(endpoint, authRecord)) {
-                throw new Error('session_host_upgrade_lease_journal_mismatch');
-            }
-            return authRecord;
-        } finally {
-            await client.close().catch(() => {});
-        }
+        // Explicit native RPC and retained-host maintenance remain separate.
+        // Ordinary ensure/start has no supported live replacement authority.
+        throw new Error('session_host_automatic_live_replacement_unsupported');
     }
 
     return {

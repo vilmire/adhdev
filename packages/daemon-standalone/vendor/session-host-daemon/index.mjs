@@ -951,7 +951,6 @@ function withReplayResyncPreamble(text, sinceSeq) {
 }
 
 // src/server.ts
-var DEFAULT_EVICT_SIGKILL_GRACE_MS = 4e3;
 var INSTANCE_ARG_PREFIX = "--instance-config-key=";
 function sessionHostInstanceArg(configDir) {
   const canonical = resolveInstanceConfigDir2({ ADHDEV_CONFIG_DIR: configDir });
@@ -1077,6 +1076,7 @@ function readVerifiedReplacementProvenance(options) {
     const effectiveLeaseStateDir = options.leaseStateDir ?? path5.join(canonicalDir, "session-host");
     if (effectiveLeaseStateDir) {
       const leaseFile = path5.join(effectiveLeaseStateDir, "upgrade-lease.json");
+      if (!fs5.existsSync(leaseFile)) return void 0;
       if (fs5.existsSync(leaseFile)) {
         const leaseStat = fs5.lstatSync(leaseFile);
         if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || leaseStat.nlink !== 1 || (leaseStat.mode & 63) !== 0) {
@@ -1134,12 +1134,11 @@ var SessionHostServer = class extends EventEmitter {
   instanceConfigDir;
   pidFilePath;
   isPidAliveOverride;
-  isManagedOwnerPid;
-  replacementProvenance;
   getOwnerBirth;
   getSocketOwnerPids;
-  readOwnerArgs;
-  evictGraceMs;
+  isCancelled;
+  startupFence = null;
+  hasReplacementContext;
   restorePending = true;
   mutatingRequests = 0;
   endpointInode = null;
@@ -1175,12 +1174,10 @@ var SessionHostServer = class extends EventEmitter {
     this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
     this.isPidAliveOverride = options.isPidAlive;
-    this.isManagedOwnerPid = options.isManagedOwnerPid;
-    this.replacementProvenance = options.replacementProvenance;
+    this.hasReplacementContext = Object.prototype.hasOwnProperty.call(options, "replacementProvenance");
     this.getOwnerBirth = options.getOwnerBirth;
     this.getSocketOwnerPids = options.getSocketOwnerPids;
-    this.readOwnerArgs = options.readOwnerArgs;
-    this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
+    this.isCancelled = options.isCancelled;
     this.storage = new SessionHostStorage({
       appName: options.appName || "adhdev",
       rootDir: options.storageRootDir
@@ -1193,23 +1190,7 @@ var SessionHostServer = class extends EventEmitter {
       process.kill(pid, 0);
       return true;
     } catch (error) {
-      return error?.code === "EPERM";
-    }
-  }
-  readProcessArgs(pid) {
-    if (this.readOwnerArgs) return this.readOwnerArgs(pid);
-    if (process.platform === "win32") return null;
-    try {
-      return String(
-        execFileSync2("/bin/ps", ["-o", "args=", "-p", String(pid)], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 2e3,
-          windowsHide: true
-        })
-      ).trim() || null;
-    } catch {
-      return null;
+      return error?.code !== "ESRCH";
     }
   }
   readProcessBirth(pid) {
@@ -1247,9 +1228,8 @@ var SessionHostServer = class extends EventEmitter {
         if (!trimmed) continue;
         if (!/^\d+$/.test(trimmed)) return null;
         const pid = Number.parseInt(trimmed, 10);
-        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-          pids.push(pid);
-        }
+        if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+        pids.push(pid);
       }
       return pids;
     } catch (error) {
@@ -1257,276 +1237,90 @@ var SessionHostServer = class extends EventEmitter {
       return null;
     }
   }
-  isManagedSessionHostPid(pid, configDir) {
-    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid && !this.readOwnerArgs) return this.isManagedOwnerPid(pid);
-    const cmd = this.readProcessArgs(pid);
-    if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) return false;
-    return isManagedSessionHostCommandLine(cmd, configDir ?? this.instanceConfigDir ?? void 0);
-  }
-  async evictPriorEndpointOwners() {
-    if (this.endpoint.kind !== "unix") return;
-    const targetEndpointDir = path5.dirname(this.endpoint.path);
-    const resolvedEndpointDir = fs5.existsSync(targetEndpointDir) ? fs5.realpathSync(targetEndpointDir) : path5.resolve(targetEndpointDir);
-    const targetEndpointPath = path5.join(resolvedEndpointDir, path5.basename(this.endpoint.path));
-    const readEndpointIdentity = () => {
-      if (!fs5.existsSync(targetEndpointPath)) return null;
-      try {
-        const stat2 = fs5.lstatSync(targetEndpointPath, { bigint: true });
-        return { dev: stat2.dev, ino: stat2.ino };
-      } catch {
-        return null;
-      }
-    };
-    const initialEndpoint = readEndpointIdentity();
-    const initialSocketInode = initialEndpoint?.ino ?? null;
-    let pidFileCandidate = null;
-    const candidatePids = /* @__PURE__ */ new Set();
-    if (this.pidFilePath && fs5.existsSync(this.pidFilePath)) {
-      let rawPid = "";
-      try {
-        rawPid = fs5.readFileSync(this.pidFilePath, "utf8").trim();
-      } catch {
-        throw new Error("session_host_prior_owner_pidfile_corrupt");
-      }
-      if (!/^\d+$/.test(rawPid)) {
-        throw new Error("session_host_prior_owner_pidfile_corrupt");
-      }
-      const pid = Number.parseInt(rawPid, 10);
-      if (!Number.isFinite(pid) || pid <= 0) {
-        throw new Error("session_host_prior_owner_pidfile_corrupt");
-      }
-      if (pid !== process.pid) {
-        pidFileCandidate = pid;
-        candidatePids.add(pid);
-      }
-    }
-    let socketOwners = [];
-    if (initialEndpoint !== null) {
-      socketOwners = this.readSocketOwnerPids();
-      if (socketOwners === null) {
-        throw new Error("session_host_prior_owner_socket_unverified");
-      }
-      const postQueryEndpoint = readEndpointIdentity();
-      if (!postQueryEndpoint || postQueryEndpoint.dev !== initialEndpoint.dev || postQueryEndpoint.ino !== initialEndpoint.ino) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
-      for (const pid of socketOwners) {
-        if (pid !== process.pid) candidatePids.add(pid);
-      }
-    }
-    const resolveActiveProvenance = () => {
-      const prov = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
-      const trimmedBirth = typeof prov?.expectedBirth === "string" ? prov.expectedBirth.trim() : "";
-      if (!prov || prov.isCancelled?.() || !Number.isFinite(prov.expectedPid) || prov.expectedPid <= 0 || !trimmedBirth || trimmedBirth.toLowerCase() === "win32" || trimmedBirth.toLowerCase() === "unknown" || prov.activeRuntimeCount !== void 0 && prov.activeRuntimeCount !== 0) {
+  assertNoAutomaticReplacementContext() {
+    if (this.isCancelled?.()) throw new Error("session_host_start_cancelled");
+    if (this.hasReplacementContext) throw new Error("session_host_live_owner_replacement_unauthorized");
+    if (this.instanceConfigDir && fs5.existsSync(this.instanceConfigDir)) {
+      if (fs5.readdirSync(this.instanceConfigDir).some((name) => name.endsWith("-session-host-replacement.json"))) {
         throw new Error("session_host_live_owner_replacement_unauthorized");
       }
-      if (prov.instanceConfigKey !== void 0 && this.instanceConfigDir && prov.instanceConfigKey !== sessionHostInstanceArg(this.instanceConfigDir)) {
-        throw new Error("session_host_prior_owner_instance_mismatch");
-      }
-      return prov;
-    };
-    const hasDiskProvenanceArtifact = () => {
-      const dirsToCheck = /* @__PURE__ */ new Set();
-      if (this.instanceConfigDir) dirsToCheck.add(this.instanceConfigDir);
-      dirsToCheck.add(resolvedEndpointDir);
-      for (const dir of dirsToCheck) {
-        try {
-          if (!fs5.existsSync(dir)) continue;
-          const entries = fs5.readdirSync(dir);
-          if (entries.some((entry) => entry.endsWith("-session-host-replacement.json"))) {
-            return true;
-          }
-        } catch {
-          return true;
-        }
-      }
-      return false;
-    };
-    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
-    const currentProvenanceValue = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
-    const mustValidateProvenance = liveCandidates.length > 0 || currentProvenanceValue !== void 0 || this.replacementProvenance !== void 0 && typeof this.replacementProvenance !== "function" || hasDiskProvenanceArtifact();
-    if (mustValidateProvenance) {
-      const provenance = resolveActiveProvenance();
-      if (provenance.instanceConfigDir && this.instanceConfigDir && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)) {
-        throw new Error("session_host_prior_owner_instance_mismatch");
-      }
-      if (provenance.expectedEndpointInode !== void 0 && initialSocketInode !== null && provenance.expectedEndpointInode !== initialSocketInode) {
-        throw new Error("session_host_prior_owner_endpoint_inode_mismatch");
-      }
     }
-    if (liveCandidates.length > 0) {
-      const provenance = resolveActiveProvenance();
-      const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? void 0;
-      if (provenance.instanceConfigDir && this.instanceConfigDir && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)) {
-        throw new Error("session_host_prior_owner_instance_mismatch");
-      }
-      if (provenance.expectedEndpointInode !== void 0 && initialSocketInode !== null && provenance.expectedEndpointInode !== initialSocketInode) {
-        throw new Error("session_host_prior_owner_endpoint_inode_mismatch");
-      }
-      const liveSocketOwners = (socketOwners ?? []).filter((pid2) => this.isPidAlive(pid2));
-      for (const ownerPid of liveSocketOwners) {
-        if (ownerPid !== provenance.expectedPid) {
-          throw new Error("session_host_prior_owner_pid_mismatch");
-        }
-      }
-      if (pidFileCandidate !== null && this.isPidAlive(pidFileCandidate) && pidFileCandidate !== provenance.expectedPid) {
-        if (liveSocketOwners.length === 0 || this.isManagedSessionHostPid(pidFileCandidate, targetConfigDir)) {
-          throw new Error("session_host_prior_owner_pid_mismatch");
-        }
-      }
-      const pid = provenance.expectedPid;
-      if (this.isPidAlive(pid)) {
-        const cmd = this.readProcessArgs(pid);
-        if (!this.isManagedOwnerPid || this.readOwnerArgs) {
-          if (!cmd) {
-            throw new Error("session_host_prior_owner_command_unreadable");
-          }
-          if (!isManagedSessionHostCommandLine(cmd, targetConfigDir)) {
-            throw new Error("session_host_prior_owner_instance_mismatch");
-          }
-        }
-        if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) {
-          throw new Error("session_host_prior_owner_instance_mismatch");
-        }
-        const birthBeforeTerm = this.readProcessBirth(pid);
-        if (!birthBeforeTerm) {
-          throw new Error("session_host_prior_owner_birth_unreadable");
-        }
-        if (birthBeforeTerm !== provenance.expectedBirth) {
-          throw new Error("session_host_prior_owner_birth_mismatch");
-        }
-        const provenanceBeforeTerm = resolveActiveProvenance();
-        if (provenanceBeforeTerm.expectedPid !== pid || provenanceBeforeTerm.expectedBirth !== birthBeforeTerm) {
-          throw new Error("session_host_live_owner_replacement_unauthorized");
-        }
-        if (initialEndpoint !== null) {
-          const endpointBeforeTerm = readEndpointIdentity();
-          if (endpointBeforeTerm !== null && (endpointBeforeTerm.dev !== initialEndpoint.dev || endpointBeforeTerm.ino !== initialEndpoint.ino)) {
-            throw new Error("session_host_endpoint_changed_during_recovery");
-          }
-        }
-        this.recordHostLog(
-          "warn",
-          `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd || "managed-session-host"})`
-        );
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch {
-        }
-        const deadline = Date.now() + this.evictGraceMs;
-        while (Date.now() < deadline && this.isPidAlive(pid)) {
-          const currentBirth = this.readProcessBirth(pid);
-          if (!currentBirth || currentBirth !== provenance.expectedBirth) {
-            throw new Error("session_host_prior_owner_birth_mismatch");
-          }
-          const provenanceDuringWait = resolveActiveProvenance();
-          if (provenanceDuringWait.expectedPid !== pid || provenanceDuringWait.expectedBirth !== provenance.expectedBirth) {
-            throw new Error("session_host_live_owner_replacement_unauthorized");
-          }
-          await new Promise((resolve4) => setTimeout(resolve4, 25));
-        }
-        if (this.isPidAlive(pid)) {
-          const birthBeforeKill = this.readProcessBirth(pid);
-          if (!birthBeforeKill || birthBeforeKill !== provenance.expectedBirth) {
-            throw new Error("session_host_prior_owner_birth_mismatch");
-          }
-          const provenanceBeforeKill = resolveActiveProvenance();
-          if (provenanceBeforeKill.expectedPid !== pid || provenanceBeforeKill.expectedBirth !== provenance.expectedBirth) {
-            throw new Error("session_host_live_owner_replacement_unauthorized");
-          }
-          if (initialEndpoint !== null) {
-            const endpointBeforeKill = readEndpointIdentity();
-            if (endpointBeforeKill !== null && (endpointBeforeKill.dev !== initialEndpoint.dev || endpointBeforeKill.ino !== initialEndpoint.ino)) {
-              throw new Error("session_host_endpoint_changed_during_recovery");
-            }
-          }
-          this.recordHostLog(
-            "warn",
-            `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
-          );
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-          }
-        }
-      }
-    }
-    if (initialEndpoint !== null && fs5.existsSync(targetEndpointPath)) {
-      const beforeFinalQueryEndpoint = readEndpointIdentity();
-      if (!beforeFinalQueryEndpoint) {
-        return;
-      }
-      if (beforeFinalQueryEndpoint.dev !== initialEndpoint.dev || beforeFinalQueryEndpoint.ino !== initialEndpoint.ino) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
-      const remainingOwners = this.readSocketOwnerPids();
-      if (remainingOwners === null) {
-        throw new Error("session_host_prior_owner_socket_unverified");
-      }
-      if (remainingOwners.length > 0) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
-      if (pidFileCandidate !== null && this.isPidAlive(pidFileCandidate)) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
-      if (this.pidFilePath && fs5.existsSync(this.pidFilePath)) {
-        try {
-          const rawCurrentPid = fs5.readFileSync(this.pidFilePath, "utf8").trim();
-          if (!/^\d+$/.test(rawCurrentPid)) {
-            throw new Error("session_host_endpoint_changed_during_recovery");
-          }
-          const currentPid = Number.parseInt(rawCurrentPid, 10);
-          if (currentPid !== process.pid && currentPid !== pidFileCandidate) {
-            throw new Error("session_host_endpoint_changed_during_recovery");
-          }
-        } catch (error) {
-          if (error instanceof Error && error.message === "session_host_endpoint_changed_during_recovery") {
-            throw error;
-          }
-          throw new Error("session_host_endpoint_changed_during_recovery");
-        }
-      }
-      if (mustValidateProvenance) {
-        const finalProvenance = resolveActiveProvenance();
-        if (finalProvenance.expectedEndpointInode !== void 0 && beforeFinalQueryEndpoint.ino !== finalProvenance.expectedEndpointInode) {
-          throw new Error("session_host_prior_owner_endpoint_inode_mismatch");
-        }
-      }
-      const rightBeforeUnlinkEndpoint = readEndpointIdentity();
-      if (!rightBeforeUnlinkEndpoint || rightBeforeUnlinkEndpoint.dev !== initialEndpoint.dev || rightBeforeUnlinkEndpoint.ino !== initialEndpoint.ino) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
+    if (this.isCancelled?.()) throw new Error("session_host_start_cancelled");
+  }
+  async evictPriorEndpointOwners() {
+    this.assertNoAutomaticReplacementContext();
+    if (this.endpoint.kind !== "unix") return;
+    const identity = (file) => {
       try {
-        fs5.unlinkSync(targetEndpointPath);
-      } catch {
+        const stat2 = fs5.lstatSync(file, { bigint: true });
+        return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
+      } catch (error) {
+        if (error.code === "ENOENT") return "missing";
+        throw error;
       }
+    };
+    const configIdentity = this.instanceConfigDir ? identity(this.instanceConfigDir) : null;
+    const endpointParent = fs5.realpathSync(path5.dirname(this.endpoint.path));
+    const initialEndpoint = identity(this.endpoint.path);
+    const readPid = () => {
+      if (!this.pidFilePath) return "missing";
+      try {
+        const raw = fs5.readFileSync(this.pidFilePath, "utf8").trim();
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
+          throw new Error("session_host_prior_owner_pidfile_corrupt");
+        }
+        return raw;
+      } catch (error) {
+        if (error.code === "ENOENT") return "missing";
+        throw error;
+      }
+    };
+    const initialPid = readPid();
+    const initialBirth = initialPid === "missing" ? null : this.readProcessBirth(Number(initialPid));
+    const assertGeneration = (expectedEndpoint) => {
+      this.assertNoAutomaticReplacementContext();
+      const currentPid = readPid();
+      const birth = initialPid === "missing" ? null : this.readProcessBirth(Number(initialPid));
+      const alive = initialPid !== "missing" && this.isPidAlive(Number(initialPid));
+      if (currentPid !== initialPid || birth !== initialBirth || alive || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs5.realpathSync(path5.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      this.assertNoAutomaticReplacementContext();
+    };
+    if (initialPid !== "missing" && this.isPidAlive(Number(initialPid))) {
+      throw new Error("session_host_live_owner_replacement_unauthorized");
     }
+    if (initialEndpoint !== "missing") {
+      if (this.upgradeLease) throw new Error("native_host_endpoint_owner_unproved");
+      if (initialPid === "missing") throw new Error("session_host_prior_owner_socket_unverified");
+      for (let check = 0; check < 2; check++) {
+        const owners = this.readSocketOwnerPids();
+        if (owners === null) throw new Error("session_host_prior_owner_socket_unverified");
+        if (owners.length !== 0) throw new Error("session_host_endpoint_changed_during_recovery");
+        assertGeneration(initialEndpoint);
+      }
+      fs5.unlinkSync(this.endpoint.path);
+    }
+    this.startupFence = () => assertGeneration("missing");
+    this.startupFence();
   }
   async start() {
+    this.assertNoAutomaticReplacementContext();
+    if (this.upgradeLease && fs5.existsSync(this.endpoint.path)) {
+      throw new Error("native_host_endpoint_owner_unproved");
+    }
+    await this.evictPriorEndpointOwners();
+    this.startupFence?.();
     if (this.upgradeLease) {
       await this.upgradeLease.start();
-      if (fs5.existsSync(this.endpoint.path)) {
-        const prov = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
-        if (!prov || this.endpoint.kind !== "unix") {
-          await this.upgradeLease.close();
-          throw new Error("native_host_endpoint_owner_unproved");
-        }
-        try {
-          await this.evictPriorEndpointOwners();
-        } catch (error) {
-          await this.upgradeLease.close();
-          throw error;
-        }
-        if (fs5.existsSync(this.endpoint.path)) {
-          await this.upgradeLease.close();
-          throw new Error("native_host_endpoint_owner_unproved");
-        }
+      try {
+        this.startupFence?.();
+      } catch (error) {
+        await this.upgradeLease.close();
+        throw error;
       }
     }
-    if (!this.upgradeLease && this.endpoint.kind === "unix") {
-      await this.evictPriorEndpointOwners();
-    }
+    this.startupFence?.();
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
       const parser = createLineParser((envelope) => {
@@ -1572,6 +1366,7 @@ var SessionHostServer = class extends EventEmitter {
       await new Promise((resolve4, reject) => {
         this.ipcServer?.once("listening", () => resolve4());
         this.ipcServer?.once("error", reject);
+        this.startupFence?.();
         this.ipcServer?.listen(this.endpoint.path);
       });
     } catch (error) {
@@ -2452,20 +2247,9 @@ async function runServer(instanceKeyArgs = []) {
     endpoint,
     storageRootDir: getSessionHostStorageRoot(),
     instanceConfigDir: INSTANCE_CONFIG_DIR,
-    pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
-    replacementProvenance: () => readVerifiedReplacementProvenance({
-      provenanceFile: getSessionHostReplacementProvenanceFile(SESSION_HOST_APP_NAME),
-      instanceConfigDir: INSTANCE_CONFIG_DIR,
-      appName: SESSION_HOST_APP_NAME,
-      endpointPath: endpoint.path,
-      leaseStateDir: path6.join(INSTANCE_CONFIG_DIR, "session-host")
-    })
+    pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME)
   });
-  try {
-    await server.start();
-  } finally {
-    removeSessionHostReplacementProvenance(SESSION_HOST_APP_NAME);
-  }
+  await server.start();
   writeSessionHostPid(SESSION_HOST_APP_NAME);
   const shutdown = async () => {
     const deadline = setTimeout(() => {

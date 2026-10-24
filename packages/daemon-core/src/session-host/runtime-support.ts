@@ -113,6 +113,7 @@ const UNRESPONSIVE_WINDOW_MS = 90_000;
 const UNRESPONSIVE_TIMEOUT_COUNT = 3;
 const UNRESPONSIVE_INVOCATION_COUNT = 2;
 
+/** Legacy record shape only; diagnostics and lease metadata never authorize automatic live takeover. */
 export interface SessionHostReplacementAuthorization {
     /** Explicit reason for authorized replacement (e.g., idle_maintenance_upgrade). */
     reason?: 'idle_maintenance_upgrade' | 'verified_foreign_prefix';
@@ -153,7 +154,7 @@ let probeInvocationSequence = 0;
 export function createSessionHostProbeInvocation(): number { return ++probeInvocationSequence; }
 const hostIdentities = new Map<string, string>();
 const hostRuntimeCounts = new Map<string, number>();
-const inFlightReplacements = new Map<string, Promise<SessionHostEndpoint>>();
+const inFlightReplacements = new Map<string, { generation: string; task: Promise<SessionHostEndpoint> }>();
 let spawnGeneration = 0;
 const endpointKey = (endpoint: SessionHostEndpoint): string => `${endpoint.kind}:${endpoint.path}`;
 
@@ -371,6 +372,11 @@ export async function ensureSessionHostReady(options: {
     isExistingHostAlive?: () => boolean;
     existingHostState?: () => 'alive' | 'dead' | 'unknown';
     existingHostIdentity?: () => string | undefined;
+    /** Full caller generation: PID/native birth, endpoint dev/ino and config namespace. */
+    existingHostGeneration?: () => string;
+    isCancelled?: () => boolean;
+    /** Synchronous canonical lifecycle containment, rechecked before join/effects. */
+    assertLifecycleAdmission?: () => void;
     isExistingSocketPresent?: (endpoint: SessionHostEndpoint) => boolean;
     replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
     canConnectRetries?: number;
@@ -393,38 +399,35 @@ export async function ensureSessionHostReady(options: {
 
     const resolveHostState = (): 'alive' | 'dead' | 'unknown' => {
         if (options.existingHostState) return options.existingHostState();
-        if (options.isExistingHostAlive) return options.isExistingHostAlive() && endpointMayExist() ? 'alive' : 'dead';
-        return 'dead';
+        if (options.isExistingHostAlive?.()) return 'alive';
+        return endpointMayExist() ? 'unknown' : 'dead';
     };
 
-    const isReplacementAuthorized = (): boolean => {
-        const resolveAuth = () => typeof options.replacementAuthority === 'function'
-            ? options.replacementAuthority()
-            : options.replacementAuthority;
-        const auth = resolveAuth();
-        if (!isValidReplacementAuthorizationShape(auth)) return false;
-        const canonicalIdentity = `pid-${auth.expectedPid}:birth-${auth.expectedBirth.trim()}`;
-        const currentIdentity = options.existingHostIdentity?.();
-        if (!currentIdentity || currentIdentity !== canonicalIdentity) return false;
-        const observedRuntimeCount = hostRuntimeCounts.get(key);
-        if (typeof observedRuntimeCount === 'number' && observedRuntimeCount > 0) {
-            return false;
-        }
-        if (auth.expectedHostStartedAt !== undefined) {
-            const observed = getObservedSessionHostIdentity(endpoint);
-            if (observed && observed.startsWith('started:') && observed !== `started:${auth.expectedHostStartedAt}`) {
-                return false;
+    const readGeneration = (): string => {
+        let endpointIdentity = 'missing';
+        if (endpoint.kind === 'unix') {
+            try {
+                const stat = fs.lstatSync(endpoint.path, { bigint: true });
+                endpointIdentity = `${stat.dev}:${stat.ino}`;
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
             }
         }
-        const postIdentityAuth = resolveAuth();
-        if (!isValidReplacementAuthorizationShape(postIdentityAuth)) return false;
-        if (
-            postIdentityAuth.expectedPid !== auth.expectedPid
-            || postIdentityAuth.expectedBirth.trim() !== auth.expectedBirth.trim()
-        ) {
-            return false;
+        return JSON.stringify([
+            options.existingHostGeneration?.(), options.existingHostIdentity?.(), endpointIdentity,
+        ]);
+    };
+    const generation = readGeneration();
+    const assertStartAdmission = (): void => {
+        const state = resolveHostState();
+        const currentGeneration = readGeneration();
+        options.assertLifecycleAdmission?.();
+        const source = options.replacementAuthority;
+        const legacyContext = typeof source === 'function' ? source() : source;
+        if (state !== 'dead' || resolveHostState() !== 'dead' || currentGeneration !== generation
+            || options.isCancelled?.() || legacyContext?.isCancelled?.()) {
+            throw new SessionHostUnavailableTransientError(endpoint);
         }
-        return true;
     };
 
     let lastError: unknown;
@@ -447,48 +450,27 @@ export async function ensureSessionHostReady(options: {
         if (proven || (state === 'dead' && !isResourceExhaustionError(lastError))) break;
     }
 
-    const activeReplacement = inFlightReplacements.get(key);
-    if (activeReplacement) return activeReplacement;
-
-    const hostState = resolveHostState();
-    const authorizedLiveReplacement = hostState === 'alive' && isReplacementAuthorized();
-    if (
-        isResourceExhaustionError(lastError)
-        || remaining() <= 0
-        || hostState === 'unknown'
-        || (hostState === 'alive' && !authorizedLiveReplacement)
-    ) {
+    if (isResourceExhaustionError(lastError) || remaining() <= 0) {
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
+    }
+    // Endpoint-only coalescing can join an operation for a different PID,
+    // native birth, socket inode or configuration. Admit this generation first.
+    assertStartAdmission();
+    const activeReplacement = inFlightReplacements.get(key);
+    if (activeReplacement) {
+        if (activeReplacement.generation !== generation) {
+            throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        }
+        return activeReplacement.task;
     }
 
     const replacementTask = (async (): Promise<SessionHostEndpoint> => {
-        const currentState = resolveHostState();
-        if (
-            currentState === 'unknown'
-            || (currentState === 'alive' && !isReplacementAuthorized())
-        ) {
-            throw new SessionHostUnavailableTransientError(endpoint, lastError);
-        }
-        if (!options.beforeSpawnHost || currentState === 'dead') {
-            (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
-        }
+        assertStartAdmission();
         await options.beforeSpawnHost?.(endpoint);
-        // Eviction may consume the remaining budget. Never start another unbounded
-        // probe loop (or a second replacement) in this ensure call.
-        const postEvictionAuth = !options.beforeSpawnHost
-            ? (typeof options.replacementAuthority === 'function'
-                ? options.replacementAuthority()
-                : options.replacementAuthority)
-            : undefined;
-        if (
-            remaining() <= 0
-            || (currentState === 'alive' && !options.beforeSpawnHost && (!isValidReplacementAuthorizationShape(postEvictionAuth) || postEvictionAuth.isCancelled?.()))
-        ) {
-            throw new SessionHostUnavailableTransientError(endpoint, lastError);
-        }
-        if (currentState === 'alive' && options.beforeSpawnHost) {
-            (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
-        }
+        if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        assertStartAdmission();
+        (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+        assertStartAdmission();
         options.spawnHost();
         probeEvidence.delete(key);
         hostRuntimeCounts.delete(key);
@@ -505,11 +487,11 @@ export async function ensureSessionHostReady(options: {
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
     })();
 
-    inFlightReplacements.set(key, replacementTask);
+    inFlightReplacements.set(key, { generation, task: replacementTask });
     try {
         return await replacementTask;
     } finally {
-        if (inFlightReplacements.get(key) === replacementTask) {
+        if (inFlightReplacements.get(key)?.task === replacementTask) {
             inFlightReplacements.delete(key);
         }
     }

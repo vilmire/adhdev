@@ -144,7 +144,7 @@ describe('session host runtime support compatibility', () => {
     expect(events).toEqual([])
   })
 
-  it('stops the existing host before spawning a replacement when canConnect persistently fails (no split-brain)', async () => {
+  it('refuses a persistent live-host connection failure before the automatic stop callback', async () => {
     const events: string[] = []
     let existingAlive = true
     const beforeSpawnHost = vi.fn(() => {
@@ -168,9 +168,9 @@ describe('session host runtime support compatibility', () => {
       verifyRetryDelayMs: 5,
       requiredRequestTypes: ['delete_session'],
       timeoutMs: 50,
-    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-persistent-wedge-session-host.sock' })
+    } as any)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
 
-    expect(events).toEqual(['stop-existing', 'spawn'])
+    expect(events).toEqual([])
   })
 
   it('never kills or replaces a live host when connect fails with ENFILE (or when socket path exists), throwing session_host_unavailable_transient', async () => {
@@ -252,7 +252,7 @@ describe('session host runtime support compatibility', () => {
     await expect(ensureSessionHostReady({
       appName: 'adhdev-dead-host',
       spawnHost,
-      isExistingHostAlive: () => false,
+      existingHostState: () => 'dead',
       isExistingSocketPresent: () => true,
       beforeSpawnHost,
       canConnectRetries: 2,
@@ -417,7 +417,7 @@ describe('session host runtime support compatibility', () => {
         endpoint,
         spawnHost,
         beforeSpawnHost,
-        isExistingHostAlive: () => spawned,
+        existingHostState: () => spawned ? 'alive' : 'dead',
         isExistingSocketPresent: () => true,
         canConnectRetries: 0,
         timeoutMs: 500,
@@ -427,7 +427,7 @@ describe('session host runtime support compatibility', () => {
         endpoint,
         spawnHost,
         beforeSpawnHost,
-        isExistingHostAlive: () => spawned,
+        existingHostState: () => spawned ? 'alive' : 'dead',
         isExistingSocketPresent: () => true,
         canConnectRetries: 0,
         timeoutMs: 500,
@@ -645,6 +645,79 @@ describe('session host runtime support compatibility', () => {
     expect(sessionRegistry.get(ghostId)).toBeUndefined()
   })
 
+  it.each(['alive', 'unknown'] as const)('R4 refuses complete count-zero authority for a %s host before disconnect or admission', async (hostState) => {
+    const spawnHost = vi.fn(), beforeSpawnHost = vi.fn()
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-automatic-refusal.sock' },
+      existingHostState: () => hostState,
+      existingHostIdentity: () => 'pid-777:birth-Sat Oct 24 06:00:00 2026',
+      replacementAuthority: {
+        expectedPid: 777, expectedBirth: 'Sat Oct 24 06:00:00 2026',
+        expectedInstanceConfigDir: '/tmp/owned-config', expectedBootId: 'fixture-boot',
+        expectedEpoch: 3, expectedOwner: 'fixture_owner', activeRuntimeCount: 0,
+      },
+      spawnHost, beforeSpawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('R4 revalidates dead state after asynchronous admission before every effect', async () => {
+    const spawnHost = vi.fn()
+    let hostState: 'dead' | 'alive' = 'dead'
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-post-admission.sock' },
+      existingHostState: () => hostState,
+      beforeSpawnHost: async () => { hostState = 'alive' },
+      spawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('R4 refuses an in-flight join for a different config/PID/birth generation on the same endpoint', async () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/r4-inflight-generation.sock' }
+    let generation = 'config-a:pid-7:birth-a'
+    let release!: () => void
+    const admitted = new Promise<void>(resolve => { release = resolve })
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn(() => admitted)
+    mocks.state.connectResults = ['fail', 'fail', 'ok']
+    const options = { endpoint, existingHostState: () => 'dead' as const,
+      existingHostGeneration: () => generation, spawnHost, beforeSpawnHost,
+      canConnectRetries: 0, timeoutMs: 1000 }
+    const first = ensureSessionHostReady(options)
+    await new Promise(resolve => setImmediate(resolve))
+    generation = 'config-b:pid-8:birth-b'
+    const second = ensureSessionHostReady(options).then(value => ({ value }), error => ({ error }))
+    await new Promise(resolve => setImmediate(resolve))
+    generation = 'config-a:pid-7:birth-a'
+    release()
+    expect(await second).toMatchObject({ error: { code: 'session_host_unavailable_transient' } })
+    await expect(first).resolves.toEqual(endpoint)
+    expect(spawnHost).toHaveBeenCalledTimes(1)
+    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['generation', 'cancel-after-native-read'] as const)('R4 refuses %s changes after admission and before disconnect/spawn', async (fault) => {
+    let generation = 'initial', cancelled = false, reads = 0
+    const spawnHost = vi.fn()
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-effect-generation.sock' },
+      existingHostState: () => 'dead',
+      existingHostGeneration: () => { if (++reads >= 3 && fault === 'cancel-after-native-read') cancelled = true; return generation },
+      isCancelled: () => cancelled,
+      beforeSpawnHost: () => { if (fault === 'generation') generation = 'changed' },
+      spawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
   it('rejects partial caller replacementAuthority ({ activeRuntimeCount: 0 } alone) and refuses when observed runtimeCount > 0 or cancelled during identity check', async () => {
     const spawnHost = vi.fn()
     const beforeSpawnHost = vi.fn()
@@ -718,7 +791,7 @@ describe('session host runtime support compatibility', () => {
     expect(beforeSpawnHost).not.toHaveBeenCalled()
     expect(spawnHost).not.toHaveBeenCalled()
 
-    // 4. Positive control: identical canonical authority with runtimeCount === 0 and !cancelled reaches beforeSpawnHost
+    // R4 / R3-14: count zero with identical canonical authority is also unsupported.
     cancelled = false
     beforeSpawnHost.mockImplementationOnce(async () => {
       throw new runtimeSupport.SessionHostUnavailableTransientError(endpoint)
@@ -736,7 +809,7 @@ describe('session host runtime support compatibility', () => {
       canConnectRetries: 0,
       timeoutMs: 50,
     })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
-    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
   })
 })
 

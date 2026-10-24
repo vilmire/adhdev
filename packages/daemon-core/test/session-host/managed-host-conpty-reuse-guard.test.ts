@@ -11,6 +11,11 @@ const cp = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
 }))
 vi.mock('child_process', () => cp)
+vi.mock('@adhdev/session-host-core', async original => ({ ...await original<any>(), SessionHostClient: class {
+  async connect() {}
+  async request() { return { success: true, result: { supportedRequestTypes: ['delete_session'] } } }
+  async close() {}
+} }))
 
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
 
@@ -43,6 +48,7 @@ describe('managed session-host conpty reuse guard', () => {
   let originalConfigDir: string | undefined
 
   beforeEach(() => {
+    vi.spyOn(process, 'kill').mockImplementation((() => { throw Object.assign(new Error('owned dead PID'), { code: 'ESRCH' }) }) as any)
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
     cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
@@ -53,6 +59,7 @@ describe('managed session-host conpty reuse guard', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
     if (originalHome === undefined) delete process.env.HOME
     else process.env.HOME = originalHome
@@ -80,18 +87,7 @@ describe('managed session-host conpty reuse guard', () => {
     return cp.execFileSync.mock.calls.filter((c: any[]) => c[0] === 'taskkill')
   }
 
-  /**
-   * No real session-host answers the socket in a test process, so `ensureReady`
-   * ALWAYS reaches its pre-existing failure path, which stops the host and
-   * retries once. Those kills predate this fix and are not attributable to the
-   * reuse guard, so counting taskkills across a full `ensureReady` cannot
-   * distinguish the two.
-   *
-   * What is uniquely observable is the guard's decision input: the same
-   * `verifyConptyPrebuildBeforeSpawn` the reuse path now calls, reached through
-   * the public `spawnHost()`. A healthy/dev layout must not throw (hence nothing
-   * is stopped); a packaged prefix with no prebuild must throw.
-   */
+  // Transport, process probes and spawn are owned pure fixtures.
   it('does not fault a reachable host when the active prefix is healthy (nothing for the guard to stop)', async () => {
     const homeDir = stageHome()
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
@@ -110,9 +106,8 @@ describe('managed session-host conpty reuse guard', () => {
 
     // The guard's verification passes, so the reuse path proceeds untouched.
     expect(() => host.spawnHost()).not.toThrow()
-    // And ensureReady still completes its normal (here: failing) flow rather
-    // than throwing the conpty error out of the new pre-reuse check.
-    await expect(host.ensureReady()).rejects.toThrow(/did not become ready|failed to start|temporarily unavailable/i)
+    // Compatible diagnostics still reuse the host after the local prebuild check.
+    await expect(host.ensureReady()).resolves.toEqual(host.endpoint)
   })
 
   it('never engages on non-win32 platforms', async () => {
@@ -150,7 +145,7 @@ describe('managed session-host conpty reuse guard', () => {
     return entry
   }
 
-  it('runs conpty recovery without signaling an unproven host', async () => {
+  it('refuses missing conpty prebuild without stopping an unproven host', async () => {
     const homeDir = stageHome()
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     const appName = `adhdev-reuse-missing-${process.pid}-${Date.now()}`
@@ -158,7 +153,7 @@ describe('managed session-host conpty reuse guard', () => {
     stagePidFile(homeDir, appName, zombiePid)
     const entry = stagePackagedEntryWithoutConpty(homeDir, false)
 
-    // The conpty guard can ask for an extra stop, but an unproven PID is preserved.
+    // Missing prebuilds never call the explicit stop API or its extra stop pass.
     let stops = 0
     const host = createManagedSessionHost({
       appName,
@@ -175,7 +170,8 @@ describe('managed session-host conpty reuse guard', () => {
 
     await host.ensureReady().catch(() => {})
 
-    expect(stops).toBe(1)
+    expect(stops).toBe(0)
+    expect(cp.spawn).not.toHaveBeenCalled()
     expect(taskkillCalls()).toHaveLength(0)
   })
 

@@ -1,9 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn } from 'node:child_process'
 import * as fs from 'fs'
-import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
 import { SessionHostServer, readVerifiedReplacementProvenance } from '../src/server.js'
@@ -84,417 +82,55 @@ test('uncaught-exception limiter counts correctly from a zero timestamp', () => 
   assert.equal(shouldExit(3).exit, true)
 })
 
-test('start() refuses unauthorized live prior host eviction (cannot bypass parent refusal) and evicts only with explicit replacement provenance; late stop() never unlinks replacement socket', async () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-split-brain-'))
-  const configDir = path.join(tmp, 'instance-config')
-  fs.mkdirSync(configDir, { recursive: true })
-  const sockPath = path.join(tmp, 'host.sock')
-  const pidFilePath = path.join(tmp, 'host.pid')
-  const priorPid = 49151
-  const priorBirth = 'Sat Oct 24 06:00:00 2026'
-  fs.writeFileSync(pidFilePath, `${priorPid}\n`, 'utf8')
-
-  const killCalls: Array<[number, string | number | undefined]> = []
-  let priorAlive = true
-  const realKill = process.kill.bind(process)
-  ;(process as any).kill = (pid: number, signal?: string | number) => {
-    if (pid === priorPid) {
-      killCalls.push([pid, signal])
-      if (signal === 0 || signal === undefined) {
-        if (priorAlive) return true
-        const err = new Error('kill ESRCH') as NodeJS.ErrnoException
-        err.code = 'ESRCH'
-        throw err
-      }
-      priorAlive = false
-      return true
-    }
-    return realKill(pid, signal as any)
-  }
-
-  let firstServer: SessionHostServer | null = null
-  let secondServer: SessionHostServer | null = null
-  let unauthorizedServer: SessionHostServer | null = null
+test('R4 start refuses live and unknown owners and every explicit replacement context before any listener', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-automatic-refusal-'))
+  const realKill = process.kill
+  const signaled: unknown[] = []
+  process.kill = ((pid: number, signal: unknown) => { signaled.push([pid, signal]); throw new Error('unexpected signal') }) as any
   try {
-    firstServer = new SessionHostServer({
-      appName: `adhdev-split-brain-first-${process.pid}`,
-      endpoint: { kind: 'unix', path: sockPath },
-      storageRootDir: path.join(tmp, 'storage-1'),
-      instanceConfigDir: configDir,
-    } as any)
-    await firstServer.start()
-    const firstIno = fs.lstatSync(sockPath, { bigint: true }).ino
-
-    // 1. Unauthorized child startup MUST refuse and never signal priorPid or unlink sockPath
-    unauthorizedServer = new SessionHostServer({
-      appName: `adhdev-split-brain-unauthorized-${process.pid}`,
-      endpoint: { kind: 'unix', path: sockPath },
-      storageRootDir: path.join(tmp, 'storage-unauth'),
-      instanceConfigDir: configDir,
-      pidFilePath,
-      isManagedOwnerPid: (pid: number) => pid === priorPid,
-      getOwnerBirth: () => priorBirth,
-      getSocketOwnerPids: () => [priorPid],
-    } as any)
-    await assert.rejects(unauthorizedServer.start(), /session_host_live_owner_replacement_unauthorized/)
-    assert.equal(
-      killCalls.some(([pid, sig]) => pid === priorPid && (sig === 'SIGTERM' || sig === 'SIGKILL')),
-      false,
-      'unauthorized child startup must never signal a live prior host',
-    )
-    assert.equal(fs.lstatSync(sockPath, { bigint: true }).ino, firstIno)
-
-    // 2. Authorized replacement with matching instance key, PID, birth, and socket inode succeeds
-    secondServer = new SessionHostServer({
-      appName: `adhdev-split-brain-second-${process.pid}`,
-      endpoint: { kind: 'unix', path: sockPath },
-      storageRootDir: path.join(tmp, 'storage-2'),
-      instanceConfigDir: configDir,
-      pidFilePath,
-      isManagedOwnerPid: (pid: number) => pid === priorPid,
-      getOwnerBirth: () => priorBirth,
-      getSocketOwnerPids: () => (priorAlive ? [priorPid] : []),
-      readOwnerArgs: () => `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)}`,
-      replacementProvenance: {
-        expectedPid: priorPid,
-        expectedBirth: priorBirth,
-        instanceConfigDir: configDir,
-        expectedEndpointInode: firstIno,
-      },
-    } as any)
-    await secondServer.start()
-
-    assert.equal(
-      killCalls.some(([pid, sig]) => pid === priorPid && sig === 'SIGTERM'),
-      true,
-      'authorized new host start() must stop prior managed host before rebinding socket',
-    )
-    const secondIno = fs.lstatSync(sockPath, { bigint: true }).ino
-
-    // Old host stopping late must NOT unlink or rename the replacement host's bound socket inode
-    const origClose = (firstServer as any).ipcServer.close.bind((firstServer as any).ipcServer)
-    let sockExistedDuringClose = true
-    ;(firstServer as any).ipcServer.close = (cb?: (err?: Error) => void) => {
-      sockExistedDuringClose = fs.existsSync(sockPath) && fs.lstatSync(sockPath, { bigint: true }).ino === secondIno
-      return origClose(cb)
+    for (const fault of ['live', 'no-pid', 'null-owner', 'foreign-owner', 'explicit', 'undefined-callback', 'disk-artifact']) {
+      const config = path.join(tmp, fault)
+      fs.mkdirSync(config)
+      const endpoint = path.join(config, 'host.sock'), pidFilePath = path.join(config, 'host.pid')
+      fs.writeFileSync(endpoint, 'retained endpoint')
+      if (fault !== 'no-pid') fs.writeFileSync(pidFilePath, '49152')
+      if (fault === 'disk-artifact') fs.writeFileSync(path.join(config, 'test-session-host-replacement.json'), '{}')
+      const server = new SessionHostServer({
+        endpoint: { kind: 'unix', path: endpoint }, instanceConfigDir: config,
+        storageRootDir: path.join(config, 'storage'), pidFilePath,
+        isPidAlive: () => fault === 'live', getOwnerBirth: () => null,
+        getSocketOwnerPids: () => fault === 'null-owner' ? null : fault === 'foreign-owner' ? [98765] : [],
+        ...(fault === 'undefined-callback' ? { replacementProvenance: () => undefined } : {}),
+        ...(fault === 'explicit' ? { replacementProvenance: { expectedPid: 49152, expectedBirth: 'known-birth', activeRuntimeCount: 0 } } : {}),
+      })
+      await assert.rejects(server.start())
+      assert.equal(fs.readFileSync(endpoint, 'utf8'), 'retained endpoint')
+      assert.deepEqual(signaled, [])
     }
-    await firstServer.stop()
-    firstServer = null
-    assert.equal(sockExistedDuringClose, true, 'runStop() must never rename the replacement socket away before close (M3)')
-    assert.equal(fs.existsSync(sockPath), true, 'late stop() of old host unlinked replacement socket')
-    assert.equal(fs.lstatSync(sockPath, { bigint: true }).ino, secondIno)
-
-    await secondServer.stop()
-    secondServer = null
-  } finally {
-    process.kill = realKill
-    await unauthorizedServer?.stop().catch(() => {})
-    await firstServer?.stop().catch(() => {})
-    await secondServer?.stop().catch(() => {})
-    fs.rmSync(tmp, { recursive: true, force: true })
-  }
+  } finally { process.kill = realKill; fs.rmSync(tmp, { recursive: true, force: true }) }
 })
 
-test('start() refuses stale pidfile with vanished socket when prior host is alive, wrong/duplicate/missing instance key, unreadable ownership, PID reuse before SIGKILL, and changed socket inode/owner before unlink', async () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-fences-'))
-  const configDir = path.join(tmp, 'config')
-  fs.mkdirSync(configDir, { recursive: true })
-  const priorPid = 49152
-  const realKill = process.kill.bind(process)
-  let priorAlive = true
-  let currentBirth: string | null = 'Sat Oct 24 06:00:00 2026'
-  let currentCmd: string | null = `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)}`
-  const signaled: Array<[number, string | number | undefined]> = []
-  const createdServers: SessionHostServer[] = []
-
+test('R4 late stop preserves a replacement endpoint without closing its path or renaming it', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-late-stop-'))
   try {
-    // 1. Stale PID file + vanished socket with live prior host (unauthorized)
-    const pidFile1 = path.join(tmp, 'vanished.pid')
-    const sock1 = path.join(tmp, 'vanished.sock')
-    fs.writeFileSync(pidFile1, `${priorPid}\n`, 'utf8')
-    ;(process as any).kill = (pid: number, sig?: string | number) => {
-      if (pid === priorPid) {
-        if (sig === 0 || sig === undefined) return true
-        signaled.push([pid, sig])
-        return true
-      }
-      return realKill(pid, sig as any)
+    const endpoint = path.join(tmp, 'host.sock')
+    fs.writeFileSync(endpoint, 'old endpoint')
+    const server = new SessionHostServer({ endpoint: { kind: 'unix', path: endpoint }, storageRootDir: path.join(tmp, 'storage') })
+    ;(server as any).endpointInode = fs.lstatSync(endpoint, { bigint: true }).ino
+    fs.renameSync(endpoint, endpoint + '.old')
+    fs.writeFileSync(endpoint, 'replacement endpoint')
+    let unrefs = 0
+    ;(server as any).ipcServer = {
+      unref() { unrefs++ }, removeAllListeners() {},
+      close() { throw new Error('close would unlink the replacement by path') },
     }
-    const vanishedServer = new SessionHostServer({
-      appName: 'adhdev-vanished',
-      endpoint: { kind: 'unix', path: sock1 },
-      storageRootDir: path.join(tmp, 's1'),
-      instanceConfigDir: configDir,
-      pidFilePath: pidFile1,
-    } as any)
-    createdServers.push(vanishedServer)
-    await assert.rejects(vanishedServer.start(), /session_host_live_owner_replacement_unauthorized/)
-    assert.deepEqual(signaled, [])
-
-    // 2. Wrong, duplicate, or missing instance key, or unreadable command/birth/pidfile
-    for (const fault of ['missing-key', 'wrong-key', 'duplicate-key', 'unreadable-cmd', 'unreadable-birth', 'corrupt-pidfile'] as const) {
-      signaled.length = 0
-      const sock = path.join(tmp, `${fault}.sock`)
-      const pidFile = path.join(tmp, `${fault}.pid`)
-      fs.writeFileSync(sock, 'sock')
-      fs.writeFileSync(pidFile, fault === 'corrupt-pidfile' ? 'corrupt\n' : `${priorPid}\n`, 'utf8')
-      currentBirth = fault === 'unreadable-birth' ? null : 'Sat Oct 24 06:00:00 2026'
-      currentCmd =
-        fault === 'missing-key'
-          ? 'node /opt/adhdev/session-host-daemon/dist/index.js serve'
-          : fault === 'wrong-key'
-            ? `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(path.join(tmp, 'other'))}`
-            : fault === 'duplicate-key'
-              ? `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)} --instance-config-key=${'a'.repeat(64)}`
-              : fault === 'unreadable-cmd'
-                ? null
-                : `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)}`
-      const srv = new SessionHostServer({
-        appName: `adhdev-${fault}`,
-        endpoint: { kind: 'unix', path: sock },
-        storageRootDir: path.join(tmp, `storage-${fault}`),
-        instanceConfigDir: configDir,
-        pidFilePath: pidFile,
-        getOwnerBirth: () => currentBirth,
-        readOwnerArgs: () => currentCmd,
-        getSocketOwnerPids: () => [priorPid],
-        replacementProvenance: {
-          expectedPid: priorPid,
-          expectedBirth: 'Sat Oct 24 06:00:00 2026',
-          instanceConfigDir: configDir,
-        },
-      } as any)
-      await assert.rejects(srv.start(), /session_host_prior_owner_/)
-      assert.deepEqual(signaled, [], `must never signal on ${fault}`)
-      assert.equal(fs.existsSync(sock), true, `must never unlink socket on ${fault}`)
-    }
-
-    // 3. PID reuse / native birth change between SIGTERM and SIGKILL
-    signaled.length = 0
-    priorAlive = true
-    currentBirth = 'Sat Oct 24 06:00:00 2026'
-    currentCmd = `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)}`
-    const reuseSock = path.join(tmp, 'reuse.sock')
-    const reusePidFile = path.join(tmp, 'reuse.pid')
-    fs.writeFileSync(reuseSock, 'sock')
-    fs.writeFileSync(reusePidFile, `${priorPid}\n`, 'utf8')
-    ;(process as any).kill = (pid: number, sig?: string | number) => {
-      if (pid === priorPid) {
-        if (sig === 0 || sig === undefined) return true
-        signaled.push([pid, sig])
-        if (sig === 'SIGTERM') {
-          // Simulate OS recycling PID 49152 to a newly born process before grace expires
-          currentBirth = 'Sat Oct 24 06:04:00 2026'
-        }
-        return true
-      }
-      return realKill(pid, sig as any)
-    }
-    const reuseServer = new SessionHostServer({
-      appName: 'adhdev-reuse',
-      endpoint: { kind: 'unix', path: reuseSock },
-      storageRootDir: path.join(tmp, 's-reuse'),
-      instanceConfigDir: configDir,
-      pidFilePath: reusePidFile,
-      evictGraceMs: 20,
-      getOwnerBirth: () => currentBirth,
-      readOwnerArgs: () => currentCmd,
-      getSocketOwnerPids: () => [priorPid],
-      replacementProvenance: {
-        expectedPid: priorPid,
-        expectedBirth: 'Sat Oct 24 06:00:00 2026',
-        instanceConfigDir: configDir,
-      },
-    } as any)
-    await assert.rejects(reuseServer.start(), /session_host_prior_owner_birth_mismatch/)
-    assert.deepEqual(signaled, [[priorPid, 'SIGTERM']])
-    assert.equal(fs.existsSync(reuseSock), true, 'must not unlink socket when PID was reused during grace period')
-
-    // 4. Changed socket inode between validation and unlink
-    signaled.length = 0
-    priorAlive = true
-    currentBirth = 'Sat Oct 24 06:00:00 2026'
-    const raceSock = path.join(tmp, 'inode-race.sock')
-    const racePidFile = path.join(tmp, 'inode-race.pid')
-    fs.writeFileSync(raceSock, 'first-inode')
-    fs.writeFileSync(racePidFile, `${priorPid}\n`, 'utf8')
-    let replacementInode: bigint | null = null
-    ;(process as any).kill = (pid: number, sig?: string | number) => {
-      if (pid === priorPid) {
-        if (sig === 0 || sig === undefined) {
-          if (priorAlive) return true
-          throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
-        }
-        signaled.push([pid, sig])
-        priorAlive = false
-        // Another process replaces the socket inode before unlink runs
-        fs.unlinkSync(raceSock)
-        fs.writeFileSync(raceSock, 'second-inode')
-        replacementInode = fs.lstatSync(raceSock, { bigint: true }).ino
-        return true
-      }
-      return realKill(pid, sig as any)
-    }
-    const raceServer = new SessionHostServer({
-      appName: 'adhdev-inode-race',
-      endpoint: { kind: 'unix', path: raceSock },
-      storageRootDir: path.join(tmp, 's-race'),
-      instanceConfigDir: configDir,
-      pidFilePath: racePidFile,
-      evictGraceMs: 20,
-      getOwnerBirth: () => currentBirth,
-      readOwnerArgs: () => currentCmd,
-      getSocketOwnerPids: () => (priorAlive ? [priorPid] : []),
-      replacementProvenance: {
-        expectedPid: priorPid,
-        expectedBirth: 'Sat Oct 24 06:00:00 2026',
-        instanceConfigDir: configDir,
-      },
-    } as any)
-    await assert.rejects(raceServer.start(), /session_host_endpoint_changed_during_recovery/)
-    assert.equal(fs.existsSync(raceSock), true)
-    assert.equal(fs.lstatSync(raceSock, { bigint: true }).ino, replacementInode)
-
-    // 5. Proven-dead prior owner with unchanged stale socket recovers once cleanly
-    const deadSock = path.join(tmp, 'dead-owner.sock')
-    const deadPidFile = path.join(tmp, 'dead-owner.pid')
-    fs.writeFileSync(deadSock, 'stale-dead-socket')
-    fs.writeFileSync(deadPidFile, `${priorPid}\n`, 'utf8')
-    priorAlive = false
-    const recoveredServer = new SessionHostServer({
-      appName: 'adhdev-dead-recovery',
-      endpoint: { kind: 'unix', path: deadSock },
-      storageRootDir: path.join(tmp, 's-dead'),
-      instanceConfigDir: configDir,
-      pidFilePath: deadPidFile,
-      getSocketOwnerPids: () => [],
-    } as any)
-    await recoveredServer.start()
-    await recoveredServer.stop()
-  } finally {
-    process.kill = realKill
-    for (const s of createdServers) {
-      await s.stop().catch(() => {})
-    }
-    fs.rmSync(tmp, { recursive: true, force: true })
-  }
+    await server.stop()
+    assert.equal(unrefs, 1)
+    assert.equal(fs.readFileSync(endpoint, 'utf8'), 'replacement endpoint')
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
 })
 
-test('C1: real lsof/ps authorized eviction only targets the listener of this exact socket and instance key and never signals other unix sockets or agent prompts mentioning session-host-daemon', async () => {
-  if (process.platform === 'win32') return
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-c1-lsof-'))
-  const configDir = path.join(tmp, 'instance-config')
-  fs.mkdirSync(configDir, { recursive: true })
-  const targetSockPath = path.join(tmp, 'target.sock')
-  const unrelatedSockPath = path.join(tmp, 'unrelated.sock')
-  const pidFilePath = path.join(tmp, 'stale-recycled.pid')
-
-  // 1. Spawn a real child process running from `<tmp>/session-host-daemon/index.js`
-  //    that listens on `targetSockPath` (the actual prior host owning `targetSockPath`).
-  const fakeHostDir = path.join(tmp, 'session-host-daemon')
-  fs.mkdirSync(fakeHostDir, { recursive: true })
-  const fakeHostEntry = path.join(fakeHostDir, 'index.js')
-  fs.writeFileSync(
-    fakeHostEntry,
-    `
-      const net = require('net');
-      const srv = net.createServer();
-      srv.listen(${JSON.stringify(targetSockPath)}, () => {
-        process.stdout.write('READY\\n');
-      });
-      process.on('SIGTERM', () => {
-        srv.close(() => process.exit(0));
-      });
-      setInterval(() => {}, 10000);
-    `,
-    'utf8',
-  )
-  const targetListenerChild = spawn(process.execPath, [fakeHostEntry, 'serve', instanceArgFor(configDir)], {
-    stdio: ['ignore', 'pipe', 'ignore'],
-    windowsHide: true,
-  })
-  await new Promise<void>((resolve, reject) => {
-    targetListenerChild.once('error', reject)
-    targetListenerChild.stdout?.on('data', (chunk) => {
-      if (String(chunk).includes('READY')) resolve()
-    })
-  })
-  const targetBirth = String(
-    execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(targetListenerChild.pid)], { encoding: 'utf8' }),
-  ).trim()
-
-  // 2. Spawn a real decoy child process that holds a unix socket at `unrelatedSockPath`
-  //    AND has "session-host-daemon/index.js" and "adhdev-sessiond" in its trailing prompt argv
-  //    (simulating an agent CLI worker like codex/claude AND another instance's unix socket).
-  //    Also write its PID into `pidFilePath` to simulate a recycled PID in a stale pidfile!
-  const decoyScript = `
-    const net = require('net');
-    const srv = net.createServer();
-    srv.listen(${JSON.stringify(unrelatedSockPath)}, () => {
-      process.stdout.write('READY\\n');
-    });
-    setInterval(() => {}, 10000);
-  `
-  const decoyChild = spawn(
-    process.execPath,
-    ['-e', decoyScript, '--', '--prompt', 'investigate session-host-daemon/index.js and adhdev-sessiond split-brain'],
-    { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
-  )
-  await new Promise<void>((resolve, reject) => {
-    decoyChild.once('error', reject)
-    decoyChild.stdout?.on('data', (chunk) => {
-      if (String(chunk).includes('READY')) resolve()
-    })
-  })
-  fs.writeFileSync(pidFilePath, `${decoyChild.pid}\n`, 'utf8')
-
-  // Intercept process.kill so no unrelated process on the machine can ever be signaled,
-  // while forwarding real signals to targetListenerChild so it exits cleanly on SIGTERM.
-  const realKill = process.kill.bind(process)
-  const signaledPids: Array<[number, string | number]> = []
-  ;(process as any).kill = (pid: number, signal?: string | number) => {
-    if (signal === 0 || signal === undefined) {
-      return realKill(pid, 0)
-    }
-    signaledPids.push([pid, signal])
-    if (pid === targetListenerChild.pid) {
-      return realKill(pid, signal as any)
-    }
-    return true
-  }
-
-  let server: SessionHostServer | null = null
-  try {
-    server = new SessionHostServer({
-      appName: `adhdev-c1-test-${process.pid}`,
-      endpoint: { kind: 'unix', path: targetSockPath },
-      storageRootDir: path.join(tmp, 'storage'),
-      instanceConfigDir: configDir,
-      pidFilePath,
-      evictGraceMs: 200,
-      replacementProvenance: {
-        expectedPid: targetListenerChild.pid!,
-        expectedBirth: targetBirth,
-        instanceConfigDir: configDir,
-      },
-    } as any)
-    await server.start()
-
-    assert.deepEqual(
-      signaledPids,
-      [[targetListenerChild.pid!, 'SIGTERM']],
-      `evictPriorEndpointOwners must signal ONLY targetListenerChild (pid ${targetListenerChild.pid}), never decoyChild (pid ${decoyChild.pid}) or other unix sockets, but signaled: ${JSON.stringify(signaledPids)}`,
-    )
-  } finally {
-    process.kill = realKill
-    await server?.stop().catch(() => {})
-    try { realKill(targetListenerChild.pid!, 'SIGKILL') } catch { /* noop */ }
-    try { realKill(decoyChild.pid!, 'SIGKILL') } catch { /* noop */ }
-    fs.rmSync(tmp, { recursive: true, force: true })
-  }
-})
-
-test('R2 pure eviction and provenance fences: unknown socket owner with dead pidfile refuses unlink, endpoint replaced during final owner query is retained, cancellation during birth query precedes SIGTERM, verified provenance file + upgrade-lease journal enforced, and confirmed dead empty socket unlinks', async () => {
+test('R2 pure eviction and provenance fences: unknown socket owner with dead pidfile refuses unlink, endpoint replaced during final owner query is retained, cancellation during dead-owner birth query precedes effects, automatic provenance takeover is unsupported, and confirmed dead empty socket unlinks', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-r2-pure-'))
   const configDir = path.join(tmp, 'config')
   fs.mkdirSync(configDir, { recursive: true })
@@ -519,6 +155,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       appName: 'adhdev-r2-unknown',
       endpoint: { kind: 'unix', path: sock1 },
       storageRootDir: path.join(tmp, 's1'),
+      getOwnerBirth: () => null,
       instanceConfigDir: configDir,
       pidFilePath: pidFile1,
       getSocketOwnerPids: () => null,
@@ -541,6 +178,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       appName: 'adhdev-r2-replaced',
       endpoint: { kind: 'unix', path: sock2 },
       storageRootDir: path.join(tmp, 's2'),
+      getOwnerBirth: () => null,
       instanceConfigDir: configDir,
       pidFilePath: pidFile2,
       getSocketOwnerPids: () => {
@@ -560,7 +198,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
     assert.equal(fs.existsSync(sock2), true)
     assert.equal(fs.lstatSync(sock2, { bigint: true }).ino, replacementInode)
 
-    // 3. Cancellation during final native birth query precedes SIGTERM
+    // 3. Cancellation during a dead-owner native birth query precedes unlink/start effects
     const sock3 = path.join(tmp, 'cancel-birth.sock')
     const pidFile3 = path.join(tmp, 'cancel-birth.pid')
     fs.writeFileSync(sock3, 'live-owner')
@@ -580,21 +218,14 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       pidFilePath: pidFile3,
       readOwnerArgs: () =>
         `node /opt/adhdev/session-host-daemon/dist/index.js serve ${instanceArgFor(configDir)}`,
-      getOwnerBirth: () => {
-        cancelled = true
-        return 'Sat Oct 24 06:00:00 2026'
-      },
-      getSocketOwnerPids: () => [priorPid],
-      replacementProvenance: {
-        expectedPid: priorPid,
-        expectedBirth: 'Sat Oct 24 06:00:00 2026',
-        instanceConfigDir: configDir,
-        isCancelled: () => cancelled,
-      },
+      isPidAlive: () => false,
+      getOwnerBirth: () => { cancelled = true; return null },
+      getSocketOwnerPids: () => [],
+      isCancelled: () => cancelled,
     } as any)
     await assert.rejects(
       (srvCancel as any).evictPriorEndpointOwners(),
-      /session_host_live_owner_replacement_unauthorized/,
+      /session_host_start_cancelled/,
     )
     assert.deepEqual(signaled, [])
     assert.equal(fs.existsSync(sock3), true)
@@ -688,7 +319,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       undefined,
     )
 
-    // Valid private provenance + matching held upgrade-lease.json authorizes idle eviction
+    // R4: valid private provenance + matching held lease still cannot authorize automatic live eviction
     writeValidProvenanceAndLease()
     let prior4Alive = true
     signaled.length = 0
@@ -723,10 +354,10 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
           leaseStateDir: leaseDir,
         }),
     } as any)
-    await (srvWired as any).evictPriorEndpointOwners()
+    await assert.rejects((srvWired as any).evictPriorEndpointOwners(), /session_host_live_owner_replacement_unauthorized/)
     removeSessionHostReplacementProvenance(appName, configDir)
-    assert.deepEqual(signaled, [[priorPid, 'SIGTERM']])
-    assert.equal(fs.existsSync(sock4), false)
+    assert.deepEqual(signaled, [])
+    assert.equal(fs.existsSync(sock4), true)
     assert.equal(fs.existsSync(provFile), false)
 
     // 5. Confirmed dead prior owner with verified empty socket ownership unlinks stale socket cleanly
@@ -746,6 +377,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       appName: 'adhdev-r2-dead-clean',
       endpoint: { kind: 'unix', path: sock5 },
       storageRootDir: path.join(tmp, 's5'),
+      getOwnerBirth: () => null,
       instanceConfigDir: configDir,
       pidFilePath: pidFile5,
       getSocketOwnerPids: () => [],
@@ -828,7 +460,7 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
     })
     await assert.rejects(
       () => (srvPostParentKillMismatch as any).evictPriorEndpointOwners(),
-      /session_host_prior_owner_endpoint_inode_mismatch/,
+      /session_host_live_owner_replacement_unauthorized/,
     )
     assert.equal(fs.existsSync(sock6), true)
     removeSessionHostReplacementProvenance(appName, configDir)

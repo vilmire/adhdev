@@ -14,7 +14,7 @@ const state = vi.hoisted(() => ({
     legacyUnkeyed: false, duplicateKey: false, unreadableCmd: false, unreadableBirth: false,
     healthyDiagnostics: false, runtimeCount: 2, hostStartedAt: 1000,
     delayCallbackMs: 0, connectErrorCode: '',
-    spawn: vi.fn(),
+    spawn: vi.fn(), diagHook: null as (() => Promise<void>) | null, childDone: null as Promise<void> | null, prelisten: vi.fn(),
 }))
 vi.mock('child_process', () => ({
     execFileSync: vi.fn((file: string, args?: readonly string[]) => {
@@ -39,6 +39,10 @@ vi.mock('child_process', () => ({
     }),
     spawn: (...args: any[]) => state.spawn(...args),
 }))
+vi.mock('net', async (original) => ({ ...await original<any>(), createServer: () => {
+    state.prelisten()
+    throw new Error('fixture_prelisten_boundary')
+} }))
 vi.mock('@adhdev/session-host-core', async (original) => {
     const actual = await original<typeof import('@adhdev/session-host-core')>()
     class Client {
@@ -105,8 +109,10 @@ vi.mock('@adhdev/session-host-core', async (original) => {
                 }
             }
             state.calls++
+            await state.diagHook?.()
             const budget = options?.timeoutMs ?? 30_000
             state.budgets.push(budget)
+            if (state.replaced) await state.childDone
             if (state.healthyDiagnostics || state.replaced) {
                 return {
                     success: true,
@@ -153,7 +159,6 @@ vi.mock('@adhdev/session-host-core', async (original) => {
 import { createManagedSessionHost } from '../../src/session-host/managed-host.js'
 import { SessionHostClient } from '@adhdev/session-host-core'
 import {
-    readVerifiedReplacementProvenance,
     SessionHostServer,
 } from '../../../session-host-daemon/src/server.js'
 
@@ -176,8 +181,9 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
             disconnectCount: 0, birth: 'Sat Oct 24 06:00:00 2026', socketOwners: [54321],
             legacyUnkeyed: false, duplicateKey: false, unreadableCmd: false, unreadableBirth: false,
             healthyDiagnostics: false, runtimeCount: 2, hostStartedAt: 1000,
-            delayCallbackMs: 0, connectErrorCode: '',
+            delayCallbackMs: 0, connectErrorCode: '', childDone: null, diagHook: null,
         })
+        state.prelisten.mockReset()
         state.spawn.mockReset().mockImplementation(() => {
             state.callsAtSpawn = state.calls
             expect(state.alive).toBe(false)
@@ -214,6 +220,143 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
         fs.writeFileSync(host.getPidFile(), '54321')
         return host
     }
+
+    it.each(['posix-prefix', 'windows-argv', 'windows-prebuild'] as const)('R4 refuses automatic %s takeover without stopping the existing host', async (fault) => {
+        state.healthyDiagnostics = true
+        const currentEntry = state.currentEntry
+        if (fault !== 'posix-prefix') Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+        if (fault === 'windows-prebuild') {
+            state.currentEntry = path.join(configDir, 'active', 'node_modules', 'adhdev', 'vendor', 'session-host-daemon', 'index.js')
+        } else {
+            state.currentEntry = path.join(configDir, 'removed', 'session-host-daemon', 'index.js')
+        }
+        const host = managed({ resolveEntryOverride: () => fault === 'windows-prebuild' ? state.currentEntry : currentEntry, timeoutMs: 500 })
+        fs.writeFileSync(host.endpoint.path, 'retained endpoint')
+        try {
+            await expect(host.ensureReady()).rejects.toThrow()
+            expect(state.alive).toBe(true)
+            expect(state.spawn).not.toHaveBeenCalled()
+            expect(state.disconnectCount).toBe(0)
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGKILL')
+            expect(fs.readFileSync(host.getPidFile(), 'utf8')).toBe('54321')
+        } finally { fs.rmSync(host.endpoint.path, { force: true }) }
+    })
+
+    it('R4 retains the verified dead pidfile for independent child stale endpoint validation', async () => {
+        state.alive = false
+        state.socketOwners = []
+        state.connectErrorCode = 'ECONNREFUSED'
+        const host = managed({ timeoutMs: 1000 })
+        fs.writeFileSync(host.endpoint.path, 'stale endpoint')
+        state.spawn.mockImplementationOnce(() => {
+            expect(fs.readFileSync(host.getPidFile(), 'utf8')).toBe('54321')
+            const child = new SessionHostServer({
+                endpoint: host.endpoint, instanceConfigDir: configDir,
+                storageRootDir: path.join(configDir, 'child-storage'), pidFilePath: host.getPidFile(),
+                isPidAlive: () => false, getOwnerBirth: () => null, getSocketOwnerPids: () => [],
+            })
+            state.childDone = child.start().then(() => { throw new Error('unexpected listener') }, error => {
+                expect(error.message).toBe('fixture_prelisten_boundary')
+                expect(fs.existsSync(host.endpoint.path)).toBe(false)
+            })
+            state.replaced = true
+            return { pid: 4242, unref() {}, on() {} }
+        })
+        try {
+            await expect(host.ensureReady()).resolves.toEqual(host.endpoint)
+            expect(state.spawn).toHaveBeenCalledTimes(1)
+            expect(state.prelisten).toHaveBeenCalledTimes(1)
+        } finally { fs.rmSync(host.endpoint.path, { force: true }) }
+    })
+
+    it.each(['cold', 'dead-no-socket', 'no-pid-socket', 'null-owner', 'foreign-owner', 'pid-change', 'birth-change', 'inode-change', 'config-change', 'cancel-after-read', 'undefined-callback'] as const)(
+        'R4 child prelisten validates %s with all native and listener effects mocked', async (fault) => {
+        const endpoint = { kind: 'unix' as const, path: path.join(configDir, 'owned-child.sock') }
+        const pidFilePath = path.join(configDir, 'owned-child.pid')
+        if (fault !== 'cold' && fault !== 'no-pid-socket') fs.writeFileSync(pidFilePath, '54321')
+        if (fault !== 'cold' && fault !== 'dead-no-socket') fs.writeFileSync(endpoint.path, 'old endpoint')
+        let ownerReads = 0, birthReads = 0, cancelled = false
+        const child = new SessionHostServer({
+            endpoint, instanceConfigDir: configDir, pidFilePath,
+            storageRootDir: path.join(configDir, 'owned-child-storage'), isPidAlive: () => false,
+            getOwnerBirth: () => fault === 'birth-change' && ++birthReads > 1 ? 'new-birth' : null,
+            getSocketOwnerPids: () => {
+                if (++ownerReads === 2) {
+                    if (fault === 'pid-change') fs.writeFileSync(pidFilePath, '98765')
+                    if (fault === 'inode-change') { fs.renameSync(endpoint.path, endpoint.path + '.old'); fs.writeFileSync(endpoint.path, 'peer endpoint') }
+                    if (fault === 'config-change') fs.chmodSync(configDir, 0o700)
+                    if (fault === 'cancel-after-read') cancelled = true
+                }
+                return fault === 'null-owner' ? null : fault === 'foreign-owner' ? [98765] : []
+            },
+            isCancelled: () => cancelled,
+            ...(fault === 'undefined-callback' ? { replacementProvenance: () => undefined } : {}),
+        })
+        if (fault === 'cold' || fault === 'dead-no-socket') {
+            await expect(child.start()).rejects.toThrow('fixture_prelisten_boundary')
+            expect(state.prelisten).toHaveBeenCalledTimes(1)
+        } else {
+            // mkdtemp starts at 0700, so stage a distinct initial mode for the mode race.
+            if (fault === 'config-change') fs.chmodSync(configDir, 0o750)
+            await expect(child.start()).rejects.toThrow()
+            expect(state.prelisten).not.toHaveBeenCalled()
+            expect(fs.existsSync(endpoint.path)).toBe(true)
+        }
+        expect(state.spawn).not.toHaveBeenCalled()
+        expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+        expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGKILL')
+    })
+
+    it('R4 cancellation during dead-owner native reads refuses before disconnect or spawn', async () => {
+        state.alive = false
+        state.socketOwners = []
+        state.connectErrorCode = 'ECONNREFUSED'
+        let reads = 0, cancelled = false
+        const host = managed({ timeoutMs: 1000,
+            getProcessBirth: () => { if (++reads >= 3) cancelled = true; return null },
+            replacementAuthority: { isCancelled: () => cancelled } as any,
+        })
+        fs.writeFileSync(host.endpoint.path, 'dead endpoint')
+        try {
+            await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+            expect(cancelled).toBe(true)
+            expect(state.disconnectCount).toBe(0)
+            expect(state.spawn).not.toHaveBeenCalled()
+        } finally { fs.rmSync(host.endpoint.path, { force: true }) }
+    })
+
+    it.each(['pid-change', 'config-change', 'endpoint-change', 'prebuild-removed'] as const)('R4 fences %s during the in-flight prefix probe before automatic effects', async (fault) => {
+        state.healthyDiagnostics = true
+        let prebuild = ''
+        if (fault === 'prebuild-removed') {
+            Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+            const prefix = path.join(configDir, 'active')
+            state.currentEntry = path.join(prefix, 'node_modules', 'adhdev', 'vendor', 'session-host-daemon', 'index.js')
+            prebuild = path.join(prefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node')
+            fs.mkdirSync(path.dirname(prebuild), { recursive: true }); fs.writeFileSync(prebuild, 'owned prebuild')
+        }
+        const host = managed({ timeoutMs: 1000 })
+        const endpoint = host.endpoint.path
+        fs.writeFileSync(endpoint, 'retained endpoint')
+        let release!: () => void
+        const paused = new Promise<void>(resolve => { release = resolve })
+        state.diagHook = async () => { state.diagHook = null; await paused }
+        const result = host.ensureReady().then(value => ({ value }), error => ({ error }))
+        await new Promise(resolve => setImmediate(resolve))
+        if (fault === 'pid-change') fs.writeFileSync(host.getPidFile(), '98765')
+        if (fault === 'config-change') { const other = path.join(configDir, 'other'); fs.mkdirSync(other); process.env.ADHDEV_CONFIG_DIR = other }
+        if (fault === 'endpoint-change') { fs.renameSync(endpoint, endpoint + '.old'); fs.writeFileSync(endpoint, 'peer endpoint') }
+        if (fault === 'prebuild-removed') fs.unlinkSync(prebuild)
+        release()
+        try {
+            expect(await result).toHaveProperty('error')
+            expect(state.spawn).not.toHaveBeenCalled()
+            expect(state.disconnectCount).toBe(0)
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(fs.existsSync(endpoint)).toBe(true)
+        } finally { fs.rmSync(endpoint, { force: true }); fs.rmSync(endpoint + '.old', { force: true }) }
+    })
 
     it.each([false, true])('never evicts or disconnects a live host with synthetic PTYs across >=3 timeouts, >=2 calls, >=30s span and 28-31s observer starvation (controller=%s)', async (hasController) => {
         vi.useFakeTimers()
@@ -315,7 +458,7 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
         },
     )
 
-    it('succeeds on explicit authorized idle replacement and escalates to SIGKILL only while PID, instance key, and native birth match', async () => {
+    it('refuses unsupported automatic live replacement even with complete count-zero authority', async () => {
         const host = managed({
             evictGraceMs: 0,
             timeoutMs: 1_000,
@@ -336,10 +479,11 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
             return true
         }) as any)
         try {
-            await expect(host.ensureReady()).resolves.toEqual(host.endpoint)
-            expect(process.kill).toHaveBeenCalledWith(54321, 'SIGTERM')
-            expect(process.kill).toHaveBeenCalledWith(54321, 'SIGKILL')
-            expect(state.spawn).toHaveBeenCalledTimes(1)
+            await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGKILL')
+            expect(state.spawn).not.toHaveBeenCalled()
+            expect(state.disconnectCount).toBe(0)
         } finally {
             fs.rmSync(host.endpoint.path, { force: true })
         }
@@ -373,11 +517,7 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
             }) as any)
             try {
                 await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
-                if (fault === 'active-pty' || fault === 'cancelled-epoch' || fault === 'wrong-instance-auth') {
-                    expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
-                } else {
-                    expect(process.kill).toHaveBeenCalledWith(54321, 'SIGTERM')
-                }
+                expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
                 expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGKILL')
                 expect(state.spawn).not.toHaveBeenCalled()
             } finally {
@@ -464,196 +604,15 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
         }
     })
 
-    it('acquires idle replacement authority via upgrade-lease protocol, verifies upgrade-lease.json, writes private 0o600 provenance file, and refuses on active runtimes or mismatched lease journal', async () => {
-        state.healthyDiagnostics = true
-        state.runtimeCount = 2
-        const host = managed({ evictGraceMs: 0, timeoutMs: 1_000 })
-        fs.writeFileSync(host.endpoint.path, 'protocol-idle-socket')
-
-        try {
-            const leaseToken = 'a'.repeat(64)
-            const tokenHash = createHash('sha256').update(leaseToken).digest('hex')
-            // 1. Refuses to acquire replacement authority while runtimeCount > 0
-            await expect(
-                host.acquireIdleReplacementAuthority({ owner: 'rollout_owner_01', token: leaseToken }),
-            ).rejects.toThrow(/native_host_upgrade_busy/)
-
-            // 2. Acquires complete replacement authority when runtimeCount === 0
-            state.runtimeCount = 0
-            const auth = await host.acquireIdleReplacementAuthority({ owner: 'rollout_owner_01', token: leaseToken })
-            expect(auth).toMatchObject({
-                expectedPid: 54321,
-                expectedBirth: state.birth,
-                expectedInstanceConfigDir: configDir,
-                expectedBootId: 'boot-idle-1',
-                expectedEpoch: 4,
-                expectedOwner: 'rollout_owner_01',
-                expectedTokenHash: tokenHash,
-                activeRuntimeCount: 0,
-            })
-
-            // 3. Authorized replacement writes private 0o600 provenance file while held upgrade-lease.json exists on disk,
-            //    and child SessionHostServer consumes both on-disk files during evictPriorEndpointOwners()
-            state.healthyDiagnostics = false
-            const leaseFileOnDisk = path.join(configDir, 'session-host', 'upgrade-lease.json')
-            expect(fs.existsSync(leaseFileOnDisk)).toBe(true)
-            let provenanceSnapshot: any = null
-            let provenanceMode = 0
-            let childValidatedProvenance: any = null
-            state.spawn.mockImplementationOnce(() => {
-                const provFile = host.getReplacementProvenanceFile()
-                expect(fs.existsSync(provFile)).toBe(true)
-                expect(fs.existsSync(leaseFileOnDisk)).toBe(true)
-                provenanceMode = fs.lstatSync(provFile).mode & 0o777
-                provenanceSnapshot = JSON.parse(fs.readFileSync(provFile, 'utf8'))
-                childValidatedProvenance = readVerifiedReplacementProvenance({
-                    provenanceFile: provFile,
-                    instanceConfigDir: configDir,
-                    appName: path.basename(configDir),
-                    endpointPath: host.endpoint.path,
-                    leaseStateDir: path.join(configDir, 'session-host'),
-                })
-                state.replaced = true
-                return { pid: 4242, unref() {}, on() {} }
-            })
-            const authorizedHost = managed({
-                evictGraceMs: 0,
-                timeoutMs: 1_000,
-                replacementAuthority: () => auth,
-            })
-            await expect(authorizedHost.ensureReady()).resolves.toEqual(host.endpoint)
-            expect(provenanceMode).toBe(0o600)
-            expect(provenanceSnapshot).toMatchObject({
-                schemaVersion: 1,
-                expectedPid: 54321,
-                expectedBirth: state.birth,
-                expectedBootId: 'boot-idle-1',
-                expectedEpoch: 4,
-                expectedOwner: 'rollout_owner_01',
-                expectedTokenHash: tokenHash,
-                activeRuntimeCount: 0,
-            })
-            expect(childValidatedProvenance).toMatchObject({
-                expectedPid: 54321,
-                expectedBirth: state.birth,
-                expectedBootId: 'boot-idle-1',
-                expectedEpoch: 4,
-                expectedOwner: 'rollout_owner_01',
-                expectedTokenHash: tokenHash,
-                activeRuntimeCount: 0,
-            })
-
-            // 3b. Child SessionHostServer.evictPriorEndpointOwners() validates on-disk provenance + held upgrade-lease.json
-            //     even after parent beforeSpawnHost already killed 54321 and unlinked pidfile (liveCandidates.length === 0)
-            fs.writeFileSync(host.endpoint.path, 'stale-authorized-socket', { mode: 0o600 })
-            const staleIno = fs.lstatSync(host.endpoint.path, { bigint: true }).ino
-            const canonicalConfigDir = fs.realpathSync(configDir)
-            const instanceConfigKey = `--instance-config-key=${createHash('sha256').update(canonicalConfigDir).digest('hex')}`
-            fs.writeFileSync(
-                host.getReplacementProvenanceFile(),
-                JSON.stringify({
-                    schema: 1,
-                    schemaVersion: 1,
-                    appName: path.basename(configDir),
-                    instanceConfigDir: canonicalConfigDir,
-                    instanceConfigKey,
-                    endpointPath: host.endpoint.path,
-                    expectedEndpointInode: (staleIno + 99999n).toString(),
-                    expectedPid: 54321,
-                    expectedBirth: state.birth,
-                    expectedBootId: 'boot-idle-1',
-                    expectedEpoch: 4,
-                    expectedOwner: 'rollout_owner_01',
-                    expectedTokenHash: tokenHash,
-                    activeRuntimeCount: 0,
-                    issuedAtMs: Date.now(),
-                }),
-                { mode: 0o600 },
-            )
-            const childServerMismatch = new SessionHostServer({
-                appName: path.basename(configDir),
-                endpoint: host.endpoint,
-                pidFilePath: host.getPidFile(),
-                instanceConfigDir: canonicalConfigDir,
-                isPidAlive: () => false,
-                getSocketOwnerPids: () => [],
-                replacementProvenance: () =>
-                    readVerifiedReplacementProvenance({
-                        provenanceFilePath: host.getReplacementProvenanceFile(),
-                        instanceConfigDir: canonicalConfigDir,
-                        appName: path.basename(configDir),
-                        endpointPath: host.endpoint.path,
-                        leaseStateDir: path.join(configDir, 'session-host'),
-                    }),
-            })
-            await expect(
-                (childServerMismatch as unknown as { evictPriorEndpointOwners: () => Promise<void> }).evictPriorEndpointOwners(),
-            ).rejects.toThrow(/endpoint_inode_mismatch/)
-            expect(fs.existsSync(host.endpoint.path)).toBe(true)
-
-            // Matching inode + held upgrade-lease.json allows child to unlink stale socket when liveCandidates.length === 0
-            fs.writeFileSync(
-                host.getReplacementProvenanceFile(),
-                JSON.stringify({
-                    schema: 1,
-                    schemaVersion: 1,
-                    appName: path.basename(configDir),
-                    instanceConfigDir: canonicalConfigDir,
-                    instanceConfigKey,
-                    endpointPath: host.endpoint.path,
-                    expectedEndpointInode: staleIno.toString(),
-                    expectedPid: 54321,
-                    expectedBirth: state.birth,
-                    expectedBootId: 'boot-idle-1',
-                    expectedEpoch: 4,
-                    expectedOwner: 'rollout_owner_01',
-                    expectedTokenHash: tokenHash,
-                    activeRuntimeCount: 0,
-                    issuedAtMs: Date.now(),
-                }),
-                { mode: 0o600 },
-            )
-            await expect(
-                (childServerMismatch as unknown as { evictPriorEndpointOwners: () => Promise<void> }).evictPriorEndpointOwners(),
-            ).resolves.toBeUndefined()
-            expect(fs.existsSync(host.endpoint.path)).toBe(false)
-            fs.rmSync(host.getReplacementProvenanceFile(), { force: true })
-            fs.writeFileSync(host.endpoint.path, 'protocol-idle-socket')
-            fs.writeFileSync(host.getPidFile(), '54321')
-
-            // 4. Mismatched upgrade-lease.json journal invalidates auth.isCancelled() and refuses replacement
-            state.alive = true
-            state.replaced = false
-            vi.mocked(process.kill).mockClear()
-            const leaseDir = path.join(configDir, 'session-host')
-            fs.mkdirSync(leaseDir, { recursive: true })
-            const leaseFile = path.join(leaseDir, 'upgrade-lease.json')
-            fs.writeFileSync(
-                leaseFile,
-                JSON.stringify({
-                    schema: 1,
-                    endpoint: host.endpoint.path,
-                    epoch: 4,
-                    held: false,
-                    owner: null,
-                    tokenHash: null,
-                }),
-                { mode: 0o600 },
-            )
-            fs.chmodSync(leaseFile, 0o600)
-            expect(auth.isCancelled?.()).toBe(true)
-            const hostWithBrokenLease = managed({
-                evictGraceMs: 0,
-                timeoutMs: 500,
-                replacementAuthority: () => auth,
-            })
-            await expect(hostWithBrokenLease.ensureReady()).rejects.toMatchObject({
-                code: 'session_host_unavailable_transient',
-            })
-            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
-        } finally {
-            fs.rmSync(host.endpoint.path, { force: true })
-        }
+    it('rejects unsupported automatic lease authority before any native RPC acquisition', async () => {
+        const host = managed({ timeoutMs: 1000 })
+        const request = vi.spyOn(SessionHostClient.prototype, 'request')
+        await expect(host.acquireIdleReplacementAuthority({
+            owner: 'fixture_owner', token: 'a'.repeat(64),
+        })).rejects.toThrow('session_host_automatic_live_replacement_unsupported')
+        expect(request).not.toHaveBeenCalled()
+        expect(state.spawn).not.toHaveBeenCalled()
+        expect(state.disconnectCount).toBe(0)
     })
 
     it('treats getSocketOwnerPids() === null (unknown owner) as fail-closed unknown for both dead-pidfile and live replacement paths', async () => {

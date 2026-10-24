@@ -52,15 +52,17 @@ interface SessionHostServerOptions {
     isPidAlive?: (pid: number) => boolean;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
     isManagedOwnerPid?: (pid: number) => boolean;
-    /** Explicit replacement provenance required before evicting any live prior session-host process. */
+    /** Unsupported legacy replacement context; ordinary startup rejects its presence. */
     replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
     /** Optional native birth probe override (`ps -o lstart=`). */
     getOwnerBirth?: (pid: number) => string | null;
     /** Optional unix socket owner PID probe override (`lsof -t`). */
     getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+    /** Cancellation is checked after blocking reads and before startup effects. */
+    isCancelled?: () => boolean;
     /** Optional process command-line probe override (`ps -o args=`). */
     readOwnerArgs?: (pid: number) => string | null;
-    /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
+    /** Legacy option retained for source compatibility; automatic live eviction is unsupported. */
     evictGraceMs?: number;
 }
 declare class SessionHostServer extends EventEmitter {
@@ -72,12 +74,11 @@ declare class SessionHostServer extends EventEmitter {
     private readonly instanceConfigDir;
     private readonly pidFilePath;
     private readonly isPidAliveOverride?;
-    private readonly isManagedOwnerPid?;
-    private readonly replacementProvenance?;
     private readonly getOwnerBirth?;
     private readonly getSocketOwnerPids?;
-    private readonly readOwnerArgs?;
-    private readonly evictGraceMs;
+    private readonly isCancelled?;
+    private startupFence;
+    private readonly hasReplacementContext;
     private restorePending;
     private mutatingRequests;
     private endpointInode;
@@ -95,10 +96,9 @@ declare class SessionHostServer extends EventEmitter {
     private stopPromise;
     constructor(options?: SessionHostServerOptions);
     private isPidAlive;
-    private readProcessArgs;
     private readProcessBirth;
     private readSocketOwnerPids;
-    private isManagedSessionHostPid;
+    private assertNoAutomaticReplacementContext;
     private evictPriorEndpointOwners;
     start(): Promise<void>;
     stop(): Promise<void>;

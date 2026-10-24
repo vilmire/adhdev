@@ -65665,8 +65665,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename34 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename34 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename33 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename33 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -128027,8 +128027,8 @@ ${marker2}`,
           if ((0, import_fs26.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os48 === "win32") {
-          const { dirname: dirname57 } = await import("path");
-          const appDir = dirname57(appPath);
+          const { dirname: dirname56 } = await import("path");
+          const appDir = dirname56(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -131928,17 +131928,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path62.isAbsolute(sessionPath)) return null;
-      const basename34 = path62.basename(sessionPath, ".jsonl");
-      if (!isSafeFilename(basename34)) return null;
+      const basename33 = path62.basename(sessionPath, ".jsonl");
+      if (!isSafeFilename(basename33)) return null;
       if (!fs56.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename34, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename33, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename34,
+        providerSessionId: basename33,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -131947,7 +131947,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename34,
+          providerSessionId: basename33,
           agent: "claude-cli"
         });
       }
@@ -132333,8 +132333,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!fs57.existsSync(sessionPath)) return null;
       const meta = readSessionMeta(sessionPath);
       const metaId = String(meta?.id ?? "").trim();
-      const basename34 = path63.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename34.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename33 = path63.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename33.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -151541,9 +151541,9 @@ ${output}` : "";
       };
       if (meshRecord2.inline) {
         const crypto18 = await import("crypto");
-        const randomUUID48 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
+        const randomUUID47 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
         const node2 = {
-          id: `node_${randomUUID48().replace(/-/g, "")}`,
+          id: `node_${randomUUID47().replace(/-/g, "")}`,
           workspace: fields.workspace,
           repoRoot: fields.repoRoot,
           daemonId: fields.daemonId,
@@ -152301,8 +152301,8 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync61, writeFileSync: writeFileSync51 } = await import("fs");
-          const { dirname: dirname57, join: join139 } = await import("path");
+          const { mkdirSync: mkdirSync61, writeFileSync: writeFileSync50 } = await import("fs");
+          const { dirname: dirname56, join: join139 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -152342,8 +152342,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync61(dirname57(absolutePath), { recursive: true });
-          writeFileSync51(absolutePath, `${scaffoldJson}
+          mkdirSync61(dirname56(absolutePath), { recursive: true });
+          writeFileSync50(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
             success: true,
@@ -152411,8 +152411,8 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync121, readFileSync: readFileSync110, mkdirSync: mkdirSync61, writeFileSync: writeFileSync51 } = await import("fs");
-          const { dirname: dirname57, join: join139 } = await import("path");
+          const { existsSync: existsSync121, readFileSync: readFileSync110, mkdirSync: mkdirSync61, writeFileSync: writeFileSync50 } = await import("fs");
+          const { dirname: dirname56, join: join139 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
@@ -152476,8 +152476,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync61(dirname57(absolutePath), { recursive: true });
-          writeFileSync51(absolutePath, serialized, "utf-8");
+          mkdirSync61(dirname56(absolutePath), { recursive: true });
+          writeFileSync50(absolutePath, serialized, "utf-8");
           return {
             success: true,
             written: true,
@@ -154098,8 +154098,8 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync121, readFileSync: readFileSync110, writeFileSync: writeFileSync51, mkdirSync: mkdirSync61 } = await import("fs");
-          const { dirname: dirname57 } = await import("path");
+          const { existsSync: existsSync121, readFileSync: readFileSync110, writeFileSync: writeFileSync50, mkdirSync: mkdirSync61 } = await import("fs");
+          const { dirname: dirname56 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -154127,7 +154127,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync61(dirname57(mcpConfigPath), { recursive: true });
+              mkdirSync61(dirname56(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
@@ -154166,9 +154166,9 @@ ${ptyResult.output.slice(-2e3)}`);
                   const backupDir = (0, import_path39.join)(getConfigDir2(), "mcp-config-backups");
                   mkdirSync61(backupDir, { recursive: true });
                   const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
-                  writeFileSync51((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
+                  writeFileSync50((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
                 }
-                writeFileSync51(mcpConfigPath, nextMcpConfigText, "utf-8");
+                writeFileSync50(mcpConfigPath, nextMcpConfigText, "utf-8");
               }
             } catch (error) {
               const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
@@ -185837,44 +185837,6 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function getObservedSessionHostIdentity(endpoint) {
       return hostIdentities.get(endpointKey(endpoint));
     }
-    function isValidReplacementAuthorizationShape(auth) {
-      if (!auth || typeof auth !== "object") return false;
-      const candidate = auth;
-      if (candidate.isCancelled !== void 0 && typeof candidate.isCancelled !== "function") return false;
-      if (candidate.isCancelled?.()) return false;
-      if (typeof candidate.activeRuntimeCount !== "number" || !Number.isSafeInteger(candidate.activeRuntimeCount) || candidate.activeRuntimeCount !== 0) {
-        return false;
-      }
-      if (typeof candidate.expectedPid !== "number" || !Number.isSafeInteger(candidate.expectedPid) || candidate.expectedPid <= 0 || candidate.expectedPid === process.pid) {
-        return false;
-      }
-      if (typeof candidate.expectedBirth !== "string") return false;
-      const birth = candidate.expectedBirth.trim();
-      if (!birth || birth === "win32" || birth === "unknown") return false;
-      if (typeof candidate.expectedInstanceConfigDir !== "string" || !candidate.expectedInstanceConfigDir.trim()) {
-        return false;
-      }
-      if (typeof candidate.expectedBootId !== "string" || !candidate.expectedBootId.trim()) {
-        return false;
-      }
-      if (typeof candidate.expectedEpoch !== "number" || !Number.isSafeInteger(candidate.expectedEpoch) || candidate.expectedEpoch < 0) {
-        return false;
-      }
-      if (typeof candidate.expectedOwner !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(candidate.expectedOwner)) {
-        return false;
-      }
-      if (candidate.leaseToken !== void 0 && (typeof candidate.leaseToken !== "string" || !/^[a-f0-9]{64}$/.test(candidate.leaseToken))) {
-        return false;
-      }
-      if (candidate.expectedTokenHash !== void 0 && (typeof candidate.expectedTokenHash !== "string" || !/^[a-f0-9]{64}$/.test(candidate.expectedTokenHash))) {
-        return false;
-      }
-      const canonicalIdentity = `pid-${candidate.expectedPid}:birth-${birth}`;
-      if (candidate.expectedIdentity !== void 0 && candidate.expectedIdentity !== canonicalIdentity) {
-        return false;
-      }
-      return true;
-    }
     function isDiagnosticsRequestTimeoutError(error) {
       if (!error || typeof error !== "object" || isResourceExhaustionError(error)) return false;
       const record6 = error;
@@ -185994,32 +185956,35 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const endpointMayExist = () => endpoint.kind === "pipe" || (options.isExistingSocketPresent ? options.isExistingSocketPresent(endpoint) : isExistingSocketPathPresent(endpoint));
       const resolveHostState = () => {
         if (options.existingHostState) return options.existingHostState();
-        if (options.isExistingHostAlive) return options.isExistingHostAlive() && endpointMayExist() ? "alive" : "dead";
-        return "dead";
+        if (options.isExistingHostAlive?.()) return "alive";
+        return endpointMayExist() ? "unknown" : "dead";
       };
-      const isReplacementAuthorized = () => {
-        const resolveAuth = () => typeof options.replacementAuthority === "function" ? options.replacementAuthority() : options.replacementAuthority;
-        const auth = resolveAuth();
-        if (!isValidReplacementAuthorizationShape(auth)) return false;
-        const canonicalIdentity = `pid-${auth.expectedPid}:birth-${auth.expectedBirth.trim()}`;
-        const currentIdentity = options.existingHostIdentity?.();
-        if (!currentIdentity || currentIdentity !== canonicalIdentity) return false;
-        const observedRuntimeCount = hostRuntimeCounts.get(key4);
-        if (typeof observedRuntimeCount === "number" && observedRuntimeCount > 0) {
-          return false;
-        }
-        if (auth.expectedHostStartedAt !== void 0) {
-          const observed2 = getObservedSessionHostIdentity(endpoint);
-          if (observed2 && observed2.startsWith("started:") && observed2 !== `started:${auth.expectedHostStartedAt}`) {
-            return false;
+      const readGeneration = () => {
+        let endpointIdentity = "missing";
+        if (endpoint.kind === "unix") {
+          try {
+            const stat2 = fs113.lstatSync(endpoint.path, { bigint: true });
+            endpointIdentity = `${stat2.dev}:${stat2.ino}`;
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
           }
         }
-        const postIdentityAuth = resolveAuth();
-        if (!isValidReplacementAuthorizationShape(postIdentityAuth)) return false;
-        if (postIdentityAuth.expectedPid !== auth.expectedPid || postIdentityAuth.expectedBirth.trim() !== auth.expectedBirth.trim()) {
-          return false;
+        return JSON.stringify([
+          options.existingHostGeneration?.(),
+          options.existingHostIdentity?.(),
+          endpointIdentity
+        ]);
+      };
+      const generation = readGeneration();
+      const assertStartAdmission = () => {
+        const state2 = resolveHostState();
+        const currentGeneration = readGeneration();
+        options.assertLifecycleAdmission?.();
+        const source2 = options.replacementAuthority;
+        const legacyContext = typeof source2 === "function" ? source2() : source2;
+        if (state2 !== "dead" || resolveHostState() !== "dead" || currentGeneration !== generation || options.isCancelled?.() || legacyContext?.isCancelled?.()) {
+          throw new SessionHostUnavailableTransientError(endpoint);
         }
-        return true;
       };
       let lastError;
       let proven = false;
@@ -186043,29 +186008,24 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const state2 = options.existingHostState ? options.existingHostState() : options.isExistingHostAlive?.() ? "alive" : "dead";
         if (proven || state2 === "dead" && !isResourceExhaustionError(lastError)) break;
       }
-      const activeReplacement = inFlightReplacements.get(key4);
-      if (activeReplacement) return activeReplacement;
-      const hostState = resolveHostState();
-      const authorizedLiveReplacement = hostState === "alive" && isReplacementAuthorized();
-      if (isResourceExhaustionError(lastError) || remaining() <= 0 || hostState === "unknown" || hostState === "alive" && !authorizedLiveReplacement) {
+      if (isResourceExhaustionError(lastError) || remaining() <= 0) {
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
       }
+      assertStartAdmission();
+      const activeReplacement = inFlightReplacements.get(key4);
+      if (activeReplacement) {
+        if (activeReplacement.generation !== generation) {
+          throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        }
+        return activeReplacement.task;
+      }
       const replacementTask = (async () => {
-        const currentState = resolveHostState();
-        if (currentState === "unknown" || currentState === "alive" && !isReplacementAuthorized()) {
-          throw new SessionHostUnavailableTransientError(endpoint, lastError);
-        }
-        if (!options.beforeSpawnHost || currentState === "dead") {
-          import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
-        }
+        assertStartAdmission();
         await options.beforeSpawnHost?.(endpoint);
-        const postEvictionAuth = !options.beforeSpawnHost ? typeof options.replacementAuthority === "function" ? options.replacementAuthority() : options.replacementAuthority : void 0;
-        if (remaining() <= 0 || currentState === "alive" && !options.beforeSpawnHost && (!isValidReplacementAuthorizationShape(postEvictionAuth) || postEvictionAuth.isCancelled?.())) {
-          throw new SessionHostUnavailableTransientError(endpoint, lastError);
-        }
-        if (currentState === "alive" && options.beforeSpawnHost) {
-          import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
-        }
+        if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        assertStartAdmission();
+        import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
+        assertStartAdmission();
         options.spawnHost();
         probeEvidence2.delete(key4);
         hostRuntimeCounts.delete(key4);
@@ -186081,11 +186041,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
       })();
-      inFlightReplacements.set(key4, replacementTask);
+      inFlightReplacements.set(key4, { generation, task: replacementTask });
       try {
         return await replacementTask;
       } finally {
-        if (inFlightReplacements.get(key4) === replacementTask) {
+        if (inFlightReplacements.get(key4)?.task === replacementTask) {
           inFlightReplacements.delete(key4);
         }
       }
@@ -186138,7 +186098,6 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_cooperative_gate();
     var import_child_process15 = require("child_process");
-    var import_crypto42 = require("crypto");
     init_hidden_spawn();
     var fs114 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
@@ -186190,141 +186149,46 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function getReplacementProvenanceFile() {
         return path106.join(instance().configDir, `${appName}-session-host-replacement.json`);
       }
-      function removeReplacementProvenanceFile() {
-        try {
-          fs114.unlinkSync(getReplacementProvenanceFile());
-        } catch {
-        }
+      function assertManagedHostBridgeAdmission(operation) {
+        assertWorkerBridgeLifecycleAdmission(operation, instance().configDir);
       }
-      function writeReplacementProvenanceFile(params) {
-        const dir = instance().configDir;
-        fs114.mkdirSync(dir, { recursive: true, mode: 448 });
-        const target = getReplacementProvenanceFile();
-        const tmp = `${target}.${(0, import_crypto42.randomUUID)()}.tmp`;
-        const expectedTokenHash = params.auth.expectedTokenHash ?? (params.auth.leaseToken ? (0, import_crypto42.createHash)("sha256").update(params.auth.leaseToken).digest("hex") : void 0);
-        const nowMs2 = Date.now();
-        const payload = {
-          schema: 1,
-          schemaVersion: 1,
-          appName,
-          instanceConfigDir: dir,
-          instanceConfigKey: sessionHostInstanceArg(dir),
-          endpointPath: params.endpoint.path,
-          expectedEndpointInode: params.expectedEndpointInode !== void 0 ? String(params.expectedEndpointInode) : null,
-          expectedPid: params.auth.expectedPid,
-          expectedBirth: params.auth.expectedBirth.trim(),
-          expectedBootId: params.auth.expectedBootId,
-          expectedEpoch: params.auth.expectedEpoch,
-          expectedOwner: params.auth.expectedOwner,
-          expectedTokenHash: expectedTokenHash ?? null,
-          activeRuntimeCount: 0,
-          issuedAt: nowMs2,
-          issuedAtMs: nowMs2
-        };
-        const fd = fs114.openSync(tmp, "wx", 384);
+      function pathIdentity(file) {
         try {
-          fs114.writeFileSync(fd, JSON.stringify(payload), "utf8");
-        } finally {
-          fs114.closeSync(fd);
-        }
-        fs114.renameSync(tmp, target);
-      }
-      let inFlightReplacementAuth;
-      function verifyLeaseJournalForReplacement(endpoint, auth) {
-        const leaseJournal = path106.join(instance().configDir, "session-host", "upgrade-lease.json");
-        if (!fs114.existsSync(leaseJournal)) return true;
-        try {
-          const stat2 = fs114.lstatSync(leaseJournal);
-          if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || (stat2.mode & 63) !== 0 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
-            return false;
-          }
-          const parsed = JSON.parse(fs114.readFileSync(leaseJournal, "utf8"));
-          const canonicalEndpointDir = fs114.existsSync(path106.dirname(endpoint.path)) ? fs114.realpathSync(path106.dirname(endpoint.path)) : path106.resolve(path106.dirname(endpoint.path));
-          const canonicalEndpointPath = path106.join(canonicalEndpointDir, path106.basename(endpoint.path));
-          const leaseEndpointDir = typeof parsed?.endpoint === "string" && fs114.existsSync(path106.dirname(parsed.endpoint)) ? fs114.realpathSync(path106.dirname(parsed.endpoint)) : typeof parsed?.endpoint === "string" ? path106.resolve(path106.dirname(parsed.endpoint)) : "";
-          const leaseEndpointPath = typeof parsed?.endpoint === "string" ? path106.join(leaseEndpointDir, path106.basename(parsed.endpoint)) : "";
-          if (parsed?.schema !== 1 || parsed.held !== true || leaseEndpointPath !== canonicalEndpointPath || parsed.epoch !== auth.expectedEpoch || parsed.owner !== auth.expectedOwner || typeof parsed.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.tokenHash)) {
-            return false;
-          }
-          if (parsed.bootId !== void 0 && parsed.bootId !== auth.expectedBootId) {
-            return false;
-          }
-          if (parsed.pid !== void 0 && parsed.pid !== auth.expectedPid) {
-            return false;
-          }
-          if (parsed.expiresAt !== void 0 && (typeof parsed.expiresAt !== "number" || !Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now())) {
-            return false;
-          }
-          if (auth.expectedTokenHash === void 0 && auth.leaseToken === void 0) {
-            return false;
-          }
-          if (auth.expectedTokenHash !== void 0 && parsed.tokenHash !== auth.expectedTokenHash) {
-            return false;
-          }
-          if (auth.leaseToken !== void 0) {
-            const tokenDigest = (0, import_crypto42.createHash)("sha256").update(auth.leaseToken).digest("hex");
-            if (parsed.tokenHash !== tokenDigest) return false;
-          }
-          return true;
-        } catch {
-          return false;
-        }
-      }
-      function hasNonLeaseStrictBridgeArtifact(configDir) {
-        try {
-          let root = path106.resolve(configDir);
-          let rootStat;
-          try {
-            rootStat = fs114.lstatSync(root);
-          } catch (error) {
-            if (error.code !== "ENOENT") return true;
-          }
-          if (rootStat) {
-            if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return true;
-            root = fs114.realpathSync(root);
-          }
-          for (const name of [
-            "worker-bridge-supervisor.json",
-            "worker-bridge-launchd-exclusion.json",
-            "worker-bridge-lifecycle-fence.json"
-          ]) {
-            try {
-              fs114.lstatSync(path106.join(root, name));
-              return true;
-            } catch (error) {
-              if (error.code !== "ENOENT") return true;
-            }
-          }
-          const ledgerDir = path106.join(root, "mesh-ledger");
-          try {
-            fs114.lstatSync(ledgerDir);
-            return true;
-          } catch (error) {
-            if (error.code !== "ENOENT") return true;
-          }
-          return false;
-        } catch {
-          return true;
-        }
-      }
-      function assertManagedHostBridgeAdmission(operation, authorizedReplacement) {
-        const configDir = instance().configDir;
-        const leaseJournal = path106.join(configDir, "session-host", "upgrade-lease.json");
-        let leaseExists = false;
-        try {
-          fs114.lstatSync(leaseJournal);
-          leaseExists = true;
+          const stat2 = fs114.lstatSync(file, { bigint: true });
+          return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
         } catch (error) {
-          if (error.code !== "ENOENT") {
-            assertWorkerBridgeLifecycleAdmission(operation, configDir);
-            return;
-          }
+          if (error.code === "ENOENT") return "missing";
+          throw error;
         }
-        if (!leaseExists || !authorizedReplacement || authorizedReplacement.isCancelled?.() || !verifyLeaseJournalForReplacement(getEndpoint(), authorizedReplacement) || hasNonLeaseStrictBridgeArtifact(configDir)) {
-          assertWorkerBridgeLifecycleAdmission(operation, configDir);
-          return;
+      }
+      function getExistingHostGeneration() {
+        const context2 = instance();
+        const endpoint = getEndpoint();
+        const pidState = readPidFileState();
+        const pid = pidState.status === "ok" ? pidState.pid : null;
+        return JSON.stringify([
+          context2.configDir,
+          context2.canonicalConfigDir,
+          context2.ipcKey,
+          pathIdentity(context2.configDir),
+          pidState,
+          pid === null ? null : getProcessBirth(pid),
+          pid === null ? false : isPidAlive(pid),
+          endpoint.kind,
+          endpoint.path,
+          pathIdentity(endpoint.path),
+          instance().canonicalConfigDir,
+          readPidFileState()
+        ]);
+      }
+      function assertAutomaticStart(generation, isCancelled, deadline = Infinity) {
+        assertManagedHostBridgeAdmission("session_host_spawn");
+        const state2 = inspectExistingHostState();
+        const currentGeneration = getExistingHostGeneration();
+        assertManagedHostBridgeAdmission("session_host_spawn");
+        if (state2 !== "dead" || generation !== currentGeneration || Date.now() >= deadline || isCancelled?.()) {
+          throw new SessionHostUnavailableTransientError(getEndpoint());
         }
-        assertMaintenanceLifecycle(operation, configDir);
       }
       function readPidFileState() {
         try {
@@ -186333,7 +186197,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const raw = fs114.readFileSync(pidFile, "utf8").trim();
           if (!/^\d+$/.test(raw)) return { status: "corrupt" };
           const pid = Number.parseInt(raw, 10);
-          return Number.isFinite(pid) && pid > 0 ? { status: "ok", pid } : { status: "corrupt" };
+          return Number.isSafeInteger(pid) && pid > 0 ? { status: "ok", pid } : { status: "corrupt" };
         } catch {
           return { status: "corrupt" };
         }
@@ -186373,7 +186237,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const lines = out.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
           if (lines.length === 0) return [];
           if (!lines.every((line) => /^\d+$/.test(line))) return null;
-          return lines.map((line) => Number.parseInt(line, 10)).filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+          const pids = lines.map((line) => Number.parseInt(line, 10));
+          return pids.every((pid) => Number.isSafeInteger(pid) && pid > 0) ? pids : null;
         } catch (error) {
           if (error?.status === 1 && String(error?.stdout ?? "").trim() === "" || error?.message === "no socket owner" && error?.status === void 0 && error?.code === void 0 && error?.signal === void 0) {
             return [];
@@ -186387,6 +186252,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const birth = getProcessBirth(pid);
         return birth ? `pid-${pid}:birth-${birth}` : `pid-${pid}:birth-unknown`;
       }
+      function isKnownDeadPid(pid) {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch (error) {
+          return error.code === "ESRCH";
+        }
+      }
       function inspectExistingHostState() {
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
@@ -186394,30 +186267,30 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return "unknown";
         }
         if (pidState.status === "missing") {
-          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
+          if (fs114.existsSync(endpoint.path)) {
             return "unknown";
           }
           return "dead";
         }
         const existingPid = pidState.pid;
         if (existingPid === process.pid) return "unknown";
-        if (!isPidAlive(existingPid)) {
+        if (isKnownDeadPid(existingPid)) {
           if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
             if (process.platform !== "win32") {
               const owners = getSocketOwnerPids(endpoint.path);
               if (owners === null) {
                 return "unknown";
               }
-              if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+              if (owners.length !== 0) {
                 return "unknown";
               }
             }
           }
           return "dead";
         }
-        if (!canSignalPid(existingPid)) return "unknown";
+        if (!isPidAlive(existingPid) || !canSignalPid(existingPid)) return "unknown";
         const birth = getProcessBirth(existingPid);
-        if (!birth || birth === "win32" || birth === "unknown") return "unknown";
+        if (!birth || birth.toLowerCase() === "win32" || birth.toLowerCase() === "unknown") return "unknown";
         if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
           if (process.platform !== "win32") {
             const owners = getSocketOwnerPids(endpoint.path);
@@ -186482,11 +186355,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         LOG.info("SessionHost", `conpty prebuild verified before spawn at ${found}`);
       }
-      function spawnHost() {
-        const activeReplacementAuth = inFlightReplacementAuth;
-        inFlightReplacementAuth = void 0;
+      function spawnHost(startFence) {
+        assertManagedHostBridgeAdmission("session_host_spawn");
+        const generation = startFence?.generation ?? getExistingHostGeneration();
+        const assertStart = () => assertAutomaticStart(generation, startFence?.isCancelled, startFence?.deadline);
+        assertStart();
         assertMaintenanceLifecycle("session_host_spawn", instance().configDir);
-        assertManagedHostBridgeAdmission("session_host_spawn", activeReplacementAuth);
+        assertManagedHostBridgeAdmission("session_host_spawn");
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
         preflightDiskSpace(instance().configDir, "spawn the session host");
@@ -186495,10 +186370,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         let logFd = null;
         if (options.spawnStdio === "logfile") {
           const logDir = path106.join(instance().configDir, "logs");
+          assertStart();
           fs114.mkdirSync(logDir, { recursive: true });
+          assertStart();
           logFd = fs114.openSync(path106.join(logDir, "session-host.log"), "a");
           stdio = ["ignore", logFd, logFd];
         }
+        assertStart();
         const child = (0, import_child_process15.spawn)(nodeExecutable, [entry, "serve", sessionHostInstanceArg(instance().configDir)], {
           detached: true,
           stdio,
@@ -186563,7 +186441,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         return stopped;
       }
-      async function stopHostRunningFromForeignEntry(deadline, probeInvocation, options2 = {}) {
+      async function checkHostRunningFromForeignEntry(deadline, probeInvocation, options2 = {}) {
         let currentEntry;
         try {
           currentEntry = resolveEntry();
@@ -186617,9 +186495,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (options2.onlyWhenEntryMissing && reportedExists) return;
         LOG.warn(
           "SessionHost",
-          `Reachable session-host reports it is running from ${reported}${reportedExists ? "" : " (which no longer exists)"}, but this install runs from ${currentEntry}. That host would fail every create_session loading node-pty from its own prefix; stopping it so a current one is spawned in its place.`
+          `Reachable session-host reports it is running from ${reported}${reportedExists ? "" : " (which no longer exists)"}, but this install runs from ${currentEntry}. Automatic replacement is unsupported; retaining the existing host.`
         );
-        stopManagedSessionHostProcess();
+        throw new SessionHostUnavailableTransientError(endpoint, new Error("session_host_foreign_entry"));
       }
       async function ensureReady(ensureOptions) {
         const ensureDeadline = Date.now() + timeoutMs;
@@ -186655,350 +186533,57 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             });
           }
         }
+        if (inspectExistingHostState() === "dead") assertManagedHostBridgeAdmission("session_host_spawn");
+        const generation = getExistingHostGeneration();
         options.beforeEnsureReady?.();
         if (process.platform === "win32") {
           const existingPid = getPid();
           if (existingPid !== null) {
             const runningPath = getRunningSessionHostScriptPath(existingPid);
             if (runningPath !== null && !pathsEquivalent(runningPath, resolveEntry())) {
-              LOG.warn("SessionHost", `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${resolveEntry()}`);
-              stopManagedSessionHostProcess();
+              LOG.warn("SessionHost", `Detected host pid ${existingPid} running from ${runningPath}; retaining the existing host`);
+              throw new SessionHostUnavailableTransientError(getEndpoint(), new Error("session_host_foreign_entry"));
             }
           }
         }
         if (process.platform === "win32") {
-          await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation);
+          await checkHostRunningFromForeignEntry(ensureDeadline, probeInvocation);
         } else {
-          await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation, { onlyWhenEntryMissing: true });
+          await checkHostRunningFromForeignEntry(ensureDeadline, probeInvocation, { onlyWhenEntryMissing: true });
         }
-        if (process.platform === "win32") {
-          try {
-            verifyConptyPrebuildBeforeSpawn(resolveEntry());
-          } catch (error) {
-            LOG.warn(
-              "SessionHost",
-              `conpty prebuild missing in the active prefix; a reachable session-host would fail every create_session. Stopping it rather than reusing it: ${error instanceof Error ? error.message : String(error)}`
-            );
-            stopManagedSessionHostProcess();
-          }
-        }
+        if (process.platform === "win32") verifyConptyPrebuildBeforeSpawn(resolveEntry());
         const isExistingHostAlive = () => inspectExistingHostState() === "alive";
-        const resolveRawReplacementAuthority = () => {
+        if (getExistingHostGeneration() !== generation) throw new SessionHostUnavailableTransientError(getEndpoint());
+        const isCancelled = () => {
           const source2 = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
-          return typeof source2 === "function" ? source2() : source2;
+          const auth = typeof source2 === "function" ? source2() : source2;
+          return Boolean(auth?.isCancelled?.());
         };
-        const resolveVerifiedReplacementAuthority = () => {
-          const raw = resolveRawReplacementAuthority();
-          if (!isValidReplacementAuthorizationShape(raw)) return void 0;
-          if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
-            return void 0;
-          }
-          const expectedBirth = raw.expectedBirth.trim();
-          const canonicalIdentity = `pid-${raw.expectedPid}:birth-${expectedBirth}`;
-          const currentPid = getPid();
-          if (currentPid === null || currentPid !== raw.expectedPid) return void 0;
-          if (!isPidAlive(currentPid)) return void 0;
-          if (!canSignalPid(currentPid)) return void 0;
-          const currentBirth = getProcessBirth(currentPid);
-          if (!currentBirth || currentBirth !== expectedBirth) return void 0;
-          const endpoint = getEndpoint();
-          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
-            if (raw.expectedEndpointInode !== void 0) {
-              try {
-                if (fs114.lstatSync(endpoint.path, { bigint: true }).ino !== raw.expectedEndpointInode) {
-                  return void 0;
-                }
-              } catch {
-                return void 0;
-              }
-            }
-            if (process.platform !== "win32") {
-              const owners = getSocketOwnerPids(endpoint.path);
-              if (owners === null) return void 0;
-              if (owners.length > 0 && !owners.includes(currentPid)) return void 0;
-              if (owners.some((ownerPid) => ownerPid !== currentPid && isPidAlive(ownerPid))) return void 0;
-            }
-          }
-          if (!verifyLeaseJournalForReplacement(endpoint, raw)) {
-            return void 0;
-          }
-          const latestRaw = resolveRawReplacementAuthority();
-          if (!isValidReplacementAuthorizationShape(latestRaw) || latestRaw.isCancelled?.()) {
-            return void 0;
-          }
-          if (latestRaw.expectedPid !== raw.expectedPid || latestRaw.expectedBirth.trim() !== expectedBirth || latestRaw.expectedBootId !== raw.expectedBootId || latestRaw.expectedEpoch !== raw.expectedEpoch || latestRaw.expectedOwner !== raw.expectedOwner) {
-            return void 0;
-          }
-          return {
-            ...latestRaw,
-            expectedBirth,
-            expectedIdentity: canonicalIdentity
-          };
+        const beforeSpawnHost = () => {
+          assertAutomaticStart(generation, isCancelled, ensureDeadline);
         };
-        const disconnectEndpointClients = (endpoint) => {
-          import_session_host_core18.SessionHostClient.disconnectClients?.(endpoint);
-        };
-        const evictGraceMs = options.evictGraceMs ?? 4e3;
-        const beforeSpawnHost = async (endpoint) => {
-          inFlightReplacementAuth = void 0;
-          const state2 = inspectExistingHostState();
-          if (state2 === "unknown") {
-            throw new SessionHostUnavailableTransientError(endpoint);
-          }
-          if (state2 === "alive") {
-            const existingPid = getPid();
-            if (existingPid === null || existingPid === process.pid) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            const initialEndpointStat = endpoint.kind === "unix" && fs114.existsSync(endpoint.path) ? (() => {
-              try {
-                const s2 = fs114.lstatSync(endpoint.path, { bigint: true });
-                return { dev: s2.dev, ino: s2.ino };
-              } catch {
-                return null;
-              }
-            })() : null;
-            const cmd = getProcessCommandLine(existingPid);
-            if (!isManagedPid(existingPid) || !isManagedSessionHostCommandLine(cmd, instance().configDir)) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            const initialBirth = getProcessBirth(existingPid);
-            if (!initialBirth) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            const auth = resolveVerifiedReplacementAuthority();
-            if (!auth || auth.expectedPid !== existingPid || auth.expectedBirth !== initialBirth || auth.isCancelled?.() || getPid() !== existingPid) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            if (initialEndpointStat !== null) {
-              try {
-                const currentStat = fs114.lstatSync(endpoint.path, { bigint: true });
-                if (currentStat.dev !== initialEndpointStat.dev || currentStat.ino !== initialEndpointStat.ino) {
-                  throw new SessionHostUnavailableTransientError(endpoint);
-                }
-              } catch {
-                throw new SessionHostUnavailableTransientError(endpoint);
-              }
-            }
-            const preTermAuth = resolveRawReplacementAuthority();
-            if (!isValidReplacementAuthorizationShape(preTermAuth) || preTermAuth.isCancelled?.()) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            assertMaintenanceLifecycle("session_host_kill", instance().configDir);
-            assertManagedHostBridgeAdmission("session_host_stop", auth);
-            writeReplacementProvenanceFile({
-              endpoint,
-              expectedEndpointInode: initialEndpointStat?.ino ?? auth.expectedEndpointInode,
-              auth
-            });
-            disconnectEndpointClients(endpoint);
-            LOG.warn(
-              "SessionHost",
-              `Stopping unresponsive session-host pid ${existingPid} before spawning replacement (endpoint=${endpoint.path}, cmd=${cmd || "unverified"})`
-            );
-            try {
-              if (process.platform === "win32") {
-                hiddenExecFileSync("taskkill", ["/PID", String(existingPid), "/T", "/F"], { stdio: "ignore" });
-              } else {
-                process.kill(existingPid, "SIGTERM");
-              }
-            } catch {
-            }
-            if (!isPidAlive(existingPid)) {
-              const postTermRaw = resolveRawReplacementAuthority();
-              if (!isValidReplacementAuthorizationShape(postTermRaw) || postTermRaw.isCancelled?.()) {
-                removeReplacementProvenanceFile();
-                throw new SessionHostUnavailableTransientError(endpoint);
-              }
-              try {
-                fs114.unlinkSync(getPidFile());
-              } catch {
-              }
-              inFlightReplacementAuth = auth;
-              return;
-            }
-            if (process.platform !== "win32" && isPidAlive(existingPid)) {
-              const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
-              while (Date.now() < deadline && isPidAlive(existingPid)) {
-                const graceBirth = getProcessBirth(existingPid);
-                const graceSignalable = canSignalPid(existingPid);
-                const graceAuth = resolveVerifiedReplacementAuthority();
-                if (!graceAuth || graceAuth.isCancelled?.() || getPid() !== existingPid || graceBirth !== initialBirth || !graceSignalable) {
-                  removeReplacementProvenanceFile();
-                  throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                await new Promise((resolve56) => setTimeout(resolve56, 25));
-              }
-              if (isPidAlive(existingPid)) {
-                const killBirth = getProcessBirth(existingPid);
-                const killSignalable = canSignalPid(existingPid);
-                const killAuth = resolveVerifiedReplacementAuthority();
-                if (!killAuth || killAuth.isCancelled?.() || getPid() !== existingPid || killBirth !== initialBirth || !killSignalable) {
-                  removeReplacementProvenanceFile();
-                  throw new SessionHostUnavailableTransientError(endpoint);
-                }
-                LOG.warn(
-                  "SessionHost",
-                  `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
-                );
-                try {
-                  process.kill(existingPid, "SIGKILL");
-                } catch {
-                }
-              }
-            }
-            if (isPidAlive(existingPid)) {
-              removeReplacementProvenanceFile();
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            const postKillRaw = resolveRawReplacementAuthority();
-            if (!isValidReplacementAuthorizationShape(postKillRaw) || postKillRaw.isCancelled?.()) {
-              removeReplacementProvenanceFile();
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-            try {
-              fs114.unlinkSync(getPidFile());
-            } catch {
-            }
-            inFlightReplacementAuth = auth;
-            return;
-          }
-          const deadPidState = readPidFileState();
-          if (deadPidState.status === "corrupt" || deadPidState.status === "missing" && endpoint.kind === "unix" && fs114.existsSync(endpoint.path) || deadPidState.status === "ok" && isPidAlive(deadPidState.pid)) {
-            throw new SessionHostUnavailableTransientError(endpoint);
-          }
-          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path) && process.platform !== "win32") {
-            const owners = getSocketOwnerPids(endpoint.path);
-            if (owners === null || deadPidState.status === "ok" && owners.some((ownerPid) => ownerPid !== deadPidState.pid && isPidAlive(ownerPid))) {
-              throw new SessionHostUnavailableTransientError(endpoint);
-            }
-          }
-          disconnectEndpointClients(endpoint);
-          if (deadPidState.status === "ok" && !isPidAlive(deadPidState.pid)) {
-            try {
-              fs114.unlinkSync(getPidFile());
-            } catch {
-            }
-          }
-        };
-        try {
-          return await ensureSessionHostReady({
-            appName,
-            probeInvocation,
-            endpoint: getEndpoint(),
-            spawnHost,
-            beforeSpawnHost,
-            onHostReplaced: options.onHostReplaced,
-            isExistingHostAlive,
-            existingHostState: inspectExistingHostState,
-            existingHostIdentity: getExistingHostIdentity,
-            replacementAuthority: resolveVerifiedReplacementAuthority,
-            timeoutMs: Math.max(1, ensureDeadline - Date.now()),
-            requiredRequestTypes: options.requiredRequestTypes
-          });
-        } finally {
-          inFlightReplacementAuth = void 0;
-          removeReplacementProvenanceFile();
-        }
+        return ensureSessionHostReady({
+          appName,
+          probeInvocation,
+          endpoint: getEndpoint(),
+          spawnHost: () => {
+            assertAutomaticStart(generation, isCancelled, ensureDeadline);
+            spawnHost({ generation, isCancelled, deadline: ensureDeadline });
+          },
+          beforeSpawnHost,
+          assertLifecycleAdmission: beforeSpawnHost,
+          onHostReplaced: options.onHostReplaced,
+          isExistingHostAlive,
+          existingHostState: inspectExistingHostState,
+          existingHostIdentity: getExistingHostIdentity,
+          existingHostGeneration: getExistingHostGeneration,
+          isCancelled,
+          timeoutMs: Math.max(1, ensureDeadline - Date.now()),
+          requiredRequestTypes: options.requiredRequestTypes
+        });
       }
-      async function acquireIdleReplacementAuthority(leaseOptions) {
-        if (!leaseOptions || typeof leaseOptions !== "object") {
-          throw new Error("session_host_replacement_authority_invalid");
-        }
-        if (typeof leaseOptions.owner !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(leaseOptions.owner)) {
-          throw new Error("session_host_replacement_owner_invalid");
-        }
-        if (typeof leaseOptions.token !== "string" || !/^[a-f0-9]{64}$/.test(leaseOptions.token)) {
-          throw new Error("session_host_replacement_token_invalid");
-        }
-        if (leaseOptions.isCancelled !== void 0 && typeof leaseOptions.isCancelled !== "function") {
-          throw new Error("session_host_replacement_authority_invalid");
-        }
-        if (leaseOptions.isCancelled?.()) {
-          throw new Error("session_host_replacement_cancelled");
-        }
-        const endpoint = getEndpoint();
-        if (inspectExistingHostState() !== "alive") {
-          throw new Error("session_host_replacement_target_not_verified_alive");
-        }
-        const existingPid = getPid();
-        if (existingPid === null || existingPid === process.pid || !isPidAlive(existingPid) || !canSignalPid(existingPid)) {
-          throw new Error("session_host_replacement_target_not_verified_alive");
-        }
-        const expectedBirth = getProcessBirth(existingPid);
-        if (!expectedBirth || expectedBirth === "win32" || expectedBirth === "unknown") {
-          throw new Error("session_host_replacement_birth_unverified");
-        }
-        const expectedEndpointInode = endpoint.kind === "unix" && fs114.existsSync(endpoint.path) ? fs114.lstatSync(endpoint.path, { bigint: true }).ino : void 0;
-        const rpcBudget = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, leaseOptions.timeoutMs ?? SESSION_HOST_PROBE_TIMEOUT_MS));
-        const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: rpcBudget, registerAsShared: false });
-        try {
-          await client.connect(rpcBudget);
-          const leaseStateResp = await client.request({ type: "get_upgrade_lease", payload: {} }, { timeoutMs: rpcBudget });
-          if (!leaseStateResp.success || !leaseStateResp.result) {
-            throw new Error(leaseStateResp.error || "session_host_upgrade_lease_unavailable");
-          }
-          const proof = leaseStateResp.result;
-          if (proof.pid !== existingPid || proof.endpoint !== endpoint.path || typeof proof.bootId !== "string" || !proof.bootId.trim() || typeof proof.epoch !== "number" || !Number.isSafeInteger(proof.epoch) || proof.epoch < 0) {
-            throw new Error("session_host_upgrade_lease_identity_mismatch");
-          }
-          const acquireResp = await client.request({
-            type: "acquire_upgrade_lease",
-            payload: {
-              bootId: proof.bootId,
-              epoch: proof.epoch,
-              owner: leaseOptions.owner,
-              token: leaseOptions.token
-            }
-          }, { timeoutMs: rpcBudget });
-          if (!acquireResp.success || !acquireResp.result || acquireResp.result.held !== true) {
-            throw new Error(acquireResp.error || "session_host_upgrade_lease_not_acquired");
-          }
-          if (acquireResp.result.pid !== existingPid || acquireResp.result.bootId !== proof.bootId || acquireResp.result.epoch !== proof.epoch || acquireResp.result.owner !== leaseOptions.owner) {
-            throw new Error("session_host_upgrade_lease_identity_mismatch");
-          }
-          const diagResp = await client.request({
-            type: "get_host_diagnostics",
-            payload: { includeSessions: false }
-          }, { timeoutMs: rpcBudget });
-          if (!diagResp.success || !diagResp.result) {
-            throw new Error(diagResp.error || "session_host_diagnostics_unavailable");
-          }
-          recordSessionHostProbeSuccess(endpoint, diagResp.result);
-          if (typeof diagResp.result.runtimeCount !== "number" || diagResp.result.runtimeCount !== 0) {
-            throw new Error("session_host_not_idle");
-          }
-          if (getPid() !== existingPid || !isPidAlive(existingPid) || !canSignalPid(existingPid) || getProcessBirth(existingPid) !== expectedBirth) {
-            throw new Error("session_host_replacement_target_changed");
-          }
-          if (leaseOptions.isCancelled?.()) {
-            throw new Error("session_host_replacement_cancelled");
-          }
-          const expectedTokenHash = (0, import_crypto42.createHash)("sha256").update(leaseOptions.token).digest("hex");
-          const authRecord = {
-            reason: "idle_maintenance_upgrade",
-            expectedIdentity: `pid-${existingPid}:birth-${expectedBirth}`,
-            expectedPid: existingPid,
-            expectedBirth,
-            expectedInstanceConfigDir: instance().configDir,
-            expectedBootId: proof.bootId,
-            expectedEpoch: proof.epoch,
-            expectedOwner: leaseOptions.owner,
-            leaseToken: leaseOptions.token,
-            expectedTokenHash,
-            expectedEndpointInode,
-            expectedHostStartedAt: diagResp.result.hostStartedAt,
-            activeRuntimeCount: 0,
-            isCancelled: () => Boolean(leaseOptions.isCancelled?.()) || !verifyLeaseJournalForReplacement(endpoint, authRecord)
-          };
-          if (!verifyLeaseJournalForReplacement(endpoint, authRecord)) {
-            throw new Error("session_host_upgrade_lease_journal_mismatch");
-          }
-          return authRecord;
-        } finally {
-          await client.close().catch(() => {
-          });
-        }
+      async function acquireIdleReplacementAuthority(_leaseOptions) {
+        throw new Error("session_host_automatic_live_replacement_unsupported");
       }
       return {
         appName,
@@ -188022,7 +187607,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    var import_crypto43 = require("crypto");
+    var import_crypto42 = require("crypto");
     var import_fs50 = require("fs");
     var import_path48 = require("path");
     init_config();
@@ -188084,7 +187669,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto43.randomBytes)(32).toString("hex");
+      return (0, import_crypto42.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -188831,7 +188416,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_publisher();
     init_mesh_record();
     init_worker_bridge_transaction();
-    var import_crypto44 = require("crypto");
+    var import_crypto43 = require("crypto");
     init_dist();
     init_dist();
     init_background_work_guard();
@@ -189357,7 +188942,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto44.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto43.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
