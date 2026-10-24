@@ -15,12 +15,23 @@ import {
   type SessionHostRecord,
 } from '@adhdev/session-host-core';
 import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-artifact.js';
-import { SessionHostServer } from './server.js';
+import {
+  SessionHostServer,
+  isManagedSessionHostCommandLine,
+  sessionHostInstanceArg,
+} from './server.js';
 import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
 
-export { SessionHostServer } from './server.js';
+export {
+  SessionHostServer,
+  isManagedSessionHostCommandLine,
+  sessionHostInstanceArg,
+} from './server.js';
 export { startThreadpoolWatchdog } from './threadpool-watchdog.js';
-export type { SessionHostServerOptions } from './server.js';
+export type {
+  SessionHostReplacementProvenance,
+  SessionHostServerOptions,
+} from './server.js';
 export { resolveGuardianArtifact } from './guardian-artifact.js';
 export type { GuardianArtifactPins } from './guardian-artifact.js';
 export type { HostUpgradeBinding } from './upgrade-lease.js';
@@ -73,17 +84,31 @@ function parseArgs(argv: string[]) {
   const readOnly = rest.includes('--read-only');
   const takeover = rest.includes('--takeover');
   const showAll = rest.includes('--all');
-  const positional = rest.filter((arg) => arg !== '--read-only' && arg !== '--takeover' && arg !== '--all');
+  const instanceKeyArgs = rest.filter((arg) => arg.startsWith('--instance-config-key='));
+  const positional = rest.filter(
+    (arg) =>
+      arg !== '--read-only'
+      && arg !== '--takeover'
+      && arg !== '--all'
+      && !arg.startsWith('--instance-config-key='),
+  );
   return {
     command: command || 'serve',
     positional,
     readOnly,
     takeover,
     showAll,
+    instanceKeyArgs,
   };
 }
 
-async function runServer(): Promise<void> {
+async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
+  if (
+    instanceKeyArgs.length > 1
+    || (instanceKeyArgs.length === 1 && instanceKeyArgs[0] !== sessionHostInstanceArg(INSTANCE_CONFIG_DIR))
+  ) {
+    throw new Error('session_host_instance_config_key_mismatch');
+  }
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
@@ -99,6 +124,7 @@ async function runServer(): Promise<void> {
     upgradeBinding,
     endpoint: getSessionHostEndpoint(),
     storageRootDir: getSessionHostStorageRoot(),
+    instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
   });
   await server.start();
@@ -402,9 +428,9 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
 }
 
 async function main(): Promise<void> {
-  const { command, positional, readOnly, takeover, showAll } = parseArgs(process.argv.slice(2));
+  const { command, positional, readOnly, takeover, showAll, instanceKeyArgs } = parseArgs(process.argv.slice(2));
   if (command === 'serve') {
-    await runServer();
+    await runServer(instanceKeyArgs);
     return;
   }
   if (command === 'list') {

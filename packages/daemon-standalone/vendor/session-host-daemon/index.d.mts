@@ -12,6 +12,16 @@ interface HostUpgradeBinding {
     stateDir: string;
 }
 
+declare function sessionHostInstanceArg(configDir: string): string;
+declare function isManagedSessionHostCommandLine(commandLine: string | null | undefined, configDir?: string): boolean;
+interface SessionHostReplacementProvenance {
+    expectedPid: number;
+    expectedBirth: string;
+    instanceConfigDir?: string;
+    instanceConfigKey?: string;
+    expectedEndpointInode?: bigint;
+    isCancelled?: () => boolean;
+}
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
     /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
@@ -19,10 +29,20 @@ interface SessionHostServerOptions {
     appName?: string;
     /** Explicit session-host state root (runtime records + tombstones). */
     storageRootDir?: string;
+    /** Instance config directory used to verify single matching --instance-config-key on prior owners. */
+    instanceConfigDir?: string;
     /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
     pidFilePath?: string;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
     isManagedOwnerPid?: (pid: number) => boolean;
+    /** Explicit replacement provenance required before evicting any live prior session-host process. */
+    replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
+    /** Optional native birth probe override (`ps -o lstart=`). */
+    getOwnerBirth?: (pid: number) => string | null;
+    /** Optional unix socket owner PID probe override (`lsof -t`). */
+    getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+    /** Optional process command-line probe override (`ps -o args=`). */
+    readOwnerArgs?: (pid: number) => string | null;
     /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
     evictGraceMs?: number;
 }
@@ -32,8 +52,13 @@ declare class SessionHostServer extends EventEmitter {
     private runtimes;
     private readonly storage;
     private readonly upgradeLease;
+    private readonly instanceConfigDir;
     private readonly pidFilePath;
     private readonly isManagedOwnerPid?;
+    private readonly replacementProvenance?;
+    private readonly getOwnerBirth?;
+    private readonly getSocketOwnerPids?;
+    private readonly readOwnerArgs?;
     private readonly evictGraceMs;
     private restorePending;
     private mutatingRequests;
@@ -53,6 +78,8 @@ declare class SessionHostServer extends EventEmitter {
     constructor(options?: SessionHostServerOptions);
     private isPidAlive;
     private readProcessArgs;
+    private readProcessBirth;
+    private readSocketOwnerPids;
     private isManagedSessionHostPid;
     private evictPriorEndpointOwners;
     start(): Promise<void>;
@@ -148,4 +175,4 @@ declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: numbe
     countInWindow: number;
 };
 
-export { type GuardianArtifactPins, type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, resolveGuardianArtifact, startThreadpoolWatchdog };
+export { type GuardianArtifactPins, type HostUpgradeBinding, type SessionHostReplacementProvenance, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, isManagedSessionHostCommandLine, resolveGuardianArtifact, sessionHostInstanceArg, startThreadpoolWatchdog };

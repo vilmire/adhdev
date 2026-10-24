@@ -27,6 +27,7 @@ import {
     recordSessionHostProbeSuccess,
     SessionHostUnavailableTransientError,
     createSessionHostProbeInvocation,
+    type SessionHostReplacementAuthorization,
 } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 import { isPidAlive } from '../system/process-utils.js';
@@ -109,6 +110,15 @@ export interface ManagedSessionHostOptions {
      * caller can immediately reconcile or terminate sessions from the old host.
      */
     onHostReplaced?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
+    /**
+     * Explicit idle-replacement authorization required before evicting any live
+     * managed session-host process.
+     */
+    replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
+    /** Optional process birth probe override (`ps -o lstart=`). */
+    getProcessBirth?: (pid: number) => string | null;
+    /** Optional unix socket owner PID probe override (`lsof -t`). */
+    getSocketOwnerPids?: (endpointPath: string) => number[] | null;
 }
 
 export interface ManagedSessionHost {
@@ -121,7 +131,9 @@ export interface ManagedSessionHost {
     killPid(pid: number): boolean;
     spawnHost(): void;
     stopManagedSessionHostProcess(): boolean;
-    ensureReady(): Promise<SessionHostEndpoint>;
+    ensureReady(ensureOptions?: {
+        replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
+    }): Promise<SessionHostEndpoint>;
     getStatusPaths(): { pidFile: string; endpoint: SessionHostEndpoint };
 }
 
@@ -181,15 +193,70 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return path.join(instance().configDir, `${appName}-session-host.pid`);
     }
 
-    function getPid(): number | null {
+    function readPidFileState(): { status: 'missing' } | { status: 'corrupt' } | { status: 'ok'; pid: number } {
         try {
             const pidFile = getPidFile();
-            if (!fs.existsSync(pidFile)) return null;
-            const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-            return Number.isFinite(pid) ? pid : null;
+            if (!fs.existsSync(pidFile)) return { status: 'missing' };
+            const raw = fs.readFileSync(pidFile, 'utf8').trim();
+            if (!/^\d+$/.test(raw)) return { status: 'corrupt' };
+            const pid = Number.parseInt(raw, 10);
+            return Number.isFinite(pid) && pid > 0 ? { status: 'ok', pid } : { status: 'corrupt' };
+        } catch {
+            return { status: 'corrupt' };
+        }
+    }
+
+    function getPid(): number | null {
+        const state = readPidFileState();
+        return state.status === 'ok' ? state.pid : null;
+    }
+
+    function getProcessBirth(pid: number): string | null {
+        if (options.getProcessBirth) return options.getProcessBirth(pid);
+        if (process.platform === 'win32') return 'win32';
+        try {
+            const out = String(
+                hiddenExecFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+                    encoding: 'utf8',
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                    timeout: 2_000,
+                }),
+            ).trim();
+            return out || null;
         } catch {
             return null;
         }
+    }
+
+    function getSocketOwnerPids(endpointPath: string): number[] | null {
+        if (options.getSocketOwnerPids) return options.getSocketOwnerPids(endpointPath);
+        if (process.platform === 'win32' || !fs.existsSync(endpointPath)) return null;
+        const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : '/usr/bin/lsof';
+        try {
+            const out = String(
+                hiddenExecFileSync(lsofBin, ['-n', '-t', '--', endpointPath], {
+                    encoding: 'utf8',
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                    timeout: 2_000,
+                }),
+            );
+            const lines = out.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+            if (lines.length === 0) return [];
+            if (!lines.every((line) => /^\d+$/.test(line))) return null;
+            return lines
+                .map((line) => Number.parseInt(line, 10))
+                .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+        } catch (error: any) {
+            if (error?.status === 1 && String(error?.stdout ?? '').trim() === '') return [];
+            return null;
+        }
+    }
+
+    function getExistingHostIdentity(): string {
+        const pid = getPid();
+        if (pid === null) return 'unknown';
+        const birth = getProcessBirth(pid);
+        return birth ? `pid-${pid}:birth-${birth}` : `pid-${pid}:birth-unknown`;
     }
 
     function killPid(pid: number): boolean {
@@ -467,21 +534,37 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         const client = new SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported: string | undefined;
         let connected = false;
+        let requestTimeoutMs = probeTimeoutMs;
+        let requestStartMonotonic = 0;
+        let requestStartWall = 0;
         try {
             await client.connect(probeTimeoutMs);
             connected = true;
+            requestTimeoutMs = Math.max(1, probeDeadline - Date.now());
+            requestStartMonotonic = performance.now();
+            requestStartWall = Date.now();
             const response = await client.request<SessionHostDiagnostics>({
                 type: 'get_host_diagnostics',
                 payload: { includeSessions: false },
-            }, { timeoutMs: Math.max(1, probeDeadline - Date.now()) });
+            }, { timeoutMs: requestTimeoutMs });
             recordSessionHostProbeSuccess(endpoint, response.success ? response.result : undefined);
             if (!response.success || !response.result) return;
             const value = response.result.hostEntryPath;
             reported = typeof value === 'string' && value.trim() ? value : undefined;
         } catch (error) {
+            if (connected && error && typeof error === 'object') {
+                const actualElapsedMs = Math.max(0, Math.round(performance.now() - requestStartMonotonic));
+                const wallElapsedMs = Math.max(0, Date.now() - requestStartWall);
+                const observerLagMs = Math.max(0, actualElapsedMs - requestTimeoutMs);
+                const record = error as Record<string, unknown>;
+                if (typeof record.scheduledTimeoutMs !== 'number') record.scheduledTimeoutMs = requestTimeoutMs;
+                if (typeof record.actualElapsedMs !== 'number') record.actualElapsedMs = actualElapsedMs;
+                if (typeof record.wallElapsedMs !== 'number') record.wallElapsedMs = wallElapsedMs;
+                if (typeof record.observerLagMs !== 'number') record.observerLagMs = observerLagMs;
+            }
             // request() disconnects on timeout. Preserve the connected-RPC
             // evidence before ensure probes a fresh connection below.
-            recordSessionHostProbeFailure(endpoint, connected ? error : undefined, String(getPid() ?? 'unknown'), probeInvocation);
+            recordSessionHostProbeFailure(endpoint, connected ? error : undefined, getExistingHostIdentity(), probeInvocation);
             if (isResourceExhaustionError(error)) throw new SessionHostUnavailableTransientError(endpoint, error);
             return;
         } finally {
@@ -505,7 +588,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         stopManagedSessionHostProcess();
     }
 
-    async function ensureReady(): Promise<SessionHostEndpoint> {
+    async function ensureReady(ensureOptions?: {
+        replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
+    }): Promise<SessionHostEndpoint> {
         const ensureDeadline = Date.now() + timeoutMs;
         const probeInvocation = createSessionHostProbeInvocation();
         const maintenance = readCooperativeMaintenance(instance().configDir);
@@ -626,9 +711,67 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             }
         }
 
-        const isExistingHostAlive = (): boolean => {
-            const existingPid = getPid();
-            return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
+        const inspectExistingHostState = (): 'alive' | 'dead' | 'unknown' => {
+            const endpoint = getEndpoint();
+            const pidState = readPidFileState();
+            if (pidState.status === 'corrupt') {
+                return 'unknown';
+            }
+            if (pidState.status === 'missing') {
+                if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path) && !options.extraStop) {
+                    return 'unknown';
+                }
+                return 'dead';
+            }
+            const existingPid = pidState.pid;
+            if (existingPid === process.pid) return 'unknown';
+            if (!isPidAlive(existingPid)) {
+                if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                    const owners = getSocketOwnerPids(endpoint.path);
+                    if (owners && owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+                        return 'unknown';
+                    }
+                }
+                return 'dead';
+            }
+            if (!canSignalPid(existingPid)) return 'unknown';
+            const birth = getProcessBirth(existingPid);
+            if (!birth) return 'unknown';
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                const owners = getSocketOwnerPids(endpoint.path);
+                if (owners !== null) {
+                    if (owners.length > 0 && !owners.includes(existingPid)) return 'unknown';
+                    if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return 'unknown';
+                }
+            }
+            return 'alive';
+        };
+
+        const isExistingHostAlive = (): boolean => inspectExistingHostState() === 'alive';
+
+        const resolveVerifiedReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
+            const source = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
+            const raw = typeof source === 'function' ? source() : source;
+            if (!raw) return undefined;
+            if (raw.isCancelled?.()) return undefined;
+            if (typeof raw.activeRuntimeCount !== 'number' || raw.activeRuntimeCount !== 0) return undefined;
+            if (raw.expectedInstanceConfigDir !== undefined) {
+                if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
+                    return undefined;
+                }
+            }
+            const currentPid = getPid();
+            if (currentPid !== null && raw.expectedPid !== undefined && currentPid !== raw.expectedPid) return undefined;
+            if (currentPid !== null && isPidAlive(currentPid)) {
+                if (!canSignalPid(currentPid)) return undefined;
+                const currentBirth = getProcessBirth(currentPid);
+                if (!currentBirth) return undefined;
+                if (raw.expectedBirth !== undefined && currentBirth !== raw.expectedBirth) return undefined;
+            }
+            return {
+                ...raw,
+                expectedIdentity: raw.expectedIdentity ?? getExistingHostIdentity(),
+            };
         };
 
         const disconnectEndpointClients = (endpoint: SessionHostEndpoint): void => {
@@ -638,9 +781,27 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         const evictGraceMs = options.evictGraceMs ?? 4_000;
 
         const beforeSpawnHost = async (endpoint: SessionHostEndpoint): Promise<void> => {
-            disconnectEndpointClients(endpoint);
-            const existingPid = getPid();
-            if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+            const state = inspectExistingHostState();
+            if (state === 'unknown') {
+                throw new SessionHostUnavailableTransientError(endpoint);
+            }
+            if (state === 'alive') {
+                const auth = resolveVerifiedReplacementAuthority();
+                const existingPid = getPid();
+                if (!auth || existingPid === null || existingPid === process.pid) {
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                const initialBirth = getProcessBirth(existingPid);
+                if (!initialBirth || !canSignalPid(existingPid)) {
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                if (auth.expectedPid !== undefined && auth.expectedPid !== existingPid) {
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                if (auth.expectedBirth !== undefined && auth.expectedBirth !== initialBirth) {
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                disconnectEndpointClients(endpoint);
                 const cmd = getProcessCommandLine(existingPid);
                 LOG.warn(
                     'SessionHost',
@@ -648,12 +809,28 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                         `(endpoint=${endpoint.path}, cmd=${cmd || 'unverified'})`,
                 );
                 stopManagedSessionHostProcess();
-                if (process.platform !== 'win32' && isPidAlive(existingPid) && canSignalPid(existingPid)) {
+                if (process.platform !== 'win32' && isPidAlive(existingPid)) {
                     const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
                     while (Date.now() < deadline && isPidAlive(existingPid)) {
+                        if (
+                            !resolveVerifiedReplacementAuthority()
+                            || getPid() !== existingPid
+                            || getProcessBirth(existingPid) !== initialBirth
+                            || !canSignalPid(existingPid)
+                        ) {
+                            throw new SessionHostUnavailableTransientError(endpoint);
+                        }
                         await new Promise((resolve) => setTimeout(resolve, 25));
                     }
-                    if (isPidAlive(existingPid) && canSignalPid(existingPid)) {
+                    if (isPidAlive(existingPid)) {
+                        if (
+                            !resolveVerifiedReplacementAuthority()
+                            || getPid() !== existingPid
+                            || getProcessBirth(existingPid) !== initialBirth
+                            || !canSignalPid(existingPid)
+                        ) {
+                            throw new SessionHostUnavailableTransientError(endpoint);
+                        }
                         LOG.warn(
                             'SessionHost',
                             `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
@@ -663,7 +840,14 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                     }
                 }
                 if (isPidAlive(existingPid)) throw new SessionHostUnavailableTransientError(endpoint);
-            } else if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                return;
+            }
+            disconnectEndpointClients(endpoint);
+            const deadPid = getPid();
+            if (deadPid !== null && !isPidAlive(deadPid)) {
+                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
+            }
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
                 options.extraStop?.(endpoint);
             }
         };
@@ -676,7 +860,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             beforeSpawnHost,
             onHostReplaced: options.onHostReplaced,
             isExistingHostAlive,
-            existingHostIdentity: () => String(getPid() ?? 'unknown'),
+            existingHostState: inspectExistingHostState,
+            existingHostIdentity: getExistingHostIdentity,
+            replacementAuthority: resolveVerifiedReplacementAuthority,
             timeoutMs: Math.max(1, ensureDeadline - Date.now()),
             requiredRequestTypes: options.requiredRequestTypes,
         });

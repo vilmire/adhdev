@@ -3739,9 +3739,24 @@ var require_dist = __commonJS({
           request
         };
         const timeoutLabel = timeoutMs % 1e3 === 0 ? `${timeoutMs / 1e3}s` : `${timeoutMs}ms`;
+        const startedAt = Date.now();
+        const startedMonotonicAt = performance.now();
         return new Promise((resolve3, reject) => {
           const timeout = setTimeout(() => {
-            const timeoutError = Object.assign(new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`), { code: "SESSION_HOST_REQUEST_TIMEOUT", requestType: request.type });
+            const actualElapsedMs = Math.max(0, Math.round(performance.now() - startedMonotonicAt));
+            const wallElapsedMs = Math.max(0, Date.now() - startedAt);
+            const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+            const timeoutError = Object.assign(
+              new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`),
+              {
+                code: "SESSION_HOST_REQUEST_TIMEOUT",
+                requestType: request.type,
+                scheduledTimeoutMs: timeoutMs,
+                actualElapsedMs,
+                wallElapsedMs,
+                observerLagMs
+              }
+            );
             if (this.socket === socket) {
               this.disconnect(timeoutError);
             } else {
@@ -3831,8 +3846,22 @@ var require_dist = __commonJS({
               reject(error);
             };
             const closed = () => failed(new Error("Session host connection closed before connect"));
+            const connectStartedAt = Date.now();
+            const connectStartedMonotonicAt = performance.now();
             const timer = setTimeout(() => {
-              const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: "SESSION_HOST_CONNECT_TIMEOUT" });
+              const actualElapsedMs = Math.max(0, Math.round(performance.now() - connectStartedMonotonicAt));
+              const wallElapsedMs = Math.max(0, Date.now() - connectStartedAt);
+              const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+              const error = Object.assign(
+                new Error(`Session host connect timed out after ${timeoutMs}ms`),
+                {
+                  code: "SESSION_HOST_CONNECT_TIMEOUT",
+                  scheduledTimeoutMs: timeoutMs,
+                  actualElapsedMs,
+                  wallElapsedMs,
+                  observerLagMs
+                }
+              );
               failed(error);
               if (this.socket === socket) this.disconnect(error);
             }, timeoutMs);
@@ -3874,12 +3903,26 @@ var require_dist = __commonJS({
         const alreadyConnected = this.isConnected() && !this.connectPromise;
         if (options.timeoutMs !== void 0) {
           let timer;
+          const raceStartedAt = Date.now();
+          const raceStartedMonotonicAt = performance.now();
           try {
             await Promise.race([
               this.connect(timeoutMs),
               new Promise((_resolve, reject) => {
                 timer = setTimeout(() => {
-                  const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: "SESSION_HOST_CONNECT_TIMEOUT" });
+                  const actualElapsedMs = Math.max(0, Math.round(performance.now() - raceStartedMonotonicAt));
+                  const wallElapsedMs = Math.max(0, Date.now() - raceStartedAt);
+                  const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+                  const error = Object.assign(
+                    new Error(`Session host connect timed out after ${timeoutMs}ms`),
+                    {
+                      code: "SESSION_HOST_CONNECT_TIMEOUT",
+                      scheduledTimeoutMs: timeoutMs,
+                      actualElapsedMs,
+                      wallElapsedMs,
+                      observerLagMs
+                    }
+                  );
                   reject(error);
                   this.disconnect(error);
                 }, timeoutMs);
@@ -185777,6 +185820,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     var SESSION_HOST_PROBE_TIMEOUT_MS = 3e3;
     var SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS = 3e4;
+    var SESSION_HOST_MAX_OBSERVER_LAG_MS = 1500;
     var UNRESPONSIVE_WINDOW_MS = 9e4;
     var UNRESPONSIVE_TIMEOUT_COUNT = 3;
     var UNRESPONSIVE_INVOCATION_COUNT = 2;
@@ -185786,30 +185830,57 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return ++probeInvocationSequence;
     }
     var hostIdentities = /* @__PURE__ */ new Map();
+    var inFlightReplacements = /* @__PURE__ */ new Map();
     var spawnGeneration = 0;
     var endpointKey = (endpoint) => `${endpoint.kind}:${endpoint.path}`;
     function getObservedSessionHostIdentity(endpoint) {
       return hostIdentities.get(endpointKey(endpoint));
     }
+    function isDiagnosticsRequestTimeoutError(error) {
+      if (!error || typeof error !== "object" || isResourceExhaustionError(error)) return false;
+      const record6 = error;
+      if (typeof record6.code === "string") {
+        return record6.code === "SESSION_HOST_REQUEST_TIMEOUT" && record6.requestType === "get_host_diagnostics";
+      }
+      return error instanceof Error && /Session host request timed out.*get_host_diagnostics/.test(error.message);
+    }
+    function isObserverStarvedTimeout(error) {
+      if (!error || typeof error !== "object") return false;
+      const record6 = error;
+      if (typeof record6.observerLagMs === "number" && record6.observerLagMs > SESSION_HOST_MAX_OBSERVER_LAG_MS) {
+        return true;
+      }
+      if (typeof record6.actualElapsedMs === "number" && typeof record6.scheduledTimeoutMs === "number" && record6.actualElapsedMs - record6.scheduledTimeoutMs > SESSION_HOST_MAX_OBSERVER_LAG_MS) {
+        return true;
+      }
+      return false;
+    }
     function recordSessionHostProbeFailure(endpoint, error, identity2, invocation) {
       const key4 = endpointKey(endpoint);
-      const timedOut = !isResourceExhaustionError(error) && error instanceof Error && /Session host request timed out.*get_host_diagnostics/.test(error.message);
-      if (!timedOut) {
+      if (!isDiagnosticsRequestTimeoutError(error)) {
         probeEvidence2.delete(key4);
         return false;
       }
-      const now = Date.now();
+      if (isObserverStarvedTimeout(error)) {
+        return false;
+      }
+      const wallNow = Date.now();
+      const monotonicNow = performance.now();
       for (const [other, evidence2] of probeEvidence2) {
-        if (now - evidence2.firstAt > UNRESPONSIVE_WINDOW_MS) probeEvidence2.delete(other);
+        if (monotonicNow - evidence2.firstMonotonicAt > UNRESPONSIVE_WINDOW_MS || wallNow - evidence2.firstWallAt > UNRESPONSIVE_WINDOW_MS) {
+          probeEvidence2.delete(other);
+        }
       }
       const prior = probeEvidence2.get(key4);
-      const evidence = prior && prior.identity === identity2 ? prior : { identity: identity2, count: 0, firstAt: now, invocations: /* @__PURE__ */ new Set() };
+      const evidence = prior && prior.identity === identity2 ? prior : { identity: identity2, count: 0, firstWallAt: wallNow, firstMonotonicAt: monotonicNow, invocations: /* @__PURE__ */ new Set() };
       evidence.count++;
       if (invocation !== void 0 && evidence.invocations.size < UNRESPONSIVE_INVOCATION_COUNT) {
         evidence.invocations.add(invocation);
       }
       probeEvidence2.set(key4, evidence);
-      return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT && evidence.invocations.size >= UNRESPONSIVE_INVOCATION_COUNT && now - evidence.firstAt >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS;
+      const monotonicSpanMs = monotonicNow - evidence.firstMonotonicAt;
+      const wallSpanMs = wallNow - evidence.firstWallAt;
+      return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT && evidence.invocations.size >= UNRESPONSIVE_INVOCATION_COUNT && monotonicSpanMs >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS && wallSpanMs >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS;
     }
     function recordSessionHostProbeSuccess(endpoint, diagnostics) {
       probeEvidence2.delete(endpointKey(endpoint));
@@ -185821,13 +185892,19 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const client = new import_session_host_core17.SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
+      let requestTimeoutMs = timeoutMs;
+      let requestStartMonotonic = 0;
+      let requestStartWall = 0;
       try {
         await client.connect(timeoutMs);
         connected = true;
+        requestTimeoutMs = Math.max(1, deadline - Date.now());
+        requestStartMonotonic = performance.now();
+        requestStartWall = Date.now();
         const response = await client.request({
           type: "get_host_diagnostics",
           payload: { includeSessions: false }
-        }, { timeoutMs: Math.max(1, deadline - Date.now()) });
+        }, { timeoutMs: requestTimeoutMs });
         recordSessionHostProbeSuccess(endpoint, response.success ? response.result : void 0);
         if (!response.success) throw new Error(response.error || "Session host diagnostics probe failed");
         const missing = getMissingRequestTypes(response.result, requiredRequestTypes);
@@ -185837,6 +185914,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return { ok: true };
       } catch (error) {
         if (error instanceof SessionHostCompatibilityError) throw error;
+        if (connected && error && typeof error === "object") {
+          const actualElapsedMs = Math.max(0, Math.round(performance.now() - requestStartMonotonic));
+          const wallElapsedMs = Math.max(0, Date.now() - requestStartWall);
+          const observerLagMs = Math.max(0, actualElapsedMs - requestTimeoutMs);
+          const record6 = error;
+          if (typeof record6.scheduledTimeoutMs !== "number") record6.scheduledTimeoutMs = requestTimeoutMs;
+          if (typeof record6.actualElapsedMs !== "number") record6.actualElapsedMs = actualElapsedMs;
+          if (typeof record6.wallElapsedMs !== "number") record6.wallElapsedMs = wallElapsedMs;
+          if (typeof record6.observerLagMs !== "number") record6.observerLagMs = observerLagMs;
+        }
         const proven = recordSessionHostProbeFailure(endpoint, connected ? error : void 0, identity2, invocation);
         return { ok: false, error, proven };
       } finally {
@@ -185846,11 +185933,35 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function ensureSessionHostReady(options) {
       const endpoint = options.endpoint || (0, import_session_host_core17.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const key4 = endpointKey(endpoint);
       const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
       const remaining = () => Math.max(0, deadline - Date.now());
       const required = options.requiredRequestTypes || [];
       const invocation = options.probeInvocation ?? createSessionHostProbeInvocation();
+      const endpointMayExist = () => endpoint.kind === "pipe" || (options.isExistingSocketPresent ? options.isExistingSocketPresent(endpoint) : isExistingSocketPathPresent(endpoint));
+      const resolveHostState = () => {
+        if (options.existingHostState) return options.existingHostState();
+        if (options.isExistingHostAlive) return options.isExistingHostAlive() && endpointMayExist() ? "alive" : "dead";
+        return "dead";
+      };
+      const isReplacementAuthorized = () => {
+        const auth = typeof options.replacementAuthority === "function" ? options.replacementAuthority() : options.replacementAuthority;
+        if (!auth) return false;
+        if (auth.isCancelled?.()) return false;
+        if (typeof auth.activeRuntimeCount !== "number" || auth.activeRuntimeCount !== 0) return false;
+        if (auth.expectedIdentity !== void 0) {
+          const currentIdentity = options.existingHostIdentity?.();
+          if (!currentIdentity || currentIdentity !== auth.expectedIdentity) return false;
+        }
+        if (auth.expectedHostStartedAt !== void 0) {
+          const observed2 = getObservedSessionHostIdentity(endpoint);
+          if (observed2 && observed2.startsWith("started:") && observed2 !== `started:${auth.expectedHostStartedAt}`) {
+            return false;
+          }
+        }
+        return true;
+      };
       let lastError;
       let proven = false;
       const retries = Math.max(0, options.canConnectRetries ?? options.verifyRetries ?? 2);
@@ -185870,29 +185981,48 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (result.ok) return endpoint;
         lastError = result.error;
         proven = result.proven;
-        if (proven || !options.isExistingHostAlive?.() && !isResourceExhaustionError(lastError)) break;
+        const state2 = options.existingHostState ? options.existingHostState() : options.isExistingHostAlive?.() ? "alive" : "dead";
+        if (proven || state2 === "dead" && !isResourceExhaustionError(lastError)) break;
       }
-      const hostAlive = Boolean(options.isExistingHostAlive?.());
-      const endpointMayExist = endpoint.kind === "pipe" || (options.isExistingSocketPresent ? options.isExistingSocketPresent(endpoint) : isExistingSocketPathPresent(endpoint));
-      if (isResourceExhaustionError(lastError) || !proven && hostAlive && endpointMayExist || remaining() <= 0) {
+      const activeReplacement = inFlightReplacements.get(key4);
+      if (activeReplacement) return activeReplacement;
+      const hostState = resolveHostState();
+      const authorizedLiveReplacement = hostState === "alive" && isReplacementAuthorized();
+      if (isResourceExhaustionError(lastError) || remaining() <= 0 || hostState === "unknown" || hostState === "alive" && !authorizedLiveReplacement) {
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
       }
-      import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
-      await options.beforeSpawnHost?.(endpoint);
-      if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
-      options.spawnHost();
-      probeEvidence2.delete(endpointKey(endpoint));
-      hostIdentities.set(endpointKey(endpoint), `spawn:${++spawnGeneration}`);
-      while (remaining() > 0) {
-        const result = await probeHost(endpoint, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));
-        if (result.ok) {
-          await options.onHostReplaced?.(endpoint);
-          return endpoint;
+      const replacementTask = (async () => {
+        if (hostState === "alive" && !isReplacementAuthorized()) {
+          throw new SessionHostUnavailableTransientError(endpoint, lastError);
         }
-        lastError = result.error;
-        await new Promise((resolve56) => setTimeout(resolve56, Math.min(STARTUP_POLL_MS, remaining())));
+        import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
+        await options.beforeSpawnHost?.(endpoint);
+        const postEvictionAuth = typeof options.replacementAuthority === "function" ? options.replacementAuthority() : options.replacementAuthority;
+        if (remaining() <= 0 || hostState === "alive" && (!postEvictionAuth || postEvictionAuth.isCancelled?.())) {
+          throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        }
+        options.spawnHost();
+        probeEvidence2.delete(key4);
+        hostIdentities.set(key4, `spawn:${++spawnGeneration}`);
+        while (remaining() > 0) {
+          const result = await probeHost(endpoint, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));
+          if (result.ok) {
+            await options.onHostReplaced?.(endpoint);
+            return endpoint;
+          }
+          lastError = result.error;
+          await new Promise((resolve56) => setTimeout(resolve56, Math.min(STARTUP_POLL_MS, remaining())));
+        }
+        throw new SessionHostUnavailableTransientError(endpoint, lastError);
+      })();
+      inFlightReplacements.set(key4, replacementTask);
+      try {
+        return await replacementTask;
+      } finally {
+        if (inFlightReplacements.get(key4) === replacementTask) {
+          inFlightReplacements.delete(key4);
+        }
       }
-      throw new SessionHostUnavailableTransientError(endpoint, lastError);
     }
     async function listHostedCliRuntimes(endpoint) {
       const existing = import_session_host_core17.SessionHostClient.findConnectedClient?.(endpoint) ?? null;
@@ -185987,15 +186117,64 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function getPidFile() {
         return path106.join(instance().configDir, `${appName}-session-host.pid`);
       }
-      function getPid() {
+      function readPidFileState() {
         try {
           const pidFile = getPidFile();
-          if (!fs114.existsSync(pidFile)) return null;
-          const pid = Number.parseInt(fs114.readFileSync(pidFile, "utf8").trim(), 10);
-          return Number.isFinite(pid) ? pid : null;
+          if (!fs114.existsSync(pidFile)) return { status: "missing" };
+          const raw = fs114.readFileSync(pidFile, "utf8").trim();
+          if (!/^\d+$/.test(raw)) return { status: "corrupt" };
+          const pid = Number.parseInt(raw, 10);
+          return Number.isFinite(pid) && pid > 0 ? { status: "ok", pid } : { status: "corrupt" };
+        } catch {
+          return { status: "corrupt" };
+        }
+      }
+      function getPid() {
+        const state2 = readPidFileState();
+        return state2.status === "ok" ? state2.pid : null;
+      }
+      function getProcessBirth(pid) {
+        if (options.getProcessBirth) return options.getProcessBirth(pid);
+        if (process.platform === "win32") return "win32";
+        try {
+          const out = String(
+            hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"],
+              timeout: 2e3
+            })
+          ).trim();
+          return out || null;
         } catch {
           return null;
         }
+      }
+      function getSocketOwnerPids(endpointPath) {
+        if (options.getSocketOwnerPids) return options.getSocketOwnerPids(endpointPath);
+        if (process.platform === "win32" || !fs114.existsSync(endpointPath)) return null;
+        const lsofBin = process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof";
+        try {
+          const out = String(
+            hiddenExecFileSync(lsofBin, ["-n", "-t", "--", endpointPath], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"],
+              timeout: 2e3
+            })
+          );
+          const lines = out.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+          if (lines.length === 0) return [];
+          if (!lines.every((line) => /^\d+$/.test(line))) return null;
+          return lines.map((line) => Number.parseInt(line, 10)).filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
+        } catch (error) {
+          if (error?.status === 1 && String(error?.stdout ?? "").trim() === "") return [];
+          return null;
+        }
+      }
+      function getExistingHostIdentity() {
+        const pid = getPid();
+        if (pid === null) return "unknown";
+        const birth = getProcessBirth(pid);
+        return birth ? `pid-${pid}:birth-${birth}` : `pid-${pid}:birth-unknown`;
       }
       function killPid(pid) {
         assertMaintenanceLifecycle("session_host_kill", instance().configDir);
@@ -186141,19 +186320,35 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported;
         let connected = false;
+        let requestTimeoutMs = probeTimeoutMs;
+        let requestStartMonotonic = 0;
+        let requestStartWall = 0;
         try {
           await client.connect(probeTimeoutMs);
           connected = true;
+          requestTimeoutMs = Math.max(1, probeDeadline - Date.now());
+          requestStartMonotonic = performance.now();
+          requestStartWall = Date.now();
           const response = await client.request({
             type: "get_host_diagnostics",
             payload: { includeSessions: false }
-          }, { timeoutMs: Math.max(1, probeDeadline - Date.now()) });
+          }, { timeoutMs: requestTimeoutMs });
           recordSessionHostProbeSuccess(endpoint, response.success ? response.result : void 0);
           if (!response.success || !response.result) return;
           const value = response.result.hostEntryPath;
           reported = typeof value === "string" && value.trim() ? value : void 0;
         } catch (error) {
-          recordSessionHostProbeFailure(endpoint, connected ? error : void 0, String(getPid() ?? "unknown"), probeInvocation);
+          if (connected && error && typeof error === "object") {
+            const actualElapsedMs = Math.max(0, Math.round(performance.now() - requestStartMonotonic));
+            const wallElapsedMs = Math.max(0, Date.now() - requestStartWall);
+            const observerLagMs = Math.max(0, actualElapsedMs - requestTimeoutMs);
+            const record6 = error;
+            if (typeof record6.scheduledTimeoutMs !== "number") record6.scheduledTimeoutMs = requestTimeoutMs;
+            if (typeof record6.actualElapsedMs !== "number") record6.actualElapsedMs = actualElapsedMs;
+            if (typeof record6.wallElapsedMs !== "number") record6.wallElapsedMs = wallElapsedMs;
+            if (typeof record6.observerLagMs !== "number") record6.observerLagMs = observerLagMs;
+          }
+          recordSessionHostProbeFailure(endpoint, connected ? error : void 0, getExistingHostIdentity(), probeInvocation);
           if (isResourceExhaustionError(error)) throw new SessionHostUnavailableTransientError(endpoint, error);
           return;
         } finally {
@@ -186170,7 +186365,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         );
         stopManagedSessionHostProcess();
       }
-      async function ensureReady() {
+      async function ensureReady(ensureOptions) {
         const ensureDeadline = Date.now() + timeoutMs;
         const probeInvocation = createSessionHostProbeInvocation();
         const maintenance = readCooperativeMaintenance2(instance().configDir);
@@ -186231,30 +186426,110 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             stopManagedSessionHostProcess();
           }
         }
-        const isExistingHostAlive = () => {
-          const existingPid = getPid();
-          return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
+        const inspectExistingHostState = () => {
+          const endpoint = getEndpoint();
+          const pidState = readPidFileState();
+          if (pidState.status === "corrupt") {
+            return "unknown";
+          }
+          if (pidState.status === "missing") {
+            if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path) && !options.extraStop) {
+              return "unknown";
+            }
+            return "dead";
+          }
+          const existingPid = pidState.pid;
+          if (existingPid === process.pid) return "unknown";
+          if (!isPidAlive(existingPid)) {
+            if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
+              const owners = getSocketOwnerPids(endpoint.path);
+              if (owners && owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+                return "unknown";
+              }
+            }
+            return "dead";
+          }
+          if (!canSignalPid(existingPid)) return "unknown";
+          const birth = getProcessBirth(existingPid);
+          if (!birth) return "unknown";
+          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
+            const owners = getSocketOwnerPids(endpoint.path);
+            if (owners !== null) {
+              if (owners.length > 0 && !owners.includes(existingPid)) return "unknown";
+              if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return "unknown";
+            }
+          }
+          return "alive";
+        };
+        const isExistingHostAlive = () => inspectExistingHostState() === "alive";
+        const resolveVerifiedReplacementAuthority = () => {
+          const source2 = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
+          const raw = typeof source2 === "function" ? source2() : source2;
+          if (!raw) return void 0;
+          if (raw.isCancelled?.()) return void 0;
+          if (typeof raw.activeRuntimeCount !== "number" || raw.activeRuntimeCount !== 0) return void 0;
+          if (raw.expectedInstanceConfigDir !== void 0) {
+            if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
+              return void 0;
+            }
+          }
+          const currentPid = getPid();
+          if (currentPid !== null && raw.expectedPid !== void 0 && currentPid !== raw.expectedPid) return void 0;
+          if (currentPid !== null && isPidAlive(currentPid)) {
+            if (!canSignalPid(currentPid)) return void 0;
+            const currentBirth = getProcessBirth(currentPid);
+            if (!currentBirth) return void 0;
+            if (raw.expectedBirth !== void 0 && currentBirth !== raw.expectedBirth) return void 0;
+          }
+          return {
+            ...raw,
+            expectedIdentity: raw.expectedIdentity ?? getExistingHostIdentity()
+          };
         };
         const disconnectEndpointClients = (endpoint) => {
           import_session_host_core18.SessionHostClient.disconnectClients?.(endpoint);
         };
         const evictGraceMs = options.evictGraceMs ?? 4e3;
         const beforeSpawnHost = async (endpoint) => {
-          disconnectEndpointClients(endpoint);
-          const existingPid = getPid();
-          if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+          const state2 = inspectExistingHostState();
+          if (state2 === "unknown") {
+            throw new SessionHostUnavailableTransientError(endpoint);
+          }
+          if (state2 === "alive") {
+            const auth = resolveVerifiedReplacementAuthority();
+            const existingPid = getPid();
+            if (!auth || existingPid === null || existingPid === process.pid) {
+              throw new SessionHostUnavailableTransientError(endpoint);
+            }
+            const initialBirth = getProcessBirth(existingPid);
+            if (!initialBirth || !canSignalPid(existingPid)) {
+              throw new SessionHostUnavailableTransientError(endpoint);
+            }
+            if (auth.expectedPid !== void 0 && auth.expectedPid !== existingPid) {
+              throw new SessionHostUnavailableTransientError(endpoint);
+            }
+            if (auth.expectedBirth !== void 0 && auth.expectedBirth !== initialBirth) {
+              throw new SessionHostUnavailableTransientError(endpoint);
+            }
+            disconnectEndpointClients(endpoint);
             const cmd = getProcessCommandLine(existingPid);
             LOG.warn(
               "SessionHost",
               `Stopping unresponsive session-host pid ${existingPid} before spawning replacement (endpoint=${endpoint.path}, cmd=${cmd || "unverified"})`
             );
             stopManagedSessionHostProcess();
-            if (process.platform !== "win32" && isPidAlive(existingPid) && canSignalPid(existingPid)) {
+            if (process.platform !== "win32" && isPidAlive(existingPid)) {
               const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
               while (Date.now() < deadline && isPidAlive(existingPid)) {
+                if (!resolveVerifiedReplacementAuthority() || getPid() !== existingPid || getProcessBirth(existingPid) !== initialBirth || !canSignalPid(existingPid)) {
+                  throw new SessionHostUnavailableTransientError(endpoint);
+                }
                 await new Promise((resolve56) => setTimeout(resolve56, 25));
               }
-              if (isPidAlive(existingPid) && canSignalPid(existingPid)) {
+              if (isPidAlive(existingPid)) {
+                if (!resolveVerifiedReplacementAuthority() || getPid() !== existingPid || getProcessBirth(existingPid) !== initialBirth || !canSignalPid(existingPid)) {
+                  throw new SessionHostUnavailableTransientError(endpoint);
+                }
                 LOG.warn(
                   "SessionHost",
                   `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
@@ -186270,7 +186545,17 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               }
             }
             if (isPidAlive(existingPid)) throw new SessionHostUnavailableTransientError(endpoint);
-          } else if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
+            return;
+          }
+          disconnectEndpointClients(endpoint);
+          const deadPid = getPid();
+          if (deadPid !== null && !isPidAlive(deadPid)) {
+            try {
+              fs114.unlinkSync(getPidFile());
+            } catch {
+            }
+          }
+          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
             options.extraStop?.(endpoint);
           }
         };
@@ -186282,7 +186567,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           beforeSpawnHost,
           onHostReplaced: options.onHostReplaced,
           isExistingHostAlive,
-          existingHostIdentity: () => String(getPid() ?? "unknown"),
+          existingHostState: inspectExistingHostState,
+          existingHostIdentity: getExistingHostIdentity,
+          replacementAuthority: resolveVerifiedReplacementAuthority,
           timeoutMs: Math.max(1, ensureDeadline - Date.now()),
           requiredRequestTypes: options.requiredRequestTypes
         });

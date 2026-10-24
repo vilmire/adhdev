@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -10,6 +11,7 @@ import {
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
   isTerminalRecord,
+  resolveInstanceConfigDir,
 } from '@adhdev/session-host-core';
 import type {
   CreateSessionPayload,
@@ -47,7 +49,18 @@ import {
 
 export const DEFAULT_EVICT_SIGKILL_GRACE_MS = 4_000;
 
-export function isManagedSessionHostCommandLine(commandLine: string | null | undefined): boolean {
+const INSTANCE_ARG_PREFIX = '--instance-config-key=';
+
+export function sessionHostInstanceArg(configDir: string): string {
+  const canonical = resolveInstanceConfigDir({ ADHDEV_CONFIG_DIR: configDir });
+  const digest = createHash('sha256').update(canonical).digest('hex');
+  return `${INSTANCE_ARG_PREFIX}${digest}`;
+}
+
+export function isManagedSessionHostCommandLine(
+  commandLine: string | null | undefined,
+  configDir?: string,
+): boolean {
   if (!commandLine) return false;
   const tokens: string[] = [];
   const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -57,10 +70,20 @@ export function isManagedSessionHostCommandLine(commandLine: string | null | und
   }
   if (tokens.length === 0) return false;
 
+  const instanceTokens = tokens.filter((token) => token.startsWith(INSTANCE_ARG_PREFIX));
+  const matchesInstanceArg = (): boolean => {
+    if (instanceTokens.length !== 1) return false;
+    if (configDir !== undefined) {
+      return instanceTokens[0] === sessionHostInstanceArg(configDir);
+    }
+    return /^--instance-config-key=[0-9a-f]{64}$/.test(instanceTokens[0]);
+  };
+
   const execBase = path.basename(tokens[0].replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
   if (execBase === 'adhdev-sessiond') {
     const subcommand = tokens[1]?.toLowerCase();
-    return !subcommand || subcommand === 'serve';
+    if (subcommand && subcommand !== 'serve' && !subcommand.startsWith('-')) return false;
+    return configDir !== undefined || instanceTokens.length > 0 ? matchesInstanceArg() : true;
   }
   if (execBase !== 'node') return false;
 
@@ -98,7 +121,17 @@ export function isManagedSessionHostCommandLine(commandLine: string | null | und
   if (!isSessionHostEntry) return false;
 
   const subcommand = tokens[idx + 1]?.toLowerCase();
-  return !subcommand || subcommand === 'serve' || subcommand.startsWith('-');
+  if (subcommand && subcommand !== 'serve' && !subcommand.startsWith('-')) return false;
+  return matchesInstanceArg();
+}
+
+export interface SessionHostReplacementProvenance {
+  expectedPid: number;
+  expectedBirth: string;
+  instanceConfigDir?: string;
+  instanceConfigKey?: string;
+  expectedEndpointInode?: bigint;
+  isCancelled?: () => boolean;
 }
 
 export interface SessionHostServerOptions {
@@ -108,10 +141,20 @@ export interface SessionHostServerOptions {
   appName?: string;
   /** Explicit session-host state root (runtime records + tombstones). */
   storageRootDir?: string;
+  /** Instance config directory used to verify single matching --instance-config-key on prior owners. */
+  instanceConfigDir?: string;
   /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
   pidFilePath?: string;
   /** Optional predicate override for testing whether a prior pid is a managed session-host. */
   isManagedOwnerPid?: (pid: number) => boolean;
+  /** Explicit replacement provenance required before evicting any live prior session-host process. */
+  replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
+  /** Optional native birth probe override (`ps -o lstart=`). */
+  getOwnerBirth?: (pid: number) => string | null;
+  /** Optional unix socket owner PID probe override (`lsof -t`). */
+  getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+  /** Optional process command-line probe override (`ps -o args=`). */
+  readOwnerArgs?: (pid: number) => string | null;
   /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
   evictGraceMs?: number;
 }
@@ -122,8 +165,13 @@ export class SessionHostServer extends EventEmitter {
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
   private readonly upgradeLease: HostUpgradeLease | null;
+  private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
   private readonly isManagedOwnerPid?: (pid: number) => boolean;
+  private readonly replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
+  private readonly getOwnerBirth?: (pid: number) => string | null;
+  private readonly getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+  private readonly readOwnerArgs?: (pid: number) => string | null;
   private readonly evictGraceMs: number;
   private restorePending = true;
   private mutatingRequests = 0;
@@ -160,8 +208,13 @@ export class SessionHostServer extends EventEmitter {
     }
     this.upgradeLease = options.upgradeBinding
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
+    this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
     this.isManagedOwnerPid = options.isManagedOwnerPid;
+    this.replacementProvenance = options.replacementProvenance;
+    this.getOwnerBirth = options.getOwnerBirth;
+    this.getSocketOwnerPids = options.getSocketOwnerPids;
+    this.readOwnerArgs = options.readOwnerArgs;
     this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
     this.storage = new SessionHostStorage({
       appName: options.appName || 'adhdev',
@@ -180,6 +233,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   private readProcessArgs(pid: number): string | null {
+    if (this.readOwnerArgs) return this.readOwnerArgs(pid);
     if (process.platform === 'win32') return null;
     try {
       return String(
@@ -195,77 +249,227 @@ export class SessionHostServer extends EventEmitter {
     }
   }
 
-  private isManagedSessionHostPid(pid: number): boolean {
+  private readProcessBirth(pid: number): string | null {
+    if (this.getOwnerBirth) return this.getOwnerBirth(pid);
+    if (process.platform === 'win32') return 'win32';
+    try {
+      return String(
+        execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 2_000,
+          windowsHide: true,
+        }),
+      ).trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private readSocketOwnerPids(): number[] | null {
+    if (this.getSocketOwnerPids) return this.getSocketOwnerPids(this.endpoint.path);
+    if (process.platform === 'win32' || !fs.existsSync(this.endpoint.path)) return [];
+    const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
+    try {
+      // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
+      // which would enumerate every unix-socket process on the machine. Passing only
+      // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
+      const out = String(
+        execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 2_000,
+          windowsHide: true,
+        }),
+      );
+      const pids: number[] = [];
+      for (const line of out.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (!/^\d+$/.test(trimmed)) return null;
+        const pid = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+          pids.push(pid);
+        }
+      }
+      return pids;
+    } catch (error: any) {
+      if (error?.status === 1 && String(error?.stdout ?? '').trim() === '') return [];
+      return null;
+    }
+  }
+
+  private isManagedSessionHostPid(pid: number, configDir?: string): boolean {
     if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
+    if (this.isManagedOwnerPid && !this.readOwnerArgs) return this.isManagedOwnerPid(pid);
     const cmd = this.readProcessArgs(pid);
-    return isManagedSessionHostCommandLine(cmd);
+    if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) return false;
+    return isManagedSessionHostCommandLine(cmd, configDir ?? this.instanceConfigDir ?? undefined);
   }
 
   private async evictPriorEndpointOwners(): Promise<void> {
     if (this.endpoint.kind !== 'unix') return;
+    const initialSocketInode = fs.existsSync(this.endpoint.path)
+      ? fs.lstatSync(this.endpoint.path, { bigint: true }).ino
+      : null;
+
+    let pidFileCandidate: number | null = null;
     const candidatePids = new Set<number>();
     if (this.pidFilePath && fs.existsSync(this.pidFilePath)) {
+      let rawPid = '';
       try {
-        const pid = Number.parseInt(fs.readFileSync(this.pidFilePath, 'utf8').trim(), 10);
-        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-          candidatePids.add(pid);
-        }
+        rawPid = fs.readFileSync(this.pidFilePath, 'utf8').trim();
       } catch {
-        // noop
+        throw new Error('session_host_prior_owner_pidfile_corrupt');
       }
-    }
-    if (process.platform !== 'win32' && fs.existsSync(this.endpoint.path)) {
-      const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
-      try {
-        // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
-        // which would enumerate every unix-socket process on the machine. Passing only
-        // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
-        const out = String(
-          execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            timeout: 2_000,
-            windowsHide: true,
-          }),
-        );
-        for (const line of out.split(/\r?\n/)) {
-          const pid = Number.parseInt(line.trim(), 10);
-          if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-            candidatePids.add(pid);
-          }
-        }
-      } catch {
-        // noop
+      if (!/^\d+$/.test(rawPid)) {
+        throw new Error('session_host_prior_owner_pidfile_corrupt');
+      }
+      const pid = Number.parseInt(rawPid, 10);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        throw new Error('session_host_prior_owner_pidfile_corrupt');
+      }
+      if (pid !== process.pid) {
+        pidFileCandidate = pid;
+        candidatePids.add(pid);
       }
     }
 
-    for (const pid of candidatePids) {
-      if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
-      const cmd = this.readProcessArgs(pid) || 'managed-session-host';
-      this.recordHostLog(
-        'warn',
-        `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd})`,
-      );
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        continue;
+    let socketOwners: number[] | null = [];
+    if (initialSocketInode !== null) {
+      socketOwners = this.readSocketOwnerPids();
+      if (socketOwners === null && pidFileCandidate === null) {
+        throw new Error('session_host_prior_owner_socket_unverified');
       }
-      const deadline = Date.now() + this.evictGraceMs;
-      while (Date.now() < deadline && this.isPidAlive(pid)) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
+      if (socketOwners !== null) {
+        for (const pid of socketOwners) {
+          if (pid !== process.pid) candidatePids.add(pid);
+        }
       }
+    }
+
+    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
+    if (liveCandidates.length > 0) {
+      const provenance = typeof this.replacementProvenance === 'function'
+        ? this.replacementProvenance()
+        : this.replacementProvenance;
+      if (!provenance || provenance.isCancelled?.()) {
+        throw new Error('session_host_live_owner_replacement_unauthorized');
+      }
+      const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? undefined;
+      if (
+        provenance.instanceConfigDir
+        && this.instanceConfigDir
+        && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)
+      ) {
+        throw new Error('session_host_prior_owner_instance_mismatch');
+      }
+      if (
+        provenance.expectedEndpointInode !== undefined
+        && initialSocketInode !== null
+        && provenance.expectedEndpointInode !== initialSocketInode
+      ) {
+        throw new Error('session_host_prior_owner_endpoint_inode_mismatch');
+      }
+
+      const liveSocketOwners = (socketOwners ?? []).filter((pid) => this.isPidAlive(pid));
+      for (const ownerPid of liveSocketOwners) {
+        if (ownerPid !== provenance.expectedPid) {
+          throw new Error('session_host_prior_owner_pid_mismatch');
+        }
+      }
+
+      if (
+        pidFileCandidate !== null
+        && this.isPidAlive(pidFileCandidate)
+        && pidFileCandidate !== provenance.expectedPid
+      ) {
+        if (liveSocketOwners.length === 0 || this.isManagedSessionHostPid(pidFileCandidate, targetConfigDir)) {
+          throw new Error('session_host_prior_owner_pid_mismatch');
+        }
+      }
+
+      const pid = provenance.expectedPid;
       if (this.isPidAlive(pid)) {
+        const cmd = this.readProcessArgs(pid);
+        if (!this.isManagedOwnerPid || this.readOwnerArgs) {
+          if (!cmd) {
+            throw new Error('session_host_prior_owner_command_unreadable');
+          }
+          if (!isManagedSessionHostCommandLine(cmd, targetConfigDir)) {
+            throw new Error('session_host_prior_owner_instance_mismatch');
+          }
+        }
+        if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) {
+          throw new Error('session_host_prior_owner_instance_mismatch');
+        }
+        const birthBeforeTerm = this.readProcessBirth(pid);
+        if (!birthBeforeTerm) {
+          throw new Error('session_host_prior_owner_birth_unreadable');
+        }
+        if (birthBeforeTerm !== provenance.expectedBirth) {
+          throw new Error('session_host_prior_owner_birth_mismatch');
+        }
+
         this.recordHostLog(
           'warn',
-          `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
+          `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd || 'managed-session-host'})`,
         );
         try {
-          process.kill(pid, 'SIGKILL');
+          process.kill(pid, 'SIGTERM');
         } catch {
           // noop
         }
+        const deadline = Date.now() + this.evictGraceMs;
+        while (Date.now() < deadline && this.isPidAlive(pid)) {
+          const currentBirth = this.readProcessBirth(pid);
+          if (!currentBirth || currentBirth !== provenance.expectedBirth) {
+            throw new Error('session_host_prior_owner_birth_mismatch');
+          }
+          if (provenance.isCancelled?.()) {
+            throw new Error('session_host_live_owner_replacement_unauthorized');
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        if (this.isPidAlive(pid)) {
+          const birthBeforeKill = this.readProcessBirth(pid);
+          if (!birthBeforeKill || birthBeforeKill !== provenance.expectedBirth) {
+            throw new Error('session_host_prior_owner_birth_mismatch');
+          }
+          if (provenance.isCancelled?.()) {
+            throw new Error('session_host_live_owner_replacement_unauthorized');
+          }
+          this.recordHostLog(
+            'warn',
+            `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
+          );
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // noop
+          }
+        }
+      }
+    }
+
+    if (initialSocketInode !== null && fs.existsSync(this.endpoint.path)) {
+      let currentInode: bigint;
+      try {
+        currentInode = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+      } catch {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      if (currentInode !== initialSocketInode) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      const remainingOwners = this.readSocketOwnerPids();
+      if (remainingOwners && remainingOwners.some((ownerPid) => this.isPidAlive(ownerPid))) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      try {
+        fs.unlinkSync(this.endpoint.path);
+      } catch {
+        // noop
       }
     }
   }
@@ -281,11 +485,6 @@ export class SessionHostServer extends EventEmitter {
     }
     if (!this.upgradeLease && this.endpoint.kind === 'unix') {
       await this.evictPriorEndpointOwners();
-      try {
-        fs.unlinkSync(this.endpoint.path);
-      } catch {
-        // noop
-      }
     }
 
     this.ipcServer = net.createServer((socket) => {

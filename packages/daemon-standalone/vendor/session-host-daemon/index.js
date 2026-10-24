@@ -33,11 +33,13 @@ var index_exports = {};
 __export(index_exports, {
   SessionHostServer: () => SessionHostServer,
   createUncaughtExceptionLimiter: () => createUncaughtExceptionLimiter,
+  isManagedSessionHostCommandLine: () => isManagedSessionHostCommandLine,
   resolveGuardianArtifact: () => resolveGuardianArtifact,
+  sessionHostInstanceArg: () => sessionHostInstanceArg,
   startThreadpoolWatchdog: () => startThreadpoolWatchdog
 });
 module.exports = __toCommonJS(index_exports);
-var import_crypto = require("crypto");
+var import_crypto2 = require("crypto");
 var fs7 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
 var import_session_host_core6 = require("@adhdev/session-host-core");
@@ -77,6 +79,7 @@ function resolveGuardianArtifact(pins) {
 
 // src/server.ts
 var import_child_process = require("child_process");
+var import_crypto = require("crypto");
 var import_events = require("events");
 var fs5 = __toESM(require("fs"));
 var net = __toESM(require("net"));
@@ -953,7 +956,13 @@ function withReplayResyncPreamble(text, sinceSeq) {
 
 // src/server.ts
 var DEFAULT_EVICT_SIGKILL_GRACE_MS = 4e3;
-function isManagedSessionHostCommandLine(commandLine) {
+var INSTANCE_ARG_PREFIX = "--instance-config-key=";
+function sessionHostInstanceArg(configDir) {
+  const canonical = (0, import_session_host_core5.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: configDir });
+  const digest2 = (0, import_crypto.createHash)("sha256").update(canonical).digest("hex");
+  return `${INSTANCE_ARG_PREFIX}${digest2}`;
+}
+function isManagedSessionHostCommandLine(commandLine, configDir) {
   if (!commandLine) return false;
   const tokens = [];
   const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -962,10 +971,19 @@ function isManagedSessionHostCommandLine(commandLine) {
     tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
   }
   if (tokens.length === 0) return false;
+  const instanceTokens = tokens.filter((token) => token.startsWith(INSTANCE_ARG_PREFIX));
+  const matchesInstanceArg = () => {
+    if (instanceTokens.length !== 1) return false;
+    if (configDir !== void 0) {
+      return instanceTokens[0] === sessionHostInstanceArg(configDir);
+    }
+    return /^--instance-config-key=[0-9a-f]{64}$/.test(instanceTokens[0]);
+  };
   const execBase = path5.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
   if (execBase === "adhdev-sessiond") {
     const subcommand2 = tokens[1]?.toLowerCase();
-    return !subcommand2 || subcommand2 === "serve";
+    if (subcommand2 && subcommand2 !== "serve" && !subcommand2.startsWith("-")) return false;
+    return configDir !== void 0 || instanceTokens.length > 0 ? matchesInstanceArg() : true;
   }
   if (execBase !== "node") return false;
   const valueFlags = /* @__PURE__ */ new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C"]);
@@ -995,7 +1013,8 @@ function isManagedSessionHostCommandLine(commandLine) {
   const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path5.basename(normalizedScript) === "adhdev-sessiond";
   if (!isSessionHostEntry) return false;
   const subcommand = tokens[idx + 1]?.toLowerCase();
-  return !subcommand || subcommand === "serve" || subcommand.startsWith("-");
+  if (subcommand && subcommand !== "serve" && !subcommand.startsWith("-")) return false;
+  return matchesInstanceArg();
 }
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
@@ -1003,8 +1022,13 @@ var SessionHostServer = class extends import_events.EventEmitter {
   runtimes = /* @__PURE__ */ new Map();
   storage;
   upgradeLease;
+  instanceConfigDir;
   pidFilePath;
   isManagedOwnerPid;
+  replacementProvenance;
+  getOwnerBirth;
+  getSocketOwnerPids;
+  readOwnerArgs;
   evictGraceMs;
   restorePending = true;
   mutatingRequests = 0;
@@ -1038,8 +1062,13 @@ var SessionHostServer = class extends import_events.EventEmitter {
       }
     }
     this.upgradeLease = options.upgradeBinding ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
+    this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
     this.isManagedOwnerPid = options.isManagedOwnerPid;
+    this.replacementProvenance = options.replacementProvenance;
+    this.getOwnerBirth = options.getOwnerBirth;
+    this.getSocketOwnerPids = options.getSocketOwnerPids;
+    this.readOwnerArgs = options.readOwnerArgs;
     this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
     this.storage = new SessionHostStorage({
       appName: options.appName || "adhdev",
@@ -1056,6 +1085,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
   }
   readProcessArgs(pid) {
+    if (this.readOwnerArgs) return this.readOwnerArgs(pid);
     if (process.platform === "win32") return null;
     try {
       return String(
@@ -1070,69 +1100,194 @@ var SessionHostServer = class extends import_events.EventEmitter {
       return null;
     }
   }
-  isManagedSessionHostPid(pid) {
+  readProcessBirth(pid) {
+    if (this.getOwnerBirth) return this.getOwnerBirth(pid);
+    if (process.platform === "win32") return "win32";
+    try {
+      return String(
+        (0, import_child_process.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 2e3,
+          windowsHide: true
+        })
+      ).trim() || null;
+    } catch {
+      return null;
+    }
+  }
+  readSocketOwnerPids() {
+    if (this.getSocketOwnerPids) return this.getSocketOwnerPids(this.endpoint.path);
+    if (process.platform === "win32" || !fs5.existsSync(this.endpoint.path)) return [];
+    const lsofBin = process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof";
+    try {
+      const out = String(
+        (0, import_child_process.execFileSync)(lsofBin, ["-n", "-t", "--", this.endpoint.path], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 2e3,
+          windowsHide: true
+        })
+      );
+      const pids = [];
+      for (const line of out.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (!/^\d+$/.test(trimmed)) return null;
+        const pid = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+          pids.push(pid);
+        }
+      }
+      return pids;
+    } catch (error) {
+      if (error?.status === 1 && String(error?.stdout ?? "").trim() === "") return [];
+      return null;
+    }
+  }
+  isManagedSessionHostPid(pid, configDir) {
     if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
+    if (this.isManagedOwnerPid && !this.readOwnerArgs) return this.isManagedOwnerPid(pid);
     const cmd = this.readProcessArgs(pid);
-    return isManagedSessionHostCommandLine(cmd);
+    if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) return false;
+    return isManagedSessionHostCommandLine(cmd, configDir ?? this.instanceConfigDir ?? void 0);
   }
   async evictPriorEndpointOwners() {
     if (this.endpoint.kind !== "unix") return;
+    const initialSocketInode = fs5.existsSync(this.endpoint.path) ? fs5.lstatSync(this.endpoint.path, { bigint: true }).ino : null;
+    let pidFileCandidate = null;
     const candidatePids = /* @__PURE__ */ new Set();
     if (this.pidFilePath && fs5.existsSync(this.pidFilePath)) {
+      let rawPid = "";
       try {
-        const pid = Number.parseInt(fs5.readFileSync(this.pidFilePath, "utf8").trim(), 10);
-        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-          candidatePids.add(pid);
-        }
+        rawPid = fs5.readFileSync(this.pidFilePath, "utf8").trim();
       } catch {
+        throw new Error("session_host_prior_owner_pidfile_corrupt");
+      }
+      if (!/^\d+$/.test(rawPid)) {
+        throw new Error("session_host_prior_owner_pidfile_corrupt");
+      }
+      const pid = Number.parseInt(rawPid, 10);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        throw new Error("session_host_prior_owner_pidfile_corrupt");
+      }
+      if (pid !== process.pid) {
+        pidFileCandidate = pid;
+        candidatePids.add(pid);
       }
     }
-    if (process.platform !== "win32" && fs5.existsSync(this.endpoint.path)) {
-      const lsofBin = process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof";
-      try {
-        const out = String(
-          (0, import_child_process.execFileSync)(lsofBin, ["-n", "-t", "--", this.endpoint.path], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-            timeout: 2e3,
-            windowsHide: true
-          })
-        );
-        for (const line of out.split(/\r?\n/)) {
-          const pid = Number.parseInt(line.trim(), 10);
-          if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-            candidatePids.add(pid);
+    let socketOwners = [];
+    if (initialSocketInode !== null) {
+      socketOwners = this.readSocketOwnerPids();
+      if (socketOwners === null && pidFileCandidate === null) {
+        throw new Error("session_host_prior_owner_socket_unverified");
+      }
+      if (socketOwners !== null) {
+        for (const pid of socketOwners) {
+          if (pid !== process.pid) candidatePids.add(pid);
+        }
+      }
+    }
+    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
+    if (liveCandidates.length > 0) {
+      const provenance = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
+      if (!provenance || provenance.isCancelled?.()) {
+        throw new Error("session_host_live_owner_replacement_unauthorized");
+      }
+      const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? void 0;
+      if (provenance.instanceConfigDir && this.instanceConfigDir && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)) {
+        throw new Error("session_host_prior_owner_instance_mismatch");
+      }
+      if (provenance.expectedEndpointInode !== void 0 && initialSocketInode !== null && provenance.expectedEndpointInode !== initialSocketInode) {
+        throw new Error("session_host_prior_owner_endpoint_inode_mismatch");
+      }
+      const liveSocketOwners = (socketOwners ?? []).filter((pid2) => this.isPidAlive(pid2));
+      for (const ownerPid of liveSocketOwners) {
+        if (ownerPid !== provenance.expectedPid) {
+          throw new Error("session_host_prior_owner_pid_mismatch");
+        }
+      }
+      if (pidFileCandidate !== null && this.isPidAlive(pidFileCandidate) && pidFileCandidate !== provenance.expectedPid) {
+        if (liveSocketOwners.length === 0 || this.isManagedSessionHostPid(pidFileCandidate, targetConfigDir)) {
+          throw new Error("session_host_prior_owner_pid_mismatch");
+        }
+      }
+      const pid = provenance.expectedPid;
+      if (this.isPidAlive(pid)) {
+        const cmd = this.readProcessArgs(pid);
+        if (!this.isManagedOwnerPid || this.readOwnerArgs) {
+          if (!cmd) {
+            throw new Error("session_host_prior_owner_command_unreadable");
+          }
+          if (!isManagedSessionHostCommandLine(cmd, targetConfigDir)) {
+            throw new Error("session_host_prior_owner_instance_mismatch");
           }
         }
-      } catch {
-      }
-    }
-    for (const pid of candidatePids) {
-      if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
-      const cmd = this.readProcessArgs(pid) || "managed-session-host";
-      this.recordHostLog(
-        "warn",
-        `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd})`
-      );
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        continue;
-      }
-      const deadline = Date.now() + this.evictGraceMs;
-      while (Date.now() < deadline && this.isPidAlive(pid)) {
-        await new Promise((resolve3) => setTimeout(resolve3, 25));
-      }
-      if (this.isPidAlive(pid)) {
+        if (this.isManagedOwnerPid && !this.isManagedOwnerPid(pid)) {
+          throw new Error("session_host_prior_owner_instance_mismatch");
+        }
+        const birthBeforeTerm = this.readProcessBirth(pid);
+        if (!birthBeforeTerm) {
+          throw new Error("session_host_prior_owner_birth_unreadable");
+        }
+        if (birthBeforeTerm !== provenance.expectedBirth) {
+          throw new Error("session_host_prior_owner_birth_mismatch");
+        }
         this.recordHostLog(
           "warn",
-          `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
+          `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd || "managed-session-host"})`
         );
         try {
-          process.kill(pid, "SIGKILL");
+          process.kill(pid, "SIGTERM");
         } catch {
         }
+        const deadline = Date.now() + this.evictGraceMs;
+        while (Date.now() < deadline && this.isPidAlive(pid)) {
+          const currentBirth = this.readProcessBirth(pid);
+          if (!currentBirth || currentBirth !== provenance.expectedBirth) {
+            throw new Error("session_host_prior_owner_birth_mismatch");
+          }
+          if (provenance.isCancelled?.()) {
+            throw new Error("session_host_live_owner_replacement_unauthorized");
+          }
+          await new Promise((resolve3) => setTimeout(resolve3, 25));
+        }
+        if (this.isPidAlive(pid)) {
+          const birthBeforeKill = this.readProcessBirth(pid);
+          if (!birthBeforeKill || birthBeforeKill !== provenance.expectedBirth) {
+            throw new Error("session_host_prior_owner_birth_mismatch");
+          }
+          if (provenance.isCancelled?.()) {
+            throw new Error("session_host_live_owner_replacement_unauthorized");
+          }
+          this.recordHostLog(
+            "warn",
+            `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
+          );
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+          }
+        }
+      }
+    }
+    if (initialSocketInode !== null && fs5.existsSync(this.endpoint.path)) {
+      let currentInode;
+      try {
+        currentInode = fs5.lstatSync(this.endpoint.path, { bigint: true }).ino;
+      } catch {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      if (currentInode !== initialSocketInode) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      const remainingOwners = this.readSocketOwnerPids();
+      if (remainingOwners && remainingOwners.some((ownerPid) => this.isPidAlive(ownerPid))) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      try {
+        fs5.unlinkSync(this.endpoint.path);
+      } catch {
       }
     }
   }
@@ -1146,10 +1301,6 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     if (!this.upgradeLease && this.endpoint.kind === "unix") {
       await this.evictPriorEndpointOwners();
-      try {
-        fs5.unlinkSync(this.endpoint.path);
-      } catch {
-      }
     }
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
@@ -2029,16 +2180,23 @@ function parseArgs(argv) {
   const readOnly = rest.includes("--read-only");
   const takeover = rest.includes("--takeover");
   const showAll = rest.includes("--all");
-  const positional = rest.filter((arg) => arg !== "--read-only" && arg !== "--takeover" && arg !== "--all");
+  const instanceKeyArgs = rest.filter((arg) => arg.startsWith("--instance-config-key="));
+  const positional = rest.filter(
+    (arg) => arg !== "--read-only" && arg !== "--takeover" && arg !== "--all" && !arg.startsWith("--instance-config-key=")
+  );
   return {
     command: command || "serve",
     positional,
     readOnly,
     takeover,
-    showAll
+    showAll,
+    instanceKeyArgs
   };
 }
-async function runServer() {
+async function runServer(instanceKeyArgs = []) {
+  if (instanceKeyArgs.length > 1 || instanceKeyArgs.length === 1 && instanceKeyArgs[0] !== sessionHostInstanceArg(INSTANCE_CONFIG_DIR)) {
+    throw new Error("session_host_instance_config_key_mismatch");
+  }
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
@@ -2053,6 +2211,7 @@ async function runServer() {
     upgradeBinding,
     endpoint: getSessionHostEndpoint(),
     storageRootDir: getSessionHostStorageRoot(),
+    instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME)
   });
   await server.start();
@@ -2123,7 +2282,7 @@ async function listRuntimes(showAll = false) {
 }
 async function attachRuntime(target, readOnly = false, takeover = false) {
   const client = new import_session_host_core6.SessionHostClient({ endpoint: getSessionHostEndpoint() });
-  const clientId = `local-terminal-${process.pid}-${(0, import_crypto.randomUUID)().slice(0, 8)}`;
+  const clientId = `local-terminal-${process.pid}-${(0, import_crypto2.randomUUID)().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
   let runtimeId = "";
@@ -2338,9 +2497,9 @@ async function attachRuntime(target, readOnly = false, takeover = false) {
   }
 }
 async function main() {
-  const { command, positional, readOnly, takeover, showAll } = parseArgs(process.argv.slice(2));
+  const { command, positional, readOnly, takeover, showAll, instanceKeyArgs } = parseArgs(process.argv.slice(2));
   if (command === "serve") {
-    await runServer();
+    await runServer(instanceKeyArgs);
     return;
   }
   if (command === "list") {
@@ -2424,7 +2583,9 @@ ${err?.stack || ""}`);
 0 && (module.exports = {
   SessionHostServer,
   createUncaughtExceptionLimiter,
+  isManagedSessionHostCommandLine,
   resolveGuardianArtifact,
+  sessionHostInstanceArg,
   startThreadpoolWatchdog
 });
 //# sourceMappingURL=index.js.map
