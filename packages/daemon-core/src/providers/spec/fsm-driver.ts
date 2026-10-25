@@ -834,14 +834,11 @@ export class FsmDriver implements ISpecDriver {
         const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
 
-        // Modal states (approval / picker) extract their buttons + title from the
-        // cursor-bound live modal region so neither scrolled-off history nor a quoted
-        // modal above an active/idle composer is extracted as live. The region is
-        // resolved in the same scrollback-extended guard frame the transition guards
-        // use: a tall modal (big diff, long command) pushes its header and command line
-        // above the viewport, and a viewport-only read reduced the title to the footer
-        // ("Press enter to confirm…") — a non-actionable push and an approval key that
-        // no longer distinguished one command from the next.
+        // Modal states extract buttons + title from the cursor-bound live modal region
+        // (never scrolled-off history or a quoted modal above a composer), resolved in
+        // the same scrollback-extended guard frame the transition guards use: a tall
+        // modal's header and command line sit above the viewport, and a viewport-only
+        // read reduced the title to its footer (non-actionable push, ambiguous key).
         const cursor = this.adapter.getCursorPosition();
         const guard = state.modal ? this.guardFrame(screen, cursor) : null;
         const modalLines = guard ? guard.lines : lines;

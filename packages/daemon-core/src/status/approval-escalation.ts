@@ -164,7 +164,8 @@ function buildEscalatedEvent(
     delete rebuilt.modalKey;
     delete rebuilt.approvalEvidence;
 
-    if (approval) {
+    // A resolved or stale record is not this episode: never lend its key or evidence.
+    if (approval && approval.lifecycle === 'pending' && approval.resolvedAt == null) {
         const modalKey = typeof approval.modalKey === 'string' ? approval.modalKey.trim() : '';
         if (modalKey) {
             rebuilt.modalKey = modalKey;

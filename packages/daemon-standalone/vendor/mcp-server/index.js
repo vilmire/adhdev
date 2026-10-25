@@ -177954,9 +177954,10 @@ ${buttons.join("\n")}`;
               `approval_request:${now}`,
               now
             );
-            const approvalModalKey = adapterStatus?.providerApproval?.modalKey ?? `modal:${(0, import_node_crypto44.randomUUID)()}`;
+            const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto44.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
-            const approvalEvidence = adapterStatus?.providerApproval?.evidence;
+            const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
               event: "agent:waiting_approval",
               chatTitle,
@@ -177973,11 +177974,12 @@ ${buttons.join("\n")}`;
                 observedBy: "cli_fsm",
                 source: "fsm_edge",
                 attemptRef: host.currentAttemptRef?.() ?? void 0,
-                at: adapterStatus?.providerApproval?.createdAt ?? now,
+                // Same rule as the key: only the pending episode describes this suspension.
+                at: providerApproval?.createdAt ?? now,
                 modal: "approval",
                 modalKey: approvalModalKey,
-                clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
-                providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
+                clockUnknown: providerApproval?.createdAt === null,
+                providerSetup: providerApproval?.type === "provider_setup" && providerApproval.evidence === "live"
               });
             }
           }
@@ -196726,7 +196728,7 @@ ${notice.notice}${supersededHint}`;
       delete rebuilt.modalButtons;
       delete rebuilt.modalKey;
       delete rebuilt.approvalEvidence;
-      if (approval) {
+      if (approval && approval.lifecycle === "pending" && approval.resolvedAt == null) {
         const modalKey = typeof approval.modalKey === "string" ? approval.modalKey.trim() : "";
         if (modalKey) {
           rebuilt.modalKey = modalKey;

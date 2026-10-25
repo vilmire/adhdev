@@ -159,3 +159,26 @@ describe('CliProviderInstance approval emit gate — buttonless repaint of an op
     expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(2)
   })
 })
+
+describe('CliProviderInstance approval emit gate — a sign-in right after an answered approval', () => {
+  // After an approval is answered the adapter still reports the RESOLVED lifecycle record
+  // (old key). A following sign-in wait must not inherit that key: the server would drop
+  // its push as a duplicate episode and the owner would never hear about the sign-in.
+  it('mints a fresh key for an external wait instead of reusing the resolved episode key', () => {
+    const { instance, setAdapterStatus } = makeInstance()
+    const pushed: any[] = []
+    ;(instance as any).context = { emitProviderEvent: (e: any) => pushed.push(e) }
+    const detect = (instance as any).detectStatusTransition.bind(instance)
+    const oldKey = 'modal:3c2b1a00-1111-4111-8111-000000000001'
+    setAdapterStatus({ ...APPROVAL(1), providerApproval: { source: 'provider_modal', type: 'tool_permission', lifecycle: 'pending', evidence: 'live', modalKey: oldKey } }); detect()
+    setAdapterStatus({ ...GENERATING, providerApproval: { source: 'provider_modal', type: 'tool_permission', lifecycle: 'resolved', evidence: 'live', modalKey: oldKey } }); detect()
+    setAdapterStatus({ status: 'waiting_approval', approvalEntrySeq: 2, activeModal: null, waitKind: 'external', providerApproval: { source: 'provider_modal', type: 'tool_permission', lifecycle: 'resolved', evidence: 'live', modalKey: oldKey } }); detect()
+    const waits = pushed.filter((e) => e.event === 'agent:waiting_approval')
+    expect(waits).toHaveLength(2)
+    expect(waits[0].modalKey).toBe(oldKey)
+    expect(waits[1].modalKey).toMatch(/^modal:[0-9a-f-]{36}$/)
+    expect(waits[1].modalKey).not.toBe(oldKey)
+    expect(waits[1].waitKind).toBe('external')
+    expect(waits[1].approvalEvidence).toBe('live')
+  })
+})

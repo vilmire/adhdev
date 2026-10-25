@@ -177,6 +177,19 @@ describe('coordinator-first owner escalation', () => {
         w.stop();
     });
 
+    it('an escalated external wait never carries a resolved approval record\'s key', () => {
+        const w = world();
+        const OLD = 'modal:99999999-9999-4999-8999-999999999999';
+        const FRESH = 'modal:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        state = { status: 'waiting_approval', settings: workerSettings, activeChat: { status: 'waiting_approval', activeModal: null, providerApproval: approval(OLD, { lifecycle: 'resolved', resolvedAt: 5 }) } };
+        w.bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'claude-cli', waitKind: 'external', modalKey: FRESH, approvalEvidence: 'live', timestamp: 1 } } as any);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+        const sent = (w.server[0] as any).payload ?? w.server[0];
+        expect(sent.modalKey).not.toBe(OLD);
+        w.stop();
+    });
+
     it('a buttonless waiting_approval WITHOUT the external mark still never reaches the owner', () => {
         const w = world();
         state = externalState();

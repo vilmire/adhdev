@@ -513,10 +513,16 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // Legacy adapters without ProviderApprovalLifecycle still mint a
                 // random opaque UUID per approval episode — never derive modalKey
                 // from prompt text or button labels.
-                const approvalModalKey = adapterStatus?.providerApproval?.modalKey
-                    ?? `modal:${randomUUID()}`;
+                // Only a PENDING lifecycle episode lends its key: after an approval is
+                // answered the adapter still reports the resolved record, and reusing its
+                // key for the next wait (a sign-in right after) made the server drop that
+                // push as a duplicate episode. An external wait always gets its own key.
+                const providerApproval = adapterStatus?.waitKind === 'external' || adapterStatus?.providerApproval?.lifecycle !== 'pending'
+                    ? null
+                    : adapterStatus.providerApproval;
+                const approvalModalKey = providerApproval?.modalKey ?? `modal:${randomUUID()}`;
                 host.lastApprovalModalKey = approvalModalKey;
-                const approvalEvidence = adapterStatus?.providerApproval?.evidence;
+                const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === 'external' ? 'live' : undefined);
                 host.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now,
                     modalMessage: modal?.message,
@@ -531,11 +537,12 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         observedBy: 'cli_fsm',
                         source: 'fsm_edge',
                         attemptRef: host.currentAttemptRef?.() ?? undefined,
-                        at: adapterStatus?.providerApproval?.createdAt ?? now,
+                        // Same rule as the key: only the pending episode describes this suspension.
+                        at: providerApproval?.createdAt ?? now,
                         modal: 'approval',
                         modalKey: approvalModalKey,
-                        clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
-                        providerSetup: adapterStatus?.providerApproval?.type === 'provider_setup' && adapterStatus.providerApproval.evidence === 'live',
+                        clockUnknown: providerApproval?.createdAt === null,
+                        providerSetup: providerApproval?.type === 'provider_setup' && providerApproval.evidence === 'live',
                     });
                 }
             }
