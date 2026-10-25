@@ -158,6 +158,11 @@ export const TURN_LEDGER_DDL = `
         ON turn_events(attempt_id, recorded_at);
     CREATE INDEX IF NOT EXISTS ix_turn_events_mesh_kind
         ON turn_events(mesh_id, kind, at_ms);
+    -- findPublishedEvent (notice re-render, delivery sweep) looks rows up by their
+    -- published coordinates; without this it scanned every event of the mesh
+    -- (~700k on the preview coordinator) per delivered notice, per sweep pass.
+    CREATE INDEX IF NOT EXISTS ix_turn_events_published_coords
+        ON turn_events(src_writer, published_seq) WHERE publish_state = 'published';
 
     CREATE TABLE IF NOT EXISTS turn_holds (
         hold_id TEXT PRIMARY KEY,
