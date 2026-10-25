@@ -55,8 +55,9 @@ test('mesh_launch_session schema maps providers, keeps type optional, and has no
 
 test('mesh_launch_session description documents the provider-aware duplicate guard accurately', () => {
   const description = `${MESH_LAUNCH_SESSION_TOOL.description} ${MESH_LAUNCH_SESSION_TOOL.inputSchema.properties.force.description}`;
-  // Same-provider or unknown-provider reuse (idempotent), …
-  assert.match(description, /MATCHES the resolved launch type — or whose provider is unknown/);
+  // Reuse requires the resolved provider/profile; unknown is legacy-only, …
+  assert.match(description, /provider matches the resolved launch type and configured profile/);
+  assert.match(description, /unknown provider is accepted only without a configured model\/thinking profile/);
   assert.match(description, /reused:true/);
   // … but a definite provider mismatch launches FRESH — never a refusal, and
   // force=true bypasses the guard entirely (owner contract 71603dc10).

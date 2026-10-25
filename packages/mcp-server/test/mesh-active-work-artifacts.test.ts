@@ -26,10 +26,10 @@ import { holdMemberStatusOnCoordinator } from './helpers/held-node-state.js';
 // attempt IS the pre-recorded dispatch; Stage 6 reads it). Armed once per file.
 armTestTurnLedger();
 
-function cleanupMesh(meshId: string): void {
-  __clearMeshQueueForTests(meshId);
+async function cleanupMesh(meshId: string): Promise<void> {
   // The fixtures reuse session ids across cases; the ledger holds ≤1 open attempt per session.
-  closeOpenTestAttempts();
+  await closeOpenTestAttempts();
+  __clearMeshQueueForTests(meshId);
   // G2/G3: runtime reads are SQLite-primary — clear the runtime store rows too
   // (ledger entries and drained pending-event fingerprints), otherwise state
   // accumulates across runs and bleeds into assertions.
@@ -250,7 +250,7 @@ async function seedDirectTranscriptDispatch(meshId: string, taskId: string): Pro
 
 test('direct mesh_send_task projects exactly one active work row in status and active queue view', async () => {
   const meshId = 'mesh-active-direct-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx, calls } = createRemoteCtx(meshId, { initialStatus: 'idle' });
 
   try {
@@ -350,13 +350,13 @@ test('direct mesh_send_task projects exactly one active work row in status and a
     assert.equal(typeof activeView.pollingGuidance.doNotPollBefore, 'string');
     assert.ok(calls.some(call => call.command === 'agent_command'));
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose keeps it', async () => {
   const meshId = 'mesh-active-work-slim-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createRemoteCtx(meshId, { initialStatus: 'idle' });
   const longPrompt = 'DELEGATED TASK: ' + 'do the thing carefully and report back. '.repeat(120); // ~5KB
 
@@ -399,7 +399,7 @@ test('leak #2: compact activeWork drops the triple-echoed task prompt; verbose k
     // Byte win: compact substantially smaller than verbose for this row-heavy case.
     assert.ok(compactStr.length < verboseStr.length, `compact (${compactStr.length}) must be < verbose (${verboseStr.length})`);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
@@ -414,7 +414,7 @@ function turnObserveCalls(calls: Array<{ command: string; args: Record<string, u
 
 test('the queue view (not mesh_status) reports an idle direct dispatch\'s final transcript as ONE content-free turn_observe(transcript_final, mcp_probe) — never an in-process terminal write', async () => {
   const meshId = 'mesh-direct-transcript-status-completion-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const taskId = 'direct-transcript-status-task';
   const finalSummary = [
     'Restored the approved file and verified the workspace is clean.',
@@ -464,13 +464,13 @@ test('the queue view (not mesh_status) reports an idle direct dispatch\'s final 
     assert.equal(observedAgain.length, 2);
     assert.equal(observedAgain[1].eventId, observedAgain[0].eventId);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_view_queue reports transcript-backed idle direct dispatch evidence through turn_observe before classifying', async () => {
   const meshId = 'mesh-direct-transcript-view-queue-completion-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const taskId = 'direct-transcript-view-queue-task';
   const finalSummary = [
     'Final investigation result.',
@@ -502,13 +502,13 @@ test('mesh_view_queue reports transcript-backed idle direct dispatch evidence th
     assert.equal(JSON.stringify(observed).includes('Final investigation result'), false);
     assert.equal(readLocalRecords(meshId).filter(entry => entry.kind === 'task_completed').length, 0);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_view_queue refreshes live mesh sessions before classifying direct work', async () => {
   const meshId = 'mesh-view-queue-refresh-direct-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx, calls } = createRemoteCtx(meshId);
   const staleCtx = {
     ...ctx,
@@ -537,13 +537,13 @@ test('mesh_view_queue refreshes live mesh sessions before classifying direct wor
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === 'direct-refresh-task'));
     assert.equal(activeView.staleDirectWork.some((entry: any) => entry.taskId === 'direct-refresh-task'), false);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('active queue view keeps historical queue rows out while direct work is exposed separately', async () => {
   const meshId = 'mesh-active-only-separation-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createRemoteCtx(meshId);
 
   try {
@@ -572,13 +572,13 @@ test('active queue view keeps historical queue rows out while direct work is exp
     assert.ok(activeView.activeWork.every((entry: any) => entry.source === 'queue' || entry.source === 'direct'));
     assert.ok(activeView.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === 'direct-ledger-task'));
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('stale direct ledger tasks are separated from active work when queue is empty and sessions are not live', async () => {
   const meshId = 'mesh-stale-direct-active-work-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const mesh = {
     id: meshId,
     name: 'Stale Direct Work',
@@ -684,13 +684,13 @@ test('stale direct ledger tasks are separated from active work when queue is emp
       'direct-removed-node',
     ]);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork array, and cleanup candidate rows', async () => {
   const meshId = 'mesh-view-queue-compact-payload-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const mesh = {
     id: meshId,
     name: 'Compact Payload',
@@ -772,13 +772,13 @@ test('mesh_view_queue compact mode drops historical queue rows, staleDirectWork 
     // historical/orphan/cleanup row arrays are the dominant payload weight).
     assert.ok(compact.length * 1.4 < full.length, `expected compact (${compact.length}) substantially smaller than verbose (${full.length})`);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_task_history returns pending async refine failure events instead of discarding them', async () => {
   const meshId = 'mesh-refine-pending-history-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const mesh = {
     id: meshId,
     name: 'Refine Event Surfacing',
@@ -868,13 +868,13 @@ test('mesh_task_history returns pending async refine failure events instead of d
     assert.equal(second.pendingCoordinatorEvents, undefined);
     assert.equal(second.entries.length, 1);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_enqueue_task on a remote (IPC) mesh stays queue-sourced and is never pushed (rc.37 Finding B)', async () => {
   const meshId = 'mesh-enqueue-push-source-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createRemoteCtx(meshId);
 
   try {
@@ -896,7 +896,7 @@ test('mesh_enqueue_task on a remote (IPC) mesh stays queue-sourced and is never 
     const status = JSON.parse(await meshStatus(ctx as any));
     assert.equal(status.activeWork.some((entry: any) => entry.source === 'direct' && entry.taskId === enqueued.taskId), false);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
@@ -934,7 +934,7 @@ function createWorktreeRoutingCtx(meshId: string) {
 
 test('mesh_enqueue_task prefer_worktree routes the task to the most recently cloned worktree node', async () => {
   const meshId = 'mesh-enqueue-prefer-worktree-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createWorktreeRoutingCtx(meshId);
   try {
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
@@ -950,13 +950,13 @@ test('mesh_enqueue_task prefer_worktree routes the task to the most recently clo
     assert.ok(entry, 'expected the enqueued task in the queue');
     assert.equal(entry.targetNodeId, 'node-wt-2');
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_enqueue_task explicit target_node_id overrides prefer_worktree', async () => {
   const meshId = 'mesh-enqueue-explicit-target-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createWorktreeRoutingCtx(meshId);
   try {
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
@@ -970,13 +970,13 @@ test('mesh_enqueue_task explicit target_node_id overrides prefer_worktree', asyn
     const entry = getQueue(meshId).find((t: any) => t.id === enqueued.taskId);
     assert.equal(entry.targetNodeId, 'node-wt-1');
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
 test('mesh_enqueue_task prefer_worktree is a no-op when no worktree node exists', async () => {
   const meshId = 'mesh-enqueue-prefer-worktree-noop-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx } = createRemoteCtx(meshId); // only a single non-worktree node
   try {
     const enqueued = JSON.parse(await meshEnqueueTask(ctx as any, {
@@ -990,7 +990,7 @@ test('mesh_enqueue_task prefer_worktree is a no-op when no worktree node exists'
     const entry = getQueue(meshId).find((t: any) => t.id === enqueued.taskId);
     assert.equal(entry.targetNodeId, undefined);
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });
 
@@ -1029,7 +1029,7 @@ test('task completion evidence normalizes structured worker result and process a
 
 test('live_debug_readonly mode rejects obvious write/commit/push dispatches but allows inspection-only work', async () => {
   const meshId = 'mesh-live-debug-readonly-test';
-  cleanupMesh(meshId);
+  await cleanupMesh(meshId);
   const { ctx, calls } = createRemoteCtx(meshId);
 
   try {
@@ -1053,6 +1053,6 @@ test('live_debug_readonly mode rejects obvious write/commit/push dispatches but 
     assert.equal(allowed.source, 'queue');
     assert.equal(allowed.taskMode, 'live_debug_readonly');
   } finally {
-    cleanupMesh(meshId);
+    await cleanupMesh(meshId);
   }
 });

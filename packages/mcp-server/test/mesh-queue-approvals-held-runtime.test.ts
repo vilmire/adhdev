@@ -87,9 +87,9 @@ function buildCtx(meshId: string, opts: { held: boolean }) {
     return { ctx, mesh, directCommands, meshCommands };
 }
 
-function cleanup(meshId: string): void {
+async function cleanup(meshId: string): Promise<void> {
+    await closeOpenTestAttempts();
     __clearMeshQueueForTests(meshId);
-    closeOpenTestAttempts();
     __clearLocalRecordsForTests(meshId);
     __clearMeshPendingEventsForTests(meshId);
 }
@@ -102,7 +102,7 @@ test('mesh_view_queue answers remote node sessions from held runtime — no mesh
         assert.equal(result.success !== false, true, JSON.stringify(result));
         assert.deepEqual(meshCommands, [], 'no remote get_status_metadata call for the held node');
     } finally {
-        cleanup(meshId);
+        await cleanup(meshId);
     }
 });
 
@@ -113,7 +113,7 @@ test('mesh_view_queue never probes a member even when nothing is held for it yet
         await meshViewQueue(ctx as any, { view: 'active', verbose: true });
         assert.deepEqual(meshCommands, [], 'nothing held = unknown, not a live probe');
     } finally {
-        cleanup(meshId);
+        await cleanup(meshId);
     }
 });
 
@@ -125,7 +125,7 @@ test('mesh_list_pending_approvals answers from held runtime — no meshCommand c
         assert.equal(Array.isArray(result.approvals), true, JSON.stringify(result));
         assert.deepEqual(meshCommands, [], 'no remote get_status_metadata call for the held node');
     } finally {
-        cleanup(meshId);
+        await cleanup(meshId);
     }
 });
 
@@ -136,7 +136,7 @@ test('mesh_list_pending_approvals never probes a member even when nothing is hel
         await meshListPendingApprovals(ctx as any, {});
         assert.deepEqual(meshCommands, [], 'nothing held = unknown, not a live probe');
     } finally {
-        cleanup(meshId);
+        await cleanup(meshId);
     }
 });
 
@@ -157,6 +157,6 @@ test('mesh_send_task session preflight (explicit session_id) answers from held r
         // (readNodeRuntime) never had to make a live meshCommand call.
         assert.equal(meshCommands.filter((c) => c.command === 'get_status_metadata').length, 0, JSON.stringify({ result, meshCommands }));
     } finally {
-        cleanup(meshId);
+        await cleanup(meshId);
     }
 });

@@ -56,8 +56,8 @@ function throwingTransport(error: unknown) {
     } as any;
 }
 
-test('TURN_IPC_COMMANDS has exactly twenty-five names (the C2 six + mission_* + C-W8 note_* + C-W9b tool_call_record/ledger_query/mission_list_query + the C-W9a store commands + the C-W9c stats/prune/orphaned-pin commands)', () => {
-    assert.equal(TURN_IPC_COMMANDS.length, 25);
+test('TURN_IPC_COMMANDS has exactly twenty-six names (the C2 six + mission_* + C-W8 note_* + C-W9b tool_call_record/ledger_query/mission_list_query + the C-W9a store commands + the C-W9c stats/prune/orphaned-pin commands)', () => {
+    assert.equal(TURN_IPC_COMMANDS.length, 26);
     assert.deepEqual(
         [...TURN_IPC_COMMANDS].sort(),
         [
@@ -65,7 +65,7 @@ test('TURN_IPC_COMMANDS has exactly twenty-five names (the C2 six + mission_* + 
             'ledger_query', 'mesh_index_query', 'mesh_record', 'mission_list_query', 'mission_query', 'mission_upsert',
             'note_forget', 'note_upsert', 'operator_status', 'orphaned_pin_notify',
             'prune_stale_direct',
-            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue', 'queue_revise',
             'record_local', 'recovery_context_query', 'task_stats_query',
             'tool_call_record', 'turn_cancel', 'turn_observe', 'turn_query',
         ],

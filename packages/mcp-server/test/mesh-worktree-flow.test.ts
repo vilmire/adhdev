@@ -2958,14 +2958,14 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   assert.equal(payload.success, true);
   assert.equal(payload.payloadMode, 'full');
   assert.deepEqual(payload.sourceOfTruth.activeStatuses, ['pending', 'assigned']);
-  assert.deepEqual(payload.sourceOfTruth.historicalStatuses, ['completed', 'failed', 'cancelled']);
+  assert.deepEqual(payload.sourceOfTruth.historicalStatuses, ['completed', 'blocked', 'failed', 'cancelled']);
   assert.equal(payload.summary.totalCount, 3);
   assert.equal(payload.visibleSummary.totalCount, 3);
   assert.deepEqual(payload.activeCounts, { pending: 0, assigned: 1 });
   assert.deepEqual(payload.summary.rawActiveCounts, { pending: 0, assigned: 2 });
-  assert.deepEqual(payload.historicalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.deepEqual(payload.historicalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
   assert.deepEqual(payload.visibleActiveCounts, { pending: 0, assigned: 1 });
-  assert.deepEqual(payload.visibleHistoricalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.deepEqual(payload.visibleHistoricalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
   assert.equal(payload.activeCount, 1);
   assert.equal(payload.historicalCount, 1);
   assert.equal(payload.staleAssignedCount, 1);
@@ -3008,7 +3008,7 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   assert.equal(filteredPayload.success, true);
   assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 1 });
   assert.deepEqual(filteredPayload.visibleActiveCounts, { pending: 0, assigned: 0 });
-  assert.deepEqual(filteredPayload.visibleHistoricalCounts, { completed: 1, failed: 0, cancelled: 0 });
+  assert.deepEqual(filteredPayload.visibleHistoricalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
   assert.equal(filteredPayload.staleAssignedCount, 1);
   assert.equal(filteredPayload.queue.length, 1);
   assert.equal(filteredPayload.historicalQueue.length, 1);

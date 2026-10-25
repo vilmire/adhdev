@@ -111,7 +111,7 @@ function createLocalCtx(meshId: string, opts: { nodeFacts?: unknown } = {}) {
 function withLedger<T>(fn: () => Promise<T>): Promise<T> {
     const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: COORDINATOR, publisher: null });
     setActiveTurnLedgerForIpc(ledger);
-    return fn().finally(() => { closeOpenTestAttempts(); setActiveTurnLedgerForIpc(null); });
+    return fn().finally(async () => { await closeOpenTestAttempts(); setActiveTurnLedgerForIpc(null); });
 }
 
 async function send(ctx: any, extra: Record<string, unknown> = {}) {
