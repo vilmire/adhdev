@@ -132,6 +132,60 @@ describe('coordinator-first owner escalation', () => {
         w.stop();
     });
 
+    // waiting_external (browser sign-in, 2FA): a wait on a human outside the terminal.
+    // It projects to waiting_approval with no modal and no buttons, and the daemon marks
+    // the event waitKind:'external'. It escalates once per wait, never storms, and a later
+    // wait escalates again.
+    const externalState = () => ({ status: 'waiting_approval', settings: workerSettings, activeChat: { status: 'waiting_approval', activeModal: null, providerApproval: undefined } });
+    const askExternal = (w: ReturnType<typeof world>, ts = 1) => w.bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'claude-cli', waitKind: 'external', timestamp: ts } } as any);
+
+    it('holds and deduplicates an external wait on a delegated worker so it never storms the owner', () => {
+        const w = world();
+        state = externalState();
+        askExternal(w);
+        expect(w.dashboard).toHaveLength(1);
+        expect(w.server).toHaveLength(0);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        askExternal(w);
+        expect(w.server).toHaveLength(0);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        expect(w.server).toHaveLength(1);
+        expect((w.server[0] as any).payload?.waitKind ?? (w.server[0] as any).waitKind).toBe('external');
+        askExternal(w);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('escalates a later external wait again after the session resolves to idle', () => {
+        const w = world();
+        state = externalState();
+        askExternal(w, 1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+        state = { status: 'idle', settings: workerSettings, activeChat: { status: 'idle', activeModal: null, providerApproval: undefined } };
+        vi.advanceTimersByTime(1_000);
+        state = externalState();
+        askExternal(w, 2);
+        expect(w.server).toHaveLength(1);
+        // The per-session owner-escalation cooldown (counted from the first push) still
+        // applies: the second wait is delayed to the end of it, never dropped.
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS - 1_000 - 1);
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(1);
+        expect(w.server).toHaveLength(2);
+        w.stop();
+    });
+
+    it('a buttonless waiting_approval WITHOUT the external mark still never reaches the owner', () => {
+        const w = world();
+        state = externalState();
+        w.bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'claude-cli', timestamp: 1 } } as any);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 10);
+        expect(w.server).toHaveLength(0);
+        w.stop();
+    });
+
     it('drops the held push when the session terminates', () => {
         const w = world(); w.ask();
         w.bus.emit({ kind: 'terminated', sessionId: 'w1' } as any);

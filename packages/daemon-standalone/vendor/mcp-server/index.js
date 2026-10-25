@@ -98786,7 +98786,7 @@ ${body}`;
       const pct = Number(m[1]);
       return Math.max(0, Math.min(total, Math.round(total * pct / 100)));
     }
-    function resolveSections(sectionsObj, lines) {
+    function resolveSections(sectionsObj, lines, viewportStartRow = 0) {
       const total = lines.length;
       const anchored = /* @__PURE__ */ new Map();
       const sectionEntries = Object.entries(sectionsObj);
@@ -98851,7 +98851,7 @@ ${body}`;
           to = total;
         } else if (sec.from_bottom !== void 0) {
           const sz = resolveSize(sec.from_bottom, total);
-          from = total - sz;
+          from = Math.max(viewportStartRow, total - sz);
           to = total;
         }
         anchored.set(id4, { fromLine: from, toLine: to });
@@ -99149,6 +99149,1244 @@ ${detail.join("\n")}` : stripped;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
+    function stripAnsi2(text4) {
+      const s2 = String(text4 || "");
+      if (s2.indexOf("\x1B") === -1) return s2;
+      return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
+    }
+    function hasProviderFailureEnvelope(text4) {
+      return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
+    }
+    function findMatchingClosingFence(lines, openIdx, ch, openLen = 3) {
+      const closeRe = new RegExp(`^${ch}{${openLen},}\\s*$`);
+      for (let j = openIdx + 1; j < lines.length; j += 1) {
+        const candidate = lines[j];
+        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate)) {
+          return -1;
+        }
+        if (closeRe.test(candidate.trim())) {
+          return j;
+        }
+      }
+      return -1;
+    }
+    function findClosedDiffHunkEnd(lines, openIdx) {
+      const headerMatch = lines[openIdx].trim().match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+      const expectedOld = headerMatch ? Number(headerMatch[2] ?? 1) : 0;
+      const expectedNew = headerMatch ? Number(headerMatch[4] ?? 1) : 0;
+      let oldSeen = 0;
+      let newSeen = 0;
+      let sawDiffChange = false;
+      let lastDiffIdx = -1;
+      const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
+      for (let j = openIdx + 1; j < limit; j += 1) {
+        const candidate = lines[j];
+        const trimmed2 = candidate.trim();
+        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate) || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate) || TOOL_HEADER_LINE_RE.test(candidate) || COL0_COMPOSER_DIVIDER_LINE_RE.test(candidate) && j + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[j + 1])) {
+          return expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew ? lastDiffIdx : -1;
+        }
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S|@@\s+-\d+|```+|~~~+)/i.test(trimmed2)) {
+          return oldSeen > 0 || newSeen > 0 ? lastDiffIdx : -1;
+        }
+        if (candidate.startsWith("+")) {
+          newSeen += 1;
+          sawDiffChange = true;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith("-")) {
+          oldSeen += 1;
+          sawDiffChange = true;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith(" ")) {
+          if (expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew && SIGN_IN_SCREEN_HEADER_RE.test(candidate)) {
+            break;
+          }
+          oldSeen += 1;
+          newSeen += 1;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith("\\ No newline")) {
+          lastDiffIdx = j;
+          continue;
+        }
+        break;
+      }
+      if (lastDiffIdx === -1 || !sawDiffChange) return -1;
+      return lastDiffIdx;
+    }
+    function stripToolAndCodeLines(raw) {
+      let inToolBlock = false;
+      let inAssistantProseBlock = false;
+      let inFence = null;
+      let inFenceLen = 0;
+      let fenceCloseIdx = -1;
+      let fenceLines = 0;
+      let inDiffHunk = false;
+      let diffHunkCloseIdx = -1;
+      let diffHunkLines = 0;
+      const out = [];
+      const lines = raw.split("\n");
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const trimmed2 = line.trim();
+        if (inFence !== null && fenceCloseIdx !== -1) {
+          if (i < fenceCloseIdx) {
+            continue;
+          }
+          inFence = null;
+          inFenceLen = 0;
+          fenceCloseIdx = -1;
+          fenceLines = 0;
+          continue;
+        }
+        if (inDiffHunk && diffHunkCloseIdx !== -1) {
+          if (i <= diffHunkCloseIdx) {
+            continue;
+          }
+          inDiffHunk = false;
+          diffHunkCloseIdx = -1;
+          diffHunkLines = 0;
+        }
+        if (TRUNCATED_OUTPUT_LINE_RE.test(line)) {
+          inFence = null;
+          inFenceLen = 0;
+          fenceCloseIdx = -1;
+          fenceLines = 0;
+          inDiffHunk = false;
+          diffHunkCloseIdx = -1;
+          diffHunkLines = 0;
+          inToolBlock = false;
+          inAssistantProseBlock = false;
+          continue;
+        }
+        const fenceMatch = trimmed2.match(/^(```+|~~~+)/);
+        if (fenceMatch) {
+          const ch = fenceMatch[1][0];
+          const fenceLen = fenceMatch[1].length;
+          if (inFence === null) {
+            inFence = ch;
+            inFenceLen = fenceLen;
+            fenceCloseIdx = findMatchingClosingFence(lines, i, ch, fenceLen);
+            fenceLines = 0;
+            inDiffHunk = false;
+            diffHunkCloseIdx = -1;
+            diffHunkLines = 0;
+            inAssistantProseBlock = false;
+            continue;
+          }
+          if (inFence === ch && fenceLen >= inFenceLen && new RegExp(`^${ch}{${inFenceLen},}\\s*$`).test(trimmed2)) {
+            inFence = null;
+            inFenceLen = 0;
+            fenceCloseIdx = -1;
+            fenceLines = 0;
+            continue;
+          }
+        }
+        if (inFence !== null) {
+          const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
+          const isComposerBoundary = COMPOSER_DIVIDER_LINE_RE.test(line) && i + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
+          fenceLines += 1;
+          if (isStrongTurnBoundary || isComposerBoundary || fenceLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+            inFence = null;
+            inFenceLen = 0;
+            fenceCloseIdx = -1;
+            fenceLines = 0;
+          } else {
+            continue;
+          }
+        }
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed2)) {
+          inDiffHunk = false;
+          diffHunkCloseIdx = -1;
+          diffHunkLines = 0;
+          inAssistantProseBlock = false;
+          continue;
+        }
+        if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
+          inDiffHunk = true;
+          diffHunkCloseIdx = findClosedDiffHunkEnd(lines, i);
+          diffHunkLines = 0;
+          inAssistantProseBlock = false;
+          continue;
+        }
+        if (inDiffHunk) {
+          const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
+          const isComposerBoundary = COL0_COMPOSER_DIVIDER_LINE_RE.test(line) && i + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
+          diffHunkLines += 1;
+          if (isStrongTurnBoundary || isComposerBoundary || SIGN_IN_SCREEN_HEADER_RE.test(line) || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+            inDiffHunk = false;
+            diffHunkCloseIdx = -1;
+            diffHunkLines = 0;
+          } else if (/^(?:[ +-]|\\ No newline)/.test(line)) {
+            continue;
+          } else {
+            inDiffHunk = false;
+            diffHunkCloseIdx = -1;
+            diffHunkLines = 0;
+          }
+        }
+        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
+          inToolBlock = false;
+          inAssistantProseBlock = false;
+          if (TOOL_HEADER_LINE_RE.test(line)) {
+            inToolBlock = true;
+            continue;
+          }
+          if (/^[ \t]*⏺(?:\s|$)/.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+            inAssistantProseBlock = true;
+            continue;
+          }
+        }
+        if (!trimmed2) {
+          inAssistantProseBlock = false;
+          continue;
+        }
+        if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
+          inToolBlock = true;
+          inAssistantProseBlock = false;
+          continue;
+        }
+        if (inToolBlock) {
+          if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line)) {
+            continue;
+          }
+          inToolBlock = false;
+        }
+        if (inAssistantProseBlock) {
+          if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line) && !SIGN_IN_SCREEN_HEADER_RE.test(line)) {
+            continue;
+          }
+          inAssistantProseBlock = false;
+        }
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw)\s+\S|(?:if|else\s+if|expect|it|test|describe|assert)\s*(?:\(|\.[a-z]+\s*\())/.test(trimmed2)) continue;
+        out.push(line);
+      }
+      return out.join("\n");
+    }
+    function detectProviderFailure(output, _exitCode) {
+      const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
+      const filtered = stripToolAndCodeLines(stripped);
+      const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
+      const text4 = linesText.replace(/\s+/g, " ").trim();
+      if (!text4) return null;
+      const quota = hasProviderFailureEnvelope(text4) && [
+        /\b(?:usage|quota|credit)\s+limit\b/,
+        /\bquota\s*(?:exhausted|refresh)/,
+        /\bbilling\s+cycle\b/
+      ].some((pattern) => pattern.test(text4));
+      if (quota) {
+        return {
+          errorReason: "quota_exceeded",
+          failureKind: "quota",
+          message: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
+        };
+      }
+      const billing = [
+        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
+        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
+        /\bpayment_required\b/,
+        /\binsufficient\s+(?:balance|credits?)\b/
+      ].some((pattern) => pattern.test(text4));
+      if (billing) {
+        return {
+          errorReason: "billing_failed",
+          failureKind: "billing",
+          message: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying."
+        };
+      }
+      const auth = [
+        // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
+        /"type"\s*:\s*"authentication_error"/,
+        /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
+        // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
+        /(?:^|[.!?·:;\n]\s*)(?:(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)|⏺\s+api\s+error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
+        // Anchored CLI auth / token / not-signed-in statements
+        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
+        // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
+      ].some((pattern) => pattern.test(linesText));
+      if (auth) {
+        return {
+          errorReason: "auth_failed",
+          failureKind: "auth",
+          // Provider-neutral wording: the AUTH axis now serves every spec-backed
+          // CLI (see observeProviderFailureOutput), so naming Kimi here would send
+          // a claude-cli operator to re-login against the wrong tool. The billing
+          // and quota messages above stay Kimi-specific because those axes remain
+          // kimi-scoped.
+          //
+          // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
+          // (assert: detectProviderFailure(message) === null). It travels
+          // into mesh failure events that the daemon INJECTS into coordinator and
+          // worker PTYs — the previous wording ("Provider authentication failed…")
+          // matched the bare `authentication failed` rule above, so every delivery
+          // of an auth-failure event poisoned the receiving session's own tail and
+          // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
+          // wording out of every pattern in this file when editing it.
+          message: AUTH_FAILURE_MESSAGE
+        };
+      }
+      return null;
+    }
+    function detectAuthFailureOnlyReply(reply) {
+      const text4 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text4 || text4.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text4);
+      const segments = (isJsonOrRaw401 ? text4.split(/\s*·\s*/) : text4.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
+      const failure7 = detectProviderFailure(text4);
+      return failure7?.failureKind === "auth" ? failure7 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
+    }
+    var ANSI_OSC_DCS_RE;
+    var ANSI_CSI_RE;
+    var AUTH_FAILURE_MESSAGE;
+    var CLEAR_PROVIDER_CHROME_RE;
+    var SIGN_IN_SCREEN_HEADER_RE;
+    var TOOL_HEADER_LINE_RE;
+    var CLAUDE_ERROR_ENVELOPE_LINE_RE;
+    var TRUNCATED_OUTPUT_LINE_RE;
+    var STRONG_TURN_BOUNDARY_LINE_RE;
+    var COMPOSER_DIVIDER_LINE_RE;
+    var COL0_COMPOSER_DIVIDER_LINE_RE;
+    var COMPOSER_PROMPT_LINE_RE;
+    var MAX_OPEN_BLOCK_SPAN_LINES;
+    var MAX_CLOSED_BLOCK_LOOKAHEAD_LINES;
+    var AUTH_ONLY_SEGMENT_RE;
+    var AUTH_ONLY_REPLY_MAX_CHARS;
+    var init_provider_failure_classifier = __esm2({
+      "src/providers/spec/provider-failure-classifier.ts"() {
+        "use strict";
+        ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+        ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+        AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
+        CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
+        SIGN_IN_SCREEN_HEADER_RE = /^[ \t]*(?:[╭╰┌└┏┗│┃]|[›❯>▸]\s*(?:\d+\.\s*)?(?:Sign in|API key login is disabled|Press Enter to sign in)|(?:Claude Code\b|Welcome to (?:Claude Code|Cursor Agent|Grok CLI|Antigravity CLI)\b|Select login method:|Anthropic Console account\b|How do you want to sign in\?|Opening browser to sign in|Cloud gateway\s*[·•]\s*sign in\b|Browser didn't open\?|Paste code here if prompted\s*>|Sign in with ChatGPT to use Codex\b|Finish signing in via your browser\b|Preparing device code login\b|Use your own OpenAI API key\b|Paste or type your API key below\b|(?:Welcome back!\s+)?You are currently not signed in\.|Select Google Cloud sign-in method:|Authentication required\.\s+Please visit the URL to log in:|If you aren't automatically redirected, paste the authorization code below:|Signing in(?:\s+to your Google account)?(?:\.{3}|…)?|Cursor Agent\b|Sign in required\b|Signing in with the browser\b|If your browser didn't open,\s*click this link to log in:|Press q to show a QR code to log in\b|Press Enter to sign in\b|Sign in to Grok Build\b|Approve in your browser\b|Waiting for approval\.\.\.|Paste your xAI API key\b|Enter your (?:xAI )?API key\b|Sign in to Kimi Code\b|Visit the URL below in your browser to authorize:|Verification code:\s+[A-Z0-9-]+|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+Waiting for authorization|Your key will be saved to [^\n]*config\.toml))/i;
+        TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
+        CLAUDE_ERROR_ENVELOPE_LINE_RE = /^[ \t]*⏺\s+api\s+error\s*:\s*(?:(?:http\s*)?40[123]\b|[^\n]*(?:"authentication_error"|"token_revoked"|"invalid_api_key"|"token_expired"|"invalid_token"))/i;
+        TRUNCATED_OUTPUT_LINE_RE = /^[ \t]*(?:…|\.\.\.)\s+\+\d+\s+lines\b/i;
+        STRONG_TURN_BOUNDARY_LINE_RE = /^[ \t]{0,2}(?:⏺(?:\s|$)|[✻✢✳✶✽✷✸✹](?:\s|$))/;
+        COMPOSER_DIVIDER_LINE_RE = /^[ \t]*─{10,}[ \t]*$/;
+        COL0_COMPOSER_DIVIDER_LINE_RE = /^─{10,}[ \t]*$/;
+        COMPOSER_PROMPT_LINE_RE = /^[ \t]*[❯›>](?:\s|$)/;
+        MAX_OPEN_BLOCK_SPAN_LINES = 40;
+        MAX_CLOSED_BLOCK_LOOKAHEAD_LINES = 512;
+        AUTH_ONLY_SEGMENT_RE = new RegExp("^(?:" + [
+          // "Login expired", "OAuth token has expired", "Your session has expired"
+          String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
+          // "Please run /login", "Run /login to re-authenticate"
+          String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
+          // "Not logged in", "Invalid API key", "Invalid authentication credentials", "Authentication required"
+          String.raw`not\s+(?:logged|signed)\s+in`,
+          String.raw`(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:api\s+key|authentication\s+credentials)`,
+          String.raw`(?:authentication|login)\s+(?:required|failed)`,
+          // "API Error: 401 {…authentication_error…}" or raw Anthropic authentication_error JSON.
+          String.raw`api\s+error:\s*401\b.*`,
+          String.raw`\{.*"type"\s*:\s*"authentication_error".*\}`
+        ].join("|") + ")$");
+        AUTH_ONLY_REPLY_MAX_CHARS = 600;
+      }
+    });
+    function chunkPreservingSurrogates(text4, size) {
+      const chunks = [];
+      let offset = 0;
+      while (offset < text4.length) {
+        let end = Math.min(text4.length, offset + size);
+        if (end < text4.length) {
+          const code = text4.charCodeAt(end - 1);
+          if (code >= 55296 && code <= 56319) end -= 1;
+        }
+        if (end <= offset) end = Math.min(text4.length, offset + size);
+        chunks.push(text4.slice(offset, end));
+        offset = end;
+      }
+      return chunks;
+    }
+    var WIN32_PTY_WRITE_CHUNK_CHARS;
+    var WIN32_PTY_WRITE_CHUNK_GAP_MS;
+    var init_pty_write_chunking = __esm2({
+      "src/cli-adapters/pty-write-chunking.ts"() {
+        "use strict";
+        WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
+        WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
+      }
+    });
+    function countNewlines(s2) {
+      let n = 0;
+      for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
+      return n;
+    }
+    function shouldUseVerifiedSubmit(text4, platform10 = process.platform) {
+      if (platform10 === "win32") return true;
+      return text4.length >= VERIFIED_SUBMIT_MIN_CHARS;
+    }
+    function resolveWin32SubmitMode(env2 = process.env) {
+      return env2.ADHDEV_WIN32_SUBMIT_MODE === "soft_newline" ? "soft_newline" : "paste";
+    }
+    function normalizeForEcho(s2) {
+      return s2.replace(/\s+/g, "");
+    }
+    function resolveSubmitDelayMs(specBeforeSubmit, text4, manifestSendDelayMs) {
+      const lines = countNewlines(text4);
+      const linesBonus = Math.min(800, lines * 80);
+      const lengthBonus = Math.min(800, Math.floor(text4.length / 1e3) * 200);
+      const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
+      const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
+      return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
+    }
+    function guessExt(mime) {
+      if (/png/i.test(mime)) return ".png";
+      if (/jpe?g/i.test(mime)) return ".jpg";
+      if (/gif/i.test(mime)) return ".gif";
+      if (/webp/i.test(mime)) return ".webp";
+      return ".bin";
+    }
+    function resolveMaxSubmitResends(specMaxResends) {
+      if (typeof specMaxResends === "number" && Number.isInteger(specMaxResends) && specMaxResends > 0 && specMaxResends <= WIN32_SUBMIT_MAX_RESENDS) {
+        return specMaxResends;
+      }
+      return WIN32_SUBMIT_MAX_RESENDS;
+    }
+    function resolveResendBackoffMs(attempt, baseGapMs = WIN32_SUBMIT_RESEND_GAP_MS) {
+      const factor = Math.min(10, attempt + 1);
+      return baseGapMs * factor;
+    }
+    var SUBMIT_DELAY_FLOOR_MS;
+    var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS;
+    var VERIFIED_SUBMIT_MIN_CHARS;
+    var WIN32_BRACKETED_PASTE_OPEN;
+    var WIN32_BRACKETED_PASTE_CLOSE;
+    var BRACKETED_PASTE_OPEN;
+    var BRACKETED_PASTE_CLOSE;
+    var WIN32_SOFT_NEWLINE;
+    var chunkPreservingSurrogates2;
+    var MID_GENERATION_SUBMIT_MIN_GAP_MS;
+    var SEND_IN_FLIGHT_MAX_MS;
+    var WIN32_SUBMIT_RESEND_GAP_MS;
+    var WIN32_SUBMIT_MAX_RESENDS;
+    var WIN32_SUBMIT_SETTLE_MS;
+    var WIN32_SUBMIT_SETTLE_POLL_MS;
+    var WIN32_ECHO_PROBE_CHARS;
+    var WIN32_ECHO_MAX_WAIT_MS;
+    var init_submit_policy = __esm2({
+      "src/providers/spec/submit-policy.ts"() {
+        "use strict";
+        init_pty_write_chunking();
+        SUBMIT_DELAY_FLOOR_MS = 200;
+        SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
+        VERIFIED_SUBMIT_MIN_CHARS = 512;
+        WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
+        WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
+        BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
+        BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
+        WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
+        chunkPreservingSurrogates2 = chunkPreservingSurrogates;
+        MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
+        SEND_IN_FLIGHT_MAX_MS = 6e4;
+        WIN32_SUBMIT_RESEND_GAP_MS = 350;
+        WIN32_SUBMIT_MAX_RESENDS = 14;
+        WIN32_SUBMIT_SETTLE_MS = 500;
+        WIN32_SUBMIT_SETTLE_POLL_MS = 120;
+        WIN32_ECHO_PROBE_CHARS = 16;
+        WIN32_ECHO_MAX_WAIT_MS = 2e4;
+      }
+    });
+    function keyRecord(unit, down) {
+      return `\x1B[${WIN32_VK_PACKET};0;${unit};${down ? 1 : 0};0;1_`;
+    }
+    function win32InputModeRecordsForCodePoint(char) {
+      const units = [];
+      for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
+      return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
+    }
+    function win32InputModeTokens(text4) {
+      const tokens = [];
+      let ascii = "";
+      const pushAscii = () => {
+        if (!ascii) return;
+        let last = 0;
+        for (const m of ascii.matchAll(/\x1b\[[0-9;]*[\x40-\x7e]/g)) {
+          if (m.index > last) tokens.push({ text: ascii.slice(last, m.index), atomic: false });
+          tokens.push({ text: m[0], atomic: true });
+          last = m.index + m[0].length;
+        }
+        if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
+        ascii = "";
+      };
+      for (const ch of text4) {
+        if (ch.charCodeAt(0) < 128) {
+          ascii += ch;
+          continue;
+        }
+        pushAscii();
+        tokens.push({ text: win32InputModeRecordsForCodePoint(ch), atomic: true });
+      }
+      pushAscii();
+      return tokens;
+    }
+    function chunkWin32InputMode(text4, maxChars) {
+      return chunkWin32Tokens(win32InputModeTokens(text4), maxChars);
+    }
+    function chunkWin32Tokens(tokens, maxChars) {
+      const size = Math.max(1, Math.floor(maxChars));
+      const segments = [];
+      let current4 = "";
+      const flush = () => {
+        if (current4) {
+          segments.push(current4);
+          current4 = "";
+        }
+      };
+      for (const token of tokens) {
+        if (!token.atomic) {
+          let rest = token.text;
+          while (rest) {
+            const room = size - current4.length;
+            if (room <= 0) {
+              flush();
+              continue;
+            }
+            current4 += rest.slice(0, room);
+            rest = rest.slice(room);
+          }
+          continue;
+        }
+        if (current4.length + token.text.length > size) flush();
+        current4 += token.text;
+      }
+      flush();
+      return segments;
+    }
+    function win32TerminalInputTokens(data) {
+      const tokens = [];
+      let last = 0;
+      for (const m of data.matchAll(TERMINAL_ESCAPE_RE)) {
+        if (m.index > last) tokens.push(...win32InputModeTokens(data.slice(last, m.index)));
+        tokens.push({ text: m[0], atomic: true });
+        last = m.index + m[0].length;
+      }
+      if (last < data.length) tokens.push(...win32InputModeTokens(data.slice(last)));
+      return tokens;
+    }
+    function chunkWin32TerminalInput(data, maxChars) {
+      return chunkWin32Tokens(win32TerminalInputTokens(data), maxChars);
+    }
+    var WIN32_VK_PACKET;
+    var TERMINAL_ESCAPE_RE;
+    var init_win32_input_mode = __esm2({
+      "src/providers/spec/win32-input-mode.ts"() {
+        "use strict";
+        WIN32_VK_PACKET = 231;
+        TERMINAL_ESCAPE_RE = /\x1b\[M[\s\S]{3}|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\]P_^X][\s\S]*?(?:\x07|\x1b\\)|\x1bO[\s\S]|\x1b[\s\S]/gu;
+      }
+    });
+    function isAnchoredSignInViewport(viewport, spec) {
+      if (!viewport || !spec?.transitions) return false;
+      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+      if (!stripped.trim()) return false;
+      const cleaned = stripToolAndCodeLines(stripped);
+      if (!cleaned.trim()) return false;
+      for (const t of spec.transitions) {
+        if (t.to !== "signing_in" || !t.when) continue;
+        if (evaluateConditionPreview(t.when, spec.sections, stripped).result && evaluateConditionPreview(t.when, spec.sections, cleaned).result) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function hasCredentialInputPromptInViewport(viewport) {
+      if (!viewport) return false;
+      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+      if (!stripped.trim()) return false;
+      const cleaned = stripToolAndCodeLines(stripped);
+      if (!cleaned.trim()) return false;
+      for (const candidate of [stripped, cleaned]) {
+        CREDENTIAL_PROMPT_LINE_RE.lastIndex = 0;
+        let lastMatch = null;
+        let m;
+        while ((m = CREDENTIAL_PROMPT_LINE_RE.exec(candidate)) !== null) {
+          lastMatch = m;
+        }
+        if (!lastMatch) return false;
+        const tailAfterPrompt = candidate.slice(lastMatch.index + lastMatch[0].length);
+        const nonEmptyTailLines = tailAfterPrompt.split("\n").filter((l) => l.trim().length > 0);
+        if (nonEmptyTailLines.length > 12) return false;
+        if (POST_CREDENTIAL_ACTIVE_UI_RE.test(tailAfterPrompt)) return false;
+      }
+      return true;
+    }
+    function isSignInOrCredentialViewport(viewport, spec) {
+      if (!viewport) return false;
+      if (hasCredentialInputPromptInViewport(viewport)) return true;
+      if (spec && isAnchoredSignInViewport(viewport, spec)) return true;
+      return false;
+    }
+    var LATCH_WATCHDOG_SLACK_MS;
+    var UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS;
+    var PASTE_PLACEHOLDER_RE;
+    var CREDENTIAL_PROMPT_LINE_RE;
+    var POST_CREDENTIAL_ACTIVE_UI_RE;
+    var SendSubmitEngine;
+    var init_send_submit_engine = __esm2({
+      "src/providers/spec/send-submit-engine.ts"() {
+        "use strict";
+        init_logger();
+        init_fsm_evaluator();
+        init_provider_failure_classifier();
+        init_pty_write_chunking();
+        init_submit_policy();
+        init_win32_input_mode();
+        init_submit_policy();
+        LATCH_WATCHDOG_SLACK_MS = 50;
+        UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
+        PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
+        CREDENTIAL_PROMPT_LINE_RE = /(?:^|\n)[ \t]*(?:[│┃|›❯>][ \t]*)?(?:Paste (?:or type )?your [^\n]*API key\b|Enter (?:your )?(?:[A-Za-z0-9_-]+ )?API key\b|Paste or type your API key below\b|Your key will be saved to [^\n]*config\.toml|If you aren't automatically redirected,\s*paste the authorization code below:|Enter (?:the )?(?:device|verification|authorization) code\b|Verification code:\s+[A-Z0-9-]+|Preparing device code login\b)/gi;
+        POST_CREDENTIAL_ACTIVE_UI_RE = /(?:^|\n)[ \t]*(?:[│┃|❯›>▶●•][ \t]*)?(?:1[.)][ \t]+(?!Sign in\b|Log in\b|Authorize\b|Enter API key\b|Paste API key\b|Provide your own API key\b|Use Gemini API key\b)\S|1[ \t]*\([●○]\)[ \t]+(?!Sign in\b|Paste your\b)\S)|(?:\? for shortcuts|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│[ \t]*>[ \t]*│)/i;
+        SendSubmitEngine = class {
+          constructor(host) {
+            this.host = host;
+          }
+          writeAttempt;
+          writeObservers = /* @__PURE__ */ new Map();
+          observeSendWrite(messageId, observer) {
+            this.writeObservers.set(messageId, observer);
+          }
+          notifyWrite(attempt, state2) {
+            attempt.observer?.(state2);
+            if (state2 === "submitted" && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+          }
+          writeKeys(text4, submit = false, attempt = this.writeAttempt) {
+            let result;
+            try {
+              result = this.host.adapter.send_keys(text4);
+            } catch (error) {
+              if (attempt) this.notifyWrite(attempt, "uncertain");
+              throw error;
+            }
+            if (!attempt) return;
+            const confirmed = result && typeof result.then === "function" ? Promise.resolve(result).then((value) => value !== false, () => false) : Promise.resolve(result === true);
+            if (!submit) attempt.bodyWrites.push(confirmed);
+            if (submit && !attempt.bodyFinished) {
+              this.notifyWrite(attempt, "uncertain");
+              return;
+            }
+            if (submit) {
+              void Promise.all([...attempt.bodyWrites, confirmed]).then((writes) => {
+                this.notifyWrite(attempt, writes.every(Boolean) ? "submitted" : "uncertain");
+                if ((writes.slice(0, -1).some((written) => !written) || this.win32SubmitTimer === null) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+              });
+            }
+          }
+          /** Queued send bodies — see QueuedSendEntry. */
+          pendingSends = [];
+          /** True while a send is written but the FSM has not yet left idle, i.e. the
+           *  composer is mid-submit. Blocks a second send from overwriting the first
+           *  before the CLI has consumed it (see handleSendMessage). */
+          sendInFlight = false;
+          /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
+           *  send the CLI never visibly consumed cannot wedge the queue forever. */
+          sendInFlightAt = 0;
+          /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
+           *  suspended, or 0 when it is free to run. See reserveDrain(). */
+          drainReservedUntil = 0;
+          /** Counter for driver-minted ids of sends that arrived without one. */
+          anonymousSendCounter = 0;
+          /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
+           *  a torn-down driver never writes a queued body into a dead PTY. */
+          pendingSendDrainTimer = null;
+          /** QUEUE-WEDGE: wakes the drain when the in-flight latch is due to release.
+           *  See armLatchWatchdog(). Deliberately NOT part of hasInFlightSubmit():
+           *  nothing of this timer's is in the composer. */
+          latchWatchdogTimer = null;
+          /** SUBMIT-SILENT-FAILURE latch — see lastSubmitUnconfirmed(). */
+          submitUnconfirmed = false;
+          /** Most recent win32 body write, for the submit settle-gate. */
+          lastWin32WriteAt = 0;
+          win32SubmitTimer = null;
+          win32WriteTimer = null;
+          plainSubmitTimer = null;
+          plainSubmitAttempt = null;
+          /** Number of bodies still parked, for shutdown logging. */
+          get queueDepth() {
+            return this.pendingSends.length;
+          }
+          /** Byte lengths of the parked bodies, for the shutdown discard log. */
+          queuedLengths() {
+            return this.pendingSends.map((s2) => s2.text.length);
+          }
+          /** Drop every parked body. Called only from FsmDriver.shutdown(), which logs
+           *  the discard loudly first — these bodies were never written. */
+          discardQueued() {
+            this.pendingSends.length = 0;
+          }
+          /** Cancel every armed write/submit timer. Called from FsmDriver.shutdown()
+           *  so a torn-down driver never fires a CR into a dead PTY. */
+          cancelTimers() {
+            this.writeObservers.clear();
+            this.writeAttempt = void 0;
+            this.plainSubmitAttempt = null;
+            if (this.win32SubmitTimer) {
+              clearTimeout(this.win32SubmitTimer);
+              this.win32SubmitTimer = null;
+            }
+            if (this.win32WriteTimer) {
+              clearTimeout(this.win32WriteTimer);
+              this.win32WriteTimer = null;
+            }
+            if (this.plainSubmitTimer) {
+              clearTimeout(this.plainSubmitTimer);
+              this.plainSubmitTimer = null;
+            }
+            if (this.pendingSendDrainTimer) {
+              clearTimeout(this.pendingSendDrainTimer);
+              this.pendingSendDrainTimer = null;
+            }
+            if (this.latchWatchdogTimer) {
+              clearTimeout(this.latchWatchdogTimer);
+              this.latchWatchdogTimer = null;
+            }
+          }
+          /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
+          sendMessageDuringGeneration(text4, bracketedPaste, messageId) {
+            if (process.platform === "win32") {
+              LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
+              return { accepted: false, reason: "platform_unsupported" };
+            }
+            if (!this.host.readySeenOnce) return { accepted: false, reason: "not_ready" };
+            if (this.host.currentStatus() !== "generating") return { accepted: false, reason: "not_generating" };
+            if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text4.length})`
+            );
+            const attempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
+            if (attempt) this.notifyWrite(attempt, "started");
+            this.actuallySendMessage(text4, bracketedPaste, { midGeneration: true, attempt });
+            return { accepted: true };
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
+          reserveDrain(ttlMs) {
+            this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`
+            );
+          }
+          /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
+          releaseDrain() {
+            if (this.drainReservedUntil === 0) return;
+            this.drainReservedUntil = 0;
+            this.drainPendingSends();
+          }
+          /** True while an out-of-band caller still owns the next write. The TTL is a
+           *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
+          isDrainReserved() {
+            if (this.drainReservedUntil === 0) return false;
+            if (Date.now() >= this.drainReservedUntil) {
+              LOG.warn("FsmDriver", `[${this.host.specTag()}] drain reservation expired \u2014 releasing`);
+              this.drainReservedUntil = 0;
+              return false;
+            }
+            return true;
+          }
+          /** True while a body submitted under `messageId` is still parked in the FIFO. */
+          hasQueuedSend(messageId) {
+            return this.pendingSends.some((s2) => s2.messageId === messageId);
+          }
+          /** The parked ids, oldest first — the FIFO order the idle drain will follow. */
+          queuedMessageIds() {
+            return this.pendingSends.map((s2) => s2.messageId);
+          }
+          /**
+           * SEND-NOW-DOUBLE-SEND: take the body parked under `messageId` out of the
+           * FIFO so the out-of-band caller (send-now, interrupt, cancel) becomes its
+           * ONLY delivery route, and return it — the claimer writes the entry's own
+           * built body, so an attachment reference survives. `null` when nothing is
+           * parked under that id (never parked, or already drained).
+           */
+          claimQueuedSend(messageId) {
+            const index = this.pendingSends.findIndex((s2) => s2.messageId === messageId);
+            if (index < 0) return null;
+            const [entry] = this.pendingSends.splice(index, 1);
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] claimed queued send ${messageId} for out-of-band delivery (len=${entry.text.length}, position=${index + 1}, remaining=${this.pendingSends.length})`
+            );
+            return { entry, index };
+          }
+          /**
+           * Put a claimed entry back where it was, after an out-of-band write was
+           * refused and nothing was written. Then drain: the refusal is often "the
+           * session is no longer generating", i.e. it is idle NOW and the frame that
+           * would have drained the FIFO has already passed.
+           */
+          restoreQueuedSend(claimed) {
+            if (this.hasQueuedSend(claimed.entry.messageId)) return;
+            const index = Math.max(0, Math.min(claimed.index, this.pendingSends.length));
+            this.pendingSends.splice(index, 0, claimed.entry);
+            LOG.info(
+              "FsmDriver",
+              `[${this.host.specTag()}] restored queued send ${claimed.entry.messageId} at position ${index + 1} (queued=${this.pendingSends.length})`
+            );
+            this.drainPendingSends();
+          }
+          /**
+           * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
+           * is genuinely able to accept one: it has been ready at least once, it is
+           * sitting at an idle prompt right now, and no earlier send is still in flight.
+           * Anything else is queued and drained by drainPendingSends() when the machine
+           * next returns to idle.
+           *
+           * Before the fix this consulted ONLY `readySeenOnce` — a one-shot latch — so
+           * every send after the first ignored the live FSM state and could be written
+           * on top of a still-generating turn, braiding the two bodies in the composer
+           * (see the SEND-OVERLAP note above the constants).
+           */
+          handleSendMessage(text4, bracketedPaste, messageId) {
+            if (!this.canSendNow()) {
+              const id4 = messageId || `anon:${++this.anonymousSendCounter}`;
+              this.pendingSends.push({ messageId: id4, text: text4, bracketedPaste });
+              const reason = this.sendBlockedReason();
+              LOG.info(
+                "FsmDriver",
+                `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text4.length}, queued=${this.pendingSends.length})`
+              );
+              return { status: "queued", queueDepth: this.pendingSends.length, reason };
+            }
+            this.beginSend(text4, bracketedPaste, messageId);
+            return { status: "delivered" };
+          }
+          /** True when the most recent canSendNow() check blocked on an anchored
+           *  sign-in viewport while the FSM still reported idle. */
+          lastPreSendAuthBlocked = false;
+          isPreSendAuthRequired() {
+            let viewport = "";
+            try {
+              viewport = this.host.adapter?.snapshot?.() ?? "";
+            } catch {
+              viewport = "";
+            }
+            if (isAnchoredSignInViewport(viewport, this.host.spec)) {
+              this.lastPreSendAuthBlocked = true;
+              this.host.onPreSendAuthRequired?.();
+              return true;
+            }
+            this.lastPreSendAuthBlocked = false;
+            return false;
+          }
+          /** True when a send can be written to the PTY right now. */
+          canSendNow() {
+            this.lastPreSendAuthBlocked = false;
+            if (!this.host.readySeenOnce) return false;
+            if (this.isSendInFlight()) return false;
+            if (this.host.currentStateId === "signing_in" && this.isPreSendAuthRequired()) return false;
+            if (this.host.currentStatus() !== "idle") return false;
+            if (this.isPreSendAuthRequired()) return false;
+            return true;
+          }
+          /** Human-readable reason a send was queued — logged, never used for control flow. */
+          sendBlockedReason() {
+            if (!this.host.readySeenOnce) return "machine not ready yet";
+            if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+            if (this.lastPreSendAuthBlocked) return "auth_required";
+            return `machine is ${this.host.currentStatus()}`;
+          }
+          /** In-flight latch with its self-expiry applied, so a send the CLI never
+           *  visibly consumed cannot wedge the queue permanently. */
+          isSendInFlight() {
+            if (!this.sendInFlight) return false;
+            if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
+              LOG.warn("FsmDriver", `[${this.host.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms \u2014 releasing`);
+              this.sendInFlight = false;
+              return false;
+            }
+            return true;
+          }
+          /** Mark a send as in flight and write it. */
+          beginSend(text4, bracketedPaste, messageId) {
+            this.writeAttempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
+            if (this.writeAttempt) this.notifyWrite(this.writeAttempt, "started");
+            this.sendInFlight = true;
+            this.sendInFlightAt = Date.now();
+            this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
+            this.actuallySendMessage(text4, bracketedPaste);
+          }
+          /**
+           * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
+           * releases in two ways — the FSM leaves idle, or the latch outlives
+           * SEND_IN_FLIGHT_MAX_MS — and both were only ever NOTICED inside
+           * drainPendingSends(), which the driver calls from its evaluation loop, i.e.
+           * on a PTY frame. A send the CLI never consumed produces no frame: the
+           * terminal sits at a quiet prompt, so the expired latch was never observed
+           * and every body queued behind it stayed parked for good ("ㅇㅇ", "ㅇㅇ?"
+           * behind a submit that was typed into a startup dialog; the session read
+           * idle, the dashboard showed nothing wrong, and only an unrelated keystroke
+           * — a frame — finally drained them).
+           *
+           * So the engine wakes itself: one timer, re-armed per send, that runs the
+           * same drain at the moment the latch is due. It decides nothing new — the
+           * drain still gates on the driver's status and on the latch — it only
+           * guarantees the gate is CONSULTED when there is no frame to do it.
+           */
+          armLatchWatchdog(delayMs) {
+            if (this.latchWatchdogTimer) clearTimeout(this.latchWatchdogTimer);
+            this.latchWatchdogTimer = setTimeout(() => {
+              this.latchWatchdogTimer = null;
+              this.drainPendingSends();
+            }, Math.max(0, delayMs));
+          }
+          /**
+           * Release the in-flight latch and write the next queued send, if the machine
+           * can take one. Called from the FSM evaluation loop, so it runs on the same
+           * frame the machine reaches idle — the queue never waits for an extra PTY
+           * frame that a quiet CLI would never produce (the same hazard maybeMarkReady
+           * documents for the very first message).
+           */
+          drainPendingSends() {
+            if (!this.host.readySeenOnce) return;
+            const status = this.host.currentStatus();
+            if (this.sendInFlight && status !== "idle") {
+              this.sendInFlight = false;
+            }
+            if (status !== "idle") return;
+            if (this.isDrainReserved()) {
+              LOG.info(
+                "FsmDriver",
+                `[${this.host.specTag()}] drain held \u2014 an out-of-band send owns the next write (queued=${this.pendingSends.length})`
+              );
+              return;
+            }
+            if (this.isSendInFlight()) return;
+            if (this.pendingSends.length === 0) return;
+            if (this.isPreSendAuthRequired()) return;
+            const next = this.pendingSends.shift();
+            LOG.info("FsmDriver", `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
+            if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
+            this.pendingSendDrainTimer = setTimeout(() => {
+              this.pendingSendDrainTimer = null;
+              if (this.host.currentStatus() !== "idle" || this.isPreSendAuthRequired()) {
+                this.pendingSends.unshift(next);
+                this.sendInFlight = false;
+                if (this.latchWatchdogTimer) {
+                  clearTimeout(this.latchWatchdogTimer);
+                  this.latchWatchdogTimer = null;
+                }
+                return;
+              }
+              this.beginSend(next.text, next.bracketedPaste, next.messageId);
+            }, 50);
+            this.sendInFlight = true;
+            this.sendInFlightAt = Date.now();
+            this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
+          }
+          /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
+           *  resend budget without the agent ever leaving the composer. A caller seeing
+           *  this should treat an apparent 'generating' status as untrustworthy. */
+          lastSubmitUnconfirmed() {
+            return this.submitUnconfirmed;
+          }
+          /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
+           *  tracked timer so the shutdown drain gate can see it and shutdown() can
+           *  cancel it instead of letting it fire into a killed PTY. */
+          schedulePlainSubmit(submitKey, delayMs, receiptAttempt = this.writeAttempt) {
+            const attempt = receiptAttempt;
+            if (this.plainSubmitTimer) {
+              clearTimeout(this.plainSubmitTimer);
+              this.plainSubmitTimer = null;
+              if (this.plainSubmitAttempt && this.plainSubmitAttempt !== attempt) {
+                this.notifyWrite(this.plainSubmitAttempt, "uncertain");
+                if (this.writeObservers.get(this.plainSubmitAttempt.messageId) === this.plainSubmitAttempt.observer) {
+                  this.writeObservers.delete(this.plainSubmitAttempt.messageId);
+                }
+              }
+            }
+            this.plainSubmitAttempt = attempt;
+            this.plainSubmitTimer = setTimeout(() => {
+              this.plainSubmitTimer = null;
+              this.plainSubmitAttempt = null;
+              this.writeKeys(submitKey, true, attempt);
+            }, delayMs);
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
+           *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
+           *  the body (or part of it) is in the composer and its submit key has not yet
+           *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
+           *  written yet — the composer holds nothing of theirs; they are discarded with
+           *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
+           *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
+           *  would hold shutdown for a whole turn boundary, not a submit).
+           *
+           *  NOTIF-IMMEDIACY (Tier 2) coverage note: a MID-GENERATION split write is
+           *  covered by this predicate WITHOUT a new timer field, because
+           *  actuallySendMessage's midGeneration branch schedules its separated CR
+           *  through `schedulePlainSubmit` — i.e. it arms `plainSubmitTimer`, which is
+           *  already listed below. This matters: mesh completion notifications now take
+           *  that path, and the composer-residue defect this gate exists for (oss
+           *  7cd5b777) is exactly "daemon exits between the body write and its CR". The
+           *  coupling is load-bearing, so if the mid-generation branch ever stops using
+           *  schedulePlainSubmit it MUST add its timer here in the same change. */
+          hasInFlightSubmit() {
+            return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
+          }
+          /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
+           *  than callback-wiring: the four timers above re-arm each other across
+           *  several phases (write → echo-gate → resend net) and a poll is the only
+           *  join point that needs no knowledge of which phase is active. */
+          whenSubmitDrained(timeoutMs) {
+            if (!this.hasInFlightSubmit()) return Promise.resolve(true);
+            const deadline = Date.now() + Math.max(0, timeoutMs);
+            return new Promise((resolve58) => {
+              const poll2 = () => {
+                if (!this.hasInFlightSubmit()) {
+                  resolve58(true);
+                  return;
+                }
+                if (Date.now() >= deadline) {
+                  resolve58(false);
+                  return;
+                }
+                setTimeout(poll2, 100);
+              };
+              setTimeout(poll2, 100);
+            });
+          }
+          actuallySendMessage(text4, bracketedPaste, opts) {
+            const attempt = opts?.midGeneration ? opts.attempt ?? null : this.writeAttempt;
+            const sm = this.host.spec.send_message;
+            this.submitUnconfirmed = false;
+            const perChar = sm.delay_ms_per_char ?? 0;
+            const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text4, this.host.opts.manifestSendDelayMs);
+            const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
+            if (opts?.midGeneration) {
+              const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text4}${BRACKETED_PASTE_CLOSE}` : text4;
+              this.writeKeys(body, false, attempt);
+              if (attempt) attempt.bodyFinished = true;
+              this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), attempt);
+              return;
+            }
+            if (wrapInPaste) {
+              this.writeKeys(`${BRACKETED_PASTE_OPEN}${text4}${BRACKETED_PASTE_CLOSE}`, false, attempt);
+              if (attempt) attempt.bodyFinished = true;
+              this.markBodyWrite();
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4, { skipEchoGate: true });
+              return;
+            }
+            if (process.platform === "win32") {
+              this.writeWin32Body(text4);
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4);
+              return;
+            }
+            if (perChar === 0 && shouldUseVerifiedSubmit(text4)) {
+              this.writeKeys(text4, false, attempt);
+              if (attempt) attempt.bodyFinished = true;
+              this.markBodyWrite();
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4);
+              return;
+            }
+            if (perChar === 0) {
+              this.writeKeys(text4, false, attempt);
+              if (attempt) attempt.bodyFinished = true;
+              if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
+              else this.writeKeys(sm.submit_key, true, attempt);
+              return;
+            }
+            let i = 0;
+            const iv = setInterval(() => {
+              if (i >= text4.length) {
+                clearInterval(iv);
+                if (attempt) attempt.bodyFinished = true;
+                this.schedulePlainSubmit(sm.submit_key, beforeSubmit, attempt);
+                return;
+              }
+              this.writeKeys(text4[i], false, attempt);
+              i += 1;
+            }, perChar);
+          }
+          /** Record a win32 body write so the settle-gate counts it as input activity
+           *  even before the echo arrives. */
+          markBodyWrite() {
+            this.lastWin32WriteAt = Date.now();
+          }
+          /** Most recent win32 input activity — a write we issued OR a PTY output chunk
+           *  (echo). The submit settle-gate waits for this to go quiet. */
+          lastWin32InputActivityAt() {
+            return Math.max(this.host.lastPtyDataAt, this.lastWin32WriteAt);
+          }
+          /**
+           * Write the message body to the PTY for win32, paced into bounded chunks. A
+           * single unbounded ConPTY write can overflow the input pipe and drop leading
+           * bytes; splitting it with a short inter-chunk gap keeps the console input
+           * buffer from overflowing. Small bodies still go out in a single write. Each
+           * write advances lastWin32WriteAt so the submit settle-gate keeps waiting until
+           * the final segment is out and echoed.
+           *
+           * FIX-B-v2: a body that contains an embedded newline cannot be written raw —
+           * on the real win32 Ink/ConPTY composer each '\n' SUBMITS the preceding line as
+           * its own entry, truncating the prompt to only the tail fragment. So a
+           * newline-bearing body is rewritten so its embedded newlines never submit:
+           *   - 'paste' (default): wrap the body in a bracketed-paste (ESC[200~ … ESC[201~)
+           *     — the composer takes the whole thing, newlines and all, as pasted text.
+           *   - 'soft_newline': replace each embedded newline with a non-submitting
+           *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
+           * The trailing submit CR is NOT written here — it stays separate and is fired
+           * later by scheduleVerifiedSubmit (concern (A)). The bracketed-paste markers are
+           * written as their own atomic segments (never chunked), so chunking can never
+           * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
+           */
+          writeWin32Body(text4) {
+            const attempt = this.writeAttempt;
+            if (this.win32WriteTimer) {
+              clearTimeout(this.win32WriteTimer);
+              this.win32WriteTimer = null;
+            }
+            const hasNewline = /\r?\n/.test(text4);
+            const mode = resolveWin32SubmitMode();
+            const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
+            let segments;
+            if (!hasNewline) {
+              segments = chunkBody(text4, WIN32_PTY_WRITE_CHUNK_CHARS);
+            } else if (mode === "soft_newline") {
+              const rewritten = text4.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+              segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
+            } else {
+              segments = [
+                WIN32_BRACKETED_PASTE_OPEN,
+                ...chunkBody(text4, WIN32_PTY_WRITE_CHUNK_CHARS),
+                WIN32_BRACKETED_PASTE_CLOSE
+              ];
+            }
+            if (segments.length <= 1) {
+              this.markBodyWrite();
+              this.writeKeys(segments[0] ?? text4, false, attempt);
+              if (attempt) attempt.bodyFinished = true;
+              return;
+            }
+            let idx = 0;
+            const writeNext = () => {
+              this.win32WriteTimer = null;
+              if (idx >= segments.length) return;
+              this.markBodyWrite();
+              this.writeKeys(segments[idx], false, attempt);
+              idx += 1;
+              if (idx < segments.length) {
+                this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
+              } else if (attempt) attempt.bodyFinished = true;
+            };
+            writeNext();
+          }
+          /**
+           * win32 submit. Two phases:
+           *
+           *  Phase 1 (echo-gate): hold the first CR until the body text is CONFIRMED in the
+           *  composer (its whitespace-collapsed tail appears in the rendered screen) AND the
+           *  PTY output is then quiet for WIN32_SUBMIT_SETTLE_MS (the full, possibly multi-KB
+           *  / multiline body has finished arriving). This replaces a bare output-quiet
+           *  settle: an early write that races claude's boot is buffered, not dropped, so the
+           *  screen can go quiet with the body NOT YET in the composer — a quiet-only gate
+           *  would then fire a CR into an empty composer (no submit). Waiting on the echo
+           *  closes that. Honors an initial minimum delay and a generous WIN32_ECHO_MAX_WAIT_MS
+           *  last-resort blind fire so a body that truly never confirms still submits (carried
+           *  by phase 2) rather than hanging. A settled session echoes immediately → no delay.
+           *
+           *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
+           *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
+           *  newline) resend, up to WIN32_SUBMIT_MAX_RESENDS. The first CR always fires
+           *  (a stale/edge status never suppresses it); resends are gated on still being
+           *  idle and stop the instant the agent leaves idle (submitted → generating /
+           *  approval). This preserves the win32 lone-CR-swallow handling.
+           */
+          scheduleVerifiedSubmit(submitKey, initialDelayMs, body, opts) {
+            const writeAttempt = this.writeAttempt;
+            if (this.win32SubmitTimer) {
+              clearTimeout(this.win32SubmitTimer);
+              this.win32SubmitTimer = null;
+            }
+            const startedAt = Date.now();
+            const maxResends = resolveMaxSubmitResends(this.host.spec.send_message?.max_submit_resends);
+            const normBody = normalizeForEcho(body);
+            const headProbe = normBody.slice(0, WIN32_ECHO_PROBE_CHARS);
+            const tailProbe = normBody.slice(-WIN32_ECHO_PROBE_CHARS);
+            const bodyEchoed = () => {
+              if (!normBody) return true;
+              const visible = normalizeForEcho(this.host.adapter.snapshot());
+              if (PASTE_PLACEHOLDER_RE.test(visible)) return true;
+              if (!visible.includes(tailProbe)) return false;
+              if (this.host.spec.send_message?.echo_confirm === "tail") return true;
+              const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
+              return full.includes(headProbe);
+            };
+            const fire = (attempt, bodyConfirmed) => {
+              this.win32SubmitTimer = null;
+              this.writeKeys(submitKey, true, writeAttempt);
+              if (attempt + 1 >= maxResends) {
+                if (this.host.currentStatus() === "idle") {
+                  this.submitUnconfirmed = true;
+                  LOG.error(
+                    "FsmDriver",
+                    `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${maxResends} submit-key attempts (len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). The message is likely still sitting unsent in the composer \u2014 the agent is NOT working on it.`
+                  );
+                  this.sendInFlight = false;
+                  if (this.pendingSends.length > 0) {
+                    LOG.warn(
+                      "FsmDriver",
+                      `[${this.host.specTag()}] releasing the in-flight slot after an unconfirmed submit \u2014 ${this.pendingSends.length} queued send(s) will be attempted next`
+                    );
+                  }
+                  this.armLatchWatchdog(UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS);
+                }
+                return;
+              }
+              const gapMs = bodyConfirmed ? WIN32_SUBMIT_RESEND_GAP_MS : resolveResendBackoffMs(attempt, WIN32_SUBMIT_RESEND_GAP_MS);
+              this.win32SubmitTimer = setTimeout(() => {
+                if (this.host.currentStatus() !== "idle") {
+                  this.win32SubmitTimer = null;
+                  if (attempt > 0) {
+                    LOG.warn("FsmDriver", `[${this.host.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
+                  }
+                  return;
+                }
+                fire(attempt + 1, bodyConfirmed || bodyEchoed());
+              }, gapMs);
+            };
+            const waitForEcho = () => {
+              this.win32SubmitTimer = null;
+              const now = Date.now();
+              const quietFor = now - this.lastWin32InputActivityAt();
+              const waited = now - startedAt;
+              const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
+              if (opts?.skipEchoGate ? true : bodyEchoed() && settled) {
+                fire(0, true);
+                return;
+              }
+              if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
+                LOG.warn(
+                  "FsmDriver",
+                  `[${this.host.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) \u2014 firing submit key blind; resend net will back off and verify rather than fast-fire.`
+                );
+                fire(0, false);
+                return;
+              }
+              this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
+            };
+            if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForEcho, initialDelayMs);
+            else waitForEcho();
+          }
+        };
+      }
+    });
     function matchNumberedChoiceIndex(line) {
       const m = NUMBERED_CHOICE_LINE_RE.exec(line);
       if (!m) return null;
@@ -99282,7 +100520,7 @@ ${detail.join("\n")}` : stripped;
       if (modalEndRow < viewportStartRow) return empty;
       if (modalEndRow < lastNonBlankRow) return empty;
       let minStartRow = firstNonBlankRow;
-      for (const b of choiceBlocks) {
+      for (const b of validChoiceBlocks) {
         if (b !== lastChoiceBlock && b.endRow < choiceStartRow) {
           minStartRow = Math.max(minStartRow, b.endRow + 1);
         }
@@ -99389,6 +100627,16 @@ ${detail.join("\n")}` : stripped;
       if (!m) return false;
       const btn = m.buttons.find((b) => b.index === index);
       if (!btn) return false;
+      if (ctx.readViewport) {
+        try {
+          const viewport = ctx.readViewport();
+          if (viewport && isSignInOrCredentialViewport(viewport, ctx.spec)) {
+            LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 live viewport contains an anchored sign-in screen or credential input prompt. No keys written.`);
+            return false;
+          }
+        } catch {
+        }
+      }
       if (isMultiSelectCheckboxPicker(ctx.state, ctx.readScrollbackLines)) {
         LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
         return false;
@@ -99422,6 +100670,7 @@ ${detail.join("\n")}` : stripped;
         init_evaluator();
         init_fsm_types();
         init_interactive_prompt();
+        init_send_submit_engine();
         init_logger();
         NUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→●○◉◯▶]\s*)?(?:\(\s*[●○xX ]\s*\)\s*)?(?:\[[ xX]\]|[☐☒◻◼])?\s*(\d+)(?:\.\s*(?:\[[ xX]\]|[☐☒◻◼])?\s*\S|\s*\([●○xX ]\)\s*\S)/;
         UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(?:Yes,\s*I trust this folder|No,\s*exit)\s*$|Allow once\s+Allow always\s+Reject|\bConfirm\s+Cancel\b|^\s*Yes,\s*proceed\s+y\s*$|^\s*No,\s*quit\s+n\s*$/i;
@@ -99552,7 +100801,7 @@ ${detail.join("\n")}` : stripped;
       if (isAny(cond)) {
         const children = cond.any.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some((c) => c.result);
-        const pending = children.filter((c) => !c.result).map((c) => c.remainingMs ?? Infinity);
+        const pending = children.filter((c) => !c.result).map((c) => c.remainingMs && c.remainingMs > 0 ? c.remainingMs : Infinity);
         const remainingMs = result ? 0 : pending.length ? Math.min(...pending) : 0;
         return { kind: "any", result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
       }
@@ -99654,7 +100903,7 @@ ${detail.join("\n")}` : stripped;
       const liveModal = resolveLiveModalSlice(lines, cursor, viewportStartRow ?? 0);
       const modalSections = liveModal.hasLiveModal ? resolveSections(spec.sections ?? {}, liveModal.lines) : Object.keys(spec.sections ?? {}).map((id4) => ({ id: id4, fromLine: 0, toLine: 0, text: "" }));
       const modalCursor = liveModal.hasLiveModal && cursor ? { row: Math.max(0, cursor.row - liveModal.startRow), col: cursor.col } : cursor;
-      const sections = resolveSections(spec.sections ?? {}, lines);
+      const sections = resolveSections(spec.sections ?? {}, lines, viewportStartRow ?? 0);
       const outgoing = outgoingTransitions(spec, currentStateId);
       const transitions = [];
       let fired = null;
@@ -99713,6 +100962,10 @@ ${detail.join("\n")}` : stripped;
         }
         transitions.push(te);
         if (fires && !fired) fired = te;
+      }
+      const signInFired = transitions.find((te) => te.fires && te.to === "signing_in");
+      if (signInFired) {
+        fired = signInFired;
       }
       if (fired && !stateById(spec, fired.to)) {
         legacyTrace.push({ kind: "state_skip", text: `transition target ${fired.to} not found` });
@@ -168409,6 +169662,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       screenTimer = null;
       tickTimer = null;
       lastScreen = "";
+      screenVersion = 0;
+      cachedScreen = "";
+      cachedScreenVersion = -1;
       /** Debug-only ring buffer of PTY input/output/resize/cursor events. */
       events = [];
       lastCursorKey = "";
@@ -168439,6 +169695,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             "exit",
             `exitCode=${exitCode === null ? "unknown" : exitCode}${signal ? ` signal=${signal}` : ""}`
           );
+          if (this.cachedScreenVersion !== this.screenVersion) {
+            try {
+              this.computeScreen();
+            } catch {
+            }
+          }
           this.handlers.on_exit?.({ ...info, exitCode, signal });
           this.pty = null;
         });
@@ -168455,9 +169717,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.recordEvent("resize", `${cols}x${rows}`);
         this.pty?.resize(cols, rows);
         this.screen.resize(rows, cols);
+        this.screenVersion += 1;
       }
       snapshot() {
-        return this.lastScreen || this.computeScreen();
+        if (this.cachedScreenVersion === this.screenVersion) {
+          return this.cachedScreen;
+        }
+        return this.pty !== null ? this.computeScreen() : this.lastScreen || this.computeScreen();
       }
       /**
        * Full-buffer snapshot including scrollback history. Unlike snapshot()
@@ -168554,6 +169820,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       kill() {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+          try {
+            this.computeScreen();
+          } catch {
+          }
+        }
         try {
           this.pty?.kill();
         } catch {
@@ -168567,6 +169839,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        *  anyway) is killed, as before. */
       detach() {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+          try {
+            this.computeScreen();
+          } catch {
+          }
+        }
         try {
           if (typeof this.pty?.detach === "function") this.pty.detach();
           else this.pty?.kill();
@@ -168578,6 +169856,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       onChunk(chunk) {
         this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
         this.screen.write(chunk);
+        this.screenVersion += 1;
         try {
           this.handlers.on_pty_data?.(chunk);
         } catch {
@@ -168585,7 +169864,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (this.screenTimer) return;
         this.screenTimer = setTimeout(() => {
           this.screenTimer = null;
-          const snap = this.computeScreen();
+          const snap = this.snapshot();
           const cur = this.screen.getCursorPosition();
           const curKey = `${cur.row},${cur.col}`;
           if (curKey !== this.lastCursorKey) {
@@ -168601,7 +169880,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }, this.screenDebounceMs);
       }
       computeScreen() {
-        return this.screen.getText();
+        const text4 = this.screen.getText();
+        this.cachedScreen = text4;
+        this.cachedScreenVersion = this.screenVersion;
+        return text4;
       }
       stopTimers() {
         if (this.screenTimer) {
@@ -168926,763 +170208,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_fsm_types();
     init_fsm_loader();
-    init_logger();
-    var WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
-    var WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
-    function chunkPreservingSurrogates(text4, size) {
-      const chunks = [];
-      let offset = 0;
-      while (offset < text4.length) {
-        let end = Math.min(text4.length, offset + size);
-        if (end < text4.length) {
-          const code = text4.charCodeAt(end - 1);
-          if (code >= 55296 && code <= 56319) end -= 1;
-        }
-        if (end <= offset) end = Math.min(text4.length, offset + size);
-        chunks.push(text4.slice(offset, end));
-        offset = end;
-      }
-      return chunks;
-    }
-    function countNewlines(s2) {
-      let n = 0;
-      for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
-      return n;
-    }
-    var SUBMIT_DELAY_FLOOR_MS = 200;
-    var SUBMIT_DRAIN_SHUTDOWN_MAX_WAIT_MS = 3e4;
-    var VERIFIED_SUBMIT_MIN_CHARS = 512;
-    function shouldUseVerifiedSubmit(text4, platform10 = process.platform) {
-      if (platform10 === "win32") return true;
-      return text4.length >= VERIFIED_SUBMIT_MIN_CHARS;
-    }
-    var WIN32_BRACKETED_PASTE_OPEN = "\x1B[200~";
-    var WIN32_BRACKETED_PASTE_CLOSE = "\x1B[201~";
-    var BRACKETED_PASTE_OPEN = WIN32_BRACKETED_PASTE_OPEN;
-    var BRACKETED_PASTE_CLOSE = WIN32_BRACKETED_PASTE_CLOSE;
-    var WIN32_SOFT_NEWLINE = "\x1B[27;2;13~";
-    function resolveWin32SubmitMode(env2 = process.env) {
-      return env2.ADHDEV_WIN32_SUBMIT_MODE === "soft_newline" ? "soft_newline" : "paste";
-    }
-    function normalizeForEcho(s2) {
-      return s2.replace(/\s+/g, "");
-    }
-    function resolveSubmitDelayMs(specBeforeSubmit, text4, manifestSendDelayMs) {
-      const lines = countNewlines(text4);
-      const linesBonus = Math.min(800, lines * 80);
-      const lengthBonus = Math.min(800, Math.floor(text4.length / 1e3) * 200);
-      const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
-      const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
-      return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
-    }
-    var chunkPreservingSurrogates2 = chunkPreservingSurrogates;
-    function guessExt(mime) {
-      if (/png/i.test(mime)) return ".png";
-      if (/jpe?g/i.test(mime)) return ".jpg";
-      if (/gif/i.test(mime)) return ".gif";
-      if (/webp/i.test(mime)) return ".webp";
-      return ".bin";
-    }
-    var MID_GENERATION_SUBMIT_MIN_GAP_MS = 400;
-    var SEND_IN_FLIGHT_MAX_MS = 6e4;
-    var WIN32_SUBMIT_RESEND_GAP_MS = 350;
-    var WIN32_SUBMIT_MAX_RESENDS = 14;
-    function resolveMaxSubmitResends(specMaxResends) {
-      if (typeof specMaxResends === "number" && Number.isInteger(specMaxResends) && specMaxResends > 0 && specMaxResends <= WIN32_SUBMIT_MAX_RESENDS) {
-        return specMaxResends;
-      }
-      return WIN32_SUBMIT_MAX_RESENDS;
-    }
-    function resolveResendBackoffMs(attempt, baseGapMs = WIN32_SUBMIT_RESEND_GAP_MS) {
-      const factor = Math.min(10, attempt + 1);
-      return baseGapMs * factor;
-    }
-    var WIN32_SUBMIT_SETTLE_MS = 500;
-    var WIN32_SUBMIT_SETTLE_POLL_MS = 120;
-    var WIN32_ECHO_PROBE_CHARS = 16;
-    var WIN32_ECHO_MAX_WAIT_MS = 2e4;
-    var WIN32_VK_PACKET = 231;
-    function keyRecord(unit, down) {
-      return `\x1B[${WIN32_VK_PACKET};0;${unit};${down ? 1 : 0};0;1_`;
-    }
-    function win32InputModeRecordsForCodePoint(char) {
-      const units = [];
-      for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
-      return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
-    }
-    function win32InputModeTokens(text4) {
-      const tokens = [];
-      let ascii = "";
-      const pushAscii = () => {
-        if (!ascii) return;
-        let last = 0;
-        for (const m of ascii.matchAll(/\x1b\[[0-9;]*[\x40-\x7e]/g)) {
-          if (m.index > last) tokens.push({ text: ascii.slice(last, m.index), atomic: false });
-          tokens.push({ text: m[0], atomic: true });
-          last = m.index + m[0].length;
-        }
-        if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
-        ascii = "";
-      };
-      for (const ch of text4) {
-        if (ch.charCodeAt(0) < 128) {
-          ascii += ch;
-          continue;
-        }
-        pushAscii();
-        tokens.push({ text: win32InputModeRecordsForCodePoint(ch), atomic: true });
-      }
-      pushAscii();
-      return tokens;
-    }
-    function chunkWin32InputMode(text4, maxChars) {
-      return chunkWin32Tokens(win32InputModeTokens(text4), maxChars);
-    }
-    function chunkWin32Tokens(tokens, maxChars) {
-      const size = Math.max(1, Math.floor(maxChars));
-      const segments = [];
-      let current4 = "";
-      const flush = () => {
-        if (current4) {
-          segments.push(current4);
-          current4 = "";
-        }
-      };
-      for (const token of tokens) {
-        if (!token.atomic) {
-          let rest = token.text;
-          while (rest) {
-            const room = size - current4.length;
-            if (room <= 0) {
-              flush();
-              continue;
-            }
-            current4 += rest.slice(0, room);
-            rest = rest.slice(room);
-          }
-          continue;
-        }
-        if (current4.length + token.text.length > size) flush();
-        current4 += token.text;
-      }
-      flush();
-      return segments;
-    }
-    var TERMINAL_ESCAPE_RE = /\x1b\[M[\s\S]{3}|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\]P_^X][\s\S]*?(?:\x07|\x1b\\)|\x1bO[\s\S]|\x1b[\s\S]/gu;
-    function win32TerminalInputTokens(data) {
-      const tokens = [];
-      let last = 0;
-      for (const m of data.matchAll(TERMINAL_ESCAPE_RE)) {
-        if (m.index > last) tokens.push(...win32InputModeTokens(data.slice(last, m.index)));
-        tokens.push({ text: m[0], atomic: true });
-        last = m.index + m[0].length;
-      }
-      if (last < data.length) tokens.push(...win32InputModeTokens(data.slice(last)));
-      return tokens;
-    }
-    function chunkWin32TerminalInput(data, maxChars) {
-      return chunkWin32Tokens(win32TerminalInputTokens(data), maxChars);
-    }
-    var LATCH_WATCHDOG_SLACK_MS = 50;
-    var UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
-    var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
-    var SendSubmitEngine = class {
-      constructor(host) {
-        this.host = host;
-      }
-      writeAttempt;
-      writeObservers = /* @__PURE__ */ new Map();
-      observeSendWrite(messageId, observer) {
-        this.writeObservers.set(messageId, observer);
-      }
-      notifyWrite(attempt, state2) {
-        attempt.observer?.(state2);
-        if (state2 === "submitted" && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
-      }
-      writeKeys(text4, submit = false, attempt = this.writeAttempt) {
-        let result;
-        try {
-          result = this.host.adapter.send_keys(text4);
-        } catch (error) {
-          if (attempt) this.notifyWrite(attempt, "uncertain");
-          throw error;
-        }
-        if (!attempt) return;
-        const confirmed = result && typeof result.then === "function" ? Promise.resolve(result).then((value) => value !== false, () => false) : Promise.resolve(result === true);
-        if (!submit) attempt.bodyWrites.push(confirmed);
-        if (submit && !attempt.bodyFinished) {
-          this.notifyWrite(attempt, "uncertain");
-          return;
-        }
-        if (submit) {
-          void Promise.all([...attempt.bodyWrites, confirmed]).then((writes) => {
-            this.notifyWrite(attempt, writes.every(Boolean) ? "submitted" : "uncertain");
-            if ((writes.slice(0, -1).some((written) => !written) || this.win32SubmitTimer === null) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
-          });
-        }
-      }
-      /** Queued send bodies — see QueuedSendEntry. */
-      pendingSends = [];
-      /** True while a send is written but the FSM has not yet left idle, i.e. the
-       *  composer is mid-submit. Blocks a second send from overwriting the first
-       *  before the CLI has consumed it (see handleSendMessage). */
-      sendInFlight = false;
-      /** Wall-clock (ms) the in-flight send was written. Bounds sendInFlight so a
-       *  send the CLI never visibly consumed cannot wedge the queue forever. */
-      sendInFlightAt = 0;
-      /** SEND-NOW-WRONG-ITEM: wall clock until which the autonomous FIFO drain is
-       *  suspended, or 0 when it is free to run. See reserveDrain(). */
-      drainReservedUntil = 0;
-      /** Counter for driver-minted ids of sends that arrived without one. */
-      anonymousSendCounter = 0;
-      /** Pending queued-send drain timer, tracked so shutdown() can cancel it and
-       *  a torn-down driver never writes a queued body into a dead PTY. */
-      pendingSendDrainTimer = null;
-      /** QUEUE-WEDGE: wakes the drain when the in-flight latch is due to release.
-       *  See armLatchWatchdog(). Deliberately NOT part of hasInFlightSubmit():
-       *  nothing of this timer's is in the composer. */
-      latchWatchdogTimer = null;
-      /** SUBMIT-SILENT-FAILURE latch — see lastSubmitUnconfirmed(). */
-      submitUnconfirmed = false;
-      /** Most recent win32 body write, for the submit settle-gate. */
-      lastWin32WriteAt = 0;
-      win32SubmitTimer = null;
-      win32WriteTimer = null;
-      plainSubmitTimer = null;
-      plainSubmitAttempt = null;
-      /** Number of bodies still parked, for shutdown logging. */
-      get queueDepth() {
-        return this.pendingSends.length;
-      }
-      /** Byte lengths of the parked bodies, for the shutdown discard log. */
-      queuedLengths() {
-        return this.pendingSends.map((s2) => s2.text.length);
-      }
-      /** Drop every parked body. Called only from FsmDriver.shutdown(), which logs
-       *  the discard loudly first — these bodies were never written. */
-      discardQueued() {
-        this.pendingSends.length = 0;
-      }
-      /** Cancel every armed write/submit timer. Called from FsmDriver.shutdown()
-       *  so a torn-down driver never fires a CR into a dead PTY. */
-      cancelTimers() {
-        this.writeObservers.clear();
-        this.writeAttempt = void 0;
-        this.plainSubmitAttempt = null;
-        if (this.win32SubmitTimer) {
-          clearTimeout(this.win32SubmitTimer);
-          this.win32SubmitTimer = null;
-        }
-        if (this.win32WriteTimer) {
-          clearTimeout(this.win32WriteTimer);
-          this.win32WriteTimer = null;
-        }
-        if (this.plainSubmitTimer) {
-          clearTimeout(this.plainSubmitTimer);
-          this.plainSubmitTimer = null;
-        }
-        if (this.pendingSendDrainTimer) {
-          clearTimeout(this.pendingSendDrainTimer);
-          this.pendingSendDrainTimer = null;
-        }
-        if (this.latchWatchdogTimer) {
-          clearTimeout(this.latchWatchdogTimer);
-          this.latchWatchdogTimer = null;
-        }
-      }
-      /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text4, bracketedPaste, messageId) {
-        if (process.platform === "win32") {
-          LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
-          return { accepted: false, reason: "platform_unsupported" };
-        }
-        if (!this.host.readySeenOnce) return { accepted: false, reason: "not_ready" };
-        if (this.host.currentStatus() !== "generating") return { accepted: false, reason: "not_generating" };
-        if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
-        LOG.info(
-          "FsmDriver",
-          `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text4.length})`
-        );
-        const attempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
-        if (attempt) this.notifyWrite(attempt, "started");
-        this.actuallySendMessage(text4, bracketedPaste, { midGeneration: true, attempt });
-        return { accepted: true };
-      }
-      /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
-      reserveDrain(ttlMs) {
-        this.drainReservedUntil = Date.now() + Math.max(0, ttlMs);
-        LOG.info(
-          "FsmDriver",
-          `[${this.host.specTag()}] FIFO drain reserved for ${ttlMs}ms (queued=${this.pendingSends.length})`
-        );
-      }
-      /** SEND-NOW-WRONG-ITEM: see ISpecDriver.releaseDrain. */
-      releaseDrain() {
-        if (this.drainReservedUntil === 0) return;
-        this.drainReservedUntil = 0;
-        this.drainPendingSends();
-      }
-      /** True while an out-of-band caller still owns the next write. The TTL is a
-       *  self-heal: a caller that dies mid-sequence must not wedge the queue. */
-      isDrainReserved() {
-        if (this.drainReservedUntil === 0) return false;
-        if (Date.now() >= this.drainReservedUntil) {
-          LOG.warn("FsmDriver", `[${this.host.specTag()}] drain reservation expired \u2014 releasing`);
-          this.drainReservedUntil = 0;
-          return false;
-        }
-        return true;
-      }
-      /** True while a body submitted under `messageId` is still parked in the FIFO. */
-      hasQueuedSend(messageId) {
-        return this.pendingSends.some((s2) => s2.messageId === messageId);
-      }
-      /** The parked ids, oldest first — the FIFO order the idle drain will follow. */
-      queuedMessageIds() {
-        return this.pendingSends.map((s2) => s2.messageId);
-      }
-      /**
-       * SEND-NOW-DOUBLE-SEND: take the body parked under `messageId` out of the
-       * FIFO so the out-of-band caller (send-now, interrupt, cancel) becomes its
-       * ONLY delivery route, and return it — the claimer writes the entry's own
-       * built body, so an attachment reference survives. `null` when nothing is
-       * parked under that id (never parked, or already drained).
-       */
-      claimQueuedSend(messageId) {
-        const index = this.pendingSends.findIndex((s2) => s2.messageId === messageId);
-        if (index < 0) return null;
-        const [entry] = this.pendingSends.splice(index, 1);
-        LOG.info(
-          "FsmDriver",
-          `[${this.host.specTag()}] claimed queued send ${messageId} for out-of-band delivery (len=${entry.text.length}, position=${index + 1}, remaining=${this.pendingSends.length})`
-        );
-        return { entry, index };
-      }
-      /**
-       * Put a claimed entry back where it was, after an out-of-band write was
-       * refused and nothing was written. Then drain: the refusal is often "the
-       * session is no longer generating", i.e. it is idle NOW and the frame that
-       * would have drained the FIFO has already passed.
-       */
-      restoreQueuedSend(claimed) {
-        if (this.hasQueuedSend(claimed.entry.messageId)) return;
-        const index = Math.max(0, Math.min(claimed.index, this.pendingSends.length));
-        this.pendingSends.splice(index, 0, claimed.entry);
-        LOG.info(
-          "FsmDriver",
-          `[${this.host.specTag()}] restored queued send ${claimed.entry.messageId} at position ${index + 1} (queued=${this.pendingSends.length})`
-        );
-        this.drainPendingSends();
-      }
-      /**
-       * SEND-OVERLAP gate. A send may only go straight to the PTY when the machine
-       * is genuinely able to accept one: it has been ready at least once, it is
-       * sitting at an idle prompt right now, and no earlier send is still in flight.
-       * Anything else is queued and drained by drainPendingSends() when the machine
-       * next returns to idle.
-       *
-       * Before the fix this consulted ONLY `readySeenOnce` — a one-shot latch — so
-       * every send after the first ignored the live FSM state and could be written
-       * on top of a still-generating turn, braiding the two bodies in the composer
-       * (see the SEND-OVERLAP note above the constants).
-       */
-      handleSendMessage(text4, bracketedPaste, messageId) {
-        if (!this.canSendNow()) {
-          const id4 = messageId || `anon:${++this.anonymousSendCounter}`;
-          this.pendingSends.push({ messageId: id4, text: text4, bracketedPaste });
-          const reason = this.sendBlockedReason();
-          LOG.info(
-            "FsmDriver",
-            `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text4.length}, queued=${this.pendingSends.length})`
-          );
-          return { status: "queued", queueDepth: this.pendingSends.length, reason };
-        }
-        this.beginSend(text4, bracketedPaste, messageId);
-        return { status: "delivered" };
-      }
-      /** True when a send can be written to the PTY right now. */
-      canSendNow() {
-        if (!this.host.readySeenOnce) return false;
-        if (this.isSendInFlight()) return false;
-        return this.host.currentStatus() === "idle";
-      }
-      /** Human-readable reason a send was queued — logged, never used for control flow. */
-      sendBlockedReason() {
-        if (!this.host.readySeenOnce) return "machine not ready yet";
-        if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
-        return `machine is ${this.host.currentStatus()}`;
-      }
-      /** In-flight latch with its self-expiry applied, so a send the CLI never
-       *  visibly consumed cannot wedge the queue permanently. */
-      isSendInFlight() {
-        if (!this.sendInFlight) return false;
-        if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
-          LOG.warn("FsmDriver", `[${this.host.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms \u2014 releasing`);
-          this.sendInFlight = false;
-          return false;
-        }
-        return true;
-      }
-      /** Mark a send as in flight and write it. */
-      beginSend(text4, bracketedPaste, messageId) {
-        this.writeAttempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
-        if (this.writeAttempt) this.notifyWrite(this.writeAttempt, "started");
-        this.sendInFlight = true;
-        this.sendInFlightAt = Date.now();
-        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
-        this.actuallySendMessage(text4, bracketedPaste);
-      }
-      /**
-       * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
-       * releases in two ways — the FSM leaves idle, or the latch outlives
-       * SEND_IN_FLIGHT_MAX_MS — and both were only ever NOTICED inside
-       * drainPendingSends(), which the driver calls from its evaluation loop, i.e.
-       * on a PTY frame. A send the CLI never consumed produces no frame: the
-       * terminal sits at a quiet prompt, so the expired latch was never observed
-       * and every body queued behind it stayed parked for good ("ㅇㅇ", "ㅇㅇ?"
-       * behind a submit that was typed into a startup dialog; the session read
-       * idle, the dashboard showed nothing wrong, and only an unrelated keystroke
-       * — a frame — finally drained them).
-       *
-       * So the engine wakes itself: one timer, re-armed per send, that runs the
-       * same drain at the moment the latch is due. It decides nothing new — the
-       * drain still gates on the driver's status and on the latch — it only
-       * guarantees the gate is CONSULTED when there is no frame to do it.
-       */
-      armLatchWatchdog(delayMs) {
-        if (this.latchWatchdogTimer) clearTimeout(this.latchWatchdogTimer);
-        this.latchWatchdogTimer = setTimeout(() => {
-          this.latchWatchdogTimer = null;
-          this.drainPendingSends();
-        }, Math.max(0, delayMs));
-      }
-      /**
-       * Release the in-flight latch and write the next queued send, if the machine
-       * can take one. Called from the FSM evaluation loop, so it runs on the same
-       * frame the machine reaches idle — the queue never waits for an extra PTY
-       * frame that a quiet CLI would never produce (the same hazard maybeMarkReady
-       * documents for the very first message).
-       */
-      drainPendingSends() {
-        if (!this.host.readySeenOnce) return;
-        const status = this.host.currentStatus();
-        if (this.sendInFlight && status !== "idle") {
-          this.sendInFlight = false;
-        }
-        if (status !== "idle") return;
-        if (this.isDrainReserved()) {
-          LOG.info(
-            "FsmDriver",
-            `[${this.host.specTag()}] drain held \u2014 an out-of-band send owns the next write (queued=${this.pendingSends.length})`
-          );
-          return;
-        }
-        if (this.isSendInFlight()) return;
-        if (this.pendingSends.length === 0) return;
-        const next = this.pendingSends.shift();
-        LOG.info("FsmDriver", `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
-        if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
-        this.pendingSendDrainTimer = setTimeout(() => {
-          this.pendingSendDrainTimer = null;
-          this.beginSend(next.text, next.bracketedPaste, next.messageId);
-        }, 50);
-        this.sendInFlight = true;
-        this.sendInFlightAt = Date.now();
-        this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
-      }
-      /** SUBMIT-SILENT-FAILURE: true when the most recent send exhausted its submit
-       *  resend budget without the agent ever leaving the composer. A caller seeing
-       *  this should treat an apparent 'generating' status as untrustworthy. */
-      lastSubmitUnconfirmed() {
-        return this.submitUnconfirmed;
-      }
-      /** ENTER-LOSS layer ①: schedule the short-body / perChar submit key through a
-       *  tracked timer so the shutdown drain gate can see it and shutdown() can
-       *  cancel it instead of letting it fire into a killed PTY. */
-      schedulePlainSubmit(submitKey, delayMs, receiptAttempt = this.writeAttempt) {
-        const attempt = receiptAttempt;
-        if (this.plainSubmitTimer) {
-          clearTimeout(this.plainSubmitTimer);
-          this.plainSubmitTimer = null;
-          if (this.plainSubmitAttempt && this.plainSubmitAttempt !== attempt) {
-            this.notifyWrite(this.plainSubmitAttempt, "uncertain");
-            if (this.writeObservers.get(this.plainSubmitAttempt.messageId) === this.plainSubmitAttempt.observer) {
-              this.writeObservers.delete(this.plainSubmitAttempt.messageId);
-            }
-          }
-        }
-        this.plainSubmitAttempt = attempt;
-        this.plainSubmitTimer = setTimeout(() => {
-          this.plainSubmitTimer = null;
-          this.plainSubmitAttempt = null;
-          this.writeKeys(submitKey, true, attempt);
-        }, delayMs);
-      }
-      /** ENTER-LOSS layer ① — see ISpecDriver.hasInFlightSubmit. A submit is in
-       *  flight while any of the body-write / CR-hold / CR-resend timers is armed:
-       *  the body (or part of it) is in the composer and its submit key has not yet
-       *  been confirmed. Deliberately does NOT include `pendingSends` (bodies never
-       *  written yet — the composer holds nothing of theirs; they are discarded with
-       *  their own loud log by shutdown()) nor `sendInFlight` alone (that latch stays
-       *  set until the FSM *leaves* idle, i.e. after a successful CR — waiting on it
-       *  would hold shutdown for a whole turn boundary, not a submit).
-       *
-       *  NOTIF-IMMEDIACY (Tier 2) coverage note: a MID-GENERATION split write is
-       *  covered by this predicate WITHOUT a new timer field, because
-       *  actuallySendMessage's midGeneration branch schedules its separated CR
-       *  through `schedulePlainSubmit` — i.e. it arms `plainSubmitTimer`, which is
-       *  already listed below. This matters: mesh completion notifications now take
-       *  that path, and the composer-residue defect this gate exists for (oss
-       *  7cd5b777) is exactly "daemon exits between the body write and its CR". The
-       *  coupling is load-bearing, so if the mid-generation branch ever stops using
-       *  schedulePlainSubmit it MUST add its timer here in the same change. */
-      hasInFlightSubmit() {
-        return this.win32SubmitTimer !== null || this.win32WriteTimer !== null || this.plainSubmitTimer !== null || this.pendingSendDrainTimer !== null;
-      }
-      /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
-       *  than callback-wiring: the four timers above re-arm each other across
-       *  several phases (write → echo-gate → resend net) and a poll is the only
-       *  join point that needs no knowledge of which phase is active. */
-      whenSubmitDrained(timeoutMs) {
-        if (!this.hasInFlightSubmit()) return Promise.resolve(true);
-        const deadline = Date.now() + Math.max(0, timeoutMs);
-        return new Promise((resolve58) => {
-          const poll2 = () => {
-            if (!this.hasInFlightSubmit()) {
-              resolve58(true);
-              return;
-            }
-            if (Date.now() >= deadline) {
-              resolve58(false);
-              return;
-            }
-            setTimeout(poll2, 100);
-          };
-          setTimeout(poll2, 100);
-        });
-      }
-      actuallySendMessage(text4, bracketedPaste, opts) {
-        const attempt = opts?.midGeneration ? opts.attempt ?? null : this.writeAttempt;
-        const sm = this.host.spec.send_message;
-        this.submitUnconfirmed = false;
-        const perChar = sm.delay_ms_per_char ?? 0;
-        const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text4, this.host.opts.manifestSendDelayMs);
-        const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
-        if (opts?.midGeneration) {
-          const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text4}${BRACKETED_PASTE_CLOSE}` : text4;
-          this.writeKeys(body, false, attempt);
-          if (attempt) attempt.bodyFinished = true;
-          this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), attempt);
-          return;
-        }
-        if (wrapInPaste) {
-          this.writeKeys(`${BRACKETED_PASTE_OPEN}${text4}${BRACKETED_PASTE_CLOSE}`, false, attempt);
-          if (attempt) attempt.bodyFinished = true;
-          this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4, { skipEchoGate: true });
-          return;
-        }
-        if (process.platform === "win32") {
-          this.writeWin32Body(text4);
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4);
-          return;
-        }
-        if (perChar === 0 && shouldUseVerifiedSubmit(text4)) {
-          this.writeKeys(text4, false, attempt);
-          if (attempt) attempt.bodyFinished = true;
-          this.markBodyWrite();
-          this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text4);
-          return;
-        }
-        if (perChar === 0) {
-          this.writeKeys(text4, false, attempt);
-          if (attempt) attempt.bodyFinished = true;
-          if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
-          else this.writeKeys(sm.submit_key, true, attempt);
-          return;
-        }
-        let i = 0;
-        const iv = setInterval(() => {
-          if (i >= text4.length) {
-            clearInterval(iv);
-            if (attempt) attempt.bodyFinished = true;
-            this.schedulePlainSubmit(sm.submit_key, beforeSubmit, attempt);
-            return;
-          }
-          this.writeKeys(text4[i], false, attempt);
-          i += 1;
-        }, perChar);
-      }
-      /** Record a win32 body write so the settle-gate counts it as input activity
-       *  even before the echo arrives. */
-      markBodyWrite() {
-        this.lastWin32WriteAt = Date.now();
-      }
-      /** Most recent win32 input activity — a write we issued OR a PTY output chunk
-       *  (echo). The submit settle-gate waits for this to go quiet. */
-      lastWin32InputActivityAt() {
-        return Math.max(this.host.lastPtyDataAt, this.lastWin32WriteAt);
-      }
-      /**
-       * Write the message body to the PTY for win32, paced into bounded chunks. A
-       * single unbounded ConPTY write can overflow the input pipe and drop leading
-       * bytes; splitting it with a short inter-chunk gap keeps the console input
-       * buffer from overflowing. Small bodies still go out in a single write. Each
-       * write advances lastWin32WriteAt so the submit settle-gate keeps waiting until
-       * the final segment is out and echoed.
-       *
-       * FIX-B-v2: a body that contains an embedded newline cannot be written raw —
-       * on the real win32 Ink/ConPTY composer each '\n' SUBMITS the preceding line as
-       * its own entry, truncating the prompt to only the tail fragment. So a
-       * newline-bearing body is rewritten so its embedded newlines never submit:
-       *   - 'paste' (default): wrap the body in a bracketed-paste (ESC[200~ … ESC[201~)
-       *     — the composer takes the whole thing, newlines and all, as pasted text.
-       *   - 'soft_newline': replace each embedded newline with a non-submitting
-       *     Shift+Enter (CSI-u) so the body is typed as one multi-line entry.
-       * The trailing submit CR is NOT written here — it stays separate and is fired
-       * later by scheduleVerifiedSubmit (concern (A)). The bracketed-paste markers are
-       * written as their own atomic segments (never chunked), so chunking can never
-       * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
-       */
-      writeWin32Body(text4) {
-        const attempt = this.writeAttempt;
-        if (this.win32WriteTimer) {
-          clearTimeout(this.win32WriteTimer);
-          this.win32WriteTimer = null;
-        }
-        const hasNewline = /\r?\n/.test(text4);
-        const mode = resolveWin32SubmitMode();
-        const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
-        let segments;
-        if (!hasNewline) {
-          segments = chunkBody(text4, WIN32_PTY_WRITE_CHUNK_CHARS);
-        } else if (mode === "soft_newline") {
-          const rewritten = text4.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
-          segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
-        } else {
-          segments = [
-            WIN32_BRACKETED_PASTE_OPEN,
-            ...chunkBody(text4, WIN32_PTY_WRITE_CHUNK_CHARS),
-            WIN32_BRACKETED_PASTE_CLOSE
-          ];
-        }
-        if (segments.length <= 1) {
-          this.markBodyWrite();
-          this.writeKeys(segments[0] ?? text4, false, attempt);
-          if (attempt) attempt.bodyFinished = true;
-          return;
-        }
-        let idx = 0;
-        const writeNext = () => {
-          this.win32WriteTimer = null;
-          if (idx >= segments.length) return;
-          this.markBodyWrite();
-          this.writeKeys(segments[idx], false, attempt);
-          idx += 1;
-          if (idx < segments.length) {
-            this.win32WriteTimer = setTimeout(writeNext, WIN32_PTY_WRITE_CHUNK_GAP_MS);
-          } else if (attempt) attempt.bodyFinished = true;
-        };
-        writeNext();
-      }
-      /**
-       * win32 submit. Two phases:
-       *
-       *  Phase 1 (echo-gate): hold the first CR until the body text is CONFIRMED in the
-       *  composer (its whitespace-collapsed tail appears in the rendered screen) AND the
-       *  PTY output is then quiet for WIN32_SUBMIT_SETTLE_MS (the full, possibly multi-KB
-       *  / multiline body has finished arriving). This replaces a bare output-quiet
-       *  settle: an early write that races claude's boot is buffered, not dropped, so the
-       *  screen can go quiet with the body NOT YET in the composer — a quiet-only gate
-       *  would then fire a CR into an empty composer (no submit). Waiting on the echo
-       *  closes that. Honors an initial minimum delay and a generous WIN32_ECHO_MAX_WAIT_MS
-       *  last-resort blind fire so a body that truly never confirms still submits (carried
-       *  by phase 2) rather than hanging. A settled session echoes immediately → no delay.
-       *
-       *  Phase 2 (verified resend — unchanged): send the submit key, wait a gap, and
-       *  if the FSM is still 'idle' (the CR was absorbed as a multiline-paste
-       *  newline) resend, up to WIN32_SUBMIT_MAX_RESENDS. The first CR always fires
-       *  (a stale/edge status never suppresses it); resends are gated on still being
-       *  idle and stop the instant the agent leaves idle (submitted → generating /
-       *  approval). This preserves the win32 lone-CR-swallow handling.
-       */
-      scheduleVerifiedSubmit(submitKey, initialDelayMs, body, opts) {
-        const writeAttempt = this.writeAttempt;
-        if (this.win32SubmitTimer) {
-          clearTimeout(this.win32SubmitTimer);
-          this.win32SubmitTimer = null;
-        }
-        const startedAt = Date.now();
-        const maxResends = resolveMaxSubmitResends(this.host.spec.send_message?.max_submit_resends);
-        const normBody = normalizeForEcho(body);
-        const headProbe = normBody.slice(0, WIN32_ECHO_PROBE_CHARS);
-        const tailProbe = normBody.slice(-WIN32_ECHO_PROBE_CHARS);
-        const bodyEchoed = () => {
-          if (!normBody) return true;
-          const visible = normalizeForEcho(this.host.adapter.snapshot());
-          if (PASTE_PLACEHOLDER_RE.test(visible)) return true;
-          if (!visible.includes(tailProbe)) return false;
-          if (this.host.spec.send_message?.echo_confirm === "tail") return true;
-          const full = normalizeForEcho(this.host.adapter.snapshotWithScrollback());
-          return full.includes(headProbe);
-        };
-        const fire = (attempt, bodyConfirmed) => {
-          this.win32SubmitTimer = null;
-          this.writeKeys(submitKey, true, writeAttempt);
-          if (attempt + 1 >= maxResends) {
-            if (this.host.currentStatus() === "idle") {
-              this.submitUnconfirmed = true;
-              LOG.error(
-                "FsmDriver",
-                `[${this.host.specTag()}] SUBMIT NOT CONFIRMED after ${maxResends} submit-key attempts (len=${body.length}, echoed=${bodyEchoed()}, waited=${Date.now() - startedAt}ms). The message is likely still sitting unsent in the composer \u2014 the agent is NOT working on it.`
-              );
-              this.sendInFlight = false;
-              if (this.pendingSends.length > 0) {
-                LOG.warn(
-                  "FsmDriver",
-                  `[${this.host.specTag()}] releasing the in-flight slot after an unconfirmed submit \u2014 ${this.pendingSends.length} queued send(s) will be attempted next`
-                );
-              }
-              this.armLatchWatchdog(UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS);
-            }
-            return;
-          }
-          const gapMs = bodyConfirmed ? WIN32_SUBMIT_RESEND_GAP_MS : resolveResendBackoffMs(attempt, WIN32_SUBMIT_RESEND_GAP_MS);
-          this.win32SubmitTimer = setTimeout(() => {
-            if (this.host.currentStatus() !== "idle") {
-              this.win32SubmitTimer = null;
-              if (attempt > 0) {
-                LOG.warn("FsmDriver", `[${this.host.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
-              }
-              return;
-            }
-            fire(attempt + 1, bodyConfirmed || bodyEchoed());
-          }, gapMs);
-        };
-        const waitForEcho = () => {
-          this.win32SubmitTimer = null;
-          const now = Date.now();
-          const quietFor = now - this.lastWin32InputActivityAt();
-          const waited = now - startedAt;
-          const settled = quietFor >= WIN32_SUBMIT_SETTLE_MS;
-          if (opts?.skipEchoGate ? true : bodyEchoed() && settled) {
-            fire(0, true);
-            return;
-          }
-          if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
-            LOG.warn(
-              "FsmDriver",
-              `[${this.host.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) \u2014 firing submit key blind; resend net will back off and verify rather than fast-fire.`
-            );
-            fire(0, false);
-            return;
-          }
-          this.win32SubmitTimer = setTimeout(waitForEcho, WIN32_SUBMIT_SETTLE_POLL_MS);
-        };
-        if (initialDelayMs > 0) this.win32SubmitTimer = setTimeout(waitForEcho, initialDelayMs);
-        else waitForEcho();
-      }
-    };
+    init_send_submit_engine();
     init_logger();
     var DEFAULT_REDRAW_NUDGE_SILENT_MS = 45e3;
     var DEFAULT_REDRAW_NUDGE_MAX_PER_EPISODE = 4;
@@ -170645,6 +171171,7 @@ trust_level = "trusted"
         LOG.info("FsmDriver", `[${this.host.specTag()}] stall refocus log summary: ${suppressed} later reinjection(s) suppressed after first ${STALL_REFOCUS_INFO_LIMIT}`);
       }
     };
+    init_submit_policy();
     var fsmDriverSeq = 0;
     var FsmDriver = class _FsmDriver {
       constructor(opts) {
@@ -170689,7 +171216,8 @@ trust_level = "trusted"
           specTag: () => this.specTag(),
           // ★ The engine gates on this but never computes it — see the note on
           // the `sends` field.
-          currentStatus: () => this.currentStatus()
+          currentStatus: () => this.currentStatus(),
+          onPreSendAuthRequired: () => this.enterPreSendSigningIn()
         });
         this.redrawNudge = new RedrawNudger({
           isGenerating: () => this.currentStatus() === "generating",
@@ -171221,7 +171749,7 @@ trust_level = "trusted"
           regionLastChangedAt: this.regionLastChangedAt,
           stableVerdictCache: this.stableVerdictCache
         }, currentLines, cursor, now);
-        const markerScan = this.bgMarker.enabled ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines)) : null;
+        const markerScan = this.bgMarker.enabled ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines, currentLines.length - screen.split("\n").length)) : null;
         const prevForEval = this.prevScreenLines;
         const ev = this.evalFsmNow(this.bgMarker.frame(guard2, markerScan), screen, cursor, now);
         this.lastFsmEval = ev;
@@ -171277,23 +171805,29 @@ trust_level = "trusted"
       }
       commitTransition(fired, now, ev) {
         const from = this.currentStateId;
-        this.pushFsmSnapshot(from, fired, now, ev);
+        if (ev) this.pushFsmSnapshot(from, fired, now, ev);
         this.currentStateId = fired.to;
         this.stateEnteredAt = now;
         this.lastModalParseMissKey = null;
         this.regionLastChangedAt.clear();
         this.stableVerdictCache.clear();
-        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, {
-          reason: "transition",
-          via: `${from}\u2192${fired.to}`,
-          matchedRules: summarizeTransition(fired)
-        });
+        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, { reason: "transition", via: `${from}\u2192${fired.to}`, matchedRules: ev ? summarizeTransition(fired) : [fired.label] });
         LOG.info("FsmDriver", `[${this.specTag()}] ${from} \u2192 ${fired.to} (${fired.label})`);
         const statusOf = (id4) => {
           const st = stateById(this.spec, id4);
           return st ? statusForState(st) : "idle";
         };
         this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
+      }
+      /** Transition to `signing_in` when the pre-send screen guard detects an active anchored login screen while idle. */
+      enterPreSendSigningIn() {
+        if (this.currentStatus() !== "idle") return;
+        if (!stateById(this.spec, "signing_in") || this.currentStateId === "signing_in") return;
+        this.commitTransition({ to: "signing_in", label: "pre_send_auth_guard", eligible: true, holdSatisfied: true, holdRemainingMs: 0, condResult: true, fires: true, priority: 0 }, Date.now());
+        if (!this.tornDown && this.adapter.hasActivePty()) {
+          this.reevaluate(true);
+          this.armPostTransitionReevaluate();
+        } else this.emitStateChanged(true);
       }
       /** Snapshot the full FSM evaluation that produced a transition into the
        *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]
@@ -171602,6 +172136,8 @@ trust_level = "trusted"
           modal: this.currentEval?.modal,
           state: stateById(this.spec, this.currentStateId),
           specId: this.spec.id,
+          spec: this.spec,
+          readViewport: () => this.adapter.snapshot(),
           readScrollbackLines: () => this.scrollbackLines(),
           sendKeys: (keys) => this.adapter.send_keys(keys),
           submitConfirm: (keys) => this.submitModalConfirm(keys)
@@ -172475,118 +173011,7 @@ ${text4}` : text4;
       }
       return messages.filter((m) => typeof m.content === "string" && m.content.trim().length > 0);
     }
-    var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
-    var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-    function stripAnsi2(text4) {
-      const s2 = String(text4 || "");
-      if (s2.indexOf("\x1B") === -1) return s2;
-      return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
-    }
-    var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
-    function hasProviderFailureEnvelope(text4) {
-      return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
-    }
-    function detectProviderFailure(output, _exitCode) {
-      const text4 = stripAnsi2(output).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text4) return null;
-      const quota = hasProviderFailureEnvelope(text4) && [
-        /\b(?:usage|quota|credit)\s+limit\b/,
-        /\bquota\s*(?:exhausted|refresh)/,
-        /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text4));
-      if (quota) {
-        return {
-          errorReason: "quota_exceeded",
-          failureKind: "quota",
-          message: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
-        };
-      }
-      const billing = [
-        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
-        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
-        /\bpayment_required\b/,
-        /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text4));
-      if (billing) {
-        return {
-          errorReason: "billing_failed",
-          failureKind: "billing",
-          message: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying."
-        };
-      }
-      const auth = [
-        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
-        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
-        /\b(?:token_expired|invalid_token)\b/,
-        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
-        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
-        // AUTH-EXPIRY-GENERALIZATION (D4). The two rules above that could plausibly
-        // have matched claude-cli's live banner both miss it:
-        //   "Login expired · Please run /login"
-        // `login\s*(?:error|failed|required)` wants a failure NOUN after "login"
-        // ("expired" is not in that set), and the `please run login` rule wants the
-        // bare word — the banner says the slash command `/login`. So the session
-        // produced no classification at all and stayed dispatch-eligible for a day
-        // (incident session b23d10ee, 2026-09-20 → 09-21).
-        //
-        // These two rules are STATEMENT-ANCHORED rather than bare presence matches.
-        // The anchor (start of tail, or immediately after sentence punctuation such
-        // as `.` `!` `?` `·` `:` `;`) is what separates a banner the CLI printed from
-        // an agent narrating the same words mid-sentence. That distinction is not
-        // theoretical: the unanchored form classified
-        //   "I will add a test for the login expired banner rendering"
-        // as auth_failed, which would have stranded the very session doing that work
-        // — the overcorrection this gate must not commit. It is the structural
-        // equivalent of the quota bucket's failure-envelope precondition above,
-        // adapted to wording that carries no HTTP status.
-        /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/
-      ].some((pattern) => pattern.test(text4));
-      if (auth) {
-        return {
-          errorReason: "auth_failed",
-          failureKind: "auth",
-          // Provider-neutral wording: the AUTH axis now serves every spec-backed
-          // CLI (see observeProviderFailureOutput), so naming Kimi here would send
-          // a claude-cli operator to re-login against the wrong tool. The billing
-          // and quota messages above stay Kimi-specific because those axes remain
-          // kimi-scoped.
-          //
-          // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
-          // (assert: detectProviderFailure(message) === null). It travels
-          // into mesh failure events that the daemon INJECTS into coordinator and
-          // worker PTYs — the previous wording ("Provider authentication failed…")
-          // matched the bare `authentication failed` rule above, so every delivery
-          // of an auth-failure event poisoned the receiving session's own tail and
-          // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
-          // wording out of every pattern in this file when editing it.
-          message: AUTH_FAILURE_MESSAGE
-        };
-      }
-      return null;
-    }
-    var AUTH_ONLY_SEGMENT_RE = new RegExp("^(?:" + [
-      // "Login expired", "OAuth token has expired", "Your session has expired"
-      String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
-      // "Please run /login", "Run /login to re-authenticate"
-      String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
-      // "Not logged in", "Invalid API key", "Authentication required"
-      String.raw`not\s+(?:logged|signed)\s+in`,
-      String.raw`invalid\s+api\s+key`,
-      String.raw`(?:authentication|login)\s+(?:required|failed)`,
-      // "API Error: 401 {…authentication_error…}" — the CLI's raw 401 echo.
-      String.raw`api\s+error:\s*401\b.*`
-    ].join("|") + ")$");
-    var AUTH_ONLY_REPLY_MAX_CHARS = 600;
-    function detectAuthFailureOnlyReply(reply) {
-      const text4 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text4 || text4.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-      const segments = (/^api\s+error:\s*401\b/.test(text4) ? text4.split(/\s*·\s*/) : text4.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
-      if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
-      const failure7 = detectProviderFailure(text4);
-      return failure7?.failureKind === "auth" ? failure7 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
-    }
+    init_provider_failure_classifier();
     function buildSpecDebugSnapshot(v, driver) {
       let screen = "";
       let sections;
@@ -173000,7 +173425,7 @@ ${text4}` : text4;
         };
       }
       if (state2.status === "waiting_external") {
-        return { ...base, status: "waiting_approval" };
+        return { ...base, status: "waiting_approval", waitKind: "external" };
       }
       if (state2.status === "owner_attention") {
         return {
@@ -173890,6 +174315,8 @@ ${text4}` : text4;
       }
     }
     init_logger();
+    init_provider_failure_classifier();
+    init_provider_failure_classifier();
     var PROVIDER_MARKERS = {
       "codex-cli": /chatgpt\.com|backend-api\/|wham\/usage|\bcodex(?:-cli)?\b|\bopenai\b/i,
       "claude-cli": /\banthropic\b|\bclaude(?:-cli)?\b|claude\.ai/i,
@@ -174013,10 +174440,27 @@ ${text4}` : text4;
       return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply));
     }
     var TAIL_BYTES4 = 16 * 1024;
-    var STUCK_BUSY_ESCAPE_MS = 6e4;
     var MIN_SUSPECT_AGE_MS = 5e3;
+    var MID_TURN_AUTH_CONFIRM_MS = 15e3;
+    var MID_TURN_QUIET_MS = 5e3;
     var ADVISORY_COOLDOWN_MS = 10 * 6e4;
     var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
+    var KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
+    var ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|api\s+error\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{))|(?:[●✗✖⚠!]\s+)?(?:(?:http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S))/i;
+    function hasAnchoredMidTurnAuthFailure(cliType, rawSurface) {
+      const masked = maskForeignProviderText(cliType, rawSurface);
+      const stripped = stripAnsi2(masked).replace(/\r\n?/g, "\n");
+      const filtered = stripToolAndCodeLines(stripped);
+      if (!filtered.trim()) return false;
+      const rawNonEmpty = stripped.split("\n").filter((l) => l.trim().length > 0);
+      const bottomWindow = new Set(rawNonEmpty.slice(-8));
+      for (const line of filtered.split("\n")) {
+        if (ANCHORED_MID_TURN_AUTH_LINE_RE.test(line) && bottomWindow.has(line)) {
+          return true;
+        }
+      }
+      return false;
+    }
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
@@ -174058,21 +174502,30 @@ ${text4}` : text4;
       const ageMs2 = now - suspect.suspectedAtMs;
       if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
       if (input.submitInFlight) return {};
-      if (input.midTurn && ageMs2 < STUCK_BUSY_ESCAPE_MS) return {};
-      state2.suspect = null;
-      if (ctx.isCoordinator) return {};
       let screen = "";
       try {
         screen = input.readScreen() || "";
       } catch {
         screen = "";
       }
-      const confirmed = classifyAuthBillingOutput(ctx.cliType, screen || input.tail);
+      const surface = screen || input.tail;
+      if (input.midTurn) {
+        if (ageMs2 < MID_TURN_AUTH_CONFIRM_MS) return {};
+        if (input.quietMs !== void 0 && input.quietMs < MID_TURN_QUIET_MS) return {};
+        if (!hasAnchoredMidTurnAuthFailure(ctx.cliType, surface)) return {};
+      }
+      if (!input.midTurn || ctx.cliType !== "kimi") {
+        state2.suspect = null;
+      }
+      if (ctx.isCoordinator) return {};
+      const confirmed = classifyAuthBillingOutput(ctx.cliType, surface);
       if (!confirmed) {
         LOG.info("SpecAdapter", `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) \u2014 dismissed as quoted content`);
         return { clearTail: true };
       }
-      if (ctx.cliType === "kimi") return { latch: confirmed };
+      if (!input.midTurn && ctx.cliType === "kimi" && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
+        return { latch: confirmed };
+      }
       if (now - state2.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
       state2.advisoryNotifiedAtMs = now;
       LOG.warn("SpecAdapter", `[${ctx.cliType}] possible ${confirmed.failureKind} failure ON SCREEN at turn boundary (session=${ctx.sessionLabel}) \u2014 ADVISORY ONLY: session left running and dispatchable, coordinator notified; stopping it is the coordinator's decision`);
@@ -174086,6 +174539,7 @@ ${text4}` : text4;
         }
       };
     }
+    init_provider_failure_classifier();
     var DEFAULT_CAP_BYTES = 64 * 1024;
     var RawTail = class {
       constructor(capBytes = DEFAULT_CAP_BYTES) {
@@ -174195,6 +174649,8 @@ ${text4}` : text4;
         return Buffer.byteLength(this.buf, "utf8");
       }
     };
+    init_pty_write_chunking();
+    init_win32_input_mode();
     var Win32RawInputWriter = class {
       constructor(sink2, options = {}) {
         this.sink = sink2;
@@ -175022,9 +175478,13 @@ ${text4}` : text4;
       /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
       maybeConfirmLiveAuthBillingSuspect() {
         if (!this.liveAuth?.suspect || this.providerFailure || this.exited) return;
+        const lastOutputAt = this.driver?.getLastOutputAt?.();
         const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
-          // FSM status is idle | generating | approval — anything but idle is mid-turn.
-          midTurn: !!this.latestState && this.latestState.status !== "idle",
+          // FSM status is idle | generating | approval | waiting_external — anything
+          // other than a settled post-boot idle (`starting` defaults to status 'idle'
+          // in fsm-types before readySeen) is mid-turn / non-idle.
+          midTurn: !!this.latestState && (this.latestState.status !== "idle" || this.latestState.id === "starting"),
+          quietMs: typeof lastOutputAt === "number" && lastOutputAt > 0 ? Math.max(0, Date.now() - lastOutputAt) : void 0,
           readScreen: () => typeof this.driver?.snapshot === "function" ? this.driver.snapshot() : "",
           tail: this.rawTail.strippedTail(TAIL_BYTES4),
           submitInFlight: typeof this.driver?.hasInFlightSubmit === "function" && this.driver.hasInFlightSubmit()
@@ -176748,6 +177208,7 @@ ${JSON.stringify(replies)}
       const pad = (value) => String(value).padStart(2, "0");
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
     }
+    init_send_submit_engine();
     var APPROVAL_SETTLE_MS = 600;
     var APPROVAL_GATE_HYSTERESIS_MS = 1500;
     var APPROVAL_FLAP_CONTINUITY_MS = 6e3;
@@ -176775,7 +177236,38 @@ ${JSON.stringify(replies)}
       const picked = pickLeastPrivilegeApprovalButton(buttons, host.provider);
       return picked.index >= 0 ? picked : null;
     }
+    var LOGIN_BUTTON_LABEL_RE = /^(?:\d+[.)\s]*(?:\([●○]\)\s*)?)?(?:Sign in\b|Log in\b|Authorize via browser\b|Provide your own API key\b|Use Gemini API key\b|Paste your (?:xAI )?API key\b|Enter (?:your )?API key\b)/i;
+    function isAutoApproveBlockedBySignInViewport(host, adapterStatus, modal) {
+      if (adapterStatus?.isAnchoredSignInViewport === true) return true;
+      const rawButtons = Array.isArray(modal?.buttons) ? modal.buttons : [];
+      if (rawButtons.some((b) => LOGIN_BUTTON_LABEL_RE.test(String(b || "").trim()))) {
+        return true;
+      }
+      const adapterAny = host?.adapter;
+      if (typeof adapterAny?.isAnchoredSignInViewport === "function") {
+        try {
+          if (adapterAny.isAnchoredSignInViewport() === true) return true;
+        } catch {
+        }
+      }
+      let viewport = "";
+      if (typeof adapterStatus?.viewport === "string") {
+        viewport = adapterStatus.viewport;
+      } else if (typeof adapterStatus?.screenText === "string") {
+        viewport = adapterStatus.screenText;
+      } else {
+        try {
+          viewport = host?.adapter?.getTerminalScreenSnapshot?.()?.text ?? adapterAny?.driver?.snapshot?.() ?? adapterAny?.snapshot?.() ?? "";
+        } catch {
+          viewport = "";
+        }
+      }
+      if (!viewport) return false;
+      const spec = adapterStatus?.spec ?? adapterAny?.spec ?? adapterAny?.driver?.spec;
+      return isSignInOrCredentialViewport(viewport, spec);
+    }
     function approvableModalSignature(host, modal, providerApproval) {
+      if (isAutoApproveBlockedBySignInViewport(host, void 0, modal)) return null;
       const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
       if (!modal || buttons.length === 0) return null;
       const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
@@ -176846,6 +177338,10 @@ ${JSON.stringify(replies)}
     }
     function maybeAutoApproveStatus(host, adapterStatus, now = Date.now()) {
       if (!host.shouldUsePtyAutoApprove()) {
+        resetPtyAutoApproveState(host);
+        return false;
+      }
+      if (adapterStatus?.status === "waiting_approval" && isAutoApproveBlockedBySignInViewport(host, adapterStatus, adapterStatus?.activeModal)) {
         resetPtyAutoApproveState(host);
         return false;
       }
@@ -177437,7 +177933,9 @@ ${buttons.join("\n")}`;
             host.completedDebounceTimer = null;
           }
           host.completedDebouncePending = null;
-          if (!host.generatingStartedAt) host.generatingStartedAt = now;
+          if (!host.generatingStartedAt && (adapterStatus.activeModal || host.turnStartedThisBoot || host.hasAdapterPendingResponse())) {
+            host.generatingStartedAt = now;
+          }
           host.busyEpoch++;
           const modal = adapterStatus.activeModal;
           LOG.info("CLI", `[${host.type}] approval modal: "${modal?.message?.slice(0, 80) ?? "none"}"`);
@@ -177466,7 +177964,8 @@ ${buttons.join("\n")}`;
               modalMessage: modal?.message,
               modalButtons: modal?.buttons,
               modalKey: approvalModalKey,
-              ...approvalEvidence ? { approvalEvidence } : {}
+              ...approvalEvidence ? { approvalEvidence } : {},
+              ...adapterStatus?.waitKind === "external" ? { waitKind: "external" } : {}
             });
             if (host.turnEvidencePort) {
               emitSuspension(host.turnEvidencePort, {
@@ -192920,6 +193419,7 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_logger();
     init_config();
+    init_submit_policy();
     var SESSION_ID_LEN = 8;
     function short(id4) {
       if (!id4) return "-";
@@ -195229,6 +195729,7 @@ ${notice.notice}${supersededHint}`;
     init_refresh_triggers();
     init_registry();
     init_logger();
+    init_submit_policy();
     var RESIDUE_PROBE_CHARS = 24;
     var RESIDUE_MIN_BODY_CHARS = 64;
     var RESIDUE_LOOKBACK_MS = 24 * 60 * 6e4;
@@ -196209,6 +196710,13 @@ ${notice.notice}${supersededHint}`;
       return !!modalKey && `modal:${modalKey}` === heldKey;
     }
     var ESCALATION_MAX_OPEN_EPISODE_RECHECKS = 60;
+    var STATUS_ONLY_KEY = "status_only:waiting_external";
+    var STATUS_ONLY_RESOLVE_POLL_MS = 1e3;
+    function episodeKeyFor(state2, rawEvent) {
+      const key5 = currentApprovalEpisodeKey(state2, rawEvent);
+      if (key5) return key5;
+      return rawEvent?.waitKind === "external" && stillWaiting(state2) ? STATUS_ONLY_KEY : null;
+    }
     function buildEscalatedEvent(rawEvent, state2) {
       const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
       const hasActiveModalProp = Boolean(state2?.activeChat && "activeModal" in state2.activeChat);
@@ -196280,6 +196788,37 @@ ${notice.notice}${supersededHint}`;
       const held = /* @__PURE__ */ new Map();
       const escalated = /* @__PURE__ */ new Set();
       const lastEscalatedAt = /* @__PURE__ */ new Map();
+      const statusOnlyWatchers = /* @__PURE__ */ new Map();
+      const stopStatusOnlyWatcher = (sessionId) => {
+        const w = statusOnlyWatchers.get(sessionId);
+        if (w !== void 0) {
+          clearTimer(w);
+          statusOnlyWatchers.delete(sessionId);
+        }
+      };
+      const clearStatusOnlyEscalation = (sessionId) => {
+        stopStatusOnlyWatcher(sessionId);
+        escalated.delete(`${sessionId}\0${STATUS_ONLY_KEY}`);
+      };
+      const armStatusOnlyWatcher = (sessionId) => {
+        stopStatusOnlyWatcher(sessionId);
+        const poll2 = () => {
+          statusOnlyWatchers.delete(sessionId);
+          if (!escalated.has(`${sessionId}\0${STATUS_ONLY_KEY}`)) return;
+          let st = null;
+          try {
+            st = deps.readState(sessionId);
+          } catch {
+            st = null;
+          }
+          if (!stillWaiting(st)) {
+            clearStatusOnlyEscalation(sessionId);
+            return;
+          }
+          statusOnlyWatchers.set(sessionId, setTimer(poll2, STATUS_ONLY_RESOLVE_POLL_MS));
+        };
+        statusOnlyWatchers.set(sessionId, setTimer(poll2, STATUS_ONLY_RESOLVE_POLL_MS));
+      };
       const fire = (sessionId) => {
         const entry = held.get(sessionId);
         if (!entry) return;
@@ -196287,7 +196826,7 @@ ${notice.notice}${supersededHint}`;
         let currentKey = null;
         try {
           state2 = deps.readState(sessionId);
-          currentKey = currentApprovalEpisodeKey(state2, entry.raw);
+          currentKey = episodeKeyFor(state2, entry.raw);
         } catch {
           currentKey = null;
         }
@@ -196315,7 +196854,8 @@ ${notice.notice}${supersededHint}`;
           return;
         }
         const rebuilt = buildEscalatedEvent(entry.raw, state2);
-        if (!hasActionableEscalatedModal(rebuilt, state2)) {
+        const statusOnly = currentKey === STATUS_ONLY_KEY;
+        if (!statusOnly && !hasActionableEscalatedModal(rebuilt, state2)) {
           if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS || heldEpisodeStillOpen(state2, currentKey) && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS) {
             entry.rechecks += 1;
             entry.key = currentKey;
@@ -196346,6 +196886,7 @@ ${notice.notice}${supersededHint}`;
         held.delete(sessionId);
         escalated.add(`${sessionId}\0${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs2);
+        if (statusOnly) armStatusOnlyWatcher(sessionId);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
           const oldest = escalated.values().next().value;
           if (oldest === void 0) break;
@@ -196354,8 +196895,19 @@ ${notice.notice}${supersededHint}`;
       };
       return {
         hold(rawEvent) {
-          if (rawEvent.event !== "agent:waiting_approval") return false;
           const sessionId = typeof rawEvent.targetSessionId === "string" ? rawEvent.targetSessionId.trim() : "";
+          if (rawEvent.event !== "agent:waiting_approval") {
+            if (sessionId) {
+              let st = null;
+              try {
+                st = deps.readState(sessionId);
+              } catch {
+                st = null;
+              }
+              if (!stillWaiting(st)) clearStatusOnlyEscalation(sessionId);
+            }
+            return false;
+          }
           if (!sessionId) return false;
           let state2;
           try {
@@ -196364,7 +196916,8 @@ ${notice.notice}${supersededHint}`;
             return false;
           }
           if (!state2 || !isCoordinatorFirstSession(state2.settings ?? null)) return false;
-          const key5 = currentApprovalEpisodeKey(state2, rawEvent);
+          const key5 = episodeKeyFor(state2, rawEvent);
+          if (key5 !== STATUS_ONLY_KEY) clearStatusOnlyEscalation(sessionId);
           if (key5 && escalated.has(`${sessionId}\0${key5}`)) return true;
           const existing = held.get(sessionId);
           if (existing) {
@@ -196400,12 +196953,15 @@ ${notice.notice}${supersededHint}`;
             clearTimer(entry.timer);
             held.delete(sessionId);
           }
+          stopStatusOnlyWatcher(sessionId);
           for (const k of [...escalated]) if (k.startsWith(`${sessionId}\0`)) escalated.delete(k);
           lastEscalatedAt.delete(sessionId);
         },
         dispose() {
           for (const entry of held.values()) clearTimer(entry.timer);
           held.clear();
+          for (const w of statusOnlyWatchers.values()) clearTimer(w);
+          statusOnlyWatchers.clear();
           escalated.clear();
           lastEscalatedAt.clear();
         },
@@ -196592,6 +197148,7 @@ ${notice.notice}${supersededHint}`;
       if (event.approvalEvidence === "live" || event.approvalEvidence === "cached" || event.approvalEvidence === "unavailable") {
         payload.approvalEvidence = event.approvalEvidence;
       }
+      if (event.waitKind === "external") payload.waitKind = "external";
       if (payload.targetSessionId && resolveHideMute) {
         const hideMute = resolveHideMute(payload.targetSessionId);
         if (hideMute) {
@@ -196672,6 +197229,7 @@ ${notice.notice}${supersededHint}`;
       }) : null;
       const unsubProviderEvent = bus.on("provider_event", (e) => {
         const raw = e.event;
+        if (raw.event !== "agent:waiting_approval") escalation?.hold(raw);
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
         if (!serverEvent) return;
         LOG.debug("StatusEvent", `${String(raw.event)} (${String(raw.providerType || raw.ideType || "")})`);
@@ -196685,6 +197243,7 @@ ${notice.notice}${supersededHint}`;
       }, { name: "host.status-event" });
       const unsubTurn = deps.turnCommits === false ? () => {
       } : bus.on("turn", (e) => {
+        escalation?.hold({ event: "turn", targetSessionId: e.sessionId });
         const durationSec = durations.observe(e);
         const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute, { resolveSessionMeta, durationSec });
         if (!serverEvent) return;

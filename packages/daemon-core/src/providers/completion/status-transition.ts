@@ -468,7 +468,9 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             if (host.completedDebounceTimer) { clearTimeout(host.completedDebounceTimer); host.completedDebounceTimer = null; }
             host.completedDebouncePending = null;
 
-            if (!host.generatingStartedAt) host.generatingStartedAt = now;
+            if (!host.generatingStartedAt && (adapterStatus.activeModal || host.turnStartedThisBoot || host.hasAdapterPendingResponse())) {
+                host.generatingStartedAt = now;
+            }
             // FALSE-IDLE continuity: waiting_approval is a busy phase (the agent
             // resumes into it), so bump the epoch too — the completedDebouncePending
             // cancel above covers the currently-armed pending, and the epoch covers
@@ -521,6 +523,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     modalButtons: modal?.buttons,
                     modalKey: approvalModalKey,
                     ...(approvalEvidence ? { approvalEvidence } : {}),
+                    ...(adapterStatus?.waitKind === 'external' ? { waitKind: 'external' } : {}),
                 });
                 if (host.turnEvidencePort) {
                     emitSuspension(host.turnEvidencePort, {

@@ -58,6 +58,13 @@ export interface CliAdapterStatus {
         kind?: 'approval' | 'picker' | 'confirm' | 'choice' | null;
     } | null;
     providerApproval?: import('@adhdev/mesh-shared').ProviderApproval | null;
+    /**
+     * 'external' when a `waiting_approval` is really a wait on a human acting outside
+     * the terminal (FSM `waiting_external`: browser sign-in, 2FA) — no modal, no
+     * buttons, still owner-actionable. Lets escalation and the server push tell it
+     * apart from a buttonless approval repaint, which must never push.
+     */
+    waitKind?: 'external';
     activeInteractivePrompt?: InteractivePrompt | null;
     providerSessionId?: string;
     errorMessage?: string;

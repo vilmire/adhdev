@@ -240,8 +240,11 @@ function evalCond(
         const children = cond.any.map(c =>
             evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some(c => c.result);
-        // remaining = the soonest child that could flip true
-        const pending = children.filter(c => !c.result).map(c => c.remainingMs ?? Infinity);
+        // remaining = the soonest child that could flip true on a timer.
+        // Non-timer branches (regex, not, or all-of-regex) report 0/undefined
+        // when false and cannot flip without a screen change, so treat <= 0 as
+        // Infinity here to avoid shadowing a sibling elapsed_ms / stable_ms arm.
+        const pending = children.filter(c => !c.result).map(c => (c.remainingMs && c.remainingMs > 0) ? c.remainingMs : Infinity);
         const remainingMs = result ? 0 : (pending.length ? Math.min(...pending) : 0);
         return { kind: 'any', result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
     }
@@ -377,6 +380,26 @@ function evalCond(
     return { kind: 'all', result: false, detail: 'unknown condition' };
 }
 
+/**
+ * Canonical state-classification precedence (single source of truth shared by
+ * evaluateFsm and SendSubmitEngine.isAnchoredSignInViewport):
+ *
+ *   1. Active sign-in frame (`signing_in`) — identified by a login header in
+ *      the active bottom UI frame when no settled composer, live busy spinner/
+ *      footer, or bottom-anchored modal outranks it via its own vetoes.
+ *   2. Active structural modals / choice prompts (`trust`, `consent_banner`,
+ *      `approval`, `picker`, `choice`) — when the modal is the bottom-most
+ *      interactive block in the live viewport (no login screen below it).
+ *   3. Active streaming / generation (`busy`) — identified by live spinners,
+ *      background-task markers, and non-login generating footers.
+ *   4. Settled ready composer (`idle`) / startup grace.
+ *
+ * Each provider's `→signing_in` transition carries explicit vetoes for settled
+ * composer chrome, live busy spinners/footers, and active bottom-anchored
+ * modals. When `signing_in` still fires after those vetoes, a real login screen
+ * is present at the bottom of the live viewport and `signing_in` takes
+ * precedence over any lower-confidence transition (see lines below).
+ */
 function fromLabel(t: FsmTransition): string {
     const from = Array.isArray(t.from) ? t.from.join('|') : t.from;
     return t.label ?? `${from}→${t.to}`;
@@ -417,7 +440,7 @@ export function evaluateFsm(
     const modalCursor = liveModal.hasLiveModal && cursor
         ? { row: Math.max(0, cursor.row - liveModal.startRow), col: cursor.col }
         : cursor;
-    const sections = resolveSections(spec.sections ?? {}, lines);
+    const sections = resolveSections(spec.sections ?? {}, lines, viewportStartRow ?? 0);
 
     const outgoing = outgoingTransitions(spec, currentStateId);
     const transitions: TransitionEval[] = [];
@@ -484,6 +507,17 @@ export function evaluateFsm(
         }
         transitions.push(te);
         if (fires && !fired) fired = te;
+    }
+
+    // Enforce canonical sign-in precedence: every provider's `→signing_in`
+    // transition carries explicit vetoes for settled composer chrome, live
+    // busy spinners/footers, and active bottom-anchored modals. When a
+    // `signing_in` transition still fires after those vetoes, a real login
+    // screen is present in the live viewport and `signing_in` must win over
+    // any lower-confidence transition.
+    const signInFired = transitions.find(te => te.fires && te.to === 'signing_in');
+    if (signInFired) {
+        fired = signInFired;
     }
 
     // Validate destination exists (defensive — loader should catch this).

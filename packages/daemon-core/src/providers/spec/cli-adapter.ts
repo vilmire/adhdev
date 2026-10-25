@@ -1057,9 +1057,13 @@ export class SpecCliAdapter implements CliAdapter {
     /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
     private maybeConfirmLiveAuthBillingSuspect(): void {
         if (!this.liveAuth?.suspect || this.providerFailure || this.exited) return;
+        const lastOutputAt = this.driver?.getLastOutputAt?.();
         const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
-            // FSM status is idle | generating | approval — anything but idle is mid-turn.
-            midTurn: !!this.latestState && this.latestState.status !== 'idle',
+            // FSM status is idle | generating | approval | waiting_external — anything
+            // other than a settled post-boot idle (`starting` defaults to status 'idle'
+            // in fsm-types before readySeen) is mid-turn / non-idle.
+            midTurn: !!this.latestState && (this.latestState.status !== 'idle' || this.latestState.id === 'starting'),
+            quietMs: typeof lastOutputAt === 'number' && lastOutputAt > 0 ? Math.max(0, Date.now() - lastOutputAt) : undefined,
             readScreen: () => (typeof this.driver?.snapshot === 'function' ? this.driver.snapshot() : ''),
             tail: this.rawTail.strippedTail(TAIL_BYTES),
             submitInFlight: typeof this.driver?.hasInFlightSubmit === 'function' && this.driver.hasInFlightSubmit(),

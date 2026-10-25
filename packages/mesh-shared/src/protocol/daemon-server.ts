@@ -75,6 +75,7 @@ export type DaemonStatusEventWirePayload = {
     modalButtons?: string[]
     modalKey?: string
     approvalEvidence?: 'live' | 'cached' | 'unavailable'
+    waitKind?: 'external'
     surfaceHidden?: boolean
     muted?: boolean
 }

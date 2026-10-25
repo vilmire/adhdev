@@ -842,6 +842,8 @@ export interface DaemonStatusEventPayload {
     modalButtons?: string[];
     modalKey?: string;
     approvalEvidence?: 'live' | 'cached' | 'unavailable';
+    /** Non-content enum: a wait on a human outside the terminal (see CliAdapterStatus.waitKind). */
+    waitKind?: 'external';
     /**
      * The target session's dashboard visibility at the moment the event fired.
      *

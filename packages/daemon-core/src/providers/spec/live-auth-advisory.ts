@@ -79,7 +79,7 @@
  */
 
 import { LOG } from '../../logging/logger.js';
-import { detectProviderFailure, type ProviderFailure } from './provider-failure-classifier.js';
+import { detectProviderFailure, stripAnsi, stripToolAndCodeLines, type ProviderFailure } from './provider-failure-classifier.js';
 import { maskForeignProviderText } from './provider-output-attribution.js';
 import type { SignalDetection } from './signal-rules.js';
 
@@ -88,16 +88,53 @@ import type { SignalDetection } from './signal-rules.js';
  *  unchanged; only where the tail bytes live moved (one shared `RawTail`, not
  *  a private accumulator this module used to own via `appendAuthTail`). */
 export const TAIL_BYTES = 16 * 1024;
-const STUCK_BUSY_ESCAPE_MS = 60_000;
 /** A just-submitted prompt sits in the composer for ~1-2s while the FSM still
  *  reads idle (standalone live check 2026-09-21: a prompt that merely MENTIONED
  *  the words paged within 300ms of sendMessage). Let the idle→generating edge
  *  land before the screen is trusted as a turn boundary. */
 const MIN_SUSPECT_AGE_MS = 5_000;
+/** Bounded mid-turn confirmation window: when a session stays in `busy` with no
+ *  recent output and a strictly anchored auth error line (native JSON
+ *  authentication_error or anchored CLI/HTTP 401 banner, never tool output),
+ *  surface an advisory without re-introducing the unconditional 60s busy escape. */
+const MID_TURN_AUTH_CONFIRM_MS = 15_000;
+const MID_TURN_QUIET_MS = 5_000;
 /** A TUI repaints its banner, so without a cooldown one expired session would
  *  page the coordinator on every idle edge. */
 const ADVISORY_COOLDOWN_MS = 10 * 60_000;
 export const LIVE_AUTH_ADVISORY_RULE_ID = 'builtin.live_auth_marker';
+
+/**
+ * Anchored Kimi provider-UI error envelope. Kimi's live hard-error latch is
+ * restricted to Kimi's own machine-tagged `[provider.auth_error]` / `[auth.*]`
+ * lines or its explicit `kimi login` / `Kimi Code` banner on the settled screen,
+ * never generic text.
+ */
+const KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
+
+/**
+ * Strictly anchored mid-turn auth failure line pattern (evaluated ONLY after
+ * `stripAnsi` and `stripToolAndCodeLines`, and only on lines near the bottom
+ * of the screen). Matches native JSON auth errors or line-anchored CLI/HTTP 401
+ * / login-expired banners at column 0..2; never matches indented tool/code/diff
+ * lines, prose, or 403 quota lines.
+ */
+const ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|api\s+error\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{))|(?:[●✗✖⚠!]\s+)?(?:(?:http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S))/i;
+
+function hasAnchoredMidTurnAuthFailure(cliType: string, rawSurface: string): boolean {
+    const masked = maskForeignProviderText(cliType, rawSurface);
+    const stripped = stripAnsi(masked).replace(/\r\n?/g, '\n');
+    const filtered = stripToolAndCodeLines(stripped);
+    if (!filtered.trim()) return false;
+    const rawNonEmpty = stripped.split('\n').filter(l => l.trim().length > 0);
+    const bottomWindow = new Set(rawNonEmpty.slice(-8));
+    for (const line of filtered.split('\n')) {
+        if (ANCHORED_MID_TURN_AUTH_LINE_RE.test(line) && bottomWindow.has(line)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 export interface LiveAuthState {
     suspect: { failure: ProviderFailure; suspectedAtMs: number } | null;
@@ -177,11 +214,11 @@ export interface LiveAuthResolution {
     latch?: ProviderFailure;
 }
 
-/** Resolve a pending suspicion at a turn boundary. Runs on the routine status poll. */
+/** Resolve a pending suspicion at a turn boundary (or bounded anchored mid-turn wedge). Runs on the routine status poll. */
 export function resolveLiveAuthSuspect(
     state: LiveAuthState,
     ctx: LiveAuthContext,
-    input: { midTurn: boolean; readScreen: () => string; tail: string; now?: number; submitInFlight?: boolean },
+    input: { midTurn: boolean; readScreen: () => string; tail: string; now?: number; submitInFlight?: boolean; quietMs?: number },
 ): LiveAuthResolution {
     const suspect = state.suspect;
     if (!suspect) return {};
@@ -195,20 +232,31 @@ export function resolveLiveAuthSuspect(
     // multi-KB body over tens of seconds (antigravity) kept re-raising and
     // re-resolving the suspicion against the task text. Wait for the submit.
     if (input.submitInFlight) return {};
-    if (input.midTurn && ageMs < STUCK_BUSY_ESCAPE_MS) return {};
-    state.suspect = null;
+
+    let screen = '';
+    try { screen = input.readScreen() || ''; } catch { screen = ''; }
+    const surface = screen || input.tail;
+
+    if (input.midTurn) {
+        if (ageMs < MID_TURN_AUTH_CONFIRM_MS) return {};
+        if (input.quietMs !== undefined && input.quietMs < MID_TURN_QUIET_MS) return {};
+        if (!hasAnchoredMidTurnAuthFailure(ctx.cliType, surface)) return {};
+    }
+    if (!input.midTurn || ctx.cliType !== 'kimi') {
+        state.suspect = null;
+    }
     // Re-check at confirm time too — the relay stamp path can mark a session as a
     // coordinator after the suspicion was recorded.
     if (ctx.isCoordinator) return {};
 
-    let screen = '';
-    try { screen = input.readScreen() || ''; } catch { screen = ''; }
-    const confirmed = classifyAuthBillingOutput(ctx.cliType, screen || input.tail);
+    const confirmed = classifyAuthBillingOutput(ctx.cliType, surface);
     if (!confirmed) {
         LOG.info('SpecAdapter', `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) — dismissed as quoted content`);
         return { clearTail: true };
     }
-    if (ctx.cliType === 'kimi') return { latch: confirmed };
+    if (!input.midTurn && ctx.cliType === 'kimi' && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
+        return { latch: confirmed };
+    }
 
     if (now - state.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
     state.advisoryNotifiedAtMs = now;

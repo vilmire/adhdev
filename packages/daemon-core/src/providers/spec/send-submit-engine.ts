@@ -34,8 +34,10 @@
 'use strict';
 
 import { LOG } from '../../logging/logger.js';
-import type { CliSpecV4, FsmStatus } from './fsm-types.js';
+import { type CliSpecV4, type FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
+import { evaluateConditionPreview } from './fsm-evaluator.js';
+import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
     WIN32_PTY_WRITE_CHUNK_GAP_MS,
@@ -143,6 +145,96 @@ export interface DriverHost {
      * ("machine is waiting_external").
      */
     currentStatus(): FsmStatus;
+    /** Optional hook invoked when the pre-send screen guard detects an anchored
+     *  sign-in screen on a session the FSM still considers idle. */
+    onPreSendAuthRequired?(): void;
+}
+
+/**
+ * PRE-SEND SCREEN GUARD: evaluates the provider spec's own `to: 'signing_in'`
+ * transition conditions against the live viewport (ignoring the `from` state
+ * restriction) through the shared FSM condition evaluator so the pre-send guard
+ * and the FSM share a single source of truth. Both the raw ANSI-stripped
+ * viewport and the tool/code/fence/diff-stripped viewport must match so quoted
+ * login text in tool output or code blocks cannot block a send.
+ */
+export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): boolean {
+    if (!viewport || !spec?.transitions) return false;
+    // TerminalAdapter.snapshot() returns the full fixed-height PTY grid padded
+    // with trailing blank rows; trim them so from_bottom sections (status_tail,
+    // footer, viewport) anchor to the last visible content line just as
+    // FsmDriver.reevaluate's trimBlankEnds view does.
+    const stripped = stripAnsi(viewport)
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/(?:\n[ \t]*)+$/, '');
+    if (!stripped.trim()) return false;
+    const cleaned = stripToolAndCodeLines(stripped);
+    if (!cleaned.trim()) return false;
+
+    // Evaluate the provider spec's `to: 'signing_in'` transitions on both the
+    // raw ANSI-stripped viewport and the tool/code/fence/diff-stripped
+    // viewport. Each spec's `signing_in` transition carries explicit vetoes for
+    // settled idle composers, live busy spinners/footers, and active bottom
+    // modals; if `signing_in` still matches, fail safe by blocking the send.
+    for (const t of spec.transitions) {
+        if (t.to !== 'signing_in' || !t.when) continue;
+        if (
+            evaluateConditionPreview(t.when, spec.sections, stripped).result
+            && evaluateConditionPreview(t.when, spec.sections, cleaned).result
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const CREDENTIAL_PROMPT_LINE_RE = /(?:^|\n)[ \t]*(?:[│┃|›❯>][ \t]*)?(?:Paste (?:or type )?your [^\n]*API key\b|Enter (?:your )?(?:[A-Za-z0-9_-]+ )?API key\b|Paste or type your API key below\b|Your key will be saved to [^\n]*config\.toml|If you aren't automatically redirected,\s*paste the authorization code below:|Enter (?:the )?(?:device|verification|authorization) code\b|Verification code:\s+[A-Z0-9-]+|Preparing device code login\b)/gi;
+
+const POST_CREDENTIAL_ACTIVE_UI_RE = /(?:^|\n)[ \t]*(?:[│┃|❯›>▶●•][ \t]*)?(?:1[.)][ \t]+(?!Sign in\b|Log in\b|Authorize\b|Enter API key\b|Paste API key\b|Provide your own API key\b|Use Gemini API key\b)\S|1[ \t]*\([●○]\)[ \t]+(?!Sign in\b|Paste your\b)\S)|(?:\? for shortcuts|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│[ \t]*>[ \t]*│)/i;
+
+/**
+ * DEFENCE IN DEPTH: detects a live credential or device-code input prompt at
+ * the bottom of the viewport (with no active approval modal, ready composer,
+ * or busy spinner below it), independent of FSM state transitions.
+ */
+export function hasCredentialInputPromptInViewport(viewport: string): boolean {
+    if (!viewport) return false;
+    const stripped = stripAnsi(viewport)
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/(?:\n[ \t]*)+$/, '');
+    if (!stripped.trim()) return false;
+    const cleaned = stripToolAndCodeLines(stripped);
+    if (!cleaned.trim()) return false;
+
+    for (const candidate of [stripped, cleaned]) {
+        CREDENTIAL_PROMPT_LINE_RE.lastIndex = 0;
+        let lastMatch: RegExpExecArray | null = null;
+        let m: RegExpExecArray | null;
+        while ((m = CREDENTIAL_PROMPT_LINE_RE.exec(candidate)) !== null) {
+            lastMatch = m;
+        }
+        if (!lastMatch) return false;
+        const tailAfterPrompt = candidate.slice(lastMatch.index + lastMatch[0].length);
+        const nonEmptyTailLines = tailAfterPrompt.split('\n').filter(l => l.trim().length > 0);
+        if (nonEmptyTailLines.length > 12) return false;
+        if (POST_CREDENTIAL_ACTIVE_UI_RE.test(tailAfterPrompt)) return false;
+    }
+    return true;
+}
+
+/**
+ * True when the live viewport is an anchored sign-in screen OR displays a
+ * bottom-most credential/device-code input prompt. Used by auto-approve and
+ * modal-press paths as defence-in-depth so no keystroke can be sent into an
+ * API-key or device-code field even if a caller presents a synthetic approval.
+ */
+export function isSignInOrCredentialViewport(viewport: string, spec?: CliSpecV4): boolean {
+    if (!viewport) return false;
+    if (hasCredentialInputPromptInViewport(viewport)) return true;
+    if (spec && isAnchoredSignInViewport(viewport, spec)) return true;
+    return false;
 }
 
 /**
@@ -421,17 +513,42 @@ export class SendSubmitEngine {
         return { status: 'delivered' };
     }
 
+    /** True when the most recent canSendNow() check blocked on an anchored
+     *  sign-in viewport while the FSM still reported idle. */
+    private lastPreSendAuthBlocked = false;
+
+    private isPreSendAuthRequired(): boolean {
+        let viewport = '';
+        try {
+            viewport = this.host.adapter?.snapshot?.() ?? '';
+        } catch {
+            viewport = '';
+        }
+        if (isAnchoredSignInViewport(viewport, this.host.spec)) {
+            this.lastPreSendAuthBlocked = true;
+            this.host.onPreSendAuthRequired?.();
+            return true;
+        }
+        this.lastPreSendAuthBlocked = false;
+        return false;
+    }
+
     /** True when a send can be written to the PTY right now. */
     private canSendNow(): boolean {
+        this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
-        return this.host.currentStatus() === 'idle';
+        if (this.host.currentStateId === 'signing_in' && this.isPreSendAuthRequired()) return false;
+        if (this.host.currentStatus() !== 'idle') return false;
+        if (this.isPreSendAuthRequired()) return false;
+        return true;
     }
 
     /** Human-readable reason a send was queued — logged, never used for control flow. */
     private sendBlockedReason(): string {
         if (!this.host.readySeenOnce) return 'machine not ready yet';
         if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+        if (this.lastPreSendAuthBlocked) return 'auth_required';
         return `machine is ${this.host.currentStatus()}`;
     }
 
@@ -509,6 +626,7 @@ export class SendSubmitEngine {
         }
         if (this.isSendInFlight()) return;
         if (this.pendingSends.length === 0) return;
+        if (this.isPreSendAuthRequired()) return;
         const next = this.pendingSends.shift()!;
         LOG.info('FsmDriver', `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
         // Small delay for parity with the ready-gate drain: it lets the prompt
@@ -516,6 +634,15 @@ export class SendSubmitEngine {
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
         this.pendingSendDrainTimer = setTimeout(() => {
             this.pendingSendDrainTimer = null;
+            if (this.host.currentStatus() !== 'idle' || this.isPreSendAuthRequired()) {
+                this.pendingSends.unshift(next);
+                this.sendInFlight = false;
+                if (this.latchWatchdogTimer) {
+                    clearTimeout(this.latchWatchdogTimer);
+                    this.latchWatchdogTimer = null;
+                }
+                return;
+            }
             this.beginSend(next.text, next.bracketedPaste, next.messageId);
         }, 50);
         // Hold the latch immediately so a second drain on the very next frame

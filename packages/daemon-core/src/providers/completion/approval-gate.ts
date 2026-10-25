@@ -32,6 +32,8 @@ import {
 import { workingDirBasename } from '../working-dir.js';
 import { formatApprovalRequestMessage } from '../cli-provider-effect-format.js';
 import { hasNonEmptyCliModalButtons } from '../cli-provider-status-helpers.js';
+import { isSignInOrCredentialViewport } from '../spec/send-submit-engine.js';
+import type { CliSpecV4 } from '../spec/fsm-types.js';
 
 export const APPROVAL_SETTLE_MS = 600;
 export const APPROVAL_GATE_HYSTERESIS_MS = 1500;
@@ -62,6 +64,7 @@ export interface ApprovalGateHost {
         getLastApprovalResolvedAt(): number;
         resolveModalMatched?: (index: number) => boolean;
         resolveModal?: (index: number) => void;
+        getTerminalScreenSnapshot?: (maxBytes?: number) => { text?: string } | null;
     };
     manualAttendance: {
         isAttended(now: number): boolean;
@@ -149,12 +152,51 @@ export function selectAutoApprovalButton(
     return picked.index >= 0 ? picked : null;
 }
 
+const LOGIN_BUTTON_LABEL_RE = /^(?:\d+[.)\s]*(?:\([●○]\)\s*)?)?(?:Sign in\b|Log in\b|Authorize via browser\b|Provide your own API key\b|Use Gemini API key\b|Paste your (?:xAI )?API key\b|Enter (?:your )?API key\b)/i;
+
+function isAutoApproveBlockedBySignInViewport(
+    host: ApprovalGateHost | undefined,
+    adapterStatus?: any,
+    modal?: any,
+): boolean {
+    if (adapterStatus?.isAnchoredSignInViewport === true) return true;
+    const rawButtons = Array.isArray(modal?.buttons) ? modal.buttons : [];
+    if (rawButtons.some((b: any) => LOGIN_BUTTON_LABEL_RE.test(String(b || '').trim()))) {
+        return true;
+    }
+    const adapterAny = host?.adapter as any;
+    if (typeof adapterAny?.isAnchoredSignInViewport === 'function') {
+        try {
+            if (adapterAny.isAnchoredSignInViewport() === true) return true;
+        } catch { /* ignore */ }
+    }
+    let viewport = '';
+    if (typeof adapterStatus?.viewport === 'string') {
+        viewport = adapterStatus.viewport;
+    } else if (typeof adapterStatus?.screenText === 'string') {
+        viewport = adapterStatus.screenText;
+    } else {
+        try {
+            viewport = host?.adapter?.getTerminalScreenSnapshot?.()?.text
+                ?? adapterAny?.driver?.snapshot?.()
+                ?? adapterAny?.snapshot?.()
+                ?? '';
+        } catch {
+            viewport = '';
+        }
+    }
+    if (!viewport) return false;
+    const spec: CliSpecV4 | undefined = adapterStatus?.spec ?? adapterAny?.spec ?? adapterAny?.driver?.spec;
+    return isSignInOrCredentialViewport(viewport, spec);
+}
+
 /**
  * The settle-gate identity for a raw activeModal, or null when it is NOT a
  * concrete auto-approvable consent prompt. Mirrors the fire path's gates so the
  * mask-stall nudge asks the SAME question the settle clock is accruing against.
  */
 export function approvableModalSignature(host: ApprovalGateHost, modal: any, providerApproval?: unknown): string | null {
+    if (isAutoApproveBlockedBySignInViewport(host, undefined, modal)) return null;
     const buttons = Array.isArray(modal?.buttons)
         ? modal.buttons.map((b: any) => String(b || '').trim()).filter(Boolean)
         : [];
@@ -262,6 +304,14 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     // launch-args modes grant approval in the CLI process itself and must never
     // enter the PTY modal parser/fire/settle/mask/nudge subsystem.
     if (!host.shouldUsePtyAutoApprove()) {
+        resetPtyAutoApproveState(host);
+        return false;
+    }
+    // Defence-in-depth: never auto-approve or press a modal button when the live
+    // viewport is an anchored sign-in screen or displays a credential/device-code
+    // input prompt (e.g. an approval card quoted above an API-key prompt).
+    if (adapterStatus?.status === 'waiting_approval'
+        && isAutoApproveBlockedBySignInViewport(host, adapterStatus, adapterStatus?.activeModal)) {
         resetPtyAutoApproveState(host);
         return false;
     }

@@ -127,6 +127,24 @@ function heldEpisodeStillOpen(state: SessionStateLike, heldKey: string): boolean
 const ESCALATION_MAX_OPEN_EPISODE_RECHECKS = 60;
 
 /**
+ * A wait on a human acting OUTSIDE the terminal (FSM `waiting_external`: browser
+ * sign-in, 2FA) projects to `waiting_approval` with no modal and no buttons. It is
+ * not an approval to press, so the modal-keyed rules above never identify it — yet
+ * the owner must still hear about it, once per wait. The daemon marks such events
+ * `waitKind: 'external'`; the gate keys the whole wait as one status-only episode,
+ * escalates it once, and forgets it when the session stops waiting so a later wait
+ * escalates again.
+ */
+const STATUS_ONLY_KEY = 'status_only:waiting_external';
+const STATUS_ONLY_RESOLVE_POLL_MS = 1_000;
+
+function episodeKeyFor(state: SessionStateLike, rawEvent: Record<string, unknown> | null | undefined): string | null {
+    const key = currentApprovalEpisodeKey(state, rawEvent);
+    if (key) return key;
+    return rawEvent?.waitKind === 'external' && stillWaiting(state) ? STATUS_ONLY_KEY : null;
+}
+
+/**
  * Rebuild the escalated event from the CURRENT validated episode in `state`
  * rather than forwarding stale fields from `entry.raw` (which may have been
  * captured while `approvalEvidence: 'unavailable'` or an earlier episode key).
@@ -214,13 +232,37 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
     const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
     const escalated = new Set<string>();
     const lastEscalatedAt = new Map<string, number>();
+    const statusOnlyWatchers = new Map<string, unknown>();
+
+    const stopStatusOnlyWatcher = (sessionId: string) => {
+        const w = statusOnlyWatchers.get(sessionId);
+        if (w !== undefined) { clearTimer(w); statusOnlyWatchers.delete(sessionId); }
+    };
+    const clearStatusOnlyEscalation = (sessionId: string) => {
+        stopStatusOnlyWatcher(sessionId);
+        escalated.delete(`${sessionId}\u0000${STATUS_ONLY_KEY}`);
+    };
+    // Forget a delivered external wait once the session stops waiting, so the next
+    // wait (a new sign-in) escalates again instead of being deduped forever.
+    const armStatusOnlyWatcher = (sessionId: string) => {
+        stopStatusOnlyWatcher(sessionId);
+        const poll = () => {
+            statusOnlyWatchers.delete(sessionId);
+            if (!escalated.has(`${sessionId}\u0000${STATUS_ONLY_KEY}`)) return;
+            let st: SessionStateLike = null;
+            try { st = deps.readState(sessionId); } catch { st = null; }
+            if (!stillWaiting(st)) { clearStatusOnlyEscalation(sessionId); return; }
+            statusOnlyWatchers.set(sessionId, setTimer(poll, STATUS_ONLY_RESOLVE_POLL_MS));
+        };
+        statusOnlyWatchers.set(sessionId, setTimer(poll, STATUS_ONLY_RESOLVE_POLL_MS));
+    };
 
     const fire = (sessionId: string) => {
         const entry = held.get(sessionId);
         if (!entry) return;
         let state: SessionStateLike = null;
         let currentKey: string | null = null;
-        try { state = deps.readState(sessionId); currentKey = currentApprovalEpisodeKey(state, entry.raw); } catch { currentKey = null; }
+        try { state = deps.readState(sessionId); currentKey = episodeKeyFor(state, entry.raw); } catch { currentKey = null; }
         if (!currentKey) {
             // Still parked but the episode is momentarily unreadable (an
             // evidence:'unavailable' repaint): look again shortly instead of
@@ -249,7 +291,9 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             return;
         }
         const rebuilt = buildEscalatedEvent(entry.raw, state);
-        if (!hasActionableEscalatedModal(rebuilt, state)) {
+        const statusOnly = currentKey === STATUS_ONLY_KEY;
+        // An external wait has no buttons by construction; it is still owner-actionable.
+        if (!statusOnly && !hasActionableEscalatedModal(rebuilt, state)) {
             if ((stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS)
                 || (heldEpisodeStillOpen(state, currentKey) && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS)) {
                 entry.rechecks += 1;
@@ -286,6 +330,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         // becomes current again.
         escalated.add(`${sessionId}\u0000${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs);
+        if (statusOnly) armStatusOnlyWatcher(sessionId);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
             const oldest = escalated.values().next().value;
             if (oldest === undefined) break;
@@ -295,13 +340,22 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
 
     return {
         hold(rawEvent) {
-            if (rawEvent.event !== 'agent:waiting_approval') return false;
             const sessionId = typeof rawEvent.targetSessionId === 'string' ? rawEvent.targetSessionId.trim() : '';
+            if (rawEvent.event !== 'agent:waiting_approval') {
+                // Any other session fact is a chance to notice an external wait ended.
+                if (sessionId) {
+                    let st: SessionStateLike = null;
+                    try { st = deps.readState(sessionId); } catch { st = null; }
+                    if (!stillWaiting(st)) clearStatusOnlyEscalation(sessionId);
+                }
+                return false;
+            }
             if (!sessionId) return false;
             let state: SessionStateLike;
             try { state = deps.readState(sessionId); } catch { return false; }
             if (!state || !isCoordinatorFirstSession(state.settings ?? null)) return false;
-            const key = currentApprovalEpisodeKey(state, rawEvent);
+            const key = episodeKeyFor(state, rawEvent);
+            if (key !== STATUS_ONLY_KEY) clearStatusOnlyEscalation(sessionId);
             if (key && escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
             if (existing) {
@@ -334,12 +388,15 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         retire(sessionId) {
             const entry = held.get(sessionId);
             if (entry) { clearTimer(entry.timer); held.delete(sessionId); }
+            stopStatusOnlyWatcher(sessionId);
             for (const k of [...escalated]) if (k.startsWith(`${sessionId}\u0000`)) escalated.delete(k);
             lastEscalatedAt.delete(sessionId);
         },
         dispose() {
             for (const entry of held.values()) clearTimer(entry.timer);
             held.clear();
+            for (const w of statusOnlyWatchers.values()) clearTimer(w);
+            statusOnlyWatchers.clear();
             escalated.clear();
             lastEscalatedAt.clear();
         },

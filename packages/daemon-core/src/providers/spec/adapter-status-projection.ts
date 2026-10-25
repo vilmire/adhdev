@@ -166,7 +166,7 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
     // and declares no extract.buttons, so nothing is parsed — which is also what
     // keeps the auto-approve gate inert here (it requires buttons to press).
     if (state.status === 'waiting_external') {
-        return { ...base, status: 'waiting_approval' };
+        return { ...base, status: 'waiting_approval', waitKind: 'external' };
     }
 
     // OWNER-ATTENTION PARK (see FsmState.owner_attention): a prompt only the

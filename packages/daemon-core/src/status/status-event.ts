@@ -344,6 +344,7 @@ export function projectServerStatusEvent(
     if (event.approvalEvidence === 'live' || event.approvalEvidence === 'cached' || event.approvalEvidence === 'unavailable') {
         payload.approvalEvidence = event.approvalEvidence;
     }
+    if (event.waitKind === 'external') payload.waitKind = 'external';
 
     // Stamp the target session's visibility so the server's push-suppression
     // gate does not have to join against a snapshot that may not have arrived
@@ -508,6 +509,7 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     }) : null;
     const unsubProviderEvent = bus.on('provider_event', (e) => {
         const raw = e.event as unknown as Record<string, unknown>;
+        if (raw.event !== 'agent:waiting_approval') escalation?.hold(raw);
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
         if (!serverEvent) return;
         LOG.debug('StatusEvent', `${String(raw.event)} (${String(raw.providerType || raw.ideType || '')})`);
@@ -526,6 +528,7 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     // default — see StatusEventEmitterDeps.turnCommits above). No P2P
     // enrichment applies — a committed turn carries no interactivePrompt.
     const unsubTurn = deps.turnCommits === false ? () => {} : bus.on('turn', (e) => {
+        escalation?.hold({ event: 'turn', targetSessionId: e.sessionId });
         const durationSec = durations.observe(e);
         const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute, { resolveSessionMeta, durationSec });
         if (!serverEvent) return;
