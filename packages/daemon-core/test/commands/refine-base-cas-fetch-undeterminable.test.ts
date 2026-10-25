@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine-merge.js';
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 
 /**
  * ★The DS2 base-movement CAS is the ONLY time-of-check guard in front of the
@@ -94,14 +95,16 @@ function buildFixture() {
 
   // Base checkout.
   execFileSync('git', ['-c', 'protocol.file.allow=always', 'clone', '-q', originPath, repoRoot], { encoding: 'utf-8' })
-  git(repoRoot, ['config', 'user.email', 'test@example.com'])
-  git(repoRoot, ['config', 'user.name', 'Test User'])
+  // The Refinery's integration-range scan enforces the owner identity on every
+  // publication, private root included, so the commits it would push carry it.
+  git(repoRoot, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+  git(repoRoot, ['config', 'user.name', 'vilmire'])
   const baseHead = git(repoRoot, ['rev-parse', 'origin/main'])
 
   // Feature branch in a worktree, one commit ahead.
   git(repoRoot, ['worktree', 'add', '-q', '-b', 'feature/x', workspace, 'main'])
-  git(workspace, ['config', 'user.email', 'test@example.com'])
-  git(workspace, ['config', 'user.name', 'Test User'])
+  git(workspace, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+  git(workspace, ['config', 'user.name', 'vilmire'])
   const branchHead = commitFile(workspace, 'feature.txt', 'work\n', 'feat: work')
 
   return { root, originPath, repoRoot, workspace, baseHead, branchHead }
@@ -166,13 +169,20 @@ async function runStage(fx: ReturnType<typeof buildFixture>, opts: {
   // completion. The CAS / merge / push path under test never touches `self`.
   const self: any = { deps: {}, execute: async () => ({ success: true }) }
   const outcome = await runRefineMergeAndFinalizeLocked(self, ctx)
-  const ran = (verb: string) => calls.some(c => c.args[0] === verb)
+  // The git subcommand, skipping leading global options: the pinned push runs as
+  // `git -c core.hooksPath=<fence> push …`, so args[0] alone would miss it.
+  const verbOf = (args: string[]) => {
+    let i = 0
+    while (i < args.length && args[i].startsWith('-')) i += args[i] === '-c' || args[i] === '-C' ? 2 : 1
+    return args[i]
+  }
+  const ran = (verb: string) => calls.some(c => verbOf(c.args) === verb)
   return {
     outcome,
     calls,
     stages: ctx.refineStages as Array<Record<string, any>>,
     mergeRan: ran('merge'),
-    pushRan: calls.some(c => c.args[0] === 'push'),
+    pushRan: ran('push'),
   }
 }
 
@@ -288,8 +298,14 @@ describe('base_cas: over-correction guards — the real verdicts still behave ex
 
   it('★the good case still pushes when approval is not required — the gate is not a blanket block', async () => {
     const fx = buildFixture()
-    const { pushRan, mergeRan } = await runStage(fx, { requireApprovalForPush: false })
+    // "Approval not required" holds only for a destination PROVEN private: an exact
+    // canonical private-root push URL (served by the test's local bare origin via the
+    // synthetic transport). A bare local path is "not proven private" and would need
+    // owner approval.
+    bindPushDestination(fx.repoRoot, fx.originPath, 'root')
+    const { pushRan, mergeRan, stages } = await runStage(fx, { requireApprovalForPush: false })
     expect(mergeRan).toBe(true)
+    expect(stages.find(s => s.stage === 'integration_range')).toMatchObject({ status: 'passed', policy: 'private', identityFindings: 0 })
     // Pushes into the test's own local bare origin — never a real remote.
     expect(pushRan).toBe(true)
     const originHead = git(fx.originPath, ['rev-parse', 'main'])
@@ -539,3 +555,5 @@ describe('base_cas: over-correction guards for the local-ahead check', () => {
     expect(cas?.movedAxis).toBeUndefined()
   })
 })
+
+useSyntheticPublicPushPatterns()

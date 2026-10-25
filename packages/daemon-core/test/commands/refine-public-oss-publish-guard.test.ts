@@ -26,6 +26,16 @@ const AUTO_PUBLISH_ON = { allowAutoPublishSubmoduleMainCommits: true } as const
 // A PUBLIC remote additionally needs the owner's per-commit approval; these tests exercise the guard BEHIND it.
 const approved = (f: { localOnly: string }) => ({ ...AUTO_PUBLISH_ON, approvedPublishShas: [f.localOnly] })
 const cleanups: string[] = []
+// Since 74da80102 the approval evaluator runs the public-push guard itself and a
+// guard violation is part of the approval request: a blocked commit is refused
+// BEFORE any push is attempted, even when its SHA is approved.
+function expectGuardBlockedBeforePush(entry: any, detail: string) {
+  expect(entry.autoPublishAttempted).toBe(false)
+  expect(entry.autoPublishSucceeded).toBeUndefined()
+  expect(entry.autoPublishSkippedReason).toContain('publish_approval_required')
+  expect(entry.publishApproval?.unapproved).toEqual([])
+  expect(entry.publishApproval?.commits.some((c: any) => c.guardScan === 'blocked' && c.guardDetails.some((d: string) => d.includes(detail)))).toBe(true)
+}
 
 function git(cwd: string, args: string[], id = BAD): string {
   return execFileSync('git', ['-c', 'protocol.file.allow=always', ...args], {
@@ -84,9 +94,7 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
     const [entry] = gate.unreachable
     expect(gate.status).toBe('failed')
-    expect(entry.autoPublishSucceeded).toBe(false)
-    expect(entry.error).toContain('public-oss push guard BLOCKED')
-    expect(entry.error).toContain('identity')
+    expectGuardBlockedBeforePush(entry, 'identity')
     expect(f.originMain()).toEqual(before)
     expect(f.originMain()).not.toContain(f.localOnly)
   })
@@ -95,8 +103,8 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: `const p = '${['C:', 'Users', 'mallory', 'repo'].join('\\\\')}'\n` })  // built at runtime: the tree scan must not see a literal leak
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
     const [entry] = gate.unreachable
-    expect(entry.autoPublishSucceeded).toBe(false)
-    expect(entry.error).toContain('personal path')
+    expect(gate.status).toBe('failed')
+    expectGuardBlockedBeforePush(entry, 'personal path')
     expect(f.originMain()).not.toContain(f.localOnly)
   })
 
@@ -307,7 +315,8 @@ describe('review approval regressions', () => {
     const providers = fixture({ originSubpath: 'vilmire/adhdev-providers', id: BAD, content: 'clean\n' })
     const gate = await runMeshRefineSubmoduleReachabilityGate(providers.base, providers.mergedTree, approved(providers))
     expect(gate.status).toBe('failed')
-    expect(gate.entries[0].error).toContain('identity')
+    expectGuardBlockedBeforePush(gate.entries[0], 'identity')
+    expect(providers.originMain()).not.toContain(providers.localOnly)
   })
 })
 
@@ -315,7 +324,11 @@ describe('review approval regressions', () => {
 it('P1-5: the shared root publication assertion still runs the identity guard after approval', async () => {
   const { assertRefineryPublishApproved } = await import('../../src/mesh/mesh-refine-gitlink-utils')
   const f = fixture({ originSubpath: 'vilmire/adhdev', id: BAD, content: 'clean\n' })
-  await expect(assertRefineryPublishApproved(f.sub, f.localOnly, 'main', [f.localOnly])).rejects.toThrow('identity')
+  const refusal = await assertRefineryPublishApproved(f.sub, f.localOnly, 'main', [f.localOnly]).then(() => undefined, (e: any) => e)
+  expect(refusal?.message).toContain('publish_approval_required')
+  expect(refusal?.approval?.unapproved).toEqual([])
+  expect(refusal?.approval?.commits).toEqual([expect.objectContaining({ sha: f.localOnly, guardScan: 'blocked', guardDetails: expect.arrayContaining([expect.stringContaining('identity')]) })])
+  expect(f.originMain()).not.toContain(f.localOnly)
 })
 
 it('round4 P2-A: missing private pattern config refuses an approved public publish', async () => {
@@ -346,7 +359,7 @@ it('round4 P2-A: configured fleet patterns reach the in-process scanner', async 
   writeFileSync(join(f.sub, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['other'], knownHosts: ['OtherHostZ'] }))
   const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
   expect(gate.status).toBe('failed')
-  expect(gate.unreachable[0].error).toContain('personal path')
+  expectGuardBlockedBeforePush(gate.unreachable[0], 'personal path')
   expect(f.originMain()).not.toContain(f.localOnly)
 })
 

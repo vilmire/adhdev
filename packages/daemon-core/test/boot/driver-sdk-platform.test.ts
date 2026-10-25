@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { probeDriverList } from '../../../../../scripts/check-daemon-boot-smoke.mjs';
+// OSS-owned probe (oss/scripts): the OSS tree must not import the private host repo's scripts.
+import { probeDriverList } from '../../../../scripts/driver-list-probe.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';

@@ -189,6 +189,16 @@ describe('process-table source: asynchronous, single-flight, throttled, never bl
 
 describe.skipIf(process.platform === 'win32')('readSystemProcessTableAsync (real ps)', () => {
   it('returns the live process table asynchronously, with start times, including this process under its parent', async () => {
+    // procps on Linux prints `time=` with whole-second resolution ([DD-]HH:MM:SS), so a
+    // worker that has burned < 1 s of CPU legitimately reads as 0 there (macOS prints
+    // centiseconds). Burn past that resolution first so `> 0` below proves the column
+    // is parsed on every POSIX platform, not just on a busy machine.
+    const cpuMs = () => { const u = process.cpuUsage(); return (u.user + u.system) / 1_000 };
+    const burnDeadline = Date.now() + 15_000;
+    let sink = 0;
+    while (cpuMs() < 1_500 && Date.now() < burnDeadline) for (let i = 0; i < 100_000; i++) sink += Math.sqrt(i);
+    expect(sink).toBeGreaterThanOrEqual(0);
+    expect(cpuMs()).toBeGreaterThanOrEqual(1_500);
     const table = await readSystemProcessTableAsync(process.platform);
     expect(table).not.toBeNull();
     const self = table!.find((n) => n.pid === process.pid);
@@ -198,7 +208,9 @@ describe.skipIf(process.platform === 'win32')('readSystemProcessTableAsync (real
     expect(self!.startedAtMs).toBeLessThanOrEqual(Date.now() + 2_000);
     // cumulative CPU time (this test process has burned some): the new ps `time=` column
     expect(self!.cpuTimeMs).toBeGreaterThan(0);
-  });
+    // ...and it is this process's own cumulative CPU, not some other column.
+    expect(self!.cpuTimeMs).toBeLessThanOrEqual(cpuMs() + 1_000);
+  }, 30_000);
 });
 
 describe('table parsing', () => {

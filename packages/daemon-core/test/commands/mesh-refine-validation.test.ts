@@ -96,8 +96,12 @@ function createRouter(meshId?: string, messages?: string[], statusInstanceId?: s
 function initGitRepo(repo: string) {
   mkdirSync(repo, { recursive: true })
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo })
-  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo })
+  // The Refinery's integration-range scan enforces the owner identity on EVERY
+  // publication, private root included (240188a5d / 74da80102), so the root
+  // fixture commits — and the worktree/merge commits that share this config —
+  // carry the required vilmire noreply identity.
+  execFileSync('git', ['config', 'user.email', 'vilmire@users.noreply.github.com'], { cwd: repo })
+  execFileSync('git', ['config', 'user.name', 'vilmire'], { cwd: repo })
   writeFileSync(join(repo, 'README.md'), 'base\n', 'utf-8')
   writeFileSync(join(repo, 'package.json'), JSON.stringify({
     scripts: {
@@ -119,7 +123,12 @@ function initGitRepo(repo: string) {
   execFileSync('git', ['remote', 'add', 'origin', originBare], { cwd: repo })
   execFileSync('git', ['config', 'remote.origin.adhdev-private', 'true'], { cwd: repo })
   execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo })
-  bindPushDestination(repo, originBare, 'oss')
+  // The fixture root is the PRIVATE root repository (github.com/vilmire/adhdev-cloud):
+  // only an exact canonical private push URL proves privacy (the local
+  // adhdev-private marker cannot). Binding it to the public oss URL made every
+  // auto-push test hit publish_approval_required. Tests that exercise a public
+  // root rebind explicitly.
+  bindPushDestination(repo, originBare, 'root')
 }
 
 function initSubmoduleOrigin(repo: string) {
@@ -924,6 +933,13 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['config', 'receive.denyCurrentBranch', 'updateInstead'], { cwd: submoduleOrigin })
       initGitRepo(repo)
       addSubmodule(repo, submoduleOrigin, 'oss')
+      // The base's submodule commit must already be on origin: the pinned
+      // integration base of the root push has to equal the destination branch.
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
+      // The submodule is the PUBLIC oss repository. Its push destination must be
+      // an exact canonical URL (a bare local path has no approval identity), and
+      // publishing it needs the owner's per-commit approval plus the required identity.
+      bindPushDestination(join(repo, 'oss'), submoduleOrigin, 'oss')
       const worktree = createWorktreeWithCommit(root, repo)
       mkdirSync(join(worktree, '.adhdev'), { recursive: true })
       writeFileSync(join(worktree, '.adhdev', 'refine.json'), JSON.stringify({
@@ -940,14 +956,18 @@ describe('refine_mesh_node validation gate', () => {
       execFileSync('git', ['add', '.adhdev/refine.json'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'opt in to submodule auto publish'], { cwd: worktree })
       execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', 'oss'], { cwd: worktree })
-      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: join(worktree, 'oss') })
-      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.email', 'vilmire@users.noreply.github.com'], { cwd: join(worktree, 'oss') })
+      execFileSync('git', ['config', 'user.name', 'vilmire'], { cwd: join(worktree, 'oss') })
       writeFileSync(join(worktree, 'oss', 'AUTO_PUBLISHED.md'), 'published by refinery\n', 'utf-8')
       execFileSync('git', ['add', 'AUTO_PUBLISHED.md'], { cwd: join(worktree, 'oss') })
       execFileSync('git', ['commit', '-q', '-m', 'auto publish submodule commit'], { cwd: join(worktree, 'oss') })
       const autoPublishedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: join(worktree, 'oss'), encoding: 'utf-8' }).trim()
       execFileSync('git', ['add', 'oss'], { cwd: worktree })
       execFileSync('git', ['commit', '-q', '-m', 'point submodule at auto-published commit'], { cwd: worktree })
+      // Exact per-repository owner approvals: the public oss commit, and — because an
+      // explicit approval mapping also fences the private root — every pending root commit.
+      const rootPending = execFileSync('git', ['rev-list', '--reverse', 'origin/main..HEAD'], { cwd: worktree, encoding: 'utf-8' }).trim().split('\n').filter(Boolean)
+      const approvedPublishShas = { root: rootPending, oss: [autoPublishedCommit] }
       const mesh = createMesh(repo, worktree, 'node-auto-publish-submodule', undefined, false)
       const router = createRouter()
 
@@ -956,6 +976,7 @@ describe('refine_mesh_node validation gate', () => {
         meshId: mesh.id,
         nodeId: 'node-auto-publish-submodule',
         inlineMesh: mesh,
+        approvedPublishShas,
       })
 
       expectAccepted(accepted, 'node-auto-publish-submodule')
@@ -1694,6 +1715,11 @@ describe('refine_mesh_node validation gate', () => {
       }), 'utf-8')
       execFileSync('git', ['add', '.'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'add bootstrap config'], { cwd: repo })
+      // Publish the base config commit: an unpushed local-ahead base cannot be the
+      // pinned integration base of the push (the destination must equal it), so the
+      // first attempt would fail push_failed and the automatic retry — not this
+      // attempt — would produce the terminal result under test.
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
       const worktree = createWorktreeWithCommit(root, repo)
       const mesh = createMesh(repo, worktree, 'node-m2-cached')
       const node: any = mesh.nodes.find((n: any) => n.id === 'node-m2-cached')
@@ -1733,6 +1759,11 @@ describe('refine_mesh_node validation gate', () => {
       }), 'utf-8')
       execFileSync('git', ['add', '.'], { cwd: repo })
       execFileSync('git', ['commit', '-q', '-m', 'add bootstrap config'], { cwd: repo })
+      // Publish the base config commit: an unpushed local-ahead base cannot be the
+      // pinned integration base of the push (the destination must equal it), so the
+      // first attempt would fail push_failed and the automatic retry — not this
+      // attempt — would produce the terminal result under test.
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo })
       const worktree = createWorktreeWithCommit(root, repo)
       const mesh = createMesh(repo, worktree, 'node-m2-stale')
       const node: any = mesh.nodes.find((n: any) => n.id === 'node-m2-stale')
@@ -1809,6 +1840,8 @@ describe('P1-5 root public publishing', () => {
       execFileSync('git', ['commit', '-qm', 'configure patterns'], { cwd: repo })
       execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
       execFileSync('git', ['config', '--unset', 'remote.origin.adhdev-private'], { cwd: repo })
+      // This test is about a PUBLIC root destination: bind the push URL to the public oss repository.
+      bindPushDestination(repo, `${repo}-origin.git`, 'oss')
       const remoteBefore = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repo, encoding: 'utf8' }).trim()
       execFileSync('git', ['config', 'user.name', 'vilmire'], { cwd: repo })
       execFileSync('git', ['config', 'user.email', 'vilmire@users.noreply.github.com'], { cwd: repo })

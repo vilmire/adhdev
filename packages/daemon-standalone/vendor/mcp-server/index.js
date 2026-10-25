@@ -71827,6 +71827,7 @@ ${upstream}`;
           preStatus: current4,
           pushTarget,
           operationError: formatGitError2(error),
+          ...error instanceof PublicPublishApprovalRequired ? { publishApproval: error.approval } : {},
           finalBranchConvergenceState: buildConvergenceState(current4, "not_mergeable")
         };
         await appendFastForwardLedger(result2, "failed");

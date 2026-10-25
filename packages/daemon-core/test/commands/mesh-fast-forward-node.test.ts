@@ -552,7 +552,12 @@ it('round4 P1-C: workspace public push refuses without exact approval, then scan
     const cfg = git(work, ['rev-parse', 'HEAD'])
     const scanned = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, cfg] })
     expect(scanned.success).toBe(false)
-    expect(scanned.operationError).toContain('identity')
+    // The exact approval is accepted, but the guard scan inside the approval
+    // evaluator blocks the foreign identity before anything is pushed.
+    expect(scanned.operationError).toContain('publish_approval_required')
+    expect(scanned.publishApproval?.unapproved).toEqual([])
+    expect(scanned.publishApproval?.extraApproved).toEqual([])
+    expect(scanned.publishApproval?.commits).toContainEqual(expect.objectContaining({ sha: tip, approved: true, guardScan: 'blocked', guardDetails: expect.arrayContaining([expect.stringContaining('identity')]) }))
     expect(git(origin, ['rev-parse', 'main'])).toBe(before)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -112,8 +112,11 @@ async function runRealRefineCleanup(policy: Record<string, unknown>) {
     const repoRoot = join(dir, 'repo');
     await execFileAsync('git', ['init', '--bare', remote]);
     await execFileAsync('git', ['clone', remote, repoRoot]);
-    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoRoot });
-    await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repoRoot });
+    // The Refinery's integration-range scan enforces the owner identity on every
+    // publication, private root included, so the pushed commits (the worktree's
+    // feature commit and the Refinery merge share this config) carry it.
+    await execFileAsync('git', ['config', 'user.email', 'vilmire@users.noreply.github.com'], { cwd: repoRoot });
+    await execFileAsync('git', ['config', 'user.name', 'vilmire'], { cwd: repoRoot });
     await writeFile(join(repoRoot, 'README.md'), '# test\n');
     await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot });
     await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repoRoot });

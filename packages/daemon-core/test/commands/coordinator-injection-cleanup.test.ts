@@ -972,6 +972,15 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
 
     const ws = tempWorkspace('adhdev-agy-prod-worker-ws-')
     const coordHome = tempWorkspace('adhdev-agy-prod-coord-home-')
+    // Synthetic REAL home + private-home base: the worker's private HOME imports
+    // from these, never from the machine running the test. On linux the agy
+    // oauth-token file is a REQUIRED import (it is the only credential source
+    // there), so a CI runner without a signed-in agy refused the launch.
+    const realHome = tempWorkspace('adhdev-agy-prod-real-home-')
+    const workerHomeBaseDir = tempWorkspace('adhdev-agy-prod-worker-homes-')
+    const realToken = join(realHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+    fs.mkdirSync(path.dirname(realToken), { recursive: true, mode: 0o700 })
+    writeFileSync(realToken, '{"synthetic":true}\n', { encoding: 'utf-8', mode: 0o600 })
     let workerHome = ''
     try {
       writeFileSync(join(ws, 'AGENTS.md'), '# Repo Rules\nPreserve USER_PROD_WORKER_RULE_321.\n', 'utf-8')
@@ -988,10 +997,15 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         isolation: agyManifest.meshCoordinator.delegatedWorkerIsolation,
         mcpConfig: agyManifest.meshCoordinator.mcpConfig,
         sessionKey: 'worker-prod-session-1',
+        realHome,
+        workerHomeBaseDir,
       })
       workerHome = delegated.env.HOME
       expect(workerHome).toBeTruthy()
       expect(workerHome).not.toBe(coordHome)
+      expect(fs.realpathSync(workerHome).startsWith(fs.realpathSync(workerHomeBaseDir))).toBe(true)
+      // The credential is linked through from the (synthetic) real home, not copied.
+      expect(fs.realpathSync(join(workerHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))).toBe(fs.realpathSync(realToken))
       expect(existsSync(join(workerHome, '.gemini', 'config', 'adhdev-mesh-coordinator'))).toBe(false)
 
       const coordView = collectAntigravityLoadedRules(ws, coordHome)
@@ -1104,6 +1118,8 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       rmSync(ws, { recursive: true, force: true })
       rmSync(coordHome, { recursive: true, force: true })
       if (workerHome) rmSync(workerHome, { recursive: true, force: true })
+      rmSync(workerHomeBaseDir, { recursive: true, force: true })
+      rmSync(realHome, { recursive: true, force: true })
     }
   })
 
@@ -1430,13 +1446,25 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
     const home = tempWorkspace('adhdev-agy-r2-legacy-eof-home-')
     let oldRegistryMod: any
     try {
+      const parentCommit = 'd33b7ad15eda0341f74d50c9e8f9ec467151e16e'
+      try {
+        execFileSync('git', ['cat-file', '-e', `${parentCommit}^{commit}`], { cwd: ossRepoRoot, stdio: 'ignore' })
+      } catch {
+        // Not a skip: this case needs the real parent writer. A shallow clone must fetch full history.
+        throw new Error(`R2-legacy-EOF needs commit ${parentCommit} in the oss checkout (shallow clone? use fetch-depth: 0)`)
+      }
       const archive = execFileSync(
         'git',
-        ['archive', 'd33b7ad15eda0341f74d50c9e8f9ec467151e16e', 'packages/daemon-core/src'],
+        ['archive', parentCommit, 'packages/daemon-core/src'],
         { cwd: ossRepoRoot, maxBuffer: 32 * 1024 * 1024 },
       )
       execFileSync('tar', ['-x', '-C', parentSnapshotRoot], { input: archive, maxBuffer: 32 * 1024 * 1024 })
-      fs.symlinkSync(join(ossRepoRoot, '..', 'node_modules'), join(parentSnapshotRoot, 'node_modules'))
+      // The snapshot resolves packages like the live daemon-core does: from the oss
+      // repo's own node_modules (an OSS-only clone has no host monorepo above it),
+      // falling back to an enclosing workspace's when oss is a submodule without one.
+      const nodeModules = [join(ossRepoRoot, 'node_modules'), join(ossRepoRoot, '..', 'node_modules')].find(dir => fs.existsSync(dir))
+      expect(nodeModules).toBeTruthy()
+      fs.symlinkSync(nodeModules!, join(parentSnapshotRoot, 'node_modules'))
 
       vi.resetModules()
       const oldMeshMod = await import(

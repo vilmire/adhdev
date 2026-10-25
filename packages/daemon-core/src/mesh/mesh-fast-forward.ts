@@ -1,6 +1,6 @@
 import { devNull } from 'node:os';
 import { gitChildEnv } from '../git/git-locale.js';
-import { assertRefineryPublishApproved, type PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
+import { assertRefineryPublishApproved, PublicPublishApprovalRequired, type MeshRefinePublishApprovalRequest, type PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
 import type { GitRepoStatus, GitSubmoduleStatus } from '../git/git-types.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { GitCommandError, runGit } from '../git/git-executor.js';
@@ -85,6 +85,13 @@ export interface MeshFastForwardResult {
   submodulePushes?: MeshFastForwardSubmodulePushResult[];
   finalBranchConvergenceState?: Record<string, unknown>;
   operationError?: string;
+  /**
+   * Set when the root push was refused by the publication approval evaluator.
+   * Carries the per-commit evidence (approval state AND guard scan — identity /
+   * personal-path findings) that the generic publish_approval_required message
+   * does not, so the operator can tell an unapproved commit from a guard block.
+   */
+  publishApproval?: MeshRefinePublishApprovalRequest;
   ledgerError?: string;
   nextStep?: string;
   trigger?: string;
@@ -393,6 +400,7 @@ async function pushMeshNode(
       preStatus: current,
       pushTarget,
       operationError: formatGitError(error),
+      ...(error instanceof PublicPublishApprovalRequired ? { publishApproval: error.approval } : {}),
       finalBranchConvergenceState: buildConvergenceState(current, 'not_mergeable'),
     };
     await appendFastForwardLedger(result, 'failed');
