@@ -18,6 +18,7 @@ import { normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-m
 import { getProviderSessionCapabilities, EXTENSION_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
 import { emitStatusEdge, forwardProviderEvent, type SessionEventPort } from './provider-event-port.js';
 import { emitTurnStarted, emitTurnEnd, emitSuspension, type TurnEvidencePort } from './turn-evidence-port.js';
+import { legacyLiveProviderApproval } from './legacy-provider-approval.js';
 
 /** What an extension's events are enriched with from its parent IDE instance. */
 export interface ExtensionParentContext {
@@ -114,14 +115,10 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.messages),
                 activeModal: this.activeModal,
                 ...(this.currentStatus === 'waiting_approval' && this.currentApprovalModalKey ? {
-                    providerApproval: {
-                        type: 'tool_permission',
-                        lifecycle: 'pending',
-                        evidence: 'live',
-                        actionable: Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0,
-                        modalKey: this.currentApprovalModalKey,
-                        resolvedAt: null,
-                    } as any,
+                    providerApproval: legacyLiveProviderApproval(
+                        this.currentApprovalModalKey,
+                        Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0,
+                    ),
                 } : {}),
                 inputContent: '',
             } : null,

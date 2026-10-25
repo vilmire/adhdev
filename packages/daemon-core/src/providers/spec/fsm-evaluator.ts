@@ -288,12 +288,17 @@ function evalCond(
         return { kind: 'stable', result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
     }
     if (isSectionAbsent(cond)) {
-        const useModalSlice = Boolean(
-            absence && (cond.section_absent === 'modal' || cond.section_absent === 'trust'),
-        );
-        const haySections = useModalSlice ? absence!.modalSections : sections;
-        const hayScreen = useModalSlice ? absence!.modalScreen : fullScreen;
-        const hayCursor = useModalSlice ? absence!.modalCursor : cursor;
+        // Absence of a modal is an EXIT question ("is the modal still on screen?"). Answer
+        // it from the viewport, not the cursor-bound slice: TUIs park a hidden cursor at the
+        // last cell they repainted (often a status line above the modal), and a slice that
+        // goes empty for that frame would resolve the approval and re-key it on re-entry —
+        // one push per flap. Scrollback stays excluded, so stale copies cannot hold it open.
+        // Without scrollback in the frame (viewport fields null) the whole screen IS the viewport.
+        const modalAbsence = cond.section_absent === 'modal' || cond.section_absent === 'trust';
+        const useViewport = Boolean(modalAbsence && absence && absence.viewportScreen !== null && absence.viewportSections !== null);
+        const haySections = useViewport ? absence!.viewportSections! : sections;
+        const hayScreen = useViewport ? absence!.viewportScreen! : fullScreen;
+        const hayCursor = useViewport ? absence!.viewportCursor : cursor;
         const result = evaluateCondition(cond as Condition, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         return { kind: 'regex', result, detail: `section_absent=${cond.section_absent}` };
     }
@@ -314,12 +319,13 @@ function evalCond(
         // fire a modal transition, while a tall live modal whose header scrolled
         // into scrollback still matches.
         const secName = isRegex(cond) ? ((cond as any).section as string | undefined) : undefined;
+        //
+        // Under `not` the modal/trust section is an exit question too and is answered
+        // from the viewport (see section_absent above) — only positive guards are
+        // cursor-bound.
+        const modalSection = secName === 'modal' || secName === 'trust';
         const useModalSlice = Boolean(
-            absence && isRegex(cond) && (
-                secName === 'modal'
-                || secName === 'trust'
-                || (absence.isModalTarget && !absence.inNot)
-            ),
+            absence && isRegex(cond) && !absence.inNot && (modalSection || absence.isModalTarget),
         );
         const useViewport = Boolean(
             !useModalSlice
@@ -330,7 +336,7 @@ function evalCond(
             && (
                 secName === 'footer'
                 || secName === 'StatusLine'
-                || (absence.inNot && !secName)
+                || (absence.inNot && (!secName || modalSection))
             ),
         );
         const hayScreen = useModalSlice

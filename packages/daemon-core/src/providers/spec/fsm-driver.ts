@@ -830,10 +830,20 @@ export class FsmDriver implements ISpecDriver {
         const sections = resolveSections(this.spec.sections ?? {}, lines);
 
         // Modal states (approval / picker) extract their buttons + title from the
-        // cursor-bound live modal region in the active viewport so neither scrolled-off
-        // history nor a quoted modal above an active/idle composer is extracted as live.
+        // cursor-bound live modal region so neither scrolled-off history nor a quoted
+        // modal above an active/idle composer is extracted as live. The region is
+        // resolved in the same scrollback-extended guard frame the transition guards
+        // use: a tall modal (big diff, long command) pushes its header and command line
+        // above the viewport, and a viewport-only read reduced the title to the footer
+        // ("Press enter to confirm…") — a non-actionable push and an approval key that
+        // no longer distinguished one command from the next.
         const cursor = this.adapter.getCursorPosition();
-        const modal = deriveModal(state, sections, screen, (id, reason) => this.warnModalParseMiss(id, reason), cursor);
+        const guard = state.modal ? this.guardFrame(screen, cursor) : null;
+        const modalLines = guard ? guard.lines : lines;
+        const modalSections = guard ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
+        const modalScreen = guard ? guard.screen : screen;
+        const viewportStartRow = guard ? guard.lines.length - lines.length : 0;
+        const modal = deriveModal(state, modalSections, modalScreen, (id, reason) => this.warnModalParseMiss(id, reason), guard ? guard.cursor : cursor, viewportStartRow, liveLines => resolveSections(this.spec.sections ?? {}, liveLines));
         const controls = this.deriveControls(state.id);
         const title = modal?.title ?? deriveTitle(state, sections, screen);
 

@@ -298,7 +298,18 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
             }
         }
         if (typeof this.terminal.getCursorPosition !== 'function') return { col: 0, row: 0 };
-        return this.terminal.getCursorPosition();
+        const legacy = this.terminal.getCursorPosition();
+        if (this.altScreenActive) return legacy;
+        // Legacy (pre-viewport, API level 1) bindings report a viewport-relative row, but
+        // getText() drops the viewport's leading blank rows. Rebase the same way the
+        // viewport path does, or the cursor lands below the trimmed frame and the live
+        // modal slice rejects a real modal (a missed approval on stale/dev builds).
+        const lines = this.formatLines();
+        const viewport = lines.length > this.rows ? lines.slice(lines.length - this.rows) : lines;
+        let first = 0;
+        while (first < viewport.length && !viewport[first]) first += 1;
+        if (first >= viewport.length) return { col: legacy.col, row: 0 };
+        return { col: legacy.col, row: Math.max(0, legacy.row - first) };
     }
 
     dispose(): void {

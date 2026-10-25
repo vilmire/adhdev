@@ -470,6 +470,45 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
             expect(runDriver(claudeSpec, '', viewport).status).toBe('waiting_approval');
         });
 
+        it('a tall GhosttyVT modal keeps its header and command in the title (scrolled above the viewport)', async () => {
+            const tall = (cmd: string) => [
+                '\x1b[2J\x1b[H'
+                + 'Would you like to run the following command?\r\n\r\n'
+                + `  $ ${cmd}\r\n`
+                + Array.from({ length: 40 }, (_, i) => `+ changed line ${i + 1}\r\n`).join('')
+                + '› 1. Yes, proceed (y)\r\n'
+                + "  2. Yes, and don't ask again (a)\r\n"
+                + '  3. No, and tell Codex what to do differently (esc)\r\n\r\n'
+                + '  enter to submit | esc to cancel',
+            ];
+            const a = await runGhostty('codex-cli', tall('git status'));
+            const b = await runGhostty('codex-cli', tall('git push --force'));
+            expect(a.status).toBe('waiting_approval');
+            expect(b.status).toBe('waiting_approval');
+            expect(a.modal?.title).toContain('git status');
+            expect(b.modal?.title).toContain('git push --force');
+            expect(a.modal?.title).toMatch(/^Would you like to run the following command\?/);
+        });
+
+        it('a quoted modal in scrollback does not leak preceding output into the live modal title', async () => {
+            const modal = (cmd: string) => 'Would you like to run the following command?\r\n\r\n'
+                + `  $ ${cmd}\r\n\r\n`
+                + '› 1. Yes, proceed (y)\r\n'
+                + "  2. Yes, and don't ask again (a)\r\n"
+                + '  3. No, and tell Codex what to do differently (esc)\r\n\r\n'
+                + '  enter to submit | esc to cancel\r\n';
+            const output = Array.from({ length: 30 }, (_, i) => `agent output ${i}\r\n`).join('');
+            const r = await runGhostty('codex-cli', [
+                '\x1b[2J\x1b[H' + modal('quoted rm -rf /tmp/x') + '› \r\n' + output,
+                modal('git status'),
+            ]);
+            expect(r.status).toBe('waiting_approval');
+            expect(r.modal?.title).toMatch(/^Would you like to run the following command\?/);
+            expect(r.modal?.title).toContain('git status');
+            // Agent output must never become modal text (it would reach the push body).
+            expect(r.modal?.title).not.toMatch(/agent output/);
+        });
+
         it('preserves GhosttyVT rendered modals (top-of-screen with blank rows, scrolled 60-line output, Claude option 2, and 36-col narrow terminal)', async () => {
             expect((await runGhostty('codex-cli', [
                 '\x1b[2J\x1b[H'
@@ -711,6 +750,39 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
             );
             const secondKey = lifecycle.read()?.modalKey;
             expect(secondKey).toBe(firstKey);
+        });
+
+        it('re-keys when the command changes under the same header, and never revives a resolved episode', () => {
+            const lifecycle = new ProviderApprovalLifecycle();
+            const state = { id: 'approval', label: 'Approval', title: 'Allow command?', status: 'approval' as const };
+            const buttons = [{ index: 1, label: 'Yes', key: '1\r', current: true }, { index: 2, label: 'No', key: '2\r' }];
+            const header = 'Would you like to run the following command?';
+
+            lifecycle.observe(state, { title: `${header}\n$ git status`, buttons, kind: 'approval' }, 1000);
+            const first = lifecycle.read()?.modalKey;
+            // Approval → approval with a different command: a stale approve for `git status`
+            // must not match the `git push --force` modal.
+            lifecycle.observe(state, { title: `${header}\n$ git push --force`, buttons, kind: 'approval' }, 1500);
+            const second = lifecycle.read()?.modalKey;
+            expect(second).toBeTruthy();
+            expect(second).not.toBe(first);
+            // codex may print a shared "Reason: …" line before the command.
+            lifecycle.observe(state, { title: `${header}\nReason: needs network\n$ curl a.example`, buttons, kind: 'approval' }, 1510);
+            const reasonA = lifecycle.read()?.modalKey;
+            lifecycle.observe(state, { title: `${header}\nReason: needs network\n$ curl b.example`, buttons, kind: 'approval' }, 1520);
+            expect(lifecycle.read()?.modalKey).not.toBe(reasonA);
+            lifecycle.observe(state, { title: `${header}\n$ git push --force`, buttons, kind: 'approval' }, 1530);
+            const second2 = lifecycle.read()?.modalKey;
+            expect(second2).not.toBe(second);
+            // Repaint with different spacing keeps the key.
+            lifecycle.observe(state, { title: `${header}\n$  git push   --force`, buttons, kind: 'approval' }, 1600);
+            expect(lifecycle.read()?.modalKey).toBe(second2);
+
+            lifecycle.resolve(1700);
+            expect(lifecycle.read()?.lifecycle).toBe('resolved');
+            lifecycle.observe(state, { title: `${header}\n$ git push --force`, buttons, kind: 'approval' }, 1800);
+            expect(lifecycle.read()?.lifecycle).toBe('pending');
+            expect(lifecycle.read()?.modalKey).not.toBe(second2);
         });
 
         it('transient buttonless repaint does not permanently resolve a live approval', () => {

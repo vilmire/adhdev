@@ -268,6 +268,15 @@ export function deriveModal(
     fullScreen: string,
     warnParseMiss: (stateId: string, reason: string) => void,
     cursor?: { row: number; col: number },
+    /** First viewport row in `fullScreen` when it is a scrollback-extended guard frame. */
+    viewportStartRow = 0,
+    /**
+     * Resolve spec sections on the live region's own lines (as fsm-evaluator does).
+     * Clipping frame-wide sections is wrong for first-match anchors: a quoted modal
+     * earlier in the frame starts the section there, and the clip then begins it at
+     * whatever output precedes the live modal — a title made of agent output.
+     */
+    resolveLiveSections?: (lines: string[]) => ResolvedSection[],
 ): ModalSnapshot | null {
     const rule = state.extract?.buttons;
     if (!rule) {
@@ -283,12 +292,12 @@ export function deriveModal(
         return null;
     }
     const screenLines = fullScreen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
-    const liveModal = resolveLiveModalSlice(screenLines, cursor, 0);
+    const liveModal = resolveLiveModalSlice(screenLines, cursor, viewportStartRow);
     if (!liveModal.hasLiveModal) {
         return null;
     }
     const scopedScreen = liveModal.screen;
-    const scopedSections: ResolvedSection[] = sections.map(s => {
+    const scopedSections: ResolvedSection[] = resolveLiveSections ? resolveLiveSections(liveModal.lines) : sections.map(s => {
         const fromLine = Math.max(s.fromLine, liveModal.startRow);
         const toLine = Math.max(fromLine, Math.min(s.toLine, liveModal.endRow + 1));
         return {

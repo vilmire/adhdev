@@ -573,8 +573,19 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             // resolved would otherwise collide with the stale fingerprint and be
             // dropped. The seq in the fingerprint already separates entries; this
             // reset is a belt-and-suspenders guard for the re-entry case.
-            host.lastApprovalEventFingerprint = '';
-            host.lastApprovalModalKey = null;
+            //
+            // EXCEPT a buttonless repaint of a still-open modal: the adapter projects
+            // that frame as generating, but its approval episode is still pending under
+            // the same key. Clearing here would re-emit agent:waiting_approval, a
+            // duplicate approval bubble and a suspension every time the buttons fail to
+            // parse for one frame.
+            const sameOpenEpisode = adapterStatus?.providerApproval?.lifecycle === 'pending'
+                && !!host.lastApprovalModalKey
+                && adapterStatus.providerApproval.modalKey === host.lastApprovalModalKey;
+            if (!sameOpenEpisode) {
+                host.lastApprovalEventFingerprint = '';
+                host.lastApprovalModalKey = null;
+            }
         } else if (newStatus === 'idle' && (host.lastStatus === 'generating' || host.lastStatus === 'waiting_approval')) {
             host.lastApprovalModalKey = null;
             const duration = host.generatingStartedAt ? Math.round((now - host.generatingStartedAt) / 1000) : 0;

@@ -87972,23 +87972,30 @@ ${closeSentinel}`;
                 if (this.altScreenActive || vp.activeScreen === "alternate") {
                   return { col: vp.cursorCol, row: vp.cursorRow };
                 }
-                const lines = this.formatLines();
-                if (lines.length === 0) return { col: vp.cursorCol, row: 0 };
-                const viewportStart = lines.length > this.rows ? lines.length - this.rows : 0;
-                const viewport = lines.slice(viewportStart);
-                let first = 0;
-                while (first < viewport.length && !viewport[first]) first += 1;
-                if (first >= viewport.length) return { col: vp.cursorCol, row: 0 };
+                const lines2 = this.formatLines();
+                if (lines2.length === 0) return { col: vp.cursorCol, row: 0 };
+                const viewportStart = lines2.length > this.rows ? lines2.length - this.rows : 0;
+                const viewport2 = lines2.slice(viewportStart);
+                let first2 = 0;
+                while (first2 < viewport2.length && !viewport2[first2]) first2 += 1;
+                if (first2 >= viewport2.length) return { col: vp.cursorCol, row: 0 };
                 const screenCursorRow = vp.activeOriginRow + vp.cursorRow;
                 return {
                   col: vp.cursorCol,
-                  row: Math.max(0, screenCursorRow - viewportStart - first)
+                  row: Math.max(0, screenCursorRow - viewportStart - first2)
                 };
               } catch {
               }
             }
             if (typeof this.terminal.getCursorPosition !== "function") return { col: 0, row: 0 };
-            return this.terminal.getCursorPosition();
+            const legacy = this.terminal.getCursorPosition();
+            if (this.altScreenActive) return legacy;
+            const lines = this.formatLines();
+            const viewport = lines.length > this.rows ? lines.slice(lines.length - this.rows) : lines;
+            let first = 0;
+            while (first < viewport.length && !viewport[first]) first += 1;
+            if (first >= viewport.length) return { col: legacy.col, row: 0 };
+            return { col: legacy.col, row: Math.max(0, legacy.row - first) };
           }
           dispose() {
             if (this.disposed) return;
@@ -99311,7 +99318,7 @@ ${detail.join("\n")}` : stripped;
         screen: sliceLines.join("\n")
       };
     }
-    function deriveModal(state2, sections, fullScreen, warnParseMiss, cursor) {
+    function deriveModal(state2, sections, fullScreen, warnParseMiss, cursor, viewportStartRow = 0, resolveLiveSections) {
       const rule = state2.extract?.buttons;
       if (!rule) {
         if (state2.modal) {
@@ -99320,12 +99327,12 @@ ${detail.join("\n")}` : stripped;
         return null;
       }
       const screenLines = fullScreen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
-      const liveModal = resolveLiveModalSlice(screenLines, cursor, 0);
+      const liveModal = resolveLiveModalSlice(screenLines, cursor, viewportStartRow);
       if (!liveModal.hasLiveModal) {
         return null;
       }
       const scopedScreen = liveModal.screen;
-      const scopedSections = sections.map((s2) => {
+      const scopedSections = resolveLiveSections ? resolveLiveSections(liveModal.lines) : sections.map((s2) => {
         const fromLine = Math.max(s2.fromLine, liveModal.startRow);
         const toLine = Math.max(fromLine, Math.min(s2.toLine, liveModal.endRow + 1));
         return {
@@ -99595,22 +99602,22 @@ ${detail.join("\n")}` : stripped;
         return { kind: "stable", result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
       }
       if (isSectionAbsent(cond)) {
-        const useModalSlice = Boolean(
-          absence && (cond.section_absent === "modal" || cond.section_absent === "trust")
-        );
-        const haySections = useModalSlice ? absence.modalSections : sections;
-        const hayScreen = useModalSlice ? absence.modalScreen : fullScreen;
-        const hayCursor = useModalSlice ? absence.modalCursor : cursor;
+        const modalAbsence = cond.section_absent === "modal" || cond.section_absent === "trust";
+        const useViewport = Boolean(modalAbsence && absence && absence.viewportScreen !== null && absence.viewportSections !== null);
+        const haySections = useViewport ? absence.viewportSections : sections;
+        const hayScreen = useViewport ? absence.viewportScreen : fullScreen;
+        const hayCursor = useViewport ? absence.viewportCursor : cursor;
         const result = evaluateCondition(cond, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         return { kind: "regex", result, detail: `section_absent=${cond.section_absent}` };
       }
       if (isRegex(cond) || isChanged(cond)) {
         const secName = isRegex(cond) ? cond.section : void 0;
+        const modalSection = secName === "modal" || secName === "trust";
         const useModalSlice = Boolean(
-          absence && isRegex(cond) && (secName === "modal" || secName === "trust" || absence.isModalTarget && !absence.inNot)
+          absence && isRegex(cond) && !absence.inNot && (modalSection || absence.isModalTarget)
         );
         const useViewport = Boolean(
-          !useModalSlice && absence && absence.viewportScreen !== null && absence.viewportSections !== null && isRegex(cond) && (secName === "footer" || secName === "StatusLine" || absence.inNot && !secName)
+          !useModalSlice && absence && absence.viewportScreen !== null && absence.viewportSections !== null && isRegex(cond) && (secName === "footer" || secName === "StatusLine" || absence.inNot && (!secName || modalSection))
         );
         const hayScreen = useModalSlice ? absence.modalScreen : useViewport ? absence.viewportScreen : fullScreen;
         const haySections = useModalSlice ? absence.modalSections : useViewport ? absence.viewportSections : sections;
@@ -128529,6 +128536,21 @@ ${marker2}`,
         ...opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}
       }));
     }
+    function legacyLiveProviderApproval(modalKey, hasButtons) {
+      return {
+        source: "legacy_provider",
+        type: "unknown",
+        compatibility: hasButtons ? "session_only" : "unknown",
+        evidence: "live",
+        lifecycle: "pending",
+        modalKey,
+        createdAt: null,
+        resolvedAt: null,
+        description: "",
+        buttons: [],
+        actionable: false
+      };
+    }
     var ExtensionProviderInstance = class {
       type;
       category = "extension";
@@ -128603,14 +128625,10 @@ ${marker2}`,
             messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.messages),
             activeModal: this.activeModal,
             ...this.currentStatus === "waiting_approval" && this.currentApprovalModalKey ? {
-              providerApproval: {
-                type: "tool_permission",
-                lifecycle: "pending",
-                evidence: "live",
-                actionable: Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0,
-                modalKey: this.currentApprovalModalKey,
-                resolvedAt: null
-              }
+              providerApproval: legacyLiveProviderApproval(
+                this.currentApprovalModalKey,
+                Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0
+              )
             } : {},
             inputContent: ""
           } : null,
@@ -129311,14 +129329,10 @@ ${marker2}`,
             messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.cachedChat.messages || []),
             activeModal: autoApproveActive ? null : this.cachedChat.activeModal || null,
             ...visibleStatus === "waiting_approval" && this.currentApprovalModalKey ? {
-              providerApproval: {
-                type: "tool_permission",
-                lifecycle: "pending",
-                evidence: "live",
-                actionable: Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0,
-                modalKey: this.currentApprovalModalKey,
-                resolvedAt: null
-              }
+              providerApproval: legacyLiveProviderApproval(
+                this.currentApprovalModalKey,
+                Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0
+              )
             } : {},
             inputContent: this.cachedChat.inputContent || ""
           } : null,
@@ -168292,9 +168306,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           this.inApproval = true;
           return;
         }
-        const titleHead = typeof modal.title === "string" ? modal.title.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "" : "";
-        const signature = JSON.stringify([state2.id, modal.kind, titleHead, modal.buttons]);
-        const isNew = !this.inApproval || !this.current?.modalKey || signature !== this.signature;
+        const titleLines = typeof modal.title === "string" ? modal.title.split(/\r?\n/).map((line) => line.trim().replace(/\s+/g, " ")).filter(Boolean) : [];
+        const commandLine = titleLines.slice(1).find((line) => /^\$ /.test(line)) ?? titleLines[1] ?? "";
+        const titleKey = [titleLines[0] ?? "", commandLine].join("\n");
+        const signature = JSON.stringify([state2.id, modal.kind, titleKey, modal.buttons]);
+        const isNew = !this.inApproval || !this.current?.modalKey || this.current.lifecycle !== "pending" || signature !== this.signature;
         if (isNew) {
           this.current = {
             ...assignment,
@@ -168315,8 +168331,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         } else if (this.current) {
           this.current = {
             ...this.current,
-            lifecycle: "pending",
-            resolvedAt: null,
             evidence: "live",
             actionable: !setup,
             buttons: modal.buttons.map((b) => b.label.slice(0, 120))
@@ -171306,7 +171320,12 @@ trust_level = "trusted"
         const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
         const cursor = this.adapter.getCursorPosition();
-        const modal = deriveModal(state2, sections, screen, (id4, reason) => this.warnModalParseMiss(id4, reason), cursor);
+        const guard2 = state2.modal ? this.guardFrame(screen, cursor) : null;
+        const modalLines = guard2 ? guard2.lines : lines;
+        const modalSections = guard2 ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
+        const modalScreen = guard2 ? guard2.screen : screen;
+        const viewportStartRow = guard2 ? guard2.lines.length - lines.length : 0;
+        const modal = deriveModal(state2, modalSections, modalScreen, (id4, reason) => this.warnModalParseMiss(id4, reason), guard2 ? guard2.cursor : cursor, viewportStartRow, (liveLines) => resolveSections(this.spec.sections ?? {}, liveLines));
         const controls = this.deriveControls(state2.id);
         const title = modal?.title ?? deriveTitle(state2, sections, screen);
         const next = {
@@ -177482,8 +177501,11 @@ ${buttons.join("\n")}`;
           if (!host.generatingStartedAt) host.generatingStartedAt = now;
           host.busyEpoch++;
         } else if (newStatus === "generating" && host.lastStatus === "waiting_approval") {
-          host.lastApprovalEventFingerprint = "";
-          host.lastApprovalModalKey = null;
+          const sameOpenEpisode = adapterStatus?.providerApproval?.lifecycle === "pending" && !!host.lastApprovalModalKey && adapterStatus.providerApproval.modalKey === host.lastApprovalModalKey;
+          if (!sameOpenEpisode) {
+            host.lastApprovalEventFingerprint = "";
+            host.lastApprovalModalKey = null;
+          }
         } else if (newStatus === "idle" && (host.lastStatus === "generating" || host.lastStatus === "waiting_approval")) {
           host.lastApprovalModalKey = null;
           const duration = host.generatingStartedAt ? Math.round((now - host.generatingStartedAt) / 1e3) : 0;
@@ -178511,14 +178533,7 @@ ${buttons.join("\n")}`;
       const finalStatus = hasInteractivePrompt ? "waiting_choice" : visibleStatus;
       const finalChatStatus = hasInteractivePrompt ? "waiting_choice" : activeChatStatus;
       const resolvedActiveModal = autoApproveActive || autoApproveHoldIdle ? null : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal);
-      const resolvedProviderApproval = autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt ? null : adapterStatus.providerApproval ?? (finalStatus === "waiting_approval" && host.lastApprovalModalKey ? {
-        type: "tool_permission",
-        lifecycle: "pending",
-        evidence: "live",
-        actionable: hasNonEmptyCliModalButtons(resolvedActiveModal),
-        modalKey: host.lastApprovalModalKey,
-        resolvedAt: null
-      } : null);
+      const resolvedProviderApproval = autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt ? null : adapterStatus.providerApproval ?? (finalStatus === "waiting_approval" && host.lastApprovalModalKey ? legacyLiveProviderApproval(host.lastApprovalModalKey, hasNonEmptyCliModalButtons(resolvedActiveModal)) : null);
       return {
         type: host.type,
         name: host.provider.name,
@@ -196186,6 +196201,14 @@ ${notice.notice}${supersededHint}`;
     function stillWaiting(state2) {
       return !!state2 && (state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval");
     }
+    function heldEpisodeStillOpen(state2, heldKey) {
+      if (!state2 || !heldKey) return false;
+      const approval = state2.activeChat?.providerApproval ?? state2.providerApproval;
+      if (!approval || approval.lifecycle !== "pending" || approval.resolvedAt != null) return false;
+      const modalKey = typeof approval.modalKey === "string" ? approval.modalKey.trim() : "";
+      return !!modalKey && `modal:${modalKey}` === heldKey;
+    }
+    var ESCALATION_MAX_OPEN_EPISODE_RECHECKS = 60;
     function buildEscalatedEvent(rawEvent, state2) {
       const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
       const hasActiveModalProp = Boolean(state2?.activeChat && "activeModal" in state2.activeChat);
@@ -196241,7 +196264,7 @@ ${notice.notice}${supersededHint}`;
     }
     function hasActionableEscalatedModal(rebuilt, state2) {
       const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
-      if (approval && approval.actionable === false) return false;
+      if (approval && approval.actionable === false && approval.source !== "legacy_provider") return false;
       return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
     }
     function createApprovalEscalationGate(deps) {
@@ -196269,7 +196292,8 @@ ${notice.notice}${supersededHint}`;
           currentKey = null;
         }
         if (!currentKey) {
-          if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+          const open = heldEpisodeStillOpen(state2, entry.key);
+          if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS || open && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS) {
             entry.rechecks += 1;
             entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
             return;
@@ -196292,7 +196316,7 @@ ${notice.notice}${supersededHint}`;
         }
         const rebuilt = buildEscalatedEvent(entry.raw, state2);
         if (!hasActionableEscalatedModal(rebuilt, state2)) {
-          if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+          if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS || heldEpisodeStillOpen(state2, currentKey) && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS) {
             entry.rechecks += 1;
             entry.key = currentKey;
             entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);

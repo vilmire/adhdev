@@ -107,6 +107,31 @@ describe('coordinator-first owner escalation', () => {
         w.stop();
     });
 
+    it('keeps the hold when the window ends on a buttonless repaint of the same open episode', () => {
+        // The adapter projects that frame as generating with the approval still pending
+        // under the same key; the daemon will not re-emit agent:waiting_approval for it
+        // when the buttons come back, so dropping the hold would lose the owner push.
+        const w = world(); w.ask();
+        const live = state;
+        state = { ...state, status: 'generating', activeChat: { ...state.activeChat, status: 'generating', activeModal: null, providerApproval: approval(EP_1, { evidence: 'unavailable', actionable: false }) } };
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(0);
+        vi.advanceTimersByTime(5_000 * 8); // longer than the plain unreadable-recheck budget
+        expect(w.server).toHaveLength(0);
+        state = live;
+        vi.advanceTimersByTime(5_000);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('escalates a legacy (IDE/extension) approval even though it is not Inbox-actionable', () => {
+        const w = world({ activeChat: { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval(EP_1, { source: 'legacy_provider', actionable: false }) } });
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
     it('drops the held push when the session terminates', () => {
         const w = world(); w.ask();
         w.bus.emit({ kind: 'terminated', sessionId: 'w1' } as any);

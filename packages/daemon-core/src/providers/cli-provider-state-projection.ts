@@ -37,6 +37,7 @@ import { mergeConversationMessages } from './cli-provider-transcript-merge.js';
 import { ParsedIngestTimestampStamper } from './cli-provider-ingest-times.js';
 import { type PersistableCliHistoryMessage, buildIncrementalHistoryAppendMessages, projectCliChatMessage } from './cli-provider-history-dedup.js';
 import type { PtyRuntimeMetadata } from '../cli-adapters/pty-transport.js';
+import { legacyLiveProviderApproval } from './legacy-provider-approval.js';
 
 /** The narrow surface of CliProviderInstance the state projection reads/writes. */
 export interface ProviderStateHost {
@@ -355,14 +356,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
     const resolvedProviderApproval = (autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt)
         ? null
         : (adapterStatus.providerApproval ?? (finalStatus === 'waiting_approval' && host.lastApprovalModalKey
-            ? {
-                type: 'tool_permission',
-                lifecycle: 'pending',
-                evidence: 'live',
-                actionable: hasNonEmptyCliModalButtons(resolvedActiveModal),
-                modalKey: host.lastApprovalModalKey,
-                resolvedAt: null,
-            }
+            ? legacyLiveProviderApproval(host.lastApprovalModalKey, hasNonEmptyCliModalButtons(resolvedActiveModal))
             : null));
 
     return {

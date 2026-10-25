@@ -133,3 +133,29 @@ describe('CliProviderInstance approval emit gate — seq separates identical bac
     expect(approvals.length).toBe(1)
   })
 })
+
+describe('CliProviderInstance approval emit gate — buttonless repaint of an open modal', () => {
+  // The spec adapter projects a frame whose modal buttons failed to parse as `generating`
+  // while the approval episode stays pending under the same modalKey. Returning to the
+  // parsed modal must not re-emit agent:waiting_approval (one owner push per flap).
+  const key = 'modal:7d1f6a0e-6c55-4b0c-9a2b-3e0f4c2d9a11'
+  const pending = (evidence: string) => ({ source: 'provider_modal', type: 'tool_permission', lifecycle: 'pending', evidence, modalKey: key })
+  const OPEN = { ...APPROVAL(1), providerApproval: pending('live') }
+  const REPAINT = { status: 'generating', approvalEntrySeq: 1, activeModal: null, providerApproval: pending('unavailable') }
+
+  it('emits once across parse-miss repaints of the same episode', () => {
+    const { instance, events, setAdapterStatus } = makeInstance()
+    const detect = (instance as any).detectStatusTransition.bind(instance)
+    for (const s of [OPEN, REPAINT, OPEN, REPAINT, OPEN]) { setAdapterStatus(s); detect() }
+    expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(1)
+  })
+
+  it('still emits again once the episode actually resolved', () => {
+    const { instance, events, setAdapterStatus } = makeInstance()
+    const detect = (instance as any).detectStatusTransition.bind(instance)
+    setAdapterStatus(OPEN); detect()
+    setAdapterStatus({ ...GENERATING, providerApproval: { ...pending('live'), lifecycle: 'resolved' } }); detect()
+    setAdapterStatus({ ...APPROVAL(2), providerApproval: { ...pending('live'), modalKey: 'modal:0b8a1c22-41f3-4d0e-8a77-5c9e2f1b3d44' } }); detect()
+    expect(events.filter((e) => e.event === 'agent:waiting_approval').length).toBe(2)
+  })
+})

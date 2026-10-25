@@ -29,11 +29,21 @@ export class ProviderApprovalLifecycle {
             this.inApproval = true;
             return;
         }
-        const titleHead = typeof modal.title === 'string'
-            ? (modal.title.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? '')
-            : '';
-        const signature = JSON.stringify([state.id, modal.kind, titleHead, modal.buttons]);
-        const isNew = !this.inApproval || !this.current?.modalKey || signature !== this.signature;
+        // Header + the command line, whitespace-normalised. The header alone ("Would you
+        // like to run the following command?") is shared by every command, so keying on it
+        // let a stale approve meant for one command press another. The command line is the
+        // first `$ …` line when there is one (codex can print "Reason: …" first), else the
+        // first detail line; later lines are excluded because streaming output can trail
+        // the detail block between repaints. The signature never leaves this object; only
+        // the opaque UUID key is published.
+        const titleLines = typeof modal.title === 'string'
+            ? modal.title.split(/\r?\n/).map(line => line.trim().replace(/\s+/g, ' ')).filter(Boolean)
+            : [];
+        const commandLine = titleLines.slice(1).find(line => /^\$ /.test(line)) ?? titleLines[1] ?? '';
+        const titleKey = [titleLines[0] ?? '', commandLine].join('\n');
+        const signature = JSON.stringify([state.id, modal.kind, titleKey, modal.buttons]);
+        // A resolved episode is never revived under its old key.
+        const isNew = !this.inApproval || !this.current?.modalKey || this.current.lifecycle !== 'pending' || signature !== this.signature;
         if (isNew) {
             this.current = {
                 ...assignment,
@@ -47,8 +57,6 @@ export class ProviderApprovalLifecycle {
         } else if (this.current) {
             this.current = {
                 ...this.current,
-                lifecycle: 'pending',
-                resolvedAt: null,
                 evidence: 'live',
                 actionable: !setup,
                 buttons: modal.buttons.map(b => b.label.slice(0, 120)),

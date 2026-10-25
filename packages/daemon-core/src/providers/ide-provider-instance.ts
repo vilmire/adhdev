@@ -26,6 +26,7 @@ import { formatAutoApprovalMessage, modalAllowsAutoApproval, pickAutoApprovalBut
 import { mergeProviderPatchState, resolveProviderStateSurface } from './provider-patch-state.js';
 import { buildRuntimeSystemChatMessage, normalizeChatMessages, extractFinalSummaryFromMessages } from './chat-message-normalization.js';
 import { getProviderSessionCapabilities, IDE_PROVIDER_SESSION_CAPABILITIES_BASE } from './open-panel-support.js';
+import { legacyLiveProviderApproval } from './legacy-provider-approval.js';
 
 type ReadChatModal = {
     message?: string;
@@ -176,14 +177,10 @@ export class IdeProviderInstance implements ProviderInstance {
                 messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.cachedChat.messages || []),
                 activeModal: autoApproveActive ? null : (this.cachedChat.activeModal || null),
                 ...(visibleStatus === 'waiting_approval' && this.currentApprovalModalKey ? {
-                    providerApproval: {
-                        type: 'tool_permission',
-                        lifecycle: 'pending',
-                        evidence: 'live',
-                        actionable: Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0,
-                        modalKey: this.currentApprovalModalKey,
-                        resolvedAt: null,
-                    } as any,
+                    providerApproval: legacyLiveProviderApproval(
+                        this.currentApprovalModalKey,
+                        Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0,
+                    ),
                 } : {}),
                 inputContent: this.cachedChat.inputContent || '',
             } : null,

@@ -30,7 +30,7 @@ export const OWNER_APPROVAL_ESCALATION_MS = 60_000;
 export const OWNER_APPROVAL_SESSION_COOLDOWN_MS = 120_000;
 
 type ProviderApprovalLike = {
-    type?: unknown; lifecycle?: unknown; status?: unknown; evidence?: unknown; actionable?: unknown; modalKey?: unknown; resolvedAt?: unknown;
+    source?: unknown; type?: unknown; lifecycle?: unknown; status?: unknown; evidence?: unknown; actionable?: unknown; modalKey?: unknown; resolvedAt?: unknown;
 } | null;
 
 type SessionStateLike = {
@@ -109,6 +109,24 @@ function stillWaiting(state: SessionStateLike): boolean {
 }
 
 /**
+ * The held episode is still open even though this frame does not read as waiting:
+ * a buttonless repaint projects `generating` with the approval pending under the same
+ * key (evidence 'unavailable'). The daemon does not re-emit agent:waiting_approval for
+ * that episode when the buttons come back, so dropping the hold here would lose the
+ * owner escalation for good.
+ */
+function heldEpisodeStillOpen(state: SessionStateLike, heldKey: string): boolean {
+    if (!state || !heldKey) return false;
+    const approval = state.activeChat?.providerApproval ?? state.providerApproval;
+    if (!approval || approval.lifecycle !== 'pending' || approval.resolvedAt != null) return false;
+    const modalKey = typeof approval.modalKey === 'string' ? approval.modalKey.trim() : '';
+    return !!modalKey && `modal:${modalKey}` === heldKey;
+}
+
+/** Re-check budget while the held episode is provably still open (≈5 min at 5 s). */
+const ESCALATION_MAX_OPEN_EPISODE_RECHECKS = 60;
+
+/**
  * Rebuild the escalated event from the CURRENT validated episode in `state`
  * rather than forwarding stale fields from `entry.raw` (which may have been
  * captured while `approvalEvidence: 'unavailable'` or an earlier episode key).
@@ -178,7 +196,9 @@ function buildEscalatedEvent(
 
 function hasActionableEscalatedModal(rebuilt: Record<string, unknown>, state: SessionStateLike): boolean {
     const approval = state?.activeChat?.providerApproval ?? state?.providerApproval;
-    if (approval && approval.actionable === false) return false;
+    // Legacy (IDE/extension/CLI-fallback) records are never Inbox-actionable by design,
+    // but their buttons are still the owner's decision — escalate on the buttons alone.
+    if (approval && approval.actionable === false && approval.source !== 'legacy_provider') return false;
     return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
 }
 
@@ -205,7 +225,9 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             // Still parked but the episode is momentarily unreadable (an
             // evidence:'unavailable' repaint): look again shortly instead of
             // dropping the escalation for good.
-            if (stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+            const open = heldEpisodeStillOpen(state, entry.key);
+            if ((stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS)
+                || (open && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS)) {
                 entry.rechecks += 1;
                 entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
                 return;
@@ -228,7 +250,8 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         }
         const rebuilt = buildEscalatedEvent(entry.raw, state);
         if (!hasActionableEscalatedModal(rebuilt, state)) {
-            if (stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+            if ((stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS)
+                || (heldEpisodeStillOpen(state, currentKey) && entry.rechecks < ESCALATION_MAX_OPEN_EPISODE_RECHECKS)) {
                 entry.rechecks += 1;
                 entry.key = currentKey;
                 entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);

@@ -616,5 +616,16 @@ describe('codex-cli v4 FSM — background terminal keeps session generating (bus
         const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row, col: 2 }, undefined, clk(10000, 0));
         expect(hold.fired).toBeNull();
     });
+
+    it('approval stays put when a repaint parks the hidden cursor outside the modal', () => {
+        // Ratatui/Ink leave the cursor at the last cell they drew (e.g. a status line
+        // above the modal). Exit guards must not read that frame as "modal gone": each
+        // flap would resolve the approval and re-key it — one owner push per flap.
+        const rows = bgWithApprovalScreen.split('\n').length;
+        for (const row of [0, Math.floor(rows / 2), rows - 1]) {
+            const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row, col: 0 }, undefined, clk(10000, 0));
+            expect(hold.fired?.to ?? null, `cursor row ${row}`).toBeNull();
+        }
+    });
 });
 
