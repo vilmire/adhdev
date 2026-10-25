@@ -385,6 +385,8 @@ it('round4 P2-B: per-repo approvals permit two public repos; a flat array refuse
   expect(mapped.status).toBe('passed')
   expect(f.originMain()).toContain(f.localOnly)
   expect(other.originMain()).toContain(other.localOnly)
-})
+// Builds two public fixture repos plus a superproject with real git (13 s alone); under a
+// full-suite load it exceeded the 30 s default, so it gets an explicit budget.
+}, 60_000)
 
 useSyntheticPublicPushPatterns()
