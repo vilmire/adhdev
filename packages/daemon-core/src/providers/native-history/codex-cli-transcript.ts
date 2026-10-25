@@ -440,7 +440,7 @@ function parseSessionFile(
   const records: NativeHistoryMessage[] = [];
   const usageRecords: NativeUsageRecord[] = [];
   const turnTerminalMarkers: NativeTurnTerminalMarker[] = [];
-  const provenance = createCodexTurnProvenance();
+  const provenance = createCodexTurnProvenance(sessionId);
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -492,7 +492,7 @@ function parseSessionFile(
 
     if (type === 'event_msg') {
       const nativeAt = extractTimestampValue(record.timestamp) || 0;
-      if (payloadType === 'task_started' || payloadType === 'error') provenance(payload, nativeAt);
+      if (payloadType === 'task_started' || payloadType === 'error' || payloadType === 'user_message') provenance(payload, nativeAt);
       // (NATIVE-TURN-SIGNAL) Record the provider's own turn-terminal marker BEFORE
       // the message-building below. This runs for EVERY terminal record, including
       // one whose summary field is empty — that turn (tool-terminated or empty

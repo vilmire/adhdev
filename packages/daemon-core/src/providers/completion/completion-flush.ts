@@ -1,3 +1,4 @@
+import { completionIdentityCurrent, type CompletionBindingHost } from './native-completion-binding.js';
 /**
  * The completed-debounce flush interpreter (verbatim move out of
  * CliProviderInstance — M-FILE-SIZE-DEBT decomposition).
@@ -54,7 +55,7 @@ function asNativeTurnOutcome(value: unknown): NativeTurnOutcome | undefined {
 }
 
 /** The narrow surface of CliProviderInstance the flush interpreter reads/writes. */
-export interface CompletionFlushHost {
+export interface CompletionFlushHost extends Partial<CompletionBindingHost> {
     nativeTurnTerminalMarker?(startedAt?: number): NativeTurnTerminalMarker | null;
     type: string;
     instanceId: string;
@@ -102,6 +103,12 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         return;
     }
 
+    if (pending.completionBinding && !completionIdentityCurrent(host as CompletionBindingHost, pending)) {
+        if (host.completedDebounceTimer) clearTimeout(host.completedDebounceTimer);
+        host.completedDebouncePending = null; host.completedDebounceTimer = null;
+        host.clearCancelledCompletionRecheck();
+        return;
+    }
     const reader = host.buildCompletionSignalReader(pending);
     const policy = host.completionEnginePolicy();
     const latestVisibleStatus = reader.visibleStatus();
@@ -153,8 +160,14 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
     host.applyCompletionArmPatch(pending, decision.armPatch);
 
     const nativeMarker = host.nativeTurnTerminalMarker?.(pending.turnStartedAt);
-    const nativeFailureDiagnostic = nativeMarker?.outcome === 'failed'
-        ? { nativeTurnOutcome: 'failed', nativeProviderFailure: nativeMarker.providerFailure ?? 'provider_error',
+    if (nativeMarker?.outcome === 'aborted') {
+        // An abort is not a genuine final. The existing cancellation lifecycle owns its verdict.
+        host.completedDebouncePending = null; host.completedDebounceTimer = null;
+        host.clearCancelledCompletionRecheck();
+        return;
+    }
+    const nativeFailureDiagnostic = nativeMarker
+        ? { nativeTurnOutcome: nativeMarker.outcome, ...(nativeMarker.outcome === 'failed' ? { nativeProviderFailure: nativeMarker.providerFailure ?? 'provider_error' } : {}),
             nativeMarker: { outcome: nativeMarker.outcome, turnId: nativeMarker.turnId, receivedAt: nativeMarker.receivedAt, startedAt: nativeMarker.startedAt, errorAt: nativeMarker.errorAt } } : {};
 
     if (decision.kind === 'hold') {
@@ -229,6 +242,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
             duration: pending.duration,
             timestamp: pending.timestamp,
             taskId: pending.taskId,
+            attemptRef: pending.capturedAttemptRef,
             finalSummary: weakFinalSummary,
             completionDiagnostic,
         });
@@ -255,14 +269,15 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
         duration: pending.duration,
         busyEpoch: host.busyEpoch,
     });
-    const finalSummary = nativeMarker?.outcome === 'failed' ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
+    const finalSummary = nativeMarker ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
     const transcriptProfile = resolveTranscriptAuthorityProfile(host.provider);
     const finalContentLength = typeof finalSummary === 'string' ? finalSummary.trim().length : 0;
     host.emitGeneratingCompleted({
         chatTitle: pending.chatTitle,
         duration: pending.duration,
-        timestamp: pending.timestamp,
+        timestamp: nativeMarker?.receivedAt ?? pending.timestamp,
         taskId: pending.taskId,
+        attemptRef: pending.capturedAttemptRef,
         finalSummary,
         evidenceLevel: 'reported',
         completionDiagnostic: {
@@ -274,6 +289,7 @@ export function flushCompletedDebounceIfFinalized(host: CompletionFlushHost): vo
             finalAssistantEvidenceSource: pending.resolvedFinalEvidenceSource ?? 'parsed',
             finalAssistantContentLength: finalContentLength,
             ...host.finalSummaryProvenanceDiagnostic(finalSummary),
+            ...(nativeMarker ? { finalSummarySource: 'native_transcript', finalSummaryMayBeTruncated: false } : {}),
             transcriptEvidence: {
                 version: 1,
                 kind: 'final_assistant',
@@ -327,6 +343,7 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
     finalSummary?: string;
     evidenceLevel?: string;
     completionDiagnostic?: Record<string, unknown>;
+    attemptRef?: TurnAttemptRef | null;
 }): void {
     // Cache the final assistant summary so the dashboard snapshot can surface it
     // for native-source providers whose assistant answer is absent from the PTY
@@ -392,7 +409,7 @@ export function emitGeneratingCompleted(host: CompletionEmitHost, opts: {
             sessionId: host.instanceId,
             observedBy: 'cli_completion_flush',
             source: weak ? 'completion_flush_weak' : 'completion_flush_genuine',
-            attemptRef: host.currentAttemptRef?.() ?? undefined,
+            attemptRef: opts.attemptRef === undefined ? host.currentAttemptRef?.() ?? undefined : opts.attemptRef ?? undefined,
             taskId: opts.taskId,
             at: opts.timestamp,
             strength: weak ? 'weak' : 'genuine',

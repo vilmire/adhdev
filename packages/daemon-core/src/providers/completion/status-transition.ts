@@ -126,6 +126,7 @@ export interface StatusTransitionHost {
     generatingDebounceTimer: NodeJS.Timeout | null;
     generatingDebouncePending: { chatTitle: string; timestamp: number } | null;
     completedDebounceTimer: NodeJS.Timeout | null;
+    captureCompletionIdentity?(pending: CompletedDebouncePending): void;
     completedDebouncePending: CompletedDebouncePending | null;
     busyEpoch: number;
     autoApproveBusy: boolean;
@@ -662,6 +663,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                             ? { lastOutputAtArm: adapterStatus.lastOutputAt as number }
                             : {}),
                     };
+                    host.captureCompletionIdentity?.(host.completedDebouncePending);
                     LOG.info('CLI', `[${host.type}] short-generating routed through settle window (${shortDurationMs}ms, source=${shortEvidenceSource}, missingEvidence=${missingEvidence}) — arming completedDebouncePending instead of inline fire`);
                     // EVTTRACE: now traces the settle ARM (not an inline fire) for mesh sessions,
                     // so logs show the short-gen path deferring to continuity re-check.
@@ -731,6 +733,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         ? { lastOutputAtArm: adapterStatus.lastOutputAt as number }
                         : {}),
                 };
+                host.captureCompletionIdentity?.(host.completedDebouncePending);
                 const ownsExternalHistory = !!(host.adapter as any)?.chatMessagesOwnedExternally;
                 // (FALSEIDLE-BGCHILD-a) Native-history providers flush immediately (the
                 // transcript is authoritative). For autonomously-progressing mesh sessions,

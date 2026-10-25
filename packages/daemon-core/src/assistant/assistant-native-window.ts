@@ -38,6 +38,9 @@ export interface AuditedCoordinatorReply {
     attemptId: string | null;
     /** Attempt still open: the commit-time capture has not run. Do not flag. */
     attemptOpen?: boolean;
+    /** Individually closed native turn; no enclosing ledger generation or full window is certified. */
+    nativeTurnProof?: { sessionId: string; nativeSessionId: string; turnId: string; startedAt: number; endedAt: number;
+        messageId: string; contentHash: string; generation: number | null };
     /** Closed by boot reconcile (`session_error` + `session_registry`). */
     restartClosed?: boolean;
 }

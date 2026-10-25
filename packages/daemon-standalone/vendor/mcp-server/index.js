@@ -74244,7 +74244,14 @@ ${upstream}`;
       const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
       const startInclusive = Math.max(0, endExclusive - boundedLimit);
       const sliced = collapsed.slice(startInclusive, endExclusive);
-      return { messages: sliced, hasMore: startInclusive > 0 };
+      return {
+        messages: sliced,
+        hasMore: startInclusive > 0,
+        ...excludeFromIdentity ? {
+          boundaryResolved: cursorIndex >= 0,
+          ...cursorIndex >= 0 ? { boundaryDigest: historyBoundaryDigest(collapsed[cursorIndex]) } : {}
+        } : {}
+      };
     }
     function isBoundedTailRequest(limit, offset, excludeRecentCount) {
       const numericLimit = Number(limit);
@@ -74425,6 +74432,15 @@ ${upstream}`;
       collected.reverse();
       return { records: collected, readAllFiles };
     }
+    function historyBoundaryDigest(message) {
+      return (0, import_node_crypto8.createHash)("sha256").update(JSON.stringify([
+        buildHistoryMessageIdentity(message),
+        message.role,
+        message.receivedAt,
+        message.content
+      ])).digest("hex");
+    }
+    var import_node_crypto8;
     var fs25;
     var path36;
     var BOUNDED_TAIL_CACHE_MAX_ENTRIES;
@@ -74439,6 +74455,7 @@ ${upstream}`;
     var init_chat_history_tail = __esm2({
       "src/config/chat-history-tail.ts"() {
         "use strict";
+        import_node_crypto8 = require("crypto");
         init_chat_history_messages();
         init_chat_message_normalization();
         fs25 = __toESM2(require("fs"));
@@ -84617,7 +84634,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     }
     function captureWriterStop(r, root, tree, runtimeKey, startedAt) {
       const requestKey = key2(r);
-      const capture = { requestKey, runtimeKey, startedAt, root, tree, incarnation: (0, import_node_crypto8.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root, tree])).digest("hex") };
+      const capture = { requestKey, runtimeKey, startedAt, root, tree, incarnation: (0, import_node_crypto9.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root, tree])).digest("hex") };
       db(true).prepare("INSERT OR IGNORE INTO mesh_writer_stop_captures (request_id,session_id,capture_json) VALUES (?,?,?)").run(r.stopRequestId, r.sessionId, JSON.stringify(capture));
       return readWriterStopCapture(r);
     }
@@ -84629,12 +84646,12 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       readWriterStopCapture(r);
       db().prepare("UPDATE mesh_writer_stop_captures SET settled = 1 WHERE request_id = ?").run(r.stopRequestId);
     }
-    var import_node_crypto8;
+    var import_node_crypto9;
     var key2;
     var init_mesh_writer_stop_journal = __esm2({
       "src/commands/mesh-writer-stop-journal.ts"() {
         "use strict";
-        import_node_crypto8 = require("crypto");
+        import_node_crypto9 = require("crypto");
         init_mesh_runtime_store();
         key2 = (r) => JSON.stringify([r.meshId, r.taskId, r.attemptId, r.generation, r.dispatchNonce, r.sessionId, r.nodeId, r.providerType, r.ownerDaemonId, r.stopRequestId]);
       }
@@ -93392,7 +93409,7 @@ ${result.stderr}`, result.code);
           continue;
         }
         const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto20.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto222.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
         try {
           (0, import_node_fs12.writeFileSync)((0, import_node_path11.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -93417,7 +93434,7 @@ ${result.stderr}`, result.code);
     var import_node_fs12;
     var import_node_path11;
     var import_node_child_process14;
-    var import_node_crypto20;
+    var import_node_crypto222;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var ownProcessStartId;
@@ -93427,7 +93444,7 @@ ${result.stderr}`, result.code);
         import_node_fs12 = require("fs");
         import_node_path11 = require("path");
         import_node_child_process14 = require("child_process");
-        import_node_crypto20 = require("crypto");
+        import_node_crypto222 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
         ownProcessStartId = processStartId(process.pid);
@@ -95965,7 +95982,7 @@ ${body}`;
     });
     var import_node_fs15;
     var import_node_path14;
-    var import_node_crypto222;
+    var import_node_crypto24;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -95974,7 +95991,7 @@ ${body}`;
         "use strict";
         import_node_fs15 = require("fs");
         import_node_path14 = require("path");
-        import_node_crypto222 = require("crypto");
+        import_node_crypto24 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -95998,7 +96015,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto222.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto24.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -96249,7 +96266,7 @@ ${body}`;
     }
     var import_node_fs16;
     var import_node_path15;
-    var import_node_crypto23;
+    var import_node_crypto25;
     var entryKeys;
     var origins;
     var integer;
@@ -96259,7 +96276,7 @@ ${body}`;
         "use strict";
         import_node_fs16 = require("fs");
         import_node_path15 = require("path");
-        import_node_crypto23 = require("crypto");
+        import_node_crypto25 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -96345,7 +96362,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto23.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto25.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs16.openSync)(temp, "wx", 384);
@@ -96484,7 +96501,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto24.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto26.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -96497,7 +96514,7 @@ ${body}`;
     }
     var import_node_fs17;
     var import_node_path16;
-    var import_node_crypto24;
+    var import_node_crypto26;
     var ID2;
     var proposalKeys;
     var text2;
@@ -96508,7 +96525,7 @@ ${body}`;
         "use strict";
         import_node_fs17 = require("fs");
         import_node_path16 = require("path");
-        import_node_crypto24 = require("crypto");
+        import_node_crypto26 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -96540,7 +96557,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto24.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto26.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -96551,7 +96568,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs17.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto24.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto26.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs17.openSync)(tmp, "wx", 384);
               try {
@@ -102115,7 +102132,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto27;
+    var import_node_crypto29;
     var import_node_os7;
     var import_node_path21;
     var refused;
@@ -102124,7 +102141,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto27 = require("crypto");
+        import_node_crypto29 = require("crypto");
         import_node_os7 = require("os");
         import_node_path21 = require("path");
         init_managed_mcp_process();
@@ -102329,7 +102346,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record7 = {
-              invocationId: (0, import_node_crypto27.randomUUID)(),
+              invocationId: (0, import_node_crypto29.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -102401,7 +102418,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto28;
+    var import_node_crypto30;
     var import_node_fs21;
     var import_node_path22;
     var ID3;
@@ -102410,7 +102427,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto28 = require("crypto");
+        import_node_crypto30 = require("crypto");
         import_node_fs21 = require("fs");
         import_node_path22 = require("path");
         init_config();
@@ -102430,7 +102447,7 @@ ${asText(streams.stderr)}
             const record7 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto28.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto30.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -102499,7 +102516,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto29.createHash)("sha256");
+      const hash3 = (0, import_node_crypto31.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs222.readFileSync)((0, import_node_path23.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path23.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -102522,13 +102539,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto29;
+    var import_node_crypto31;
     var import_node_fs222;
     var import_node_path23;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto29 = require("crypto");
+        import_node_crypto31 = require("crypto");
         import_node_fs222 = require("fs");
         import_node_path23 = require("path");
         init_manifest();
@@ -106532,7 +106549,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path24.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key5 = (0, import_node_crypto30.createHash)("sha256").update(`${meshId}\0${identity3}`).digest("hex").slice(0, 24);
+      const key5 = (0, import_node_crypto322.createHash)("sha256").update(`${meshId}\0${identity3}`).digest("hex").slice(0, 24);
       return (0, import_node_path24.join)(root, key5);
     }
     async function verifyCheckout(workspace, identity3) {
@@ -106601,7 +106618,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path24.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto30.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto322.randomUUID)() };
       try {
         await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -106627,7 +106644,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises11.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto30.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto322.randomUUID)() };
         await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -106749,7 +106766,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process19;
     var import_node_util10;
-    var import_node_crypto30;
+    var import_node_crypto322;
     var import_promises11;
     var import_node_path24;
     var exec5;
@@ -106768,7 +106785,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process19 = require("child_process");
         import_node_util10 = require("util");
-        import_node_crypto30 = require("crypto");
+        import_node_crypto322 = require("crypto");
         import_promises11 = require("fs/promises");
         import_node_path24 = require("path");
         init_config();
@@ -106813,13 +106830,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity3) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key5 = (0, import_node_crypto31.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto31.createHmac)("sha256", key5).update(`${grant.target}
+      const key5 = (0, import_node_crypto33.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto33.createHmac)("sha256", key5).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto31.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto33.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity3) {
       const hostId = str9(args?.hostDaemonId);
@@ -106848,7 +106865,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto31;
+    var import_node_crypto33;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -106857,7 +106874,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto31 = require("crypto");
+        import_node_crypto33 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -107089,7 +107106,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto322.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto34.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -107126,7 +107143,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto322.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto34.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -107194,7 +107211,7 @@ ${b.text}`).join("\n\n");
       }
       return null;
     }
-    async function readNativeWindow(execute, sessionId, start, end) {
+    async function readNativeWindow(execute, sessionId, start, end, scan) {
       const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
       let messages = [];
       let providerIdle = false;
@@ -107202,6 +107219,10 @@ ${b.text}`).join("\n\n");
       let chat = null;
       let unsupportedProvider = false;
       const targets = /* @__PURE__ */ new Map();
+      const closedTurns = /* @__PURE__ */ new Map();
+      let provenance = "";
+      let checkpoint = scan?.checkpoints.load(sessionId, scan.scope, end) ?? null;
+      let continued = false;
       const request = async (command, args) => {
         const remaining = deadline - Date.now();
         if (remaining <= 0) return null;
@@ -107221,6 +107242,36 @@ ${b.text}`).join("\n\n");
       };
       const take = (read2, storedHistory = false) => {
         if (!read2 || !verifiedNativeRead(read2, sessionId) || !Array.isArray(read2.messages)) return false;
+        const nativeSessionId = typeof read2.providerSessionId === "string" ? read2.providerSessionId : "";
+        const provider = read2.agent ?? rec4(read2.debugReadChat)?.provider;
+        const source2 = nativeSessionId ? JSON.stringify([provider, nativeSessionId]) : "";
+        if (provenance && source2 !== provenance) {
+          scan?.checkpoints.reset(sessionId);
+          messages = [];
+          closedTurns.clear();
+          invalid = true;
+          return false;
+        }
+        if (source2) provenance = source2;
+        const wanted = new Set(read2.messages.map(standardAssistantBubble).filter((b) => b !== null).map((b) => b.text));
+        const bySummary = /* @__PURE__ */ new Map();
+        for (const raw of Array.isArray(read2.turnTerminalMarkers) ? read2.turnTerminalMarkers : []) {
+          const value = rec4(raw);
+          if (!value || typeof value.summary !== "string" || !wanted.has(value.summary.trim())) continue;
+          const marker2 = value;
+          const group = bySummary.get(marker2.summary.trim()) ?? [];
+          group.push(marker2);
+          bySummary.set(marker2.summary.trim(), group);
+        }
+        for (const message of read2.messages) {
+          const bubble = standardAssistantBubble(message);
+          if (!bubble || !finalized(message, storedHistory) || !nativeSessionId) continue;
+          const matching = (bySummary.get(bubble.text) ?? []).filter((m) => m.outcome === "completed" && m.nativeSessionId === nativeSessionId && typeof m.turnId === "string" && !!m.turnId && Number.isFinite(m.startedAt) && m.startedAt > 0 && Number.isFinite(m.receivedAt) && m.receivedAt >= bubble.at && m.receivedAt <= end && bubble.at >= m.startedAt && typeof m.inputDigest === "string" && /^[a-f0-9]{64}$/.test(m.inputDigest) && Number.isFinite(m.inputAt) && m.inputAt >= m.startedAt && m.inputAt <= m.receivedAt);
+          if (matching.length === 1) {
+            const m = matching[0];
+            closedTurns.set(reportMessageId(message), { turnId: m.turnId, nativeSessionId, startedAt: m.startedAt, endedAt: m.receivedAt, messageId: reportMessageId(message) });
+          }
+        }
         providerIdle ||= read2.providerObservedStatus === "idle";
         for (const message of read2.messages) {
           const b = standardAssistantBubble(message);
@@ -107234,7 +107285,7 @@ ${b.text}`).join("\n\n");
           const bubble = standardAssistantBubble(message);
           if (bubble) targets.set(bubble.at, reportMessageId(message));
         }
-        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets, chat, unsupportedProvider };
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid && !continued, providerIdle, targets, chat, unsupportedProvider, closedTurns };
       };
       chat = await request("read_chat", { targetSessionId: sessionId, tailLimit: 200 });
       unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
@@ -107262,13 +107313,90 @@ ${b.text}`).join("\n\n");
         }
         return result(false);
       }
-      messages = [];
+      if (!scan) {
+        messages = [];
+        invalid = false;
+        for (let offset = 0; offset < 400; offset += 100) {
+          const history = await request("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+          if (!take(history, true)) return result(false);
+          const oldest = history.messages.map(standardAssistantBubble).filter((b) => b !== null).reduce((at, b) => Math.min(at, b.at), Infinity);
+          if (history.hasMore === false || oldest < start) return result(true);
+        }
+        return result(false);
+      }
+      messages = messages.filter((message) => closedTurns.has(reportMessageId(message)));
       invalid = false;
-      for (let offset = 0; offset < 400; offset += 100) {
-        const history = await request("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+      let boundary = "";
+      let boundaryAt = end;
+      let digest4 = "";
+      let lower = start;
+      let upper = end;
+      let oldestAt = Infinity;
+      for (let page = 0; page < 4; page++) {
+        if (page === 1 && checkpoint) {
+          if (checkpoint.provenance !== provenance) {
+            scan?.checkpoints.reset(sessionId);
+            checkpoint = null;
+            return result(false);
+          }
+          boundary = checkpoint.boundary;
+          boundaryAt = checkpoint.boundaryAt;
+          digest4 = checkpoint.digest;
+          lower = checkpoint.lower;
+          upper = checkpoint.upper;
+          continued = true;
+        }
+        const history = await request("chat_history", {
+          targetSessionId: sessionId,
+          offset: 0,
+          limit: 100,
+          excludeRecentCount: 0,
+          ...boundary ? { excludeFromIdentity: boundary } : {}
+        });
+        if (boundary && (history?.boundaryResolved !== true || history.boundaryDigest !== digest4)) {
+          scan?.checkpoints.reset(sessionId);
+          return result(false);
+        }
         if (!take(history, true)) return result(false);
-        const oldest = history.messages.map(standardAssistantBubble).filter((b) => b !== null).reduce((at, b) => Math.min(at, b.at), Infinity);
-        if (history.hasMore === false || oldest < start) return result(true);
+        const rows = history.messages;
+        const times = rows.map(bubbleTimestamp);
+        if (times.some((at, i) => at === null || i > 0 && at < times[i - 1]) || boundary && times.some((at) => at > boundaryAt)) {
+          scan.checkpoints.reset(sessionId);
+          return result(false);
+        }
+        const oldest = times.reduce((a, v) => Math.min(a, v), Infinity);
+        if (history.hasMore === false || oldest < lower) {
+          scan?.checkpoints.reset(sessionId);
+          return result(true);
+        }
+        const first = rows[0];
+        if (!first) return result(false);
+        const next = buildHistoryMessageIdentity(first);
+        if (!next || next === boundary || oldest >= oldestAt) {
+          scan?.checkpoints.reset(sessionId);
+          return result(false);
+        }
+        boundary = next;
+        boundaryAt = oldest;
+        digest4 = historyBoundaryDigest(first);
+        oldestAt = oldest;
+        if (scan && provenance && oldest >= lower && oldest <= upper && (!checkpoint || page >= 1)) {
+          const lastTurn = [...closedTurns.values()].at(-1);
+          const value = {
+            version: 1,
+            sessionId,
+            scope: scan.scope,
+            provenance,
+            lower,
+            upper,
+            boundary,
+            digest: digest4,
+            boundaryAt: oldest,
+            lastNativeTurnId: lastTurn?.turnId ?? null,
+            expiresAt: checkpoint?.expiresAt ?? end + 60 * 6e4
+          };
+          scan.checkpoints.save(value);
+        }
       }
       return result(false);
     }
@@ -107320,7 +107448,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto322.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto34.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -107397,7 +107525,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto322;
+    var import_node_crypto34;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -107408,7 +107536,8 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto322 = require("crypto");
+        init_chat_history_tail();
+        import_node_crypto34 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -108875,6 +109004,37 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
       }
     });
+    var NativeScanCheckpoints;
+    var init_native_scan_checkpoint = __esm2({
+      "src/assistant/native-scan-checkpoint.ts"() {
+        "use strict";
+        NativeScanCheckpoints = class {
+          constructor(db2) {
+            this.db = db2;
+            db2.exec(`CREATE TABLE IF NOT EXISTS assistant_native_scan_checkpoints (
+            session_id TEXT PRIMARY KEY, version INTEGER NOT NULL, expires_at INTEGER NOT NULL, payload TEXT NOT NULL)`);
+          }
+          load(sessionId, scope, now) {
+            const row2 = this.db.prepare("SELECT version,expires_at,payload FROM assistant_native_scan_checkpoints WHERE session_id=?").get(sessionId);
+            try {
+              const x = JSON.parse(row2?.payload ?? "null");
+              if (row2?.version === 1 && row2.expires_at === x?.expiresAt && x?.version === 1 && x.sessionId === sessionId && x.scope === scope && x.expiresAt > now && x.expiresAt <= now + 60 * 6e4 && x.lower > 0 && x.lower <= x.boundaryAt && x.boundaryAt <= x.upper && x.upper <= now && typeof x.provenance === "string" && x.provenance.length <= 1024 && typeof x.boundary === "string" && x.boundary.length > 0 && x.boundary.length <= 1024 && /^[a-f0-9]{64}$/.test(x.digest)) return x;
+            } catch {
+            }
+            this.reset(sessionId);
+            return null;
+          }
+          save(value) {
+            this.db.prepare("INSERT OR REPLACE INTO assistant_native_scan_checkpoints VALUES(?,?,?,?)").run(value.sessionId, 1, value.expiresAt, JSON.stringify(value));
+            this.db.exec(`DELETE FROM assistant_native_scan_checkpoints WHERE session_id NOT IN
+            (SELECT session_id FROM assistant_native_scan_checkpoints ORDER BY expires_at DESC, session_id LIMIT 128)`);
+          }
+          reset(sessionId) {
+            this.db.prepare("DELETE FROM assistant_native_scan_checkpoints WHERE session_id=?").run(sessionId);
+          }
+        };
+      }
+    });
     function restartClosed(row2) {
       return row2.terminal_reason === "session_error" && row2.terminal_source === "session_registry";
     }
@@ -108884,18 +109044,27 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const first = inventory.length ? Math.floor(opts.now / 6e4) * SESSION_CAP % inventory.length : 0;
       const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
       const out = [];
+      const checkpoints = new NativeScanCheckpoints(opts.db);
       const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
+        if (opts.isAuthorized?.(meshId, sessionId) === false) return { sessionId, skipped: true };
         if (!sessionId) return { sessionId, skipped: true };
         if (cliType && !isTimestampedNativeProvider(cliType)) return { sessionId, skipped: true };
         const attempts = opts.db.prepare(`
-            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
+            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state, a.generation,
                 r.relayed_at, c.rendered_at AS coverage_at
             FROM turn_attempts a
             LEFT JOIN assistant_relays r ON r.attempt_id=a.attempt_id AND r.coordinator_session_id=a.session_id
             LEFT JOIN assistant_relay_coverage c ON c.attempt_id=a.attempt_id AND c.coordinator_session_id=a.session_id
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
-        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        const anchor = () => opts.db.prepare("SELECT attempt_id,generation,accepted_at FROM turn_attempts WHERE session_id=? AND scope='plain' ORDER BY accepted_at,attempt_id").all(sessionId);
+        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto35.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now, { checkpoints, scope });
+        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto35.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        if (opts.isAuthorized?.(meshId, sessionId) === false || scope !== currentScope) {
+          checkpoints.reset(sessionId);
+          return { sessionId, skipped: true };
+        }
         if (window.unsupportedProvider) return { sessionId, skipped: true };
         return { sessionId, meshId, attempts, window };
       }));
@@ -108908,14 +109077,18 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           continue;
         }
         const { sessionId, meshId, attempts, window } = scan;
-        if (!window.complete || window.ambiguous) {
+        if (window.ambiguous || !window.complete && !window.closedTurns.size) {
           complete = false;
           failed = true;
           continue;
         }
+        if (!window.complete) complete = false;
         successful += 1;
         const reportIds = /* @__PURE__ */ new Map();
         for (const bubble of window.bubbles) {
+          const messageId = window.targets.get(bubble.at);
+          const proof = messageId ? window.closedTurns.get(messageId) : void 0;
+          if (!window.complete && !proof) continue;
           const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
           containing.sort((a, b) => b.accepted_at - a.accepted_at);
           const attempt = containing[0];
@@ -108931,8 +109104,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           out.push({
             sessionId,
             meshId,
-            messageId: window.targets.get(bubble.at),
-            ...attempt ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
+            messageId,
+            ...attempt && window.complete && !open ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
+            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto35.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
             messageAt: bubble.at,
             chars: Array.from(bubble.text).length,
             text: bubble.text,
@@ -108945,19 +109119,22 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (failed && !successful) throw new Error("coordinator native audit unavailable");
       return complete ? out : Object.assign(out, { complete: false });
     }
+    var import_node_crypto35;
     var TERMINAL2;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
     var init_assistant_relay_audit = __esm2({
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
+        init_native_scan_checkpoint();
+        import_node_crypto35 = require("crypto");
         init_assistant_native_window();
         init_report_continuation();
         init_attempt_report_recovery();
         init_mesh_config();
         init_coordinator_registry();
         init_assistant_relay_format();
-        TERMINAL2 = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
+        TERMINAL2 = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
         SESSION_CAP = 20;
         RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }
@@ -108968,19 +109145,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto33;
+    var import_node_crypto36;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto33 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto33.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto36 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto36.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
-          reply.attemptId ?? Math.floor(reply.messageAt / 6e4)
+          reply.nativeTurnProof ? [reply.nativeTurnProof.nativeSessionId, reply.nativeTurnProof.turnId, reply.messageId] : reply.attemptId ?? Math.floor(reply.messageAt / 6e4)
         );
         RelayGapTracker = class {
           constructor(store2, now) {
@@ -109162,7 +109339,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto34;
+    var import_node_crypto37;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -109178,7 +109355,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto34 = require("crypto");
+        import_node_crypto37 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -109190,7 +109367,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto34.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto37.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -109791,7 +109968,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
           noteUncoveredReply(reply, now) {
             const text4 = reply.text?.trim() ?? "";
-            if (!text4 || !reply.chars || reply.attemptOpen || !reply.messageId || !this.ports.hasAssistant()) return;
+            const proof = reply.nativeTurnProof;
+            const closedNativeTurn = !!proof && proof.sessionId === reply.sessionId && proof.messageId === reply.messageId && !!proof.nativeSessionId && !!proof.turnId && proof.startedAt > 0 && proof.startedAt <= reply.messageAt && proof.endedAt >= reply.messageAt && proof.contentHash === replyHash(text4);
+            if (!text4 || !reply.chars || reply.attemptOpen && !closedNativeTurn || !reply.messageId || !this.ports.hasAssistant()) return;
             if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId) || [...this.batches.values()].some((b) => b.attemptIds.includes(reply.attemptId)) || this.queue.some((i) => i.kind === "relay" && i.attemptIds.includes(reply.attemptId)))) return;
             if (!reply.attemptId && (this.queue.some((i) => i.kind === "relay" && i.coordinatorSessionId === reply.sessionId) || [...this.batches.values()].some((b) => b.coordinatorSessionId === reply.sessionId))) return;
             const key5 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4);
@@ -109815,6 +109994,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return [...this.renderedCoverage.keys()].some((key5) => {
               const [session, attempt, at, contentHash] = JSON.parse(key5);
               if (session !== reply.sessionId || contentHash !== hash3) return false;
+              if (reply.nativeTurnProof) return at === reply.messageAt;
               return reply.attemptId ? attempt === reply.attemptId : at === reply.messageAt || typeof at === "number" && Math.abs(at - reply.messageAt) <= RELAY_QUIET_MS;
             });
           }
@@ -112596,6 +112776,7 @@ ${defangRelayBody(text4)}`;
             sinceMs,
             now: Date.now(),
             coordinatorSessions,
+            isAuthorized: (meshId, sessionId) => !!meshId && ports.listMeshes().some((m) => m.id === meshId && ports.isHostedHere(m)) && ports.coordinatorSessionAuthorized?.(meshId, sessionId) !== false,
             execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true })
           });
         },
@@ -120833,7 +121014,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         logMeshCommandEvent(event, fields);
       }
     };
-    var import_node_crypto9 = require("crypto");
+    var import_node_crypto10 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();
     init_logger();
@@ -121205,7 +121386,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.pingIntervalMs = options.pingIntervalMs ?? WS_MESH_PING_INTERVAL_MS;
         this.maxMissedPongs = options.maxMissedPongs ?? WS_MESH_MAX_MISSED_PONGS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-        this.idNonce = `${this.idNonce}_${(0, import_node_crypto9.randomBytes)(3).toString("hex")}`;
+        this.idNonce = `${this.idNonce}_${(0, import_node_crypto10.randomBytes)(3).toString("hex")}`;
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       /** Register the inbound-command handler. It returns a result or throws. */
@@ -121974,7 +122155,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var import_node_child_process12 = require("child_process");
     var fs44 = __toESM2(require("fs"));
     var path52 = __toESM2(require("path"));
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
@@ -122604,11 +122785,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_install();
     var fs33 = __toESM2(require("fs"));
     var path40 = __toESM2(require("path"));
-    var import_node_crypto10 = require("crypto");
+    var import_node_crypto11 = require("crypto");
     var import_node_child_process11 = require("child_process");
     init_config();
     init_cooperative_gate();
-    var sha3 = (v) => (0, import_node_crypto10.createHash)("sha256").update(v).digest("hex");
+    var sha3 = (v) => (0, import_node_crypto11.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs33.realpathSync(process.execPath), entryPath = fs33.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process11.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
@@ -122654,7 +122835,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return r;
     }
     function durable(file, r) {
-      const temp = file + "." + (0, import_node_crypto10.randomUUID)() + ".tmp", fd = fs33.openSync(temp, "wx", 384);
+      const temp = file + "." + (0, import_node_crypto11.randomUUID)() + ".tmp", fd = fs33.openSync(temp, "wx", 384);
       try {
         fs33.writeFileSync(fd, JSON.stringify(r));
         fs33.fsyncSync(fd);
@@ -122677,7 +122858,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
-      const dir = ensureDirectory(root), operationId = (0, import_node_crypto10.randomUUID)();
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto11.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path40.join(dir, operationId + ".json"), r);
       return operationId;
@@ -125663,18 +125844,18 @@ ${marker2}`,
     }, { meshSender: "authenticated_peer" });
     var fs42 = __toESM2(require("fs"));
     var path50 = __toESM2(require("path"));
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     init_config();
     init_cooperative_gate();
     var fs41 = __toESM2(require("fs"));
     var path49 = __toESM2(require("path"));
     init_config();
-    var import_node_crypto11 = require("crypto");
+    var import_node_crypto12 = require("crypto");
     var import_session_host_core8 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
-    var digest = (value) => (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var digest = (value) => (0, import_node_crypto12.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     var text = (v) => typeof v === "string" ? v.trim() : "";
     function freshCoordinators(state2) {
       const select = (e) => ({ sessionId: e.sessionId, meshId: e.meshId, workspace: e.workspace, cliType: e.cliType, startedAt: e.startedAt });
@@ -125888,7 +126069,7 @@ ${marker2}`,
     }
     var ACTOR_CONFIG_FILE = "cooperative-maintenance-actor.json";
     var used = /* @__PURE__ */ new Map();
-    var hash22 = (s2) => (0, import_node_crypto12.createHash)("sha256").update(s2).digest("hex");
+    var hash22 = (s2) => (0, import_node_crypto13.createHash)("sha256").update(s2).digest("hex");
     function privateFile(file) {
       const s2 = fs42.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.nlink !== 1 || s2.size > 256 * 1024 || s2.mode & 63 || process.getuid && s2.uid !== process.getuid() || fs42.realpathSync(file) !== file) throw new Error("maintenance_actor_private_pin_required");
@@ -125908,8 +126089,8 @@ ${marker2}`,
       if (key5.length !== 32 || hash22(key5) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request.schema !== 1 || request.operation !== operation || request.daemonId !== state2.daemonId || request.planDigest !== state2.planDigest || request.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request.nonce) || !Number.isSafeInteger(request.sentAt) || Math.abs(Date.now() - request.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request.mac)) throw new Error("maintenance_actor_challenge_invalid");
       if ((request.body !== void 0 || request.bodyDigest !== void 0) && (request.bodyDigest !== hash22(JSON.stringify(request.body)) || JSON.stringify(request.body).length > 256 * 1024)) throw new Error("maintenance_collection_body_invalid");
-      const expected = (0, import_node_crypto12.createHmac)("sha256", key5).update(actorObservationChallengeBytes(request)).digest();
-      if (!(0, import_node_crypto12.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
+      const expected = (0, import_node_crypto13.createHmac)("sha256", key5).update(actorObservationChallengeBytes(request)).digest();
+      if (!(0, import_node_crypto13.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
       const replayKey = `${root}:${request.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
@@ -125929,7 +126110,7 @@ ${marker2}`,
           entryPath: process.argv[1],
           observedAt: Date.now()
         };
-        return { success: true, reply, mac: (0, import_node_crypto12.createHmac)("sha256", key5).update(JSON.stringify(reply)).digest("hex") };
+        return { success: true, reply, mac: (0, import_node_crypto13.createHmac)("sha256", key5).update(JSON.stringify(reply)).digest("hex") };
       } };
     }
     async function authenticatedActorObservation(host, request) {
@@ -125939,8 +126120,8 @@ ${marker2}`,
     }
     var fs43 = __toESM2(require("fs"));
     var path51 = __toESM2(require("path"));
-    var import_node_crypto13 = require("crypto");
-    var sha4 = (x) => (0, import_node_crypto13.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
+    var import_node_crypto14 = require("crypto");
+    var sha4 = (x) => (0, import_node_crypto14.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
     function validateMcpIdentity(value) {
       if (!value || typeof value.birth !== "string" || !/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value.birth) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[a-f0-9-]{36}$/.test(value.bootNonce) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0 || !path51.isAbsolute(value.entryPath ?? "") || !path51.isAbsolute(value.nodePath ?? "") || ![value.entrySha256, value.nodeSha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw new Error("maintenance_mcp_identity_invalid");
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
@@ -126022,7 +126203,7 @@ ${marker2}`,
       const membershipDigest = sha4(records), members = await Promise.all(records.map((identity3) => new Promise((resolve58) => {
         const name = `${root}:${key3(identity3)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
-        const nonce = (0, import_node_crypto13.randomUUID)(), timer = setTimeout(() => {
+        const nonce = (0, import_node_crypto14.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
           resolve58({ identity: identity3, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
@@ -126034,7 +126215,7 @@ ${marker2}`,
     init_cooperative_gate();
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
-    var digest2 = (v) => (0, import_node_crypto14.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
+    var digest2 = (v) => (0, import_node_crypto15.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
       const identity3 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
@@ -126260,10 +126441,10 @@ ${marker2}`,
       const drain = await withMaintenanceObservation((state2) => collectTargetDrain(components, state2, auth.root, request.nonce));
       return auth.reply({ drain });
     }
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_cooperative_gate();
     init_dist();
-    var sha5 = (b) => (0, import_node_crypto15.createHash)("sha256").update(b).digest("hex");
+    var sha5 = (b) => (0, import_node_crypto16.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
       throw Error(s2);
@@ -126291,16 +126472,16 @@ ${marker2}`,
           daemonId: peer.daemonId,
           planDigest: s2.planDigest,
           epoch: s2.epoch,
-          nonce: (0, import_node_crypto15.randomUUID)(),
+          nonce: (0, import_node_crypto16.randomUUID)(),
           sentAt: Date.now(),
           configSha256: peerConfigSha,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha5(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto15.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto16.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha5(fs45.readFileSync(pin.path)) !== pin.sha256 || sha5(fs45.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha5(fs45.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
         const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto15.timingSafeEqual)((0, import_node_crypto15.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto16.timingSafeEqual)((0, import_node_crypto16.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -128440,7 +128621,9 @@ ${marker2}`,
           summary: marker2.summary
         };
         if (typeof marker2.turnId === "string") normalized.turnId = marker2.turnId;
-        for (const key5 of ["startedAt", "errorAt"]) {
+        if (typeof marker2.nativeSessionId === "string" && marker2.nativeSessionId.length <= 512) normalized.nativeSessionId = marker2.nativeSessionId;
+        if (typeof marker2.inputDigest === "string" && /^[a-f0-9]{64}$/.test(marker2.inputDigest)) normalized.inputDigest = marker2.inputDigest;
+        for (const key5 of ["startedAt", "errorAt", "inputAt", "supersededAt"]) {
           if (marker2[key5] !== void 0) {
             if (!isFiniteNumber4(marker2[key5])) throw new Error(`${source2}: invalid ${key5}`);
             normalized[key5] = marker2[key5];
@@ -130681,12 +130864,20 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return count;
     }
     init_message_source_address();
-    function createCodexTurnProvenance() {
+    var import_node_crypto17 = require("crypto");
+    function createCodexTurnProvenance(nativeSessionId) {
       let current4;
+      let last;
       return (payload, at, marker2) => {
         const id4 = marker2?.turnId ?? (typeof payload.turn_id === "string" ? payload.turn_id.trim() : "");
         if (payload.type === "task_started") {
+          if (last) last.supersededAt = at;
           current4 = { id: id4, startedAt: at };
+        }
+        if (payload.type === "user_message" && current4 && typeof payload.message === "string" && at >= current4.startedAt) {
+          if (current4.inputAt) current4.startedAt = 0;
+          current4.inputAt = at;
+          current4.inputDigest = (0, import_node_crypto17.createHash)("sha256").update(payload.message.trim()).digest("hex");
         }
         if (marker2 && current4 && (id4 && current4.id && id4 !== current4.id || !id4 && current4.id)) return { ...marker2, startedAt: 0 };
         if (payload.type === "error" && current4 && at < current4.startedAt) {
@@ -130709,9 +130900,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!marker2) return void 0;
         const result = {
           ...marker2,
-          ...current4 ? { startedAt: current4.startedAt } : {},
+          ...current4 ? { startedAt: current4.startedAt, inputAt: current4.inputAt, inputDigest: current4.inputDigest } : {},
+          nativeSessionId,
           ...current4?.failure && (!marker2.summary || payload.error) ? { outcome: "failed", providerFailure: current4.failure, errorAt: current4.errorAt } : {}
         };
+        last = result;
         return result;
       };
     }
@@ -130780,7 +130973,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
     }
     var fs50 = __toESM2(require("fs"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto18 = require("crypto");
     var PARSED_JSONL_CACHE_MAX_ENTRIES = 8;
     var PARSED_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
     var parsedJsonlCache = /* @__PURE__ */ new Map();
@@ -130823,7 +131016,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const length = Math.min(BOUNDARY_BYTES, committedBytes);
         const bytes = Buffer.allocUnsafe(length);
         if (fs50.readSync(fd, bytes, 0, length, committedBytes - length) !== length) return null;
-        return (0, import_node_crypto16.createHash)("sha256").update(bytes).digest("hex");
+        return (0, import_node_crypto18.createHash)("sha256").update(bytes).digest("hex");
       } catch {
         return null;
       } finally {
@@ -131013,14 +131206,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let recordsSinceYield = 0;
       let sliceStartedAt = performance.now();
       let readTail = Buffer.alloc(0);
-      let digest4 = resume ? cached5.boundaryDigest : (0, import_node_crypto16.createHash)("sha256").update("").digest("hex");
+      let digest4 = resume ? cached5.boundaryDigest : (0, import_node_crypto18.createHash)("sha256").update("").digest("hex");
       let readAnchorBytes = from;
       let readAnchorDigest = digest4;
       try {
         if (resume && from > 0) {
           readTail = Buffer.alloc(Math.min(BOUNDARY_BYTES, from));
           const count = fs50.readSync(fd, readTail, 0, readTail.length, from - readTail.length);
-          if (count !== readTail.length || (0, import_node_crypto16.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
+          if (count !== readTail.length || (0, import_node_crypto18.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
             return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
           }
         }
@@ -131031,7 +131224,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (position === from) {
             const length = Math.min(BOUNDARY_BYTES, count);
             readAnchorBytes = from + length;
-            readAnchorDigest = (0, import_node_crypto16.createHash)("sha256").update(Buffer.concat([readTail, chunk.subarray(0, length)]).subarray(-BOUNDARY_BYTES)).digest("hex");
+            readAnchorDigest = (0, import_node_crypto18.createHash)("sha256").update(Buffer.concat([readTail, chunk.subarray(0, length)]).subarray(-BOUNDARY_BYTES)).digest("hex");
           }
           parsedJsonlCacheStats.bytesRead += count;
           position += count;
@@ -131060,7 +131253,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           const settledEnd = committedBytes - (position - count);
           if (settledEnd > 0) {
             const boundary = settledEnd >= BOUNDARY_BYTES ? chunk.subarray(settledEnd - BOUNDARY_BYTES, settledEnd) : Buffer.concat([readTail, chunk.subarray(0, settledEnd)]).subarray(-BOUNDARY_BYTES);
-            digest4 = (0, import_node_crypto16.createHash)("sha256").update(boundary).digest("hex");
+            digest4 = (0, import_node_crypto18.createHash)("sha256").update(boundary).digest("hex");
           }
           readTail = count >= BOUNDARY_BYTES ? Buffer.from(chunk.subarray(count - BOUNDARY_BYTES, count)) : Buffer.concat([readTail, chunk.subarray(0, count)]).subarray(-BOUNDARY_BYTES);
           if (position < stat2.size) {
@@ -132426,6 +132619,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           terminal = { type: rec5.type, timestamp: rec5.timestamp, payload: payload && {
             type: payload.type,
             turn_id: payload.turn_id,
+            message: typeof payload.message === "string" ? payload.message : void 0,
             error: payload.error && typeof payload.error === "object" ? { type: payload.error.type } : payload.error,
             last_agent_message: flattenJsonlText(payload.last_agent_message)
           } };
@@ -132491,7 +132685,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
         if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
-        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal));
+        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal), providerSessionId);
         projection = {
           messages: markNativeHistorySnapshot(messages2),
           turnTerminalMarkers: turnTerminalMarkers2,
@@ -132534,11 +132728,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         ...turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}
       };
     }
-    function extractBuiltinTurnTerminalMarkers(agentType, lines) {
+    function extractBuiltinTurnTerminalMarkers(agentType, lines, nativeSessionId) {
       if (agentType === "kimi") return extractKimiTurnTerminalMarkers(lines);
       if (agentType !== "codex-cli") return [];
       const markers = [];
-      const provenance = createCodexTurnProvenance();
+      const provenance = createCodexTurnProvenance(nativeSessionId);
       for (const rec5 of lines) {
         if (String(rec5?.type ?? "") !== "event_msg") continue;
         const payload = rec5?.payload;
@@ -133250,10 +133444,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const type2 = typeof provider.type === "string" ? provider.type.trim() : "";
       return !!type2 && BUILTIN_TURN_SIGNAL_PROVIDER_TYPES.has(type2);
     }
-    function selectTurnTerminalMarker(markers, turnStartedAt) {
+    function selectTurnTerminalMarker(markers, turnStartedAt, binding) {
       if (!Array.isArray(markers) || markers.length === 0) return null;
       const startedAt = typeof turnStartedAt === "number" && Number.isFinite(turnStartedAt) && turnStartedAt > 0 ? turnStartedAt : 0;
       if (!startedAt) return null;
+      if (binding) {
+        if (binding.turnStartedAt !== startedAt || !binding.sessionId || !binding.nativeSessionId || !binding.inputDigest || !(binding.inputAt > 0 && binding.inputAt <= startedAt)) return null;
+        const matches = markers.filter((m) => m.nativeSessionId === binding.nativeSessionId && !!m.turnId && (!binding.nativeTurnId || m.turnId === binding.nativeTurnId) && m.inputDigest === binding.inputDigest && Number.isFinite(m.inputAt) && m.inputAt >= binding.inputAt && Number.isFinite(m.startedAt) && m.startedAt >= binding.inputAt && m.startedAt <= startedAt && Number.isFinite(m.receivedAt) && m.inputAt <= m.receivedAt && m.receivedAt >= startedAt && !m.supersededAt);
+        return matches.length === 1 ? matches[0] : null;
+      }
       for (let i = markers.length - 1; i >= 0; i--) {
         const m = markers[i];
         if (!m) continue;
@@ -133453,7 +133652,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const records = [];
       const usageRecords = [];
       const turnTerminalMarkers = [];
-      const provenance = createCodexTurnProvenance();
+      const provenance = createCodexTurnProvenance(sessionId);
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
@@ -133495,7 +133694,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const payloadType = String(payload.type ?? "").trim();
         if (type2 === "event_msg") {
           const nativeAt = extractTimestampValue(record7.timestamp) || 0;
-          if (payloadType === "task_started" || payloadType === "error") provenance(payload, nativeAt);
+          if (payloadType === "task_started" || payloadType === "error" || payloadType === "user_message") provenance(payload, nativeAt);
           if (completionSignal) {
             const isComplete = payloadType === completionSignal.recordType;
             const isAbort = !!completionSignal.abortRecordType && payloadType === completionSignal.abortRecordType;
@@ -139072,7 +139271,7 @@ ${output}` : "";
     }
     var fs72 = __toESM2(require("fs"));
     var path79 = __toESM2(require("path"));
-    var import_node_crypto19 = require("crypto");
+    var import_node_crypto21 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -140062,7 +140261,7 @@ ${output}` : "";
       };
     }
     var fs71 = __toESM2(require("fs"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto20 = require("crypto");
     init_logger();
     var import_crypto25 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -141146,10 +141345,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto17 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto17.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto19.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -142023,7 +142222,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto18.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto20.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -144260,7 +144459,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto19.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto21.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -144552,7 +144751,7 @@ ${output}` : "";
     }
     var import_node_fs13 = __toESM2(require("fs"));
     var import_node_path12 = __toESM2(require("path"));
-    var import_node_crypto21 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_logger();
     init_owned_lock();
     var OutgoingReceiptStore = class {
@@ -144573,7 +144772,7 @@ ${output}` : "";
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path12.default.join(this.directory, (0, import_node_crypto21.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path12.default.join(this.directory, (0, import_node_crypto23.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -144663,7 +144862,7 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto21.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto23.randomUUID)()}.tmp`;
         const fd = import_node_fs13.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -144693,8 +144892,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto21.randomUUID)(),
-            generation: (0, import_node_crypto21.randomUUID)(),
+            attemptId: (0, import_node_crypto23.randomUUID)(),
+            generation: (0, import_node_crypto23.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -150604,7 +150803,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto25 = require("crypto");
+    var import_node_crypto27 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db2) {
@@ -150612,7 +150811,7 @@ ${output}` : "";
     }
     function key4(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto25.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto27.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db2, credential, claim) {
       schema2(db2);
@@ -150836,7 +151035,7 @@ ${output}` : "";
     init_logger();
     init_runtime_defaults();
     init_worker_report_idempotency();
-    var import_node_crypto26 = require("crypto");
+    var import_node_crypto28 = require("crypto");
     init_dist();
     init_mesh_runtime_store();
     init_logger();
@@ -151229,7 +151428,7 @@ ${output}` : "";
       }
     };
     init_mesh_writer_stop_journal();
-    var BOOT = (0, import_node_crypto26.randomUUID)();
+    var BOOT = (0, import_node_crypto28.randomUUID)();
     function journal(create = false) {
       const db2 = MeshRuntimeStore.getInstance().db;
       if (create) db2.exec("CREATE TABLE IF NOT EXISTS mesh_holder_attaches (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, identity_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, phase TEXT NOT NULL, prepared_json TEXT NOT NULL, runtime_json TEXT NOT NULL, boot_nonce TEXT NOT NULL)");
@@ -159904,7 +160103,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto35 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     var import_node_fs24 = require("fs");
     var os37 = __toESM2(require("os"));
     var import_node_path27 = require("path");
@@ -160129,7 +160328,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path27.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto35.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto38.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -167634,7 +167833,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path98 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto36 = require("crypto");
+    var import_node_crypto39 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -167675,7 +167874,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto36.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto39.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -172099,7 +172298,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto40 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -172126,7 +172325,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto37.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto40.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -174713,7 +174912,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process23 = require("child_process");
-    var import_node_crypto38 = require("crypto");
+    var import_node_crypto41 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -174723,7 +174922,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto38.randomUUID)();
+      generation = (0, import_node_crypto41.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -174784,7 +174983,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto38.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto41.randomUUID)()}`;
         return new Promise((resolve58, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -174820,7 +175019,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto39 = require("crypto");
+    var import_node_crypto422 = require("crypto");
     init_dist();
     function record6(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -174951,7 +175150,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto39.randomUUID)(),
+          promptId: (0, import_node_crypto422.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -175488,6 +175687,144 @@ ${JSON.stringify(replies)}
     init_workspaces();
     init_recent_activity();
     init_summary_metadata();
+    function captureCompletionIdentity(host, pending) {
+      const current4 = host.currentAttemptRef?.();
+      pending.capturedAttemptRef = current4 ? { ...current4 } : null;
+      if (!host.providerSessionId || !host.lastAcknowledgedInputDigest || !pending.turnStartedAt || !(host.lastAcknowledgedUserInputAt > 0 && host.lastAcknowledgedUserInputAt <= pending.turnStartedAt)) return;
+      pending.completionBinding = {
+        sessionId: host.instanceId,
+        nativeSessionId: host.providerSessionId,
+        turnStartedAt: pending.turnStartedAt,
+        inputAt: host.lastAcknowledgedUserInputAt,
+        inputDigest: host.lastAcknowledgedInputDigest,
+        attemptRef: pending.capturedAttemptRef
+      };
+    }
+    function completionIdentityCurrent(host, pending) {
+      const b = pending.completionBinding;
+      return !!b && !host.disposed && b.sessionId === host.instanceId && b.nativeSessionId === host.providerSessionId && b.turnStartedAt === host.generatingStartedAt && b.inputAt === host.lastAcknowledgedUserInputAt && b.inputDigest === host.lastAcknowledgedInputDigest && (!pending.taskId || !host.completingTurnTaskId || host.completingTurnTaskId() === pending.taskId) && JSON.stringify(b.attemptRef) === JSON.stringify(host.currentAttemptRef?.() ?? null);
+    }
+    function boundCompletionMarker(host, pending) {
+      if (!completionIdentityCurrent(host, pending)) return null;
+      const marker2 = selectTurnTerminalMarker(host.lastNativeTurnTerminalMarkers, pending.turnStartedAt, pending.completionBinding);
+      if (marker2 && marker2.receivedAt > Date.now()) return null;
+      if (marker2) pending.completionBinding.nativeTurnId = marker2.turnId;
+      return marker2;
+    }
+    init_logger();
+    var STATUS_HYDRATION_TAIL_LIMIT = 200;
+    var COMPLETED_FINALIZATION_RETRY_MS = 1e3;
+    var COMPLETED_FINALIZATION_MAX_WAIT_MS = 3e4;
+    var CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 2e4;
+    var MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 6e4;
+    var NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4e3;
+    var CANCELLED_COMPLETION_RECHECK_MS = 1500;
+    var CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS = 4;
+    var PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
+    var ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3e3;
+    var ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 6e4;
+    var TERMINAL_BLOCK_HARD_CAP_MS = 10 * 6e4;
+    var BACKGROUND_TASK_HOLD_MAX_MS = 5 * 6e4;
+    var USER_INPUT_ACK_DEDUP_WINDOW_MS = 6e4;
+    var TERMINAL_MESH_EVENTS = /* @__PURE__ */ new Set([
+      "agent:generating_completed",
+      "agent:stopped",
+      "agent:ready"
+    ]);
+    function armCancelledCompletionRecheck(host, pending, reason) {
+      if (reason === "new_pty_output" && !pending.completionBinding) return;
+      const now = Date.now();
+      let prior = host.cancelledCompletionRecheck;
+      if (prior && (prior.pending.turnStartedAt !== pending.turnStartedAt || prior.pending.completionBinding?.inputAt !== pending.completionBinding?.inputAt || JSON.stringify(prior.pending.capturedAttemptRef) !== JSON.stringify(pending.capturedAttemptRef))) {
+        clearCancelledCompletionRecheck(host);
+        prior = null;
+      }
+      const carriedPending = prior?.pending ?? pending;
+      const attempts = prior ? prior.attempts : 0;
+      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding) {
+        clearCancelledCompletionRecheck(host);
+        LOG.debug("CLI", `[${host.type}] cancelled-completion recheck budget exhausted (${reason}) \u2014 deferring to the next FSM completion edge`);
+        return;
+      }
+      host.cancelledCompletionRecheck = {
+        pending: carriedPending,
+        reason,
+        attempts,
+        firstCancelledAt: prior?.firstCancelledAt ?? now
+      };
+      if (host.cancelledCompletionRecheckTimer) clearTimeout(host.cancelledCompletionRecheckTimer);
+      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS) {
+        host.cancelledCompletionRecheckTimer = null;
+        return;
+      }
+      host.cancelledCompletionRecheckTimer = setTimeout(
+        () => runCancelledCompletionRecheck(host),
+        CANCELLED_COMPLETION_RECHECK_MS
+      );
+    }
+    function clearCancelledCompletionRecheck(host) {
+      if (host.cancelledCompletionRecheckTimer) {
+        clearTimeout(host.cancelledCompletionRecheckTimer);
+        host.cancelledCompletionRecheckTimer = null;
+      }
+      host.cancelledCompletionRecheck = null;
+    }
+    function runCancelledCompletionRecheck(host) {
+      host.cancelledCompletionRecheckTimer = null;
+      const watch5 = host.cancelledCompletionRecheck;
+      if (!watch5) return;
+      if (host.completedDebouncePending) {
+        clearCancelledCompletionRecheck(host);
+        return;
+      }
+      if (watch5.pending.completionBinding) {
+        if (Date.now() - watch5.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch5.pending)) {
+          clearCancelledCompletionRecheck(host);
+          return;
+        }
+        const status = host.adapter.getStatus({ allowParse: false });
+        if (status?.status && status.status !== "idle") {
+          clearCancelledCompletionRecheck(host);
+          return;
+        }
+        host.readExternalCompletionMessages?.();
+        if (!boundCompletionMarker(host, watch5.pending)) {
+          watch5.attempts++;
+          if (watch5.attempts < CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS) {
+            host.cancelledCompletionRecheckTimer = setTimeout(() => runCancelledCompletionRecheck(host), CANCELLED_COMPLETION_RECHECK_MS);
+          }
+          return;
+        }
+      }
+      watch5.attempts += 1;
+      LOG.info("CLI", `[${host.type}] re-checking completion cancelled by ${watch5.reason} (attempt ${watch5.attempts}/${CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS}, ${Date.now() - watch5.firstCancelledAt}ms since cancel)`);
+      if (host.completionTraceOn()) host.recordCompletionGateTrace("cancel_recheck", {
+        reason: watch5.reason,
+        attempt: watch5.attempts,
+        sinceCancelMs: Date.now() - watch5.firstCancelledAt,
+        busyEpoch: host.busyEpoch
+      });
+      const lastOutputAt = host.adapter.getStatus({ allowParse: false })?.lastOutputAt;
+      host.completedDebouncePending = {
+        ...watch5.pending,
+        busyEpochAtArm: host.busyEpoch,
+        lastOutputAtArm: typeof lastOutputAt === "number" && Number.isFinite(lastOutputAt) ? lastOutputAt : watch5.pending.lastOutputAtArm
+      };
+      host.flushCompletedDebounceIfFinalized();
+      if (host.cancelledCompletionRecheck === watch5 && host.completedDebouncePending) {
+        clearCancelledCompletionRecheck(host);
+      }
+    }
+    function observeCancelledNativeCompletion(host) {
+      const watch5 = host.cancelledCompletionRecheck;
+      if (!watch5?.pending.completionBinding || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+      if (Date.now() - watch5.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch5.pending)) {
+        clearCancelledCompletionRecheck(host);
+        return;
+      }
+      if (!boundCompletionMarker(host, watch5.pending)) return;
+      host.cancelledCompletionRecheckTimer = setTimeout(() => runCancelledCompletionRecheck(host), 0);
+    }
     var crypto14 = __toESM2(require("crypto"));
     init_contracts2();
     init_logger();
@@ -175588,25 +175925,6 @@ ${JSON.stringify(replies)}
     init_debug_trace();
     init_debug_config();
     init_chat_message_normalization();
-    var STATUS_HYDRATION_TAIL_LIMIT = 200;
-    var COMPLETED_FINALIZATION_RETRY_MS = 1e3;
-    var COMPLETED_FINALIZATION_MAX_WAIT_MS = 3e4;
-    var CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 2e4;
-    var MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 6e4;
-    var NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4e3;
-    var CANCELLED_COMPLETION_RECHECK_MS = 1500;
-    var CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS = 4;
-    var PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
-    var ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3e3;
-    var ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 6e4;
-    var TERMINAL_BLOCK_HARD_CAP_MS = 10 * 6e4;
-    var BACKGROUND_TASK_HOLD_MAX_MS = 5 * 6e4;
-    var USER_INPUT_ACK_DEDUP_WINDOW_MS = 6e4;
-    var TERMINAL_MESH_EVENTS = /* @__PURE__ */ new Set([
-      "agent:generating_completed",
-      "agent:stopped",
-      "agent:ready"
-    ]);
     var NATIVE_HISTORY_PENDING_MAX_WAIT_MS = 45e3;
     var path99 = __toESM2(require("path"));
     var import_node_module2 = require("module");
@@ -176567,7 +176885,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto40 = require("crypto");
+    var import_node_crypto43 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -176765,7 +177083,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto40.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto43.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -176848,6 +177166,7 @@ ${buttons.join("\n")}`;
                 busyEpochAtArm: host.busyEpoch,
                 ...typeof adapterStatus?.lastOutputAt === "number" && Number.isFinite(adapterStatus.lastOutputAt) ? { lastOutputAtArm: adapterStatus.lastOutputAt } : {}
               };
+              host.captureCompletionIdentity?.(host.completedDebouncePending);
               LOG.info("CLI", `[${host.type}] short-generating routed through settle window (${shortDurationMs}ms, source=${shortEvidenceSource}, missingEvidence=${missingEvidence}) \u2014 arming completedDebouncePending instead of inline fire`);
               if (host.isMeshWorkerSession()) {
                 traceMeshEventStage("arm", host.meshTraceCtx(), `short-generating settle-arm (source=${shortEvidenceSource}, missingEvidence=${missingEvidence})`);
@@ -176899,6 +177218,7 @@ ${buttons.join("\n")}`;
               busyEpochAtArm: host.busyEpoch,
               ...typeof adapterStatus?.lastOutputAt === "number" && Number.isFinite(adapterStatus.lastOutputAt) ? { lastOutputAtArm: adapterStatus.lastOutputAt } : {}
             };
+            host.captureCompletionIdentity?.(host.completedDebouncePending);
             const ownsExternalHistory = !!host.adapter?.chatMessagesOwnedExternally;
             const meshSettleSession = host.isAutonomousMeshSession();
             const flushDelay = resolveCompletionSettleDelayMs({
@@ -177077,64 +177397,6 @@ ${buttons.join("\n")}`;
         }
       }
     }
-    init_logger();
-    function armCancelledCompletionRecheck(host, pending, reason) {
-      if (reason === "new_pty_output") return;
-      const now = Date.now();
-      const prior = host.cancelledCompletionRecheck;
-      const carriedPending = prior?.pending ?? pending;
-      const attempts = prior ? prior.attempts : 0;
-      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS) {
-        clearCancelledCompletionRecheck(host);
-        LOG.debug("CLI", `[${host.type}] cancelled-completion recheck budget exhausted (${reason}) \u2014 deferring to the next FSM completion edge`);
-        return;
-      }
-      host.cancelledCompletionRecheck = {
-        pending: carriedPending,
-        reason,
-        attempts,
-        firstCancelledAt: prior?.firstCancelledAt ?? now
-      };
-      if (host.cancelledCompletionRecheckTimer) clearTimeout(host.cancelledCompletionRecheckTimer);
-      host.cancelledCompletionRecheckTimer = setTimeout(
-        () => runCancelledCompletionRecheck(host),
-        CANCELLED_COMPLETION_RECHECK_MS
-      );
-    }
-    function clearCancelledCompletionRecheck(host) {
-      if (host.cancelledCompletionRecheckTimer) {
-        clearTimeout(host.cancelledCompletionRecheckTimer);
-        host.cancelledCompletionRecheckTimer = null;
-      }
-      host.cancelledCompletionRecheck = null;
-    }
-    function runCancelledCompletionRecheck(host) {
-      host.cancelledCompletionRecheckTimer = null;
-      const watch5 = host.cancelledCompletionRecheck;
-      if (!watch5) return;
-      if (host.completedDebouncePending) {
-        clearCancelledCompletionRecheck(host);
-        return;
-      }
-      watch5.attempts += 1;
-      LOG.info("CLI", `[${host.type}] re-checking completion cancelled by ${watch5.reason} (attempt ${watch5.attempts}/${CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS}, ${Date.now() - watch5.firstCancelledAt}ms since cancel)`);
-      if (host.completionTraceOn()) host.recordCompletionGateTrace("cancel_recheck", {
-        reason: watch5.reason,
-        attempt: watch5.attempts,
-        sinceCancelMs: Date.now() - watch5.firstCancelledAt,
-        busyEpoch: host.busyEpoch
-      });
-      const lastOutputAt = host.adapter.getStatus({ allowParse: false })?.lastOutputAt;
-      host.completedDebouncePending = {
-        ...watch5.pending,
-        busyEpochAtArm: host.busyEpoch,
-        lastOutputAtArm: typeof lastOutputAt === "number" && Number.isFinite(lastOutputAt) ? lastOutputAt : watch5.pending.lastOutputAtArm
-      };
-      host.flushCompletedDebounceIfFinalized();
-      if (host.cancelledCompletionRecheck === watch5 && host.completedDebouncePending) {
-        clearCancelledCompletionRecheck(host);
-      }
-    }
     init_contracts2();
     var MAX_TRACKED_MESSAGES = 2e3;
     function hasUsableTimestamp(message) {
@@ -177259,7 +177521,10 @@ ${buttons.join("\n")}`;
           const sessionId = host.providerSessionId;
           const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, limit)).then((history) => {
             if (host.providerSessionId !== sessionId) return;
-            if (history.source === "provider-native") host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+            if (history.source === "provider-native" && !history.stale) {
+              host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+              host.observeNativeCompletion?.(history.turnTerminalMarkers ?? []);
+            }
             host.lastNativeSourceCanonicalCacheKey = cacheKey;
             host.lastNativeSourceCanonicalCheckAt = Date.now();
           }).catch((error) => LOG.debug("CLI", `[${host.type}] history hydration failed: ${String(error)}`));
@@ -177280,7 +177545,8 @@ ${buttons.join("\n")}`;
           historyBehavior: host.provider.historyBehavior,
           scripts: host.provider.scripts
         });
-        if (restoredHistory.source === "provider-native") {
+        if (restoredHistory.source === "provider-native" && !restoredHistory.stale) {
+          host.observeNativeCompletion?.(restoredHistory.turnTerminalMarkers ?? []);
           host.lastPersistedHistoryMessages = toPersistableMessages(restoredHistory.messages);
         }
         host.lastNativeSourceCanonicalCheckAt = Date.now();
@@ -177687,6 +177953,7 @@ ${buttons.join("\n")}`;
       host.recentUserInputAcks.set(ackContentKey, receivedAt);
       pruneRecentUserInputAcks(host, receivedAt);
       host.lastAcknowledgedUserInputAt = receivedAt;
+      host.lastAcknowledgedInputDigest = typeof input === "string" || input.parts.every((part) => part.type === "text") ? shortHash(content, 64) : void 0;
       const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}${sourceId ? `:${sourceId}` : ""}`, 24)}`;
       appendRuntimeMessage(host, buildChatMessage({
         role: "user",
@@ -178020,6 +178287,13 @@ ${buttons.join("\n")}`;
         host.completedDebounceTimer = null;
         return;
       }
+      if (pending.completionBinding && !completionIdentityCurrent(host, pending)) {
+        if (host.completedDebounceTimer) clearTimeout(host.completedDebounceTimer);
+        host.completedDebouncePending = null;
+        host.completedDebounceTimer = null;
+        host.clearCancelledCompletionRecheck();
+        return;
+      }
       const reader = host.buildCompletionSignalReader(pending);
       const policy = host.completionEnginePolicy();
       const latestVisibleStatus = reader.visibleStatus();
@@ -178044,9 +178318,15 @@ ${buttons.join("\n")}`;
       }
       host.applyCompletionArmPatch(pending, decision.armPatch);
       const nativeMarker = host.nativeTurnTerminalMarker?.(pending.turnStartedAt);
-      const nativeFailureDiagnostic = nativeMarker?.outcome === "failed" ? {
-        nativeTurnOutcome: "failed",
-        nativeProviderFailure: nativeMarker.providerFailure ?? "provider_error",
+      if (nativeMarker?.outcome === "aborted") {
+        host.completedDebouncePending = null;
+        host.completedDebounceTimer = null;
+        host.clearCancelledCompletionRecheck();
+        return;
+      }
+      const nativeFailureDiagnostic = nativeMarker ? {
+        nativeTurnOutcome: nativeMarker.outcome,
+        ...nativeMarker.outcome === "failed" ? { nativeProviderFailure: nativeMarker.providerFailure ?? "provider_error" } : {},
         nativeMarker: { outcome: nativeMarker.outcome, turnId: nativeMarker.turnId, receivedAt: nativeMarker.receivedAt, startedAt: nativeMarker.startedAt, errorAt: nativeMarker.errorAt }
       } : {};
       if (decision.kind === "hold") {
@@ -178102,6 +178382,7 @@ ${buttons.join("\n")}`;
           duration: pending.duration,
           timestamp: pending.timestamp,
           taskId: pending.taskId,
+          attemptRef: pending.capturedAttemptRef,
           finalSummary: weakFinalSummary,
           completionDiagnostic
         });
@@ -178124,14 +178405,15 @@ ${buttons.join("\n")}`;
         duration: pending.duration,
         busyEpoch: host.busyEpoch
       });
-      const finalSummary = nativeMarker?.outcome === "failed" ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
+      const finalSummary = nativeMarker ? nativeMarker.summary : host.cleanCompletionFinalSummary(pending);
       const transcriptProfile = resolveTranscriptAuthorityProfile(host.provider);
       const finalContentLength = typeof finalSummary === "string" ? finalSummary.trim().length : 0;
       host.emitGeneratingCompleted({
         chatTitle: pending.chatTitle,
         duration: pending.duration,
-        timestamp: pending.timestamp,
+        timestamp: nativeMarker?.receivedAt ?? pending.timestamp,
         taskId: pending.taskId,
+        attemptRef: pending.capturedAttemptRef,
         finalSummary,
         evidenceLevel: "reported",
         completionDiagnostic: {
@@ -178143,6 +178425,7 @@ ${buttons.join("\n")}`;
           finalAssistantEvidenceSource: pending.resolvedFinalEvidenceSource ?? "parsed",
           finalAssistantContentLength: finalContentLength,
           ...host.finalSummaryProvenanceDiagnostic(finalSummary),
+          ...nativeMarker ? { finalSummarySource: "native_transcript", finalSummaryMayBeTruncated: false } : {},
           transcriptEvidence: {
             version: 1,
             kind: "final_assistant",
@@ -178194,7 +178477,7 @@ ${buttons.join("\n")}`;
           sessionId: host.instanceId,
           observedBy: "cli_completion_flush",
           source: weak ? "completion_flush_weak" : "completion_flush_genuine",
-          attemptRef: host.currentAttemptRef?.() ?? void 0,
+          attemptRef: opts.attemptRef === void 0 ? host.currentAttemptRef?.() ?? void 0 : opts.attemptRef ?? void 0,
           taskId: opts.taskId,
           at: opts.timestamp,
           strength: weak ? "weak" : "genuine",
@@ -179122,6 +179405,7 @@ ${buttons.join("\n")}`;
       parsedIngestTimestamps = new ParsedIngestTimestampStamper();
       lastPersistedHistoryMessages = [];
       lastAcknowledgedUserInputAt = 0;
+      lastAcknowledgedInputDigest;
       // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
       // prompt acked twice in quick succession (the worker buffers the first
       // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
@@ -179569,7 +179853,16 @@ ${buttons.join("\n")}`;
           return false;
         }
       }
+      captureCompletionIdentity(pending) {
+        captureCompletionIdentity(this, pending);
+      }
+      observeNativeCompletion(markers) {
+        this.lastNativeTurnTerminalMarkers = markers;
+        observeCancelledNativeCompletion(this);
+      }
       nativeTurnTerminalMarker(turnStartedAt) {
+        const pending = this.completedDebouncePending ?? this.cancelledCompletionRecheck?.pending;
+        if (pending?.completionBinding && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
         return nativeTurnTerminalMarker(this, turnStartedAt);
       }
       isAutonomousMeshSession() {
@@ -193674,7 +193967,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto41 = require("crypto");
+    var import_node_crypto44 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db2 = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -193683,7 +193976,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto41.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto44.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db2.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db2.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -193693,7 +193986,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto41.randomUUID)();
+          const id4 = (0, import_node_crypto44.randomUUID)();
           active.add(id4);
           try {
             return await run3();

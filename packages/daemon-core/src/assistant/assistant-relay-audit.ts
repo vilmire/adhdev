@@ -1,3 +1,5 @@
+import { NativeScanCheckpoints } from './native-scan-checkpoint.js';
+import { createHash } from 'node:crypto';
 import { renderNativeReplies } from './assistant-native-window.js';
 import { reportBodyId } from './report-continuation.js';
 /**
@@ -21,11 +23,12 @@ interface AttemptSpan {
     terminal_reason: string | null;
     terminal_source: string | null;
     state: string;
+    generation: number;
     relayed_at: number | null;
     coverage_at: number | null;
 }
 
-const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL = new Set(['completed', 'blocked', 'failed', 'cancelled']);
 const SESSION_CAP = 20;
 export const RELAY_AUDIT_RETENTION_MS = 24 * 60 * 60_000;
 
@@ -38,6 +41,7 @@ export async function collectCoordinatorReplies(opts: {
     execute: Execute;
     sinceMs: number;
     now: number;
+    isAuthorized?: (meshId: string | undefined, sessionId: string) => boolean;
     coordinatorSessions?: readonly { sessionId: string; cliType?: string; meshId?: string }[];
 }): Promise<AuditedCoordinatorReply[] & { complete?: boolean }> {
     // Replay bounded history, rather than discarding a bubble first observed
@@ -52,20 +56,26 @@ export async function collectCoordinatorReplies(opts: {
     const first = inventory.length ? (Math.floor(opts.now / 60_000) * SESSION_CAP) % inventory.length : 0;
     const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
     const out: AuditedCoordinatorReply[] = [];
+    const checkpoints = new NativeScanCheckpoints(opts.db);
     const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
+        if (opts.isAuthorized?.(meshId, sessionId) === false) return { sessionId, skipped: true } as const;
         if (!sessionId) return { sessionId, skipped: true } as const;
         // Providers outside TIMESTAMPED_PROVIDERS have no wall-clock native
         // record boundary contract; skip them instead of failing native audit.
         if (cliType && !isTimestampedNativeProvider(cliType)) return { sessionId, skipped: true } as const;
         const attempts = opts.db.prepare(`
-            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
+            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state, a.generation,
                 r.relayed_at, c.rendered_at AS coverage_at
             FROM turn_attempts a
             LEFT JOIN assistant_relays r ON r.attempt_id=a.attempt_id AND r.coordinator_session_id=a.session_id
             LEFT JOIN assistant_relay_coverage c ON c.attempt_id=a.attempt_id AND c.coordinator_session_id=a.session_id
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId) as AttemptSpan[];
-        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        const anchor = () => opts.db.prepare("SELECT attempt_id,generation,accepted_at FROM turn_attempts WHERE session_id=? AND scope='plain' ORDER BY accepted_at,attempt_id").all(sessionId);
+        const scope = JSON.stringify([meshId, cliType, createHash('sha256').update(JSON.stringify(anchor())).digest('hex')]);
+        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now, { checkpoints, scope });
+        const currentScope = JSON.stringify([meshId, cliType, createHash('sha256').update(JSON.stringify(anchor())).digest('hex')]);
+        if (opts.isAuthorized?.(meshId, sessionId) === false || scope !== currentScope) { checkpoints.reset(sessionId); return { sessionId, skipped: true } as const; }
         if (window.unsupportedProvider) return { sessionId, skipped: true } as const;
         return { sessionId, meshId, attempts, window };
     }));
@@ -75,10 +85,14 @@ export async function collectCoordinatorReplies(opts: {
     for (const scan of scans) {
         if ('skipped' in scan) { complete = false; continue; }
         const { sessionId, meshId, attempts, window } = scan;
-        if (!window.complete || window.ambiguous) { complete = false; failed = true; continue; }
+        if (window.ambiguous || (!window.complete && !window.closedTurns.size)) { complete = false; failed = true; continue; }
+        if (!window.complete) complete = false;
         successful += 1;
         const reportIds = new Map<string, string>();
         for (const bubble of window.bubbles) {
+            const messageId = window.targets.get(bubble.at);
+            const proof = messageId ? window.closedTurns.get(messageId) : undefined;
+            if (!window.complete && !proof) continue;
             const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
             containing.sort((a, b) => b.accepted_at - a.accepted_at);
             const attempt = containing[0];
@@ -94,8 +108,9 @@ export async function collectCoordinatorReplies(opts: {
             const open = !!attempt && (!TERMINAL.has(attempt.state)
                 || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
             out.push({
-                sessionId, meshId, messageId: window.targets.get(bubble.at),
-                ...(attempt ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {}),
+                sessionId, meshId, messageId,
+                ...(attempt && window.complete && !open ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {}),
+                ...(proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: createHash('sha256').update(bubble.text.replace(/\r\n?/g, '\n').trim()).digest('hex'), generation: null } } : {}),
                 messageAt: bubble.at,
                 chars: Array.from(bubble.text).length,
                 text: bubble.text,

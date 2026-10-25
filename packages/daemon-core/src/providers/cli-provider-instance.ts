@@ -1,3 +1,5 @@
+import { captureCompletionIdentity, boundCompletionMarker } from './completion/native-completion-binding.js';
+import { observeCancelledNativeCompletion } from './completion/cancel-recheck.js';
 import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * CliProviderInstance — Runtime instance for CLI Provider
@@ -273,6 +275,7 @@ export class CliProviderInstance implements ProviderInstance {
     readonly parsedIngestTimestamps = new ParsedIngestTimestampStamper();
     lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     lastAcknowledgedUserInputAt = 0;
+    lastAcknowledgedInputDigest?: string;
     // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
     // prompt acked twice in quick succession (the worker buffers the first
     // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
@@ -836,7 +839,16 @@ export class CliProviderInstance implements ProviderInstance {
     busyLeaseGateEnabled(): boolean {
         try { return resolveBusyLeaseGate(this.type).enabled; } catch { return false; }
     }
-    nativeTurnTerminalMarker(turnStartedAt?: number): NativeTurnTerminalMarker | null { return nativeTurnTerminalMarker(this, turnStartedAt); }
+    captureCompletionIdentity(pending: CompletedDebouncePending): void { captureCompletionIdentity(this, pending); }
+    observeNativeCompletion(markers: NativeTurnTerminalMarker[]): void {
+        this.lastNativeTurnTerminalMarkers = markers;
+        observeCancelledNativeCompletion(this);
+    }
+    nativeTurnTerminalMarker(turnStartedAt?: number): NativeTurnTerminalMarker | null {
+        const pending = this.completedDebouncePending ?? this.cancelledCompletionRecheck?.pending;
+        if (pending?.completionBinding && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
+        return nativeTurnTerminalMarker(this, turnStartedAt);
+    }
 
     isAutonomousMeshSession(): boolean { return isAutonomousMeshSession(this); }
     inApprovalResumeGrace(now = Date.now()): boolean { return inApprovalResumeGrace(this, now); }

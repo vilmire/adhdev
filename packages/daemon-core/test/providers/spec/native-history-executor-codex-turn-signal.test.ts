@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { validateReadChatResultPayload } from '../../../src/providers/read-chat-contract.js';
 /**
  * codex-cli turnTerminalMarkers via the declarative jsonl executor.
  *
@@ -109,6 +111,19 @@ describe('codex-cli turnTerminalMarkers (declarative jsonl executor)', () => {
 
     afterEach(() => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('preserves exact native input/session/turn proof through the real JSONL executor and read contract', () => {
+        const ts = Date.now() - 10_000;
+        writeRollout(SESSION_ID, [metaLine(SESSION_ID, WORKSPACE, ts),
+            JSON.stringify({ timestamp: ts + 100, type: 'event_msg', payload: { type: 'task_started', turn_id: 'bound-turn' } }),
+            JSON.stringify({ timestamp: ts + 101, type: 'event_msg', payload: { type: 'user_message', message: 'Synthetic native input' } }),
+            userMsg('Synthetic native input', ts + 101), taskComplete('bound-turn', 'Synthetic final', ts + 1000)]);
+        const result = executeNativeHistory({ source: sourceForTmp() } as any, { agentType: 'codex-cli', historySessionId: SESSION_ID, workspace: WORKSPACE });
+        const normalized = validateReadChatResultPayload({ status: 'idle', messages: result!.messages, turnTerminalMarkers: result!.turnTerminalMarkers });
+        expect(normalized.turnTerminalMarkers?.[0]).toMatchObject({ nativeSessionId: SESSION_ID, turnId: 'bound-turn',
+            startedAt: ts + 100, inputAt: ts + 101, inputDigest: createHash('sha256').update('Synthetic native input').digest('hex'),
+            receivedAt: ts + 1000, outcome: 'completed' });
     });
 
     it('surfaces a task_complete marker with empty last_agent_message (the silent tool-only turn class)', () => {

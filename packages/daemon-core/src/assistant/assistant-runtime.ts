@@ -212,6 +212,8 @@ export function buildAssistantRelayPorts(
             // would incorrectly advance its successful-audit watermark.
             return collectCoordinatorReplies({
                 db: MeshRuntimeStore.getInstance().db, sinceMs, now: Date.now(), coordinatorSessions,
+                isAuthorized: (meshId, sessionId) => !!meshId && ports.listMeshes().some(m => m.id === meshId && ports.isHostedHere(m))
+                    && ports.coordinatorSessionAuthorized?.(meshId, sessionId) !== false,
                 execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
             });
         },

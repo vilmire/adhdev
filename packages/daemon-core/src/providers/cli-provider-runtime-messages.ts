@@ -40,6 +40,7 @@ export interface RuntimeMessagesHost {
     /** TASKBUBBLE-DUP dedup ledger for user-input acks — see recordAcknowledgedUserInput. */
     recentUserInputAcks: Map<string, number>;
     lastAcknowledgedUserInputAt: number;
+    lastAcknowledgedInputDigest?: string;
 }
 
 export function maybeAppendRuntimeRecoveryMessage(
@@ -182,6 +183,8 @@ export function recordAcknowledgedUserInput(
     pruneRecentUserInputAcks(host, receivedAt);
 
     host.lastAcknowledgedUserInputAt = receivedAt;
+    host.lastAcknowledgedInputDigest = typeof input === 'string' || input.parts.every(part => part.type === 'text')
+        ? shortHash(content, 64) : undefined;
     // The runtimeMessages dedupKey stays per-call unique (includes receivedAt)
     // so a genuine resend of the same text after the window appends a fresh
     // bubble; redelivery within the window is already suppressed above.

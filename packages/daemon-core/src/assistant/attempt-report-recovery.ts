@@ -1,3 +1,6 @@
+import { buildHistoryMessageIdentity, historyBoundaryDigest } from '../config/chat-history-tail.js';
+import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js';
+import type { NativeScanCheckpoints, NativeScanCheckpoint } from './native-scan-checkpoint.js';
 /** Recover an exact native window or, failing that, an unverified envelope. Never select the latest tail. */
 import { createHash } from 'node:crypto';
 import { SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
@@ -200,7 +203,8 @@ function selectAdapterFinal(
 }
 
 /** Bounded, source-checked paging. An exhausted/failed page never proves completeness. */
-export async function readNativeWindow(execute: NativeExecute, sessionId: string, start: number, end: number) {
+export async function readNativeWindow(execute: NativeExecute, sessionId: string, start: number, end: number,
+    scan?: { checkpoints: NativeScanCheckpoints; scope: string }) {
     const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
     let messages: unknown[] = [];
     let providerIdle = false;
@@ -208,6 +212,11 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
     let chat: Record<string, unknown> | null = null;
     let unsupportedProvider = false;
     const targets = new Map<number, string>();
+    const closedTurns = new Map<string, { turnId: string; nativeSessionId: string; startedAt: number; endedAt: number; messageId: string }>();
+    let provenance = '';
+    let checkpoint = scan?.checkpoints.load(sessionId, scan.scope, end) ?? null;
+    let continued = false;
+
     const request = async (command: string, args: Record<string, unknown>) => {
         const remaining = deadline - Date.now();
         if (remaining <= 0) return null;
@@ -222,6 +231,33 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
     };
     const take = (read: Record<string, unknown> | null, storedHistory = false): boolean => {
         if (!read || !verifiedNativeRead(read, sessionId) || !Array.isArray(read.messages)) return false;
+        const nativeSessionId = typeof read.providerSessionId === 'string' ? read.providerSessionId : '';
+        const provider = read.agent ?? rec(read.debugReadChat)?.provider;
+        const source = nativeSessionId ? JSON.stringify([provider, nativeSessionId]) : '';
+        if (provenance && source !== provenance) { scan?.checkpoints.reset(sessionId); messages = []; closedTurns.clear(); invalid = true; return false; }
+        if (source) provenance = source;
+        const wanted = new Set(read.messages.map(standardAssistantBubble).filter(b => b !== null).map(b => b.text));
+        const bySummary = new Map<string, NativeTurnTerminalMarker[]>();
+        for (const raw of Array.isArray(read.turnTerminalMarkers) ? read.turnTerminalMarkers : []) {
+            const value = rec(raw);
+            if (!value || typeof value.summary !== 'string' || !wanted.has(value.summary.trim())) continue;
+            const marker = value as unknown as NativeTurnTerminalMarker;
+            const group = bySummary.get(marker.summary.trim()) ?? [];
+            group.push(marker); bySummary.set(marker.summary.trim(), group);
+        }
+        for (const message of read.messages) {
+            const bubble = standardAssistantBubble(message);
+            if (!bubble || !finalized(message, storedHistory) || !nativeSessionId) continue;
+            const matching = (bySummary.get(bubble.text) ?? []).filter(m => m.outcome === 'completed' && m.nativeSessionId === nativeSessionId
+                && typeof m.turnId === 'string' && !!m.turnId && Number.isFinite(m.startedAt) && m.startedAt! > 0
+                && Number.isFinite(m.receivedAt) && m.receivedAt >= bubble.at && m.receivedAt <= end && bubble.at >= m.startedAt!
+                && typeof m.inputDigest === 'string' && /^[a-f0-9]{64}$/.test(m.inputDigest)
+                && Number.isFinite(m.inputAt) && m.inputAt! >= m.startedAt! && m.inputAt! <= m.receivedAt);
+            if (matching.length === 1) {
+                const m = matching[0]!;
+                closedTurns.set(reportMessageId(message), { turnId: m.turnId!, nativeSessionId, startedAt: m.startedAt!, endedAt: m.receivedAt, messageId: reportMessageId(message) });
+            }
+        }
         providerIdle ||= read.providerObservedStatus === 'idle';
         for (const message of read.messages) {
             const b = standardAssistantBubble(message);
@@ -235,7 +271,7 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
             const bubble = standardAssistantBubble(message);
             if (bubble) targets.set(bubble.at, reportMessageId(message));
         }
-        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets, chat, unsupportedProvider };
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid && !continued, providerIdle, targets, chat, unsupportedProvider, closedTurns };
     };
     chat = await request('read_chat', { targetSessionId: sessionId, tailLimit: 200 });
     unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
@@ -260,19 +296,62 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
         }
         return result(false);
     }
-    // History is an independent authoritative snapshot. A live streaming row
-    // (or native row lacking bubbleState) must not poison a later finalized
-    // version, nor collide with that version as a second reply.
-    messages = [];
+    if (!scan) {
+        messages = []; invalid = false;
+        for (let offset = 0; offset < 400; offset += 100) {
+            const history = await request('chat_history', { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+            if (!take(history, true)) return result(false);
+            const oldest = (history!.messages as unknown[]).map(standardAssistantBubble).filter(b => b !== null)
+                .reduce((at, b) => Math.min(at, b.at), Infinity);
+            if (history!.hasMore === false || oldest < start) return result(true);
+        }
+        return result(false);
+    }
+    // Each fresh tick services the newest tail and at most three older pages.
+    // Partial proof is per closed native turn; traversal metadata never certifies a full body.
+    messages = messages.filter(message => closedTurns.has(reportMessageId(message)));
     invalid = false;
-    // Start at offset zero with no live-window exclusion. Overlap is deduplicated
-    // by timestamp+text. A page older than the start proves lower-bound coverage.
-    for (let offset = 0; offset < 400; offset += 100) {
-        const history = await request('chat_history', { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+    let boundary = '';
+    let boundaryAt = end;
+    let digest = '';
+    let lower = start;
+    let upper = end;
+    let oldestAt = Infinity;
+    for (let page = 0; page < 4; page++) {
+        if (page === 1 && checkpoint) {
+            if (checkpoint.provenance !== provenance) { scan?.checkpoints.reset(sessionId); checkpoint = null; return result(false); }
+            boundary = checkpoint.boundary; boundaryAt = checkpoint.boundaryAt; digest = checkpoint.digest;
+            lower = checkpoint.lower; upper = checkpoint.upper; continued = true;
+        }
+        const history = await request('chat_history', { targetSessionId: sessionId, offset: 0, limit: 100, excludeRecentCount: 0,
+            ...(boundary ? { excludeFromIdentity: boundary } : {}) });
+        if (boundary && (history?.boundaryResolved !== true || history.boundaryDigest !== digest)) {
+            scan?.checkpoints.reset(sessionId); return result(false);
+        }
         if (!take(history, true)) return result(false);
-        const oldest = (history!.messages as unknown[]).map(standardAssistantBubble).filter(b => b !== null)
-            .reduce((at, b) => Math.min(at, b.at), Infinity);
-        if (history!.hasMore === false || oldest < start) return result(true);
+        const rows = history!.messages as unknown[];
+        const times = rows.map(bubbleTimestamp);
+        if (times.some((at, i) => at === null || (i > 0 && at < times[i - 1]!))
+            || (boundary && times.some(at => at! > boundaryAt))) {
+            scan.checkpoints.reset(sessionId); return result(false);
+        }
+        const oldest = times.reduce<number>((a, v) => Math.min(a, v!), Infinity);
+        if (history!.hasMore === false || oldest < lower) {
+            scan?.checkpoints.reset(sessionId);
+            return result(true);
+        }
+        const first = rows[0] as Parameters<typeof buildHistoryMessageIdentity>[0] | undefined;
+        if (!first) return result(false);
+        const next = buildHistoryMessageIdentity(first);
+        if (!next || next === boundary || oldest >= oldestAt) { scan?.checkpoints.reset(sessionId); return result(false); }
+        boundary = next; boundaryAt = oldest; digest = historyBoundaryDigest(first); oldestAt = oldest;
+        if (scan && provenance && oldest >= lower && oldest <= upper && (!checkpoint || page >= 1)) {
+            const lastTurn = [...closedTurns.values()].at(-1);
+            const value: NativeScanCheckpoint = { version: 1, sessionId, scope: scan.scope, provenance, lower, upper,
+                boundary, digest, boundaryAt: oldest, lastNativeTurnId: lastTurn?.turnId ?? null, expiresAt: checkpoint?.expiresAt ?? end + 60 * 60_000 };
+            scan.checkpoints.save(value);
+        }
+        // A missing or unresolved identity never proves older coverage.
     }
     return result(false);
 }

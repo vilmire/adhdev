@@ -5,7 +5,8 @@ import type { AuditedCoordinatorReply } from './assistant-native-window.js';
 
 export const receiptKey = (...parts: unknown[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 export const gapGroup = (reply: AuditedCoordinatorReply): string => receiptKey('gap', reply.sessionId,
-    reply.attemptId ?? Math.floor(reply.messageAt / 60_000));
+    reply.nativeTurnProof ? [reply.nativeTurnProof.nativeSessionId, reply.nativeTurnProof.turnId, reply.messageId]
+        : reply.attemptId ?? Math.floor(reply.messageAt / 60_000));
 
 export class RelayGapTracker {
     constructor(private readonly store: AssistantRelayStore, private readonly now: () => number) {}

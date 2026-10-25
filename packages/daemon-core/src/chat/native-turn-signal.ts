@@ -59,6 +59,10 @@ export interface NativeTurnTerminalMarker {
     outcome: 'completed' | 'aborted' | 'failed';
     /** Native task_started timestamp; 0 means ambiguous turn identity. */
     startedAt?: number;
+    nativeSessionId?: string;
+    inputAt?: number;
+    inputDigest?: string;
+    supersededAt?: number;
     /** Timestamp of the structured error that caused this terminal. */
     errorAt?: number;
     /** Closed error cause; provider/user message text is never classified here. */
@@ -140,6 +144,7 @@ export function providerHasNativeTurnSignal(
 export function selectTurnTerminalMarker(
     markers: readonly NativeTurnTerminalMarker[] | null | undefined,
     turnStartedAt: number | undefined,
+    binding?: NativeCompletionBinding,
 ): NativeTurnTerminalMarker | null {
     if (!Array.isArray(markers) || markers.length === 0) return null;
 
@@ -148,6 +153,16 @@ export function selectTurnTerminalMarker(
         : 0;
     if (!startedAt) return null;
 
+    if (binding) {
+        if (binding.turnStartedAt !== startedAt || !binding.sessionId || !binding.nativeSessionId
+            || !binding.inputDigest || !(binding.inputAt > 0 && binding.inputAt <= startedAt)) return null;
+        const matches = markers.filter(m => m.nativeSessionId === binding.nativeSessionId
+            && !!m.turnId && (!binding.nativeTurnId || m.turnId === binding.nativeTurnId)
+            && m.inputDigest === binding.inputDigest && Number.isFinite(m.inputAt) && m.inputAt! >= binding.inputAt
+            && Number.isFinite(m.startedAt) && m.startedAt! >= binding.inputAt && m.startedAt! <= startedAt
+            && Number.isFinite(m.receivedAt) && m.inputAt! <= m.receivedAt && m.receivedAt >= startedAt && !m.supersededAt);
+        return matches.length === 1 ? matches[0]! : null;
+    }
     for (let i = markers.length - 1; i >= 0; i--) {
         const m = markers[i];
         if (!m) continue;
@@ -156,4 +171,15 @@ export function selectTurnTerminalMarker(
         return m;
     }
     return null;
+}
+
+/** Bound only from this instance's acknowledged input and captured attempt, never a time tolerance. */
+export interface NativeCompletionBinding {
+    sessionId: string;
+    nativeSessionId: string;
+    turnStartedAt: number;
+    inputAt: number;
+    inputDigest: string;
+    nativeTurnId?: string;
+    attemptRef: import('@adhdev/mesh-shared').TurnAttemptRef | null;
 }

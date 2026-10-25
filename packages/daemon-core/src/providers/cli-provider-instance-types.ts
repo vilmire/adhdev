@@ -15,6 +15,8 @@
 export const STATUS_HYDRATION_TAIL_LIMIT = 200;
 
 export type CompletedDebouncePending = {
+    completionBinding?: import('../chat/native-turn-signal.js').NativeCompletionBinding;
+    capturedAttemptRef?: import('@adhdev/mesh-shared').TurnAttemptRef | null;
     chatTitle: string;
     duration: number;
     timestamp: number;

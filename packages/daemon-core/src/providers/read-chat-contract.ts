@@ -171,7 +171,9 @@ function validateTurnTerminalMarkers(value: unknown, source: string): NativeTurn
       summary: marker.summary,
     }
     if (typeof marker.turnId === 'string') normalized.turnId = marker.turnId
-    for (const key of ['startedAt', 'errorAt'] as const) {
+    if (typeof marker.nativeSessionId === 'string' && marker.nativeSessionId.length <= 512) normalized.nativeSessionId = marker.nativeSessionId
+    if (typeof marker.inputDigest === 'string' && /^[a-f0-9]{64}$/.test(marker.inputDigest)) normalized.inputDigest = marker.inputDigest
+    for (const key of ['startedAt', 'errorAt', 'inputAt', 'supersededAt'] as const) {
       if (marker[key] !== undefined) {
         if (!isFiniteNumber(marker[key])) throw new Error(`${source}: invalid ${key}`)
         normalized[key] = marker[key]

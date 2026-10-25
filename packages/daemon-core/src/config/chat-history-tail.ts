@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Reading a window of saved history: stable message identity + paging over the
  * collapsed record list, and the bounded-tail fast path that serves a finite
@@ -155,7 +156,7 @@ export function pageHistoryRecords(
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
     excludeActivity: boolean = false,
-): { messages: HistoryMessage[]; hasMore: boolean } {
+): { messages: HistoryMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryDigest?: string } {
     // chat_history's prose-only default (mirrors read_chat's `includeActivity`
     // opt-in contract). Applied BEFORE dedup/collapse/paging so offset/limit/
     // identity-cursor arithmetic operates in the same message space the caller
@@ -187,7 +188,10 @@ export function pageHistoryRecords(
     const endExclusive = Math.max(0, collapsed.length - boundedExclude - boundedOffset);
     const startInclusive = Math.max(0, endExclusive - boundedLimit);
     const sliced = collapsed.slice(startInclusive, endExclusive);
-    return { messages: sliced, hasMore: startInclusive > 0 };
+    return { messages: sliced, hasMore: startInclusive > 0,
+        ...(excludeFromIdentity ? { boundaryResolved: cursorIndex >= 0,
+            ...(cursorIndex >= 0 ? { boundaryDigest: historyBoundaryDigest(collapsed[cursorIndex]!) } : {}) } : {}),
+    };
 }
 
 // A finite tail request can be served by reading only the newest files instead
@@ -506,4 +510,10 @@ export function readBoundedTailRecords(
     // receivedAt regardless, so this is purely for stable input ordering.
     collected.reverse();
     return { records: collected, readAllFiles };
+}
+
+/** Metadata cursor validation; never grants delivery coverage or a full native window. */
+export function historyBoundaryDigest(message: HistoryMessage): string {
+    return createHash('sha256').update(JSON.stringify([buildHistoryMessageIdentity(message), message.role,
+        message.receivedAt, message.content])).digest('hex');
 }

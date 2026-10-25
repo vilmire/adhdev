@@ -39,6 +39,7 @@ export interface HistorySyncHost {
     provider: ProviderModule;
     launchMode: 'new' | 'resume' | 'manual';
     providerSessionId?: string;
+    observeNativeCompletion?(markers: import('../chat/native-turn-signal.js').NativeTurnTerminalMarker[]): void;
     historyWriter: ChatHistoryWriter;
     adapter: { updateRuntimeMeta(meta: { providerSessionId: string }): void };
     lastPersistedHistoryMessages: PersistableCliHistoryMessage[];
@@ -206,7 +207,10 @@ export function syncCanonicalSavedHistoryIfNeeded(
             const sessionId = host.providerSessionId;
             const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, limit)).then(history => {
                 if (host.providerSessionId !== sessionId) return;
-                if (history.source === 'provider-native') host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+                if (history.source === 'provider-native' && !history.stale) {
+                    host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+                    host.observeNativeCompletion?.(history.turnTerminalMarkers ?? []);
+                }
                 host.lastNativeSourceCanonicalCacheKey = cacheKey;
                 host.lastNativeSourceCanonicalCheckAt = Date.now();
             }).catch(error => LOG.debug('CLI', `[${host.type}] history hydration failed: ${String(error)}`));
@@ -226,7 +230,8 @@ export function syncCanonicalSavedHistoryIfNeeded(
             historyBehavior: host.provider.historyBehavior,
             scripts: host.provider.scripts as any,
         });
-        if (restoredHistory.source === 'provider-native') {
+        if (restoredHistory.source === 'provider-native' && !restoredHistory.stale) {
+            host.observeNativeCompletion?.(restoredHistory.turnTerminalMarkers ?? []);
             host.lastPersistedHistoryMessages = toPersistableMessages(restoredHistory.messages);
         }
         host.lastNativeSourceCanonicalCheckAt = Date.now();

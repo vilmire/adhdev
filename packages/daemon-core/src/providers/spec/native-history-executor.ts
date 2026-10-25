@@ -418,6 +418,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
             const payload = rec?.payload;
             terminal = { type: rec.type, timestamp: rec.timestamp, payload: payload && {
                 type: payload.type, turn_id: payload.turn_id,
+                message: typeof payload.message === 'string' ? payload.message : undefined,
                 error: payload.error && typeof payload.error === 'object' ? { type: payload.error.type } : payload.error,
                 last_agent_message: flattenJsonlText(payload.last_agent_message),
             } };
@@ -508,7 +509,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
         // its tail. A rewrite/replacement still invalidates all assembled data.
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
         if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
-        const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal));
+        const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal), providerSessionId);
         projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers,
             ...(usageRecords.length ? { usage: foldUsageRecords(usageRecords, {
                 providerSessionId: providerSessionId || '', agent: typeof input.agentType === 'string' ? input.agentType : 'unknown',
@@ -576,11 +577,11 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
  * code change) rather than duplicating a `completionSignal` concept into the
  * v1 spec schema.
  */
-function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[]): NativeTurnTerminalMarker[] {
+function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[], nativeSessionId?: string): NativeTurnTerminalMarker[] {
     if (agentType === 'kimi') return extractKimiTurnTerminalMarkers(lines);
     if (agentType !== 'codex-cli') return [];
     const markers: NativeTurnTerminalMarker[] = [];
-    const provenance = createCodexTurnProvenance();
+    const provenance = createCodexTurnProvenance(nativeSessionId);
     for (const rec of lines) {
         if (String(rec?.type ?? '') !== 'event_msg') continue;
         const payload = rec?.payload;

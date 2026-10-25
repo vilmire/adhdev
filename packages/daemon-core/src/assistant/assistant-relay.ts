@@ -813,7 +813,11 @@ export class AssistantRelay {
 
     private noteUncoveredReply(reply: AuditedCoordinatorReply, now: number): void {
         const text = reply.text?.trim() ?? '';
-        if (!text || !reply.chars || reply.attemptOpen || !reply.messageId || !this.ports.hasAssistant()) return;
+        const proof = reply.nativeTurnProof;
+        const closedNativeTurn = !!proof && proof.sessionId === reply.sessionId && proof.messageId === reply.messageId
+            && !!proof.nativeSessionId && !!proof.turnId && proof.startedAt > 0 && proof.startedAt <= reply.messageAt
+            && proof.endedAt >= reply.messageAt && proof.contentHash === replyHash(text);
+        if (!text || !reply.chars || (reply.attemptOpen && !closedNativeTurn) || !reply.messageId || !this.ports.hasAssistant()) return;
         // A closed attempt can still be waiting for quiet-window/busy delivery.
         if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId)
             || [...this.batches.values()].some(b => b.attemptIds.includes(reply.attemptId!))
@@ -847,6 +851,7 @@ export class AssistantRelay {
         return [...this.renderedCoverage.keys()].some(key => {
             const [session, attempt, at, contentHash] = JSON.parse(key);
             if (session !== reply.sessionId || contentHash !== hash) return false;
+            if (reply.nativeTurnProof) return at === reply.messageAt;
             return reply.attemptId ? attempt === reply.attemptId : at === reply.messageAt || (typeof at === 'number' && Math.abs(at - reply.messageAt) <= RELAY_QUIET_MS);
         });
     }
