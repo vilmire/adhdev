@@ -45108,12 +45108,14 @@ ${error.message || ""}`;
       return age >= -5e3 && age < 9e4;
     }
     var import_node_fs6;
+    var CAPACITY_OCCUPYING_STATUSES;
     var init_mesh_task_routing_contract = __esm2({
       "src/mesh/mesh-task-routing-contract.ts"() {
         "use strict";
         init_mesh_pinned_node_identity();
         import_node_fs6 = require("fs");
         init_mesh_physical_ownership();
+        CAPACITY_OCCUPYING_STATUSES = ["assigned", "pending"];
       }
     });
     function queueTaskShortTitle(task) {
@@ -77138,13 +77140,13 @@ ${upstream}`;
       return scope.some((candidate) => daemonIdsEquivalent4(assignedNodeId, candidate));
     }
     function activeProviderAssignedCount(meshId, nodeId, providerType, daemonNodeIds) {
-      return getQueue(meshId).filter((task) => {
+      return getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter((task) => {
         const reserved = pendingLaunchReservation(task);
         return (task.status === "assigned" || reserved) && rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds) && (reserved ? task.autoLaunch?.providerType : task.assignedProviderType) === providerType;
       }).length;
     }
     function activeSlotAssignedCount(meshId, nodeId, providerType, slot, daemonNodeIds) {
-      return getQueue(meshId).filter((task) => {
+      return getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter((task) => {
         const reserved = pendingLaunchReservation(task);
         if (task.status !== "assigned" && !reserved) return false;
         if (!rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)) return false;
@@ -80591,7 +80593,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         markSkip(nodeId, "owned_paths_conflict");
         return null;
       }
-      const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, (provider) => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : void 0, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? "" } : void 0, getQueue(meshId)));
+      const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, (provider) => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : void 0, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? "" } : void 0, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] })));
       if (!resolved.providerType) {
         markSkip(nodeId, resolved.reason || "provider_unusable");
         return null;
@@ -80831,7 +80833,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             continue;
           }
           const isReadonly = isTaskReadonly3(task);
-          const reservations = getQueue(meshId).filter((t) => t.id !== task.id && pendingLaunchReservation(t));
+          const reservations = getQueue(meshId, { status: ["pending"] }).filter((t) => t.id !== task.id && pendingLaunchReservation(t));
           if (isReadonly) {
             if (activeReadonlyAssignedCount(meshId) + reservations.filter(isTaskReadonly3).length >= maxReadonlyParallelTasks) {
               markAutoLaunch(meshId, task.id, { status: "skipped", reason: "max_readonly_parallel_tasks_reached" });

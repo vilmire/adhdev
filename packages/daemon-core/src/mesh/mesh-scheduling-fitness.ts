@@ -1,4 +1,4 @@
-import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
+import { pendingLaunchReservation, CAPACITY_OCCUPYING_STATUSES } from './mesh-task-routing-contract.js';
 import { getQueue, isTaskReadonly } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getActiveDirectDispatches } from './mesh-work-queue.js';
@@ -519,7 +519,7 @@ export function activeProviderAssignedCount(
     providerType: string,
     daemonNodeIds?: readonly string[],
 ): number {
-    return getQueue(meshId).filter(task => {
+    return getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter(task => {
         const reserved = pendingLaunchReservation(task);
         return (task.status === 'assigned' || reserved)
             && rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)
@@ -546,7 +546,7 @@ function activeSlotAssignedCount(
     slot: NodeCapabilitySlot,
     daemonNodeIds?: readonly string[],
 ): number {
-    return getQueue(meshId).filter(task => {
+    return getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }).filter(task => {
         const reserved = pendingLaunchReservation(task);
         if (task.status !== 'assigned' && !reserved) return false;
         if (!rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)) return false;

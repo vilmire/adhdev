@@ -1,6 +1,6 @@
 import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { realpathSync } from 'node:fs';
-import type { MeshRoutingPreferences } from '@adhdev/mesh-shared';
+import type { MeshRoutingPreferences, MeshTaskStatus } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { currentPhysicalScope, comparePhysicalOwnership } from './mesh-physical-ownership.js';
 
@@ -38,6 +38,15 @@ export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | '
     })) return 'review_input_busy';
     return undefined;
 }
+
+/**
+ * The only statuses a row can occupy capacity in: claimed (`assigned`) or holding a launch
+ * reservation (which requires `pending`). Capacity readers filter on these in SQL instead of
+ * parsing the whole queue — the terminal history (completed/failed/cancelled, ~1.6k rows /
+ * 6 MB on the preview coordinator) was re-parsed per slot per node per tick and pinned the
+ * daemon's event loop.
+ */
+export const CAPACITY_OCCUPYING_STATUSES: readonly MeshTaskStatus[] = ['assigned', 'pending'];
 
 /** Short lived launch reservations prevent a multi-task pass oversubscribing caps before claims. */
 export function pendingLaunchReservation(task: MeshWorkQueueEntry, now = Date.now()): boolean {

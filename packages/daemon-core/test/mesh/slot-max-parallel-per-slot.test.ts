@@ -245,3 +245,41 @@ describe('atomic claim enforces the per-slot cap (the authoritative gate)', () =
         expect(claimed).toBeNull(); // one slot, not two separate budgets
     });
 });
+
+describe('★ capacity readers never parse the terminal history', () => {
+    // The preview coordinator kept ~1.6k completed/failed/cancelled rows (6 MB). The
+    // capacity counters read the WHOLE queue per slot per node per tick, which pinned the
+    // daemon's event loop (75% of CPU, session-host requests timing out). They must filter
+    // to the capacity-occupying statuses in SQL — and still count launch reservations.
+    it('filters by status in the store and still counts assigned rows + launch reservations', async () => {
+        const { MeshRuntimeStore } = await import('../../src/mesh/mesh-runtime-store.js');
+        const meshId = freshMesh();
+        const now = new Date().toISOString();
+        const terminal = Array.from({ length: 200 }, (_, i) => ({
+            id: `done_${i}`, meshId, message: 'old', status: 'completed',
+            assignedNodeId: NODE_ID, assignedProviderType: 'claude-cli', assignedModel: 'opus',
+            createdAt: now, updatedAt: now,
+        }));
+        __replaceMeshQueueForTests(meshId, [
+            ...terminal,
+            {
+                id: 'reserved', meshId, message: 'r', status: 'pending', createdAt: now, updatedAt: now,
+                autoLaunch: { status: 'started', nodeId: NODE_ID, providerType: 'kimi', model: 'kimi-code/k3', updatedAt: now },
+            },
+            {
+                id: 'running', meshId, message: 'r', status: 'assigned', assignedNodeId: NODE_ID,
+                assignedProviderType: 'kimi', assignedModel: 'kimi-code/k3', assignedSessionId: 's', createdAt: now, updatedAt: now,
+            },
+        ] as any);
+        const spy = vi.spyOn(MeshRuntimeStore.getInstance(), 'getQueueEntries');
+
+        // 200 terminal opus rows must not occupy the opus slot.
+        expect(__slotHasCapacityForTests(meshId, NODE_ID, OWNER_NODE, OPUS_SLOT)).toBe(true);
+        // kimi cap 2 = one running + one reservation → saturated.
+        expect(__slotHasCapacityForTests(meshId, NODE_ID, OWNER_NODE, KIMI_SLOT)).toBe(false);
+
+        expect(spy).toHaveBeenCalled();
+        for (const call of spy.mock.calls) expect(call[1]?.length, 'unfiltered full-queue read').toBeGreaterThan(0);
+        spy.mockRestore();
+    });
+});

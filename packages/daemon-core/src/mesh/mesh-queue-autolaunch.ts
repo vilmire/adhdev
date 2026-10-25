@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal } from './mesh-task-routing-contract.js';
+import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal, CAPACITY_OCCUPYING_STATUSES } from './mesh-task-routing-contract.js';
 import { getMachineId } from '../config/config.js';
 import { currentPhysicalScope } from './mesh-physical-ownership.js';
 import { recordQueueTaskHold } from './mesh-queue-hold-store.js';
@@ -741,7 +741,7 @@ async function resolveAutoLaunchPlan(
         markSkip(nodeId, 'owned_paths_conflict');
         return null;
     }
-    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId)));
+    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] })));
     if (!resolved.providerType) {
         // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
         // loop (a gated first-choice provider falls through to the node's
@@ -1138,7 +1138,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 continue;
             }
             const isReadonly = isTaskReadonly(task);
-            const reservations = getQueue(meshId).filter(t => t.id !== task.id && pendingLaunchReservation(t));
+            const reservations = getQueue(meshId, { status: ['pending'] }).filter(t => t.id !== task.id && pendingLaunchReservation(t));
             if (isReadonly) {
                 if (activeReadonlyAssignedCount(meshId) + reservations.filter(isTaskReadonly).length >= maxReadonlyParallelTasks) {
                     markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_readonly_parallel_tasks_reached' });
