@@ -303,13 +303,13 @@ describe('③ a tall modal whose anchor scrolled above the viewport still transi
     });
 
     it('guards evaluated on the scrollback-inclusive frame DO reach approval', () => {
-        const res = evaluateFsm(spec, 'busy', fullBuffer.join('\n'), { row: 0, col: 0 },
+        const res = evaluateFsm(spec, 'busy', fullBuffer.join('\n'), undefined,
             fullBuffer, clk(1_000_000, 1_000_000 - 30_000));
         expect((res.fired as { to?: string } | null)?.to).toBe('approval');
     });
 
     it('guards evaluated on the viewport alone do NOT — which is the defect', () => {
-        const res = evaluateFsm(spec, 'busy', viewportOnly.join('\n'), { row: 0, col: 0 },
+        const res = evaluateFsm(spec, 'busy', viewportOnly.join('\n'), undefined,
             viewportOnly, clk(1_000_000, 1_000_000 - 30_000));
         expect((res.fired as { to?: string } | null)?.to).not.toBe('approval');
     });

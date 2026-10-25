@@ -267,6 +267,8 @@ export function commandFirstModalMessage(message: string): string {
     return [lines[idx].trim(), ...lines.slice(0, idx), ...lines.slice(idx + 1)].join('\n');
 }
 
+const MODAL_KEY_UUID_RE = /^(?:modal:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Server-bound projection. Allow-list: every field is copied individually and
  * type-checked; `provider:*` events are dropped whole (arbitrary text).
@@ -332,6 +334,15 @@ export function projectServerStatusEvent(
         if (modalButtons.length > 0) {
             payload.modalButtons = modalButtons;
         }
+    }
+    if (typeof event.modalKey === 'string') {
+        const trimmedModalKey = event.modalKey.trim();
+        if (MODAL_KEY_UUID_RE.test(trimmedModalKey)) {
+            payload.modalKey = trimmedModalKey;
+        }
+    }
+    if (event.approvalEvidence === 'live' || event.approvalEvidence === 'cached' || event.approvalEvidence === 'unavailable') {
+        payload.approvalEvidence = event.approvalEvidence;
     }
 
     // Stamp the target session's visibility so the server's push-suppression
@@ -472,12 +483,14 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager, deps.sessionRegistry);
     const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
     const durations = createTurnDurationTracker();
-    const sendServer = (serverEvent: DaemonStatusEventPayload) => {
-        if (!deps.sendServer) return;
+    const sendServer = (serverEvent: DaemonStatusEventPayload): boolean => {
+        if (!deps.sendServer) return false;
         try {
             deps.sendServer(serverEvent);
+            return true;
         } catch (error) {
             LOG.warn('StatusEvent', `server delivery failed: ${(error as Error)?.message ?? error}`);
+            return false;
         }
     };
     const escalation = deps.sendServer && deps.approvalEscalationMs !== false ? createApprovalEscalationGate({
@@ -486,10 +499,11 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
             const getInstance = deps.instanceManager?.getInstance;
             return typeof getInstance === 'function' ? getInstance.call(deps.instanceManager, sessionId)?.getState?.() as any : undefined;
         },
-        // Re-project at send time so current hide/mute is honoured.
+        // Re-project at send time so current hide/mute and live episode fields are honoured.
         escalate: (_sessionId, raw) => {
             const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
-            if (serverEvent) sendServer({ ...serverEvent, timestamp: Date.now() });
+            if (!serverEvent) return false;
+            return sendServer({ ...serverEvent, timestamp: Date.now() });
         },
     }) : null;
     const unsubProviderEvent = bus.on('provider_event', (e) => {

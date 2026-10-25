@@ -61,6 +61,34 @@ describe('projectServerStatusEvent (allow-list)', () => {
         expect(projectServerStatusEvent({ event: 'agent:ready' })).toBeNull();
         expect(projectServerStatusEvent({})).toBeNull();
     });
+
+    it('accepts strictly UUID-formatted modalKey and drops arbitrary strings (canary: PRIVATE_TITLE_OR_COMMAND)', () => {
+        const validModalPrefix = projectServerStatusEvent({
+            event: 'agent:waiting_approval',
+            modalKey: 'modal:11111111-2222-4333-8444-555555555555',
+        });
+        expect(validModalPrefix?.modalKey).toBe('modal:11111111-2222-4333-8444-555555555555');
+
+        const validBareUuid = projectServerStatusEvent({
+            event: 'agent:waiting_approval',
+            modalKey: '11111111-2222-4333-8444-555555555555',
+        });
+        expect(validBareUuid?.modalKey).toBe('11111111-2222-4333-8444-555555555555');
+
+        for (const bad of [
+            'PRIVATE_TITLE_OR_COMMAND',
+            'modal:PRIVATE_TITLE_OR_COMMAND',
+            'modal-digest:' + 'a'.repeat(64),
+            'modal:1',
+        ]) {
+            const projected = projectServerStatusEvent({
+                event: 'agent:waiting_approval',
+                modalKey: bad,
+            });
+            expect(projected?.modalKey).toBeUndefined();
+            expect(JSON.stringify(projected)).not.toContain('PRIVATE_TITLE_OR_COMMAND');
+        }
+    });
 });
 
 describe('projectP2PStatusEvent', () => {

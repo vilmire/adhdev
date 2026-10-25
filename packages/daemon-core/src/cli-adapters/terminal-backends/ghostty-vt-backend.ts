@@ -3,11 +3,19 @@ import type {
     TerminalViewportBackendOptions,
 } from './types.js';
 
+type GhosttyVtViewportSnapshot = {
+    cursorRow: number;
+    cursorCol: number;
+    activeOriginRow: number;
+    activeScreen: 'primary' | 'alternate';
+};
+
 type GhosttyVtTerminal = {
     write(data: string | Uint8Array): void;
     resize(cols: number, rows: number): void;
     formatPlainText(options?: { trim?: boolean }): string;
     getCursorPosition(): { col: number; row: number };
+    getViewport?(options?: { includeRows?: 'none' | 'cursor' | 'all'; cells?: boolean }): GhosttyVtViewportSnapshot;
     dispose(): void;
 };
 
@@ -267,6 +275,28 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
 
     getCursorPosition(): { col: number; row: number } {
         if (this.disposed) return { col: 0, row: 0 };
+        if (typeof this.terminal.getViewport === 'function') {
+            try {
+                const vp = this.terminal.getViewport({ includeRows: 'none' });
+                if (this.altScreenActive || vp.activeScreen === 'alternate') {
+                    return { col: vp.cursorCol, row: vp.cursorRow };
+                }
+                const lines = this.formatLines();
+                if (lines.length === 0) return { col: vp.cursorCol, row: 0 };
+                const viewportStart = lines.length > this.rows ? lines.length - this.rows : 0;
+                const viewport = lines.slice(viewportStart);
+                let first = 0;
+                while (first < viewport.length && !viewport[first]) first += 1;
+                if (first >= viewport.length) return { col: vp.cursorCol, row: 0 };
+                const screenCursorRow = vp.activeOriginRow + vp.cursorRow;
+                return {
+                    col: vp.cursorCol,
+                    row: Math.max(0, screenCursorRow - viewportStart - first),
+                };
+            } catch {
+                // Fall back to legacy getCursorPosition if getViewport fails.
+            }
+        }
         if (typeof this.terminal.getCursorPosition !== 'function') return { col: 0, row: 0 };
         return this.terminal.getCursorPosition();
     }

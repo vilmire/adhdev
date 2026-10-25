@@ -130,6 +130,9 @@ describe('NOTIF-APPROVAL-MASKED: stalled auto-approve coordinator nudge', () => 
     h.call(STABLE(1), 1700) // +700ms ≥ SETTLE_MS → auto-approve fires (recordAutoApproval)
     expect(h.fires.length).toBe(1)
     expect(h.instance.autoApproveMaskSince).toBe(0) // episode cleared on fire
+    h.call(GENERATING(1), 2000)
+    h.call(GENERATING(1), 2000 + FLAP_CONTINUITY_MS + 20)
+    expect(h.instance.autoApproveMaskSince).toBe(0) // episode cleared once approval exits
     expect(nudges(h.events).length).toBe(0) // never stalled → coordinator sees no noise
   })
 

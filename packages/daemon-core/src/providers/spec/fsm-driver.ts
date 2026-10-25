@@ -829,26 +829,13 @@ export class FsmDriver implements ISpecDriver {
         const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
 
-        // Modal states (approval / picker) extract their buttons + title from a
-        // SCROLLBACK-INCLUSIVE buffer: claude-cli renders an approval as a box,
-        // and when the prompt body (a big diff / long explanation) is tall the
-        // top of the box — including the `─────` separator that anchors the
-        // `modal` section — scrolls above the viewport. Matching only the
-        // viewport then yields < min_count buttons, deriveModal returns null,
-        // and auto-approve never fires (the "long prompts never auto-approve"
-        // bug). The viewport stays authoritative for transitions / cursor
-        // conditions; only this content-pattern extraction reads scrollback.
-        const modalLines = state.modal
-            ? this.scrollbackLines()
-            : lines;
-        const modalSections = state.modal
-            ? resolveSections(this.spec.sections ?? {}, modalLines)
-            : sections;
-        const modalFullScreen = modalLines.join('\n');
-
-        const modal = deriveModal(state, modalSections, modalFullScreen, (id, reason) => this.warnModalParseMiss(id, reason));
+        // Modal states (approval / picker) extract their buttons + title from the
+        // cursor-bound live modal region in the active viewport so neither scrolled-off
+        // history nor a quoted modal above an active/idle composer is extracted as live.
+        const cursor = this.adapter.getCursorPosition();
+        const modal = deriveModal(state, sections, screen, (id, reason) => this.warnModalParseMiss(id, reason), cursor);
         const controls = this.deriveControls(state.id);
-        const title = modal?.title ?? deriveTitle(state, modalSections, modalFullScreen);
+        const title = modal?.title ?? deriveTitle(state, sections, screen);
 
         const next: CurrentEval = {
             // status is derived from the FSM state itself (statusForState), NOT from

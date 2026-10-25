@@ -7,15 +7,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { createStatusEventEmitter } from '../../src/status/status-event.js';
-import { currentApprovalEpisodeKey, isCoordinatorFirstSession, OWNER_APPROVAL_ESCALATION_MS } from '../../src/status/approval-escalation.js';
+import {
+    createApprovalEscalationGate,
+    currentApprovalEpisodeKey,
+    isCoordinatorFirstSession,
+    OWNER_APPROVAL_ESCALATION_MS,
+    OWNER_APPROVAL_SESSION_COOLDOWN_MS,
+} from '../../src/status/approval-escalation.js';
 
+const EP_1 = 'modal:11111111-1111-4111-8111-111111111111';
+const EP_2 = 'modal:22222222-2222-4222-8222-222222222222';
+const EP_RECOVERED = 'modal:33333333-3333-4333-8333-333333333333';
 const workerSettings = { launchedByCoordinator: true, meshNodeFor: 'mesh-1', spawnedSessionVisibility: 'visible' };
 const approval = (modalKey: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_permission', lifecycle: 'pending', evidence: 'live', actionable: true, modalKey, resolvedAt: null, ...extra });
 
 let state: any;
-function world(opts: { settings?: Record<string, unknown> } = {}) {
+function world(opts: { settings?: Record<string, unknown>; activeChat?: Record<string, unknown> } = {}) {
     state = { status: 'waiting_approval', settings: opts.settings ?? workerSettings,
-        activeChat: { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval('modal:1') } };
+        activeChat: opts.activeChat ?? { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval(EP_1) } };
     const bus = createSessionLifecycleBus();
     const dashboard: any[] = [];
     const server: any[] = [];
@@ -23,7 +32,7 @@ function world(opts: { settings?: Record<string, unknown> } = {}) {
         instanceManager: { getInstance: (id: string) => id === 'w1' ? { getState: () => state } : undefined },
         sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p),
     });
-    const ask = () => bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'codex-cli', modalMessage: 'Run npm test?', modalButtons: ['Yes', 'No'], timestamp: 1 } } as any);
+    const ask = (extra: Record<string, unknown> = {}) => bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'codex-cli', modalMessage: 'Run npm test?', modalButtons: ['Yes', 'No'], modalKey: EP_1, approvalEvidence: 'live', timestamp: 1, ...extra } } as any);
     return { bus, dashboard, server, stop, ask };
 }
 
@@ -117,6 +126,295 @@ describe('coordinator-first owner escalation', () => {
     it('sends a non-delegated session immediately, as before', () => {
         const w = world({ settings: {} }); w.ask();
         expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('fails closed (hold() === true) when a coordinator-first session is masked to generating or has unavailable evidence', () => {
+        const escalated: any[] = [];
+        let currentState: any = {
+            status: 'generating',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval('modal:masked'),
+            },
+        };
+        const gate = createApprovalEscalationGate({
+            readState: () => currentState,
+            escalate: (_id, raw) => escalated.push(raw),
+        });
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(escalated).toHaveLength(0);
+
+        currentState = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval('', { evidence: 'unavailable', modalKey: null }),
+            },
+        };
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(escalated).toHaveLength(0);
+        gate.dispose();
+    });
+
+    it('enforces per-session cooldown so a worker cannot escalate twice within the cooldown window', () => {
+        const w = world();
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+
+        // A new approval episode 10s later (still inside the 120s cooldown) must be held during the cooldown window
+        // and then escalate automatically once the cooldown expires without needing a new provider event.
+        vi.advanceTimersByTime(10_000);
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval(EP_2) } };
+        w.ask({ modalKey: EP_2 });
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+
+        // Once the remaining cooldown window elapses from the first escalation, the held second episode escalates automatically.
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS - OWNER_APPROVAL_ESCALATION_MS - 10_000);
+        expect(w.server).toHaveLength(2);
+        expect(w.server[1]).toMatchObject({ modalKey: EP_2, approvalEvidence: 'live' });
+        w.stop();
+    });
+
+    it('rebuilds the escalated event from the current validated episode (not stale entry.raw) when evidence starts unavailable and recovers late', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Initial transient frame', buttons: [] },
+                providerApproval: approval('', { evidence: 'unavailable', modalKey: null }),
+            },
+        });
+        // Initial raw event had unavailable evidence, no buttons, and no valid modalKey
+        w.ask({
+            modalMessage: 'Initial transient frame',
+            modalButtons: [],
+            modalKey: undefined,
+            approvalEvidence: 'unavailable',
+        });
+        expect(w.server).toHaveLength(0);
+
+        // Settles to live evidence 500ms later with no second provider_event
+        vi.advanceTimersByTime(500);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?\n$ npm test', buttons: ['1. Yes, proceed', '2. No'] },
+                providerApproval: approval(EP_RECOVERED, { evidence: 'live' }),
+            },
+        };
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+        // The escalated server payload carries the recovered live UUID modalKey, evidence, and buttons
+        expect(w.server[0]).toMatchObject({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'w1',
+            modalKey: EP_RECOVERED,
+            approvalEvidence: 'live',
+            modalButtons: ['1. Yes, proceed', '2. No'],
+        });
+        expect(w.server[0].modalMessage).toContain('$ npm test');
+        w.stop();
+    });
+
+    it('marks an episode as escalated ONLY after a successful delivery attempt and retries on transient failure', () => {
+        const currentState: any = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        };
+        let attempts = 0;
+        const delivered: any[] = [];
+        const gate = createApprovalEscalationGate({
+            readState: () => currentState,
+            escalate: (_id, raw) => {
+                attempts += 1;
+                if (attempts === 1) return false;
+                delivered.push(raw);
+                return true;
+            },
+        });
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(attempts).toBe(1);
+        expect(delivered).toHaveLength(0);
+
+        // Retries after ESCALATION_RECHECK_MS (5s) because attempt 1 returned false
+        vi.advanceTimersByTime(5_000);
+        expect(attempts).toBe(2);
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({ modalKey: EP_1, approvalEvidence: 'live' });
+        gate.dispose();
+    });
+
+    it('defers escalation when episode B has an empty modal after episode A, and never leaks A command/buttons under B UUID', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run rm -rf /?', buttons: ['1. Yes', '2. No'] },
+                providerApproval: approval(EP_1),
+            },
+        });
+        w.ask({
+            modalMessage: 'Run rm -rf /?',
+            modalButtons: ['1. Yes', '2. No'],
+            modalKey: EP_1,
+        });
+
+        // Before the 60s escalation deadline, episode B replaces A, but B's modal is currently empty
+        vi.advanceTimersByTime(20_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: '', buttons: [] },
+                providerApproval: approval(EP_2),
+            },
+        };
+
+        // At 60s, B has no actionable modal yet -> must DEFER, not send A's command/buttons under EP_2
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 20_000);
+        expect(w.server).toHaveLength(0);
+
+        // Once B's modal populates, the deferred recheck delivers B's own modal and UUID
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm run lint?', buttons: ['Allow', 'Deny'] },
+                providerApproval: approval(EP_2),
+            },
+        };
+        vi.advanceTimersByTime(5_000);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({
+            modalKey: EP_2,
+            modalMessage: 'Run npm run lint?',
+            modalButtons: ['Allow', 'Deny'],
+            approvalEvidence: 'live',
+        });
+        w.stop();
+    });
+
+    it('never drops a live IDE approval held past 90s when providerApproval is absent on getState()', () => {
+        let canDeliver = false;
+        const delivered: any[] = [];
+        const ideState: any = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                id: 'ide-chat-1',
+                status: 'waiting_approval',
+                activeModal: { message: 'Allow IDE file edit?', buttons: ['Allow', 'Deny'] },
+            },
+        };
+        const gate = createApprovalEscalationGate({
+            readState: () => ideState,
+            escalate: (_id, raw) => {
+                if (!canDeliver) return false;
+                delivered.push(raw);
+                return true;
+            },
+        });
+
+        expect(gate.hold({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'ide-w1',
+            providerType: 'antigravity',
+            modalMessage: 'Allow IDE file edit?',
+            modalButtons: ['Allow', 'Deny'],
+            modalKey: EP_1,
+            approvalEvidence: 'live',
+            timestamp: 1,
+        })).toBe(true);
+
+        // Advance past 90s (60s initial window + 7 * 5s rechecks = 95s) while delivery is blocked
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS + 35_000);
+        expect(delivered).toHaveLength(0);
+
+        // Unblock delivery after 95s: the live IDE approval must still be escalated to the owner, never dropped
+        canDeliver = true;
+        vi.advanceTimersByTime(5_000);
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({
+            targetSessionId: 'ide-w1',
+            modalKey: EP_1,
+            modalMessage: 'Allow IDE file edit?',
+            modalButtons: ['Allow', 'Deny'],
+            approvalEvidence: 'live',
+        });
+        gate.dispose();
+    });
+
+    it('coalescing A then B marks only delivered B as escalated, so unresolved A can still escalate if it becomes current again', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode A command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        });
+        // Hold episode A at t=0
+        w.ask({
+            modalMessage: 'Episode A command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_1,
+        });
+
+        // At t=20s, episode B becomes current and coalesces into the pending entry
+        vi.advanceTimersByTime(20_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode B command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_2),
+            },
+        };
+        w.ask({
+            modalMessage: 'Episode B command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_2,
+        });
+
+        // At t=60s, episode B is delivered
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 20_000);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({ modalKey: EP_2, modalMessage: 'Episode B command' });
+
+        // Later, episode A (which was never delivered) becomes current again
+        vi.advanceTimersByTime(10_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode A command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        };
+        w.ask({
+            modalMessage: 'Episode A command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_1,
+        });
+
+        // Once the session cooldown from B elapses, A must escalate (not be suppressed forever)
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS);
+        expect(w.server).toHaveLength(2);
+        expect(w.server[1]).toMatchObject({ modalKey: EP_1, modalMessage: 'Episode A command' });
         w.stop();
     });
 });

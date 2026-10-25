@@ -26,16 +26,21 @@ import { LOG } from '../logging/logger.js';
 
 /** Coordinator-first window before an unresolved worker approval is pushed to the owner. */
 export const OWNER_APPROVAL_ESCALATION_MS = 60_000;
+/** Per-session cooldown so a worker can escalate to the owner at most once per window. */
+export const OWNER_APPROVAL_SESSION_COOLDOWN_MS = 120_000;
+
+type ProviderApprovalLike = {
+    type?: unknown; lifecycle?: unknown; status?: unknown; evidence?: unknown; actionable?: unknown; modalKey?: unknown; resolvedAt?: unknown;
+} | null;
 
 type SessionStateLike = {
     status?: unknown;
     settings?: Record<string, unknown> | null;
+    providerApproval?: ProviderApprovalLike;
     activeChat?: {
         status?: unknown;
         activeModal?: { message?: unknown; buttons?: unknown } | null;
-        providerApproval?: {
-            type?: unknown; lifecycle?: unknown; evidence?: unknown; actionable?: unknown; modalKey?: unknown; resolvedAt?: unknown;
-        } | null;
+        providerApproval?: ProviderApprovalLike;
     } | null;
 } | null | undefined;
 
@@ -45,29 +50,41 @@ export function isCoordinatorFirstSession(settings: Record<string, unknown> | nu
 
 /**
  * The identity of the approval episode a session is CURRENTLY parked on, or
- * null when it is not parked on a live, unresolved permission request. A
- * lifecycle-aware adapter is identified by its modalKey; a legacy adapter by
- * its modal text + buttons.
+ * null when it is not parked on a live, unmasked, unresolved permission request
+ * with a non-empty modalKey.
+ *
+ * When a provider instance (such as an IDE or legacy CLI adapter snapshot) is
+ * live in `waiting_approval` without a `providerApproval` object on `getState()`,
+ * falls back to the `modalKey` minted on the held `fallbackRawEvent` so a live
+ * approval is never silently dropped.
  */
-export function currentApprovalEpisodeKey(state: SessionStateLike): string | null {
+export function currentApprovalEpisodeKey(
+    state: SessionStateLike,
+    fallbackRawEvent?: Record<string, unknown> | null,
+): string | null {
     if (!state) return null;
+    if (state.status === 'generating' || state.activeChat?.status === 'generating') return null;
     const waiting = state.status === 'waiting_approval' || state.activeChat?.status === 'waiting_approval';
     if (!waiting) return null;
-    const approval = state.activeChat?.providerApproval;
-    if (approval) {
-        if (approval.lifecycle !== 'pending' || approval.resolvedAt != null || approval.evidence !== 'live') return null;
-        return typeof approval.modalKey === 'string' && approval.modalKey ? `modal:${approval.modalKey}` : null;
+    const approval = state.activeChat?.providerApproval ?? state.providerApproval;
+    if (!approval) {
+        const rawModalKey = typeof fallbackRawEvent?.modalKey === 'string' ? fallbackRawEvent.modalKey.trim() : '';
+        if (!rawModalKey) return null;
+        if (fallbackRawEvent?.approvalEvidence && fallbackRawEvent.approvalEvidence !== 'live') return null;
+        return `modal:${rawModalKey}`;
     }
-    const modal = state.activeChat?.activeModal;
-    if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
-    return `legacy:${JSON.stringify([String(modal.message ?? ''), modal.buttons.map(String)])}`;
+    const pending = approval.lifecycle === 'pending' || approval.status === 'awaiting_approval';
+    if (!pending || approval.resolvedAt != null || approval.evidence !== 'live') return null;
+    const modalKey = typeof approval.modalKey === 'string' ? approval.modalKey.trim() : '';
+    return modalKey ? `modal:${modalKey}` : null;
 }
 
 export interface ApprovalEscalationGateDeps {
     readState(sessionId: string): SessionStateLike;
-    /** Re-project and send the held raw event on escalation. */
-    escalate(sessionId: string, rawEvent: Record<string, unknown>): void;
+    /** Re-project and send the held raw event on escalation. Return false when delivery was rejected. */
+    escalate(sessionId: string, rawEvent: Record<string, unknown>): boolean | void;
     delayMs?: number;
+    cooldownMs?: number;
     now?: () => number;
     setTimer?: (fn: () => void, ms: number) => unknown;
     clearTimer?: (handle: unknown) => void;
@@ -91,23 +108,99 @@ function stillWaiting(state: SessionStateLike): boolean {
     return !!state && (state.status === 'waiting_approval' || state.activeChat?.status === 'waiting_approval');
 }
 
+/**
+ * Rebuild the escalated event from the CURRENT validated episode in `state`
+ * rather than forwarding stale fields from `entry.raw` (which may have been
+ * captured while `approvalEvidence: 'unavailable'` or an earlier episode key).
+ * Episode-specific fields are cleared first so an empty current modal never
+ * inherits an earlier episode's command or buttons.
+ */
+function buildEscalatedEvent(
+    rawEvent: Record<string, unknown>,
+    state: SessionStateLike,
+): Record<string, unknown> {
+    const approval = state?.activeChat?.providerApproval ?? state?.providerApproval;
+    const hasActiveModalProp = Boolean(state?.activeChat && 'activeModal' in state.activeChat);
+    const activeModal = state?.activeChat?.activeModal;
+    const rebuilt: Record<string, unknown> = { ...rawEvent };
+    delete rebuilt.modalMessage;
+    delete rebuilt.modalButtons;
+    delete rebuilt.modalKey;
+    delete rebuilt.approvalEvidence;
+
+    if (approval) {
+        const modalKey = typeof approval.modalKey === 'string' ? approval.modalKey.trim() : '';
+        if (modalKey) {
+            rebuilt.modalKey = modalKey;
+        }
+        if (approval.evidence === 'live' || approval.evidence === 'cached' || approval.evidence === 'unavailable') {
+            rebuilt.approvalEvidence = approval.evidence;
+        }
+    } else if (stillWaiting(state) && state?.status !== 'generating' && state?.activeChat?.status !== 'generating') {
+        const fallbackKey = typeof rawEvent.modalKey === 'string' ? rawEvent.modalKey.trim() : '';
+        if (fallbackKey) rebuilt.modalKey = fallbackKey;
+        const rawEvidence = rawEvent.approvalEvidence;
+        rebuilt.approvalEvidence = (rawEvidence === 'live' || rawEvidence === 'cached' || rawEvidence === 'unavailable')
+            ? rawEvidence
+            : 'live';
+    }
+
+    if (activeModal) {
+        if (typeof activeModal.message === 'string' && activeModal.message.trim()) {
+            rebuilt.modalMessage = activeModal.message;
+        }
+        if (Array.isArray(activeModal.buttons)) {
+            const buttons = activeModal.buttons.filter(
+                (button): button is string => typeof button === 'string' && button.trim().length > 0,
+            );
+            if (buttons.length > 0) {
+                rebuilt.modalButtons = buttons;
+            }
+        }
+    } else if (!hasActiveModalProp) {
+        const rawKey = typeof rawEvent.modalKey === 'string' ? rawEvent.modalKey.trim() : '';
+        if (rawKey && rebuilt.modalKey === rawKey) {
+            if (typeof rawEvent.modalMessage === 'string' && rawEvent.modalMessage.trim()) {
+                rebuilt.modalMessage = rawEvent.modalMessage;
+            }
+            if (Array.isArray(rawEvent.modalButtons)) {
+                const buttons = rawEvent.modalButtons.filter(
+                    (button): button is string => typeof button === 'string' && button.trim().length > 0,
+                );
+                if (buttons.length > 0) {
+                    rebuilt.modalButtons = buttons;
+                }
+            }
+        }
+    }
+    return rebuilt;
+}
+
+function hasActionableEscalatedModal(rebuilt: Record<string, unknown>, state: SessionStateLike): boolean {
+    const approval = state?.activeChat?.providerApproval ?? state?.providerApproval;
+    if (approval && approval.actionable === false) return false;
+    return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
+}
+
 export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): ApprovalEscalationGate {
     const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
+    const cooldownMs = deps.cooldownMs ?? OWNER_APPROVAL_SESSION_COOLDOWN_MS;
     const setTimer = deps.setTimer ?? ((fn, ms) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t; });
     const clearTimer = deps.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
-    const now = deps.now ?? Date.now;
+    const now = deps.now ?? (() => Date.now());
     // firstHeldAt caps the total hold per session: a modal that keeps minting new
     // episode keys (a tall diff scrolling its buttons in and out) must not keep
     // restarting the window and starve the owner push.
     const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
     const escalated = new Set<string>();
+    const lastEscalatedAt = new Map<string, number>();
 
     const fire = (sessionId: string) => {
         const entry = held.get(sessionId);
         if (!entry) return;
         let state: SessionStateLike = null;
         let currentKey: string | null = null;
-        try { state = deps.readState(sessionId); currentKey = currentApprovalEpisodeKey(state); } catch { currentKey = null; }
+        try { state = deps.readState(sessionId); currentKey = currentApprovalEpisodeKey(state, entry.raw); } catch { currentKey = null; }
         if (!currentKey) {
             // Still parked but the episode is momentarily unreadable (an
             // evidence:'unavailable' repaint): look again shortly instead of
@@ -121,19 +214,60 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             LOG.info('StatusEvent', `approval escalation retired session=${sessionId} (resolved before escalation)`);
             return;
         }
+        if (escalated.has(`${sessionId}\u0000${currentKey}`)) {
+            held.delete(sessionId);
+            return;
+        }
+        const nowMs = now();
+        const lastAt = lastEscalatedAt.get(sessionId);
+        if (lastAt !== undefined && nowMs - lastAt < cooldownMs) {
+            const cooldownRemaining = Math.max(1, cooldownMs - (nowMs - lastAt));
+            entry.key = currentKey;
+            entry.timer = setTimer(() => fire(sessionId), cooldownRemaining);
+            return;
+        }
+        const rebuilt = buildEscalatedEvent(entry.raw, state);
+        if (!hasActionableEscalatedModal(rebuilt, state)) {
+            if (stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+                entry.rechecks += 1;
+                entry.key = currentKey;
+                entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+                return;
+            }
+            held.delete(sessionId);
+            return;
+        }
+        LOG.info('StatusEvent', `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1000)}s unresolved`);
+        let delivered = false;
+        try {
+            delivered = deps.escalate(sessionId, rebuilt) !== false;
+        } catch (error) {
+            LOG.warn('StatusEvent', `approval escalation delivery failed session=${sessionId}: ${(error as Error)?.message ?? error}`);
+            delivered = false;
+        }
+        if (!delivered) {
+            // Never drop a live approval without notifying the owner: keep
+            // re-checking while the session remains parked on a live episode.
+            if (stillWaiting(state)) {
+                entry.rechecks += 1;
+                entry.key = currentKey;
+                entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+            } else {
+                held.delete(sessionId);
+            }
+            return;
+        }
         held.delete(sessionId);
-        if (escalated.has(`${sessionId}\u0000${currentKey}`)) return;
-        // A replaced but still-pending episode is still an unanswered request
-        // from the same worker: escalate it rather than retiring silently.
-        escalated.add(`${sessionId}\u0000${entry.key}`);
+        // Mark ONLY the episode actually delivered as escalated so an earlier
+        // coalesced episode that was never delivered can still escalate if it
+        // becomes current again.
         escalated.add(`${sessionId}\u0000${currentKey}`);
+        lastEscalatedAt.set(sessionId, nowMs);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
             const oldest = escalated.values().next().value;
             if (oldest === undefined) break;
             escalated.delete(oldest);
         }
-        LOG.info('StatusEvent', `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1000)}s unresolved`);
-        deps.escalate(sessionId, entry.raw);
     };
 
     return {
@@ -144,27 +278,47 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             let state: SessionStateLike;
             try { state = deps.readState(sessionId); } catch { return false; }
             if (!state || !isCoordinatorFirstSession(state.settings ?? null)) return false;
-            const key = currentApprovalEpisodeKey(state);
-            // No identifiable live episode: fail open to the previous behaviour.
-            if (!key) return false;
-            if (escalated.has(`${sessionId}\u0000${key}`)) return true;
+            const key = currentApprovalEpisodeKey(state, rawEvent);
+            if (key && escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
-            if (existing?.key === key) { existing.raw = rawEvent; return true; }
-            const firstHeldAt = existing?.firstHeldAt ?? now();
+            if (existing) {
+                if (!key || existing.key === key) {
+                    existing.raw = rawEvent;
+                    return true;
+                }
+                if (!existing.key && key) {
+                    existing.key = key;
+                    existing.raw = rawEvent;
+                    return true;
+                }
+            }
+            const nowMs = now();
+            const firstHeldAt = existing?.firstHeldAt ?? nowMs;
             if (existing) clearTimer(existing.timer);
-            const remaining = Math.max(0, firstHeldAt + delayMs - now());
-            held.set(sessionId, { key, raw: rawEvent, firstHeldAt, rechecks: 0, timer: setTimer(() => fire(sessionId), remaining) });
+            const lastAt = lastEscalatedAt.get(sessionId);
+            const cooldownRemaining = lastAt !== undefined ? Math.max(0, lastAt + cooldownMs - nowMs) : 0;
+            const holdRemaining = Math.max(0, firstHeldAt + delayMs - nowMs);
+            const waitMs = Math.max(holdRemaining, cooldownRemaining);
+            held.set(sessionId, {
+                key: key ?? '',
+                raw: rawEvent,
+                firstHeldAt,
+                rechecks: 0,
+                timer: setTimer(() => fire(sessionId), waitMs),
+            });
             return true;
         },
         retire(sessionId) {
             const entry = held.get(sessionId);
             if (entry) { clearTimer(entry.timer); held.delete(sessionId); }
             for (const k of [...escalated]) if (k.startsWith(`${sessionId}\u0000`)) escalated.delete(k);
+            lastEscalatedAt.delete(sessionId);
         },
         dispose() {
             for (const entry of held.values()) clearTimer(entry.timer);
             held.clear();
             escalated.clear();
+            lastEscalatedAt.clear();
         },
         get heldCount() { return held.size; },
     };

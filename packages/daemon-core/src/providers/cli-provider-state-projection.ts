@@ -55,6 +55,7 @@ export interface ProviderStateHost {
     summaryMetadata: unknown;
     suppressIdleHistoryReplay: boolean;
     autoApproveBusy: boolean;
+    lastApprovalModalKey?: string | null;
     historyWriter: ChatHistoryWriter;
     runtimeMessages: Array<{ key: string; message: ChatMessage }>;
     parsedIngestTimestamps: ParsedIngestTimestampStamper;
@@ -348,6 +349,22 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
     const finalStatus = hasInteractivePrompt ? 'waiting_choice' : visibleStatus;
     const finalChatStatus = hasInteractivePrompt ? 'waiting_choice' : activeChatStatus;
 
+    const resolvedActiveModal = (autoApproveActive || autoApproveHoldIdle)
+        ? null
+        : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal);
+    const resolvedProviderApproval = (autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt)
+        ? null
+        : (adapterStatus.providerApproval ?? (finalStatus === 'waiting_approval' && host.lastApprovalModalKey
+            ? {
+                type: 'tool_permission',
+                lifecycle: 'pending',
+                evidence: 'live',
+                actionable: hasNonEmptyCliModalButtons(resolvedActiveModal),
+                modalKey: host.lastApprovalModalKey,
+                resolvedAt: null,
+            }
+            : null));
+
     return {
         type: host.type,
         name: host.provider.name,
@@ -359,10 +376,8 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             title: parsedStatus?.title || dirName,
             status: finalChatStatus,
             messages: statusMessages,
-            activeModal: (autoApproveActive || autoApproveHoldIdle)
-                ? null
-                : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal),
-            providerApproval: (autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt) ? null : adapterStatus.providerApproval,
+            activeModal: resolvedActiveModal,
+            providerApproval: resolvedProviderApproval,
             activeInteractivePrompt: host.activeInteractivePrompt,
             inputContent: '',
         },

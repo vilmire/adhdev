@@ -491,7 +491,8 @@ export class SpecCliAdapter implements CliAdapter {
             lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
             attachedExistingRuntime: this.attachedExistingRuntime,
         });
-        if (projected.status !== 'waiting_approval' && this.approvalLifecycle?.read()?.lifecycle === 'pending') {
+        const stillInApprovalState = !this.providerFailure && !this.exited && this.spawned && this.latestState?.status === 'approval';
+        if (projected.status !== 'waiting_approval' && !stillInApprovalState && this.approvalLifecycle?.read()?.lifecycle === 'pending') {
             this.approvalLifecycle.resolve(Date.now());
             try { this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings)) }); } catch { /* Optional host metadata transport. */ }
         }

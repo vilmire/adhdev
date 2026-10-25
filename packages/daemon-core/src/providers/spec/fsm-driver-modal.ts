@@ -14,11 +14,260 @@ import type { ModalSnapshot } from './fsm-driver-types.js';
 import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
 import { LOG } from '../../logging/logger.js';
 
+export interface LiveModalSlice {
+    /** True when the bottom-most interactive block in `lines` is a live modal
+     *  within the active viewport and bound to (containing or directly adjacent
+     *  to) the active cursor row. */
+    hasLiveModal: boolean;
+    startRow: number;
+    endRow: number;
+    lines: string[];
+    screen: string;
+}
+
+const NUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→●○◉◯▶]\s*)?(?:\(\s*[●○xX ]\s*\)\s*)?(?:\[[ xX]\]|[☐☒◻◼])?\s*(\d+)(?:\.\s*(?:\[[ xX]\]|[☐☒◻◼])?\s*\S|\s*\([●○xX ]\)\s*\S)/;
+
+const UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(?:Yes,\s*I trust this folder|No,\s*exit)\s*$|Allow once\s+Allow always\s+Reject|\bConfirm\s+Cancel\b|^\s*Yes,\s*proceed\s+y\s*$|^\s*No,\s*quit\s+n\s*$/i;
+
+const MODAL_FOOTER_LINE_RE = /enter to submit|press\s+enter\s+to\s+(?:continue|confirm|submit|select)\b|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
+
+function matchNumberedChoiceIndex(line: string): number | null {
+    const m = NUMBERED_CHOICE_LINE_RE.exec(line);
+    if (!m) return null;
+    const idx = Number(m[1]);
+    return Number.isFinite(idx) && idx > 0 ? idx : null;
+}
+
+function isBackgroundTaskDrawerLine(line: string): boolean {
+    return /^\s*●\s+\[\d{2}:\d{2}:\d{2}\]\s+.*\brunning\s*$/.test(line);
+}
+
+function isComposerOrSpinnerOrBulletLine(line: string, nextLine = ''): boolean {
+    if (/(?:^|\s)(?:Working|Thinking)\s*\((?:[⠀-⣿]|\d+(?:h|m|s|ms)\b|\d+:\d)/.test(line)) return true;
+    if (/^\s*[✢✳✶✽✷✸✹✻\u2800-\u28ff]\s+\w/.test(line) && /(?:…|\.\.\.|esc to (?:interrupt|stop)|tokens?\b|\[stop\])/i.test(line)) return true;
+    if (/\besc to (?:interrupt|stop)\b/i.test(line)) return true;
+    if (/^›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line)) return true;
+    if (/^\s*›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line) && /tab to queue message|⏎\s*send/i.test(nextLine)) return true;
+    if (/^\s*(?:[│|]\s*)?❯(?:\s*$|(?:\s+(?!(?:\[[ xX]\]|[☐☒◻◼])?\s*\d+\.\s)(?!No,\s*exit\b|Yes,\s*I trust this folder\b)))/.test(line)) return true;
+    if (/Shift\+Tab:mode\b/i.test(line)) return true;
+    if (/^\s*[•●⏺]\s+\S/.test(line) && !isBackgroundTaskDrawerLine(line)) return true;
+    return false;
+}
+
+function isComposerPromptBoundary(line: string, nextLine = ''): boolean {
+    if (/^›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line)) return true;
+    if (/^\s*›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line) && /tab to queue message|⏎\s*send/i.test(nextLine)) return true;
+    if (/^\s*(?:[│|]\s*)?❯(?:\s*$|(?:\s+(?!(?:\[[ xX]\]|[☐☒◻◼])?\s*\d+\.\s)(?!No,\s*exit\b|Yes,\s*I trust this folder\b)))/.test(line)) return true;
+    return false;
+}
+
+/**
+ * Resolve the bottom-most live modal slice in `lines`, bound to the active
+ * cursor row (`cursor`).
+ *
+ * A modal block is LIVE only when:
+ *   1. its bottom (`endRow`) is inside the active viewport (`endRow >= viewportStartRow`),
+ *   2. it is the bottom-most interactive block on screen (`endRow === lastNonBlankRow`,
+ *      with no composer prompt, active spinner, or assistant prose below it), and
+ *   3. it contains, or sits directly adjacent to, the active cursor row.
+ *
+ * Fallback when no cursor is available (`cursor === undefined`): live-modal
+ * detection falls back to conditions (1) and (2) so a modal above an active
+ * composer/spinner/prose is still rejected even without a cursor. A real
+ * `{ row: 0, col: 0 }` cursor is NEVER treated as unavailable.
+ */
+export function resolveLiveModalSlice(
+    lines: string[],
+    cursor?: { row: number; col: number },
+    viewportStartRow = 0,
+): LiveModalSlice {
+    const empty: LiveModalSlice = { hasLiveModal: false, startRow: 0, endRow: 0, lines: [], screen: '' };
+    let lastNonBlankRow = lines.length - 1;
+    while (lastNonBlankRow >= 0 && !lines[lastNonBlankRow].trim()) lastNonBlankRow -= 1;
+    if (lastNonBlankRow < 0) return empty;
+    let firstNonBlankRow = 0;
+    while (firstNonBlankRow <= lastNonBlankRow && !lines[firstNonBlankRow].trim()) firstNonBlankRow += 1;
+
+    interface ChoiceBlock {
+        startRow: number;
+        endRow: number;
+        lastIdx: number;
+        count: number;
+    }
+    const choiceBlocks: ChoiceBlock[] = [];
+    const unnumberedRows: number[] = [];
+    const footerRows: number[] = [];
+
+    for (let i = 0; i <= lastNonBlankRow; i += 1) {
+        const line = lines[i];
+        const idx = matchNumberedChoiceIndex(line);
+        if (idx !== null) {
+            let optEnd = i;
+            for (let j = i + 1; j <= lastNonBlankRow && j <= i + 3; j += 1) {
+                const next = lines[j];
+                if (!next.trim()) break;
+                if (matchNumberedChoiceIndex(next) !== null) break;
+                if (UNNUMBERED_CHOICE_LINE_RE.test(next)) break;
+                if (MODAL_FOOTER_LINE_RE.test(next) || isComposerOrSpinnerOrBulletLine(next, lines[j + 1] ?? '')) break;
+                if (/^\s*[─╌═━]{8,}\s*$/.test(next)) break;
+                if (/^\s*(?:\? for shortcuts|⏵⏵\s+|tab to queue message|⏎\s*send|>\s*$)/i.test(next)) break;
+                optEnd = j;
+            }
+            const prevBlock = choiceBlocks[choiceBlocks.length - 1];
+            let canContinuePrev = false;
+            if (prevBlock && idx === prevBlock.lastIdx + 1 && i <= prevBlock.endRow + 4) {
+                canContinuePrev = true;
+                for (let r = prevBlock.endRow + 1; r < i; r += 1) {
+                    if (isComposerOrSpinnerOrBulletLine(lines[r], lines[r + 1] ?? '') || MODAL_FOOTER_LINE_RE.test(lines[r])) {
+                        canContinuePrev = false;
+                        break;
+                    }
+                }
+            }
+            if (canContinuePrev && prevBlock) {
+                prevBlock.endRow = optEnd;
+                prevBlock.lastIdx = idx;
+                prevBlock.count += 1;
+            } else if (idx === 1) {
+                choiceBlocks.push({ startRow: i, endRow: optEnd, lastIdx: 1, count: 1 });
+            }
+            i = optEnd;
+            continue;
+        }
+        if (UNNUMBERED_CHOICE_LINE_RE.test(line)) {
+            unnumberedRows.push(i);
+        }
+        if (MODAL_FOOTER_LINE_RE.test(line) && !isComposerOrSpinnerOrBulletLine(line, lines[i + 1] ?? '')) {
+            footerRows.push(i);
+        }
+    }
+
+    const validChoiceBlocks = choiceBlocks.filter(b =>
+        b.count >= 2 || footerRows.some(f => f >= b.endRow && f <= b.endRow + 3),
+    );
+    const lastChoiceBlock = validChoiceBlocks[validChoiceBlocks.length - 1];
+    const lastUnnumberedRow = unnumberedRows[unnumberedRows.length - 1] ?? -1;
+    const lastFooterRow = footerRows[footerRows.length - 1] ?? -1;
+
+    let choiceStartRow = -1;
+    let choiceEndRow = -1;
+    if (lastChoiceBlock && lastChoiceBlock.endRow >= lastUnnumberedRow) {
+        choiceStartRow = lastChoiceBlock.startRow;
+        choiceEndRow = lastChoiceBlock.endRow;
+    } else if (lastUnnumberedRow !== -1) {
+        choiceStartRow = unnumberedRows.find(r => r >= lastUnnumberedRow - 8) ?? lastUnnumberedRow;
+        choiceEndRow = lastUnnumberedRow;
+    } else if (lastFooterRow !== -1) {
+        choiceStartRow = lastFooterRow;
+        choiceEndRow = lastFooterRow;
+    }
+
+    let modalEndRow: number;
+    if (choiceEndRow !== -1) {
+        modalEndRow = choiceEndRow;
+        let sawModalFooter = MODAL_FOOTER_LINE_RE.test(lines[choiceEndRow]);
+        for (let r = choiceEndRow + 1; r <= lastNonBlankRow; r += 1) {
+            const line = lines[r];
+            if (!line.trim()) continue;
+            if (isComposerOrSpinnerOrBulletLine(line, lines[r + 1] ?? '')) break;
+            if (MODAL_FOOTER_LINE_RE.test(line)) {
+                sawModalFooter = true;
+                modalEndRow = r;
+                continue;
+            }
+            if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line)) {
+                modalEndRow = r;
+                continue;
+            }
+            if (
+                (sawModalFooter && r === lastNonBlankRow)
+                || isBackgroundTaskDrawerLine(line)
+                || /^\s*⏵⏵\s+/.test(line)
+                || /tab to queue message|⏎\s*send/i.test(line)
+                || /^\s*>\s*$/.test(line)
+                || (
+                    r >= lastNonBlankRow - 2
+                    && /^\s*(?:\? for shortcuts|›|ctrl\+f\s+Fullscreen|Grok Build\b|K\d+(?:\.\d+)?\s+Preview\b|context:\s*\d+%|- Terms of Service:|https?:\/\/|Links:)/i.test(line)
+                )
+            ) {
+                modalEndRow = r;
+                continue;
+            }
+            break;
+        }
+    } else {
+        // No choice block or modal footer on screen (e.g. header-only / side-panel onboarding modal):
+        // reject if any composer, spinner, or assistant bullet sits at the bottom of the viewport.
+        const checkFrom = Math.max(0, viewportStartRow);
+        for (let r = lastNonBlankRow; r >= checkFrom && r >= lastNonBlankRow - 6; r -= 1) {
+            if (isComposerOrSpinnerOrBulletLine(lines[r], lines[r + 1] ?? '')) {
+                return empty;
+            }
+        }
+        choiceStartRow = checkFrom;
+        modalEndRow = lastNonBlankRow;
+    }
+
+    if (modalEndRow < viewportStartRow) return empty;
+    if (modalEndRow < lastNonBlankRow) return empty;
+
+    let minStartRow = firstNonBlankRow;
+    for (const b of choiceBlocks) {
+        if (b !== lastChoiceBlock && b.endRow < choiceStartRow) {
+            minStartRow = Math.max(minStartRow, b.endRow + 1);
+        }
+    }
+    for (const f of footerRows) {
+        if (f < choiceStartRow) {
+            minStartRow = Math.max(minStartRow, f + 1);
+        }
+    }
+    for (let r = firstNonBlankRow; r < choiceStartRow; r += 1) {
+        const line = lines[r];
+        if (
+            isComposerPromptBoundary(line, lines[r + 1] ?? '')
+            || /^\s*•\s+\S/.test(line)
+            || /(?:^|\s)(?:Working|Thinking)\s*\((?:[⠀-⣿]|\d+(?:h|m|s|ms)\b|\d+:\d)/.test(line)
+            || (/^\s*[✢✳✶✽✷✸✹✻\u2800-\u28ff]\s+\w/.test(line) && /(?:…|\.\.\.|esc to (?:interrupt|stop)|tokens?\b|\[stop\])/i.test(line))
+        ) {
+            minStartRow = Math.max(minStartRow, r + 1);
+        }
+    }
+
+    const interactiveStartRow = choiceEndRow !== -1
+        ? Math.max(minStartRow, choiceStartRow > 0 ? Math.max(1, choiceStartRow - 1) : 0)
+        : Math.max(minStartRow, firstNonBlankRow);
+
+    if (cursor !== undefined) {
+        if (cursor.row < 0) return empty;
+        const effectiveCursorRow = cursor.row;
+        if (
+            effectiveCursorRow <= lastNonBlankRow
+            && isComposerOrSpinnerOrBulletLine(lines[effectiveCursorRow], lines[effectiveCursorRow + 1] ?? '')
+        ) {
+            return empty;
+        }
+        if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
+            return empty;
+        }
+    }
+
+    const sliceLines = lines.slice(minStartRow, modalEndRow + 1);
+    return {
+        hasLiveModal: true,
+        startRow: minStartRow,
+        endRow: modalEndRow,
+        lines: sliceLines,
+        screen: sliceLines.join('\n'),
+    };
+}
+
 export function deriveModal(
     state: FsmState,
     sections: ResolvedSection[],
     fullScreen: string,
     warnParseMiss: (stateId: string, reason: string) => void,
+    cursor?: { row: number; col: number },
 ): ModalSnapshot | null {
     const rule = state.extract?.buttons;
     if (!rule) {
@@ -33,17 +282,34 @@ export function deriveModal(
         }
         return null;
     }
-    const hay = sectionText(sections, rule.section, fullScreen);
+    const screenLines = fullScreen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
+    const liveModal = resolveLiveModalSlice(screenLines, cursor, 0);
+    if (!liveModal.hasLiveModal) {
+        return null;
+    }
+    const scopedScreen = liveModal.screen;
+    const scopedSections: ResolvedSection[] = sections.map(s => {
+        const fromLine = Math.max(s.fromLine, liveModal.startRow);
+        const toLine = Math.max(fromLine, Math.min(s.toLine, liveModal.endRow + 1));
+        return {
+            id: s.id,
+            fromLine: fromLine - liveModal.startRow,
+            toLine: toLine - liveModal.startRow,
+            text: screenLines.slice(fromLine, toLine).join('\n'),
+        };
+    });
+    const hay = sectionText(scopedSections, rule.section, scopedScreen);
     const minCount = rule.min_count ?? 2;
     let buttons = extractButtonsFromRule(rule, hay);
     if (buttons.length < minCount && rule.section) {
-        // Whole-screen fallback: the modal `section` can resolve too short
+        // Whole-screen fallback (scoped to the cursor-bound live modal region):
+        // the modal `section` can resolve too short
         // when a spec's `until` anchor clips the section BEFORE the choices
         // (e.g. a claude-cli approval whose command preview carries a leading
         // shell-redirect line — `>/dev/null 2>&1` — that an over-broad
         // `[…>…]` modal-terminator anchor mistakes for the input prompt,
         // stranding the `❯ 1. Yes / 2. No` buttons below the cut and wedging
-        // auto-approve forever). The buttons are still present in the full
+        // auto-approve forever). The buttons are still present in the live modal
         // buffer, so re-extract from it. `lastContiguousNumberedBlock`
         // (inside extractButtonsFromRule) already isolates the real
         // bottom-most choice block from any stray body-numbered lines the
@@ -58,7 +324,7 @@ export function deriveModal(
         // whose dialog is gone, and the answer's "1. … 2. … 3." block became the
         // buttons (title: the footer status line) — pressing one typed a digit
         // into the prompt.
-        const whole = extractButtonsFromRule(rule, fullScreen);
+        const whole = extractButtonsFromRule(rule, scopedScreen);
         if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
     } else if (buttons.length >= minCount && rule.section && !buttons.some(b => b.current)) {
         // Same rule from the other side: the section resolved to a numbered list
@@ -68,7 +334,7 @@ export function deriveModal(
         // list and a later picker ends the section early (2026-10-01, claude-cli
         // AskUserQuestion): the picker reported the old list as its buttons for
         // the rest of the session.
-        const whole = extractButtonsFromRule(rule, fullScreen);
+        const whole = extractButtonsFromRule(rule, scopedScreen);
         if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
     }
     // APPROVAL-DEADLOCK cursor fallback. A spec narrows `cursor_marker` to
@@ -113,7 +379,7 @@ export function deriveModal(
         }
         return null;
     }
-    const title = deriveTitle(state, sections, fullScreen);
+    const title = deriveTitle(state, scopedSections, scopedScreen);
     return { title, buttons };
 }
 

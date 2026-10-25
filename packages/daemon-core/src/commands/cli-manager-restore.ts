@@ -253,7 +253,15 @@ function buildRestoredSettings(
         // (attachMeshAssignment maintains the same pair at dispatch time).
         restoredSettings.meshLastNodeId = recordMeshNodeId;
     }
-    if (record.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+    if (record.launchedByCoordinator === true) {
+        restoredSettings.launchedByCoordinator = true;
+        if (!restoredSettings.meshCoordinatorFor) {
+            const visibility = typeof record.spawnedSessionVisibility === 'string' ? record.spawnedSessionVisibility.trim() : '';
+            restoredSettings.spawnedSessionVisibility = visibility || 'hidden';
+        }
+    } else if (typeof record.spawnedSessionVisibility === 'string' && record.spawnedSessionVisibility.trim()) {
+        restoredSettings.spawnedSessionVisibility = record.spawnedSessionVisibility.trim();
+    }
     // The session's own approval mode survives the restart (without it a restored
     // coordinator fell back to the provider default — auto-approve off — and asked
     // for every command).

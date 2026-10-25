@@ -29,7 +29,10 @@ export class ProviderApprovalLifecycle {
             this.inApproval = true;
             return;
         }
-        const signature = JSON.stringify([state.id, modal.kind, modal.title, modal.buttons]);
+        const titleHead = typeof modal.title === 'string'
+            ? (modal.title.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? '')
+            : '';
+        const signature = JSON.stringify([state.id, modal.kind, titleHead, modal.buttons]);
         const isNew = !this.inApproval || !this.current?.modalKey || signature !== this.signature;
         if (isNew) {
             this.current = {
@@ -41,8 +44,15 @@ export class ProviderApprovalLifecycle {
                 ...(setup && directories ? directories : {}),
                 description: '', buttons: modal.buttons.map(b => b.label.slice(0, 120)), actionable: !setup,
             };
-        } else if (this.current?.lifecycle === 'pending') {
-            this.current = { ...this.current, evidence: 'live', actionable: !setup };
+        } else if (this.current) {
+            this.current = {
+                ...this.current,
+                lifecycle: 'pending',
+                resolvedAt: null,
+                evidence: 'live',
+                actionable: !setup,
+                buttons: modal.buttons.map(b => b.label.slice(0, 120)),
+            };
         }
         this.signature = signature;
         this.inApproval = true;

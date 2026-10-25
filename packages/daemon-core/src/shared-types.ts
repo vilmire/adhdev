@@ -840,6 +840,8 @@ export interface DaemonStatusEventPayload {
     elapsedSec?: number;
     modalMessage?: string;
     modalButtons?: string[];
+    modalKey?: string;
+    approvalEvidence?: 'live' | 'cached' | 'unavailable';
     /**
      * The target session's dashboard visibility at the moment the event fired.
      *

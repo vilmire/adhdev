@@ -539,6 +539,8 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                     ? String(record.meta.meshCoordinatorDaemonId).trim() : undefined,
                 meshActiveAttemptRef: readPersistedAttemptRef(record.meta?.meshActiveAttemptRef),
                 launchedByCoordinator: record.meta?.launchedByCoordinator === true ? true : undefined,
+                spawnedSessionVisibility: typeof record.meta?.spawnedSessionVisibility === 'string' && record.meta.spawnedSessionVisibility.trim()
+                    ? String(record.meta.spawnedSessionVisibility).trim() : undefined,
                 autoApproveMode: typeof record.meta?.autoApproveMode === 'string' && record.meta.autoApproveMode.trim()
                     ? String(record.meta.autoApproveMode).trim() : undefined,
                 // Phase E launch provenance written at spawn; validated on restore

@@ -91,7 +91,7 @@ function clk(now: number, entered: number): FsmClock {
 function fire(spec: CliSpecV4, from: string, screen: string, ageMs = 9000): string | null {
     const now = 1_000_000;
     const lines = screen.split('\n');
-    const res = evaluateFsm(spec, from, screen, { row: 0, col: 0 }, lines, clk(now, now - ageMs));
+    const res = evaluateFsm(spec, from, screen, undefined, lines, clk(now, now - ageMs));
     return (res.fired as { label?: string } | null)?.label ?? null;
 }
 
