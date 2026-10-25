@@ -4,7 +4,10 @@ import test from 'node:test';
 import { IpcTransport } from '../src/transports/ipc.js';
 import { meshLaunchSession, meshListNodes } from '../src/tools/mesh-tools.js';
 import { getNodeLaunchReadiness, readProviderPriority } from '../src/tools/mesh-tools-internal-core.js';
-import { buildMeshNodeCapabilityTags } from '@adhdev/daemon-core';
+import { buildMeshNodeCapabilityTags, readSessionModel } from '@adhdev/daemon-core';
+import { resolveLaunchProvenance } from '../../daemon-core/src/commands/cli-manager-launch.js';
+import { buildProviderState, type ProviderStateHost } from '../../daemon-core/src/providers/cli-provider-state-projection.js';
+import { allowedClassifiedDifficultiesForSession, taskMeetsSessionDifficultyFloor } from '../../daemon-core/src/mesh/mesh-difficulty-floor.js';
 
 // CURSOR-CLI-GENERATING-STUCK-SELFHOST precondition — mesh_launch_session must honor
 // an explicitly-requested provider `type` when the node's capability slots declare
@@ -479,4 +482,145 @@ test('audit: a legacy-node failed launch cannot echo unsafe resolvedProviderType
   assert.equal('resolvedProviderType' in payload, false);
   assert.equal('providerType' in audit, false);
   assert.equal(JSON.stringify(audit).includes(type), false);
+});
+
+
+const manualProfileSlots = [
+  { provider: 'codex-cli', model: 'gpt-6.1-sol', thinkingLevel: 'high', difficulty: ['difficult'] },
+  { provider: 'codex-cli', model: 'gpt-6-sol', thinkingLevel: 'medium', difficulty: ['medium'] },
+  { provider: 'codex-cli', model: 'gpt-6-luna', thinkingLevel: 'low', difficulty: ['easy'] },
+];
+
+// The real CliProviderInstance.getState consumer, with an isolated inert adapter.
+function manualLaunchState(settings: Record<string, any>, controlValues = {}): ReturnType<typeof buildProviderState> {
+  const host: ProviderStateHost = {
+    type: 'codex-cli', workingDir: '/repo', instanceId: 'fake-manual',
+    provider: { type: 'codex-cli', name: 'Codex', category: 'cli' } as any,
+    presentationMode: 'terminal', settings, lastStatus: 'idle',
+    errorMessage: undefined, errorReason: undefined, activeInteractivePrompt: null,
+    controlValues, summaryMetadata: undefined, suppressIdleHistoryReplay: false,
+    autoApproveBusy: false, historyWriter: { appendNewMessages: () => {} } as any,
+    runtimeMessages: [], parsedIngestTimestamps: { stamp: (messages: unknown[]) => messages } as any,
+    lastPersistedHistoryMessages: [], lastCompletionSummary: null,
+    adapter: { getStatus: () => ({ status: 'idle' }), getRuntimeMetadata: () => null },
+    stabilizeFlappingApprovalStatus: state => state,
+    maybeAutoApproveStatus: () => false, autoApproveMaskStalled: () => false,
+    maybeAppendRuntimeRecoveryMessage: () => {}, shouldSuppressFreshLaunchStartupReplay: () => false,
+    promoteProviderSessionId: () => {}, shouldHydrateExistingProviderHistory: () => false,
+    syncCanonicalSavedHistoryIfNeeded: () => false, shouldSuppressStaleParsedBusyStatus: () => false,
+    applyProviderResponse: () => {},
+  };
+  return buildProviderState(host);
+}
+
+function difficultClaimAllowed(node: any, state: any): boolean {
+  return taskMeetsSessionDifficultyFloor({ difficulty: 'difficult' },
+    allowedClassifiedDifficultiesForSession(node, node.policy.slots, 'codex-cli', readSessionModel(state)));
+}
+
+function profileWorker(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'profile-worker', providerType: 'codex-cli', status: 'idle',
+    settings: { role: 'worker', meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac', initialModel: 'gpt-6.1-sol', initialThinkingLevel: 'high' },
+    ...overrides,
+  };
+}
+
+test('manual configured profile reaches launch port and claim state on a multi-model provider', async () => {
+  const { ctx, launchCalls, mesh } = makeCtx({ providerPriority: ['claude-cli'], slots: manualProfileSlots });
+  assert.equal(difficultClaimAllowed(mesh.nodes[0], { settings: {} }), false, 'original omission conservatively refuses difficult');
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' }));
+  assert.equal(result.success, true);
+  const args = launchCalls[0].args as any;
+  // These are the real launch_cli keys; CliProviderInstance.getState projects settings.
+  assert.equal(args.initialModel, 'gpt-6.1-sol');
+  assert.equal(args.initialThinkingLevel, 'high');
+  assert.equal(args.settings.initialModel, args.initialModel);
+  assert.equal(args.settings.initialThinkingLevel, args.initialThinkingLevel);
+  assert.deepEqual(resolveLaunchProvenance(args, args.settings), { launchedBy: 'mesh', modelSource: 'mesh_slot', thinkingLevelSource: 'mesh_slot' });
+  const state = manualLaunchState(args.settings);
+  assert.equal(readSessionModel(state), 'gpt-6.1-sol');
+  assert.equal(difficultClaimAllowed(mesh.nodes[0], state), true);
+  for (const model of ['gpt-6-sol', 'gpt-6-luna', 'unsupported-model']) {
+    assert.equal(difficultClaimAllowed(mesh.nodes[0], manualLaunchState(args.settings, { model })), false,
+      'observed mismatched or unsupported runtime model overrides requested settings');
+  }
+  assert.equal(difficultClaimAllowed(mesh.nodes[0], { settings: {} }), false, 'unknown model remains fail closed');
+  assert.equal(args.cliType, 'codex-cli', 'explicit provider never follows another priority');
+});
+
+test('manual omitted provider propagates only its configured first profile', async () => {
+  const { ctx, launchCalls } = makeCtx({ providerPriority: ['codex-cli'], slots: manualProfileSlots });
+  await meshLaunchSession(ctx, { node_id: 'node-mac' });
+  assert.equal(launchCalls[0].args.cliType, 'codex-cli');
+  assert.equal(launchCalls[0].args.initialModel, 'gpt-6.1-sol');
+  assert.equal(launchCalls[0].args.initialThinkingLevel, 'high');
+});
+
+test('manual profile selection preserves configured order without upgrading a lower first slot', async () => {
+  const { ctx, launchCalls, mesh } = makeCtx({ slots: [manualProfileSlots[2], manualProfileSlots[0]] });
+  await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' });
+  const args = launchCalls[0].args as any;
+  assert.equal(args.initialModel, 'gpt-6-luna');
+  assert.equal(args.initialThinkingLevel, 'low');
+  assert.equal(difficultClaimAllowed(mesh.nodes[0], { settings: args.settings }), false);
+});
+
+test('manual profile-compatible worker is reused without a fake launch', async () => {
+  const { ctx, launchCalls } = makeCtx({ slots: manualProfileSlots }, [profileWorker()]);
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' }));
+  assert.equal(result.reused, true);
+  assert.equal(launchCalls.length, 0);
+});
+
+for (const [label, worker] of [
+  ['mismatched model', profileWorker({ controlValues: { model: 'gpt-6-sol' } })],
+  ['unknown model', profileWorker({ settings: { role: 'worker', meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac' } })],
+  ['mismatched thinking', profileWorker({ settings: { role: 'worker', meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac', initialModel: 'gpt-6.1-sol', initialThinkingLevel: 'low' } })],
+  ['unknown provider', profileWorker({ providerType: undefined })],
+  ['unknown thinking', profileWorker({ settings: { role: 'worker', meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac', initialModel: 'gpt-6.1-sol' } })],
+  ['observed thinking mismatch', profileWorker({ controlValues: { thinkingLevel: 'low' } })],
+] as const) {
+  test(`manual configured profile does not reuse a worker with ${label}`, async () => {
+    const { ctx, launchCalls } = makeCtx({ slots: manualProfileSlots }, [worker]);
+    const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' }));
+    assert.equal(result.reused, undefined);
+    assert.equal(launchCalls.length, 1);
+    assert.equal(launchCalls[0].args.initialModel, 'gpt-6.1-sol');
+  });
+}
+
+test('manual provider-default slot never invents a launch model or thinking provenance', async () => {
+  const { ctx, launchCalls } = makeCtx({ slots: [{ provider: 'codex-cli' }] });
+  await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' });
+  const args = launchCalls[0].args as any;
+  assert.equal(args.initialModel, undefined);
+  assert.equal(args.initialThinkingLevel, undefined);
+  assert.equal(args.settings.initialModel, undefined);
+  assert.equal(resolveLaunchProvenance(args, args.settings).modelSource, undefined);
+  assert.equal(resolveLaunchProvenance(args, args.settings).thinkingLevelSource, undefined);
+});
+
+
+test('manual Antigravity configured model and thinking are forwarded verbatim', async () => {
+  const model = 'Claude Opus 4.6 (Thinking)';
+  const { ctx, launchCalls } = makeCtx({ providerPriority: ['codex-cli'], slots: [
+    ...manualProfileSlots,
+    { provider: 'antigravity-cli', model, thinkingLevel: 'high', difficulty: ['difficult'] },
+    { provider: 'antigravity-cli', model: 'Gemini Flash', thinkingLevel: 'low', difficulty: ['easy'] },
+  ] });
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'antigravity-cli' }));
+  assert.equal(result.resolvedProviderType, 'antigravity-cli');
+  assert.equal(launchCalls[0].args.initialModel, model);
+  assert.equal(launchCalls[0].args.initialThinkingLevel, 'high');
+});
+
+test('manual reused profile accepts actual launch evidence without invented settings', async () => {
+  const { ctx, launchCalls } = makeCtx({ slots: manualProfileSlots }, [profileWorker({
+    settings: { role: 'worker', meshNodeFor: 'mesh-cursor', meshNodeId: 'node-mac' },
+    launchRecord: { model: { launchValue: 'gpt-6.1-sol' }, thinkingLevel: { launchValue: 'high' } },
+  })]);
+  const result = JSON.parse(await meshLaunchSession(ctx, { node_id: 'node-mac', type: 'codex-cli' }));
+  assert.equal(result.reused, true);
+  assert.equal(launchCalls.length, 0);
 });

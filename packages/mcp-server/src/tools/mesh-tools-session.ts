@@ -1,5 +1,5 @@
 import { withProviderPinWarning } from './mesh-provider-pin-advisory.js';
-import type { ProviderApprovalTarget } from '@adhdev/mesh-shared';
+import type { NodeCapabilitySlot, ProviderApprovalTarget } from '@adhdev/mesh-shared';
 // Mesh tool implementations — session domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
 // modules that define them; mesh-tools.ts is the tool barrel.
@@ -49,6 +49,7 @@ import {
     isIdleSessionRecord,
     isTerminalSessionRecord,
     readSessionRecordId,
+    readSessionRecordModel,
     resolveSessionProviderType,
     unwrapCommandPayload,
 } from './mesh-session-helpers.js';
@@ -781,7 +782,7 @@ function resolveLaunchAutoApprove(ctx: MeshContext, node: LocalMeshNodeEntry, pr
  * recoverable (mesh_cleanup_sessions); a blocked launch on a transient error is
  * worse for the coordinator flow.
  */
-async function findReusableWorkerSession(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string, providerType: string): Promise<string | null> {
+async function findReusableWorkerSession(ctx: MeshContext, node: LocalMeshNodeEntry, nodeId: string, providerType: string, profile?: NodeCapabilitySlot): Promise<string | null> {
     try {
         // The coordinator's answer (readNodeRuntime): its own status for its
         // nodes, the member's pushed runtime for another daemon's.
@@ -792,6 +793,17 @@ async function findReusableWorkerSession(ctx: MeshContext, node: LocalMeshNodeEn
             if (providerType) {
                 const sessionProviderType = resolveSessionProviderType(session);
                 if (sessionProviderType && sessionProviderType !== providerType) return false;
+            }
+            // A configured launch profile must never reuse an unobserved or different
+            // provider/model/effort. Runtime controls take precedence over launch settings.
+            if (profile?.model || profile?.thinkingLevel) {
+                if (resolveSessionProviderType(session) !== providerType) return false;
+                if (profile.model && readSessionRecordModel(session) !== profile.model) return false;
+                const thinking = readString(session?.controlValues?.thinkingLevel)
+                    || readString(session?.controlValues?.reasoning)
+                    || readString(session?.launchRecord?.thinkingLevel?.launchValue)
+                    || readString(session?.settings?.initialThinkingLevel);
+                if (profile.thinkingLevel && thinking !== profile.thinkingLevel) return false;
             }
             return true;
         });
@@ -977,6 +989,11 @@ async function meshLaunchSessionImpl(
         resolvedProviderType = detected.providerType;
     }
 
+    // Match the no-task canonical launch order: retain the resolved provider and
+    // use its first configured slot. There is no task difficulty to rank here;
+    // selecting a higher grade or a different provider would invent an override.
+    const profile = normalizeNodeCapabilitySlots(node.policy?.slots)
+        .find(slot => slot.provider === resolvedProviderType);
     const coordinatorNode = resolveCoordinatorNode(ctx);
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
@@ -991,7 +1008,7 @@ async function meshLaunchSessionImpl(
     // unlaunchable node never burns a status relay. force=true bypasses the guard
     // for a deliberate additional session.
     if (args.force !== true) {
-        const reused = await findReusableWorkerSession(ctx, node, args.node_id, resolvedProviderType);
+        const reused = await findReusableWorkerSession(ctx, node, args.node_id, resolvedProviderType, profile);
         if (reused) return reused;
     }
 
@@ -1000,7 +1017,15 @@ async function meshLaunchSessionImpl(
         result = await commandForNode(ctx, node, 'launch_cli', {
             cliType: resolvedProviderType,
             dir: node.workspace,
+            ...(profile?.model ? { initialModel: profile.model } : {}),
+            ...(profile?.thinkingLevel ? { initialThinkingLevel: profile.thinkingLevel } : {}),
+            launchedBy: 'mesh',
+            ...(profile?.model ? { modelSource: 'mesh_slot' } : {}),
+            ...(profile?.thinkingLevel ? { thinkingLevelSource: 'mesh_slot' } : {}),
             settings: {
+                // Same model carrier used by automatic launch and claim-time getState().
+                ...(profile?.model ? { initialModel: profile.model } : {}),
+                ...(profile?.thinkingLevel ? { initialThinkingLevel: profile.thinkingLevel } : {}),
                 // Worker launch envelope (A5): structured metadata so worker sessions
                 // know their role and can route completion events back correctly.
                 role: 'worker',

@@ -201299,13 +201299,13 @@ var MESH_SEND_KEYS_TOOL = {
 };
 var MESH_LAUNCH_SESSION_TOOL = {
   name: "mesh_launch_session",
-  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Cursor = cursor-cli, Kimi = kimi, OpenCode = opencode, Grok = grok-cli, Antigravity = antigravity-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli. Duplicate guard (default, force not set): when the node already has a live mesh-owned worker session whose provider MATCHES the resolved launch type \u2014 or whose provider is unknown \u2014 that session is returned idempotently (success with reused:true, launched:false) instead of spawning an empty duplicate. A live session with a definitely DIFFERENT provider does NOT block the launch: a fresh session of the requested provider is started alongside it (intended cross-provider behavior, not a refusal). Pass force=true to bypass the guard entirely and always launch an additional session.",
+  description: "Launch a new agent session on a mesh node. Returns the session ID for subsequent send_task/read_chat calls. If the user names a provider, preserve it exactly: Claude Code/Claude = claude-cli, Codex = codex-cli, Cursor = cursor-cli, Kimi = kimi, OpenCode = opencode, Grok = grok-cli, Antigravity = antigravity-cli. If type is omitted, resolve strictly from the node policy providerPriority and provider detection; fail closed when no configured provider is usable. Do not default to claude-cli. Uses the first configured slot for the resolved provider, preserving its model and thinking level in configured order. With a configured profile, reuse requires matching provider/model/thinking evidence; unknown or different profiles launch a fresh session. Duplicate guard (default, force not set): when the node already has a live mesh-owned worker session whose provider matches the resolved launch type and configured profile (unknown provider is accepted only without a configured model/thinking profile) that session is returned idempotently (success with reused:true, launched:false) instead of spawning an empty duplicate. A live session with a definitely DIFFERENT provider does NOT block the launch: a fresh session of the requested provider is started alongside it (intended cross-provider behavior, not a refusal). Pass force=true to bypass the guard entirely and always launch an additional session.",
   inputSchema: {
     type: "object",
     properties: {
       node_id: { type: "string", description: "Target node ID." },
       type: { type: "string", description: "Optional intentional provider restriction (returns an informational pin warning). Omit for automatic routing. Use claude-cli for Claude Code, codex-cli for Codex, cursor-cli for Cursor, kimi for Kimi, opencode for OpenCode, grok-cli for Grok, antigravity-cli for Antigravity. When omitted, node.policy.providerPriority is probed in order." },
-      force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: a live mesh-owned worker session for this mesh+node is returned idempotently (reused:true) when its provider matches the resolved type or is unknown; a session with a definitely different provider does NOT trigger reuse \u2014 a fresh session of the requested provider is launched. Only pass force when you intentionally want a second concurrent session on the node regardless of what already exists." }
+      force: { type: "boolean", description: "Set true to launch an ADDITIONAL session even when this node already has a live mesh-owned worker session. Default false: a live mesh-owned worker session for this mesh+node is returned idempotently (reused:true) when its provider and configured model/thinking profile match (unknown provider is accepted only without a configured profile); a session with a definitely different provider does NOT trigger reuse \u2014 a fresh session of the requested provider is launched. Only pass force when you intentionally want a second concurrent session on the node regardless of what already exists." }
     },
     required: ["node_id"]
   }
@@ -207435,7 +207435,7 @@ function resolveLaunchAutoApprove(ctx, node, providerType) {
   }
   return { autoApprove, autoApproveMode, dangerousModeAllow };
 }
-async function findReusableWorkerSession(ctx, node, nodeId, providerType) {
+async function findReusableWorkerSession(ctx, node, nodeId, providerType, profile) {
   try {
     const { probe } = await readNodeRuntime(ctx, node);
     const existing = probe.sessions.find((session) => {
@@ -207444,6 +207444,12 @@ async function findReusableWorkerSession(ctx, node, nodeId, providerType) {
       if (providerType) {
         const sessionProviderType = resolveSessionProviderType(session);
         if (sessionProviderType && sessionProviderType !== providerType) return false;
+      }
+      if (profile?.model || profile?.thinkingLevel) {
+        if (resolveSessionProviderType(session) !== providerType) return false;
+        if (profile.model && readSessionRecordModel(session) !== profile.model) return false;
+        const thinking = readString(session?.controlValues?.thinkingLevel) || readString(session?.controlValues?.reasoning) || readString(session?.launchRecord?.thinkingLevel?.launchValue) || readString(session?.settings?.initialThinkingLevel);
+        if (profile.thinkingLevel && thinking !== profile.thinkingLevel) return false;
       }
       return true;
     });
@@ -207568,6 +207574,7 @@ async function meshLaunchSessionImpl(ctx, args, audit) {
     if (typeof detected === "string") return detected;
     resolvedProviderType = detected.providerType;
   }
+  const profile = normalizeNodeCapabilitySlots(node.policy?.slots).find((slot) => slot.provider === resolvedProviderType);
   const coordinatorNode = resolveCoordinatorNode(ctx);
   const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
   const spawnedSessionVisibility = readSpawnedSessionVisibility(ctx.mesh.policy);
@@ -207578,7 +207585,7 @@ async function meshLaunchSessionImpl(ctx, args, audit) {
     return JSON.stringify(buildMissingCoordinatorDaemonIdFailure(ctx, node, resolvedProviderType), null, 2);
   }
   if (args.force !== true) {
-    const reused = await findReusableWorkerSession(ctx, node, args.node_id, resolvedProviderType);
+    const reused = await findReusableWorkerSession(ctx, node, args.node_id, resolvedProviderType, profile);
     if (reused) return reused;
   }
   let result;
@@ -207586,7 +207593,15 @@ async function meshLaunchSessionImpl(ctx, args, audit) {
     result = await commandForNode(ctx, node, "launch_cli", {
       cliType: resolvedProviderType,
       dir: node.workspace,
+      ...profile?.model ? { initialModel: profile.model } : {},
+      ...profile?.thinkingLevel ? { initialThinkingLevel: profile.thinkingLevel } : {},
+      launchedBy: "mesh",
+      ...profile?.model ? { modelSource: "mesh_slot" } : {},
+      ...profile?.thinkingLevel ? { thinkingLevelSource: "mesh_slot" } : {},
       settings: {
+        // Same model carrier used by automatic launch and claim-time getState().
+        ...profile?.model ? { initialModel: profile.model } : {},
+        ...profile?.thinkingLevel ? { initialThinkingLevel: profile.thinkingLevel } : {},
         // Worker launch envelope (A5): structured metadata so worker sessions
         // know their role and can route completion events back correctly.
         role: "worker",
