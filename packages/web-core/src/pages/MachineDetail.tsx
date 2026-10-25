@@ -21,6 +21,7 @@ import { useDaemonMetadataLoader } from '../hooks/useDaemonMetadataLoader'
 import { useDaemonMachineRuntimeSubscription } from '../hooks/useDaemonMachineRuntimeSubscription'
 import { useDaemonMachineRuntimeLoader } from '../hooks/useDaemonMachineRuntimeLoader'
 import type { DaemonData } from '../types'
+import { runDaemonUpgradeCommand, type DaemonUpgradeCommandResult } from '../utils/daemon-upgrade-command'
 import { PLATFORM_LABELS, isCliEntry, dedupeAgents, getMachineDisplayName, getMachineHostnameLabel, getProviderSummaryLine } from '../utils/daemon-utils'
 import { getDashboardActiveTabHref, getDashboardActiveTabKeyForConversation } from '../utils/dashboard-route-paths'
 import { IconBarChart, IconMonitor, IconSettings } from '../components/Icons'
@@ -58,7 +59,6 @@ import {
     getRecentHistoryResumeConfirmTitle,
 } from '../utils/dashboard-launch-copy'
 import { DEFAULT_MACHINE_RUNTIME_REFRESH_MS } from '../utils/daemon-timing'
-import { buildDaemonUpgradePayload } from '../utils/daemon-update-policy'
 
 // ─── Component ───────────────────────────────────────
 interface MachineDetailProps {
@@ -96,6 +96,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
     // provider as an inline "Update" button inside the tab.
     const [gitDialogTarget, setGitDialogTarget] = useState<{ daemonId: string; workspace: string } | null>(null)
     const [, setWorkspaceCategoryHint] = useState<'ide' | 'cli'>('ide')
+    const [upgradeState, setUpgradeState] = useState<DaemonUpgradeCommandResult | { state: 'idle' | 'loading'; message: string }>({ state: 'idle', message: '' })
     const recentLaunchActionRef = useRef<(() => Promise<void>) | null>(null)
     const [recentLaunchConfirm, setRecentLaunchConfirm] = useState<{
         title: string
@@ -581,16 +582,13 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                     providers={providers}
                                     recentLaunches={recentLaunches}
                                     currentConversations={currentConversations}
+                                    upgradeState={upgradeState}
                                     onUpgradeDaemon={async () => {
-                                        // Fail closed when the node's update
-                                        // policy has no resolvable channel.
-                                        const payload = buildDaemonUpgradePayload(machineEntry!)
-                                        if (!payload) return
-                                        try {
-                                            await sendDaemonCommand(machineId!, 'daemon_upgrade', payload)
-                                        } catch {
-                                            // Best-effort trigger; the daemon reports progress via status.
-                                        }
+                                        // Same path as the mobile screen: fails closed (nothing
+                                        // sent) without a resolvable update policy, and the result
+                                        // — including that refusal — is shown on the button.
+                                        setUpgradeState({ state: 'loading', message: '' })
+                                        setUpgradeState(await runDaemonUpgradeCommand(sendDaemonCommand, machineId!, machineEntry))
                                     }}
                                     onOpenRecent={handleOpenRecent}
                                     onOpenConversation={handleOpenConversation}

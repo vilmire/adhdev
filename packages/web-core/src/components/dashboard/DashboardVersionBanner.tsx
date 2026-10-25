@@ -9,6 +9,7 @@ interface DashboardVersionBannerProps {
     targetVersion?: string | null
     required?: boolean
     upgradingDaemons: Record<string, 'upgrading' | 'done' | 'error'>
+    upgradeMessages?: Record<string, string>
     onUpgrade: (daemonId: string) => void
     onDismiss: () => void
 }
@@ -18,6 +19,7 @@ export default function DashboardVersionBanner({
     targetVersion,
     required = false,
     upgradingDaemons,
+    upgradeMessages,
     onUpgrade,
     onDismiss,
 }: DashboardVersionBannerProps) {
@@ -72,10 +74,15 @@ export default function DashboardVersionBanner({
                             ) : state === 'done' ? (
                                 <span className="text-3xs text-green-400">✓ {t('dashboard.versionBanner.restarting')}</span>
                             ) : state === 'error' ? (
-                                <button
-                                    className="text-3xs text-red-400 hover:text-red-300 underline cursor-pointer"
-                                    onClick={() => onUpgrade(daemon.id)}
-                                >{t('dashboard.versionBanner.retry')}</button>
+                                <>
+                                    {upgradeMessages?.[daemon.id] && (
+                                        <span className="text-3xs text-red-400" role="status" data-testid="banner-upgrade-error">{upgradeMessages[daemon.id]}</span>
+                                    )}
+                                    <button
+                                        className="text-3xs text-red-400 hover:text-red-300 underline cursor-pointer"
+                                        onClick={() => onUpgrade(daemon.id)}
+                                    >{t('dashboard.versionBanner.retry')}</button>
+                                </>
                             ) : (
                                 <button
                                     className="text-3xs font-semibold cursor-pointer px-1.5 py-px rounded transition-colors"

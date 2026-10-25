@@ -445,6 +445,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         versionBannerDismissed,
         setVersionBannerDismissed,
         upgradingDaemons,
+        upgradeMessages,
         handleBannerUpgrade,
     } = useDashboardVersionBanner({
         ides,
@@ -484,6 +485,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                     targetVersion={targetVersion}
                     required={hasRequiredVersionDaemons}
                     upgradingDaemons={upgradingDaemons}
+                    upgradeMessages={upgradeMessages}
                     onUpgrade={handleBannerUpgrade}
                     onDismiss={() => setVersionBannerDismissed(true)}
                 />

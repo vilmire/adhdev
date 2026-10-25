@@ -21,6 +21,8 @@ interface MachineCommandCenterProps {
     recentLaunches: MachineRecentLaunch[]
     currentConversations: ActiveConversation[]
     onUpgradeDaemon: () => void
+    /** Result of the last upgrade attempt; the button used to give no feedback at all. */
+    upgradeState?: { state: 'idle' | 'loading' | 'done' | 'error'; message: string }
     onOpenRecent: (launch: MachineRecentLaunch) => void
     onOpenConversation: (conversation: ActiveConversation) => void
 }
@@ -48,6 +50,7 @@ export default function MachineCommandCenter({
     recentLaunches,
     currentConversations,
     onUpgradeDaemon,
+    upgradeState,
     onOpenRecent,
     onOpenConversation,
 }: MachineCommandCenterProps) {
@@ -160,12 +163,23 @@ export default function MachineCommandCenter({
                             </div>
                             <button
                                 type="button"
-                                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors"
+                                className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-amber-500/12 border border-amber-500/20 text-amber-300 hover:bg-amber-500/18 transition-colors disabled:opacity-60"
                                 onClick={onUpgradeDaemon}
+                                disabled={upgradeState?.state === 'loading'}
+                                data-testid="daemon-update-button"
                             >
-                                <IconRefresh size={13} />
+                                <IconRefresh size={13} className={upgradeState?.state === 'loading' ? 'animate-spin' : undefined} />
                                 <span className="text-sm font-medium">{updateStatus.targetVersion ? t('machine.commandCenter.updateToVersion', { version: updateStatus.targetVersion }) : t('machine.commandCenter.updateDaemon')}</span>
                             </button>
+                            {upgradeState && (upgradeState.state === 'done' || upgradeState.state === 'error') && upgradeState.message && (
+                                <div
+                                    role="status"
+                                    data-testid="daemon-update-result"
+                                    className={`text-xs ${upgradeState.state === 'error' ? 'text-red-400' : 'text-emerald-400'}`}
+                                >
+                                    {upgradeState.message}
+                                </div>
+                            )}
                         </div>
                     </SectionCard>
                 </div>

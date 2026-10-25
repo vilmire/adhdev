@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { DaemonData } from '../types'
-import { buildDaemonUpgradePayload, getDaemonUpdateTargetVersion } from '../utils/daemon-update-policy'
+import { getDaemonUpdateTargetVersion } from '../utils/daemon-update-policy'
+import { runDaemonUpgradeCommand } from '../utils/daemon-upgrade-command'
 import { isVersionMismatch, isVersionUpdateRequired } from '../utils/version-update'
 
 declare const __APP_VERSION__: string
@@ -36,28 +37,18 @@ export function useDashboardVersionBanner({
     )
     const [versionBannerDismissed, setVersionBannerDismissed] = useState(false)
     const [upgradingDaemons, setUpgradingDaemons] = useState<Record<string, 'upgrading' | 'done' | 'error'>>({})
+    /** Why the last attempt per daemon failed (or what it started) — shown on the banner chip. */
+    const [upgradeMessages, setUpgradeMessages] = useState<Record<string, string>>({})
 
     const handleBannerUpgrade = useCallback(async (daemonId: string) => {
         const daemon = ides.find((entry) => entry.id === daemonId)
         if (!daemon) return
         setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'upgrading' }))
-        const payload = buildDaemonUpgradePayload(daemon)
-        if (!payload) {
-            // No resolvable channel in the node's policy — fail closed rather
-            // than sending an empty payload that could retarget the channel.
-            setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'error' }))
-            return
-        }
-        try {
-            const result = await sendDaemonCommand(daemonId, 'daemon_upgrade', payload)
-            if (result?.result?.upgraded || result?.result?.success) {
-                setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'done' }))
-            } else {
-                setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'error' }))
-            }
-        } catch {
-            setUpgradingDaemons(prev => ({ ...prev, [daemonId]: 'error' }))
-        }
+        // Shared with the machine screens: fails closed without a resolvable update
+        // policy and reports the reason instead of a bare "retry".
+        const result = await runDaemonUpgradeCommand(sendDaemonCommand, daemonId, daemon)
+        setUpgradingDaemons(prev => ({ ...prev, [daemonId]: result.state }))
+        setUpgradeMessages(prev => ({ ...prev, [daemonId]: result.message }))
     }, [ides, sendDaemonCommand])
 
     return {
@@ -67,6 +58,7 @@ export function useDashboardVersionBanner({
         versionBannerDismissed,
         setVersionBannerDismissed,
         upgradingDaemons,
+        upgradeMessages,
         handleBannerUpgrade,
     }
 }
