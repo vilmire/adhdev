@@ -6,10 +6,20 @@ import { execFileSync } from 'node:child_process';
 import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
 import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
 import { preferEligible, reviewRoutingRefusal, pendingLaunchReservation } from '../../src/mesh/mesh-task-routing-contract.js';
+import { pinnedMeshNodeIdMatches } from '../../src/mesh/mesh-pinned-node-identity.js';
 import type { MeshWorkQueueEntry } from '../../src/mesh/mesh-work-queue-types.js';
 const dirs: string[] = [];
 afterEach(() => { dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })); });
 describe('routing contracts', () => {
+    it('keeps pinned node spelling exact and rejects blank or trimmed aliases', () => {
+        expect(pinnedMeshNodeIdMatches('node-a', 'node-a')).toBe(true);
+        expect(pinnedMeshNodeIdMatches(undefined, undefined)).toBe(true);
+        expect(pinnedMeshNodeIdMatches(null, null)).toBe(true);
+        for (const [actual, expected] of [['node-a ', 'node-a'], ['node-a', ' node-a'],
+            ['node-a', 'node-b'], ['', ''], [' ', ' '], [null, undefined], [undefined, 'node-a']] as const) {
+            expect(pinnedMeshNodeIdMatches(actual, expected)).toBe(false);
+        }
+    });
     it('soft preference retains every eligible fallback; unknown preferences do not create candidates', () => {
         expect(preferEligible(['mac', 'pinned-worker'], ['pinned-worker'], x => x)).toEqual(['pinned-worker', 'mac']);
         expect(preferEligible(['mac'], ['pinned-worker'], x => x)).toEqual(['mac']);

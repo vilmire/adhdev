@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { tmpdir } from 'node:os';
 import * as net from 'node:net';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -9,7 +10,8 @@ import { getDefaultSessionHostEndpoint, resolveSessionHostIpcKey } from '@adhdev
 import { packageNativeGuardian } from '../scripts/package-native-guardian.mjs';
 const sha=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 test('exact built host process launches pinned guardian and serves real idle lease IPC',{skip:process.platform!=='darwin'},async()=>{
- const root=fs.realpathSync(fs.mkdtempSync('/private/tmp/worker-guardian-launch-'));fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'guardian-host-fixture',version:'1.0.81-fixture'}));const configDir=path.join(root,'instance');fs.mkdirSync(configDir,{mode:0o700});
+ // Keep the fixture below the caller's temp root and within Darwin's Unix socket path limit.
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(),'gh-')));fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'guardian-host-fixture',version:'1.0.81-fixture'}));const configDir=path.join(root,'instance');fs.mkdirSync(configDir,{mode:0o700});
  const host=path.join(root,'host.js');fs.copyFileSync(path.resolve('dist/index.js'),host);fs.writeFileSync(path.join(root,'daemon.js'),'synthetic daemon bytes');fs.writeFileSync(path.join(root,'cli.js'),'synthetic CLI bytes');
  const nodePath=fs.realpathSync(process.execPath);const files=Object.fromEntries(['host','daemon','cli'].map(kind=>[kind,{path:`${kind}.js`,sha256:sha(fs.readFileSync(path.join(root,`${kind}.js`)))}]));
  const built=packageNativeGuardian(root,{platform:'darwin',arch:process.arch,version:'1.0.81-fixture',commit:'f'.repeat(40),files,nodePath,nodeSha256:sha(fs.readFileSync(nodePath))});

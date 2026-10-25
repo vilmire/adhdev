@@ -1,3 +1,4 @@
+import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { realpathSync } from 'node:fs';
 import type { MeshRoutingPreferences } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
@@ -31,7 +32,7 @@ export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | '
     try { if (realpathSync.native(context.workspace) !== scope.worktree) return 'review_input_unavailable'; } catch { return 'review_input_unavailable'; }
     if (active.some(writer => {
         if ((writer.status !== 'assigned' && !pendingLaunchReservation(writer)) || writer.readonly || writer.taskMode === 'live_debug_readonly') return false;
-        if (writer.assignedNodeId === scope.nodeId) return true;
+        if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: '', subtree: true }] };
         return comparePhysicalOwnership(source.ownedPaths!, scope, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
     })) return 'review_input_busy';

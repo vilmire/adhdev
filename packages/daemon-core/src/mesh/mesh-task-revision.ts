@@ -1,3 +1,4 @@
+import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 import { assertSourceDependencyGraph } from './mesh-task-phase-dependencies.js';
 import { normalizeRoutingPreferences } from './mesh-task-routing-contract.js';
 import { normalizeOwnedPaths, findOwnershipConflicts, type MeshTaskPhase } from '@adhdev/mesh-shared';
@@ -61,7 +62,7 @@ export function revisePendingTask(meshId: string, taskId: string, expectedRevisi
             next.review = patch.review;
         }
         if (next.phase) {
-            if (!host.nodeId || host.nodeId !== before.targetNodeId || !host.workspace || !next.ownedPaths?.paths.length) throw new Error('local_pinned_physical_context_required');
+            if (!host.nodeId || !pinnedMeshNodeIdMatches(host.nodeId, before.targetNodeId) || !host.workspace || !next.ownedPaths?.paths.length) throw new Error('local_pinned_physical_context_required');
             next.ownershipScope = attestLocalOwnership({ ...host, nodeId: host.nodeId, workspace: host.workspace, phase: next.phase, paths: next.ownedPaths });
         }
         if (patch.dependsOn !== undefined) {

@@ -1,3 +1,4 @@
+import { pinnedMeshNodeIdMatches } from './mesh-pinned-node-identity.js';
 /** Owner half: successful source attach, then queue + ledger CAS in one txn.
  * A late owner CAS rolls the source stamp back only while that prepare owns it. */
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
@@ -65,8 +66,8 @@ export async function reconcileDuplicateHolder(ctx: DeliverTaskContext, holderSe
         bridgeReceiptTransaction(store.db, () => {
             const a = ledger.getAttempt(ref.attemptId), q = store.findQueueEntryById(ctx.meshId, ctx.task.id);
             if (!a || a.terminal || a.state === 'stopping' || a.generation !== ref.generation || a.sessionId !== before.sessionId
-                || a.meshId !== ctx.meshId || a.taskId !== ctx.task.id || a.nodeId !== ctx.nodeId || a.providerType !== ctx.providerType
-                || !q || q.status !== 'assigned' || q.assignedSessionId !== ctx.sessionId || q.assignedNodeId !== ctx.nodeId
+                || a.meshId !== ctx.meshId || a.taskId !== ctx.task.id || !pinnedMeshNodeIdMatches(a.nodeId, ctx.nodeId) || a.providerType !== ctx.providerType
+                || !q || q.status !== 'assigned' || q.assignedSessionId !== ctx.sessionId || !pinnedMeshNodeIdMatches(q.assignedNodeId, ctx.nodeId)
                 || q.assignedProviderType !== ctx.providerType
                 || q.attemptId !== ref.attemptId || q.dispatchNonce !== ctx.task.dispatchNonce) throw new Error('holder_owner_CAS_changed');
             const result = ledger.observe({ eventId: operationId, kind: 'duplicate_dispatch_refusal', source: 'dispatch',

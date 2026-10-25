@@ -1,3 +1,4 @@
+import { pinnedMeshNodeIdMatches } from '../mesh/mesh-pinned-node-identity.js';
 /** Exact mesh stop. An RPC acknowledgement or disappearing adapter is never
  * quiescence. Keep owner authority unless the captured native tree is gone. */
 import { captureWriterStop, readWriterStopCapture, markWriterStopQuiescent } from './mesh-writer-stop-journal.js';
@@ -67,7 +68,7 @@ export async function stopExactMeshWriter(
             && s?.meshNodeFor === request.meshId && s?.meshActiveTaskId === request.taskId
             && s?.meshActiveAttemptId === request.attemptId && (s?.meshActiveAttemptGeneration ?? 0) === request.generation
             && (s?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0)
-            && (!request.nodeId || s?.meshNodeId === request.nodeId)
+            && (!request.nodeId || pinnedMeshNodeIdMatches(s?.meshNodeId, request.nodeId))
             && typeof s?.meshCoordinatorDaemonId === 'string' && daemonIdsEquivalent(s.meshCoordinatorDaemonId, request.ownerDaemonId!);
     };
     if (!adapter || !instance || !matches()) return pending('foreign_or_unbound_writer');

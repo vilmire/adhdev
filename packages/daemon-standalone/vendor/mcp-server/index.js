@@ -44909,6 +44909,17 @@ ${error.message || ""}`;
         loggedMigrationFailureFlag = false;
       }
     });
+    function pinnedMeshNodeIdMatches(actual, expected) {
+      if (actual !== expected) return false;
+      if (actual === void 0 || actual === null) return true;
+      return typeof actual === "string" && meshNodeIdMatches7({ nodeId: actual }, expected);
+    }
+    var init_mesh_pinned_node_identity = __esm2({
+      "src/mesh/mesh-pinned-node-identity.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
     function identity(p) {
       try {
         const s2 = (0, import_node_fs5.statSync)(p);
@@ -44940,7 +44951,7 @@ ${error.message || ""}`;
     function attestLocalOwnership(input) {
       if (!input.repoIdentity || !input.machineId || !input.nodeId || !path28.isAbsolute(input.workspace)) throw new Error("ownership_context_unproven");
       const worktree = import_node_fs5.realpathSync.native(input.workspace);
-      const git4 = (...args) => (0, import_node_child_process9.execFileSync)("git", ["-C", worktree, "rev-parse", ...args], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] }).trim();
+      const git4 = (...args) => (0, import_node_child_process9.execFileSync)("git", ["-C", worktree, "rev-parse", ...args], { windowsHide: true, encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] }).trim();
       if (import_node_fs5.realpathSync.native(git4("--show-toplevel")) !== worktree) throw new Error("ownership_worktree_root_required");
       const gitDir = import_node_fs5.realpathSync.native(git4("--absolute-git-dir"));
       const commonGitDir = import_node_fs5.realpathSync.native(path28.resolve(worktree, git4("--git-common-dir")));
@@ -45082,7 +45093,7 @@ ${error.message || ""}`;
       }
       if (active.some((writer) => {
         if (writer.status !== "assigned" && !pendingLaunchReservation(writer) || writer.readonly || writer.taskMode === "live_debug_readonly") return false;
-        if (writer.assignedNodeId === scope.nodeId) return true;
+        if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: "", subtree: true }] };
         return comparePhysicalOwnership(source2.ownedPaths, scope, paths, currentPhysicalScope(writer.ownershipScope, paths)).physicalConflict;
       })) return "review_input_busy";
@@ -45098,6 +45109,7 @@ ${error.message || ""}`;
     var init_mesh_task_routing_contract = __esm2({
       "src/mesh/mesh-task-routing-contract.ts"() {
         "use strict";
+        init_mesh_pinned_node_identity();
         import_node_fs6 = require("fs");
         init_mesh_physical_ownership();
       }
@@ -78999,7 +79011,7 @@ ${upstream}`;
         attached = true;
         bridgeReceiptTransaction(store2.db, () => {
           const a = ledger.getAttempt(ref2.attemptId), q = store2.findQueueEntryById(ctx.meshId, ctx.task.id);
-          if (!a || a.terminal || a.state === "stopping" || a.generation !== ref2.generation || a.sessionId !== before.sessionId || a.meshId !== ctx.meshId || a.taskId !== ctx.task.id || a.nodeId !== ctx.nodeId || a.providerType !== ctx.providerType || !q || q.status !== "assigned" || q.assignedSessionId !== ctx.sessionId || q.assignedNodeId !== ctx.nodeId || q.assignedProviderType !== ctx.providerType || q.attemptId !== ref2.attemptId || q.dispatchNonce !== ctx.task.dispatchNonce) throw new Error("holder_owner_CAS_changed");
+          if (!a || a.terminal || a.state === "stopping" || a.generation !== ref2.generation || a.sessionId !== before.sessionId || a.meshId !== ctx.meshId || a.taskId !== ctx.task.id || !pinnedMeshNodeIdMatches(a.nodeId, ctx.nodeId) || a.providerType !== ctx.providerType || !q || q.status !== "assigned" || q.assignedSessionId !== ctx.sessionId || !pinnedMeshNodeIdMatches(q.assignedNodeId, ctx.nodeId) || q.assignedProviderType !== ctx.providerType || q.attemptId !== ref2.attemptId || q.dispatchNonce !== ctx.task.dispatchNonce) throw new Error("holder_owner_CAS_changed");
           const result = ledger.observe({
             eventId: operationId,
             kind: "duplicate_dispatch_refusal",
@@ -79042,6 +79054,7 @@ ${upstream}`;
     var init_mesh_holder_reconcile = __esm2({
       "src/mesh/mesh-holder-reconcile.ts"() {
         "use strict";
+        init_mesh_pinned_node_identity();
         init_dist();
         init_mesh_node_identity();
         init_mesh_queue_mesh_view();
@@ -149480,6 +149493,7 @@ ${output}` : "";
     init_mesh_config();
     init_dist();
     init_config();
+    init_mesh_pinned_node_identity();
     init_mesh_task_phase_dependencies();
     init_mesh_task_routing_contract();
     init_dist();
@@ -149525,7 +149539,7 @@ ${output}` : "";
           next.review = patch.review;
         }
         if (next.phase) {
-          if (!host.nodeId || host.nodeId !== before.targetNodeId || !host.workspace || !next.ownedPaths?.paths.length) throw new Error("local_pinned_physical_context_required");
+          if (!host.nodeId || !pinnedMeshNodeIdMatches(host.nodeId, before.targetNodeId) || !host.workspace || !next.ownedPaths?.paths.length) throw new Error("local_pinned_physical_context_required");
           next.ownershipScope = attestLocalOwnership({ ...host, nodeId: host.nodeId, workspace: host.workspace, phase: next.phase, paths: next.ownedPaths });
         }
         if (patch.dependsOn !== void 0) {
@@ -151035,6 +151049,7 @@ ${output}` : "";
     init_logger();
     init_runtime_defaults();
     init_worker_report_idempotency();
+    init_mesh_pinned_node_identity();
     var import_node_crypto28 = require("crypto");
     init_dist();
     init_mesh_runtime_store();
@@ -151474,7 +151489,7 @@ ${output}` : "";
       recoverHolderAttachRollback(instance);
       const state2 = instance.getState(), s2 = state2.settings;
       if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse3("holder_not_currently_working");
-      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || s2?.meshNodeId !== mc.nodeId || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse3("foreign_or_stale_holder");
+      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse3("foreign_or_stale_holder");
       const current4 = () => {
         const v = instance.getState().settings;
         return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
@@ -167721,6 +167736,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
+    init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
     init_dist();
@@ -167775,7 +167791,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const instance = host.deps.getInstanceManager()?.getInstance(request.sessionId);
       const matches = () => {
         const s2 = instance?.getState().settings;
-        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveTaskId === request.taskId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0) && (!request.nodeId || s2?.meshNodeId === request.nodeId) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
+        return host.adapters.get(request.sessionId) === adapter && adapter?.cliType === request.providerType && s2?.assistant !== true && !s2?.meshCoordinatorFor && s2?.meshNodeFor === request.meshId && s2?.meshActiveTaskId === request.taskId && s2?.meshActiveAttemptId === request.attemptId && (s2?.meshActiveAttemptGeneration ?? 0) === request.generation && (s2?.meshActiveDispatchNonce ?? 0) === (request.dispatchNonce ?? 0) && (!request.nodeId || pinnedMeshNodeIdMatches(s2?.meshNodeId, request.nodeId)) && typeof s2?.meshCoordinatorDaemonId === "string" && daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, request.ownerDaemonId);
       };
       if (!adapter || !instance || !matches()) return pending("foreign_or_unbound_writer");
       const meta2 = adapter.getRuntimeMetadata?.();
@@ -190546,6 +190562,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_mesh_publisher();
     init_mesh_record();
+    init_mesh_pinned_node_identity();
+    var import_node_util12 = require("util");
     init_worker_bridge_transaction();
     var import_crypto43 = require("crypto");
     init_dist();
@@ -190829,7 +190847,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function settleWriterStop(request, receipt) {
         const r = receipt;
         const current4 = store2.getAttempt(request.attemptId);
-        if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== "string" || !r.incarnation || current4?.state !== "stopping" || current4.generation !== request.generation || current4.sessionId !== request.sessionId || current4.data.writerStop?.requestId !== request.stopRequestId || current4.meshId !== request.meshId || current4.taskId !== request.taskId || current4.nodeId !== request.nodeId || current4.providerType !== request.providerType || current4.dispatchNonce !== request.dispatchNonce || r.stopRequestId !== request.stopRequestId || r.attemptId !== request.attemptId || r.generation !== request.generation || r.sessionId !== request.sessionId || r.meshId !== request.meshId || r.taskId !== request.taskId || r.nodeId !== request.nodeId || r.dispatchNonce !== request.dispatchNonce || r.providerType !== request.providerType || r.ownerDaemonId !== request.ownerDaemonId) return;
+        if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== "string" || !r.incarnation || current4?.state !== "stopping" || current4.generation !== request.generation || current4.sessionId !== request.sessionId || current4.data.writerStop?.requestId !== request.stopRequestId || current4.meshId !== request.meshId || current4.taskId !== request.taskId || !pinnedMeshNodeIdMatches(current4.nodeId, request.nodeId) || current4.providerType !== request.providerType || current4.dispatchNonce !== request.dispatchNonce || !(0, import_node_util12.isDeepStrictEqual)(
+          [r.stopRequestId, r.attemptId, r.generation, r.sessionId, r.meshId, r.taskId, r.nodeId, r.dispatchNonce, r.providerType, r.ownerDaemonId],
+          [request.stopRequestId, request.attemptId, request.generation, request.sessionId, request.meshId, request.taskId, request.nodeId, request.dispatchNonce, request.providerType, request.ownerDaemonId]
+        )) return;
         const eventId = `writer_settled:${request.stopRequestId}:${(0, import_crypto43.randomUUID)()}`;
         confirmedStops.add(eventId);
         try {

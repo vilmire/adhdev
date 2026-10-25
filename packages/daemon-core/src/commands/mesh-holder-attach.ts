@@ -1,3 +1,4 @@
+import { pinnedMeshNodeIdMatches } from '../mesh/mesh-pinned-node-identity.js';
 /** Source half of duplicate-holder reconciliation. The owner receives proof
  * only after the exact running holder's native metadata acknowledges its ref. */
 import { randomUUID } from 'node:crypto';
@@ -71,7 +72,7 @@ export async function reconcileMeshHolder(host: CliAgentCommandHost, args: Agent
     recoverHolderAttachRollback(instance);
     const state = instance.getState(), s = state.settings;
     if (instance.getAdapter()?.cliType !== args.agentType || (op.phase === 'prepare' && !liveWorkingStatus(state))) return refuse('holder_not_currently_working');
-    if (s?.assistant || s?.meshCoordinatorFor || s?.meshNodeFor !== mc.meshId || s?.meshNodeId !== mc.nodeId
+    if (s?.assistant || s?.meshCoordinatorFor || s?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s?.meshNodeId, mc.nodeId)
         || (s?.meshActiveTaskId !== mc.taskId && !(row && row.boot_nonce !== BOOT && !s?.meshActiveTaskId))
         || s?.meshActiveAttemptId !== mc.attemptId || typeof s?.meshCoordinatorDaemonId !== 'string'
         || !daemonIdsEquivalent(s.meshCoordinatorDaemonId, mc.coordinatorDaemonId)

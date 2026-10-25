@@ -30,7 +30,7 @@ export function attestLocalOwnership(input: {
 }): PhysicalOwnershipScope {
     if (!input.repoIdentity || !input.machineId || !input.nodeId || !path.isAbsolute(input.workspace)) throw new Error('ownership_context_unproven');
     const worktree = realpathSync.native(input.workspace);
-    const git = (...args: string[]) => execFileSync('git', ['-C', worktree, 'rev-parse', ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const git = (...args: string[]) => execFileSync('git', ['-C', worktree, 'rev-parse', ...args], { windowsHide: true, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     if (realpathSync.native(git('--show-toplevel')) !== worktree) throw new Error('ownership_worktree_root_required');
     const gitDir = realpathSync.native(git('--absolute-git-dir'));
     const commonGitDir = realpathSync.native(path.resolve(worktree, git('--git-common-dir')));

@@ -1,3 +1,5 @@
+import { pinnedMeshNodeIdMatches } from '../mesh-pinned-node-identity.js';
+import { isDeepStrictEqual } from 'node:util';
 // ---------------------------------------------------------------------------
 // turn-ledger/ledger — `ledger.observe(evidence)`: THE turn write path (C2)
 // ---------------------------------------------------------------------------
@@ -236,13 +238,14 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== 'string' || !r.incarnation
             || current?.state !== 'stopping' || current.generation !== request.generation
             || current.sessionId !== request.sessionId || current.data.writerStop?.requestId !== request.stopRequestId
-            || current.meshId !== request.meshId || current.taskId !== request.taskId || current.nodeId !== request.nodeId
+            || current.meshId !== request.meshId || current.taskId !== request.taskId || !pinnedMeshNodeIdMatches(current.nodeId, request.nodeId)
             || current.providerType !== request.providerType || current.dispatchNonce !== request.dispatchNonce
-            || r.stopRequestId !== request.stopRequestId || r.attemptId !== request.attemptId
-            || r.generation !== request.generation || r.sessionId !== request.sessionId
-            || r.meshId !== request.meshId || r.taskId !== request.taskId || r.nodeId !== request.nodeId
-            || r.dispatchNonce !== request.dispatchNonce
-            || r.providerType !== request.providerType || r.ownerDaemonId !== request.ownerDaemonId) return; // canon-ok: Exact echoed request tuple; the source journal binds these bytes, not daemon membership.
+            // This is the exact authenticated stop reply, not daemon membership:
+            // aliases, missing fields and changed generations must all refuse.
+            || !isDeepStrictEqual(
+                [r.stopRequestId, r.attemptId, r.generation, r.sessionId, r.meshId, r.taskId, r.nodeId, r.dispatchNonce, r.providerType, r.ownerDaemonId],
+                [request.stopRequestId, request.attemptId, request.generation, request.sessionId, request.meshId, request.taskId, request.nodeId, request.dispatchNonce, request.providerType, request.ownerDaemonId],
+            )) return;
         const eventId = `writer_settled:${request.stopRequestId}:${randomUUID()}`;
         confirmedStops.add(eventId);
         try {

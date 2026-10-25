@@ -386,6 +386,14 @@ function wireNativeStop(f: ReturnType<typeof sourceFixture>, tables: () => Nativ
 }
 
 describe('RC29 exact stop and crash settlement through real command/ledger/queue', () => {
+    it.each(['nodeId', 'ownerDaemonId'] as const)('rejects a normalized alias in the exact stop %s receipt', async key => {
+        open();
+        cancel.mockImplementation(async (r: CancelDispatchRequest) => ({ ...r, success: true, quiescent: true,
+            incarnation: 'captured-native-incarnation', [key]: `${r[key]} ` }));
+        now = T0 + DEFAULT_TURN_POLICY.hardCeilingMs; ledger.sweepExpiredHolds(now); await drain();
+        expect(ledger.getAttempt(ATTEMPT)).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        expect(revoke).not.toHaveBeenCalled();
+    });
     it.each(['meshId','taskId','nodeId','attemptId','generation','sessionId','dispatchNonce','providerType','ownerDaemonId','stopRequestId'])(
         'refuses a quiescence receipt for a different %s', async key => {
             open();
