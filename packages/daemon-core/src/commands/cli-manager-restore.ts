@@ -11,7 +11,7 @@ import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../ma
  *
  * Split out of cli-manager.ts (file-size gate).
  */
-import { pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
+import { getCoordinatorForSession, pruneDeadMeshCoordinators } from '../mesh/coordinator-registry.js';
 import { LOG } from '../logging/logger.js';
 import { reconcileWorkerSessionBindsAfterRestore } from '../runtime-defaults.js';
 import { getAssistantRegistry } from '../assistant/assistant-registry.js';
@@ -154,7 +154,15 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
                 await verifyCoordinatorRecoveryInventory(coordinatorPlan, record, host.deps.getHostedBindingOwner?.(), host.deps.listHostedCliRuntimes);
                 signal?.throwIfAborted();
             }
-            if (coordinatorPlan) repairCoordinatorBinding(coordinatorPlan, record, host.deps.getHostedBindingOwner?.(), restoredRuntimeIds);
+            if (coordinatorPlan) {
+                repairCoordinatorBinding(coordinatorPlan, record, host.deps.getHostedBindingOwner?.(), restoredRuntimeIds);
+                // Materialization updates registry injection metadata. Do it only
+                // after the unchanged-binding fence, using its current exact entry.
+                // Otherwise our own prompt repair invalidates the attach snapshot.
+                if (normalizedType === 'antigravity-cli' || coordinatorPlan.entry.cliType === 'antigravity-cli') {
+                    try { ensureCoordinatorContextFileMaterialized(getCoordinatorForSession(record.runtimeId)); } catch { /* best-effort */ }
+                }
+            }
             restoredBindings.add(bindingKey);
             restored += 1;
             LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
@@ -203,9 +211,6 @@ function buildRestoredSettings(
     const coordinatorEntry = coordinatorPlan?.entry;
     if (coordinatorEntry) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
-        if (normalizedType === 'antigravity-cli' || coordinatorEntry.cliType === 'antigravity-cli') {
-            try { ensureCoordinatorContextFileMaterialized(coordinatorEntry); } catch { /* best-effort */ }
-        }
     }
     // RESTART-REBOUND RELAY ENVELOPE (rc.20): re-apply the session-level mesh
     // membership the launch/dispatch path persisted into the session-host

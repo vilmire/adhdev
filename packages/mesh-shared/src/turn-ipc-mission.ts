@@ -221,6 +221,8 @@ export interface MeshMissionTaskAggregateWire {
 }
 
 export interface MeshMissionStatsWire {
+    /** Present on peers that project proven blocked outcomes separately. */
+    blocked?: number
     missionId: string
     taskCount: number
     completed: number
@@ -313,12 +315,13 @@ function isMeshMissionTaskAggregateWire(value: unknown): value is MeshMissionTas
 }
 
 function isMeshMissionStatsWire(value: unknown): value is MeshMissionStatsWire {
-    const keys = ['missionId', 'taskCount', 'completed', 'failed', 'totalDurationMs', 'wallClockMs', 'retries', 'incompleteTaskIds'] as const
+    const keys = ['missionId', 'taskCount', 'completed', 'failed', 'blocked', 'totalDurationMs', 'wallClockMs', 'retries', 'incompleteTaskIds'] as const
     if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
     if (!isEvidenceIdentifier(value.missionId)) return false
     for (const k of ['taskCount', 'completed', 'failed', 'totalDurationMs', 'retries'] as const) {
         if (!isNonNegativeInt(value[k])) return false
     }
+    if (value.blocked !== undefined && !isNonNegativeInt(value.blocked)) return false
     if (value.wallClockMs !== null && !isNonNegativeInt(value.wallClockMs)) return false
     if (!Array.isArray(value.incompleteTaskIds) || !value.incompleteTaskIds.every(isEvidenceIdentifier)) return false
     return true
@@ -580,6 +583,8 @@ export interface LedgerQueryEntryWire {
 }
 
 export interface LedgerQuerySummaryWire {
+    /** Absent on older peers; never folded into failed by the decoder. */
+    taskBlocked?: number
     meshId: string
     totalEntries: number
     taskDispatched: number
@@ -625,12 +630,13 @@ function isLedgerQueryEntryWire(value: unknown): value is LedgerQueryEntryWire {
 }
 
 function isLedgerQuerySummaryWire(value: unknown): value is LedgerQuerySummaryWire {
-    const keys = ['meshId', 'totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'lastActivityAt', 'recentFailures'] as const
+    const keys = ['meshId', 'totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskBlocked', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'lastActivityAt', 'recentFailures'] as const
     if (!isRecord(value) || !hasOnlyKeys(value, keys)) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     for (const k of ['totalEntries', 'taskDispatched', 'taskCompleted', 'taskFailed', 'taskStalled', 'sessionLaunched', 'checkpointCreated', 'recentFailures'] as const) {
         if (!isNonNegativeInt(value[k])) return false
     }
+    if (value.taskBlocked !== undefined && !isNonNegativeInt(value.taskBlocked)) return false
     if (value.lastActivityAt !== null && typeof value.lastActivityAt !== 'string') return false
     return true
 }

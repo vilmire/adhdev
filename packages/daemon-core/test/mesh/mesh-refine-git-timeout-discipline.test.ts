@@ -92,7 +92,13 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
             ))
             .join('\n');
         const network = src.match(/execFileAsync\('git', \['(?:fetch|push)'[\s\S]{0,240}?\}\);/g) ?? [];
-        expect(network.length).toBeGreaterThanOrEqual(3);
+        // The push moved to a pinned helper; retain coverage of both direct fetches
+        // AND the helper's network-capable call (whose argv begins with -c).
+        expect(network).toHaveLength(2);
+        expect(src).toContain('await pushRefineryPinnedCommit(repoRoot, publishCommit, baseBranch, baseHead, execFileAsync)');
+        const pinnedPush = sourceOf('mesh-refine-pinned-push.ts');
+        expect(pinnedPush).toMatch(/return await run\('git', \['-c',[\s\S]*?'push', 'origin',[\s\S]*?env, timeout: GIT_NETWORK_TIMEOUT_MS/);
+        expect(pinnedPush).toContain('const env = gitChildEnv()');
         expect(network.filter(call => !/timeout:/.test(call))).toEqual([]);
     });
 

@@ -73,9 +73,27 @@ export function recordingHost(): TurnTxnHost & { calls: string[] } {
     };
 }
 
+const fixtureDeps = new WeakMap<TurnLedger, TurnLedgerDeps>();
 export function ledgerOn(db: DatabaseHandle, over: Partial<TurnLedgerDeps> = {}): TurnLedger {
-    return createTurnLedger({ db, selfDaemonId: 'dc', autoFlush: false, now: () => T0, ...over });
+    const deps = { db, selfDaemonId: 'dc', autoFlush: false, now: () => T0, ...over, ports: over.ports ?? {} };
+    const ledger = createTurnLedger(deps);
+    fixtureDeps.set(ledger, deps);
+    return ledger;
 }
+
+/** The owned synthetic native process acknowledges the exact durable stop tuple.
+ * This is an explicit second phase: tests must observe stopping/retained authority
+ * before calling it. No default fixture port silently claims quiescence. */
+export async function confirmFixtureWriterQuiescence(ledger: TurnLedger): Promise<void> {
+    const deps = fixtureDeps.get(ledger);
+    if (!deps) throw new Error('not a ledgerOn fixture');
+    const ports = deps.ports!;
+    const prior = ports.cancelDispatch;
+    ports.cancelDispatch = request => ({ ...request, success: true, quiescent: true, incarnation: 'owned-fixture-native' });
+    try { await ledger.resumeStoppingWriters(); }
+    finally { ports.cancelDispatch = prior; }
+}
+
 
 export const T0 = 1_750_000_000_000;
 export const SUMMARY: SummaryRef = { topic: 'mesh.m1.handoff', writer: 'w-dw', seq: 7 };

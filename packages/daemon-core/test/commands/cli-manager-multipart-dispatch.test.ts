@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { assignmentFixtureManager } from '../helpers/mesh-assignment-manager.js'
+
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 
 /**
@@ -57,12 +59,13 @@ function createManager(options: {
     category: options.category ?? 'cli',
     capabilities: options.capabilities ?? { input: { multipart: true, mediaTypes: ['text', 'image'] } },
   }
+  const instanceManager = assignmentFixtureManager(options.withInstance === false ? [] : [{ id: 'session-1', adapter, instance }])
   const manager = new DaemonCliManager({
     getServerConn: () => null,
     getP2p: () => null,
     onStatusChange: vi.fn(),
     removeAgentTracking: vi.fn(),
-    getInstanceManager: () => ({ getInstance: () => (options.withInstance === false ? undefined : instance) }),
+    getInstanceManager: () => instanceManager,
   } as any, {
     resolve: vi.fn(() => provider),
     getMeta: vi.fn(() => provider),

@@ -10,7 +10,7 @@ import {
 import type { TurnProbeRead } from '../../src/mesh/turn-ledger/probe.js';
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import {
-    LIVE_IDLE, T0, dispatch, evd, fakePublisher, ledgerOn, memDb, pendingCount, recordingHost, recordingPorts, rowsOf,
+    LIVE_IDLE, T0, dispatch, evd, fakePublisher, ledgerOn, memDb, pendingCount, recordingHost, recordingPorts, rowsOf, confirmFixtureWriterQuiescence,
 } from './ledger-harness.js';
 
 // C4 (C-W4): ONE tick over ledger queries. Every hold expiry turns into
@@ -60,6 +60,8 @@ describe('H-rule expiry → the effect the reducer table names (one tick)', () =
         r.advance(awaitDeliveryMs(P) + 1);
         const report = await r.scheduler.tick();
         expect(report.swept).toBeGreaterThanOrEqual(1);
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(r.ledger);
         const attempt = r.ledger.getAttempt('a1')!;
         expect(attempt.generation).toBe(1);
         expect(attempt.state).toBe('accepted');
@@ -78,6 +80,8 @@ describe('H-rule expiry → the effect the reducer table names (one tick)', () =
         r.advance(P.consumeGraceMs + 1);
         await r.scheduler.tick();
         expect(r.ports.calls.filter((c) => c.startsWith('redeliver:'))).toHaveLength(1);
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(r.ledger);
         expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
         expect(r.host.calls).toContain('requeue:t1');
     });
@@ -87,6 +91,9 @@ describe('H-rule expiry → the effect the reducer table names (one tick)', () =
         toGenerating(r);
         r.advance(P.hardCeilingMs + 1);
         await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', terminal: null });
+        expect(r.host.calls.filter(c => c.startsWith('terminal:'))).toEqual([]);
+        await confirmFixtureWriterQuiescence(r.ledger);
         const attempt = r.ledger.getAttempt('a1')!;
         expect(attempt.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
         expect(r.host.calls).toContain('terminal:t1:failed');
@@ -291,6 +298,8 @@ describe('probeDue — the probe produces evidence, never a verdict', () => {
         r.advance(P.quietWindowMs + 1);
         await r.scheduler.tick();
         expect(rowsOf(r.db, 'liveness', 'a1')[0]).toMatchObject({ rule: 'R31' });
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(r.ledger);
         expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
     });
 
@@ -423,6 +432,9 @@ describe('weak expiry requires a fresh completed probe', () => {
         toGenerating(r);
         r.scheduler.requestProbe('a1');
         await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        expect(rowsOf(r.db, 'liveness', 'a1')).toHaveLength(0);
+        await confirmFixtureWriterQuiescence(r.ledger);
         const attempt = r.ledger.getAttempt('a1')!;
         expect(attempt).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
         expect(attempt.lastLiveness).not.toBe('dead');
@@ -654,6 +666,8 @@ describe('async handoff respects session cuts in the production SQLite scheduler
             await r.scheduler.tick();
             expect(r.host.calls).not.toContain('terminal:t1:completed');
             if (control === 'dead') {
+                expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+                await confirmFixtureWriterQuiescence(r.ledger);
                 expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
                 expect(r.host.calls).toContain('requeue:t1');
             } else {
@@ -694,7 +708,11 @@ describe('async handoff respects session cuts in the production SQLite scheduler
         expect(rowsOf(r.db, 'transcript_final', 'a1')).toHaveLength(0);
         expect(rowsOf(r.db, 'liveness', 'a1')).toHaveLength(0);
         if (change === 'accepted_report') expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
-        else if (change === 'reclaim') expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
+        else if (change === 'reclaim') {
+            expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 0, state: 'stopping', terminal: null });
+            await confirmFixtureWriterQuiescence(r.ledger);
+            expect(r.ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted', terminal: null });
+        }
         else {
             expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
             expect(r.ledger.getAttempt('a1')!.data.reportCorrection).toEqual(correction);

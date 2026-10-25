@@ -41,6 +41,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
   listMeshes: meshConfigMocks.listMeshes,
 }))
 
+import { physicalWriterFixture } from '../helpers/physical-writer.js'
 import { tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
@@ -49,9 +50,9 @@ import { __drainTestTurnLedgersForTests } from './helpers/mesh-turn-ledger-fixtu
 const NODE_A = 'node_adede'
 const NODE_B = 'node_509d'
 const BASE_NODE = 'node_base'
-const WS_A = '/repo/wt-a'
-const WS_B = '/repo/wt-b'
-const WS_BASE = '/repo/main'
+const WS_A = path.join(testTmpDir, 'wt-a')
+const WS_B = path.join(testTmpDir, 'wt-b')
+const WS_BASE = path.join(testTmpDir, 'main')
 
 type Sess = { sessionId: string; workspace: string; meshNodeId?: string }
 
@@ -115,6 +116,7 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
   it('(i) ZERO cross-leak: sibling worktree sessions each claim only their own node task; no task vanishes', async () => {
     const meshId = `mesh_wtd_${randomUUID().slice(0, 8)}`
     try {
+      const a = physicalWriterFixture(WS_A, NODE_A), b = physicalWriterFixture(WS_B, NODE_B)
       setMesh(meshId, [node(NODE_A, WS_A, { isLocalWorktree: true }), node(NODE_B, WS_B, { isLocalWorktree: true })])
       // Both worker sessions came up WITHOUT a meshNodeId binding (no_node_binding) — the live symptom.
       const components = createComponents(meshId, [
@@ -128,6 +130,7 @@ describe('WTDISPATCH — sibling-worktree claim node scope (instanceManager-reso
     difficulty: 'medium',
 })
 
+      a.bind(taskA); b.bind(taskB)
       // Session A (real workspace WS_A) is driven toward node B — the cross-claim that leaked B
       // onto A in the live repro. It MUST be refused, and B MUST stay pending for B's own session.
       expect(tryAssignQueueTask(components, meshId, NODE_B, 'sess-A', 'claude-cli')).toBe(false)

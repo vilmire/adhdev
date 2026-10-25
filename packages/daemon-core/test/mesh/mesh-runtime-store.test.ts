@@ -19,6 +19,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => null,
 }));
 
+import { physicalWriterFixture } from '../helpers/physical-writer.js';
+import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { migrateMeshIsolationColumns } from '../../src/mesh/mesh-runtime-store-schema.js';
 import { seedMeshAttempt, advanceSeededAttempt } from '../helpers/turn-attempt-seed.js';
@@ -119,7 +121,7 @@ describe('mesh-runtime-store', () => {
             expect(store.getSoleActiveDirectDispatchTaskId(meshId, 's-sole')).toBeNull();
         });
 
-        it('cancelDirectDispatchAttempts closes the attempt on this process\'s ledger (no ledger → 0)', () => {
+        it('cancelDirectDispatchAttempts closes the attempt on this process\'s ledger (no ledger → 0)', async () => {
             const meshId = `mesh-dd-${randomUUID().slice(0, 8)}`;
             const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher() });
             const taskId = randomUUID();
@@ -132,6 +134,8 @@ describe('mesh-runtime-store', () => {
             setActiveTurnLedger(ledger);
             try {
                 expect(cancelDirectDispatchAttempts(meshId, [taskId])).toBe(1);
+                expect(getActiveDirectDispatches(meshId)).toHaveLength(1);
+                await confirmTestWriterQuiescence(ledger);
                 expect(getActiveDirectDispatches(meshId)).toHaveLength(0);
                 expect(cancelDirectDispatchAttempts(meshId, [taskId])).toBe(0); // idempotent
             } finally {
@@ -163,11 +167,13 @@ describe('mesh-runtime-store', () => {
         it('persists the assignedTranscriptProfile stamp on claim and omits it when absent', () => {
             const meshId = `mesh-claim-profile-${randomUUID().slice(0, 8)}`;
             const db = MeshRuntimeStore.getInstance();
-            db.insertQueueEntry({ id: 'task-p1', meshId, message: 'stamped', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
-            db.insertQueueEntry({ id: 'task-p2', meshId, message: 'unstamped', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+            const one = physicalWriterFixture(join(testTmpDir, 'p1'), 'node1');
+            const two = physicalWriterFixture(join(testTmpDir, 'p2'), 'node2');
+            db.insertQueueEntry({ ...one.task, id: 'task-p1', meshId, message: 'stamped', status: 'pending', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            db.insertQueueEntry({ ...two.task, id: 'task-p2', meshId, message: 'unstamped', status: 'pending', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
             const profile = { class: 'native-source', timing: 'floor', emitsPtyTurnEvents: false } as const;
-            const stamped = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { assignedTranscriptProfile: profile });
+            const stamped = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { ...one.claim, assignedTranscriptProfile: profile });
             expect(stamped?.id).toBe('task-p1');
             expect(stamped?.assignedTranscriptProfile).toEqual(profile);
             // Round-trips through the persisted payload, not just the in-memory entry.
@@ -175,7 +181,7 @@ describe('mesh-runtime-store', () => {
             expect(persisted?.assignedTranscriptProfile).toEqual(profile);
 
             // Older-daemon shape: no stamp option → no field on the row.
-            const unstamped = db.claimNextQueueTask(meshId, 'node2', 'sess2');
+            const unstamped = db.claimNextQueueTask(meshId, 'node2', 'sess2', [], two.claim);
             expect(unstamped?.id).toBe('task-p2');
             expect(unstamped?.assignedTranscriptProfile).toBeUndefined();
 
@@ -285,22 +291,24 @@ describe('mesh-runtime-store', () => {
             const configForm = `daemon_${core}`; // first claim stamps the config-form
             const stampForm = core;              // a sibling session stamps the bare form
             const db = MeshRuntimeStore.getInstance();
-            db.insertQueueEntry({ id: 'w-first', meshId, message: 'write 1', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
-            db.insertQueueEntry({ id: 'w-second', meshId, message: 'write 2', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
+            const otherCore = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            const one = physicalWriterFixture(join(testTmpDir, 'busy-one'), configForm);
+            const two = physicalWriterFixture(join(testTmpDir, 'busy-two'), otherCore);
+            db.insertQueueEntry({ ...one.task, id: 'w-first', meshId, message: 'write 1', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 2000).toISOString(), updatedAt: new Date(Date.now() - 2000).toISOString() });
+            db.insertQueueEntry({ ...two.task, id: 'w-second', meshId, message: 'write 2', status: 'pending', taskMode: 'code_change', createdAt: new Date(Date.now() - 1000).toISOString(), updatedAt: new Date(Date.now() - 1000).toISOString() });
 
             // First write task claimed with the config-form node id → assigned_node_id = daemon_mach_X
-            const first = db.claimNextQueueTask(meshId, configForm, 'sess1');
+            const first = db.claimNextQueueTask(meshId, configForm, 'sess1', [], one.claim);
             expect(first?.id).toBe('w-first');
             expect(first?.assignedNodeId).toBe(configForm);
 
             // A second session on the SAME machine (bare stamp-form) must see the node
             // busy and be blocked — even though the assigned row is in a different form.
-            expect(db.claimNextQueueTask(meshId, stampForm, 'sess2')).toBeNull();
+            expect(db.claimNextQueueTask(meshId, stampForm, 'sess2', [], one.claim)).toBeNull();
 
             // A session on a DIFFERENT machine is NOT falsely blocked (expansion stays
             // within a single machine core) — it claims the still-pending second task.
-            const otherCore = `mach_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-            expect(db.claimNextQueueTask(meshId, otherCore, 'sess3')?.id).toBe('w-second');
+            expect(db.claimNextQueueTask(meshId, otherCore, 'sess3', [], two.claim)?.id).toBe('w-second');
 
             __clearMeshQueueForTests(meshId);
         });
@@ -519,15 +527,21 @@ describe('mesh-runtime-store', () => {
             insertWrite(db, meshId, 'w-2', 2000);
             insertWrite(db, meshId, 'w-3', 1000);
 
+            const physical = ['node1', 'node2', 'node3'].map((node, i) => {
+                const fixture = physicalWriterFixture(join(testTmpDir, node), node);
+                const entry = db.findQueueEntryById(meshId, `w-${i + 1}`)!;
+                db.updateQueueEntry({ ...entry, ...fixture.task });
+                return fixture;
+            });
             const opts = { providerType: 'claude-cli', providerMaxParallel: 2 };
             // Distinct nodes on ONE daemon: the cap is a machine budget, so all three
             // claims contend for the same 2 slots. (A write task also requires an idle
             // node, hence one node each.)
             const daemonNodeIds = ['node1', 'node2', 'node3'];
-            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { ...opts, daemonNodeIds });
-            const c2 = db.claimNextQueueTask(meshId, 'node2', 'sess2', [], { ...opts, daemonNodeIds });
+            const c1 = db.claimNextQueueTask(meshId, 'node1', 'sess1', [], { ...opts, ...physical[0]!.claim, daemonNodeIds });
+            const c2 = db.claimNextQueueTask(meshId, 'node2', 'sess2', [], { ...opts, ...physical[1]!.claim, daemonNodeIds });
             // Third claim on the same (daemon, provider) is over the cap → blocked.
-            const c3 = db.claimNextQueueTask(meshId, 'node3', 'sess3', [], { ...opts, daemonNodeIds });
+            const c3 = db.claimNextQueueTask(meshId, 'node3', 'sess3', [], { ...opts, ...physical[2]!.claim, daemonNodeIds });
 
             expect(c1?.id).toBe('w-1');
             expect(c1?.assignedProviderType).toBe('claude-cli');

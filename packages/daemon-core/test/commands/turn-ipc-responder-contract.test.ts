@@ -94,6 +94,26 @@ describe('responder → client decoder contract (seeded data)', () => {
         }
     });
 
+    it('blocked counters retain strict type, privacy and legacy-peer fences', async () => {
+        await seed();
+        const missions: any = unwrap(await call('mission_list_query', { v, meshId, withStats: true }));
+        const ledger: any = unwrap(await call('ledger_query', { v, meshId, includeSummary: true }));
+        expect(missions.missions[0].stats.blocked).toBe(0);
+        expect(ledger.summary.taskBlocked).toBe(0);
+        for (const invalid of [-1, 0.5, '1', null]) {
+            const m = structuredClone(missions); m.missions[0].stats.blocked = invalid;
+            expect(decodeMissionListQueryResponse(m)).toBeNull();
+            expect(decodeLedgerQueryResponse({ ...ledger, summary: { ...ledger.summary, taskBlocked: invalid } })).toBeNull();
+        }
+        const privateStats = structuredClone(missions); privateStats.missions[0].stats.body = 'private';
+        expect(decodeMissionListQueryResponse(privateStats)).toBeNull();
+        expect(decodeLedgerQueryResponse({ ...ledger, summary: { ...ledger.summary, body: 'private' } })).toBeNull();
+        const legacy = structuredClone(missions); delete legacy.missions[0].stats.blocked;
+        expect(decodeMissionListQueryResponse(legacy)).not.toBeNull();
+        const legacyLedger = structuredClone(ledger); delete legacyLedger.summary.taskBlocked;
+        expect(decodeLedgerQueryResponse(legacyLedger)).not.toBeNull();
+    });
+
     it('mission_query, queue_query, active_work_query, ledger_query, recovery_context_query decode (mesh_index_query/turn_query need the boot-bound ledger — covered by their own tests)', async () => {
         const { missionId } = await seed();
         const cases: Array<[string, Record<string, unknown>, (v: unknown) => unknown]> = [

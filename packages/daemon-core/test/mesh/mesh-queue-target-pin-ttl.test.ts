@@ -261,22 +261,26 @@ describe('RC.20 TARGET-PIN TTL — a requeued target_session_id pin delivers to 
     }
   })
 
-  it('dead-target self-heal also records the content-free targetPinCleared metric', async () => {
+  it('dead local hard target parks without silently re-homing without reporting a cleared pin', async () => {
     const meshId = `mesh_ttl_metric_${randomUUID().slice(0, 8)}`
     __resetTargetPinClearedMetricsForTests()
     try {
       setMesh(meshId)
       const components = createComponents([])
       // Session absent on the LIVE LOCAL node, past the 60s dead-target grace but
-      // inside the TTL → the dead-target path (not the TTL) clears it.
+      // inside the TTL → the owner hard pin remains parked for an explicit decision.
       const t = insertPendingTask(meshId, { targetNodeId: NODE_ID, targetSessionId: 'dead-session', ageMs: DEAD_TARGET_AGE_MS })
 
       await triggerMeshQueue(components, meshId)
 
       const after = task(meshId, t.id)!
-      expect(after.targetSessionId).toBeUndefined()
-      expect(after.requeueReason).toBe('dead_target_session_absent')
-      expect(getTargetPinClearedMetrics()['dead_target_session_absent']).toBe(1)
+      expect(after.targetSessionId).toBe('dead-session')
+      expect(after.targetNodeId).toBe(NODE_ID)
+      expect(after.parked?.reason).toBe('owner_hard_pin_unavailable:dead_target_session_absent')
+      expect(after.autoLaunch?.reason).toBe('owner_hard_pin_unavailable')
+      expect(after.requeueCount ?? 0).toBe(0)
+      expect(claimNextTask(meshId, NODE_ID, 'replacement-session')).toBeNull()
+      expect(getTargetPinClearedMetrics()).toEqual({})
     } finally {
       cleanup(meshId)
     }

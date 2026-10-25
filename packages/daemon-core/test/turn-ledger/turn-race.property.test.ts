@@ -11,7 +11,7 @@ import { loadBetterSqlite3 } from '../../src/system/load-better-sqlite3.js';
 import { meshEventsPolicy, meshEventsTopic } from '../../src/seqscribe/topics.js';
 import { DEFAULT_TURN_POLICY } from '../../src/mesh/turn-ledger/policy.js';
 import type { TurnLedger, TurnPublisherPort } from '../../src/mesh/turn-ledger/ledger.js';
-import { LIVE_IDLE, SUMMARY, fakePublisher, ledgerOn, memDb, recordingHost } from './ledger-harness.js';
+import { LIVE_IDLE, SUMMARY, fakePublisher, ledgerOn, memDb, recordingHost, confirmFixtureWriterQuiescence } from './ledger-harness.js';
 
 // C8 race harness (wiring-unification §5 C8; harness spec scratchpad
 // phase-C8-test-harness-spec.md). Seeded, enumerated, no property library:
@@ -123,7 +123,7 @@ function interleave(rng: SeededRng, scripts: Scripted[]): TurnEvidence[] {
 
 interface Violation { seed: number; message: string; sequence?: unknown }
 
-function runLedgerSeed(seed: number): Violation[] {
+async function runLedgerSeed(seed: number): Promise<Violation[]> {
     const root = new SeededRng(seed);
     const N = [1, 3, 8][root.substream('workerCount').int(3)]!;
     const M = 1 + root.substream('coordinators').int(2);
@@ -148,7 +148,8 @@ function runLedgerSeed(seed: number): Violation[] {
         lastGen.set(attemptId, a.generation);
         const holds = ledger.store.activeHolds(attemptId);
         if (a.terminal && holds.length > 0) fail(`(4) terminal ${attemptId} holds ${holds.map((h) => h.reason)}`);
-        if (!a.terminal && a.scope !== 'plain' && !holds.some((h) => h.reason === 'hard_ceiling')) fail(`(4) open ${attemptId} has no hard_ceiling`);
+        if (a.state === 'stopping' && (!a.data.writerStop || a.data.writerStop.confirmed || a.terminal)) fail(`(4) stopping ${attemptId} lost exclusive unconfirmed native intent`);
+        if (!a.terminal && a.state !== 'stopping' && a.scope !== 'plain' && !holds.some((h) => h.reason === 'hard_ceiling')) fail(`(4) open ${attemptId} has no hard_ceiling`);
     };
 
     for (const evidence of sequence) {
@@ -158,6 +159,7 @@ function runLedgerSeed(seed: number): Violation[] {
         if (result.verdict === 'recorded' && JSON.stringify(ledger.getAttempt(attemptId)) !== JSON.stringify(before)) fail(`(3) recorded verdict ${result.rule} mutated ${attemptId}`);
         if (result.rule === 'R27a' && before && !['accepted', 'delivered'].includes(before.state)) fail(`(3) R27a adopted while g was ${before.state}`);
         check(attemptId);
+        await confirmFixtureWriterQuiescence(ledger);
         if (tick.next() < 0.3) {
             now += tick.int(30_000);
             ledger.sweepExpiredHolds();
@@ -166,7 +168,9 @@ function runLedgerSeed(seed: number): Violation[] {
     // Quiescence: run the clock past every ceiling; the scheduler sweep terminates everything.
     for (let round = 0; round < 12; round++) {
         now += DEFAULT_TURN_POLICY.hardCeilingMs;
-        if (ledger.sweepExpiredHolds().length === 0) break;
+        const swept = ledger.sweepExpiredHolds();
+        await confirmFixtureWriterQuiescence(ledger);
+        if (swept.length === 0) break;
     }
     for (const s of scripts) {
         check(s.attemptId);
@@ -176,16 +180,16 @@ function runLedgerSeed(seed: number): Violation[] {
         if (committed.n !== 1) fail(`(1) ${s.attemptId} terminal with ${committed.n} committed rows`);
         const graph = host.calls.filter((c) => c.startsWith(`terminal:${s.taskId}:`));
         if (graph.length !== 1 || graph[0] !== `terminal:${s.taskId}:${a.terminal.outcome}`) fail(`(1) queue/graph effect ${JSON.stringify(graph)} vs ${a.terminal.outcome}`);
-        const terminalNotices = db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE attempt_id = ? AND kind = 'notify' AND json_extract(payload_json, '$.notify') IN ('completed','failed','cancelled','stopped')`).get(s.attemptId) as { n: number };
+        const terminalNotices = db.prepare(`SELECT COUNT(*) AS n FROM turn_events WHERE attempt_id = ? AND kind = 'notify' AND json_extract(payload_json, '$.notify') IN ('completed','blocked','failed','cancelled','stopped')`).get(s.attemptId) as { n: number };
         if (terminalNotices.n !== 1) fail(`(2) ${s.attemptId} has ${terminalNotices.n} terminal notices`);
     }
     return violations;
 }
 
 describe('turn race — ledger properties (C8 1–4)', () => {
-    it(`holds every invariant over ${SEEDS} seeds`, () => {
+    it(`holds every invariant over ${SEEDS} seeds`, async () => {
         const violations: Violation[] = [];
-        for (let seed = 1; seed <= SEEDS && violations.length === 0; seed++) violations.push(...runLedgerSeed(seed));
+        for (let seed = 1; seed <= SEEDS && violations.length === 0; seed++) violations.push(...await runLedgerSeed(seed));
         if (violations.length > 0) console.error(JSON.stringify(violations[0], null, 2));
         expect(violations.map((v) => `seed ${v.seed}: ${v.message}`)).toEqual([]);
     });
@@ -268,6 +272,7 @@ async function runPairSeed(seed: number): Promise<string[]> {
     // Quiesce the owner's holds so the attempt terminates, then let replication settle.
     for (let round = 0; round < 6; round++) {
         ledgerA.sweepExpiredHolds(T_BASE + sched.now() + DEFAULT_TURN_POLICY.hardCeilingMs * (round + 1));
+        await confirmFixtureWriterQuiescence(ledgerA);
         await sched.run({ untilMs: sched.now() + 10_000 });
     }
     // Appends resolve on the (virtual) group-commit timer: flush WHILE time runs.

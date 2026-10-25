@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isMeshTopicEntry } from '@adhdev/mesh-shared';
 import { DEFAULT_TURN_POLICY, awaitDeliveryMs } from '../../src/mesh/turn-ledger/policy.js';
 import {
-    LIVE_IDLE, SUMMARY, T0, dispatch, evd, fakePublisher, ledgerOn, memDb, pendingCount, recordingHost, recordingPorts, rowsOf,
+    LIVE_IDLE, SUMMARY, T0, dispatch, evd, fakePublisher, ledgerOn, memDb, pendingCount, recordingHost, recordingPorts, rowsOf, confirmFixtureWriterQuiescence,
 } from './ledger-harness.js';
 
 // ledger.observe — the C2 write path over a real (in-memory) SQLite handle.
@@ -88,17 +88,20 @@ describe('commit path', () => {
 describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
     // Reclaim (generation + 1) exists only for mesh_queue: a mesh_direct
     // attempt commits `failed` instead (see the direct describe below).
-    it('reclaim records the cut in-txn and revokes the worker bind BEFORE cancelling (post-commit)', () => {
+    it('reclaim retains the writer until its native checkpoint, then revokes the bind and advances generation', async () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
         const exit = ledger.observe(evd('process_exit', { exitCode: 137 }, { source: 'pty_exit' }));
         expect(exit.rule).toBe('R20');
-        expect(exit.attempt).toMatchObject({ state: 'accepted', generation: 1, prevGeneration: { sessionId: 's1', consumed: true } });
+        expect(exit.attempt).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        expect(ports.calls.filter(c => c.startsWith('revoke'))).toEqual([]);
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1, prevGeneration: { sessionId: 's1', consumed: true } });
         const [cancelRow] = rowsOf(db, 'cancel_dispatch', 'a1');
-        expect(JSON.parse(String(cancelRow!.payload_json))).toMatchObject({ messageId: 'msg-1', revokeBind: true });
-        expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['revoke:s1', 'cancel:s1:g0']);
+        expect(JSON.parse(String(cancelRow!.payload_json))).toMatchObject({ messageId: 'msg-1', revokeBind: false });
+        expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['cancel:s1:g0', 'revoke:s1']);
         expect(rowsOf(db, 'reclaim', 'a1')).toHaveLength(1);
         expect(ledger.store.activeHolds('a1').map((h) => `${h.reason}:${h.generation}`).sort()).toEqual(['await_delivery:1', 'hard_ceiling:null']);
     });
@@ -110,6 +113,8 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         const ledger = ledgerOn(db, { ports, publisher });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(ledger);
         ports.calls.length = 0;
         const late = ledger.observe(evd('turn_end', { strength: 'genuine', summary: SUMMARY }, { attemptRef: { attemptId: 'a1', generation: 0 } }));
         expect(late.rule).toBe('R27a');
@@ -120,18 +125,24 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         expect(rowsOf(db, 'committed', 'a1')).toHaveLength(1);
     });
 
-    it('R27a after re-delivery to another session cuts that session', () => {
+    it('R27a after re-delivery to another session cuts that session', async () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(ledger);
         ledger.observe(evd('delivered', { messageId: 'msg-2', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's2', attemptRef: { attemptId: 'a1', generation: 1 } }));
         ports.calls.length = 0;
         const late = ledger.observe(evd('worker_report', { outcome: 'completed', summary: SUMMARY, hasHandoffNotes: false }, { source: 'worker_tool', attemptRef: { attemptId: 'a1', generation: 0 } }));
         expect(late.rule).toBe('R27a');
-        expect(ports.calls).toEqual(expect.arrayContaining(['revoke:s2', 'cancel:s2:g1']));
-        expect(late.attempt?.sessionId).toBe('s1');
+        expect(late.attempt).toMatchObject({ state: 'stopping', generation: 1, sessionId: 's2', terminal: null });
+        expect(ports.calls).toContain('cancel:s2:g1');
+        expect(ports.calls).not.toContain('revoke:s2');
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ports.calls).toContain('revoke:s2');
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'completed', sessionId: 's1' });
     });
 
     it('R27: g running — recorded, g untouched, and a late_completion notice (g−1, with the summary ref) is published', async () => {
@@ -140,6 +151,8 @@ describe('reclaim cuts g−1 first; late completions (R27a / R27)', () => {
         const ledger = ledgerOn(db, { publisher });
         driveToGenerating(ledger, { scope: 'mesh_queue' });
         ledger.observe(evd('process_exit', { exitCode: 1 }, { source: 'pty_exit' }));
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(ledger);
         const g1 = { attemptRef: { attemptId: 'a1', generation: 1 } };
         ledger.observe(evd('delivered', { messageId: 'msg-2', outcome: 'delivered', via: 'local' }, { ...g1, source: 'input_service', sessionId: 's2' }));
         ledger.observe(evd('turn_started', { retro: false }, { ...g1, sessionId: 's2' }));
@@ -274,7 +287,7 @@ describe('sessions, holds, notices', () => {
         expect(ledger.getAttempt('a2')).toBeNull();
     });
 
-    it('the scheduler sweep turns a due await_delivery hold into H1 (reclaim) via the store-side session join', () => {
+    it('the scheduler sweep turns a due await_delivery hold into H1 (reclaim) via the store-side session join', async () => {
         const db = memDb();
         let now = T0;
         const ledger = ledgerOn(db, { now: () => now, publisher: fakePublisher() });
@@ -284,7 +297,9 @@ describe('sessions, holds, notices', () => {
         const [expiry] = ledger.expiredHoldEvidence();
         expect(expiry).toMatchObject({ sessionId: 's1', reason: 'await_delivery' });
         const [result] = ledger.sweepExpiredHolds();
-        expect(result).toMatchObject({ rule: 'H1', attempt: { generation: 1, state: 'accepted' } });
+        expect(result).toMatchObject({ rule: 'H1', attempt: { generation: 0, state: 'stopping', terminal: null } });
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ledger.getAttempt('a1')).toMatchObject({ generation: 1, state: 'accepted' });
         expect(ledger.sessionIdFor('a1')).toBe('s1');
     });
 
@@ -337,7 +352,7 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
     // `mesh_send_task` without `session_id` opens the attempt with sessionId = taskId
     // (a placeholder); only `delivered` re-keys it. Live: a refused dispatch's
     // reclaim sent `stop_cli` for "session <taskId>" → `cliType required`.
-    it('a refused sessionless dispatch (R24 → direct failure) runs no cancel executor for the task-id placeholder; the in-txn cut row and the token revoke remain', () => {
+    it('a refused sessionless dispatch (R24 → direct failure) runs no cancel executor for the task-id placeholder; the in-txn cut row and the token revoke remain', async () => {
         const db = memDb();
         const ports = recordingPorts();
         const infos: string[] = [];
@@ -345,8 +360,10 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         expect(ledger.observe(dispatch({ taskId: 'task_sessionless', session: 'task_sessionless' })).rule).toBe('R1');
         const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 'task_sessionless' }));
         expect(refused.rule).toBe('R24');
+        expect(refused.attempt).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmFixtureWriterQuiescence(ledger);
         // A direct attempt is not re-armed: it commits failed with the reclaim cause; the cut is still recorded in-txn.
-        expect(refused.attempt).toMatchObject({ state: 'failed', generation: 0, terminal: { outcome: 'failed', reason: 'dispatch_failed' } });
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'failed', generation: 0, terminal: { outcome: 'failed', reason: 'dispatch_failed' } });
         expect(rowsOf(db, 'reclaim', 'a1')).toHaveLength(0);
         expect(rowsOf(db, 'cancel_dispatch', 'a1')).toHaveLength(1);
         expect(ports.cancels).toEqual([]);
@@ -358,7 +375,7 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         expect(skips[0]).toMatch(/never delivered to a session \(placeholder session = task task_sessionless\)/);
     });
 
-    it('a sessionless dispatch that WAS delivered (re-keyed to the real session) still gets its cancel on the direct failure', () => {
+    it('a sessionless dispatch that WAS delivered (re-keyed to the real session) still gets its cancel on the direct failure', async () => {
         const db = memDb();
         const ports = recordingPorts();
         const ledger = ledgerOn(db, { ports, publisher: fakePublisher() });
@@ -366,7 +383,10 @@ describe('sessionless direct dispatch — the placeholder session is never a sto
         ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service', sessionId: 's_real' }));
         const refused = ledger.observe(evd('dispatch_failed', { workerAbsent: true, reason: 'worker_absent' }, { source: 'dispatch', sessionId: 's_real' }));
         expect(refused.rule).toBe('R24');
-        expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['revoke:s_real', 'cancel:s_real:g0']);
+        expect(refused.attempt).toMatchObject({ state: 'stopping', terminal: null });
+        expect(ports.calls.filter(c => c.startsWith('revoke'))).toEqual([]);
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ports.calls.filter((c) => c.startsWith('revoke') || c.startsWith('cancel'))).toEqual(['cancel:s_real:g0', 'revoke:s_real']);
     });
 });
 
@@ -381,7 +401,10 @@ describe('mesh_direct reclaim commits failed — nothing redelivers a direct dis
         ledger.observe(dispatch({ scope: 'mesh_direct' }));
         now = T0 + awaitDeliveryMs(DEFAULT_TURN_POLICY);
         const [result] = ledger.sweepExpiredHolds();
-        expect(result).toMatchObject({ rule: 'H1', attempt: { state: 'failed', generation: 0, terminal: { reason: 'assigned_stranded_dispatch_unconfirmed' } } });
+        expect(result).toMatchObject({ rule: 'H1', attempt: { state: 'stopping', generation: 0, terminal: null } });
+        expect(host.calls).toEqual([]);
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'failed', generation: 0, terminal: { reason: 'assigned_stranded_dispatch_unconfirmed' } });
         expect(host.calls).toEqual(['terminal:t1:failed']);
         expect(ledger.store.activeHolds('a1')).toEqual([]);
         expect(ledger.nextHoldDeadline()).toBeNull();
@@ -395,13 +418,16 @@ describe('mesh_direct reclaim commits failed — nothing redelivers a direct dis
         expect(ledger.isTerminal('a1')).toBe(true);
     });
 
-    it('a mid-turn process exit (R20) fails the direct attempt with session_exit — no requeue', () => {
+    it('a mid-turn process exit (R20) fails the direct attempt with session_exit — no requeue', async () => {
         const db = memDb();
         const host = recordingHost();
         const ledger = ledgerOn(db, { host, publisher: fakePublisher() });
         driveToGenerating(ledger, { scope: 'mesh_direct' });
         const exit = ledger.observe(evd('process_exit', { exitCode: 137 }, { source: 'pty_exit' }));
-        expect(exit).toMatchObject({ rule: 'R20', attempt: { state: 'failed', terminal: { reason: 'session_exit' } } });
+        expect(exit).toMatchObject({ rule: 'R20', attempt: { state: 'stopping', terminal: null } });
+        expect(host.calls).toEqual([]);
+        await confirmFixtureWriterQuiescence(ledger);
+        expect(ledger.getAttempt('a1')).toMatchObject({ state: 'failed', terminal: { reason: 'session_exit' } });
         expect(host.calls).toEqual(['terminal:t1:failed']);
     });
 });

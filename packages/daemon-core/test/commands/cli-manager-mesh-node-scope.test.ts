@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { assignmentFixtureManager } from '../helpers/mesh-assignment-manager.js'
+
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 
 // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId) but resolved
@@ -65,13 +67,9 @@ function createDualNodeManager(opts: {
       : { meshNodeFor: 'mesh-1', meshNodeId: worktreeNodeId }
   }
 
-  const instanceManager = {
-    getInstance: (key: string) => {
-      const settings = settingsBySession[key]
-      return settings ? { getState: () => ({ settings }) } : undefined
-    },
-    attachMeshAssignmentToInstance: vi.fn(() => true),
-  }
+  const instanceManager = assignmentFixtureManager(Object.entries(settingsBySession).map(([id, settings]) => ({
+    id, settings, adapter: id === 'sess-base' ? base.adapter : worktree.adapter,
+  })))
 
   const manager = new DaemonCliManager({
     getServerConn: () => null,

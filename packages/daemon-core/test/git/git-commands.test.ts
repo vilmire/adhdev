@@ -236,7 +236,15 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
     mkdirSync(join(root, '.adhdev'));
     writeFileSync(join(root, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }));
     writeFileSync(join(root, 'file.txt'), 'clean\n');
-    git('add', 'file.txt'); git('commit', '-qm', 'initial');
+    git('add', 'file.txt');
+    // Intentional foreign-identity control must override inherited positive-fixture identity.
+    execFileSync('git', ['commit', '-qm', 'initial'], { cwd: root, env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: identity === 'valid' ? 'vilmire' : 'Other',
+      GIT_COMMITTER_NAME: identity === 'valid' ? 'vilmire' : 'Other',
+      GIT_AUTHOR_EMAIL: identity === 'valid' ? 'vilmire@users.noreply.github.com' : 'other@example.com',
+      GIT_COMMITTER_EMAIL: identity === 'valid' ? 'vilmire@users.noreply.github.com' : 'other@example.com',
+    } });
     const sha = git('rev-parse', 'HEAD');
     const services = createDefaultGitCommandServices();
     const denied: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror' }, services);
@@ -248,7 +256,10 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
     const scanned: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: { oss: [sha] }, setUpstream: true }, services);
     if (identity === 'foreign') {
       expect(scanned.success).toBe(false);
-      expect(scanned.error).toContain('identity');
+      expect(scanned.error).toContain('publish_approval_required');
+      await expect(services.push!({ workspace: root, remote: 'mirror', approvedPublishShas: { oss: [sha] } }))
+        .rejects.toMatchObject({ approval: { commits: [{ sha, approved: true, guardScan: 'blocked',
+          guardDetails: expect.arrayContaining([expect.stringContaining('identity: author'), expect.stringContaining('identity: committer')]) }] } });
       expect(() => git('--git-dir=' + join(root, 'origin.git'), 'rev-parse', '--verify', 'main')).toThrow();
     } else {
       expect(scanned.success, scanned.error).toBe(true);

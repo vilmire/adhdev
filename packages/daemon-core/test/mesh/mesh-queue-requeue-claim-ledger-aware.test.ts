@@ -52,8 +52,8 @@ import { rebindRefusedClaimToOpenAttempt } from '../../src/mesh/mesh-queue-attem
 import { fenceWorkerReportOnLedger } from '../../src/mesh/worker-report.js'
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
-import { __drainTestTurnLedgersForTests, wipeTurnTablesForTests } from './helpers/mesh-turn-ledger-fixture.js'
-import { dispatch, evd, ledgerOn, memDb, recordingHost } from '../turn-ledger/ledger-harness.js'
+import { __drainTestTurnLedgersForTests, wipeTurnTablesForTests, confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js'
+import { dispatch, evd, ledgerOn, memDb, recordingHost, confirmFixtureWriterQuiescence } from '../turn-ledger/ledger-harness.js'
 import { withQueueTerminalFence, applyTaskTerminalInTxn } from '../../src/mesh/mesh-task-terminal.js'
 import { findInjectionClosedQueueAttempt } from '../../src/mesh/mesh-queue-attempt-guard.js'
 import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js'
@@ -101,6 +101,18 @@ const settle = async () => { for (let i = 0; i < 8; i += 1) await Promise.resolv
 
 const row = (meshId: string, taskId: string) => getQueue(meshId).find(t => t.id === taskId)!
 const attempts = (meshId: string, taskId: string) => MeshRuntimeStore.getInstance().turnStore().listAttemptsForTask(meshId, taskId)
+
+
+/** The first request keeps the assigned writer exclusive; only its native proof
+ * permits the explicit requeue retry to apply caller addressing/backoff options. */
+async function requeueAfterCheckpoint(components: any, meshId: string, taskId: string, options: Parameters<typeof requeueTask>[2]) {
+  const before = row(meshId, taskId)
+  requeueTask(meshId, taskId, options)
+  expect(row(meshId, taskId)).toMatchObject({ status: before.status, assignedSessionId: before.assignedSessionId, dispatchNonce: before.dispatchNonce })
+  expect(attempts(meshId, taskId).at(-1)).toMatchObject({ state: 'stopping', terminal: null })
+  await confirmTestWriterQuiescence(components.turnLedger)
+  return requeueTask(meshId, taskId, options)
+}
 
 /** Claim `taskId` into `sessionId` and drive its attempt to `generating` (delivered + turn_started). */
 async function claimAndStart(components: any, meshId: string, taskId: string, sessionId: string) {
@@ -166,7 +178,7 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
     const running = await claimAndStart(components, meshId, task.id, 'sess-a')
     const nonce = row(meshId, task.id).dispatchNonce!
 
-    const result = requeueTask(meshId, task.id, { reason: 'operator_retry', force: true })
+    const result = await requeueAfterCheckpoint(components, meshId, task.id, { reason: 'operator_retry', force: true })
 
     expect(result?.status).toBe('pending')
     const after = row(meshId, task.id)
@@ -200,7 +212,7 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
   it('(e) after a force requeue the re-claimed worker gets a fresh attempt and its report is provable', async () => {
     const task = enqueueTask(meshId, 'REPORT-AFTER-REQUEUE', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
     await claimAndStart(components, meshId, task.id, 'sess-a')
-    requeueTask(meshId, task.id, { reason: 'operator_retry', force: true })
+    await requeueAfterCheckpoint(components, meshId, task.id, { reason: 'operator_retry', force: true })
 
     expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-b', 'claude-cli')).toBe(true)
     await settle()
@@ -284,6 +296,9 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
       at: Date.now(), sessionId: 'sess-a', source: 'operator', observedBy: ledger.selfDaemonId,
       attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
     })).verdict).toBe('applied')
+    expect(row(meshId, a.id).status).toBe('assigned')
+    expect(row(meshId, b.id).status).toBe('pending')
+    await confirmTestWriterQuiescence(ledger)
     expect(row(meshId, a.id).status).toBe('cancelled')
     expect(row(meshId, b.id).status).toBe('cancelled')
   })
@@ -305,7 +320,7 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
       const rebound = rebindRefusedClaimToOpenAttempt(meshId, task.id, attempt, now)!
       expect(Date.parse(rebound.notBefore!) - now).toBe(Math.min(2000 * 2 ** i, 60000))
     }
-    requeueTask(meshId, task.id, { force: true })
+    await requeueAfterCheckpoint(components, meshId, task.id, { force: true })
     expect(row(meshId, task.id).notBefore).toBeUndefined()
     expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-b', 'claude-cli')).toBe(true)
     await settle()
@@ -316,7 +331,7 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
     const task = enqueueTask(meshId, 'SAME-SESSION', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
     const old = await claimAndStart(components, meshId, task.id, 'sess-a')
     expect(findWorkerTaskTokenForSession(meshId, task.id, 'sess-a')?.attemptId).toBe(old.attemptId)
-    requeueTask(meshId, task.id, { force: true })
+    await requeueAfterCheckpoint(components, meshId, task.id, { force: true })
     expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-a', 'claude-cli')).toBe(true)
     await settle()
     const fresh = attempts(meshId, task.id).at(-1)!
@@ -346,27 +361,34 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
   it('F3: a force requeue sends no task-cancelled notice and no queue terminal effects', async () => {
     const task = enqueueTask(meshId, 'NOTICE-REQUEUE', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
     const attempt = await claimAndStart(components, meshId, task.id, 'sess-a')
-    requeueTask(meshId, task.id, { force: true })
+    await requeueAfterCheckpoint(components, meshId, task.id, { force: true })
     await (components.turnLedger as TurnLedger).flushPublish()
     const notices = MeshRuntimeStore.getInstance().db.prepare("SELECT payload_json FROM turn_events WHERE attempt_id = ? AND kind = 'notify'").all(attempt.attemptId) as Array<{ payload_json: string }>
     expect(notices.map(n => JSON.parse(n.payload_json)).filter(n => n.notify === 'cancelled')).toHaveLength(0)
     expect(row(meshId, task.id).status).toBe('pending')
   })
 
-  it('F3 (reducer): cancel/superseded on a mesh_queue attempt retires only the attempt; operator_cancel still commits the task', () => {
-    const effectsFor = (reason: 'superseded' | 'operator_cancel') => {
+  it('F3 (reducer): cancel/superseded retires only the attempt after quiescence; operator_cancel still commits the task', async () => {
+    const effectsFor = async (reason: 'superseded' | 'operator_cancel') => {
       const db = memDb()
-      const ledger = ledgerOn(db, { selfDaemonId: 'dc', host: recordingHost() })
+      const host = recordingHost()
+      const ledger = ledgerOn(db, { selfDaemonId: 'dc', host })
       ledger.observe(dispatch({ attemptId: 'q1', session: 's1', scope: 'mesh_queue', taskId: 't1' }))
       const result = ledger.observe(evd('cancel', { reason }, { source: 'operator', sessionId: 's1', observedBy: 'dc', attemptRef: { attemptId: 'q1', generation: 0 } }))
-      db.close()
       expect(result.verdict).toBe('applied')
-      return result.effects.map(e => e.kind)
+      expect(result.attempt).toMatchObject({ state: 'stopping', terminal: null })
+      expect(result.effects.map(e => e.kind)).not.toContain('task_terminal')
+      await confirmFixtureWriterQuiescence(ledger)
+      expect(host.calls).toEqual(reason === 'superseded' ? ['requeue:t1'] : ['terminal:t1:cancelled'])
+      const effects = db.prepare("SELECT kind FROM turn_events WHERE attempt_id = 'q1'").all() as Array<{kind: string}>
+      expect(ledger.getAttempt('q1')?.terminal).toMatchObject({ outcome: 'cancelled', reason })
+      db.close()
+      return effects.map(e => e.kind)
     }
-    const retired = effectsFor('superseded')
-    expect(retired).toEqual(expect.arrayContaining(['cancel_dispatch', 'commit', 'bus', 'release_attempt_ref']))
-    for (const kind of ['queue_status', 'task_terminal', 'notify_coordinator']) expect(retired).not.toContain(kind)
-    expect(effectsFor('operator_cancel')).toEqual(expect.arrayContaining(['queue_status', 'task_terminal', 'notify_coordinator']))
+    const retired = await effectsFor('superseded')
+    expect(retired).toEqual(expect.arrayContaining(['cancel_dispatch', 'committed']))
+    expect(retired).not.toContain('notify')
+    expect(await effectsFor('operator_cancel')).toContain('notify')
   })
 
   // F4 — both requeue command surfaces answer a ledger refusal as a refusal.

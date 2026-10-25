@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { assignmentFixtureManager } from '../helpers/mesh-assignment-manager.js'
+
 import { DaemonCliManager } from '../../src/commands/cli-manager.js'
 
 // PTY-SUBMIT-IDEMPOTENCY, wiring-unification D2: a mesh `agent_command` send_chat
@@ -39,18 +41,19 @@ function createManager(adapterStatus = 'idle') {
     isReady: vi.fn(() => adapterStatus === 'idle'),
     setOnStatusChange: vi.fn(),
   }
+  const instanceManager = assignmentFixtureManager([{ id: 'session-1', adapter }])
   const manager = new DaemonCliManager({
     getServerConn: () => null,
     getP2p: () => null,
     onStatusChange: vi.fn(),
     removeAgentTracking: vi.fn(),
-    getInstanceManager: () => null,
+    getInstanceManager: () => instanceManager,
   }, {
     resolve: vi.fn(() => ({ type: 'hermes-cli', category: 'cli' })),
     getMeta: vi.fn(() => ({ type: 'hermes-cli', category: 'cli' })),
   } as any)
   manager.adapters.set('session-1', adapter as any)
-  return { manager, adapter, sendMessage }
+  return { manager, adapter, sendMessage, setStatus: (status: string) => { adapterStatus = status } }
 }
 
 function dispatch(manager: DaemonCliManager, opts: { message: string; taskId?: string; nonce?: number; force?: boolean; messageId?: string }) {
@@ -153,7 +156,7 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
   })
 
   it('legacy force maps to policy interrupt — but it is still ONE message: the same dispatch identity is not re-sent', async () => {
-    const { manager, adapter, sendMessage } = createManager()
+    const { manager, adapter, sendMessage, setStatus } = createManager()
 
     await dispatch(manager, { message: 'do the thing', taskId: 'task-1' })
     const forcedSame = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true })
@@ -161,7 +164,7 @@ describe('DaemonCliManager PTY-submit idempotency (mesh dispatch)', () => {
     expect(adapter.interruptTurn).not.toHaveBeenCalled()
 
     // Explicit operator intent is expressed with a NEW messageId.
-    ;(adapter as any).getStatus.mockReturnValueOnce({ status: 'generating', activeModal: null, messages: [] })
+    setStatus('generating')
     const forcedNew = await dispatch(manager, { message: 'do the thing', taskId: 'task-1', force: true, messageId: 'msg_operator' })
     expect(forcedNew).toMatchObject({ success: true, interrupted: true })
     expect(adapter.interruptTurn).toHaveBeenCalledTimes(1)

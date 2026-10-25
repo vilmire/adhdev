@@ -27,6 +27,7 @@ import {
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
+import { confirmTestWriterQuiescence, wipeTurnTablesForTests } from './helpers/mesh-turn-ledger-fixture.js';
 import { fakePublisher } from '../turn-ledger/ledger-harness.js';
 import { buildMeshActiveWork } from '../../src/mesh/mesh-active-work.js';
 import { readLocalRecords } from '../../src/mesh/mesh-local-records.js';
@@ -52,6 +53,7 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         caseNo += 1;
         sessionId = `sess-worker-${caseNo}`;
         reset();
+        wipeTurnTablesForTests();
         // A fresh store per case (the open attempts outlive __clearMeshQueueForTests), and
         // the ledger this process's queue-side cancel reaches through the active slot.
         __resetMeshRuntimeStoreForTests();
@@ -115,20 +117,42 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         return activeWork.filter(r => r.taskId === taskId);
     };
 
-    it('cancelTask: an ACKED sibling dispatch row leaves the active set (no orphan)', () => {
+    const cancelConfirmed = async (taskId: string) => {
+        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('assigned');
+        expect(ledger.getAttempt(`mesh_direct:${taskId}`)).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        expect(renderActiveWork(taskId)).toHaveLength(1);
+        await confirmTestWriterQuiescence(ledger);
+    };
+    const requeueConfirmed = async (taskId: string, options: Parameters<typeof requeueTask>[2]) => {
+        // The direct writer has no safe immediate requeue handoff. First refuse
+        // the mutation, then use the supported explicit cancel/checkpoint/requeue.
+        expect(() => requeueTask(meshId, taskId, options)).toThrow('writer_checkpoint_pending');
+        expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('assigned');
+        await cancelConfirmed(taskId);
+        return requeueTask(meshId, taskId, options);
+    };
+    const assertOneNativeCommit = (taskId: string) => {
+        const committed = MeshRuntimeStore.getInstance().db.prepare("SELECT payload_json FROM turn_events WHERE attempt_id = ? AND kind = 'committed'").all(`mesh_direct:${taskId}`) as Array<{payload_json: string}>;
+        expect(committed).toHaveLength(1);
+        expect(ledger.getAttempt(`mesh_direct:${taskId}`)?.terminal).toMatchObject({ outcome: 'cancelled', reason: 'operator_cancel' });
+        expect(readLocalRecords(meshId).filter(e => e.kind === 'sibling_dispatch_terminalized' && e.taskId === taskId)).toHaveLength(0);
+    };
+
+    it('cancelTask: an ACKED sibling dispatch row leaves the active set (no orphan)', async () => {
         const taskId = dispatchAndAck('task-cancel-1');
 
-        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        await cancelConfirmed(taskId);
 
         expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('cancelled');
-        // THE INJECTION POINT: without terminalizeSiblingDispatch this row is still here.
+        // The reducer-owned native commit removes the direct attempt from active work.
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
     });
 
-    it('cancelTask: the cancelled task is NOT rendered as live active work', () => {
+    it('cancelTask: the cancelled task is NOT rendered as live active work', async () => {
         const taskId = dispatchAndAck('task-cancel-2');
 
-        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        await cancelConfirmed(taskId);
 
         // The live symptom, stated as what is actually observable rather than as one status
         // string: the orphan reaches activeWork as a NON-TERMINAL (`terminal: false`) row for
@@ -142,35 +166,30 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         expect(renderActiveWork(taskId)).toHaveLength(0);
     });
 
-    it('cancelTask: records a sibling_dispatch_terminalized audit entry naming the reason', () => {
+    it('cancelTask: records exactly one native commit naming the operator reason', async () => {
         const taskId = dispatchAndAck('task-cancel-3');
 
-        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        await cancelConfirmed(taskId);
 
-        const audit = readLocalRecords(meshId)
-            .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
-        expect(audit).toHaveLength(1);
-        expect((audit[0].payload as any).reason).toBe('queue_task_cancelled');
-        // The status the row was rescued FROM is what makes the next occurrence diagnosable.
-        expect((audit[0].payload as any).dispatchStatus).toBe('acked');
+        assertOneNativeCommit(taskId);
     });
 
-    it('requeueTask: an ACKED sibling dispatch row leaves the active set (no orphan)', () => {
+    it('requeueTask: an ACKED sibling dispatch row leaves the active set (no orphan)', async () => {
         const taskId = dispatchAndAck('task-requeue-1');
 
         // force: the row is in-flight by construction (that is the case that orphans), and the
         // single-flight guard would otherwise no-op the requeue.
-        requeueTask(meshId, taskId, { reason: 'operator_requeue', force: true });
+        await requeueConfirmed(taskId, { reason: 'operator_requeue', force: true });
 
         expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('pending');
-        // THE INJECTION POINT for the requeue path.
+        // Only the explicit retry after native confirmation may expose a pending row.
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
     });
 
-    it('requeueTask: the requeued task renders only its queue row, never a second direct row', () => {
+    it('requeueTask: the requeued task renders only its queue row, never a second direct row', async () => {
         const taskId = dispatchAndAck('task-requeue-2');
 
-        requeueTask(meshId, taskId, { reason: 'operator_requeue', force: true });
+        await requeueConfirmed(taskId, { reason: 'operator_requeue', force: true });
 
         // A requeued task legitimately shows as `pending` from its QUEUE row. What must not
         // survive is a SECOND row sourced from the abandoned dispatch — one task rendering as
@@ -181,42 +200,35 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         expect(rendered[0].status).toBe('pending');
     });
 
-    it('requeueTask: records the audit entry with the requeue reason', () => {
+    it('requeueTask: records the native cancellation before the explicit requeue', async () => {
         const taskId = dispatchAndAck('task-requeue-3');
 
-        requeueTask(meshId, taskId, { reason: 'operator_requeue', force: true });
+        await requeueConfirmed(taskId, { reason: 'operator_requeue', force: true });
 
-        const audit = readLocalRecords(meshId)
-            .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
-        expect(audit).toHaveLength(1);
-        expect((audit[0].payload as any).reason).toBe('queue_task_requeued');
+        assertOneNativeCommit(taskId);
     });
 
-    it('requeueTask (dispatchFailure branch): terminalizes the sibling under its own reason', () => {
+    it('requeueTask (dispatchFailure branch): refuses the live writer and succeeds only after its native checkpoint', async () => {
         const taskId = dispatchAndAck('task-dispatchfail-1');
 
-        requeueTask(meshId, taskId, { reason: 'transport_reject', dispatchFailure: true, force: false });
+        await requeueConfirmed(taskId, { reason: 'transport_reject', dispatchFailure: true, force: false });
 
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
-        const audit = readLocalRecords(meshId)
-            .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
-        expect(audit).toHaveLength(1);
-        expect((audit[0].payload as any).reason).toBe('queue_task_dispatch_failed');
+        assertOneNativeCommit(taskId);
     });
 
-    it('the ledger reclaim (requeueTaskForLedgerReclaim) terminalizes the sibling of the row it tears down', () => {
+    it('the ledger reclaim (requeueTaskForLedgerReclaim) never resurrects a natively confirmed terminal sibling', async () => {
         const taskId = dispatchAndAck('task-stranded-1');
         // recordDirectDispatchTask leaves the queue row 'assigned', which is what the
         // ledger's reclaim effect (H1/H2r/R31) requeues.
         expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('assigned');
 
+        await cancelConfirmed(taskId);
         requeueTaskForLedgerReclaim(meshId, taskId, 'H1_await_delivery', new Date().toISOString());
+        expect(getQueue(meshId).find(t => t.id === taskId)?.status).toBe('cancelled');
 
         expect(getActiveDirectDispatches(meshId).map(d => d.taskId)).not.toContain(taskId);
-        const audit = readLocalRecords(meshId)
-            .filter(e => e.kind === 'sibling_dispatch_terminalized' && (e.payload as any)?.taskId === taskId);
-        expect(audit).toHaveLength(1);
-        expect((audit[0].payload as any).reason).toBe('queue_task_stranded_reclaimed');
+        assertOneNativeCommit(taskId);
     });
 
     it('cancelling a task that was never dispatched leaves no row and writes no audit noise', () => {
@@ -239,9 +251,10 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         )).toHaveLength(0);
     });
 
-    it('a dispatch that already reached a terminal outcome is left alone (no double-record)', () => {
+    it('a dispatch that already reached a terminal outcome is left alone (no double-record)', async () => {
         const taskId = dispatchAndAck('task-already-terminal-1');
         ledger.observe(evidence(taskId, { kind: 'cancel', reason: 'operator_cancel', source: 'operator' }));
+        await confirmTestWriterQuiescence(ledger);
         expect(getActiveDirectDispatches(meshId).find(d => d.taskId === taskId)).toBeUndefined();
 
         cancelTask(meshId, taskId, { reason: 'operator_cancel' });
@@ -254,10 +267,11 @@ describe('SIBLING-DISPATCH-ORPHAN: abandoning a queue row terminalizes its direc
         )).toHaveLength(0);
     });
 
-    it('the sibling cancel is bookkeeping only: intentional_cleanup, no dispatch cancel against the session', () => {
+    it('the direct writer cannot be hidden by bookkeeping: it remains active until native quiescence', async () => {
         const taskId = dispatchAndAck('task-cleanup-1');
-        cancelTask(meshId, taskId, { reason: 'operator_cancel' });
+        await cancelConfirmed(taskId);
         const attempt = ledger.getAttempt(`mesh_direct:${taskId}`);
-        expect(attempt?.terminal).toMatchObject({ outcome: 'cancelled', reason: 'intentional_cleanup' });
+        expect(attempt?.terminal).toMatchObject({ outcome: 'cancelled', reason: 'operator_cancel' });
+        assertOneNativeCommit(taskId);
     });
 });

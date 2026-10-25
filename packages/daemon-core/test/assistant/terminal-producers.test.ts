@@ -5,7 +5,7 @@ import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assis
 import { assistantWatchSpecs } from '../../src/commands/high-family/assistant-watch.js';
 import { terminalRetryIdentity } from '../../src/assistant/terminal-watch.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import { memDb, ledgerOn, dispatch, evd, T0 } from '../turn-ledger/ledger-harness.js';
+import { memDb, ledgerOn, dispatch, evd, T0, confirmFixtureWriterQuiescence } from '../turn-ledger/ledger-harness.js';
 import { LocalRecordStore } from '../../src/mesh/mesh-local-record-store.js';
 import { readTerminalEvents, TerminalWatchStore } from '../../src/assistant/terminal-watch.js';
 import { pendingTerminalEvents } from '../../src/assistant/terminal-watch-runtime.js';
@@ -28,9 +28,14 @@ function producer(scope: 'mesh_queue' | 'mesh_direct', end: 'genuine' | 'weak' |
     }
     return { db, ledger };
 }
-it.each(['mesh_queue', 'mesh_direct'] as const)('reads real %s reducer commits and exposes genuine/weak/failure/cancel truth without bodies', scope => {
+it.each(['mesh_queue', 'mesh_direct'] as const)('reads real %s reducer commits and exposes genuine/weak/failure/cancel truth without bodies', async scope => {
     for (const end of ['genuine','weak','failed','cancelled'] as const) {
         const { db, ledger } = producer(scope, end);
+        if (end === 'cancelled') {
+            expect(ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', terminal: null, generation: 0 });
+            expect(readTerminalEvents(db, 'm1', 'task', 't1', 0, [])).toEqual([]);
+            await confirmFixtureWriterQuiescence(ledger);
+        }
         const terminal = ledger.getAttempt('a1')?.terminal;
         expect(terminal).not.toBeNull();
         const events = readTerminalEvents(db, 'm1', 'task', 't1', 0, []);

@@ -1,3 +1,4 @@
+import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -114,7 +115,14 @@ function cleanup(meshId: string) {
 }
 
 /** Let deliverTaskToSession's fire-and-forget .then/.catch handlers settle. */
-const settle = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve() }
+const settle = async (components: any) => {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+  const ledger = components.turnLedger
+  if (ledger.store.listOpenAttempts().some((a: any) => a.state === 'stopping')) {
+    await confirmTestWriterQuiescence(ledger)
+  }
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+}
 
 /**
  * Drive the real dispatch loop: claim → dispatch → (async) failure → requeue → repeat,
@@ -136,7 +144,7 @@ async function runDispatchLoop(components: any, meshId: string, taskId: string, 
     if (row.status !== 'pending') break
     ticks += 1
     tryAssignQueueTask(components, meshId, NODE_ID, 'sess-dead', 'claude-cli')
-    await settle()
+    await settle(components)
     vi.advanceTimersByTime(31_000)
   }
   return ticks
@@ -251,7 +259,7 @@ describe('DEAD-DISPATCH-BOUND — an undeliverable dispatch target must not re-d
 })
 
       expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-dead', 'claude-cli')).toBe(true)
-      await settle()
+      await settle(components)
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
       expect(after.status).toBe('assigned')

@@ -101,7 +101,7 @@ describe('protocol version + enum guards', () => {
     expect(isMeshTaskStatus('in_progress')).toBe(false);
     expect(isMeshTaskStatus('done')).toBe(false);
     expect([...MESH_TASK_STATUSES]).toEqual([...SHARED_MESH_TASK_STATUSES]);
-    expect([...MESH_TASK_STATUSES]).toEqual(['pending', 'assigned', 'completed', 'failed', 'cancelled']);
+    expect([...MESH_TASK_STATUSES]).toEqual(['pending', 'assigned', 'completed', 'blocked', 'failed', 'cancelled']);
   });
 });
 

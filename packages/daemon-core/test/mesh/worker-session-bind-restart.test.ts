@@ -43,6 +43,8 @@ import {
   setWorkerSessionBindPersistence,
   subscribeWorkerBindRevocation,
 } from '../../src/mesh/worker-mcp-isolation'
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js'
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js'
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed'
 
 const ctx: any = { deps: { statusInstanceId: 'test-daemon', instanceManager: { getInstance: () => undefined } } }
@@ -87,12 +89,14 @@ beforeEach(() => {
   __resetWorkerMailboxForTest()
   simulateRestart()
   MeshRuntimeStore.getInstance().db.prepare('DELETE FROM worker_session_binds').run()
+  setActiveTurnLedger(createMeshRuntimeTurnLedger({ selfDaemonId: 'test-daemon', publisher: null }))
   setWorkerSessionBindPersistence(new SqliteWorkerSessionBindStore(MeshRuntimeStore.getInstance().db), (sid) => liveHere.has(sid))
   __setHandoffNoteSinkForTests(() => {})
   __setWorkerProgressNoticeSinkForTests(() => {})
 })
 
 afterEach(() => {
+  setActiveTurnLedger(null)
   setWorkerSessionBindPersistence(null)
   __setHandoffNoteSinkForTests(undefined)
   __setWorkerProgressNoticeSinkForTests(undefined)

@@ -5,7 +5,7 @@
 
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { LOG } from '../logging/logger.js';
-import { type MeshWorkQueueEntry, applyDispatchFailureBackoff, requeueTask } from './mesh-work-queue.js';
+import { type MeshWorkQueueEntry, requeueTask } from './mesh-work-queue.js';
 import type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { type TurnAttemptRef, type TurnEvidence, sessionIdsEquivalent, meshNodeIdMatches, sanitizeRefusalCode, readText } from '@adhdev/mesh-shared';
@@ -465,6 +465,18 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
             // The DISPATCH-BOOT-RACE backoff is kept as queue metadata only
             // (notBefore on the now-pending row); it never makes a terminal decision.
             const gen = `${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`;
+            // Preserve terminal intent before dispatch_failed can enter stopping;
+            // later ordinary proposals cannot replace that exclusive stop intent.
+            if (!retryable) {
+                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
+                const failRef = turnLedgerOf(ctx.components)?.getAttempt(ctx.attemptRef.attemptId);
+                observeDispatchEvidence(ctx.components, {
+                    ...dispatchEvidenceBase({ ...ctx, attemptRef: failRef ? { attemptId: failRef.attemptId, generation: failRef.generation } : ctx.attemptRef }, 'dispatch'),
+                    eventId: `dispatch-unrecoverable:${gen}`,
+                    kind: 'session_error',
+                    reason: 'spawn_failed',
+                } as TurnEvidence);
+            }
             observeDispatchEvidence(ctx.components, {
                 ...dispatchEvidenceBase(ctx, 'dispatch'),
                 eventId: `dispatch-failed:${gen}`,
@@ -482,17 +494,8 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
                 // `error`/`reason` message, which stays local to the WARN line above only.
                 ...(applicationRefusalCode ? { refusalCode: applicationRefusalCode } : {}),
             } as TurnEvidence);
-            if (!retryable) {
-                LOG.error('MeshQueue', `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? '?'}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || 'transport reported the failure as non-recoverable'}`);
-                const failRef = turnLedgerOf(ctx.components)?.getAttempt(ctx.attemptRef.attemptId);
-                observeDispatchEvidence(ctx.components, {
-                    ...dispatchEvidenceBase({ ...ctx, attemptRef: failRef ? { attemptId: failRef.attemptId, generation: failRef.generation } : ctx.attemptRef }, 'dispatch'),
-                    eventId: `dispatch-unrecoverable:${gen}`,
-                    kind: 'session_error',
-                    reason: 'spawn_failed',
-                } as TurnEvidence);
-            } else {
-                try { applyDispatchFailureBackoff(ctx.meshId, ctx.task.id); } catch { /* backoff is advisory */ }
+            if (retryable) {
+                // The runtime requeue effect applies backoff atomically AFTER native quiescence.
                 const requeued = MeshRuntimeStore.getInstance().findQueueEntryById(ctx.meshId, ctx.task.id);
                 if (requeued?.status === 'pending' && readText(requeued.targetSessionId)) {
                     notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {

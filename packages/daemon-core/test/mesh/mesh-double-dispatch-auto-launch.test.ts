@@ -443,7 +443,8 @@ describe('AUTOLAUNCH-CLAIM-CHURN — remote-aware await-claim (no ghost respawns
       await triggerMeshQueue(components, meshId)
 
       // Task A is awaiting its claim; task B must NOT spawn a duplicate (ghost) session.
-      expect(autoLaunchReason(meshId, taskB.id)).toBe('node_has_live_session_pending_claim')
+      expect(autoLaunchReason(meshId, taskB.id)).toBe('owned_paths_conflict')
+      // An un-attested pending remote writer takes the physical fence first.
       expect(dispatchCalls(components, 'launch_cli')).toBe(0)
     } finally {
       cleanup(meshId)

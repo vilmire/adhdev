@@ -117,8 +117,13 @@ describe('typed provider approval projection', () => {
         const ceiling = setup.holds.find(h => h.reason === 'hard_ceiling')!;
         expect(ceiling).toBeDefined();
         const expired = reduce({ attempt: setup.attempt, holds: setup.holds, evidence: ev('hold_expired', { holdId: ceiling.holdId, reason: 'hard_ceiling' }), policy: POLICY, nowMs: NOW + POLICY.hardCeilingMs });
-        expect(expired.attempt?.state).toBe('failed');
-        expect(surfaceStageOfAttempt(expired.attempt!)).toBe('failed');
+        expect(expired.attempt).toMatchObject({ state: 'stopping', terminal: null, generation: setup.attempt!.generation,
+            data: { writerStop: { reason: 'hard_ceiling', terminal: { outcome: 'failed' } } } });
+        const settled = reduce({ attempt: expired.attempt, holds: expired.holds,
+            evidence: ev('operator_status', { status: 'failed', reason: 'hard_ceiling' }),
+            policy: POLICY, nowMs: NOW + POLICY.hardCeilingMs, stopConfirmed: true });
+        expect(settled.attempt?.state).toBe('failed');
+        expect(surfaceStageOfAttempt(settled.attempt!)).toBe('failed');
     });
     it('retains actual modal time across repaint; resolution and replacement fence replay', () => {
         const lifecycle = new ProviderApprovalLifecycle();

@@ -1,3 +1,4 @@
+import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js';
 /**
  * ORPHANED-UNCORRELATED-DISPATCH (live: task 14147d9b, preview mesh, 2026-10-06).
  *
@@ -235,6 +236,10 @@ describe('(b) attempt-less assigned rows are reclaimed by housekeeping', () => {
             probe: { locate: () => ({ kind: 'local' }), reader: { read: async () => ({ presence: 'absent' }) } } });
         sweepOrphanedUncorrelatedDispatches(meshId, { now, liveness: () => 'not_live', requestProbe: (id) => scheduler.requestProbe(id) });
         await scheduler.tick();
+        expect(status(id)?.status).toBe('assigned');
+        expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(true);
+        expect(ledger.getAttempt(attemptId)).toMatchObject({ state: 'stopping', generation: 0, terminal: null });
+        await confirmTestWriterQuiescence(ledger);
         expect(status(id)).toMatchObject({ id, status: 'pending', message: 'direct work', requeueReason: 'session_dead' });
         expect(ledger.getAttempt(attemptId)).toMatchObject({ generation: 1, reclaimCount: 1 });
         expect(nodeHasActiveWriteAssignment(meshId, NODE)).toBe(false);

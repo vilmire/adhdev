@@ -25729,12 +25729,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       return value.lastActivityAt === null || typeof value.lastActivityAt === "string";
     }
     function isMeshMissionStatsWire2(value) {
-      const keys = ["missionId", "taskCount", "completed", "failed", "totalDurationMs", "wallClockMs", "retries", "incompleteTaskIds"];
+      const keys = ["missionId", "taskCount", "completed", "failed", "blocked", "totalDurationMs", "wallClockMs", "retries", "incompleteTaskIds"];
       if (!isRecord2(value) || !hasOnlyKeys22(value, keys)) return false;
       if (!isEvidenceIdentifier2(value.missionId)) return false;
       for (const k of ["taskCount", "completed", "failed", "totalDurationMs", "retries"]) {
         if (!isNonNegativeInt2(value[k])) return false;
       }
+      if (value.blocked !== void 0 && !isNonNegativeInt2(value.blocked)) return false;
       if (value.wallClockMs !== null && !isNonNegativeInt2(value.wallClockMs)) return false;
       if (!Array.isArray(value.incompleteTaskIds) || !value.incompleteTaskIds.every(isEvidenceIdentifier2)) return false;
       return true;
@@ -25851,12 +25852,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       return true;
     }
     function isLedgerQuerySummaryWire2(value) {
-      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
+      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
       if (!isRecord2(value) || !hasOnlyKeys22(value, keys)) return false;
       if (!isEvidenceIdentifier2(value.meshId)) return false;
       for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
         if (!isNonNegativeInt2(value[k])) return false;
       }
+      if (value.taskBlocked !== void 0 && !isNonNegativeInt2(value.taskBlocked)) return false;
       if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
       return true;
     }
@@ -68471,7 +68473,7 @@ Index only \u2014 each tool's own description carries its parameters and contrac
 - Drivers: \`driver_list\`, \`driver_describe\`. invoke is delegated to a worker task.
 - Artifacts: \`artifact_list\`. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBCF4\uC5EC\uC904 \uACB0\uACFC\uBB3C(\uC2A4\uD06C\uB9B0\uC0F7\xB7\uBCF4\uACE0\uC11C\xB7\uC0B0\uCD9C\uBB3C)\uC740 artifact_register\uB85C \uB4F1\uB85D.
 - Status: \`mesh_status\`, \`mesh_list_nodes\`, \`mesh_route_preview\`, \`mesh_git_status\`, \`mesh_read_node_logs\`
-- Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_queue_requeue\`
+- Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_queue_requeue\`, \`mesh_queue_revise\` (revise a pending task with its expected revision; source anchors and dependency revisions must remain current)
 - Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
 - Approvals: \`mesh_approve\` (yes/no), \`mesh_answer_question\` (multi-choice questions \u2014 never \`mesh_approve\`), \`mesh_list_pending_approvals\`
 - Missions & ledger: \`mesh_mission_upsert\`, \`mesh_mission_list\` (the authority for "what work remains"), \`mesh_task_history\` (ledger by task, kind, time or node), \`mesh_ledger_query\` (deprecated alias of \`mesh_task_history\`), \`mesh_reconcile_ledger\`, \`mesh_note\`
@@ -79347,6 +79349,16 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const retryable = isRetryableDispatchFailure(e);
         if (ctx.attemptRef) {
           const gen = `${ctx.attemptRef.attemptId}:g${ctx.attemptRef.generation}:${delivery.id}`;
+          if (!retryable) {
+            LOG.error("MeshQueue", `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? "?"}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || "transport reported the failure as non-recoverable"}`);
+            const failRef = turnLedgerOf(ctx.components)?.getAttempt(ctx.attemptRef.attemptId);
+            observeDispatchEvidence(ctx.components, {
+              ...dispatchEvidenceBase({ ...ctx, attemptRef: failRef ? { attemptId: failRef.attemptId, generation: failRef.generation } : ctx.attemptRef }, "dispatch"),
+              eventId: `dispatch-unrecoverable:${gen}`,
+              kind: "session_error",
+              reason: "spawn_failed"
+            });
+          }
           observeDispatchEvidence(ctx.components, {
             ...dispatchEvidenceBase(ctx, "dispatch"),
             eventId: `dispatch-failed:${gen}`,
@@ -79364,20 +79376,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             // `error`/`reason` message, which stays local to the WARN line above only.
             ...applicationRefusalCode ? { refusalCode: applicationRefusalCode } : {}
           });
-          if (!retryable) {
-            LOG.error("MeshQueue", `Task ${ctx.task.id} (mesh ${ctx.meshId}) is undeliverable to node ${ctx.nodeId} (session ${ctx.sessionId ?? "?"}) and will NOT be retried: dispatch_unrecoverable: ${e?.message || "transport reported the failure as non-recoverable"}`);
-            const failRef = turnLedgerOf(ctx.components)?.getAttempt(ctx.attemptRef.attemptId);
-            observeDispatchEvidence(ctx.components, {
-              ...dispatchEvidenceBase({ ...ctx, attemptRef: failRef ? { attemptId: failRef.attemptId, generation: failRef.generation } : ctx.attemptRef }, "dispatch"),
-              eventId: `dispatch-unrecoverable:${gen}`,
-              kind: "session_error",
-              reason: "spawn_failed"
-            });
-          } else {
-            try {
-              applyDispatchFailureBackoff(ctx.meshId, ctx.task.id);
-            } catch {
-            }
+          if (retryable) {
             const requeued = MeshRuntimeStore.getInstance().findQueueEntryById(ctx.meshId, ctx.task.id);
             if (requeued?.status === "pending" && readText(requeued.targetSessionId)) {
               notifyCoordinatorOfPinnedDispatchFailure(ctx.components, {
@@ -181540,7 +181539,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             await verifyCoordinatorRecoveryInventory(coordinatorPlan, record7, host.deps.getHostedBindingOwner?.(), host.deps.listHostedCliRuntimes);
             signal?.throwIfAborted();
           }
-          if (coordinatorPlan) repairCoordinatorBinding(coordinatorPlan, record7, host.deps.getHostedBindingOwner?.(), restoredRuntimeIds);
+          if (coordinatorPlan) {
+            repairCoordinatorBinding(coordinatorPlan, record7, host.deps.getHostedBindingOwner?.(), restoredRuntimeIds);
+            if (normalizedType === "antigravity-cli" || coordinatorPlan.entry.cliType === "antigravity-cli") {
+              try {
+                ensureCoordinatorContextFileMaterialized(getCoordinatorForSession(record7.runtimeId));
+              } catch {
+              }
+            }
+          }
           restoredBindings.add(bindingKey);
           restored += 1;
           LOG.info("CLI", `\u267B Restored hosted runtime: ${record7.runtimeKey || record7.runtimeId} (${record7.displayName || record7.workspace})`);
@@ -181572,12 +181579,6 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const coordinatorEntry = coordinatorPlan?.entry;
       if (coordinatorEntry) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
-        if (normalizedType === "antigravity-cli" || coordinatorEntry.cliType === "antigravity-cli") {
-          try {
-            ensureCoordinatorContextFileMaterialized(coordinatorEntry);
-          } catch {
-          }
-        }
       }
       const recordMeshNodeFor = typeof record7.meshNodeFor === "string" && record7.meshNodeFor.trim() ? record7.meshNodeFor.trim() : "";
       const recordMeshNodeId = typeof record7.meshNodeId === "string" && record7.meshNodeId.trim() ? record7.meshNodeId.trim() : "";
@@ -191339,6 +191340,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var meshRuntimeTxnHost = {
       requeue(effect, ctx) {
         requeueTaskForLedgerReclaim(effect.meshId, effect.taskId, effect.reason, new Date(ctx.nowMs).toISOString());
+        if (effect.reason === "dispatch_failed") applyDispatchFailureBackoff(effect.meshId, effect.taskId);
       },
       taskTerminal(effect, ctx) {
         const result = applyTaskTerminalInTxn({
@@ -191560,7 +191562,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const at = now();
         const readCurrent = () => {
           const latest2 = store2.getAttempt(attempt.attemptId);
-          return latest2 && !latest2.terminal && latest2.generation === attempt.generation && sessionIdsEquivalent(latest2.sessionId, attempt.sessionId) && latest2.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision ? latest2 : null;
+          return latest2 && !latest2.terminal && latest2.state !== "stopping" && latest2.generation === attempt.generation && sessionIdsEquivalent(latest2.sessionId, attempt.sessionId) && latest2.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision ? latest2 : null;
         };
         const current4 = readCurrent();
         if (!current4) return;
@@ -198003,12 +198005,13 @@ function isMeshMissionTaskAggregateWire(value) {
   return value.lastActivityAt === null || typeof value.lastActivityAt === "string";
 }
 function isMeshMissionStatsWire(value) {
-  const keys = ["missionId", "taskCount", "completed", "failed", "totalDurationMs", "wallClockMs", "retries", "incompleteTaskIds"];
+  const keys = ["missionId", "taskCount", "completed", "failed", "blocked", "totalDurationMs", "wallClockMs", "retries", "incompleteTaskIds"];
   if (!isRecord(value) || !hasOnlyKeys2(value, keys)) return false;
   if (!isEvidenceIdentifier(value.missionId)) return false;
   for (const k of ["taskCount", "completed", "failed", "totalDurationMs", "retries"]) {
     if (!isNonNegativeInt(value[k])) return false;
   }
+  if (value.blocked !== void 0 && !isNonNegativeInt(value.blocked)) return false;
   if (value.wallClockMs !== null && !isNonNegativeInt(value.wallClockMs)) return false;
   if (!Array.isArray(value.incompleteTaskIds) || !value.incompleteTaskIds.every(isEvidenceIdentifier)) return false;
   return true;
@@ -198085,12 +198088,13 @@ function isLedgerQueryEntryWire(value) {
   return true;
 }
 function isLedgerQuerySummaryWire(value) {
-  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
+  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
   if (!isRecord(value) || !hasOnlyKeys2(value, keys)) return false;
   if (!isEvidenceIdentifier(value.meshId)) return false;
   for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
     if (!isNonNegativeInt(value[k])) return false;
   }
+  if (value.taskBlocked !== void 0 && !isNonNegativeInt(value.taskBlocked)) return false;
   if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
   return true;
 }

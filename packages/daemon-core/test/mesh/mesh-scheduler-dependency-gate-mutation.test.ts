@@ -71,12 +71,14 @@ import {
     getQueue,
     updateTaskStatus, __writeTaskStatusForTests,
 } from '../../src/mesh/mesh-work-queue.js';
+import { physicalWriterFixture } from '../helpers/physical-writer.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js';
 import { __resetAutoLaunchAwaitClaimBackoffForTests } from '../../src/mesh/mesh-queue-assignment.js';
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_main';
+const physical = (id: string, node = NODE_ID) => physicalWriterFixture(path.join(testTmpDir, id, node), node);
 
 function meshId(tag: string): string {
     return `mesh_gatemut_${tag}_${randomUUID().slice(0, 8)}`;
@@ -123,17 +125,19 @@ type Scenario = { dep: any; dependent: any };
 
 function setEntry(entry: any, over: Record<string, unknown>) {
     MeshRuntimeStore.getInstance().updateQueueEntry({
-        ...entry, ...over, updatedAt: new Date().toISOString(),
+        ...MeshRuntimeStore.getInstance().findQueueEntryById(entry.meshId, entry.id), ...over, updatedAt: new Date().toISOString(),
     } as any);
 }
 
 /** Dependent pending; predecessor NOT completed and NOT a claim candidate. */
 function claimScenarioUnmet(id: string): Scenario {
     const dep = enqueueTask(id, 'prerequisite', { taskMode: 'code_change', difficulty: 'medium' });
+    physical(id, 'node_other').bind(dep);
     // Park the predecessor on a DIFFERENT node so it is neither a pending candidate
     // nor a node-conflict for the claim under test.
     setEntry(dep, { status: 'assigned', assignedNodeId: 'node_other', assignedSessionId: 'other-sess' });
     const dependent = enqueueTask(id, 'dependent work', { taskMode: 'code_change', dependsOn: [dep.id], difficulty: 'medium' });
+    physical(id).bind(dependent);
     return { dep, dependent };
 }
 
@@ -150,7 +154,7 @@ function setMesh(id: string) {
         id,
         name: 'Gate Mutation Mesh',
         policy: {},
-        nodes: [{ id: NODE_ID, workspace: `/repo/${NODE_ID}`, repoRoot: `/repo/${NODE_ID}`, policy: { providerPriority: ['codex-cli'] } }],
+        nodes: [{ id: NODE_ID, workspace: physical(id).claim.physicalContext.workspace, repoRoot: physical(id).claim.physicalContext.workspace, policy: { providerPriority: ['codex-cli'] } }],
     });
 }
 
@@ -198,7 +202,7 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
                 mutatePredicate(MUTANTS.alwaysTrue);
                 // RED characterization: the invariant suite (SURFACE claim) pins
                 // claimNextTask → null for exactly this scenario.
-                const claimed = claimNextTask(mutatedId, NODE_ID, 'mut-sess-1');
+                const claimed = claimNextTask(mutatedId, NODE_ID, 'mut-sess-1', [], physical(mutatedId).claim);
                 expect(claimed?.id).toBe(dependent.id);
             } finally {
                 cleanup(mutatedId);
@@ -208,7 +212,7 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
             const restoredId = meshId('rt_always_claim_restored');
             try {
                 const { dependent } = claimScenarioUnmet(restoredId);
-                expect(claimNextTask(restoredId, NODE_ID, 'mut-sess-2')).toBeNull();
+                expect(claimNextTask(restoredId, NODE_ID, 'mut-sess-2', [], physical(restoredId).claim)).toBeNull();
                 expect(getQueue(restoredId).find(t => t.id === dependent.id)!.status).toBe('pending');
             } finally {
                 cleanup(restoredId);
@@ -253,7 +257,7 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
                 mutatePredicate(MUTANTS.skippedSatisfies);
                 // RED characterization: design :357-359 + the invariant suite pin
                 // 'skipped' as NOT satisfying the predicate.
-                const claimed = claimNextTask(mutatedId, NODE_ID, 'mut-sess-5');
+                const claimed = claimNextTask(mutatedId, NODE_ID, 'mut-sess-5', [], physical(mutatedId).claim);
                 expect(claimed?.id).toBe(dependent.id);
             } finally {
                 cleanup(mutatedId);
@@ -263,7 +267,7 @@ describe('runtime mutation: inlining dependency logic visibly breaks the gate (d
             const restoredId = meshId('rt_skip_claim_restored');
             try {
                 const { dependent } = claimScenarioSkipped(restoredId);
-                expect(claimNextTask(restoredId, NODE_ID, 'mut-sess-6')).toBeNull();
+                expect(claimNextTask(restoredId, NODE_ID, 'mut-sess-6', [], physical(restoredId).claim)).toBeNull();
                 expect(getQueue(restoredId).find(t => t.id === dependent.id)!.status).toBe('pending');
             } finally {
                 cleanup(restoredId);
@@ -335,7 +339,7 @@ const SURFACES: SurfaceMutation[] = [
         // claimNextQueueTask moved out of mesh-runtime-store.ts into mesh-runtime-store-claim.ts
         // (self-delegate move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store-claim.ts'),
-        gateCall: 'taskDependenciesSatisfied(candidate, depStatus)',
+        gateCall: 'taskDependenciesSatisfied(candidate, depStatus, dependencyGraph)',
         entryVar: 'candidate', statusMap: 'depStatus', occurrences: 1,
     },
     {
@@ -343,7 +347,7 @@ const SURFACES: SurfaceMutation[] = [
         // maybeAutoLaunchOneQueueSession moved out of mesh-queue-assignment.ts into
         // mesh-queue-autolaunch.ts (pure move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
-        gateCall: 'taskDependenciesSatisfied(task, statusById)',
+        gateCall: 'taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))',
         entryVar: 'task', statusMap: 'statusById', occurrences: 1,
     },
 ];

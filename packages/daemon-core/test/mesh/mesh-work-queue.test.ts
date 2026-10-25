@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
+import { tmpdir } from 'node:os';
+import { physicalWriterFixture } from '../helpers/physical-writer.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { LOG } from '../../src/logging/logger.js';
 import {
@@ -32,8 +34,11 @@ import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
 describe('Mesh Work Queue (GUPP)', () => {
     const meshId = `test_mesh_${Date.now()}`;
     const queuePath = path.join(getLedgerDir(), `${meshId}.queue.json`);
+    let physicalRoot: string;
+    const writer = (node: string) => physicalWriterFixture(path.join(physicalRoot, node), node);
 
     beforeEach(() => {
+        physicalRoot = fs.mkdtempSync(path.join(tmpdir(), 'queue-writer-'));
         __clearMeshQueueForTests(meshId);
         if (fs.existsSync(queuePath)) {
             fs.unlinkSync(queuePath);
@@ -41,6 +46,7 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     afterEach(() => {
+        fs.rmSync(physicalRoot, { recursive: true, force: true });
         __clearMeshQueueForTests(meshId);
         __resetMeshRuntimeStoreForTests();
         if (fs.existsSync(queuePath)) {
@@ -157,17 +163,19 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('should claim the oldest pending task', () => {
+        const one = writer('node1'), two = writer('node2');
         const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
         const t2 = enqueueTask(meshId, 'task 2', { difficulty: 'medium' });
+        one.bind(t1); two.bind(t2);
 
-        const claimed = claimNextTask(meshId, 'node1', 'session1');
+        const claimed = claimNextTask(meshId, 'node1', 'session1', [], one.claim);
         expect(claimed).to.not.be.null;
         expect(claimed?.id).to.equal(t1.id);
         expect(claimed?.status).to.equal('assigned');
         expect(claimed?.assignedNodeId).to.equal('node1');
         expect(claimed?.assignedSessionId).to.equal('session1');
 
-        const claimed2 = claimNextTask(meshId, 'node2', 'session2');
+        const claimed2 = claimNextTask(meshId, 'node2', 'session2', [], two.claim);
         expect(claimed2?.id).to.equal(t2.id);
     });
 
@@ -189,26 +197,29 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('does not let a node/session claim another task while one is still assigned', () => {
+        const one = writer('node1'), two = writer('node2');
         const t1 = enqueueTask(meshId, 'task 1', { difficulty: 'medium' });
         const t2 = enqueueTask(meshId, 'task 2', { difficulty: 'medium' });
+        one.bind(t1); two.bind(t2);
         const t3 = enqueueTask(meshId, 'task 3', { difficulty: 'medium' });
+        one.bind(t3);
 
-        const first = claimNextTask(meshId, 'node1', 'session1');
+        const first = claimNextTask(meshId, 'node1', 'session1', [], one.claim);
         expect(first?.id).to.equal(t1.id);
 
         // The same session must not stack a second queued task before closing
         // the first one.
-        expect(claimNextTask(meshId, 'node1', 'session1')).to.be.null;
+        expect(claimNextTask(meshId, 'node1', 'session1', [], one.claim)).to.be.null;
 
         // A different session on the same node is still the same worker node;
         // it must not over-claim while the node has active assigned work.
-        expect(claimNextTask(meshId, 'node1', 'session2')).to.be.null;
+        expect(claimNextTask(meshId, 'node1', 'session2', [], one.claim)).to.be.null;
 
-        const otherNode = claimNextTask(meshId, 'node2', 'session3');
+        const otherNode = claimNextTask(meshId, 'node2', 'session3', [], two.claim);
         expect(otherNode?.id).to.equal(t2.id);
 
         updateSessionTaskStatus(meshId, 'session1', 'completed');
-        const afterCompletion = claimNextTask(meshId, 'node1', 'session1');
+        const afterCompletion = claimNextTask(meshId, 'node1', 'session1', [], one.claim);
         expect(afterCompletion?.id).to.equal(t3.id);
     });
 
@@ -349,18 +360,20 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('only lets nodes claim tasks whose required tags are satisfied', () => {
+        const gpu = writer('node-gpu'), basic = writer('node-basic');
         const gpuTask = enqueueTask(meshId, 'gpu task', {
             requiredTags: ['gpu', 'provider=codex-cli', 'gpu'],
             difficulty: 'medium',
         });
         const generalTask = enqueueTask(meshId, 'general task', { difficulty: 'medium' });
+        gpu.bind(gpuTask); basic.bind(generalTask);
 
         expect(gpuTask.requiredTags).to.deep.equal(['gpu', 'provider=codex-cli']);
 
-        const mismatch = claimNextTask(meshId, 'node-basic', 'session-basic', ['provider=codex-cli']);
+        const mismatch = claimNextTask(meshId, 'node-basic', 'session-basic', ['provider=codex-cli'], basic.claim);
         expect(mismatch?.id).to.equal(generalTask.id);
 
-        const matched = claimNextTask(meshId, 'node-gpu', 'session-gpu', ['gpu', 'provider=codex-cli', 'os=darwin']);
+        const matched = claimNextTask(meshId, 'node-gpu', 'session-gpu', ['gpu', 'provider=codex-cli', 'os=darwin'], gpu.claim);
         expect(matched?.id).to.equal(gpuTask.id);
         expect(matched?.assignedNodeId).to.equal('node-gpu');
     });
@@ -536,7 +549,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(stats.pending).to.equal(0);
         expect(stats.assigned).to.equal(1);
         expect(stats.activeCounts).to.deep.equal({ pending: 0, assigned: 1 });
-        expect(stats.historicalCounts).to.deep.equal({ completed: 0, failed: 0, cancelled: 0 });
+        expect(stats.historicalCounts).to.deep.equal({ completed: 0, blocked: 0, failed: 0, cancelled: 0 });
         expect(stats.activeAssignments).to.deep.equal([{
             id: task.id,
             nodeId: 'node-active',
@@ -681,7 +694,7 @@ describe('Mesh Work Queue (GUPP)', () => {
         expect(stats.active).to.equal(1);
         expect(stats.historical).to.equal(1);
         expect(stats.activeCounts).to.deep.equal({ pending: 1, assigned: 0 });
-        expect(stats.historicalCounts).to.deep.equal({ completed: 0, failed: 1, cancelled: 0 });
+        expect(stats.historicalCounts).to.deep.equal({ completed: 0, blocked: 0, failed: 1, cancelled: 0 });
         expect(stats.activeAssignments).to.deep.equal([]);
         expect(getQueue(meshId, { status: ['pending'] })).to.have.length(1);
         expect(getQueue(meshId, { status: ['pending'] })[0].id).to.equal(pendingTask.id);
@@ -713,15 +726,17 @@ describe('Mesh Work Queue (GUPP)', () => {
     });
 
     it('getMeshQueueStats uses SQL GROUP BY — counts all status buckets correctly', () => {
-        enqueueTask(meshId, 'task pending', { difficulty: 'medium' });
+        const a = writer('node-stats-a'), b = writer('node-stats-b');
+        const pendingTask = enqueueTask(meshId, 'task pending', { difficulty: 'medium' });
         const assignedTask = enqueueTask(meshId, 'task to assign', { difficulty: 'medium' });
         const completedTask = enqueueTask(meshId, 'task to complete', { difficulty: 'medium' });
         const cancelledTask = enqueueTask(meshId, 'task to cancel', { difficulty: 'medium' });
 
+        a.bind(pendingTask); b.bind(assignedTask);
         // Claim assignedTask (second oldest)
-        claimNextTask(meshId, 'node-stats-a', 'session-stats-a');
+        claimNextTask(meshId, 'node-stats-a', 'session-stats-a', [], a.claim);
         // Complete completedTask by claiming then completing via session status
-        claimNextTask(meshId, 'node-stats-b', 'session-stats-b');
+        claimNextTask(meshId, 'node-stats-b', 'session-stats-b', [], b.claim);
         updateSessionTaskStatus(meshId, 'session-stats-b', 'completed');
         // Cancel cancelledTask
         cancelTask(meshId, cancelledTask.id, { reason: 'stats test cancel' });

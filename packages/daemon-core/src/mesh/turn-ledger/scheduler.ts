@@ -217,7 +217,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         // re-labelled as fresh evidence for its replacement.
         const readCurrent = (): TurnAttempt | null => {
             const latest = store.getAttempt(attempt.attemptId);
-            return latest && !latest.terminal && latest.generation === attempt.generation
+            return latest && !latest.terminal && latest.state !== 'stopping' && latest.generation === attempt.generation
                 && sessionIdsEquivalent(latest.sessionId, attempt.sessionId)
                 && latest.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision
                 ? latest : null;

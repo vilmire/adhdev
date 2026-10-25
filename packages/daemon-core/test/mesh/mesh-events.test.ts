@@ -1,3 +1,4 @@
+import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js'
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -737,8 +738,12 @@ describe('setupMeshEventForwarding', () => {
       const assigned = tryAssignQueueTask(components, meshId, 'node_child_1', 'runtime-session-1', 'codex-cli')
       expect(assigned).toBe(true)
 
-      // The dispatch failure is handled in an async .catch; wait for it to settle and
-      // assert the task was returned to 'pending' (retryable) rather than 'failed'.
+      // The refusal first retains the assigned physical writer; no retry is safe
+      // until the owned synthetic process acknowledges its exact stop tuple.
+      await vi.waitFor(() => expect(components.turnLedger.store.listOpenAttempts()[0]?.state).toBe('stopping'))
+      expect(getQueue(meshId).find(t => t.id === queued.id)?.status).toBe('assigned')
+      await confirmTestWriterQuiescence(components.turnLedger)
+      // Native confirmation permits the retryable pending effect, never a failure.
       await vi.waitFor(() => {
         const task = getQueue(meshId).find(t => t.id === queued.id)
         expect(task?.status).toBe('pending')
@@ -1399,7 +1404,8 @@ const { emit } = components
       expect(cliManager.handleCliCommand).not.toHaveBeenCalledWith('launch_cli', expect.anything())
       const pending = getQueue(meshId).find(entry => entry.message === 'pending task')
       expect(pending?.status).toBe('pending')
-      expect(pending?.autoLaunch?.reason).toBe('node_has_active_assignment')
+      expect(pending?.autoLaunch?.reason).toBe('owned_paths_conflict')
+      // Unknown legacy writers conservatively conflict before the node capacity gate.
     } finally {
       cleanupMeshFiles(meshId)
     }

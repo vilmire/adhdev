@@ -292,7 +292,7 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
         // claimNextQueueTask moved out of mesh-runtime-store.ts into mesh-runtime-store-claim.ts
         // (self-delegate move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-runtime-store-claim.ts'),
-        gateCalls: ['taskDependenciesSatisfied(candidate, depStatus)'],
+        gateCalls: ['taskDependenciesSatisfied(candidate, depStatus, dependencyGraph)'],
         forbidGraphTokens: true,
     },
     {
@@ -300,7 +300,7 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
         // maybeAutoLaunchOneQueueSession moved out of mesh-queue-assignment.ts into
         // mesh-queue-autolaunch.ts (pure move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
-        gateCalls: ['taskDependenciesSatisfied(task, statusById)'],
+        gateCalls: ['taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))'],
         forbidGraphTokens: true,
     },
 ];

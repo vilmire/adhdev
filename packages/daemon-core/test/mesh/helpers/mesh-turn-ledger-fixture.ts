@@ -83,3 +83,16 @@ export function wipeTurnTablesForTests(): void {
     const db = MeshRuntimeStore.getInstance().db;
     db.exec('DELETE FROM turn_holds; DELETE FROM turn_events; DELETE FROM turn_attempts;');
 }
+
+/** Explicit native checkpoint for this file's synthetic owned worker only.
+ * Uses the production receipt verifier; a bare stop request is never a receipt. */
+export async function confirmTestWriterQuiescence(ledger: TurnLedger): Promise<void> {
+    const stopping = ledger.store.listOpenAttempts({ ownerDaemonId: ledger.selfDaemonId }).filter(a => a.state === 'stopping');
+    if (!stopping.length) throw new Error('fixture expected an outstanding writer checkpoint');
+    for (const a of stopping) {
+        if (a.terminal || !a.data.writerStop || a.data.writerStop.confirmed) throw new Error('invalid fixture stop phase');
+    }
+    const checkpoint = createMeshRuntimeTurnLedger({ selfDaemonId: ledger.selfDaemonId, publisher: null,
+        ports: { cancelDispatch: request => ({ ...request, success: true, quiescent: true, incarnation: 'owned-fixture-native' }) } });
+    await checkpoint.resumeStoppingWriters();
+}

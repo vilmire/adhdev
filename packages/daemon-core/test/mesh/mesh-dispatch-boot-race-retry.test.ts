@@ -1,3 +1,4 @@
+import { confirmTestWriterQuiescence } from './helpers/mesh-turn-ledger-fixture.js'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -110,7 +111,14 @@ function cleanup(meshId: string) {
 }
 
 /** Let deliverTaskToSession's fire-and-forget .then/.catch handlers settle. */
-const settle = async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve() }
+const settle = async (components: any) => {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+  const ledger = components.turnLedger
+  if (ledger.store.listOpenAttempts().some((a: any) => a.state === 'stopping')) {
+    await confirmTestWriterQuiescence(ledger)
+  }
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+}
 
 /**
  * Drive the real dispatch loop, advancing fake timers between ticks so a backoff-gated
@@ -125,7 +133,7 @@ async function runDispatchLoop(components: any, meshId: string, taskId: string, 
     if (row.status !== 'pending') break
     ticks += 1
     tryAssignQueueTask(components, meshId, NODE_ID, 'sess-booting', 'claude-cli')
-    await settle()
+    await settle(components)
     vi.advanceTimersByTime(31_000)
   }
   return ticks
@@ -181,7 +189,7 @@ describe('DISPATCH-BOOT-RACE — a session still booting must not exhaust the re
       })
 
       tryAssignQueueTask(components, meshId, NODE_ID, 'sess-booting', 'claude-cli')
-      await settle()
+      await settle(components)
 
       // Immediately after the failure (no fake-timer advance): the row must still be
       // pending (requeued) but NOT yet re-claimable — a second claim attempt right now

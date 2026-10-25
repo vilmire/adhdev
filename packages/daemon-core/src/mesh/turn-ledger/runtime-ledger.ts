@@ -14,7 +14,7 @@
 
 import { MeshRuntimeStore } from '../mesh-runtime-store.js';
 import { applyTaskTerminalInTxn, afterTaskTerminalCommitted } from '../mesh-task-terminal.js';
-import { propagateLedgerDependencyFailure, requeueTaskForLedgerReclaim } from '../mesh-work-queue.js';
+import { applyDispatchFailureBackoff, propagateLedgerDependencyFailure, requeueTaskForLedgerReclaim } from '../mesh-work-queue.js';
 import {
     findWorkerTaskTokenForSession,
     revokeWorkerSessionBindsForSession,
@@ -30,6 +30,9 @@ import type { CancelDispatchRequest, TurnLedgerPorts, TurnTxnHost } from './effe
 export const meshRuntimeTxnHost: TurnTxnHost = {
     requeue(effect, ctx) {
         requeueTaskForLedgerReclaim(effect.meshId, effect.taskId, effect.reason, new Date(ctx.nowMs).toISOString());
+        // A dispatch failure is pending only after its native writer checkpoint.
+        // Applying this in the ingress callback ran too early and lost the delay.
+        if (effect.reason === 'dispatch_failed') applyDispatchFailureBackoff(effect.meshId, effect.taskId);
     },
     taskTerminal(effect, ctx) {
         const result = applyTaskTerminalInTxn({
