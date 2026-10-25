@@ -104,7 +104,7 @@ const TURN_LEDGER_IPC_CMDS = [
   'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
   // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-  'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+  'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'queue_revise', 'direct_dispatch_record',
   'active_work_query', 'recovery_context_query',
   // C-W9c store commands (mesh-stats-ipc.ts, merged into the same map): the last
   // mcp-server in-process daemon-core paths — task/mission stats, one prune
@@ -122,7 +122,7 @@ const COOPERATIVE_MAINTENANCE_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 98 LOW family commands once, no overlap', () => {
+  it('registers all 99 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -141,8 +141,8 @@ describe('low-family registry', () => {
     // − list_coordinator_prompts − write_coordinator_prompt (coordinator-prompts/
     // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85; strict B adds six = 91;
     // + 7 cooperative-maintenance actor/collection commands (rc13 cooperative
-    // old-entry drain, 2026-10-14) = 98.
-    expect(all).toHaveLength(98)
+    // old-entry drain, 2026-10-14) + queue_revise = 99.
+    expect(all).toHaveLength(99)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

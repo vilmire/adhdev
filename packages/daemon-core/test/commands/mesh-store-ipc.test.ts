@@ -60,7 +60,7 @@ describe('registration', () => {
         const names = Object.keys(meshStoreIpcHandlers);
         expect(names.sort()).toEqual([
             'active_work_query', 'direct_dispatch_record', 'ledger_query', 'mission_list_query',
-            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue',
+            'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue', 'queue_revise',
             'record_local', 'recovery_context_query', 'tool_call_record',
         ]);
         const byName = new Map(turnLedgerIpcSpecs.map((spec) => [spec.name, spec]));

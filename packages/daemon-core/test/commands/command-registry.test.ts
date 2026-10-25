@@ -235,7 +235,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'queue_revise', 'direct_dispatch_record',
     'active_work_query', 'recovery_context_query',
     // C-W9c: the stats/prune commands (mesh-stats-ipc.ts) — the last
     // mcp-server in-process daemon-core paths: task/mission stats, one prune
@@ -258,7 +258,7 @@ const TURN_LEDGER_IPC_COMMANDS = [
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
     'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
-    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'direct_dispatch_record',
+    'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'queue_revise', 'direct_dispatch_record',
     'active_work_query', 'recovery_context_query',
     // C-W9c: the stats/prune commands (mesh-stats-ipc.ts).
     'task_stats_query', 'prune_stale_direct', 'orphaned_pin_notify',
