@@ -75,8 +75,8 @@ describe('session-status vocabulary', () => {
 })
 
 describe('mesh vocabulary', () => {
-    it('task status has exactly the five states a queue row can hold', () => {
-        expect([...MESH_TASK_STATUSES]).toEqual(['pending', 'assigned', 'completed', 'failed', 'cancelled'])
+    it('task status has exactly the six states a queue row can hold', () => {
+        expect([...MESH_TASK_STATUSES]).toEqual(['pending', 'assigned', 'completed', 'blocked', 'failed', 'cancelled'])
         expect(isMeshTaskStatus('in_progress')).toBe(false)
         for (const terminal of MESH_TERMINAL_TASK_STATUSES) {
             expect(isMeshTaskStatus(terminal)).toBe(true)
