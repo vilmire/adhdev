@@ -702,3 +702,45 @@ export function __resetTailJsonlCacheForTests(): void {
     tailJsonlCacheStats.fileReads = 0;
     tailJsonlCacheStats.parsePasses = 0;
 }
+
+export interface AsyncTailJsonlSnapshot {
+    signature: string;
+    records: unknown[];
+}
+const asyncTailJsonlCache = new Map<string, { token: object; snapshot?: AsyncTailJsonlSnapshot }>();
+/** Async bounded status reader. A changed revision is never installed or
+ * returned as a current snapshot; callers coalesce/retry after the writer settles. */
+export async function readTailJsonlLinesAsync(filePath: string, maxBytes: number, isCurrent: () => boolean = () => true): Promise<AsyncTailJsonlSnapshot | null> {
+    let fd: fs.promises.FileHandle | undefined;
+    try {
+        fd = await fs.promises.open(filePath, 'r');
+        const before = await fd.stat();
+        const signature = tailJsonlSignature(before);
+        if (!isCurrent()) return null;
+        const cacheKey = `${maxBytes}:${filePath}`;
+        const cached = asyncTailJsonlCache.get(cacheKey);
+        if (cached?.snapshot?.signature === signature) {
+            const pathStat = await fs.promises.stat(filePath);
+            return isCurrent() && tailJsonlSignature(pathStat) === signature ? cached.snapshot : null;
+        }
+        const token = {};
+        if (asyncTailJsonlCache.size >= 8) asyncTailJsonlCache.delete(asyncTailJsonlCache.keys().next().value!);
+        asyncTailJsonlCache.set(cacheKey, { token });
+        const start = Math.max(0, before.size - maxBytes);
+        const bytes = Buffer.alloc(before.size - start);
+        const read = await fd.read(bytes, 0, bytes.length, start);
+        const lines = bytes.subarray(0, read.bytesRead).toString('utf8').split('\n');
+        if (start > 0) lines.shift();
+        const records: unknown[] = [];
+        for (const line of lines) {
+            try { if (line.trim()) records.push(JSON.parse(line)); } catch { /* malformed/in-flight fragment */ }
+        }
+        const after = await fs.promises.stat(filePath);
+        if (!isCurrent() || read.bytesRead !== bytes.length || tailJsonlSignature(after) !== signature
+            || tailJsonlSignature(await fd.stat()) !== signature || asyncTailJsonlCache.get(cacheKey)?.token !== token) return null;
+        const snapshot = { signature, records };
+        asyncTailJsonlCache.set(cacheKey, { token, snapshot });
+        return snapshot;
+    } catch { return null; }
+    finally { await fd?.close(); }
+}

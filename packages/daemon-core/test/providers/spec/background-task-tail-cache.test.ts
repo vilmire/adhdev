@@ -65,3 +65,67 @@ describe('readTailJsonlLines with cache', () => {
         expect(statsAfter.hits).toBe(0); // Cache miss
     });
 });
+
+import { vi } from 'vitest';
+import { readTailJsonlLinesAsync } from '../../../src/providers/spec/background-task-detector.js';
+
+describe('asynchronous bounded question tails', () => {
+    afterEach(() => vi.restoreAllMocks());
+    it('reuses an unchanged revision and handles append, truncate and same-size rewrite', async () => {
+        const file = path.join(tmpDir, 'async.jsonl');
+        fs.writeFileSync(file, '{"n":1}\n');
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual([{ n: 1 }]);
+        const realOpen = fs.promises.open;
+        const open = vi.spyOn(fs.promises, 'open');
+        const handles: any[] = [];
+        open.mockImplementation(async (...args: any[]) => {
+            const fd = await (realOpen as any)(...args);
+            handles.push(vi.spyOn(fd, 'read'));
+            return fd;
+        });
+        await readTailJsonlLinesAsync(file, 512 * 1024);
+        expect(handles.every(read => read.mock.calls.length === 0)).toBe(true);
+        fs.appendFileSync(file, '{"n":2}\n');
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual([{ n: 1 }, { n: 2 }]);
+        fs.writeFileSync(file, '{"n":3}\n');
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual([{ n: 3 }]);
+        fs.writeFileSync(file, '{"n":4}\n');
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual([{ n: 4 }]);
+    });
+
+    it('retains the UTF8/partial-first-line and malformed-last-fragment rules under the 512KiB cap', async () => {
+        const file = path.join(tmpDir, 'fragments.jsonl');
+        const prefix = JSON.stringify({ text: '한'.repeat(200_000) }) + '\n';
+        fs.writeFileSync(file, prefix + '{"text":"끝"}\n{"partial":');
+        const result = await readTailJsonlLinesAsync(file, 512 * 1024);
+        expect(result?.records).toEqual([{ text: '끝' }]);
+        fs.appendFileSync(file, 'true}\n');
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual([{ text: '끝' }, { partial: true }]);
+    });
+
+    it.each(['replace', 'append'] as const)('rejects a %s that races the actual asynchronous read', async (operation) => {
+        const file = path.join(tmpDir, `race-${operation}.jsonl`);
+        fs.writeFileSync(file, '{"before":true}\n');
+        const original = fs.promises.open;
+        let raced = false;
+        vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: any[]) => {
+            const fd = await (original as any)(...args);
+            const read = fd.read.bind(fd);
+            fd.read = async (...readArgs: any[]) => {
+                const result = await read(...readArgs);
+                if (!raced) {
+                    raced = true;
+                    if (operation === 'replace') {
+                        fs.writeFileSync(file + '.new', '{"replacement":true}\n');
+                        fs.renameSync(file + '.new', file);
+                    } else fs.appendFileSync(file, '{"append":true}\n');
+                }
+                return result;
+            };
+            return fd;
+        });
+        expect(await readTailJsonlLinesAsync(file, 512 * 1024)).toBeNull();
+        expect((await readTailJsonlLinesAsync(file, 512 * 1024))?.records).toEqual(operation === 'replace'
+            ? [{ replacement: true }] : [{ before: true }, { append: true }]);
+    });
+});
