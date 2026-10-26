@@ -45899,7 +45899,8 @@ ${error.message || ""}`;
     }
     function ensure(db2) {
       db2.exec(`CREATE TABLE IF NOT EXISTS mesh_session_stop_fences (
-        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL)`);
+        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_session_stop_pending ON mesh_session_stop_fences(mesh_id, state)`);
     }
     function sessionIsStopping(db2, sessionId) {
       if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
@@ -45920,6 +45921,17 @@ ${error.message || ""}`;
     }
     function releaseSessionStop(db2, sessionId, stopId) {
       db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
+    }
+    function sessionStopPending(db2, sessionId) {
+      if (!sessionIsStopping(db2, sessionId)) return false;
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state = 'stopping'").get(sessionId.trim());
+    }
+    function hasPendingSessionStops(db2, meshId) {
+      if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state = 'stopping' LIMIT 1").get(meshId);
+    }
+    function confirmSessionStop(db2, sessionId, stopId) {
+      db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
     }
     var import_node_crypto52;
     var init_mesh_session_stop_fence = __esm2({
@@ -106251,14 +106263,14 @@ ${asText(streams.stderr)}
           skip("within_ttl");
           continue;
         }
-        eligible.push({ sessionId, idleMs, machineId: record7.machineId || "local", inMesh });
+        eligible.push({ sessionId, idleMs, machineId: record7.machineId || "local", inMesh, stopping: record7.stopping === true });
       }
       const cap = args.maxIdleSessions ?? 0;
       const excess = /* @__PURE__ */ new Set();
       const machines = new Set(eligible.map((r) => r.machineId));
       for (const machine of machines) {
         const idle = eligible.filter((r) => r.machineId === machine).sort((a, b) => b.idleMs - a.idleMs || a.sessionId.localeCompare(b.sessionId));
-        const retained = idle.filter((r) => !includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
+        const retained = idle.filter((r) => !r.stopping && !includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
         if (cap > 0) for (const r of retained.slice(0, Math.max(0, retained.length - cap))) excess.add(r.sessionId);
       }
       for (const r of eligible.sort((a, b) => b.idleMs - a.idleMs)) {
@@ -106266,7 +106278,7 @@ ${asText(streams.stderr)}
           plan.skipped.push({ sessionId: r.sessionId, reason: "other_mesh" });
           continue;
         }
-        const reason = includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) ? "accepted_completion" : ttlMs > 0 && r.idleMs >= ttlMs ? "idle_ttl_exceeded" : excess.has(r.sessionId) ? "idle_machine_cap" : void 0;
+        const reason = r.stopping ? "stop_retry" : includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) ? "accepted_completion" : ttlMs > 0 && r.idleMs >= ttlMs ? "idle_ttl_exceeded" : excess.has(r.sessionId) ? "idle_machine_cap" : void 0;
         if (reason) plan.reap.push({ sessionId: r.sessionId, idleMs: r.idleMs, reason });
         else plan.skipped.push({ sessionId: r.sessionId, reason: "within_ttl" });
       }
@@ -106309,7 +106321,7 @@ ${asText(streams.stderr)}
       const rawCap = args.policy?.maxIdleDelegatedSessionsPerMachine;
       const cap = typeof rawCap === "number" && Number.isFinite(rawCap) ? Math.max(0, Math.min(100, Math.floor(rawCap))) : 2;
       const stopAccepted = args.policy?.stopDelegatedSessionOnAcceptedCompletion !== false;
-      if (ttlMs <= 0 && cap === 0 && !stopAccepted) return empty;
+      if (ttlMs <= 0 && cap === 0 && !stopAccepted && !deps.hasPendingStops?.()) return empty;
       let records = [];
       try {
         records = await deps.listSessions();
@@ -106404,12 +106416,14 @@ ${asText(streams.stderr)}
       const coordinatorDaemonId = getMachineId() ?? "";
       const context2 = { meshId: mesh.id, coordinatorDaemonId };
       return {
+        hasPendingStops: () => hasPendingSessionStops(MeshRuntimeStore.getInstance().db, mesh.id),
         listSessions: async () => {
           if (!router?.deps.sessionHostControl) throw new Error("session_host_unavailable");
           const local = await router.deps.sessionHostControl.listSessions();
           const records = local.map((record7) => ({
             ...record7,
             state: findLocalCliInstance(components, record7.sessionId)?.getState(),
+            stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, record7.sessionId),
             claimFence: sessionClaimFence(findLocalCliInstance(components, record7.sessionId)?.getState()),
             checkpointPending: sessionCheckpointPending(record7.sessionId),
             machineId: canonicalDaemonId2(coordinatorDaemonId)
@@ -106456,7 +106470,7 @@ ${asText(streams.stderr)}
                 failure7 = void 0;
                 for (const r of result.sessions) {
                   if (r.meta?.meshNodeFor !== mesh.id) continue;
-                  const record7 = { ...r, machineId: daemonId, checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
+                  const record7 = { ...r, machineId: daemonId, stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
                   routes.set(record7.sessionId, { daemonId, record: record7, provider: c.providerType || "mesh" });
                   records.push(record7);
                 }
@@ -106487,28 +106501,35 @@ ${asText(streams.stderr)}
             releaseSessionStop(db2, sessionId, stopId);
             return { success: false, error: "session_lifetime_safety_changed" };
           }
+          const acknowledged = (result) => {
+            if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, sessionId))) {
+              confirmSessionStop(db2, sessionId, stopId);
+            }
+            return result;
+          };
           const route = [...routes.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
           if (route) {
+            if (!route.record.claimFence) return { success: false, error: "lifetime_claim_fence_unsupported" };
             if (!components.dispatchMeshCommand) return { success: false, error: "P2P_unavailable" };
-            return unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, "agent_command", {
+            return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, "agent_command", {
               action: "mesh_idle_session_stop",
               agentType: route.provider,
               targetSessionId: sessionId,
               idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence },
               meshContext: context2
-            }), { command: "agent_command", peerDaemonId: route.daemonId });
+            }), { command: "agent_command", peerDaemonId: route.daemonId }));
           }
           const state2 = findLocalCliInstance(components, sessionId)?.getState();
           if (!isSafeIdleTaskSession(state2) || !router) return { success: false, error: "session_lifetime_safety_changed" };
           const record7 = [...localRecords.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
           if (!record7 || !components.cliManager) return { success: false, error: "lifetime_runtime_unavailable" };
-          return components.cliManager.agentCommand({
+          return acknowledged(await components.cliManager.agentCommand({
             action: "mesh_idle_session_stop",
             agentType: "mesh",
             targetSessionId: sessionId,
             idleSessionLifetime: { lastActivityAt: record7.lastActivityAt, stopId, claimFence: record7.claimFence },
             meshContext: context2
-          });
+          }));
         }
       };
     }
@@ -182944,6 +182965,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             lastActivityAt: r2.lastActivityAt,
             lifecycle: r2.lifecycle,
             surfaceKind: r2.surfaceKind,
+            stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, r2.sessionId),
             claimFence: sessionClaimFence(state2),
             meta: { meshNodeFor: r2.meta.meshNodeFor, meshNodeId: r2.meta.meshNodeId, launchedByCoordinator: r2.meta.launchedByCoordinator },
             state: isSafeIdleTaskSession(state2, r2.meta) ? { status: "idle" } : void 0,
@@ -182965,6 +182987,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const stopped = await control.stopSession(r.sessionId);
       if (!stopped || stopped.lifecycle !== "stopped") return { success: false, error: "lifetime_stop_unconfirmed" };
+      confirmSessionStop(db2, r.sessionId, fence.stopId);
       return { success: true, stoppedSessionIds: [r.sessionId] };
     }
     init_worker_bridge();

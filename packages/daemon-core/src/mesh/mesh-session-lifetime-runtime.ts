@@ -1,4 +1,4 @@
-import { sessionClaimFence, reserveSessionStop, releaseSessionStop } from './mesh-session-stop-fence.js';
+import { sessionClaimFence, reserveSessionStop, releaseSessionStop, sessionStopPending, hasPendingSessionStops, confirmSessionStop } from './mesh-session-stop-fence.js';
 /** Local and peer lifetime binding; peer actions use the existing session-coordinator ACL. */
 import { canonicalDaemonId, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -20,11 +20,13 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
     const coordinatorDaemonId = getMachineId() ?? '';
     const context = { meshId: mesh.id, coordinatorDaemonId };
     return {
+        hasPendingStops: () => hasPendingSessionStops(MeshRuntimeStore.getInstance().db, mesh.id),
         listSessions: async () => {
             if (!router?.deps.sessionHostControl) throw new Error('session_host_unavailable');
             const local = await router.deps.sessionHostControl.listSessions();
             const records: ReapableSessionRecord[] = local.map(record => ({ ...record,
                 state: findLocalCliInstance(components, record.sessionId)?.getState(),
+                stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, record.sessionId),
                 claimFence: sessionClaimFence(findLocalCliInstance(components, record.sessionId)?.getState()),
                 checkpointPending: sessionCheckpointPending(record.sessionId),
                 machineId: canonicalDaemonId(coordinatorDaemonId),
@@ -68,7 +70,7 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                         failure = undefined;
                         for (const r of result.sessions as ReapableSessionRecord[]) {
                             if (r.meta?.meshNodeFor !== mesh.id) continue;
-                            const record = { ...r, machineId: daemonId, checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
+                            const record = { ...r, machineId: daemonId, stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
                             routes.set(record.sessionId, { daemonId, record, provider: c.providerType || 'mesh' });
                             records.push(record);
                         }
@@ -97,20 +99,27 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                 releaseSessionStop(db, sessionId, stopId);
                 return { success: false, error: 'session_lifetime_safety_changed' };
             }
+            const acknowledged = (result: { success: boolean; [key: string]: unknown }) => {
+                if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some(id => sessionIdsEquivalent(id, sessionId))) {
+                    confirmSessionStop(db, sessionId, stopId);
+                }
+                return result;
+            };
             const route = [...routes.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
             if (route) {
+                if (!route.record.claimFence) return { success: false, error: 'lifetime_claim_fence_unsupported' };
                 if (!components.dispatchMeshCommand) return { success: false, error: 'P2P_unavailable' };
-                return unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, 'agent_command', {
+                return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, 'agent_command', {
                     action: 'mesh_idle_session_stop', agentType: route.provider, targetSessionId: sessionId,
                     idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence }, meshContext: context,
-                }), { command: 'agent_command', peerDaemonId: route.daemonId });
+                }), { command: 'agent_command', peerDaemonId: route.daemonId }));
             }
             const state = findLocalCliInstance(components, sessionId)?.getState();
             if (!isSafeIdleTaskSession(state) || !router) return { success: false, error: 'session_lifetime_safety_changed' };
             const record = [...localRecords.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
             if (!record || !components.cliManager) return { success: false, error: 'lifetime_runtime_unavailable' };
-            return components.cliManager.agentCommand({ action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: sessionId,
-                idleSessionLifetime: { lastActivityAt: record.lastActivityAt!, stopId, claimFence: record.claimFence! }, meshContext: context });
+            return acknowledged(await components.cliManager.agentCommand({ action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: sessionId,
+                idleSessionLifetime: { lastActivityAt: record.lastActivityAt!, stopId, claimFence: record.claimFence! }, meshContext: context }));
         },
     };
 }

@@ -15,7 +15,8 @@ export function claimFenceMatches(expected: SessionClaimFence, state: any): bool
 }
 function ensure(db: Database): void {
     db.exec(`CREATE TABLE IF NOT EXISTS mesh_session_stop_fences (
-        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL)`);
+        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_session_stop_pending ON mesh_session_stop_fences(mesh_id, state)`);
 }
 export function sessionIsStopping(db: Database, sessionId: string): boolean {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
@@ -37,4 +38,16 @@ export function reserveSessionStop(db: Database, meshId: string, sessionId: stri
 /** Release only before a stop can have been sent, or after an explicit no-stop refusal. */
 export function releaseSessionStop(db: Database, sessionId: string, stopId: string): void {
     db.prepare('DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?').run(sessionId.trim(), stopId);
+}
+export function sessionStopPending(db: Database, sessionId: string): boolean {
+    if (!sessionIsStopping(db, sessionId)) return false;
+    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state = 'stopping'").get(sessionId.trim());
+}
+export function hasPendingSessionStops(db: Database, meshId: string): boolean {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
+    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state = 'stopping' LIMIT 1").get(meshId);
+}
+export function confirmSessionStop(db: Database, sessionId: string, stopId: string): void {
+    // Keep a tombstone so a stale remote-idle row cannot claim the stopped runtime.
+    db.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
 }

@@ -249,3 +249,17 @@ describe('review finding 3: accepted evidence union', () => {
         expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])]).toEqual([]);
     });
 });
+
+describe('remote fence capability', () => {
+    it('does not send a fenced stop to an older host that omitted its assignment fence', async () => {
+        accept(); remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
+        const oldRecord = record(); delete (oldRecord as any).claimFence;
+        const dispatch = vi.fn(async (_peer, _command, args) => args.action === 'mesh_idle_session_inventory'
+            ? { success: true, sessions: [oldRecord] } : { success: true, stoppedSessionIds: ['worker'] });
+        const c: any = { router: { deps: { sessionHostControl: { listSessions: async () => [] } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) }, dispatchMeshCommand: dispatch };
+        const mesh = { id: meshId, nodes: [{ id: 'remote-node', daemonId: 'daemon_mach_peer', machineId: 'mach_peer' }] };
+        const result = await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now), { meshId, now, policy: undefined });
+        expect(result.stoppedSessionIds).toEqual([]);
+        expect(dispatch.mock.calls.filter(c => c[2].action === 'mesh_idle_session_stop')).toHaveLength(0);
+    });
+});

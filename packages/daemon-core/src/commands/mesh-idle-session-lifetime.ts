@@ -1,7 +1,7 @@
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { collectSessionIdsWithActiveWork } from '../mesh/mesh-idle-session-reaper.js';
 import { includesSession } from '../mesh/mesh-session-lifetime.js';
-import { sessionClaimFence, claimFenceMatches, reserveSessionStop, releaseSessionStop } from '../mesh/mesh-session-stop-fence.js';
+import { sessionClaimFence, claimFenceMatches, reserveSessionStop, releaseSessionStop, sessionStopPending, confirmSessionStop } from '../mesh/mesh-session-stop-fence.js';
 /** Host-side lifetime probe/stop, behind agent_command's session-coordinator ACL. */
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { CliAgentCommandHost } from './cli-manager-agent-command.js';
@@ -21,7 +21,7 @@ export async function idleSessionLifetimeCommand(host: CliAgentCommandHost, args
             const state = stateFor(r.sessionId);
             // Return no terminal/chat content, only the lifetime decision and host idle clock.
             return { sessionId: r.sessionId, lastActivityAt: r.lastActivityAt, lifecycle: r.lifecycle,
-                surfaceKind: r.surfaceKind, claimFence: sessionClaimFence(state), meta: { meshNodeFor: r.meta.meshNodeFor, meshNodeId: r.meta.meshNodeId, launchedByCoordinator: r.meta.launchedByCoordinator },
+                surfaceKind: r.surfaceKind, stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), claimFence: sessionClaimFence(state), meta: { meshNodeFor: r.meta.meshNodeFor, meshNodeId: r.meta.meshNodeId, launchedByCoordinator: r.meta.launchedByCoordinator },
                 state: isSafeIdleTaskSession(state, r.meta) ? { status: 'idle' } : undefined,
                 checkpointPending: sessionCheckpointPending(r.sessionId) };
         }) };
@@ -46,5 +46,6 @@ export async function idleSessionLifetimeCommand(host: CliAgentCommandHost, args
     }
     const stopped = await control.stopSession(r.sessionId);
     if (!stopped || stopped.lifecycle !== 'stopped') return { success: false, error: 'lifetime_stop_unconfirmed' };
+    confirmSessionStop(db, r.sessionId, fence.stopId);
     return { success: true, stoppedSessionIds: [r.sessionId] };
 }

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { claimNextTask } from '../../src/mesh/mesh-work-queue.js';
+import { reserveSessionStop } from '../../src/mesh/mesh-session-stop-fence.js';
+import { runIdleSessionReapPass } from '../../src/mesh/mesh-idle-session-reaper.js';
 import { reuseIdleTaskSession } from '../../src/mesh/mesh-session-reuse.js';
 import { sessionLifetimeDeps } from '../../src/mesh/mesh-session-lifetime-runtime.js';
 import { agentCommand } from '../../src/commands/cli-manager-agent-command.js';
@@ -93,5 +95,27 @@ describe('owner reservation and host delivery fence', () => {
         try {
             await expect(agentCommand(f.host, { action: 'send_chat', agentType: 'codex-cli', targetSessionId: f.sessionId, meshContext: { meshId: f.meshId } })).rejects.toThrow('session_lifetime_stopping');
         } finally { finish(); await stopping; }
+    });
+});
+
+
+describe('pending stop intent recovery', () => {
+    it('keeps a failed stop eligible when idle count falls below the cap', async () => {
+        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId);
+        const instance = { getState: () => f.state };
+        const components: any = { instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
+            router: { deps: { sessionHostControl: f.control } } };
+        const plan = await runIdleSessionReapPass(sessionLifetimeDeps(components, { id: f.meshId, nodes: [] }, Date.now()),
+            { meshId: f.meshId, dryRun: true, policy: { delegatedSessionIdleTtlMinutes: 0, maxIdleDelegatedSessionsPerMachine: 1, stopDelegatedSessionOnAcceptedCompletion: false } });
+        expect(plan.plan.reap.map(r => r.sessionId)).toEqual([f.sessionId]);
+    });
+    it('finishes outstanding stop intent even if new stop policies were disabled', async () => {
+        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId);
+        const instance = { getState: () => f.state };
+        const components: any = { instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
+            router: { deps: { sessionHostControl: f.control } } };
+        const plan = await runIdleSessionReapPass(sessionLifetimeDeps(components, { id: f.meshId, nodes: [] }, Date.now()),
+            { meshId: f.meshId, dryRun: true, policy: { delegatedSessionIdleTtlMinutes: 0, maxIdleDelegatedSessionsPerMachine: 0, stopDelegatedSessionOnAcceptedCompletion: false } });
+        expect(plan.plan.reap.map(r => r.sessionId)).toEqual([f.sessionId]);
     });
 });

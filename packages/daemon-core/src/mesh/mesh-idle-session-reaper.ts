@@ -20,6 +20,7 @@ export interface ReapableSessionRecord {
     state?: any;
     claimFence?: import('./mesh-session-stop-fence.js').SessionClaimFence;
     checkpointPending?: boolean;
+    stopping?: boolean;
     machineId?: string;
     lastActivityAt?: number;
     lifecycle?: string;
@@ -125,7 +126,7 @@ export function planIdleSessionReap(args: {
     const { meshId, records, activeWorkSessionIds, ttlMs, now } = args;
     const plan: IdleSessionReapPlan = { reap: [], skipped: [] };
     if (!Array.isArray(records)) return plan;
-    const eligible: Array<{ sessionId: string; idleMs: number; machineId: string; inMesh: boolean }> = [];
+    const eligible: Array<{ sessionId: string; idleMs: number; machineId: string; inMesh: boolean; stopping: boolean }> = [];
 
     for (const record of records) {
         const sessionId = readStringValue(record?.sessionId);
@@ -189,7 +190,7 @@ export function planIdleSessionReap(args: {
         }
 
         if (idleMs < 0) { skip('within_ttl'); continue; }
-        eligible.push({ sessionId, idleMs, machineId: record.machineId || 'local', inMesh });
+        eligible.push({ sessionId, idleMs, machineId: record.machineId || 'local', inMesh, stopping: record.stopping === true });
     }
     const cap = args.maxIdleSessions ?? 0;
     const excess = new Set<string>();
@@ -197,12 +198,12 @@ export function planIdleSessionReap(args: {
     for (const machine of machines) {
         const idle = eligible.filter(r => r.machineId === machine).sort((a, b) => b.idleMs - a.idleMs || a.sessionId.localeCompare(b.sessionId));
         // Accepted workers already leaving do not evict additional reuse candidates.
-        const retained = idle.filter(r => !includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
+        const retained = idle.filter(r => !r.stopping && !includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
         if (cap > 0) for (const r of retained.slice(0, Math.max(0, retained.length - cap))) excess.add(r.sessionId);
     }
     for (const r of eligible.sort((a, b) => b.idleMs - a.idleMs)) {
         if (!r.inMesh) { plan.skipped.push({ sessionId: r.sessionId, reason: 'other_mesh' }); continue; }
-        const reason = includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) ? 'accepted_completion'
+        const reason = r.stopping ? 'stop_retry' : includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) ? 'accepted_completion'
             : ttlMs > 0 && r.idleMs >= ttlMs ? 'idle_ttl_exceeded'
             : excess.has(r.sessionId) ? 'idle_machine_cap' : undefined;
         if (reason) plan.reap.push({ sessionId: r.sessionId, idleMs: r.idleMs, reason });
@@ -288,6 +289,7 @@ function reportReapAborted(meshId: string, now: number, error: unknown): void {
 /** Injected side effects, so the orchestrator is testable without a router. */
 export interface IdleSessionReaperDeps {
     listSessions(): Promise<ReapableSessionRecord[]>;
+    hasPendingStops?(): boolean;
     /** Existing persisted output read; injectable for focused tests. */
     acceptedSessionIds?(meshId: string): Set<string>;
     /** Stop executor; must confirm the stopped ids, with host-side safety checks. */
@@ -355,7 +357,7 @@ export async function runIdleSessionReapPass(
     const rawCap = args.policy?.maxIdleDelegatedSessionsPerMachine;
     const cap = typeof rawCap === 'number' && Number.isFinite(rawCap) ? Math.max(0, Math.min(100, Math.floor(rawCap))) : 2;
     const stopAccepted = args.policy?.stopDelegatedSessionOnAcceptedCompletion !== false;
-    if (ttlMs <= 0 && cap === 0 && !stopAccepted) return empty;
+    if (ttlMs <= 0 && cap === 0 && !stopAccepted && !deps.hasPendingStops?.()) return empty;
 
     let records: ReapableSessionRecord[] = [];
     try {
