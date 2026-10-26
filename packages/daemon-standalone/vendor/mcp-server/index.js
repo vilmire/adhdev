@@ -79619,7 +79619,11 @@ ${continuationNotice}` } : task,
       const explicit = readOptionalString2(args?.meshId) ?? readOptionalString2(args?.mesh_id) ?? readOptionalString2(meshContext?.meshId);
       if (explicit) return explicit;
       const sessionId = readOptionalString2(args?.targetSessionId) ?? readOptionalString2(args?.sessionId) ?? readOptionalString2(args?.instanceId);
-      const settings2 = sessionId ? instanceManager?.getInstance(sessionId)?.getState().settings : void 0;
+      let settings2;
+      try {
+        settings2 = sessionId ? instanceManager?.getInstance(sessionId)?.getState?.()?.settings : void 0;
+      } catch {
+      }
       return readOptionalString2(settings2?.meshNodeFor) ?? readOptionalString2(settings2?.meshCoordinatorFor) ?? void 0;
     }
     function admitRouterCommandUnderNewWorkHold(command, normalizedArgs, revealedMeshIds = [], components) {
@@ -148924,7 +148928,7 @@ ${output}` : "";
           target.releaseDrain?.();
         }
       }
-      async function run3(msg, prepareInput, noticeObserver) {
+      async function run3(msg, resolveTarget, prepareInput, noticeObserver) {
         if (settledKind(msg.messageId) === "delivered") {
           const prior2 = settled.get(msg.messageId);
           if (prior2.sessionId !== msg.sessionId || prior2.inputDigest !== outgoingInputDigest(msg.input)) throw new Error("Outgoing message identity conflict");
@@ -148935,7 +148939,7 @@ ${output}` : "";
             const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
             if (fresh) freshOutgoing.add(msg.messageId);
             if (!fresh) {
-              const liveTarget = await deps.resolveSession(msg.sessionId);
+              const liveTarget = await resolveTarget();
               if (msg.policy.mode === "queue" || receipt.state !== "accepted" || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
                 return { kind: "duplicate", of: msg.messageId };
               }
@@ -148949,7 +148953,7 @@ ${output}` : "";
         }
         let target;
         try {
-          target = await deps.resolveSession(msg.sessionId);
+          target = await resolveTarget();
         } catch (e) {
           log("error", `submit(${msg.messageId}) resolveSession threw: ${e?.message ?? e}`);
           return refuse3("internal_error");
@@ -148987,13 +148991,13 @@ ${output}` : "";
         if ("kind" in body) return body;
         return writeAndReport(target, msg, body, { fresh: true, route: "pty" }, noticeObserver);
       }
-      async function submitOwned(msg, prepareInput, noticeObserver) {
-        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse3("internal_error", { message: "messageId required" });
-        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse3("no_target");
+      async function runAdmitted(msg, prepareInput, noticeObserver) {
+        let target;
+        const resolveTarget = () => target ??= Promise.resolve().then(() => deps.resolveSession(msg.sessionId));
         const isCoordinatorNotice = Boolean(noticeObserver) || msg.origin === "mesh" && msg.messageId.startsWith("notify:");
         const isVerifiedOwnerChat = isTrustedOwnerIngress(msg) && !msg.meshAttemptRef;
         if (!isCoordinatorNotice && !isVerifiedOwnerChat) {
-          const resolvedForHold = await Promise.resolve(deps.resolveSession(msg.sessionId)).catch(() => null);
+          const resolvedForHold = await resolveTarget().catch(() => null);
           const settingsForHold = resolvedForHold?.getSessionSettings?.();
           const meshId = typeof settingsForHold?.meshNodeFor === "string" ? settingsForHold.meshNodeFor : typeof settingsForHold?.meshCoordinatorFor === "string" ? settingsForHold.meshCoordinatorFor : void 0;
           const activeHold = evaluateNewWorkHold({ meshId });
@@ -149003,7 +149007,7 @@ ${output}` : "";
               attemptId: msg.meshAttemptRef,
               taskId: msg.meshTaskId,
               isMeshOrCoordinatorFollowUp: msg.origin === "mesh",
-              sessionSettings: resolvedForHold?.getSessionSettings?.()
+              sessionSettings: settingsForHold
             });
             if (!isContinuation) {
               return refuse3(NEW_WORK_HELD_CODE2, {
@@ -149018,6 +149022,11 @@ ${output}` : "";
             }
           }
         }
+        return run3(msg, resolveTarget, prepareInput, noticeObserver);
+      }
+      async function submitOwned(msg, prepareInput, noticeObserver) {
+        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse3("internal_error", { message: "messageId required" });
+        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse3("no_target");
         const pending = inFlight4.get(msg.messageId);
         if (pending) {
           await pending.catch(() => void 0);
@@ -149029,7 +149038,7 @@ ${output}` : "";
           }
           return { kind: "duplicate", of: msg.messageId };
         }
-        const promise = withMaintenanceAdmission(() => run3(msg, prepareInput, noticeObserver)).catch((e) => {
+        const promise = withMaintenanceAdmission(() => runAdmitted(msg, prepareInput, noticeObserver)).catch((e) => {
           log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
           return refuse3("internal_error", { message: e?.message || String(e) });
         });
@@ -149277,9 +149286,14 @@ ${output}` : "";
       if (typeof adapter.restoreQueuedSend === "function") target.restoreQueuedSend = (c) => adapter.restoreQueuedSend(c);
       if (typeof adapter.reserveDrain === "function") target.reserveDrain = (ms3) => adapter.reserveDrain(ms3);
       if (typeof adapter.releaseDrain === "function") target.releaseDrain = () => adapter.releaseDrain();
-      if (instance && typeof instance.getState === "function") {
-        target.getSessionSettings = () => instance.getState?.()?.settings;
-      }
+      target.getSessionSettings = () => {
+        if (instance?.settings) return instance.settings;
+        try {
+          return instance?.getState?.()?.settings;
+        } catch {
+          return void 0;
+        }
+      };
       if (instance && typeof instance.recordAcknowledgedUserInput === "function") {
         target.recordAcknowledgedUserInput = (input, sourceMessageId, receipt) => instance.recordAcknowledgedUserInput(toInputEnvelope(input), sourceMessageId, receipt);
       }

@@ -188,3 +188,18 @@ it.each(['meshNodeFor', 'meshCoordinatorFor'] as const)('fences session-only rou
     manager.deps = { getInstanceManager: () => instanceManager };
     expect(await manager.restartSession({ targetSessionId: 'held-session' })).toMatchObject({ code: 'new_work_held' });
 });
+
+it.each([
+    ['missing instance', undefined],
+    ['missing getState and settings', {}],
+    ['missing state', { getState: () => undefined }],
+    ['missing settings', { getState: () => ({}) }],
+    ['uninitialized state projection', { getState: () => { throw new TypeError('state not initialized'); } }],
+] as const)('keeps F4 session-only admission safe with %s', (_label, instance) => {
+    const components = { instanceManager: { getInstance: () => instance } } as any;
+    expect(setNewWorkHold({ holdId: 'unbound-scoped', meshId: 'held-mesh' })).toMatchObject({ success: true, hold: { scope: 'mesh' } });
+    expect(admitRouterCommandUnderNewWorkHold('restart_session', { sessionId: 'unbound' }, [], components)).toBeNull();
+    expect(releaseNewWorkHold({ holdId: 'unbound-scoped' })).toMatchObject({ success: true });
+    expect(setNewWorkHold({ holdId: 'unbound-global' })).toMatchObject({ success: true, hold: { scope: 'daemon' } });
+    expect(admitRouterCommandUnderNewWorkHold('restart_session', { sessionId: 'unbound' }, [], components)).toMatchObject({ code: 'new_work_held' });
+});

@@ -491,7 +491,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         }
     }
 
-    async function run(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
+    async function run(msg: OutboundMessage, resolveTarget: () => Promise<SessionInputTarget | null | undefined>, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
         if (settledKind(msg.messageId) === 'delivered') {
             const prior = settled.get(msg.messageId)!;
             if (prior.sessionId !== msg.sessionId || prior.inputDigest !== outgoingInputDigest(msg.input)) throw new Error('Outgoing message identity conflict');
@@ -502,7 +502,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
                 if (fresh) freshOutgoing.add(msg.messageId);
                 if (!fresh) {
-                    const liveTarget = await deps.resolveSession(msg.sessionId);
+                    const liveTarget = await resolveTarget();
                     if (msg.policy.mode === 'queue' || receipt.state !== 'accepted' || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
                         return { kind: 'duplicate', of: msg.messageId };
                     }
@@ -517,7 +517,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
 
         let target: SessionInputTarget | null | undefined;
         try {
-            target = await deps.resolveSession(msg.sessionId);
+            target = await resolveTarget();
         } catch (e) {
             log('error', `submit(${msg.messageId}) resolveSession threw: ${(e as Error)?.message ?? e}`);
             return refuse('internal_error');
@@ -564,13 +564,16 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         return writeAndReport(target, msg, body, { fresh: true, route: 'pty' }, noticeObserver);
     }
 
-    async function submitOwned(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void):Promise<SubmitOutcome> {
-        if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
-        if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
+    async function runAdmitted(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
+        // Resolve once, inside maintenance admission and the message's in-flight
+        // ownership. A concurrent notice cannot replace the original resolver or
+        // donate its ACK observer while hold admission awaits the target.
+        let target: Promise<SessionInputTarget | null | undefined> | undefined;
+        const resolveTarget = () => target ??= Promise.resolve().then(() => deps.resolveSession(msg.sessionId));
         const isCoordinatorNotice = Boolean(noticeObserver) || (msg.origin === 'mesh' && msg.messageId.startsWith('notify:'));
         const isVerifiedOwnerChat = isTrustedOwnerIngress(msg) && !msg.meshAttemptRef;
         if (!isCoordinatorNotice && !isVerifiedOwnerChat) {
-            const resolvedForHold = await Promise.resolve(deps.resolveSession(msg.sessionId)).catch(() => null);
+            const resolvedForHold = await resolveTarget().catch(() => null);
             const settingsForHold = resolvedForHold?.getSessionSettings?.();
             const meshId = typeof settingsForHold?.meshNodeFor === 'string' ? settingsForHold.meshNodeFor
                 : typeof settingsForHold?.meshCoordinatorFor === 'string' ? settingsForHold.meshCoordinatorFor : undefined;
@@ -581,7 +584,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                     attemptId: msg.meshAttemptRef,
                     taskId: (msg as { meshTaskId?: string }).meshTaskId,
                     isMeshOrCoordinatorFollowUp: msg.origin === 'mesh',
-                    sessionSettings: resolvedForHold?.getSessionSettings?.(),
+                    sessionSettings: settingsForHold,
                 });
                 if (!isContinuation) {
                     return refuse(NEW_WORK_HELD_CODE, {
@@ -596,6 +599,12 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 }
             }
         }
+        return run(msg, resolveTarget, prepareInput, noticeObserver);
+    }
+
+    async function submitOwned(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void):Promise<SubmitOutcome> {
+        if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
+        if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
         const pending = inFlight.get(msg.messageId);
         if (pending) {
             await pending.catch(() => undefined);
@@ -607,7 +616,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             }
             return { kind: 'duplicate', of: msg.messageId };
         }
-        const promise = withMaintenanceAdmission(() => run(msg, prepareInput, noticeObserver)).catch((e): SubmitOutcome => {
+        const promise = withMaintenanceAdmission(() => runAdmitted(msg, prepareInput, noticeObserver)).catch((e): SubmitOutcome => {
             log('error', `submit(${msg.messageId}) threw: ${(e as Error)?.message ?? e}`);
             return refuse('internal_error', { message: (e as Error)?.message || String(e) });
         });

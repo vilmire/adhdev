@@ -223,7 +223,9 @@ export function resolveNewWorkHoldSessionMeshId(
     if (explicit) return explicit;
     const sessionId = readOptionalString(args?.targetSessionId) ?? readOptionalString(args?.sessionId)
         ?? readOptionalString(args?.instanceId);
-    const settings = sessionId ? instanceManager?.getInstance(sessionId)?.getState().settings : undefined;
+    let settings: Record<string, unknown> | undefined;
+    try { settings = sessionId ? instanceManager?.getInstance(sessionId)?.getState?.()?.settings : undefined; }
+    catch { /* An unavailable state has no mesh binding; global holds still apply. */ }
     return readOptionalString(settings?.meshNodeFor) ?? readOptionalString(settings?.meshCoordinatorFor) ?? undefined;
 }
 

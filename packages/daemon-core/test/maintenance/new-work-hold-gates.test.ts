@@ -29,6 +29,7 @@ import { claimNextTask, enqueueTask, getQueueEntryById } from '../../src/mesh/me
 import { createTurnDeliverHandler } from '../../src/mesh/turn-ledger/deliver.js';
 import { createTurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import { createSessionInputService } from '../../src/sessions/session-input-service.js';
+import { buildSessionInputTarget } from '../../src/sessions/session-input-target.js';
 import { sendDirectAgentTask } from '../../../mcp-server/src/tools/mesh-remote-dispatch.js';
 import { meshSendTask } from '../../../mcp-server/src/tools/mesh-tools-send-task.js';
 
@@ -276,6 +277,45 @@ describe('new-work hold gates (S1, S2, H1, H2, H3, F4 choke point, F6 notices, F
         expect(await input.submit(message('held'))).toMatchObject({ kind: 'refused', reason: NEW_WORK_HELD_CODE });
         expect(await input.submit(message('other'))).toMatchObject({ kind: 'delivered' });
         expect(sent).toEqual(['other']);
+    });
+
+    it.each([
+        ['meshNodeFor', 'settings'], ['meshCoordinatorFor', 'settings'],
+        ['meshNodeFor', 'state'], ['meshCoordinatorFor', 'state'],
+    ] as const)('preserves %s hold scope from instance %s', async (key, source) => {
+        const settings = { [key]: 'mesh-held' };
+        const instance = source === 'settings' ? { settings } : { getState: () => ({ settings }) };
+        const sendMessage = vi.fn(async () => ({ status: 'delivered' as const }));
+        const target = buildSessionInputTarget({ adapter: { cliType: 'fixture', sendMessage }, instance });
+        const input = createSessionInputService({ resolveSession: () => target });
+        setNewWorkHold({ meshId: 'mesh-held' });
+        expect(await input.submit({ messageId: 'scoped-instance', sessionId: 'bound', origin: 'mesh',
+            input: { parts: [{ type: 'text', text: 'new task' }], textFallback: 'new task' },
+            policy: { mode: 'queue' }, createdAt: Date.now() })).toMatchObject({ kind: 'refused', reason: NEW_WORK_HELD_CODE });
+        expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['missing instance', undefined],
+        ['missing getState and settings', {}],
+        ['missing state', { getState: () => undefined }],
+        ['missing settings', { getState: () => ({}) }],
+        ['uninitialized state projection', { getState: () => { throw new TypeError('state not initialized'); } }],
+    ] as const)('treats %s as no mesh scope while preserving the global hold', async (_label, instance) => {
+        const sendMessage = vi.fn(async () => ({ status: 'delivered' as const }));
+        const target = buildSessionInputTarget({ adapter: { cliType: 'fixture', sendMessage }, instance });
+        const resolveSession = vi.fn(() => target);
+        const input = createSessionInputService({ resolveSession });
+        const message = (messageId: string) => ({ messageId, sessionId: 'unbound', origin: 'mesh' as const,
+            input: { parts: [{ type: 'text' as const, text: 'new task' }], textFallback: 'new task' },
+            policy: { mode: 'queue' as const }, createdAt: Date.now() });
+        expect(setNewWorkHold({ holdId: 'unbound-scoped', meshId: 'mesh-held' })).toMatchObject({ success: true, hold: { scope: 'mesh' } });
+        expect(await input.submit(message('scoped'))).toMatchObject({ kind: 'delivered' });
+        expect(releaseNewWorkHold({ holdId: 'unbound-scoped' })).toMatchObject({ success: true });
+        expect(setNewWorkHold({ holdId: 'unbound-global' })).toMatchObject({ success: true, hold: { scope: 'daemon' } });
+        expect(await input.submit(message('global'))).toMatchObject({ kind: 'refused', reason: NEW_WORK_HELD_CODE });
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        expect(resolveSession).toHaveBeenCalledTimes(2); // One resolution per original submit.
     });
 
     it('exempts coordinator notices via noticeObserver at H2 and treats new_work_held as retryable in deliverPendingTurns (F6)', async () => {
