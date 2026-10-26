@@ -35,7 +35,7 @@ import { ProviderLoader } from './providers/provider-loader.js';
 import { providerLoaderConfigOptions } from './providers/provider-loader-config.js';
 import { loadConfig } from './config/config.js';
 import type { ProviderModule } from './providers/contracts.js';
-import { findMacAppProcessPids, listMacProcessArgs } from './launch/macos-app-process.js';
+import { findRunningMacAppPids } from './launch/macos-app-process.js';
 import { LOG } from './logging/logger.js';
 
 // ─── Provider-based dynamic IDE infrastructure ────────────────
@@ -100,7 +100,7 @@ async function getMacAppProcessPids(ideId: string): Promise<number[]> {
     const appPaths = getIdePathCandidates(ideId);
     if (appPaths.length === 0) return [];
     try {
-        return findMacAppProcessPids(await listMacProcessArgs(), appPaths);
+        return await findRunningMacAppPids(appPaths);
     } catch (error: any) {
         LOG.warn('Launch', `process listing failed — running ${ideId} processes cannot be detected: ${error?.message || error}`);
         return [];

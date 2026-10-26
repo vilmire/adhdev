@@ -33870,16 +33870,16 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         const startedAt = Date.now();
         state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
-        const spawn11 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
+        const spawn12 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-          const result = await execFileAsync6(spawn11.file, spawn11.args, {
+          const result = await execFileAsync6(spawn12.file, spawn12.args, {
             cwd,
             encoding: "utf8",
             timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS2,
             maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
             env: { ...process.env, CI: process.env.CI || "1", ...command.env || {} },
             windowsHide: true,
-            ...spawn11.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           state2.commandsRun?.push({
             command: command.command,
@@ -85072,8 +85072,8 @@ ${includeRefs[0]}`;
         argv = [node.comm, ...argv];
       }
       const argv0 = argv[0] ?? node.comm ?? "";
-      const exec8 = normalizeExecName(argv0 || node.comm || "");
-      const execName = SCRIPT_RUNTIMES.has(commExec) || PACKAGE_RUNNERS.has(commExec) ? commExec : exec8;
+      const exec7 = normalizeExecName(argv0 || node.comm || "");
+      const execName = SCRIPT_RUNTIMES.has(commExec) || PACKAGE_RUNNERS.has(commExec) ? commExec : exec7;
       let script = null;
       let scriptDirs = [];
       let scriptPackage = null;
@@ -111283,7 +111283,7 @@ ${asText(streams.stderr)}
       return commandsToRun;
     }
     async function execRefineCommand(execFileFn, candidate, cwd, resolvedCommand, control) {
-      const spawn11 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+      const spawn12 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
       const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
       const execOptions = {
         cwd,
@@ -111292,7 +111292,7 @@ ${asText(streams.stderr)}
         timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...control?.env || {}, ...candidate.env || {} },
-        ...spawn11.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+        ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       };
       return new Promise((resolve59, reject) => {
         let timer;
@@ -111315,7 +111315,7 @@ ${asText(streams.stderr)}
             }, idleTimeoutMs);
           }
         };
-        const child = (control?.scheduled ? spawnRefineGateChild : execFileFn)(spawn11.file, spawn11.args, execOptions, async (error, stdout, stderr) => {
+        const child = (control?.scheduled ? spawnRefineGateChild : execFileFn)(spawn12.file, spawn12.args, execOptions, async (error, stdout, stderr) => {
           if (timer) clearTimeout(timer);
           const cleanup = groupCleanup ? await groupCleanup : void 0;
           if (error || idleTimedOut) {
@@ -117512,7 +117512,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function pythonResourcePreflight() {
       const commands = process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
       for (const [cmd, prefix] of commands) try {
-        await exec6(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
+        await exec5(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
           cwd: getConfigDir2(),
           shell: false,
           windowsHide: true,
@@ -117530,7 +117530,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var import_node_crypto36;
     var import_promises11;
     var import_node_path24;
-    var exec6;
+    var exec5;
     var REMOTE_GIT_TIMEOUT_MS;
     var REMOTE_GIT_CLONE_TIMEOUT_MS;
     var REMOTE_GIT_CLONE_WATCHDOG_MS;
@@ -117550,7 +117550,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         import_promises11 = require("fs/promises");
         import_node_path24 = require("path");
         init_config();
-        exec6 = (0, import_node_util10.promisify)(import_node_child_process19.execFile);
+        exec5 = (0, import_node_util10.promisify)(import_node_child_process19.execFile);
         REMOTE_GIT_TIMEOUT_MS = 12e4;
         REMOTE_GIT_CLONE_TIMEOUT_MS = 18 * 6e4;
         REMOTE_GIT_CLONE_WATCHDOG_MS = 12e4;
@@ -136008,11 +136008,11 @@ ${tail}` : ""
     function defaultExecFileSync() {
       return import_child_process7.execFileSync;
     }
-    function getWindowsProcessCommandLine(pid, exec8) {
+    function getWindowsProcessCommandLine(pid, exec7) {
       const pidFilter = `ProcessId=${pid}`;
       const failures = [];
       try {
-        const psOut = exec8("powershell.exe", [
+        const psOut = exec7("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -136027,7 +136027,7 @@ ${tail}` : ""
         failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
       }
       try {
-        const wmicOut = exec8("wmic", [
+        const wmicOut = exec7("wmic", [
           "process",
           "where",
           pidFilter,
@@ -136054,13 +136054,13 @@ ${tail}` : ""
     }
     function getProcessCommandLine(pid, options = {}) {
       if (!Number.isFinite(pid) || pid <= 0) return null;
-      const exec8 = options.execFileSync ?? defaultExecFileSync();
+      const exec7 = options.execFileSync ?? defaultExecFileSync();
       const platform10 = options.platform ?? process.platform;
       if (platform10 === "win32") {
-        return getWindowsProcessCommandLine(pid, exec8);
+        return getWindowsProcessCommandLine(pid, exec7);
       }
       try {
-        const text4 = String(exec8("ps", ["-o", "command=", "-p", String(pid)], {
+        const text4 = String(exec7("ps", ["-o", "command=", "-p", String(pid)], {
           encoding: "utf8",
           timeout: 3e3,
           stdio: ["ignore", "pipe", "ignore"]
@@ -136146,11 +136146,11 @@ ${tail}` : ""
     }
     function killProcess(pid, options = {}) {
       if (!Number.isFinite(pid) || pid <= 0) return false;
-      const exec8 = options.execFileSync ?? defaultExecFileSync();
+      const exec7 = options.execFileSync ?? defaultExecFileSync();
       const platform10 = options.platform ?? process.platform;
       try {
         if (platform10 === "win32") {
-          exec8("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          exec7("taskkill", ["/PID", String(pid), "/T", "/F"], {
             stdio: "ignore",
             windowsHide: true
           });
@@ -136177,13 +136177,13 @@ ${tail}` : ""
     function inspectOwnedNodeProcesses(options) {
       const platform10 = options.platform ?? process.platform;
       if (platform10 !== "win32") return { processes: [], probeFailed: false, probeFailureReason: null };
-      const exec8 = options.execFileSync ?? defaultExecFileSync();
+      const exec7 = options.execFileSync ?? defaultExecFileSync();
       const prefixes = options.prefixes.map((p) => normalizeWindowsPath(p));
       const exclude = new Set((options.excludePids ?? []).filter((n) => Number.isFinite(n) && n > 0));
       const markers = (options.markers ?? []).map((m) => m.toLowerCase().replace(/\//g, "\\"));
       let pids = [];
       try {
-        const out = String(exec8("powershell.exe", [
+        const out = String(exec7("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -136206,7 +136206,7 @@ ${tail}` : ""
       let unreadable = 0;
       for (const pid of pids) {
         if (!Number.isFinite(pid) || pid <= 0 || exclude.has(pid)) continue;
-        const commandLine = getProcessCommandLine(pid, { platform: platform10, execFileSync: exec8 });
+        const commandLine = getProcessCommandLine(pid, { platform: platform10, execFileSync: exec7 });
         if (!commandLine) {
           unreadable += 1;
           continue;
@@ -142829,9 +142829,9 @@ ${marker2}`,
       const typedProvider = provider;
       const controls = Array.isArray(provider.controls) ? provider.controls : [];
       if (category === "cli") {
-        const spawn11 = provider.spawn;
-        const command = spawn11 && typeof spawn11 === "object" ? spawn11.command : void 0;
-        if (!spawn11 || typeof spawn11 !== "object") {
+        const spawn12 = provider.spawn;
+        const command = spawn12 && typeof spawn12 === "object" ? spawn12.command : void 0;
+        if (!spawn12 || typeof spawn12 !== "object") {
           errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
         } else if (typeof command !== "string" || !command.trim()) {
           errors.push("spawn.command is required");
@@ -151021,14 +151021,53 @@ ${output}` : "";
     }
     init_config();
     var import_child_process13 = require("child_process");
-    var PS_ARGS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-    function listMacProcessArgs(execImpl = import_child_process13.exec) {
+    var PS_LINE_PREFIX_BYTES = 4096;
+    var PS_TIMEOUT_MS = 3e3;
+    function findRunningMacAppPids(appPaths, spawnImpl = import_child_process13.spawn) {
+      if (!appPaths.some((p) => normalizeMacAppPath(p))) return Promise.resolve([]);
       return new Promise((resolve59, reject) => {
-        execImpl(
-          "ps axww -o pid=,args=",
-          { encoding: "utf-8", timeout: 3e3, maxBuffer: PS_ARGS_MAX_BUFFER_BYTES, windowsHide: true },
-          (error, stdout) => error ? reject(error) : resolve59(String(stdout ?? ""))
-        );
+        const child = spawnImpl("ps", ["axww", "-o", "pid=,args="], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+        const pids = [];
+        const take = (completed) => {
+          pids.push(...findMacAppProcessPids(completed, appPaths));
+        };
+        let line = "";
+        let truncated = false;
+        let settled = false;
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) return reject(error);
+          if (line) take(line);
+          resolve59(pids);
+        };
+        const timer = setTimeout(() => {
+          child.kill();
+          finish(new Error(`ps timed out after ${PS_TIMEOUT_MS}ms`));
+        }, PS_TIMEOUT_MS);
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          let start = 0;
+          for (; ; ) {
+            const nl = chunk.indexOf("\n", start);
+            const piece = chunk.slice(start, nl < 0 ? chunk.length : nl);
+            if (!truncated) {
+              line += piece;
+              if (line.length > PS_LINE_PREFIX_BYTES) {
+                line = line.slice(0, PS_LINE_PREFIX_BYTES);
+                truncated = true;
+              }
+            }
+            if (nl < 0) break;
+            if (line) take(line);
+            line = "";
+            truncated = false;
+            start = nl + 1;
+          }
+        });
+        child.on("error", (error) => finish(error));
+        child.on("close", (code) => finish(code === 0 ? null : new Error(`ps exited with code ${code}`)));
       });
     }
     function normalizeMacAppPath(appPath) {
@@ -151117,7 +151156,7 @@ ${output}` : "";
       const appPaths = getIdePathCandidates(ideId);
       if (appPaths.length === 0) return [];
       try {
-        return findMacAppProcessPids(await listMacProcessArgs(), appPaths);
+        return await findRunningMacAppPids(appPaths);
       } catch (error) {
         LOG.warn("Launch", `process listing failed \u2014 running ${ideId} processes cannot be detected: ${error?.message || error}`);
         return [];
@@ -194491,16 +194530,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn11 = provider.spawn;
-        if (!spawn11) {
+        const spawn12 = provider.spawn;
+        if (!spawn12) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const child = spawnFn(spawn11.command, [...spawn11.args || []], {
-            shell: spawn11.shell ?? false,
+          const child = spawnFn(spawn12.command, [...spawn12.args || []], {
+            shell: spawn12.shell ?? false,
             windowsHide: true,
             timeout: 5e3,
             stdio: ["pipe", "pipe", "pipe"]
@@ -194533,7 +194572,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: true,
-            command: `${spawn11.command} ${(spawn11.args || []).join(" ")}`,
+            command: `${spawn12.command} ${(spawn12.args || []).join(" ")}`,
             elapsed,
             stdout: stdout.trim(),
             stderr: stderr.trim(),
@@ -194543,7 +194582,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: false,
-            command: `${spawn11.command} ${(spawn11.args || []).join(" ")}`,
+            command: `${spawn12.command} ${(spawn12.args || []).join(" ")}`,
             elapsed,
             error: e.message
           });

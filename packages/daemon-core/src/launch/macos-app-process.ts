@@ -1,27 +1,60 @@
-import { exec } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 
 /**
- * `ps axww -o pid=,args=` prints every process with its full argument list.
- * Agent CLIs carry multi-KB system prompts in argv, so the listing routinely
- * approaches Node's 1 MiB `maxBuffer` default (≈0.5 MiB measured on a busy
- * Mac); past it exec fails and every app process becomes invisible.
+ * Bytes of each `ps` line that are kept. Matching needs only the pid and the
+ * start of argv (an app-bundle path prefix), never the whole argument list.
+ * Agent CLIs carry multi-KB system prompts in argv (a busy Mac's full listing
+ * was ≈0.5 MiB), so buffering whole lines — or the whole output, as exec's
+ * maxBuffer does — lets one process's argv drive memory. Streaming and
+ * truncating each line bounds it to this much per line in flight.
  */
-export const PS_ARGS_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+export const PS_LINE_PREFIX_BYTES = 4096
+const PS_TIMEOUT_MS = 3000
 
-type ExecLike = (
-  command: string,
-  options: { encoding: 'utf-8'; timeout: number; maxBuffer: number; windowsHide: boolean },
-  callback: (error: Error | null, stdout: string) => void,
-) => unknown
+type SpawnLike = (command: string, args: string[], options: { stdio: ['ignore', 'pipe', 'ignore']; windowsHide: boolean }) => Pick<ChildProcess, 'stdout' | 'on' | 'kill'>
 
-/** Rejects instead of resolving '' so callers cannot mistake a failed listing for "no processes". */
-export function listMacProcessArgs(execImpl: ExecLike = exec as unknown as ExecLike): Promise<string> {
+/**
+ * PIDs of running processes whose argv starts inside one of `appPaths`.
+ * Rejects (never resolves []) when `ps` fails, so callers cannot mistake a
+ * failed listing for "not running".
+ */
+export function findRunningMacAppPids(appPaths: readonly string[], spawnImpl: SpawnLike = spawn as unknown as SpawnLike): Promise<number[]> {
+  if (!appPaths.some(p => normalizeMacAppPath(p))) return Promise.resolve([])
   return new Promise((resolve, reject) => {
-    execImpl(
-      'ps axww -o pid=,args=',
-      { encoding: 'utf-8', timeout: 3000, maxBuffer: PS_ARGS_MAX_BUFFER_BYTES, windowsHide: true },
-      (error, stdout) => (error ? reject(error) : resolve(String(stdout ?? ''))),
-    )
+    const child = spawnImpl('ps', ['axww', '-o', 'pid=,args='], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    const pids: number[] = []
+    const take = (completed: string) => { pids.push(...findMacAppProcessPids(completed, appPaths)) }
+    let line = ''
+    let truncated = false
+    let settled = false
+    const finish = (error: Error | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) return reject(error)
+      if (line) take(line)
+      resolve(pids)
+    }
+    const timer = setTimeout(() => { child.kill(); finish(new Error(`ps timed out after ${PS_TIMEOUT_MS}ms`)) }, PS_TIMEOUT_MS)
+    child.stdout!.setEncoding('utf8')
+    child.stdout!.on('data', (chunk: string) => {
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf('\n', start)
+        const piece = chunk.slice(start, nl < 0 ? chunk.length : nl)
+        if (!truncated) {
+          line += piece
+          if (line.length > PS_LINE_PREFIX_BYTES) { line = line.slice(0, PS_LINE_PREFIX_BYTES); truncated = true }
+        }
+        if (nl < 0) break
+        if (line) take(line)
+        line = ''
+        truncated = false
+        start = nl + 1
+      }
+    })
+    child.on('error', (error: Error) => finish(error))
+    child.on('close', (code: number | null) => finish(code === 0 ? null : new Error(`ps exited with code ${code}`)))
   })
 }
 
