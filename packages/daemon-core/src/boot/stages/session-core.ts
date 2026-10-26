@@ -76,6 +76,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
     const outputFanout = new SessionOutputFanout();
     const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
+        idleSessionLifetimeControl: cfg.sessionHost.control ?? undefined,
         verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
         getHostedBindingOwner: cfg.sessionHost.getBindingOwner,
         getInstanceManager: () => instanceManager,

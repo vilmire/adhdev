@@ -1,3 +1,4 @@
+import { idleSessionLifetimeCommand } from './mesh-idle-session-lifetime.js';
 /**
  * DaemonCliManager — the `agent_command` command: send_chat (mesh assignment
  * stamp + the one SessionInputService submit), clear_history, task-scoped stop,
@@ -36,6 +37,7 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
     if (!agentType || !action) throw new Error('agentType and action required');
     if (action === 'mesh_writer_stop_capability') return { success: true, meshWriterStopProtocol: 1,
         stopRequestId: args.meshWriterStop?.stopRequestId };
+    if (action === 'mesh_idle_session_inventory' || action === 'mesh_idle_session_stop') return idleSessionLifetimeCommand(host, args);
     if (action === 'reconcile_mesh_holder') return reconcileMeshHolder(host, args);
 
     // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)

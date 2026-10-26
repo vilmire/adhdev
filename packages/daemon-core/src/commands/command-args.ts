@@ -88,6 +88,7 @@ export function readMeshContext(args: unknown): MeshCommandContext | undefined {
  * widens the accepted shape.
  */
 export interface AgentCommandArgs {
+    idleSessionLifetime?: { lastActivityAt: number };
     meshWriterStop?: import('../mesh/turn-ledger/effects.js').CancelDispatchRequest;
     holderReconcile?: { operationId: string; phase: 'prepare' | 'commit' | 'rollback' };
     agentType?: string

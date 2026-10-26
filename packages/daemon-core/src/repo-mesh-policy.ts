@@ -237,6 +237,10 @@ export interface RepoMeshPolicy {
      * see resolveDelegatedSessionIdleTtlMinutes.
      */
     delegatedSessionIdleTtlMinutes?: number | false;
+    /** Maximum idle task workers per machine; default 2, 0 disables the count cap. */
+    maxIdleDelegatedSessionsPerMachine?: number;
+    /** Stop accepted task workers on housekeeping, unless a targeted follow-up is queued. Default true. */
+    stopDelegatedSessionOnAcceptedCompletion?: boolean;
     /**
      * Whether a coordinator-dispatched worker's routine idle/completion push
      * notification is delivered to the owner every time ('always', the default —
@@ -615,6 +619,8 @@ export const DEFAULT_MESH_POLICY: RepoMeshPolicy = {
     // Stop a coordinator-launched delegate's CLI runtime after 30 idle minutes
     // (record preserved). Owner decision 2026-08-28. 0/false disables.
     delegatedSessionIdleTtlMinutes: DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES,
+    maxIdleDelegatedSessionsPerMachine: 2,
+    stopDelegatedSessionOnAcceptedCompletion: true,
     // Conservative default: every coordinator-dispatched worker completion still
     // notifies the owner. Opt into 'auto_silent_on_dispatch' to one-shot-silence the
     // routine idle push for a coordinator-driven task (approval/failure notifications

@@ -56,6 +56,10 @@ import { agentCommand } from './cli-manager-agent-command.js';
 import { colorize, resolveLaunchProvenance, type CommandResult, type CliStartOptions } from './cli-manager-launch.js';
 
 export interface CliManagerDeps {
+    idleSessionLifetimeControl?: {
+        listSessions(): Promise<import('@adhdev/session-host-core').SessionHostRecord[]>;
+        stopSession(sessionId: string): Promise<import('@adhdev/session-host-core').SessionHostRecord | null>;
+    };
  /** P2P — PTY output transmit */
     getP2p(): { broadcastSessionOutput(key: string, data: string): void } | null;
  /** InstanceManager — register in CLI unified status */

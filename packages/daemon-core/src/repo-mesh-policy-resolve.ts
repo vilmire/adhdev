@@ -231,6 +231,8 @@ const POLICY_KEY_SPECS: Record<string, PolicyKeySpec> = {
         effective: (v) => (typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_MESH_POLICY.maxTaskRetries),
     },
     idleActiveMissionReminder: { effective: (v) => v !== false },
+    maxIdleDelegatedSessionsPerMachine: { effective: (v) => typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.floor(v))) : 2 },
+    stopDelegatedSessionOnAcceptedCompletion: { effective: (v) => v !== false },
     delegatedSessionIdleTtlMinutes: { effective: (v) => resolveDelegatedSessionIdleTtlMinutes(v) },
     coordinatorIdlePushPolicy: {
         effective: (v) => (v === 'auto_silent_on_dispatch' ? 'auto_silent_on_dispatch' : 'always'),

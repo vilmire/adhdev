@@ -18,6 +18,7 @@ beforeEach(() => {
             if (queueStub.throwQueue) throw queueStub.throwQueue;
             return queueStub.queueRows;
         },
+        getLatestTaskOutput: () => undefined,
         getActiveDirectDispatches: () => {
             if (queueStub.throwDirect) throw queueStub.throwDirect;
             return queueStub.directRows;
@@ -61,6 +62,7 @@ function delegate(over: Partial<ReapableSessionRecord> = {}): ReapableSessionRec
         sessionId: 'sess_delegate',
         lastActivityAt: NOW - 31 * 60_000, // 31 min idle — just past the 30 min TTL
         lifecycle: 'running',
+        state: { status: 'idle' },
         surfaceKind: 'live_runtime',
         meta: { launchedByCoordinator: true, meshNodeFor: MESH_ID, meshNodeId: 'node_a' },
         ...over,
@@ -186,7 +188,7 @@ describe('planIdleSessionReap — TTL disabled', () => {
     it('reaps nothing when ttlMs is 0, however idle the session is', () => {
         const ancient = delegate({ lastActivityAt: NOW - 30 * 24 * 60 * 60_000 });
         expect(reaped([ancient], [], 0)).toEqual([]);
-        expect(plan([ancient], [], 0).skipped).toEqual([]);
+        expect(plan([ancient], [], 0).skipped[0].reason).toBe('within_ttl');
     });
 });
 
@@ -288,7 +290,7 @@ describe('runIdleSessionReapPass', () => {
         listSessions: async () => records,
         cleanupMeshSessions: async (args: any) => {
             stopCalls.push({ sessionIds: args.sessionIds, mode: args.mode });
-            return { success: true };
+            return { success: true, stoppedSessionIds: args.sessionIds };
         },
     });
 
@@ -322,7 +324,7 @@ describe('runIdleSessionReapPass', () => {
         const listSessions = vi.fn(async () => [delegate()]);
         const out = await runIdleSessionReapPass(
             { ...deps, listSessions },
-            { meshId: MESH_ID, policy: { delegatedSessionIdleTtlMinutes: 0 } as any, now: NOW },
+            { meshId: MESH_ID, policy: { delegatedSessionIdleTtlMinutes: 0, maxIdleDelegatedSessionsPerMachine: 0, stopDelegatedSessionOnAcceptedCompletion: false } as any, now: NOW },
         );
         expect(out.stoppedSessionIds).toEqual([]);
         expect(stopCalls).toEqual([]);
@@ -353,7 +355,7 @@ describe('runIdleSessionReapPass', () => {
             cleanupMeshSessions: async (args: any) => {
                 if (args.sessionIds[0] === 'boom') throw new Error('stop failed');
                 stopCalls.push({ sessionIds: args.sessionIds, mode: args.mode });
-                return { success: true };
+                return { success: true, stoppedSessionIds: args.sessionIds };
             },
         };
         const out = await runIdleSessionReapPass(failingDeps, { meshId: MESH_ID, policy: undefined, now: NOW });
@@ -383,7 +385,7 @@ describe('runIdleSessionReapPass — unreadable active-work aborts the pass', ()
         listSessions: async () => records,
         cleanupMeshSessions: async (args: any) => {
             stopCalls.push({ sessionIds: args.sessionIds, mode: args.mode });
-            return { success: true };
+            return { success: true, stoppedSessionIds: args.sessionIds };
         },
     });
 
@@ -487,5 +489,54 @@ describe('runIdleSessionReapPass — unreadable active-work aborts the pass', ()
         } finally {
             warn.mockRestore();
         }
+    });
+});
+
+describe('task session lifetime', () => {
+    beforeEach(() => {
+        queueStub.throwQueue = queueStub.throwDirect = null;
+        queueStub.queueRows = queueStub.directRows = [];
+        resetIdleSessionReapCounter();
+    });
+    const fresh = (id: string, age = 60_000) => delegate({ sessionId: id, lastActivityAt: NOW - age,
+        state: { status: 'idle' } } as any);
+    const lifetimePlan = (records: ReapableSessionRecord[], extra: any = {}) => planIdleSessionReap({
+        meshId: MESH_ID, records, activeWorkSessionIds: new Set(), ttlMs: TTL_MS, now: NOW,
+        maxIdleSessions: 2, acceptedSessionIds: new Set(), ...extra,
+    } as any);
+    it('ends an accepted worker before TTL, but keeps a targeted follow-up', () => {
+        expect(lifetimePlan([fresh('done')], { acceptedSessionIds: new Set(['done']) }).reap.map(r => r.sessionId)).toEqual(['done']);
+        expect(lifetimePlan([fresh('done')], { acceptedSessionIds: new Set(['done']), activeWorkSessionIds: new Set(['done']) }).reap).toEqual([]);
+    });
+    it('caps idle task workers, oldest first, independently of TTL', () => {
+        expect(lifetimePlan([fresh('new', 1000), fresh('old', 9000), fresh('middle', 5000)], { ttlMs: 0 }).reap.map(r => r.sessionId)).toEqual(['old']);
+    });
+    it.each([
+        { status: 'generating', activeChat: { status: 'waiting_input' } },
+        { status: 'idle', activeChat: { activeModal: { type: 'approval' } } },
+        { status: 'idle', activeInteractivePrompt: { promptId: 'p' } },
+        { status: 'idle', settings: { assistant: true } },
+        { status: 'idle', settings: { meshCoordinatorFor: 'any-mesh' } },
+        { status: 'idle', settings: { spawnedForTaskId: null } },
+        { status: 'idle', settings: { launchRecord: { spawnedForTaskId: null } } },
+        { status: 'idle', launchRecord: { roleLaunch: { role: 'coordinator' } } },
+        { status: 'idle', settings: { launchRecord: { roleLaunch: { role: 'assistant' } } } },
+        undefined,
+    ])('protects runtime state %j even after acceptance/TTL', state => {
+        expect(lifetimePlan([delegate({ state } as any)], { acceptedSessionIds: new Set(['sess_delegate']), maxIdleSessions: 1 }).reap).toEqual([]);
+    });
+    it('protects an unconfirmed physical writer checkpoint', () => {
+        expect(lifetimePlan([delegate({ state: { status: 'idle' }, checkpointPending: true } as any)], { acceptedSessionIds: new Set(['sess_delegate']) }).reap).toEqual([]);
+    });
+    it('does not count a refused stop as success and retries with backoff', async () => {
+        const cleanup = vi.fn().mockResolvedValueOnce({ success: false, error: 'P2P unavailable' }).mockResolvedValue({ success: true, stoppedSessionIds: ['retry'] });
+        const deps = { listSessions: async () => [delegate({ sessionId: 'retry', state: { status: 'idle' } } as any)], cleanupMeshSessions: cleanup };
+        const first = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW });
+        expect(first.stoppedSessionIds).toEqual([]);
+        await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW + 1000 });
+        expect(cleanup).toHaveBeenCalledTimes(1);
+        const retry = await runIdleSessionReapPass(deps, { meshId: MESH_ID, policy: undefined, now: NOW + 60_000 });
+        expect(retry.stoppedSessionIds).toEqual(['retry']);
+        expect(cleanup).toHaveBeenCalledTimes(2);
     });
 });

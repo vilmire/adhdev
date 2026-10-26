@@ -1,3 +1,4 @@
+import { reuseIdleTaskSession } from './mesh-session-reuse.js';
 import { realpathSync } from 'node:fs';
 import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal, CAPACITY_OCCUPYING_STATUSES } from './mesh-task-routing-contract.js';
 import { getMachineId } from '../config/config.js';
@@ -1163,6 +1164,8 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 );
                 continue;
             }
+            const reuse = reuseIdleTaskSession(components, meshId, task, tryAssignQueueTask);
+            if (reuse === 'claimed') { madeProgress = true; continue; }
             if (task.targetSessionId) {
                 // Owner targets are hard constraints, including legacy pins. An unavailable
                 // target parks for an explicit revision/requeue; no automatic unpin/retry.
