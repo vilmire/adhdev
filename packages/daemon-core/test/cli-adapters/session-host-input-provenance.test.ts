@@ -484,6 +484,75 @@ it('R10 delayed-repaint-stale-loading: real confirmLocalConsumption with stale/l
     } finally { driver.shutdown(); await (transport as any).closeClient(false); }
 });
 
+it.each(['codex-cli', 'claude-cli', 'antigravity-cli', 'kimi'] as const)(
+    'R11 delayed-persistence-repaint (%s): full fresh/safe native history ending in a prior completed turn while current-turn persistence lags and repaint is delayed 120s consumes at most once (zero second paste/DEL)',
+    async (providerType) => {
+        const { server, transport, writes } = await setup();
+        const driver = new FsmDriver({ specPath: hostSpec(), workingDir: os.tmpdir(), hotReload: false, transportFactory: { spawn: () => transport } });
+        let composer = '';
+        const consumed: string[] = [];
+        const emit = (data: string) => server.emitEvent({ type: 'session_output', sessionId: 'r7-test', seq: 1, data });
+        server.runtimes.set('r7-test', { write: (data: string) => {
+            writes.push(data);
+            if (data.startsWith('\x1b[200~')) {
+                composer = `[Pasted text #${writes.filter((s) => s.startsWith('\x1b[200~')).length} +40 lines]`;
+                emit(inputRow(composer));
+            } else if (data === '\r') {
+                if (composer) {
+                    consumed.push(composer);
+                    composer = '';
+                    // Screen/Thinking repaint is delayed 120 s (past both hold windows).
+                    setTimeout(() => emit(inputRow('') + footer('Thinking')), 120_000);
+                }
+            } else if (data === '\x7f') {
+                composer = Array.from(composer).slice(0, -1).join('');
+                emit(inputRow(composer));
+            }
+        } });
+        const priorNow = Date.now();
+        const components = {
+            instanceManager: { getInstance: () => ({ type: providerType }) },
+            commandHandler: {
+                handle: vi.fn(async () => ({
+                    success: true,
+                    status: 'idle',
+                    transcriptAuthority: 'provider',
+                    coverage: 'full',
+                    providerSessionId: `${providerType}-session-r11`,
+                    messageSource: {
+                        selected: 'native-history',
+                        providerType,
+                        identityStatus: 'safe',
+                        nativeSource: 'provider-native',
+                        nativeHistoryCoverage: 'full',
+                        coverage: { safeMapping: true },
+                        staleness: { freshEnough: true },
+                    },
+                    // Current turn persistence lags behind PTY consumption; disk still shows only the settled prior turn.
+                    messages: [
+                        { role: 'user', content: 'PRIOR PROMPT', timestamp: priorNow - 50_000 },
+                        { role: 'assistant', content: 'PRIOR ANSWER', timestamp: priorNow - 40_000 },
+                    ],
+                    turnTerminalMarkers: [
+                        { receivedAt: priorNow - 40_000, outcome: 'completed', summary: 'PRIOR ANSWER' },
+                    ],
+                })),
+            },
+        } as any;
+        const verdicts: string[] = [];
+        try {
+            driver.start(); emit('\x1b[?1049h' + inputRow('') + footer('? for shortcuts')); await vi.advanceTimersByTimeAsync(300);
+            driver.observeSubmitUnconfirmed('task:first:n0', (verdict) => { verdicts.push(verdict); return true; }, (sinceMs, opts) => confirmLocalConsumption(components, 'r7-test', sinceMs, opts));
+            expect(driver.sendMessageWithDisposition('TASK ' + 'body '.repeat(100), false, 'task:first:n0').status).toBe('delivered');
+            await vi.advanceTimersByTimeAsync(130_000);
+            expect(consumed).toHaveLength(1);
+            expect(writes.filter((s) => s.startsWith('\x1b[200~'))).toHaveLength(1);
+            expect(writes.filter((s) => s === '\x7f')).toHaveLength(0);
+            expect(verdicts).toEqual([]);
+        } finally { driver.shutdown(); await (transport as any).closeClient(false); }
+    },
+);
+
 it('R8-2 end-to-end: never deletes an equal-label foreign chip after a counter reset and reconnect (restored-runtime)', async () => {
     const { server, transport, writes } = await setup();
     const driver = new FsmDriver({ specPath: hostSpec(), workingDir: os.tmpdir(), hotReload: false, transportFactory: { spawn: () => transport } });

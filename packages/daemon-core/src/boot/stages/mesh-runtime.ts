@@ -519,63 +519,86 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
     return () => components.instanceManager.setTurnEvidencePort(null);
 }
 
+export interface DispatchAcknowledgementWatermark {
+    readonly messageId: string;
+    readonly nonce?: number;
+    readonly watermarkSeq: number;
+    readonly unacceptedConfirmed: boolean;
+}
+
 export interface ProviderConsumptionCapability {
     readonly providerType: string;
     readonly canProveNonConsumption: boolean;
+    readonly supportsDispatchAcknowledgementWatermark: boolean;
     readonly requiresTurnTerminalMarkers: boolean;
     readonly reason: string;
 }
 
 /**
- * Per-provider authoritative non-consumption capability matrix (R10):
- * - Capable (`canProveNonConsumption: true`): providers whose native store
- *   persists user and assistant turns with real per-record timestamps and exact
- *   session identity (`codex-cli`, `claude-cli`, `antigravity-cli`, `kimi`),
- *   plus native turn-terminal markers where supported (`codex-cli`, `kimi`).
- * - Incapable (`canProveNonConsumption: false`): providers whose transcripts
- *   synthesize timestamps from file mtime (`grok-cli`, `cursor-cli`) or only
- *   project text parts with newest-session fallback (`opencode`).
+ * Per-provider authoritative non-consumption capability matrix (R10 / R11):
+ * - Coordinator decision (R11): positive non-consumption is NOT provable from
+ *   transcript inspection alone. Even when a provider's native store is fresh,
+ *   complete, safely-mapped, and ends in a completed prior turn, current-turn
+ *   persistence can lag behind input consumption, wall-clock timestamps can
+ *   skew across processes, and native stores can normalize prompt bodies.
+ * - Therefore `canProveNonConsumption` and `supportsDispatchAcknowledgementWatermark`
+ *   are `false` for ALL providers today. `confirmLocalConsumption` returns
+ *   `'consumed'` when there is positive evidence of agent activity for this
+ *   dispatch (`newestAgentActivityAt >= sinceMs`), otherwise `'unknown'` —
+ *   always, for every provider.
+ * - Future `'not_consumed'` contract: gated behind a provider capability with
+ *   `canProveNonConsumption: true` AND `supportsDispatchAcknowledgementWatermark: true`,
+ *   plus a runtime `DispatchAcknowledgementWatermark` (`payload.dispatchAcknowledgement`
+ *   or `messageSource.dispatchAcknowledgement`) bound to this dispatch's
+ *   `messageId`/nonce and serialized with the provider's input acceptance queue.
  */
 export const PROVIDER_CONSUMPTION_CAPABILITIES: Readonly<Record<string, ProviderConsumptionCapability>> = {
     'codex-cli': {
         providerType: 'codex-cli',
-        canProveNonConsumption: true,
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: true,
-        reason: 'JSONL rollout records per-message timestamps and native turn-terminal markers (task_complete/turn_aborted) with exact session UUID.',
+        reason: 'JSONL rollout persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
     },
     'claude-cli': {
         providerType: 'claude-cli',
-        canProveNonConsumption: true,
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: false,
-        reason: 'Per-session JSONL records per-message timestamps on user and assistant rows with exact session UUID.',
+        reason: 'Per-session JSONL persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
     },
     'antigravity-cli': {
         providerType: 'antigravity-cli',
-        canProveNonConsumption: true,
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: false,
-        reason: 'Per-session SQLite conversations/<uuid>.db records step creation timestamps in protobuf metadata under full coverage.',
+        reason: 'Per-session SQLite step persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
     },
     'kimi': {
         providerType: 'kimi',
-        canProveNonConsumption: true,
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: true,
-        reason: 'Per-session wire.jsonl records epoch-ms timestamps on user/assistant messages and turn.ended terminal markers.',
+        reason: 'wire.jsonl persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
     },
     'grok-cli': {
         providerType: 'grok-cli',
         canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: false,
         reason: 'chat_history.jsonl records carry no per-message timestamps; receivedAt is synthesized from created_at and file mtime.',
     },
     'cursor-cli': {
         providerType: 'cursor-cli',
         canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: false,
         reason: 'agent-transcripts JSONL strips timestamps (no timestamp_ms in message_map); receivedAt is synthesized from file mtime.',
     },
     'opencode': {
         providerType: 'opencode',
         canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
         requiresTurnTerminalMarkers: false,
         reason: 'SQLite part query only projects $.type=text parts and falls back to newest session when a session has no rows.',
     },
@@ -586,16 +609,22 @@ export function getProviderConsumptionCapability(providerType: string | undefine
     return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
 }
 
-function hasAuthoritativeNonConsumptionProof(
+const DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS = 5_000;
+
+function normalizePromptWhitespace(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+export function hasAuthoritativeNonConsumptionProof(
     payload: Record<string, unknown>,
     ms: Record<string, any> | null,
     observed: TranscriptObservation,
     providerType: string | undefined,
     sinceMs: number,
-    opts?: { messageId?: string; expectedText?: string },
+    opts?: { messageId?: string; expectedText?: string; capabilityOverride?: ProviderConsumptionCapability },
 ): boolean {
-    const capability = getProviderConsumptionCapability(providerType);
-    if (!capability || !capability.canProveNonConsumption) return false;
+    const capability = opts?.capabilityOverride ?? getProviderConsumptionCapability(providerType);
+    if (!capability || !capability.canProveNonConsumption || !capability.supportsDispatchAcknowledgementWatermark) return false;
     if (payload.stale === true || observed.stale === true) return false;
     if (typeof payload.unavailableReason === 'string' && payload.unavailableReason.trim().length > 0) return false;
     if (typeof observed.unavailableReason === 'string' && observed.unavailableReason.trim().length > 0) return false;
@@ -609,29 +638,49 @@ function hasAuthoritativeNonConsumptionProof(
     if (typeof ms.fallbackReason === 'string' && ms.fallbackReason.trim().length > 0) return false;
     if (typeof ms.unavailableReason === 'string' && ms.unavailableReason.trim().length > 0) return false;
     if (typeof ms.partialReason === 'string' && ms.partialReason.trim().length > 0) return false;
-    if (ms.nativeSource && ms.nativeSource !== 'provider-native') return false;
-    if (ms.nativeHistoryCoverage && ms.nativeHistoryCoverage !== 'full') return false;
-    if (ms.identityStatus && ms.identityStatus !== 'safe') return false;
+    // R11 P2: require affirmative provenance values everywhere consulted; missing -> unknown.
+    if (ms.nativeSource !== 'provider-native') return false;
+    if (ms.nativeHistoryCoverage !== 'full') return false;
+    if (ms.identityStatus !== 'safe') return false;
     if (ms.coverage?.safeMapping !== true) return false;
-    if (ms.staleness?.freshEnough === false) return false;
+    if (ms.staleness?.freshEnough !== true) return false;
+
+    const expectedId = opts?.messageId?.trim() || '';
+    if (!expectedId) return false;
+    const rawAck = (payload.dispatchAcknowledgement ?? ms.dispatchAcknowledgement) as Partial<DispatchAcknowledgementWatermark> | undefined;
+    if (
+        !rawAck
+        || typeof rawAck !== 'object'
+        || typeof rawAck.messageId !== 'string'
+        || rawAck.messageId.trim() !== expectedId
+        || rawAck.unacceptedConfirmed !== true
+        || typeof rawAck.watermarkSeq !== 'number'
+        || !Number.isFinite(rawAck.watermarkSeq)
+        || rawAck.watermarkSeq < sinceMs
+    ) {
+        return false;
+    }
 
     const messages = payload.messages as ChatMessage[];
     if (messages.length === 0) return false;
     if (typeof payload.totalMessages === 'number' && payload.totalMessages > messages.length) return false;
 
-    const expectedId = opts?.messageId?.trim() || '';
     const expectedBody = opts?.expectedText?.trim() || '';
+    const normalizedExpectedBody = expectedBody ? normalizePromptWhitespace(expectedBody) : '';
+    const skewCeilingMs = sinceMs - DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS;
     let hasCompletedPriorAssistant = false;
     for (const msg of messages) {
         if (!msg || typeof msg !== 'object') return false;
         const ts = readChatMessageTimestampMs(msg);
-        if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0 || ts >= sinceMs) return false;
+        if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0 || ts >= sinceMs || ts >= skewCeilingMs) return false;
         const role = typeof msg.role === 'string' ? msg.role.trim().toLowerCase() : '';
         const msgId = typeof (msg as any).id === 'string' ? (msg as any).id.trim() : typeof (msg as any).messageId === 'string' ? (msg as any).messageId.trim() : '';
         if (expectedId && msgId && msgId === expectedId) return false;
         if (role === 'user' || role === 'human') {
             const text = flattenContent(msg.content).trim();
+            const normalizedText = text ? normalizePromptWhitespace(text) : '';
             if (expectedBody && text && (text === expectedBody || text.includes(expectedBody))) return false;
+            if (normalizedExpectedBody && normalizedText && (normalizedText === normalizedExpectedBody || normalizedText.includes(normalizedExpectedBody))) return false;
         } else if (role === 'assistant' || role === 'model') {
             if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
         }
@@ -646,27 +695,32 @@ function hasAuthoritativeNonConsumptionProof(
         for (const raw of payload.turnTerminalMarkers) {
             const m = raw as { receivedAt?: unknown; startedAt?: unknown; inputAt?: unknown } | null;
             const receivedAt = typeof m?.receivedAt === 'number' ? m.receivedAt : Number.NaN;
-            if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs) return false;
-            if (typeof m?.startedAt === 'number' && m.startedAt >= sinceMs) return false;
-            if (typeof m?.inputAt === 'number' && m.inputAt >= sinceMs) return false;
+            if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs || receivedAt >= skewCeilingMs) return false;
+            if (typeof m?.startedAt === 'number' && (m.startedAt >= sinceMs || m.startedAt >= skewCeilingMs)) return false;
+            if (typeof m?.inputAt === 'number' && (m.inputAt >= sinceMs || m.inputAt >= skewCeilingMs)) return false;
         }
     }
     return true;
 }
 
 /**
- * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1 / R10): fresh read of a
- * LOCAL session's transcript.
- * - `consumed`: agent activity at or after `sinceMs`.
- * - `not_consumed`: ONLY under a provider-specific authoritative positive
- *   contract (capable provider, fresh/complete/safely-mapped `native-history`
- *   transcript ending in a completed prior turn before `sinceMs`, no user or
- *   agent turn at/after `sinceMs` or matching the dispatched messageId/body,
- *   and turn-terminal markers before `sinceMs` when required).
- * - `unknown`: every uncertain case (empty, stale, unavailable, loading,
- *   unsupported provider, incomplete transcript, missing native source, read
- *   errors, user-only transcript, or 'no agent activity seen' without positive
- *   non-consumption proof) → quarantine, no re-paste and no reclaim.
+ * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1 / R10 / R11): fresh read of
+ * a LOCAL session's transcript.
+ * - `consumed`: positive evidence of agent activity for this dispatch at or
+ *   after `sinceMs` (`observed.newestAgentActivityAt >= sinceMs`).
+ * - `unknown`: returned for every other case across all providers today,
+ *   because positive non-consumption is not provable from transcript inspection
+ *   alone (persistence lag, clock skew, prompt normalization). Consequently,
+ *   automatic clear+re-paste recovery is disabled and unconfirmed submits go to
+ *   quarantine and the ledger's verified recovery (H2 probe -> H2r/H3 hard
+ *   writer-stop -> queue recovery or coordinator notify).
+ * - `not_consumed`: gated behind `hasAuthoritativeNonConsumptionProof`, which
+ *   requires a future provider capability with `canProveNonConsumption: true`
+ *   AND `supportsDispatchAcknowledgementWatermark: true` plus a dispatch-tied
+ *   acknowledgement watermark bound to `messageId` and serialized with input
+ *   acceptance, as well as affirmative provenance fields (`nativeSource ===
+ *   'provider-native'`, `nativeHistoryCoverage === 'full'`, `identityStatus ===
+ *   'safe'`, `coverage.safeMapping === true`, `staleness.freshEnough === true`).
  */
 let cachedAnalyzeProbeTranscript: ((payload: Record<string, any>, ctx: { turnStartedAtMs?: number; providerType?: string }) => any) | null = null;
 

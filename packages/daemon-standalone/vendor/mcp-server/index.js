@@ -128093,9 +128093,12 @@ ${tail}` : ""
       if (!providerType || typeof providerType !== "string") return null;
       return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
     }
+    function normalizePromptWhitespace(text4) {
+      return text4.replace(/\s+/g, " ").trim();
+    }
     function hasAuthoritativeNonConsumptionProof(payload, ms3, observed2, providerType, sinceMs, opts) {
-      const capability = getProviderConsumptionCapability(providerType);
-      if (!capability || !capability.canProveNonConsumption) return false;
+      const capability = opts?.capabilityOverride ?? getProviderConsumptionCapability(providerType);
+      if (!capability || !capability.canProveNonConsumption || !capability.supportsDispatchAcknowledgementWatermark) return false;
       if (payload.stale === true || observed2.stale === true) return false;
       if (typeof payload.unavailableReason === "string" && payload.unavailableReason.trim().length > 0) return false;
       if (typeof observed2.unavailableReason === "string" && observed2.unavailableReason.trim().length > 0) return false;
@@ -128109,27 +128112,36 @@ ${tail}` : ""
       if (typeof ms3.fallbackReason === "string" && ms3.fallbackReason.trim().length > 0) return false;
       if (typeof ms3.unavailableReason === "string" && ms3.unavailableReason.trim().length > 0) return false;
       if (typeof ms3.partialReason === "string" && ms3.partialReason.trim().length > 0) return false;
-      if (ms3.nativeSource && ms3.nativeSource !== "provider-native") return false;
-      if (ms3.nativeHistoryCoverage && ms3.nativeHistoryCoverage !== "full") return false;
-      if (ms3.identityStatus && ms3.identityStatus !== "safe") return false;
+      if (ms3.nativeSource !== "provider-native") return false;
+      if (ms3.nativeHistoryCoverage !== "full") return false;
+      if (ms3.identityStatus !== "safe") return false;
       if (ms3.coverage?.safeMapping !== true) return false;
-      if (ms3.staleness?.freshEnough === false) return false;
+      if (ms3.staleness?.freshEnough !== true) return false;
+      const expectedId = opts?.messageId?.trim() || "";
+      if (!expectedId) return false;
+      const rawAck = payload.dispatchAcknowledgement ?? ms3.dispatchAcknowledgement;
+      if (!rawAck || typeof rawAck !== "object" || typeof rawAck.messageId !== "string" || rawAck.messageId.trim() !== expectedId || rawAck.unacceptedConfirmed !== true || typeof rawAck.watermarkSeq !== "number" || !Number.isFinite(rawAck.watermarkSeq) || rawAck.watermarkSeq < sinceMs) {
+        return false;
+      }
       const messages = payload.messages;
       if (messages.length === 0) return false;
       if (typeof payload.totalMessages === "number" && payload.totalMessages > messages.length) return false;
-      const expectedId = opts?.messageId?.trim() || "";
       const expectedBody = opts?.expectedText?.trim() || "";
+      const normalizedExpectedBody = expectedBody ? normalizePromptWhitespace(expectedBody) : "";
+      const skewCeilingMs = sinceMs - DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS;
       let hasCompletedPriorAssistant = false;
       for (const msg of messages) {
         if (!msg || typeof msg !== "object") return false;
         const ts2 = readChatMessageTimestampMs(msg);
-        if (typeof ts2 !== "number" || !Number.isFinite(ts2) || ts2 <= 0 || ts2 >= sinceMs) return false;
+        if (typeof ts2 !== "number" || !Number.isFinite(ts2) || ts2 <= 0 || ts2 >= sinceMs || ts2 >= skewCeilingMs) return false;
         const role = typeof msg.role === "string" ? msg.role.trim().toLowerCase() : "";
         const msgId = typeof msg.id === "string" ? msg.id.trim() : typeof msg.messageId === "string" ? msg.messageId.trim() : "";
         if (expectedId && msgId && msgId === expectedId) return false;
         if (role === "user" || role === "human") {
           const text4 = flattenContent(msg.content).trim();
+          const normalizedText = text4 ? normalizePromptWhitespace(text4) : "";
           if (expectedBody && text4 && (text4 === expectedBody || text4.includes(expectedBody))) return false;
+          if (normalizedExpectedBody && normalizedText && (normalizedText === normalizedExpectedBody || normalizedText.includes(normalizedExpectedBody))) return false;
         } else if (role === "assistant" || role === "model") {
           if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
         }
@@ -128143,9 +128155,9 @@ ${tail}` : ""
         for (const raw of payload.turnTerminalMarkers) {
           const m = raw;
           const receivedAt = typeof m?.receivedAt === "number" ? m.receivedAt : Number.NaN;
-          if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs) return false;
-          if (typeof m?.startedAt === "number" && m.startedAt >= sinceMs) return false;
-          if (typeof m?.inputAt === "number" && m.inputAt >= sinceMs) return false;
+          if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs || receivedAt >= skewCeilingMs) return false;
+          if (typeof m?.startedAt === "number" && (m.startedAt >= sinceMs || m.startedAt >= skewCeilingMs)) return false;
+          if (typeof m?.inputAt === "number" && (m.inputAt >= sinceMs || m.inputAt >= skewCeilingMs)) return false;
         }
       }
       return true;
@@ -128320,6 +128332,7 @@ ${tail}` : ""
       });
     }
     var PROVIDER_CONSUMPTION_CAPABILITIES;
+    var DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS;
     var cachedAnalyzeProbeTranscript;
     var init_mesh_runtime = __esm2({
       "src/boot/stages/mesh-runtime.ts"() {
@@ -128366,47 +128379,55 @@ ${tail}` : ""
         PROVIDER_CONSUMPTION_CAPABILITIES = {
           "codex-cli": {
             providerType: "codex-cli",
-            canProveNonConsumption: true,
+            canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: true,
-            reason: "JSONL rollout records per-message timestamps and native turn-terminal markers (task_complete/turn_aborted) with exact session UUID."
+            reason: "JSONL rollout persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance."
           },
           "claude-cli": {
             providerType: "claude-cli",
-            canProveNonConsumption: true,
+            canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: false,
-            reason: "Per-session JSONL records per-message timestamps on user and assistant rows with exact session UUID."
+            reason: "Per-session JSONL persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance."
           },
           "antigravity-cli": {
             providerType: "antigravity-cli",
-            canProveNonConsumption: true,
+            canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: false,
-            reason: "Per-session SQLite conversations/<uuid>.db records step creation timestamps in protobuf metadata under full coverage."
+            reason: "Per-session SQLite step persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance."
           },
           "kimi": {
             providerType: "kimi",
-            canProveNonConsumption: true,
+            canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: true,
-            reason: "Per-session wire.jsonl records epoch-ms timestamps on user/assistant messages and turn.ended terminal markers."
+            reason: "wire.jsonl persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance."
           },
           "grok-cli": {
             providerType: "grok-cli",
             canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: false,
             reason: "chat_history.jsonl records carry no per-message timestamps; receivedAt is synthesized from created_at and file mtime."
           },
           "cursor-cli": {
             providerType: "cursor-cli",
             canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: false,
             reason: "agent-transcripts JSONL strips timestamps (no timestamp_ms in message_map); receivedAt is synthesized from file mtime."
           },
           "opencode": {
             providerType: "opencode",
             canProveNonConsumption: false,
+            supportsDispatchAcknowledgementWatermark: false,
             requiresTurnTerminalMarkers: false,
             reason: "SQLite part query only projects $.type=text parts and falls back to newest session when a session has no rows."
           }
         };
+        DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS = 5e3;
         cachedAnalyzeProbeTranscript = null;
       }
     });

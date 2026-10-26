@@ -30,7 +30,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { wireTurnLedger } from '../../src/boot/stages/mesh-runtime.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { getActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js';
-import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { meshNoticeRuntime } from '../../src/mesh/turn-ledger/deliver.js';
 import { startTurnLoops, stopTurnLoops } from '../../src/boot/stages/loops.js';
 import { __setSharedProcessTableSourceForTests, createProcessTableSource } from '../../src/process/process-table-snapshot.js';
@@ -38,7 +39,13 @@ import { parsePosixPsOutput, type ProcessNodeInfo } from '../../src/process/sess
 import type { TurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
 import { LOG } from '../../src/logging/logger.js';
 import { reportMeshSubmitUnconfirmed } from '../../src/providers/cli-provider-mesh-assignment.js';
-import { confirmLocalConsumption, getProviderConsumptionCapability, PROVIDER_CONSUMPTION_CAPABILITIES } from '../../src/boot/stages/mesh-runtime.js';
+import {
+    confirmLocalConsumption,
+    getProviderConsumptionCapability,
+    hasAuthoritativeNonConsumptionProof,
+    PROVIDER_CONSUMPTION_CAPABILITIES,
+    type ProviderConsumptionCapability,
+} from '../../src/boot/stages/mesh-runtime.js';
 
 afterEach(() => {
     __setSharedProcessTableSourceForTests(null);
@@ -68,10 +75,15 @@ function fakeComponents(settingsBySession: Record<string, Record<string, unknown
 const baseEvidence = { at: 1_000, source: 'fsm_edge', observedBy: 'daemon_wiring' } as const;
 
 describe('wireTurnLedger — S7 wiring', () => {
-    it('review d75636d6 F4: a proven submit_unconfirmed reclaim through the REAL boot ports hard-stops the worker session — it is never reused with a revoked bind', async () => {
+    it('review d75636d6 F4 / R11 quarantine-to-recovery: transcript-only unconfirmed submit quarantines without immediate reclaim or re-paste, and the ledger recovers both mesh_queue (requeue under nonce+1) and mesh_direct (coordinator notify) after H2 -> H2r hard writer-stop', async () => {
         const { components, portCalls } = fakeComponents({});
         const firstWrittenAt = Date.now() - 35_590;
-        components.cliManager.adapters = new Map([['s1', { cliType: 'antigravity-cli' }]]);
+        const submitSpy = vi.fn(async () => ({ kind: 'delivered' }));
+        components.cliManager.input.submit = submitSpy;
+        components.cliManager.adapters = new Map([
+            ['s1', { cliType: 'antigravity-cli' }],
+            ['s2', { cliType: 'codex-cli' }],
+        ]);
         components.cliManager.stopCli = vi.fn(async (args: any) => ({ ...(args?.meshWriterStop ?? {}), success: true, quiescent: true, incarnation: 'fixture-native-writer' }));
         components.commandHandler = {
             handle: vi.fn(async () => ({
@@ -89,15 +101,62 @@ describe('wireTurnLedger — S7 wiring', () => {
         };
         const wiring = wireTurnLedger(components, { runMigration: false });
         try {
-            const ref = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: 't1' };
+            // 1. mesh_queue path: enqueue + assign task t1 (nonce 0), deliver, then reportMeshSubmitUnconfirmed.
+            const task = enqueueTask('m1', 'DO WORK', { taskMode: 'code_change', difficulty: 'medium' } as any);
+            const store = MeshRuntimeStore.getInstance();
+            const row0 = getQueue('m1').find((t) => t.id === task.id)!;
+            store.updateQueueEntry({ ...row0, status: 'assigned', assignedNodeId: 'n1', assignedSessionId: 's1', updatedAt: new Date().toISOString() } as any);
+            const initialNonce = store.findQueueEntryById('m1', task.id)!.dispatchNonce ?? 0;
+            expect(initialNonce).toBe(0);
+            expect(store.findQueueEntryById('m1', task.id)).toMatchObject({ status: 'assigned' });
+
+            const ref1 = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: task.id };
             const now = Date.now();
-            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: 'task:t1:n0', meshId: 'm1', nodeId: 'n1', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
-            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: 'task:t1:n0', outcome: 'delivered', via: 'local' } as any);
-            const host = { instanceId: 's1', settings: { meshActiveTaskId: 't1', meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a1', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
-            expect(reportMeshSubmitUnconfirmed(host, 'task:t1:n0', firstWrittenAt)).toBe(true);
+            const msgId1 = `task:${task.id}:n0`;
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref1, eventId: 'r-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: msgId1, meshId: 'm1', nodeId: 'n1', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref1, eventId: 'r-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: msgId1, outcome: 'delivered', via: 'local' } as any);
+            const host1 = { instanceId: 's1', settings: { meshActiveTaskId: task.id, meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a1', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
+            expect(reportMeshSubmitUnconfirmed(host1, msgId1, firstWrittenAt)).toBe(true);
             for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
-            expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
+
+            // R11: transcript-only evidence returns `unknown` -> quarantined in `delivered` (generation 0), no immediate stopCli or double-send.
+            expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'delivered', generation: 0 });
+            expect(components.cliManager.stopCli).not.toHaveBeenCalled();
+            expect(submitSpy).not.toHaveBeenCalled();
+
+            // Drive ledger recovery: H2 (await_consume hold expiry) -> probe requested (no PTY re-send) -> H2r (await_consume:redrive) -> hard writer-stop -> writer_settled -> requeued to pending with dispatchNonce=1.
+            const h2Queue = wiring.ledger.observe({ ...baseEvidence, at: now + 90_000, ...ref1, eventId: 'r-h2', source: 'scheduler', sessionId: 's1', kind: 'hold_expired', holdId: 'a1:await_consume', reason: 'await_consume' } as any);
+            expect(h2Queue.rule).toBe('H2');
+            expect(wiring.probePort.maintenanceInventory().early).toContain('a1');
+            expect(submitSpy).not.toHaveBeenCalled();
+
+            const h2rQueue = wiring.ledger.observe({ ...baseEvidence, at: now + 180_000, ...ref1, eventId: 'r-h2r', source: 'scheduler', sessionId: 's1', kind: 'hold_expired', holdId: 'a1:await_consume', reason: 'await_consume' } as any);
+            expect(h2rQueue.rule).toBe('H2r');
+            for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+
             expect(components.cliManager.stopCli).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 's1', mode: 'hard' }));
+            expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
+            expect(store.findQueueEntryById('m1', task.id)).toMatchObject({ status: 'pending', dispatchNonce: 1 });
+            __clearMeshQueueForTests('m1');
+
+            // 2. mesh_direct path: quarantined direct send recovers via H2 -> H2r -> hard writer-stop -> failed + coordinator notify.
+            const ref2 = { attemptRef: { attemptId: 'a2', generation: 0 }, taskId: 't2' };
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref2, eventId: 'd-acc', source: 'dispatch', sessionId: 's2', kind: 'dispatch_accepted', scope: 'mesh_direct', messageId: 'task:t2:n0', meshId: 'm1', nodeId: 'n2', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref2, eventId: 'd-dlv', source: 'dispatch', sessionId: 's2', kind: 'delivered', messageId: 'task:t2:n0', outcome: 'delivered', via: 'local' } as any);
+            const host2 = { instanceId: 's2', settings: { meshActiveTaskId: 't2', meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a2', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
+            expect(reportMeshSubmitUnconfirmed(host2, 'task:t2:n0', firstWrittenAt)).toBe(true);
+            for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+            expect(wiring.ledger.getAttempt('a2')).toMatchObject({ state: 'delivered', generation: 0 });
+
+            wiring.ledger.observe({ ...baseEvidence, at: now + 90_000, ...ref2, eventId: 'd-h2', source: 'scheduler', sessionId: 's2', kind: 'hold_expired', holdId: 'a2:await_consume', reason: 'await_consume' } as any);
+            wiring.ledger.observe({ ...baseEvidence, at: now + 180_000, ...ref2, eventId: 'd-h2r', source: 'scheduler', sessionId: 's2', kind: 'hold_expired', holdId: 'a2:await_consume', reason: 'await_consume' } as any);
+            for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+
+            expect(components.cliManager.stopCli).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 's2', mode: 'hard' }));
+            expect(wiring.ledger.getAttempt('a2')).toMatchObject({
+                state: 'failed',
+                terminal: expect.objectContaining({ outcome: 'failed', reason: 'delivered_not_consumed_redrive' }),
+            });
         } finally {
             wiring.dispose();
         }
@@ -120,18 +179,16 @@ describe('wireTurnLedger — S7 wiring', () => {
         expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
     });
 
-    describe('R10 per-provider consumption capability matrix (all 7 CLI providers)', () => {
+    describe('R10 / R11 per-provider consumption capability matrix (all 7 CLI providers)', () => {
         const ALL_PROVIDERS = ['codex-cli', 'claude-cli', 'antigravity-cli', 'grok-cli', 'cursor-cli', 'kimi', 'opencode'] as const;
-        const CAPABLE_PROVIDERS = ['codex-cli', 'claude-cli', 'antigravity-cli', 'kimi'] as const;
-        const INCAPABLE_PROVIDERS = ['grok-cli', 'cursor-cli', 'opencode'] as const;
 
-        it('defines explicit capabilities for all 7 CLI providers and rejects unknown providers', () => {
+        it('defines explicit capabilities for all 7 CLI providers with canProveNonConsumption=false until a dispatch-tied acknowledgement watermark exists, and rejects unknown providers', () => {
             expect(Object.keys(PROVIDER_CONSUMPTION_CAPABILITIES).sort()).toEqual([...ALL_PROVIDERS].sort());
-            for (const p of CAPABLE_PROVIDERS) {
-                expect(getProviderConsumptionCapability(p)?.canProveNonConsumption).toBe(true);
-            }
-            for (const p of INCAPABLE_PROVIDERS) {
-                expect(getProviderConsumptionCapability(p)?.canProveNonConsumption).toBe(false);
+            for (const p of ALL_PROVIDERS) {
+                const cap = getProviderConsumptionCapability(p);
+                expect(cap).not.toBeNull();
+                expect(cap?.canProveNonConsumption).toBe(false);
+                expect((cap as any)?.supportsDispatchAcknowledgementWatermark).toBe(false);
             }
             expect(getProviderConsumptionCapability('unknown-cli')).toBeNull();
         });
@@ -191,7 +248,7 @@ describe('wireTurnLedger — S7 wiring', () => {
             expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
         });
 
-        it.each(CAPABLE_PROVIDERS)('capable provider %s returns `not_consumed` ONLY under an authoritative complete native transcript with a settled prior turn before sinceMs and no matching user turn', async (provider) => {
+        it.each(ALL_PROVIDERS)('R11: provider %s never returns `not_consumed` from transcript inspection even when native history is fresh, complete, safely-mapped, and ends in a completed prior turn', async (provider) => {
             const { components } = fakeComponents({});
             components.cliManager.adapters = new Map([['s1', { cliType: provider }]]);
             const since = Date.now() - 10_000;
@@ -209,48 +266,127 @@ describe('wireTurnLedger — S7 wiring', () => {
                 turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
             };
             components.commandHandler = { handle: vi.fn(async () => basePayload) };
-            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('not_consumed');
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('unknown');
 
-            // If our expectedText is already present in a user message, never return not_consumed.
+            // Positive agent activity at or after sinceMs still returns `consumed`.
             components.commandHandler = {
                 handle: vi.fn(async () => ({
                     ...basePayload,
                     messages: [
-                        { role: 'user', content: 'NEW TASK BODY', timestamp: since - 50_000 },
-                        { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                        ...basePayload.messages,
+                        { role: 'user', content: 'NEW TASK BODY', timestamp: since + 50 },
+                        { role: 'assistant', content: 'working on NEW TASK BODY', timestamp: since + 500 },
                     ],
                 })),
             };
-            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('unknown');
-
-            // Providers requiring turnTerminalMarkers (codex-cli, kimi) return unknown if markers are absent.
-            if (getProviderConsumptionCapability(provider)?.requiresTurnTerminalMarkers) {
-                const { turnTerminalMarkers: _drop, ...withoutMarkers } = basePayload;
-                components.commandHandler = { handle: vi.fn(async () => withoutMarkers) };
-                expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
-            }
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('consumed');
         });
 
-        it.each(INCAPABLE_PROVIDERS)('incapable provider %s never returns `not_consumed` (falls back to `unknown` even with a full native-history payload)', async (provider) => {
+        const syntheticWatermarkCapability: ProviderConsumptionCapability = {
+            providerType: 'codex-cli',
+            canProveNonConsumption: true,
+            supportsDispatchAcknowledgementWatermark: true,
+            requiresTurnTerminalMarkers: true,
+            reason: 'synthetic test capability with dispatch acknowledgement watermark',
+        };
+
+        it.each([1, 999, 1000, 1001])('R11 P1 clock-skew probe (%dms before firstWrittenAt) and native body normalization ("TASK\\nbody" vs "TASK body") return `unknown` (and false under future watermark capability)', async (skewMs) => {
             const { components } = fakeComponents({});
-            components.cliManager.adapters = new Map([['s1', { cliType: provider }]]);
+            components.cliManager.adapters = new Map([['s1', { cliType: 'codex-cli' }]]);
             const since = Date.now() - 10_000;
-            components.commandHandler = {
-                handle: vi.fn(async () => ({
-                    success: true,
-                    status: 'idle',
-                    transcriptAuthority: 'provider',
-                    coverage: 'full',
-                    providerSessionId: `${provider}-sess-1`,
-                    messageSource: { selected: 'native-history', providerType: provider, identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
-                    messages: [
-                        { role: 'user', content: 'prior prompt', timestamp: since - 50_000 },
-                        { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
-                    ],
-                    turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
-                })),
+            const messageSource = {
+                selected: 'native-history',
+                providerType: 'codex-cli',
+                identityStatus: 'safe',
+                nativeSource: 'provider-native',
+                nativeHistoryCoverage: 'full',
+                coverage: { safeMapping: true },
+                staleness: { freshEnough: true },
             };
-            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+            const payload = {
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: 'codex-sess-skew',
+                messageSource,
+                dispatchAcknowledgement: { messageId: 'task:t1:n0', watermarkSeq: since + 50, unacceptedConfirmed: true },
+                messages: [
+                    // User turn persisted with wall-clock skew before firstWrittenAt AND normalized whitespace ('TASK body' vs 'TASK\nbody')
+                    { role: 'user', content: 'TASK body', timestamp: since - skewMs },
+                    { role: 'assistant', content: 'prior reply', timestamp: since - skewMs },
+                ],
+                turnTerminalMarkers: [{ receivedAt: since - skewMs, outcome: 'completed', summary: 'prior reply' }],
+            };
+            components.commandHandler = { handle: vi.fn(async () => payload) };
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'TASK\nbody' })).toBe('unknown');
+            expect(
+                hasAuthoritativeNonConsumptionProof(
+                    payload,
+                    messageSource,
+                    { stale: false } as any,
+                    'codex-cli',
+                    since,
+                    { messageId: 'task:t1:n0', expectedText: 'TASK\nbody', capabilityOverride: syntheticWatermarkCapability },
+                ),
+            ).toBe(false);
+            // Also verify body normalization alone (even when timestamp is well before the skew window) is rejected:
+            const bodyNormalizedPayload = {
+                ...payload,
+                messages: [
+                    { role: 'user', content: 'TASK body', timestamp: since - 50_000 },
+                    { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                ],
+                turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
+            };
+            expect(
+                hasAuthoritativeNonConsumptionProof(
+                    bodyNormalizedPayload,
+                    messageSource,
+                    { stale: false } as any,
+                    'codex-cli',
+                    since,
+                    { messageId: 'task:t1:n0', expectedText: 'TASK\nbody', capabilityOverride: syntheticWatermarkCapability },
+                ),
+            ).toBe(false);
+        });
+
+        it.each([
+            ['missing nativeSource', { selected: 'native-history', providerType: 'codex-cli', identityStatus: 'safe', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } }],
+            ['missing nativeHistoryCoverage', { selected: 'native-history', providerType: 'codex-cli', identityStatus: 'safe', nativeSource: 'provider-native', coverage: { safeMapping: true }, staleness: { freshEnough: true } }],
+            ['missing identityStatus', { selected: 'native-history', providerType: 'codex-cli', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } }],
+            ['missing staleness.freshEnough', { selected: 'native-history', providerType: 'codex-cli', identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: {} }],
+            ['missing coverage.safeMapping', { selected: 'native-history', providerType: 'codex-cli', identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: {}, staleness: { freshEnough: true } }],
+        ])('R11 P2 missing-provenance probe (%s) returns `unknown` (and false under future watermark capability)', async (_label, messageSource) => {
+            const { components } = fakeComponents({});
+            components.cliManager.adapters = new Map([['s1', { cliType: 'codex-cli' }]]);
+            const since = Date.now() - 10_000;
+            const payload = {
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: 'codex-sess-prov',
+                messageSource,
+                dispatchAcknowledgement: { messageId: 'task:t1:n0', watermarkSeq: since + 50, unacceptedConfirmed: true },
+                messages: [
+                    { role: 'user', content: 'prior prompt', timestamp: since - 50_000 },
+                    { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                ],
+                turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
+            };
+            components.commandHandler = { handle: vi.fn(async () => payload) };
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('unknown');
+            expect(
+                hasAuthoritativeNonConsumptionProof(
+                    payload,
+                    messageSource,
+                    { stale: false } as any,
+                    'codex-cli',
+                    since,
+                    { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY', capabilityOverride: syntheticWatermarkCapability },
+                ),
+            ).toBe(false);
         });
     });
 
