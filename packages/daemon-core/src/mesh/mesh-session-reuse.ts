@@ -1,6 +1,6 @@
 import { sessionIsStopping } from './mesh-session-stop-fence.js';
 /** Explicit reuse before any spawn budget/model-slot admission, including review tasks. */
-import { readText, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { readText, sessionIdsEquivalent, meshNodeIdMatches, type MeshNodeIdentified } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -9,7 +9,7 @@ import { isSafeIdleTaskSession } from './mesh-session-lifetime.js';
 
 type Claim = (components: DaemonComponents, meshId: string, nodeId: string, sessionId: string, provider: string,
     routing?: any, trace?: any, trigger?: string) => boolean;
-export function reuseIdleTaskSession(components: DaemonComponents, meshId: string, task: MeshWorkQueueEntry, claim: Claim): 'claimed' | 'none' {
+export function reuseIdleTaskSession(components: DaemonComponents, meshId: string, task: MeshWorkQueueEntry, nodes: readonly MeshNodeIdentified[], claim: Claim): 'claimed' | 'none' {
     const candidates: Array<{ nodeId: string; sessionId: string; provider: string }> = [];
     for (const inst of components.instanceManager?.getByCategory('cli') ?? []) {
         const s = inst.getState();
@@ -25,6 +25,9 @@ export function reuseIdleTaskSession(components: DaemonComponents, meshId: strin
     }
     for (const c of candidates) {
         if (!c.nodeId || !c.sessionId || !c.provider) continue;
+        // An idle announcement is not mesh membership. Use the same merged
+        // config/cache view as the ordinary drain before attempting reuse.
+        if (!nodes.some(node => meshNodeIdMatches(node, c.nodeId))) continue;
         if (task.targetNodeId && !meshNodeIdMatches({ nodeId: c.nodeId }, task.targetNodeId)) continue;
         if (task.targetSessionId && !sessionIdsEquivalent(c.sessionId, task.targetSessionId)) continue;
         if (sessionIsStopping(MeshRuntimeStore.getInstance().db, c.sessionId)) continue;

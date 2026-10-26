@@ -162,20 +162,20 @@ describe('idle reuse', () => {
     it.each([false, true])('auto-launch adopts existing same-node/provider worker before slot/spawn admission (review=%s)', async review => {
         tasks.push({ id: 'queued', status: 'pending', readonly: true, targetNodeId: 'node', ...(review ? { review: { sourceTaskId: 'prior' } } : {}) });
         const components: any = { instanceManager: { getByCategory: () => [{ getState: () => state() }] }, router: { execute: vi.fn() } };
-        expect(await maybeAutoLaunchOneQueueSession(components, meshId, { id: meshId, policy: {}, nodes: [] })).toBe(true);
+        expect(await maybeAutoLaunchOneQueueSession(components, meshId, { id: meshId, policy: {}, nodes: [{ id: 'node' }] })).toBe(true);
         expect(claim).toHaveBeenCalledWith(components, meshId, 'node', 'worker', 'codex-cli', undefined, undefined, 'auto_launch_reuse');
         expect(components.router.execute).not.toHaveBeenCalled();
     });
     it('adopts a fresh remote idle session through the same claim authority', () => {
         remotes.push({ nodeId: 'remote-node', sessionId: 'remote-worker', providerType: 'kimi' });
-        expect(reuseIdleTaskSession({ instanceManager: { getByCategory: () => [] } } as any, meshId, { targetNodeId: 'remote-node' } as any, claim)).toBe('claimed');
+        expect(reuseIdleTaskSession({ instanceManager: { getByCategory: () => [] } } as any, meshId, { targetNodeId: 'remote-node' } as any, [{ id: 'remote-node' }], claim)).toBe('claimed');
         expect(claim.mock.calls[0].slice(2, 5)).toEqual(['remote-node', 'remote-worker', 'kimi']);
     });
     it('does not reuse protected/generating/other-node sessions', () => {
         const components: any = { instanceManager: { getByCategory: () => [{ getState: () => state({ status: 'generating', activeChat: { status: 'waiting_input' } }) }] } };
-        expect(reuseIdleTaskSession(components, meshId, {} as any, claim)).toBe('none');
+        expect(reuseIdleTaskSession(components, meshId, {} as any, [{ id: 'node' }], claim)).toBe('none');
         remotes.push({ nodeId: 'wrong-node', sessionId: 'remote-worker', providerType: 'kimi' });
-        expect(reuseIdleTaskSession(components, meshId, { targetNodeId: 'node' } as any, claim)).toBe('none');
+        expect(reuseIdleTaskSession(components, meshId, { targetNodeId: 'node' } as any, [{ id: 'node' }], claim)).toBe('none');
         expect(claim).not.toHaveBeenCalled();
     });
 });

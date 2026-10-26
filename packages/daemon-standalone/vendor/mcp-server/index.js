@@ -80747,7 +80747,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_config();
       }
     });
-    function reuseIdleTaskSession(components, meshId, task, claim) {
+    function reuseIdleTaskSession(components, meshId, task, nodes, claim) {
       const candidates = [];
       for (const inst of components.instanceManager?.getByCategory("cli") ?? []) {
         const s2 = inst.getState();
@@ -80761,6 +80761,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       for (const c of candidates) {
         if (!c.nodeId || !c.sessionId || !c.provider) continue;
+        if (!nodes.some((node) => meshNodeIdMatches7(node, c.nodeId))) continue;
         if (task.targetNodeId && !meshNodeIdMatches7({ nodeId: c.nodeId }, task.targetNodeId)) continue;
         if (task.targetSessionId && !sessionIdsEquivalent(c.sessionId, task.targetSessionId)) continue;
         if (sessionIsStopping(MeshRuntimeStore.getInstance().db, c.sessionId)) continue;
@@ -82090,7 +82091,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             );
             continue;
           }
-          const reuse = reuseIdleTaskSession(components, meshId, task, tryAssignQueueTask);
+          const reuse = reuseIdleTaskSession(components, meshId, task, mesh.nodes ?? [], tryAssignQueueTask);
           if (reuse === "claimed") {
             madeProgress = true;
             continue;

@@ -1164,7 +1164,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 );
                 continue;
             }
-            const reuse = reuseIdleTaskSession(components, meshId, task, tryAssignQueueTask);
+            const reuse = reuseIdleTaskSession(components, meshId, task, mesh.nodes ?? [], tryAssignQueueTask);
             if (reuse === 'claimed') { madeProgress = true; continue; }
             if (task.targetSessionId) {
                 // Owner targets are hard constraints, including legacy pins. An unavailable

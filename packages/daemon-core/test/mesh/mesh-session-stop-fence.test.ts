@@ -54,7 +54,7 @@ describe('review finding 1: stop/claim exclusion', () => {
             expect(f.store.findQueueEntryById(f.meshId, f.taskId)?.status).toBe('pending');
             const claim = vi.fn(() => true);
             expect(reuseIdleTaskSession({ instanceManager: { getByCategory: () => [{ getState: () => f.state }] } } as any,
-                f.meshId, f.task, claim)).toBe('none');
+                f.meshId, f.task, [{ id: f.nodeId }], claim)).toBe('none');
             expect(claim).not.toHaveBeenCalled();
         } finally { finish(); await stopping; }
     });
