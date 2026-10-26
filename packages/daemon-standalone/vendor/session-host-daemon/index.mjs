@@ -632,7 +632,7 @@ var HostUpgradeLease = class {
 // src/storage.ts
 import * as fs4 from "fs";
 import * as path3 from "path";
-import { resolveInstanceConfigDir } from "@adhdev/session-host-core";
+import { resolveInstanceConfigDir, assertTestStorageIsolated } from "@adhdev/session-host-core";
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
@@ -640,6 +640,7 @@ var SessionHostStorage = class {
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
     this.rootDir = options.rootDir || path3.join(resolveInstanceConfigDir(process.env), "session-host", appName);
+    assertTestStorageIsolated(this.rootDir);
     this.runtimesDir = path3.join(this.rootDir, "runtimes");
     this.tombstonesDir = path3.join(this.rootDir, "tombstones");
   }

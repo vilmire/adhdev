@@ -279,14 +279,14 @@ describe('launch_assistant', () => {
         } finally { finish?.(); await vi.advanceTimersByTimeAsync(1); vi.useRealTimers(); }
     });
 
-    it('lets a trusted owner replace unverifiable evidence whose PID belongs to another process', async () => {
+    it('refuses trusted owner replacement when another assistant cannot be proven dead', async () => {
         const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
         mkdirSync(runtimes, { recursive: true });
         writeFileSync(join(runtimes, 'stale.json'), JSON.stringify({ record: {
             sessionId: 'stale', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', osPid: process.pid, meta: { assistant: true } }, snapshot: {} }));
         writeFileSync(join(dir, 'foreign-session-host.pid'), String(process.pid));
         const args = markTrustedOwnerIngress({ replace: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
-        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: true, launched: true });
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: false, code: 'assistant_identity_conflict', error: expect.stringContaining('namespace foreign') });
     });
 
     it.each([true, false])('never lets trusted owner force replace a verified live foreign assistant (role metadata: %s)', async marked => {

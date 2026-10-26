@@ -1,3 +1,4 @@
+import './setup-env.js';
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SESSION_HOST_SUPPORTED_REQUEST_TYPES } from '@adhdev/session-host-core'

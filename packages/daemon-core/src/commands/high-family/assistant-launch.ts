@@ -73,6 +73,7 @@ function str(v: unknown): string {
 }
 
 function fail(code: string, error: string = code, extra: Record<string, unknown> = {}): CommandRouterResult {
+    LOG.warn('Assistant', `${code}: ${error}`);
     return { success: false, code, error, ...extra };
 }
 
@@ -274,7 +275,8 @@ const launchAssistantOnce = async (
     // Reload before every binding mutation: an older generation (or another
     // host) must never replace or clear the session a newer launch owns.
     const mayBind = () => isCurrent() && (!registry.reload()?.sessionId || registry.read()?.sessionId === sessionId);
-    if (fence.aborted || !mayBind()) {
+    const bindingConflict = !mayBind();
+    if (fence.aborted || bindingConflict) {
         if (launched?.success && sessionId) {
             const retainBinding = () => {
                 if (mayBind()) registry.bindSession({ sessionId, cliType, workspace,
@@ -303,13 +305,14 @@ const launchAssistantOnce = async (
                 failures.set(sessionId, { fence, cleanup });
             }
         }
+        if (bindingConflict && !fence.aborted) return fail('assistant_identity_conflict', `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? 'empty'}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? 'unknown'}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
         return fail(fence.cleanupPending ? 'assistant_launch_cleanup_pending' : 'assistant_launch_timeout');
     }
     if (!launched?.success || !sessionId) {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }
 
-    if (!mayBind()) return fail('assistant_identity_conflict');
+    if (!mayBind()) return fail('assistant_identity_conflict', `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? 'empty'}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? 'unknown'}, current generation ${isCurrent()}`);
     const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
     const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
     assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);

@@ -65,7 +65,10 @@ async function verifiedHostAssistants(configDir: string, namespace: string, ipcK
 export async function persistedAssistantRuntimeIds(configDir: string, options: {
     /** Already derived at boot; resolving it here would perform sync realpath. */
     ipcKey: string;
+    /** Compatibility flag: uncertainty never authorizes a second assistant. */
     allowUnverified?: boolean;
+    currentNamespace?: string;
+    onConflictEvidence?: (evidence: { namespace: string; sessionId: string; reason: string }) => void;
     onUnverified?: (namespace: string) => void;
     boundSessionId?: string;
     boundNamespace?: string;
@@ -78,13 +81,20 @@ export async function persistedAssistantRuntimeIds(configDir: string, options: {
     if (options.boundNamespace && !namespaces.includes(options.boundNamespace)) namespaces.push(options.boundNamespace);
     for (const namespace of namespaces) {
         if (!/^[\w.-]+$/.test(namespace) || namespace === '.' || namespace === '..') continue;
+        if (namespace !== options.boundNamespace && namespace !== options.currentNamespace) {
+            if (/^adhdev-(?:test(?:-|$)|input-ann-)/.test(namespace)) continue;
+            // Reserved global names belong to different install tracks. Custom
+            // namespaces within this config still need positive death proof.
+            if (['adhdev', 'adhdev-preview'].includes(options.currentNamespace ?? '')
+                && ['adhdev', 'adhdev-preview'].includes(namespace)) continue;
+        }
         const runtimes = join(hostRoot, namespace, 'runtimes');
         let files: string[];
         try { files = await readdir(runtimes); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') files = []; else throw error; }
         // The durable binding is also positive role provenance, including legacy
         // runtimes whose metadata predates assistant:true or whose file rotated.
-        const candidates = new Set<string>(options.boundSessionId ? [options.boundSessionId] : []);
+        const candidates = new Set<string>(options.boundSessionId && namespace === options.boundNamespace ? [options.boundSessionId] : []);
         for (const file of files.filter(f => /^[\w-]+\.json$/.test(f))) {
             let r: Record<string, any>;
             try { r = await readPersistedRuntimeRecord(join(runtimes, file)); }
@@ -100,9 +110,17 @@ export async function persistedAssistantRuntimeIds(configDir: string, options: {
         // irrespective of the number of assistant records or snapshots.
         if (!candidates.size) continue;
         const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
-        if (verified) for (const id of verified) ids.add(id);
-        else if (!options.allowUnverified) for (const id of candidates) ids.add(id);
-        else options.onUnverified?.(namespace);
+        if (verified) for (const id of verified) {
+            ids.add(id);
+            options.onConflictEvidence?.({ namespace, sessionId: id, reason: 'host census reports a live assistant' });
+        }
+        else {
+            for (const id of candidates) {
+                ids.add(id);
+                options.onConflictEvidence?.({ namespace, sessionId: id, reason: 'host endpoint or identity unverifiable; cannot prove the writer dead' });
+            }
+            options.onUnverified?.(namespace);
+        }
     }
     return ids;
 }

@@ -1,3 +1,4 @@
+import { assertTestStorageIsolated } from '@adhdev/session-host-core';
 /**
  * The mesh runtime directory (`<configDir>/mesh-ledger/`) — home of
  * `mesh-runtime.db`, the turn-ledger migration exports and a few small JSON
@@ -13,6 +14,7 @@ const LEDGER_DIR_NAME = 'mesh-ledger';
 
 export function getLedgerDir(): string {
     const dir = join(getConfigDir(), LEDGER_DIR_NAME);
+    assertTestStorageIsolated(dir);
     if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
     }

@@ -2874,6 +2874,7 @@ var require_dist = __commonJS({
       SessionHostRegistry: () => SessionHostRegistry,
       SessionRingBuffer: () => SessionRingBuffer,
       applyTerminalColorEnv: () => applyTerminalColorEnv,
+      assertTestStorageIsolated: () => assertTestStorageIsolated,
       buildRuntimeDisplayName: () => buildRuntimeDisplayName,
       buildRuntimeKey: () => buildRuntimeKey,
       canonicalizeInstancePath: () => canonicalizeInstancePath,
@@ -4035,9 +4036,23 @@ var require_dist = __commonJS({
     var os32 = __toESM2(require("os"));
     var path32 = __toESM2(require("path"));
     var DEFAULT_CONFIG_DIR_NAME = ".adhdev";
+    function assertTestStorageIsolated(destination) {
+      const env2 = process.env;
+      if (!env2.VITEST && env2.NODE_ENV !== "test" && !env2.NODE_TEST_CONTEXT && !process.execArgv.some((arg) => arg === "--test" || arg.startsWith("--test="))) return;
+      const target = canonicalizeInstancePath(destination);
+      const home = os32.userInfo().homedir;
+      for (const track of [".adhdev", ".adhdev-preview"]) {
+        const live = canonicalizeInstancePath(path32.join(home, track));
+        if (target === live || target.startsWith(live + path32.sep)) {
+          throw new Error("LIVE runtime storage is forbidden in a test process; pin ADHDEV_CONFIG_DIR or storageRootDir to a temporary directory");
+        }
+      }
+    }
     function resolveInstanceConfigDir(env2 = process.env, homeDir = os32.homedir()) {
       const override = typeof env2.ADHDEV_CONFIG_DIR === "string" ? env2.ADHDEV_CONFIG_DIR.trim() : "";
-      return override || path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+      const resolved = override || path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+      if (env2 === process.env) assertTestStorageIsolated(resolved);
+      return resolved;
     }
     function realpathLongestExistingPrefix(resolved) {
       let current = resolved;
@@ -42196,17 +42211,20 @@ ${error.message || ""}`;
     });
     function getLedgerDir() {
       const dir = (0, import_path9.join)(getConfigDir2(), LEDGER_DIR_NAME);
+      (0, import_session_host_core4.assertTestStorageIsolated)(dir);
       if (!(0, import_fs9.existsSync)(dir)) {
         (0, import_fs9.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
       return dir;
     }
+    var import_session_host_core4;
     var import_fs9;
     var import_path9;
     var LEDGER_DIR_NAME;
     var init_mesh_ledger_paths = __esm2({
       "src/mesh/mesh-ledger-paths.ts"() {
         "use strict";
+        import_session_host_core4 = require_dist();
         import_fs9 = require("fs");
         import_path9 = require("path");
         init_config();
@@ -66135,11 +66153,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_turn_presentation();
       }
     });
-    var import_session_host_core4;
+    var import_session_host_core5;
     var init_runtime_surface = __esm2({
       "src/session-host/runtime-surface.ts"() {
         "use strict";
-        import_session_host_core4 = require_dist();
+        import_session_host_core5 = require_dist();
       }
     });
     function readCachedInlineMeshActiveSessions(node) {
@@ -66289,7 +66307,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         providerApproval,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
         lifecycle: readStringValue(record7?.lifecycle),
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record7),
+        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record7),
         recoveryState: readStringValue(meta2.runtimeRecoveryState) ?? null,
         workspace: readStringValue(record7?.workspace) ?? null,
         title: readStringValue(record7?.displayName, record7?.workspaceLabel) ?? null,
@@ -86417,8 +86435,8 @@ ${closeSentinel}`;
         try {
           child = ptyLib.spawn(command, args, {
             name: "xterm-256color",
-            cols: import_session_host_core5.DEFAULT_SESSION_HOST_COLS,
-            rows: import_session_host_core5.DEFAULT_SESSION_HOST_ROWS,
+            cols: import_session_host_core6.DEFAULT_SESSION_HOST_COLS,
+            rows: import_session_host_core6.DEFAULT_SESSION_HOST_ROWS,
             cwd: options.cwd ?? process.cwd(),
             env: env2
           });
@@ -86453,7 +86471,7 @@ ${closeSentinel}`;
     }
     var import_node_fs11;
     var os20;
-    var import_session_host_core5;
+    var import_session_host_core6;
     var import_node_path9;
     var DEFAULT_SERVER_NAME;
     var DEFAULT_ADHDEV_MCP_COMMAND;
@@ -86463,7 +86481,7 @@ ${closeSentinel}`;
         "use strict";
         import_node_fs11 = require("fs");
         os20 = __toESM2(require("os"));
-        import_session_host_core5 = require_dist();
+        import_session_host_core6 = require_dist();
         import_node_path9 = require("path");
         init_logger();
         init_track_identity();
@@ -88089,21 +88107,21 @@ ${closeSentinel}`;
     function getTerminalBackendRuntimeStatus() {
       return { backend: "ghostty-vt" };
     }
-    var import_session_host_core6;
+    var import_session_host_core7;
     var DEFAULT_SCROLLBACK;
     var TerminalScreen;
     var init_terminal_screen = __esm2({
       "src/cli-adapters/terminal-screen.ts"() {
         "use strict";
         init_ghostty_vt_backend();
-        import_session_host_core6 = require_dist();
+        import_session_host_core7 = require_dist();
         DEFAULT_SCROLLBACK = 2e3;
         TerminalScreen = class {
           backendKind = "ghostty-vt";
           rows;
           cols;
           terminal;
-          constructor(rows = import_session_host_core6.DEFAULT_SESSION_HOST_ROWS, cols = import_session_host_core6.DEFAULT_SESSION_HOST_COLS) {
+          constructor(rows = import_session_host_core7.DEFAULT_SESSION_HOST_ROWS, cols = import_session_host_core7.DEFAULT_SESSION_HOST_COLS) {
             this.rows = Math.max(1, rows | 0);
             this.cols = Math.max(1, cols | 0);
             this.terminal = this.createBackend();
@@ -103869,7 +103887,7 @@ ${asText(streams.stderr)}
       if (ctx.sessions === void 0) {
         return skip("live_session", "Session inventory unavailable; refusing to plan removal without a liveness check (fail-closed).");
       }
-      const liveSession = ctx.sessions.find((record7) => sessionMatchesNode(record7, node, nodeId) && (0, import_session_host_core4.getSessionHostSurfaceKind)(record7) === "live_runtime");
+      const liveSession = ctx.sessions.find((record7) => sessionMatchesNode(record7, node, nodeId) && (0, import_session_host_core5.getSessionHostSurfaceKind)(record7) === "live_runtime");
       if (liveSession) {
         return skip("live_session", "A live/starting/generating/waiting/idle retained session is still attached to this node.");
       }
@@ -105312,8 +105330,8 @@ ${asText(streams.stderr)}
       const rec5 = runtime2;
       const lifecycle = readText2(rec5.lifecycle).toLowerCase();
       if (TERMINAL_RUNTIME_LIFECYCLES.has(lifecycle)) return false;
-      if ((0, import_session_host_core10.isTerminalRecord)(rec5)) return false;
-      return (0, import_session_host_core10.isSessionHostLiveRuntime)(rec5);
+      if ((0, import_session_host_core11.isTerminalRecord)(rec5)) return false;
+      return (0, import_session_host_core11.isSessionHostLiveRuntime)(rec5);
     }
     function isConfirmedTerminalCoordinator(candidate, sessionRegistry) {
       if (!candidate || typeof candidate !== "object") return true;
@@ -105400,7 +105418,7 @@ ${asText(streams.stderr)}
         return { ok: true, sessionId, launched: true, managedByAssistant: true };
       });
     }
-    var import_session_host_core10;
+    var import_session_host_core11;
     var ASSISTANT_COORDINATOR_EXTRA_PROMPT;
     var TERMINAL_STATUSES2;
     var TERMINAL_RAW_ADAPTER_STATUSES;
@@ -105409,7 +105427,7 @@ ${asText(streams.stderr)}
     var init_coordinator_lifecycle = __esm2({
       "src/assistant/coordinator-lifecycle.ts"() {
         "use strict";
-        import_session_host_core10 = require_dist();
+        import_session_host_core11 = require_dist();
         ASSISTANT_COORDINATOR_EXTRA_PROMPT = "";
         TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
         TERMINAL_RAW_ADAPTER_STATUSES = /* @__PURE__ */ new Set(["exited", "stopped", "terminated", "error"]);
@@ -105822,7 +105840,7 @@ ${asText(streams.stderr)}
     }
     function selectExpiredSessionHostRuntimes(files, now, maxAgeMs = SESSION_HOST_RUNTIME_MAX_AGE_MS) {
       return files.filter((f) => {
-        if ((0, import_session_host_core4.isSessionHostLiveRuntime)(f.record ?? void 0)) return false;
+        if ((0, import_session_host_core5.isSessionHostLiveRuntime)(f.record ?? void 0)) return false;
         return now - f.mtimeMs > maxAgeMs;
       });
     }
@@ -119125,7 +119143,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os38;
-    var import_session_host_core12;
+    var import_session_host_core13;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -119135,7 +119153,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os38 = __toESM2(require("os"));
-        import_session_host_core12 = require_dist();
+        import_session_host_core13 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -119183,7 +119201,7 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core12.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core13.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -119727,8 +119745,8 @@ ${tail}` : ""
       getRecentLogs: () => getRecentLogs,
       getSavedProviderSessions: () => getSavedProviderSessions,
       getSeqscribeDbPath: () => getSeqscribeDbPath,
-      getSessionHostRecoveryLabel: () => import_session_host_core4.getSessionHostRecoveryLabel,
-      getSessionHostSurfaceKind: () => import_session_host_core4.getSessionHostSurfaceKind,
+      getSessionHostRecoveryLabel: () => import_session_host_core5.getSessionHostRecoveryLabel,
+      getSessionHostSurfaceKind: () => import_session_host_core5.getSessionHostSurfaceKind,
       getSessionRecoveryContext: () => getSessionRecoveryContext,
       getTrackIdentity: () => getTrackIdentity,
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
@@ -119788,8 +119806,8 @@ ${tail}` : ""
       isResourceExhaustionError: () => isResourceExhaustionError,
       isRestartBlockingPresentation: () => isRestartBlockingPresentation,
       isSecretLikeEnvKey: () => isSecretLikeEnvKey,
-      isSessionHostLiveRuntime: () => import_session_host_core4.isSessionHostLiveRuntime,
-      isSessionHostRecoverySnapshot: () => import_session_host_core4.isSessionHostRecoverySnapshot,
+      isSessionHostLiveRuntime: () => import_session_host_core5.isSessionHostLiveRuntime,
+      isSessionHostRecoverySnapshot: () => import_session_host_core5.isSessionHostRecoverySnapshot,
       isSessionHostUnavailableTransientError: () => isSessionHostUnavailableTransientError,
       isSessionLaunchedBy: () => isSessionLaunchedBy,
       isSetupComplete: () => isSetupComplete,
@@ -119915,8 +119933,8 @@ ${tail}` : ""
       parseSessionLaunchRecord: () => parseSessionLaunchRecord,
       parseWorktreeListOutput: () => parseWorktreeListOutput,
       partitionChannelEntries: () => partitionChannelEntries,
-      partitionSessionHostDiagnosticsSessions: () => import_session_host_core4.partitionSessionHostDiagnosticsSessions,
-      partitionSessionHostRecords: () => import_session_host_core4.partitionSessionHostRecords,
+      partitionSessionHostDiagnosticsSessions: () => import_session_host_core5.partitionSessionHostDiagnosticsSessions,
+      partitionSessionHostRecords: () => import_session_host_core5.partitionSessionHostRecords,
       performMeshHandshake: () => performMeshHandshake,
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
@@ -125499,7 +125517,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         log?.(`Failed to remove inactive prefix ${target}: ${error?.message || String(error)}`);
       }
     }
-    var import_session_host_core7 = require_dist();
+    var import_session_host_core8 = require_dist();
     init_config();
     init_logger();
     init_track_identity();
@@ -126943,7 +126961,7 @@ ${marker2}`,
         const payload = JSON.parse(raw);
         targetVersion = typeof payload?.targetVersion === "string" ? payload.targetVersion : null;
         const envConfigDir = (process.env.ADHDEV_CONFIG_DIR || "").trim();
-        if (payload.configDir && envConfigDir && (0, import_session_host_core7.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core7.canonicalizeInstancePath)(envConfigDir)) {
+        if (payload.configDir && envConfigDir && (0, import_session_host_core8.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core8.canonicalizeInstancePath)(envConfigDir)) {
           throw new Error(
             `Upgrade helper instance conflict: payload configDir "${payload.configDir}" vs ADHDEV_CONFIG_DIR "${envConfigDir}" \u2014 refusing to run across instances`
           );
@@ -127578,7 +127596,7 @@ ${marker2}`,
     var path49 = __toESM2(require("path"));
     init_config();
     var import_node_crypto12 = require("crypto");
-    var import_session_host_core8 = require_dist();
+    var import_session_host_core9 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
@@ -127647,7 +127665,7 @@ ${marker2}`,
         if (!registry || !host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
         const endpoint = await host.deps.verifiedRetainedEndpoint();
         if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-        const client = new import_session_host_core8.SessionHostClient({ endpoint });
+        const client = new import_session_host_core9.SessionHostClient({ endpoint });
         try {
           await client.connect();
           const list2 = async () => {
@@ -127761,7 +127779,7 @@ ${marker2}`,
       if (!host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core8.SessionHostClient({ endpoint });
+      const client = new import_session_host_core9.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -127781,7 +127799,7 @@ ${marker2}`,
       if (!state2 || !p || p.epoch !== state2.epoch || p.bootNonce !== MAINTENANCE_BOOT_NONCE || p.receipt !== receipt || !p.observation || !host.deps.verifiedRetainedEndpoint) throw Error("maintenance_prepared_observation_lost");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core8.SessionHostClient({ endpoint });
+      const client = new import_session_host_core9.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -149843,7 +149861,7 @@ ${output}` : "";
       return {
         runtimeKey: typeof record7.runtimeKey === "string" ? record7.runtimeKey : void 0,
         lifecycle: typeof record7.lifecycle === "string" ? record7.lifecycle : void 0,
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record7),
+        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record7),
         attachedClientCount: Array.isArray(record7.attachedClients) ? record7.attachedClients.length : void 0,
         hasWriteOwner: !!record7.writeOwner,
         writeOwnerClientId: typeof record7.writeOwner?.clientId === "string" ? record7.writeOwner.clientId : void 0
@@ -149851,7 +149869,7 @@ ${output}` : "";
     }
     function summarizeSessionHostRecords(result) {
       const records = Array.isArray(result) ? result : [];
-      const groups = (0, import_session_host_core4.partitionSessionHostRecords)(records);
+      const groups = (0, import_session_host_core5.partitionSessionHostRecords)(records);
       return {
         sessionCount: records.length,
         liveRuntimeCount: groups.liveRuntimes.length,
@@ -154302,7 +154320,7 @@ ${output}` : "";
     var os35 = __toESM2(require("os"));
     var path85 = __toESM2(require("path"));
     init_logger();
-    var import_session_host_core9 = require_dist();
+    var import_session_host_core10 = require_dist();
     init_provider_cli_shared();
     function isFlagToken(arg) {
       return typeof arg === "string" && arg.startsWith("-") && arg !== "-" && arg !== "--";
@@ -154414,8 +154432,8 @@ ${output}` : "";
         isWin,
         useShell,
         ptyOptions: {
-          cols: geometry?.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS,
-          rows: geometry?.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS,
+          cols: geometry?.cols ?? import_session_host_core10.DEFAULT_SESSION_HOST_COLS,
+          rows: geometry?.rows ?? import_session_host_core10.DEFAULT_SESSION_HOST_ROWS,
           cwd: workingDir,
           env: env2,
           envOverrides: buildCliSpawnEnv({}, { ...baseEnv || {}, ...extraEnv || {}, TERMINAL_CWD: workingDir })
@@ -157747,7 +157765,7 @@ ${output}` : "";
             };
           }
           const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
-          const liveMeshSessions = (0, import_session_host_core4.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
+          const liveMeshSessions = (0, import_session_host_core5.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
           const workspace = readLiveMeshNodeWorkspace({
             meshId,
             nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || ""),
@@ -158533,7 +158551,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const asyncRefineLedgerEntries = readRefineJobRecords2(meshId);
           const ledgerSummary = getLocalRecordSummary2(meshId);
           const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
-          const liveMeshSessions = (0, import_session_host_core4.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
+          const liveMeshSessions = (0, import_session_host_core5.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
           const localMachineId = getMachineId() || "";
           const localMachineNickname = (() => {
             const nick = getMachineNickname();
@@ -161689,7 +161707,7 @@ ${ptyResult.output.slice(-2e3)}`);
     var import_node_path25 = require("path");
     init_dist();
     init_owned_lock();
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core12 = require_dist();
     var import_node_fs23 = require("fs");
     async function readPersistedRuntimeRecord(file) {
       const stream = (0, import_node_fs23.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
@@ -161738,8 +161756,8 @@ ${ptyResult.output.slice(-2e3)}`);
       return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
     }
     async function verifiedHostAssistants(configDir, namespace, ipcKey, boundSessionId) {
-      const endpoint = (0, import_session_host_core11.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
-      const client = new import_session_host_core11.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+      const endpoint = (0, import_session_host_core12.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
+      const client = new import_session_host_core12.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
       let timer;
       try {
         const response = await Promise.race([
@@ -161779,6 +161797,10 @@ ${ptyResult.output.slice(-2e3)}`);
       if (options.boundNamespace && !namespaces.includes(options.boundNamespace)) namespaces.push(options.boundNamespace);
       for (const namespace of namespaces) {
         if (!/^[\w.-]+$/.test(namespace) || namespace === "." || namespace === "..") continue;
+        if (namespace !== options.boundNamespace && namespace !== options.currentNamespace) {
+          if (/^adhdev-(?:test(?:-|$)|input-ann-)/.test(namespace)) continue;
+          if (["adhdev", "adhdev-preview"].includes(options.currentNamespace ?? "") && ["adhdev", "adhdev-preview"].includes(namespace)) continue;
+        }
         const runtimes = (0, import_node_path25.join)(hostRoot, namespace, "runtimes");
         let files;
         try {
@@ -161787,7 +161809,7 @@ ${ptyResult.output.slice(-2e3)}`);
           if (error.code === "ENOENT") files = [];
           else throw error;
         }
-        const candidates = new Set(options.boundSessionId ? [options.boundSessionId] : []);
+        const candidates = new Set(options.boundSessionId && namespace === options.boundNamespace ? [options.boundSessionId] : []);
         for (const file of files.filter((f) => /^[\w-]+\.json$/.test(f))) {
           let r;
           try {
@@ -161808,14 +161830,25 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         if (!candidates.size) continue;
         const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
-        if (verified) for (const id4 of verified) ids.add(id4);
-        else if (!options.allowUnverified) for (const id4 of candidates) ids.add(id4);
-        else options.onUnverified?.(namespace);
+        if (verified) for (const id4 of verified) {
+          ids.add(id4);
+          options.onConflictEvidence?.({ namespace, sessionId: id4, reason: "host census reports a live assistant" });
+        }
+        else {
+          for (const id4 of candidates) {
+            ids.add(id4);
+            options.onConflictEvidence?.({ namespace, sessionId: id4, reason: "host endpoint or identity unverifiable; cannot prove the writer dead" });
+          }
+          options.onUnverified?.(namespace);
+        }
       }
       return ids;
     }
     init_assistant_registry();
-    var refused2 = (code, error = code) => ({ success: false, code, error });
+    var refused2 = (code, error = code) => {
+      LOG.warn("Assistant", `${code}: ${error}`);
+      return { success: false, code, error };
+    };
     async function admitAssistantLaunch(ctx, args, isAborted) {
       const forceRequested = args?.force === true || args?.replace === true;
       if (forceRequested && !isTrustedOwnerIngress(args)) return refused2("assistant_owner_required");
@@ -161854,16 +161887,21 @@ ${ptyResult.output.slice(-2e3)}`);
         let entry = registry.reload();
         const candidate = entry?.sessionId && entry.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner) ? void 0 : assistantRestoreCandidate(entry, records);
         const attached = candidate ? ctx.deps.instanceManager.getInstance(candidate.runtimeId) : entry?.sessionId ? ctx.deps.instanceManager.getInstance(entry.sessionId) : void 0;
+        const conflicts = [];
         const persisted = attached ? /* @__PURE__ */ new Set() : await persistedAssistantRuntimeIds(getConfigDir2(), {
           ipcKey: getProcessInstanceContext({ standalone: owner.managedBy === "adhdev-standalone" }).ipcKey,
-          allowUnverified: forceRequested,
+          currentNamespace: owner.namespace,
+          onConflictEvidence: (evidence) => conflicts.push(`${evidence.sessionId} in namespace ${evidence.namespace}: ${evidence.reason}`),
           boundSessionId: entry?.sessionId ?? void 0,
           boundNamespace: entry?.hostOwner?.namespace,
-          onUnverified: (namespace) => LOG.warn("Assistant", `owner_force bypassed unverified assistant evidence in ${namespace}`)
+          onUnverified: (namespace) => LOG.warn("Assistant", `Unverifiable assistant evidence in namespace ${namespace}; duplicate launch remains blocked`)
         });
         if (isAborted?.()) return refused2("assistant_launch_timeout");
         if (forceRequested && !isTrustedOwnerIngress(args)) return refused2("assistant_owner_required");
-        if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2("assistant_identity_conflict");
+        if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2(
+          "assistant_identity_conflict",
+          conflicts.join("; ") || `Conflicting persisted assistant records: ${[...persisted].join(", ")}; namespace ${owner.namespace}`
+        );
         if (candidate) {
           if (candidate.lifecycle === "starting" || candidate.lifecycle === "stopping") return refused2("assistant_restore_pending");
           if (!shouldRestoreHostedRuntime(candidate, owner.managedBy)) return refused2("assistant_owned_by_other_host");
@@ -161878,7 +161916,7 @@ ${ptyResult.output.slice(-2e3)}`);
             instance.updateSettings({ assistant: true, ...candidate.autoApproveMode ? { autoApproveMode: candidate.autoApproveMode } : { autoApprove: false, autoApproveMode: void 0 } });
           }
           const latest = registry.reload();
-          if (latest?.sessionId && latest.sessionId !== candidate.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) return refused2("assistant_identity_conflict");
+          if (latest?.sessionId && latest.sessionId !== candidate.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) return refused2("assistant_identity_conflict", `Binding changed during restore: candidate ${candidate.runtimeId}, registry ${latest?.sessionId ?? "empty"}, namespace ${owner.namespace}`);
           registry.bindSession({
             sessionId: candidate.runtimeId,
             cliType: candidate.cliType,
@@ -161907,7 +161945,7 @@ ${ptyResult.output.slice(-2e3)}`);
         return void 0;
       } catch (error) {
         const message = error.message;
-        return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", message);
+        return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", `${message}; namespace ${owner.namespace}`);
       }
     }
     var import_crypto39 = require("crypto");
@@ -162436,6 +162474,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return typeof v === "string" ? v.trim() : "";
     }
     function fail6(code, error = code, extra = {}) {
+      LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
     async function promptProjects(ctx) {
@@ -162608,7 +162647,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       });
       const isCurrent = () => assistantGenerations.get(registry) === fence;
       const mayBind = () => isCurrent() && (!registry.reload()?.sessionId || registry.read()?.sessionId === sessionId);
-      if (fence.aborted || !mayBind()) {
+      const bindingConflict = !mayBind();
+      if (fence.aborted || bindingConflict) {
         if (launched?.success && sessionId) {
           const retainBinding = () => {
             if (mayBind()) registry.bindSession({
@@ -162648,12 +162688,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
+        if (bindingConflict && !fence.aborted) return fail6("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
         return fail6(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
         return fail6(str16(launched?.code) || "assistant_launch_failed", str16(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail6("assistant_identity_conflict");
+      if (!mayBind()) return fail6("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -164035,7 +164076,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!Array.isArray(sessions)) return { state: "unknown", error: "session inventory was not a list" };
       for (const record7 of sessions) {
         if (!sessionMatchesMeshNode(self, record7, node, nodeId)) continue;
-        if ((0, import_session_host_core4.getSessionHostSurfaceKind)(record7) !== "live_runtime") continue;
+        if ((0, import_session_host_core5.getSessionHostSurfaceKind)(record7) !== "live_runtime") continue;
         return { state: "occupied", sessionId: String(record7?.sessionId || "") };
       }
       return { state: "idle" };
@@ -164648,13 +164689,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         inactive_record: 0
       };
       for (const record7 of matched) {
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record7);
+        const surfaceKind = (0, import_session_host_core5.getSessionHostSurfaceKind)(record7);
         matchedBySurfaceKind[surfaceKind] += 1;
       }
       for (const record7 of matched) {
         const sessionId = String(record7.sessionId);
         const completed = self.isCompletedHostedSession(record7);
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record7);
+        const surfaceKind = (0, import_session_host_core5.getSessionHostSurfaceKind)(record7);
         const liveRuntime = surfaceKind === "live_runtime";
         const coordinatorSession = readStringValue(record7?.meta?.meshCoordinatorFor) === args.meshId;
         const recordNodeId = readStringValue(record7?.meta?.meshNodeId);
@@ -169772,7 +169813,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os43 = __toESM2(require("os"));
     var path97 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core14 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -169793,8 +169834,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core13.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core13.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core14.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core14.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -170529,7 +170570,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core15 = require_dist();
     var fs101 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
     var fs97 = __toESM2(require("fs"));
@@ -170946,8 +170987,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core14.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core14.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core15.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core15.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -188184,7 +188225,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core15 = require_dist();
+    var import_session_host_core16 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record7) {
@@ -188197,7 +188238,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core15.SessionHostClient({
+        this.client = new import_session_host_core16.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -188755,7 +188796,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto41 = require("crypto");
-    var import_session_host_core16 = require_dist();
+    var import_session_host_core17 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -188853,7 +188894,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto41.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core16.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core17.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -188948,7 +188989,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     var fs113 = __toESM2(require("fs"));
-    var import_session_host_core17 = require_dist();
+    var import_session_host_core18 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -189106,7 +189147,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function probeHost(endpoint, requiredRequestTypes, timeoutMs, identity3, invocation) {
-      const client = new import_session_host_core17.SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
+      const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
       let requestTimeoutMs = timeoutMs;
@@ -189149,7 +189190,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core17.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core18.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const key5 = endpointKey(endpoint);
       const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
@@ -189227,7 +189268,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await options.beforeSpawnHost?.(endpoint);
         if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
         assertStartAdmission();
-        import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
+        import_session_host_core18.SessionHostClient.disconnectClients?.(endpoint);
         assertStartAdmission();
         options.spawnHost();
         probeEvidence2.delete(key5);
@@ -189254,7 +189295,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function listHostedCliRuntimes(endpoint, options) {
-      const client = new import_session_host_core17.SessionHostClient({ endpoint, registerAsShared: false, requestTimeoutMs: 5e3 });
+      const client = new import_session_host_core18.SessionHostClient({ endpoint, registerAsShared: false, requestTimeoutMs: 5e3 });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -189316,7 +189357,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs114 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
     var path107 = __toESM2(require("path"));
-    var import_session_host_core18 = require_dist();
+    var import_session_host_core19 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -189326,9 +189367,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => false);
       const canSignalPid = (pid) => pid > 0 && pid !== process.pid && isManagedPid(pid) && isManagedSessionHostCommandLine(getProcessCommandLine(pid), instance().configDir);
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core18.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core19.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core18.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core19.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         if (typeof baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE === "string" && baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim()) {
@@ -189665,7 +189706,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const endpoint = getEndpoint();
         const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
         const probeDeadline = Date.now() + probeTimeoutMs;
-        const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
+        const client = new import_session_host_core19.SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported;
         let connected = false;
         let requestTimeoutMs = probeTimeoutMs;
@@ -189724,7 +189765,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core18.SessionHostClient({ endpoint, registerAsShared: false });
+          const client = new import_session_host_core19.SessionHostClient({ endpoint, registerAsShared: false });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -197768,13 +197809,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core19 = require_dist();
+    var import_session_host_core20 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core19.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core19.createSessionHostControlPlane)({
+        this.client = new import_session_host_core20.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core20.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }

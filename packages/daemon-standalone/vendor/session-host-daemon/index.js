@@ -654,6 +654,7 @@ var SessionHostStorage = class {
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
     this.rootDir = options.rootDir || path3.join((0, import_session_host_core2.resolveInstanceConfigDir)(process.env), "session-host", appName);
+    (0, import_session_host_core2.assertTestStorageIsolated)(this.rootDir);
     this.runtimesDir = path3.join(this.rootDir, "runtimes");
     this.tombstonesDir = path3.join(this.rootDir, "tombstones");
   }

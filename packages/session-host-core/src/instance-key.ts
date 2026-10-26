@@ -28,6 +28,23 @@ import * as path from 'path';
 
 export const DEFAULT_CONFIG_DIR_NAME = '.adhdev';
 
+/** Last-line storage guard, shared by session-host and mesh persistence.
+ * Node's test runner propagates NODE_TEST_CONTEXT to children; Vitest marks
+ * its workers separately. Explicit temporary roots remain valid. */
+export function assertTestStorageIsolated(destination: string): void {
+    const env = process.env;
+    if (!env.VITEST && env.NODE_ENV !== 'test' && !env.NODE_TEST_CONTEXT
+        && !process.execArgv.some(arg => arg === '--test' || arg.startsWith('--test='))) return;
+    const target = canonicalizeInstancePath(destination);
+    const home = os.userInfo().homedir;
+    for (const track of ['.adhdev', '.adhdev-preview']) {
+        const live = canonicalizeInstancePath(path.join(home, track));
+        if (target === live || target.startsWith(live + path.sep)) {
+            throw new Error('LIVE runtime storage is forbidden in a test process; pin ADHDEV_CONFIG_DIR or storageRootDir to a temporary directory');
+        }
+    }
+}
+
 /**
  * Resolve the instance config dir from the environment: ADHDEV_CONFIG_DIR
  * when set (trimmed), else `<homeDir>/.adhdev`. Mirrors daemon-core's
@@ -49,7 +66,9 @@ export function resolveInstanceConfigDir(
     homeDir: string = os.homedir(),
 ): string {
     const override = typeof env.ADHDEV_CONFIG_DIR === 'string' ? env.ADHDEV_CONFIG_DIR.trim() : '';
-    return override || path.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+    const resolved = override || path.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+    if (env === process.env) assertTestStorageIsolated(resolved);
+    return resolved;
 }
 
 /**
