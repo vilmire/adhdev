@@ -26,6 +26,7 @@
     "declaration": true,
     "declarationDir": "./dist",
     "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
     "rootDir": "./src"
   },
   "include": ["src", "src/**/*.json"]
