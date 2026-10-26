@@ -33,11 +33,19 @@ describe('rc32 session host control census', () => {
         const registry = new SessionHostRegistry();
         const record: any = { sessionId: 'live', runtimeKey: 'key', displayName: 'live', workspaceLabel: 'repo', transport: 'pty', providerType: 'codex-cli', category: 'cli', workspace: '/tmp/repo',
             launchCommand: { command: 'codex', args: ['--system-prompt', 'x'.repeat(96_000)], env: { TOKEN: 'secret' } },
-            createdAt: 1, lastActivityAt: 1, lifecycle: 'running', writeOwner: null, attachedClients: [], buffer: { scrollbackBytes: 0, snapshotSeq: 0 }, meta: { assistant: true, cliArgs: ['x'.repeat(96_000)] } };
+            createdAt: 1, startedAt: 1, lastActivityAt: 1, lifecycle: 'running', surfaceKind: 'live_runtime', writeOwner: null, attachedClients: [], buffer: { scrollbackBytes: 0, snapshotSeq: 0 },
+            meta: { assistant: true, meshNodeFor: 'mesh', meshNodeId: 'node', launchedByCoordinator: true,
+                launchRecord: { spawnedForTaskId: 'task', roleLaunch: { role: 'assistant' } }, cliArgs: ['x'.repeat(96_000)] } };
         registry.restoreSession(record); registry.restoreSession({ ...record, sessionId: 'stopped', lifecycle: 'stopped' });
         const all = registry.listSessionSummaries();
         expect(JSON.stringify(all).length).toBeLessThan(2000);
         expect(all[0].launchCommand).toEqual({ command: 'codex', args: [] });
+        // Lifetime inventory needs idle clocks, membership and role safety evidence,
+        // even though the census deliberately omits large launch arguments.
+        expect(all[0]).toMatchObject({ sessionId: 'live', runtimeKey: 'key', startedAt: 1,
+            lastActivityAt: 1, lifecycle: 'running', surfaceKind: 'live_runtime',
+            meta: { assistant: true, meshNodeFor: 'mesh', meshNodeId: 'node', launchedByCoordinator: true,
+                launchRecord: record.meta.launchRecord, cliArgs: [], cliArgsOmitted: true } });
         expect(registry.listSessionSummaries(true).map(r => r.sessionId)).toEqual(['live']);
         expect(registry.getSession('live')?.launchCommand.args[1]).toHaveLength(96_000);
     });

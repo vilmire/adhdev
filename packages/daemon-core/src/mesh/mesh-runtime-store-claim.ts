@@ -1,3 +1,4 @@
+import { sessionIsStopping } from './mesh-session-stop-fence.js';
 import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
 import { realpathSync } from 'node:fs';
 import { reviewRoutingRefusal } from './mesh-task-routing-contract.js';
@@ -136,7 +137,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             outRefusal?: MeshClaimRefusal;
         }): MeshWorkQueueEntry | null {
     return host.transaction(() => {
-        if (bridgeDispatchFrozen(host.db, meshId)) return null;
+        if (bridgeDispatchFrozen(host.db, meshId) || sessionIsStopping(host.db, sessionId)) return null;
         host.ensureLegacyQueueMigrated(meshId);
         const refuse = (reason: MeshClaimRefusalReason, detail?: string, deepest?: MeshWorkQueueEntry): null => {
             if (opts?.outRefusal) {

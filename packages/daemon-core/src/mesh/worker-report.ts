@@ -1,3 +1,4 @@
+import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
 /**
  * Worker structured reporting — Phase B/C.
  *
@@ -1044,6 +1045,7 @@ export function acceptWorkerCompletionReportForIdentity(
         + (handoffNoteRecorded ? ' with handoff note' : ''),
     ));
 
+    recordAcceptedSessionCompletion({ ...identity, attemptId: evidenceAttemptId }, nowMs);
     return {
         accepted: true,
         taskId: identity.taskId,

@@ -1,66 +1,14 @@
-/**
- * Idle delegated-session reaper.
- *
- * A coordinator-launched delegate session stays idle-LIVE after its task ends —
- * `completed` means the task finished, not that the CLI runtime exited. Existing
- * cleanup is entirely EDGE-triggered (node removal → sessionCleanupOnNodeRemove,
- * worktree convergence → PHASE 6.5),
- * so a one-off delegate launched on the BASE node — an investigation or docs task,
- * with no node removal and no worktree — is never reclaimed by
- * anything. Measured locally 2026-08-28: 27 live `claude` processes / 2.9GB RSS /
- * 27 session records with no TTL concept anywhere.
- *
- * This adds the missing AGE-triggered pass: a delegate idle past
- * `delegatedSessionIdleTtlMinutes` (default 30) has its CLI runtime STOPPED while
- * its record is PRESERVED, so the transcript stays inspectable.
- *
- * WHY STOP AND NOT DELETE: the value being reclaimed is the live CLI process (RSS,
- * provider quota, PTY); the record costs almost nothing and is the only remaining
- * evidence of what the delegate did. `mode: 'stop'` in cleanupMeshSessions keeps the
- * record; `delete_stopped` is a different contract and is deliberately NOT used here
- * (it also skips live runtimes by contract, so it would no-op on exactly the
- * idle-LIVE sessions this pass targets).
- *
- * REUSES, rather than reinventing, three existing mechanisms:
- *  1. EXECUTION — `cleanupMeshSessions({ mode: 'stop', sessionIds })`
- *     (commands/router-worktree-cleanup.ts). It already stamps
- *     `recordIntentionalMeshSessionStop` so the stop is not misread as a crash by
- *     the completion/redrive path, already skips the coordinator unconditionally,
- *     and already supports dryRun. This module only decides WHICH sessions; that
- *     function decides HOW to stop them.
- *  2. COORDINATOR EXCLUSION — `meta.meshCoordinatorFor === meshId`, the same marker
- *     used by cleanupMeshSessions' own guard and by findLiveCoordinators /
- *     mesh-idle-reminder. Checked HERE as well as there (defense in depth): passing
- *     explicit sessionIds sets hasExplicitSessionIds, and this module must never
- *     rely on a downstream guard to protect the coordinator.
- *  3. REUSE-POOL EXCLUSION — none needed. `isIdleSessionState` rejects any status in
- *     `isTerminalSessionStatus` (mesh-candidacy-predicates.ts), which includes
- *     'stopped', so a reaped session drops out of the drain candidate pool in
- *     mesh-queue-assignment.ts by construction. A regression test locks this
- *     (a reaped session must never be picked for dispatch — that class of bug is
- *     what the delivered-not-consumed redrive work already paid for once).
- *
- * IDLE CLOCK: `SessionHostRecord.lastActivityAt` (session-host-core). It is bumped by
- * `appendOutput` on every byte the PTY emits, so a generating session can never age
- * into the TTL; the remaining writers are attach/detach/write-owner/meta/lifecycle
- * transitions, all real activity. It is a REQUIRED field, so there is no
- * missing-timestamp branch to guess at.
- *
- * SAFETY POSTURE — every exclusion is FAIL-CLOSED. A record that does not
- * positively prove it is a reapable delegate is kept. In particular a session
- * missing `launchedByCoordinator` is NOT reaped: that marker is what separates a
- * coordinator-launched delegate from a session the owner opened themselves in the
- * dashboard, and stopping a human's live session is the one failure this pass must
- * never produce. Leaving a stale delegate alive costs memory; killing an owner's
- * session costs their work.
+/** Task-worker lifetime reaper: accepted completion, per-machine idle cap and TTL.
+ * All paths preserve session records and fail closed on unreadable work/runtime state.
  */
 
 import { LOG } from '../logging/logger.js';
 import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { resolveDelegatedSessionIdleTtlMs } from '../repo-mesh-types.js';
+import { acceptedCompletionSessionIds, isSafeIdleTaskSession, includesSession, resetSessionStopRetries, sessionStopRetryDue, recordSessionStopFailure, clearSessionStopRetry } from './mesh-session-lifetime.js';
 import { getQueue } from './mesh-work-queue.js';
 import { getActiveDirectDispatchesStrict } from './mesh-direct-dispatch.js';
-import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 
 /**
  * The subset of a SessionHostRecord this pass reads. Declared structurally rather
@@ -69,6 +17,11 @@ import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
  */
 export interface ReapableSessionRecord {
     sessionId: string;
+    state?: any;
+    claimFence?: import('./mesh-session-stop-fence.js').SessionClaimFence;
+    checkpointPending?: boolean;
+    stopping?: boolean;
+    machineId?: string;
     lastActivityAt?: number;
     lifecycle?: string;
     surfaceKind?: string;
@@ -77,6 +30,7 @@ export interface ReapableSessionRecord {
 
 /** Why a candidate was kept. Surfaced in the dry-run plan and the debug log. */
 type IdleSessionReapSkipReason =
+    | 'unsafe_runtime'
     | 'not_live_runtime'
     | 'coordinator_session'
     | 'not_coordinator_launched'
@@ -87,7 +41,7 @@ type IdleSessionReapSkipReason =
 
 interface IdleSessionReapPlan {
     /** Sessions whose CLI runtime should be stopped (record preserved). */
-    reap: Array<{ sessionId: string; idleMs: number }>;
+    reap: Array<{ sessionId: string; idleMs: number; reason?: string }>;
     /** Every non-reaped candidate with the reason it was kept. */
     skipped: Array<{ sessionId: string; reason: IdleSessionReapSkipReason; idleMs?: number }>;
 }
@@ -117,11 +71,18 @@ function readStringValue(value: unknown): string {
  * Exported for direct testing: this set is the "(b) no assigned/generating/waiting
  * task" condition, and getting it wrong reaps a session mid-task.
  */
-export function collectSessionIdsWithActiveWork(meshId: string): Set<string> {
+export function collectSessionIdsWithActiveWork(meshId: string, records?: ReapableSessionRecord[]): Set<string> {
     const ids = new Set<string>();
     for (const task of getQueue(meshId, { status: ['pending', 'assigned'] as any })) {
         const sessionId = readStringValue((task as any)?.assignedSessionId);
         if (sessionId) ids.add(sessionId);
+        const target = readStringValue(task.targetSessionId);
+        if (target) {
+            const record = records?.find(r => sessionIdsEquivalent(r.sessionId, target));
+            const nodeId = readStringValue(record?.meta?.meshNodeId);
+            // A contradictory branch/node pin cannot reuse this physical session.
+            if (!task.targetNodeId || !nodeId || meshNodeIdMatches({ nodeId }, task.targetNodeId)) ids.add(target);
+        }
     }
     for (const dispatch of getActiveDirectDispatchesStrict(meshId)) {
         const sessionId = readStringValue((dispatch as any)?.sessionId);
@@ -159,10 +120,13 @@ export function planIdleSessionReap(args: {
     activeWorkSessionIds: Set<string>;
     ttlMs: number;
     now: number;
+    maxIdleSessions?: number;
+    acceptedSessionIds?: Set<string>;
 }): IdleSessionReapPlan {
     const { meshId, records, activeWorkSessionIds, ttlMs, now } = args;
     const plan: IdleSessionReapPlan = { reap: [], skipped: [] };
-    if (!Array.isArray(records) || ttlMs <= 0) return plan;
+    if (!Array.isArray(records)) return plan;
+    const eligible: Array<{ sessionId: string; idleMs: number; machineId: string; inMesh: boolean; stopping: boolean }> = [];
 
     for (const record of records) {
         const sessionId = readStringValue(record?.sessionId);
@@ -197,12 +161,13 @@ export function planIdleSessionReap(args: {
             continue;
         }
 
-        // Scope to THIS mesh. A delegate bound to another mesh sharing this daemon is
-        // that mesh's business; reaping across the boundary is the MESH-ISOLATION-LEAK
-        // class the remote-idle store was already fixed for.
+        // Count other meshes on the same machine for the idle cap, but only stop
+        // sessions belonging to this mesh during this pass.
         const meshNodeFor = readStringValue(meta.meshNodeFor);
-        if (meshNodeFor && meshNodeFor !== meshId) {
-            skip('other_mesh');
+        const inMesh = !meshNodeFor || meshNodeFor === meshId;
+
+        if (!isSafeIdleTaskSession(record.state, meta) || record.checkpointPending) {
+            skip('unsafe_runtime');
             continue;
         }
 
@@ -216,19 +181,33 @@ export function planIdleSessionReap(args: {
             continue;
         }
         const idleMs = now - lastActivityAt;
-        if (idleMs < ttlMs) {
-            skip('within_ttl');
-            continue;
-        }
 
         // (b) No non-terminal task bound to this session.
         if (heldByActiveWork(sessionId, activeWorkSessionIds)) {
-            // Reached only past the TTL: carry the age so the pass can report it.
-            skip('holds_active_task', idleMs);
+            // Carry the age so the pass can report holders past the TTL.
+            skip(ttlMs > 0 && idleMs >= ttlMs ? 'holds_active_task' : 'within_ttl', idleMs);
             continue;
         }
 
-        plan.reap.push({ sessionId, idleMs });
+        if (idleMs < 0) { skip('within_ttl'); continue; }
+        eligible.push({ sessionId, idleMs, machineId: record.machineId || 'local', inMesh, stopping: record.stopping === true });
+    }
+    const cap = args.maxIdleSessions ?? 0;
+    const excess = new Set<string>();
+    const machines = new Set(eligible.map(r => r.machineId));
+    for (const machine of machines) {
+        const idle = eligible.filter(r => r.machineId === machine).sort((a, b) => b.idleMs - a.idleMs || a.sessionId.localeCompare(b.sessionId));
+        // Accepted workers already leaving do not evict additional reuse candidates.
+        const retained = idle.filter(r => !r.stopping && !includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
+        if (cap > 0) for (const r of retained.slice(0, Math.max(0, retained.length - cap))) excess.add(r.sessionId);
+    }
+    for (const r of eligible.sort((a, b) => b.idleMs - a.idleMs)) {
+        if (!r.inMesh) { plan.skipped.push({ sessionId: r.sessionId, reason: 'other_mesh' }); continue; }
+        const reason = r.stopping ? 'stop_retry' : includesSession(args.acceptedSessionIds ?? new Set(), r.sessionId) ? 'accepted_completion'
+            : ttlMs > 0 && r.idleMs >= ttlMs ? 'idle_ttl_exceeded'
+            : excess.has(r.sessionId) ? 'idle_machine_cap' : undefined;
+        if (reason) plan.reap.push({ sessionId: r.sessionId, idleMs: r.idleMs, reason });
+        else plan.skipped.push({ sessionId: r.sessionId, reason: 'within_ttl' });
     }
     return plan;
 }
@@ -310,7 +289,10 @@ function reportReapAborted(meshId: string, now: number, error: unknown): void {
 /** Injected side effects, so the orchestrator is testable without a router. */
 export interface IdleSessionReaperDeps {
     listSessions(): Promise<ReapableSessionRecord[]>;
-    /** Bound DaemonCommandRouter.cleanupMeshSessions — the shared stop executor. */
+    hasPendingStops?(): boolean;
+    /** Existing persisted output read; injectable for focused tests. */
+    acceptedSessionIds?(meshId: string): Set<string>;
+    /** Stop executor; must confirm the stopped ids, with host-side safety checks. */
     cleanupMeshSessions(args: {
         meshId: string;
         nodeId: string;
@@ -341,6 +323,7 @@ let reapedSessionCount = 0;
 /** Test-only reset of the cumulative counter. */
 export function resetIdleSessionReapCounter(): void {
     reapedSessionCount = 0;
+    resetSessionStopRetries();
 }
 
 export function getIdleSessionReapCount(): number {
@@ -370,9 +353,11 @@ export async function runIdleSessionReapPass(
     };
     const now = args.now ?? Date.now();
     const ttlMs = resolveDelegatedSessionIdleTtlMs(args.policy?.delegatedSessionIdleTtlMinutes);
-    // 0 / false disables the reaper entirely — not even a dry-run plan is computed,
-    // so a disabled mesh pays nothing (no listSessions round-trip).
-    if (ttlMs <= 0) return empty;
+    // TTL, count cap, and accepted-completion reclamation disable independently.
+    const rawCap = args.policy?.maxIdleDelegatedSessionsPerMachine;
+    const cap = typeof rawCap === 'number' && Number.isFinite(rawCap) ? Math.max(0, Math.min(100, Math.floor(rawCap))) : 2;
+    const stopAccepted = args.policy?.stopDelegatedSessionOnAcceptedCompletion !== false;
+    if (ttlMs <= 0 && cap === 0 && !stopAccepted && !deps.hasPendingStops?.()) return empty;
 
     let records: ReapableSessionRecord[] = [];
     try {
@@ -388,8 +373,16 @@ export async function runIdleSessionReapPass(
     // diagnostic. The next tick retries, so a transient store failure delays
     // reaping by one interval instead of killing sessions that hold live work.
     let activeWorkSessionIds: Set<string>;
+    let acceptedSessionIds = new Set<string>();
     try {
-        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId);
+        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId, records);
+        // The policy bounds the machine, including idle sessions on sibling worktree
+        // nodes/meshes. Their work must be enumerated before they enter the cap count.
+        for (const meshId of new Set(records.map(r => readStringValue(r.meta?.meshNodeFor)).filter(Boolean))) {
+            if (meshId !== args.meshId) for (const id of collectSessionIdsWithActiveWork(meshId, records)) activeWorkSessionIds.add(id);
+        }
+        if (stopAccepted) acceptedSessionIds = deps.acceptedSessionIds?.(args.meshId)
+            ?? acceptedCompletionSessionIds(args.meshId, records);
     } catch (e: any) {
         reportReapAborted(args.meshId, now, e);
         return { ...empty, abortedReason: 'active_work_unreadable' };
@@ -401,6 +394,8 @@ export async function runIdleSessionReapPass(
         activeWorkSessionIds,
         ttlMs,
         now,
+        maxIdleSessions: cap,
+        acceptedSessionIds,
     });
     if (!args.dryRun) reportIdlePastTtlHolders({ meshId: args.meshId, plan, ttlMs, now });
     if (plan.reap.length === 0) return { ...empty, plan };
@@ -413,8 +408,10 @@ export async function runIdleSessionReapPass(
     // Stop one session per call so a single failing session cannot suppress the rest
     // (cleanupMeshSessions reports success:false for the whole batch on any error).
     for (const target of plan.reap) {
+        const retryKey = `${args.meshId}:${target.sessionId}`;
+        if (!sessionStopRetryDue(retryKey, now)) continue;
         try {
-            await deps.cleanupMeshSessions({
+            const result = await deps.cleanupMeshSessions({
                 meshId: args.meshId,
                 nodeId: '',
                 node: undefined,
@@ -422,6 +419,11 @@ export async function runIdleSessionReapPass(
                 sessionIds: [target.sessionId],
                 source: 'mesh_cleanup_sessions',
             });
+            if (!result.success || !Array.isArray(result.stoppedSessionIds)
+                || !result.stoppedSessionIds.some((id: string) => sessionIdsEquivalent(id, target.sessionId))) {
+                throw new Error(String(result.error || 'stop_not_confirmed'));
+            }
+            clearSessionStopRetry(retryKey);
             stoppedSessionIds.push(target.sessionId);
             reapedSessionCount += 1;
             // Requirement 4: one INFO line per stop — session id, idle age, reason.
@@ -429,13 +431,14 @@ export async function runIdleSessionReapPass(
             LOG.info(
                 'MeshIdleSessionReaper',
                 `Stopped idle delegated session ${target.sessionId} (mesh ${args.meshId}, `
-                + `idle ${Math.round(target.idleMs / 60_000)}m ≥ TTL ${Math.round(ttlMs / 60_000)}m, `
-                + `reason=idle_ttl_exceeded, record preserved; total stopped=${reapedSessionCount})`,
+                + `idle ${Math.round(target.idleMs / 60_000)}m, TTL ${Math.round(ttlMs / 60_000)}m, `
+                + `reason=${target.reason}, record preserved; total stopped=${reapedSessionCount})`,
             );
         } catch (e: any) {
+            const retry = recordSessionStopFailure(retryKey, now);
             LOG.warn(
                 'MeshIdleSessionReaper',
-                `Failed to stop idle delegated session ${target.sessionId} (mesh ${args.meshId}): ${e?.message || e}`,
+                `Stop retry ${retry.attempts} scheduled at ${new Date(retry.nextAt).toISOString()}. Failed to stop idle delegated session ${target.sessionId} (mesh ${args.meshId}): ${e?.message || e}`,
             );
         }
     }

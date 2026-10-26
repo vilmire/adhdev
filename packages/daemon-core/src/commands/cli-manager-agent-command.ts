@@ -1,3 +1,5 @@
+import { sessionIsStopping } from '../mesh/mesh-session-stop-fence.js';
+import { idleSessionLifetimeCommand } from './mesh-idle-session-lifetime.js';
 /**
  * DaemonCliManager — the `agent_command` command: send_chat (mesh assignment
  * stamp + the one SessionInputService submit), clear_history, task-scoped stop,
@@ -36,6 +38,7 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
     if (!agentType || !action) throw new Error('agentType and action required');
     if (action === 'mesh_writer_stop_capability') return { success: true, meshWriterStopProtocol: 1,
         stopRequestId: args.meshWriterStop?.stopRequestId };
+    if (action === 'mesh_idle_session_inventory' || action === 'mesh_idle_session_stop') return idleSessionLifetimeCommand(host, args);
     if (action === 'reconcile_mesh_holder') return reconcileMeshHolder(host, args);
 
     // WTCLAIM (B): a mesh dispatch that named a node (meshContext.nodeId)
@@ -120,6 +123,7 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
 
 /** `send_chat`: stamp the mesh assignment (when dispatched by a mesh), then the ONE submit. */
 async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, key: string): Promise<CommandResult> {
+    if (sessionIsStopping(MeshRuntimeStore.getInstance().db, key)) throw new Error('session_lifetime_stopping');
     if (readMeshContext(args) && isWriterStopPending(key)) throw new Error('mesh_writer_stopping_checkpoint_pending');
     if (readMeshContext(args) && isHolderAttachPending(key)) throw new Error('mesh_holder_attach_checkpoint_pending');
     // Stamp mesh direct-dispatch assignment on the target
