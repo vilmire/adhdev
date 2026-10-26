@@ -1319,6 +1319,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.startupFence();
   }
   async start() {
+    (0, import_session_host_core6.validateSessionHostEndpoint)(this.endpoint);
     this.assertNoAutomaticReplacementContext();
     if (this.upgradeLease && fs6.existsSync(this.endpoint.path)) {
       throw new Error("native_host_endpoint_owner_unproved");

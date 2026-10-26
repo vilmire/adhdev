@@ -2907,6 +2907,7 @@ var require_dist = __commonJS({
       resolveSessionHostRows: () => resolveSessionHostRows,
       sanitizeSpawnEnv: () => sanitizeSpawnEnv,
       spawnCliChild: () => spawnCliChild,
+      validateSessionHostEndpoint: () => validateSessionHostEndpoint,
       writeEnvelope: () => writeEnvelope
     });
     module2.exports = __toCommonJS2(index_exports2);
@@ -3583,6 +3584,14 @@ var require_dist = __commonJS({
     var path22 = __toESM2(require("path"));
     var net = __toESM2(require("net"));
     var import_string_decoder = require("string_decoder");
+    function validateSessionHostEndpoint(endpoint, platform2 = process.platform) {
+      if (endpoint.kind !== "unix") return;
+      const limit = platform2 === "linux" ? 108 : 104;
+      const pathBytes = Buffer.byteLength(endpoint.path, "utf8");
+      if (pathBytes + 1 > limit) {
+        throw new Error(`session_host_unix_socket_path_too_long: path_bytes=${pathBytes} required_bytes=${pathBytes + 1} limit_bytes=${limit} platform=${platform2}`);
+      }
+    }
     function getDefaultSessionHostEndpoint(appName = "adhdev", options = {}) {
       const rawKey = typeof options.ipcKey === "string" ? options.ipcKey.trim() : "";
       if (rawKey && !/^[0-9a-f]{12}$/.test(rawKey)) {
@@ -103215,9 +103224,12 @@ ${mergeTreeErr?.stderr || ""}`;
         import_path35 = require("path");
       }
     });
+    function isRunnerTimeout(error) {
+      return error?.timedOut === true || error?.code === "ETIMEDOUT";
+    }
     function classifyValidationFailure(error, stderr, spawnResolutionFailed) {
       const outputLimitExceeded = error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer length exceeded/i.test(String(error?.message || ""));
-      const timedOut = !spawnResolutionFailed && !outputLimitExceeded && (error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || "")));
+      const timedOut = !spawnResolutionFailed && !outputLimitExceeded && isRunnerTimeout(error);
       const missingDependencyFailure = !spawnResolutionFailed && !outputLimitExceeded && !timedOut && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
       return { outputLimitExceeded, missingDependencyFailure, timedOut };
     }
@@ -103489,7 +103501,7 @@ ${asText(streams.stderr)}
       });
     }
     function refineExecFailureExtras(error) {
-      const timedOut = error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || ""));
+      const timedOut = isRunnerTimeout(error);
       return {
         // REFINE-LANES: descendants still alive after a gate was terminated — reported, never signalled.
         ...Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {},
@@ -119684,6 +119696,7 @@ ${tail}` : ""
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       encodeDuplicateMeshDispatchCode: () => encodeDuplicateMeshDispatchCode,
       encodeMeshHandlerErrorCode: () => encodeMeshHandlerErrorCode,
+      endsPeerAuthorization: () => endsPeerAuthorization,
       enqueueTask: () => enqueueTask,
       enqueueTaskBatch: () => enqueueTaskBatch,
       ensureSessionHostReady: () => ensureSessionHostReady,
@@ -198138,6 +198151,17 @@ ${notice.notice}${supersededHint}`;
     init_mcp_command_ingress();
     init_assistant_human_input();
     init_cooperative_gate();
+    function endsPeerAuthorization(reason) {
+      return reason !== void 0 && (/* @__PURE__ */ new Set([
+        "token_revoked",
+        "credential_rejected",
+        "evicted",
+        "force_disconnected",
+        "clean_shutdown",
+        "version_incompatible",
+        "credentials_changed"
+      ])).has(reason);
+    }
   }
 });
 

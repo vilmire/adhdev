@@ -65,6 +65,7 @@ import {
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
+  validateSessionHostEndpoint,
   isTerminalRecord
 } from "@adhdev/session-host-core";
 
@@ -1311,6 +1312,7 @@ var SessionHostServer = class extends EventEmitter {
     this.startupFence();
   }
   async start() {
+    validateSessionHostEndpoint(this.endpoint);
     this.assertNoAutomaticReplacementContext();
     if (this.upgradeLease && fs6.existsSync(this.endpoint.path)) {
       throw new Error("native_host_endpoint_owner_unproved");

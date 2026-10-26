@@ -82,6 +82,7 @@ export {
   disconnectSessionHostClients,
   findConnectedSessionHostClient,
   getDefaultSessionHostEndpoint,
+  validateSessionHostEndpoint,
   writeEnvelope,
 } from './ipc.js';
 export type {
