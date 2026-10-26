@@ -25,7 +25,7 @@ import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
-export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
+export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'getQueueSchedulingGraph' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
 export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope }
 type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
@@ -37,7 +37,7 @@ export function readInFlightOwnershipMeshWide(
     host: OwnershipHost,
     meshId: string,
 ): ScopedInFlightOwnership[] {
-    const reservations = host.getQueueEntries?.(meshId).filter(t => pendingLaunchReservation(t)).map(t => ({ payload: JSON.stringify(t) })) ?? [];
+    const reservations = host.getQueueEntries?.(meshId, ['pending']).filter(t => pendingLaunchReservation(t)).map(t => ({ payload: JSON.stringify(t) })) ?? [];
     return [...host.assignedRowsMeshWide(meshId), ...reservations]
         .map((row): ScopedInFlightOwnership | null => {
             try {
@@ -273,7 +273,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // DEPENDSON-GATE-SYMMETRY: the claim gate shares the single
         // taskDependenciesSatisfied predicate with the auto-launch filter and
         // the cloud eager P2P push, so a task blocked here is blocked there too.
-        const dependencyGraph = new Map(host.getQueueEntries(meshId).map(t => [t.id, t]));
+        const dependencyGraph = new Map(host.getQueueSchedulingGraph(meshId).map(t => [t.id, t]));
         const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean =>
             taskDependenciesSatisfied(candidate, depStatus, dependencyGraph);
 
@@ -379,7 +379,11 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             }
             return true;
         };
-        const reviewRefusal = (candidate: MeshWorkQueueEntry) => reviewRoutingRefusal(candidate, candidate.review ? reviewSource(candidate.review.sourceTaskId) : undefined, providerType, opts?.physicalContext, host.getQueueEntries(meshId));
+        let reviewActive: MeshWorkQueueEntry[] | undefined;
+        const reviewRefusal = (candidate: MeshWorkQueueEntry) => candidate.review
+            ? reviewRoutingRefusal(candidate, reviewSource(candidate.review.sourceTaskId), providerType, opts?.physicalContext,
+                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']))
+            : undefined;
         const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
             // Session ids are single-form (unlike node/daemon ids with their 3
             // serialization forms requiring expandDaemonIdForms) — see the
@@ -466,8 +470,11 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 holdBlockers ??= (host.assignedRowsMeshWide(meshId)).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
                 const context = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
                 if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');
+                const previousHold = JSON.stringify(candidate.hold);
                 setQueueTaskHold(candidate, gate.reason, context);
-                host.db.prepare('UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = \'pending\'').run(JSON.stringify(candidate), candidate.id, meshId);
+                if (previousHold !== JSON.stringify(candidate.hold)) {
+                    host.db.prepare('UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = \'pending\'').run(JSON.stringify(candidate), candidate.id, meshId);
+                }
                 return false;
             },
         })));

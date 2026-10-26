@@ -39,6 +39,29 @@ describe('rc32 saturation regressions', () => {
             { op: 'update', id: 'b' }, { op: 'delete', id: 'c' }, { op: 'insert', id: 'd' },
         ]);
     });
+    it('scheduling reads only active tasks and their reachable historical prerequisites', () => {
+        const store = MeshRuntimeStore.getInstance();
+        store.replaceQueue('saturation', [
+            { ...task('root'), phase: 'integration', dependsOn: ['source'] },
+            { ...task('source'), phase: 'source', status: 'completed' },
+            { ...task('unrelated-history'), status: 'completed', message: 'large history'.repeat(1000) },
+        ]);
+        expect(store.getQueueSchedulingGraph('saturation').map(t => t.id).sort()).toEqual(['root', 'source']);
+    });
+    it('claim ticks never read unfiltered history or rewrite an unchanged hold', () => {
+        const store = MeshRuntimeStore.getInstance();
+        store.replaceQueue('saturation', [
+            { ...task('waiting'), dependsOn: ['missing'] },
+            { ...task('history'), status: 'completed' },
+        ]);
+        const reads = vi.spyOn(store, 'getQueueEntries');
+        expect(store.claimNextQueueTask('saturation', 'node', 'session')).toBeNull();
+        const changes = () => (store.db.prepare('SELECT total_changes() AS n').get() as any).n;
+        const n = changes();
+        expect(store.claimNextQueueTask('saturation', 'node', 'session')).toBeNull();
+        expect(reads.mock.calls.every(([, statuses]) => statuses?.length)).toBe(true);
+        expect(changes()).toBe(n);
+    });
     it('unchanged hold and skipped auto-launch do not write or bump revision', () => {
         const store = MeshRuntimeStore.getInstance(); store.replaceQueue('saturation', [task('a')]);
         const skipped = { status: 'skipped', reason: 'node_has_active_assignment' } as any;

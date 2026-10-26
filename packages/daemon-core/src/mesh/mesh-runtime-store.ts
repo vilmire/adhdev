@@ -343,15 +343,33 @@ export class MeshRuntimeStore {
         return rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
     }
 
-    /** Small scheduling graph; history can carry megabytes of prompts/images. */
+    /** Active tasks and their reachable prerequisites only. History can carry
+     * megabytes of prompts/images; unrelated terminal rows need no JSON work. */
     getQueueSchedulingGraph(meshId: string): MeshWorkQueueEntry[] {
         this.ensureLegacyQueueMigrated(meshId);
-        const rows = this.db.prepare(`SELECT id, status,
-            json_extract(payload, '$.phase') AS phase,
-            json_extract(payload, '$.dependsOn') AS deps,
-            json_extract(payload, '$.cancelReason') AS cancelReason
-            FROM mesh_queue WHERE mesh_id = ?`).all(meshId) as Array<{ id: string; status: MeshTaskStatus; phase?: string; deps?: string; cancelReason?: string }>;
-        return rows.map(({ deps, ...row }) => ({ ...row, dependsOn: deps ? JSON.parse(deps) : [] }) as MeshWorkQueueEntry);
+        const graph: MeshWorkQueueEntry[] = [];
+        const seen = new Set<string>();
+        let frontier = this.getQueueHeads(meshId, ['pending']).map(row => row.id);
+        while (frontier.length) {
+            const batch = [...new Set(frontier)].filter(id => !seen.has(id));
+            frontier = [];
+            for (let offset = 0; offset < batch.length; offset += 500) {
+                const ids = batch.slice(offset, offset + 500);
+                for (const id of ids) seen.add(id);
+                const rows = this.db.prepare(`SELECT id, status,
+                    json_extract(payload, '$.phase') AS phase,
+                    json_extract(payload, '$.dependsOn') AS deps,
+                    json_extract(payload, '$.cancelReason') AS cancelReason
+                    FROM mesh_queue WHERE mesh_id = ? AND id IN (${ids.map(() => '?').join(',')})`)
+                    .all(meshId, ...ids) as Array<{ id: string; status: MeshTaskStatus; phase?: string; deps?: string; cancelReason?: string }>;
+                for (const { deps, ...row } of rows) {
+                    const entry = { ...row, dependsOn: deps ? JSON.parse(deps) : [] } as MeshWorkQueueEntry;
+                    graph.push(entry);
+                    for (const id of entry.dependsOn ?? []) if (!seen.has(id)) frontier.push(id);
+                }
+            }
+        }
+        return graph;
     }
 
     getQueueRevision(meshId: string): string {

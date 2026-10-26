@@ -67654,7 +67654,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     function readInFlightOwnershipMeshWide(host, meshId) {
-      const reservations = host.getQueueEntries?.(meshId).filter((t) => pendingLaunchReservation(t)).map((t) => ({ payload: JSON.stringify(t) })) ?? [];
+      const reservations = host.getQueueEntries?.(meshId, ["pending"]).filter((t) => pendingLaunchReservation(t)).map((t) => ({ payload: JSON.stringify(t) })) ?? [];
       return [...host.assignedRowsMeshWide(meshId), ...reservations].map((row2) => {
         try {
           const parsed = JSON.parse(row2.payload);
@@ -67768,7 +67768,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           ).all(meshId, ...depIds);
           for (const r of depRows) depStatus.set(r.id, r.status);
         }
-        const dependencyGraph = new Map(host.getQueueEntries(meshId).map((t) => [t.id, t]));
+        const dependencyGraph = new Map(host.getQueueSchedulingGraph(meshId).map((t) => [t.id, t]));
         const dependenciesSatisfied = (candidate) => taskDependenciesSatisfied(candidate, depStatus, dependencyGraph);
         const nodeConflictAllows = (candidate) => {
           if (isTaskReadonly3(candidate)) return true;
@@ -67818,7 +67818,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           }
           return true;
         };
-        const reviewRefusal = (candidate) => reviewRoutingRefusal(candidate, candidate.review ? reviewSource(candidate.review.sourceTaskId) : void 0, providerType, opts?.physicalContext, host.getQueueEntries(meshId));
+        let reviewActive;
+        const reviewRefusal = (candidate) => candidate.review ? reviewRoutingRefusal(
+          candidate,
+          reviewSource(candidate.review.sourceTaskId),
+          providerType,
+          opts?.physicalContext,
+          reviewActive ??= host.getQueueEntries(meshId, ["pending", "assigned"])
+        ) : void 0;
         const targetMatches = (candidate) => {
           if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
           if (candidate.targetNodeId && !daemonIdsEquivalent4(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
@@ -67867,8 +67874,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             holdBlockers ??= host.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
             const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
+            const previousHold = JSON.stringify(candidate.hold);
             setQueueTaskHold(candidate, gate.reason, context2);
-            host.db.prepare("UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = 'pending'").run(JSON.stringify(candidate), candidate.id, meshId);
+            if (previousHold !== JSON.stringify(candidate.hold)) {
+              host.db.prepare("UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = 'pending'").run(JSON.stringify(candidate), candidate.id, meshId);
+            }
             return false;
           }
         })));
@@ -68315,15 +68325,32 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const rows = this.db.prepare("SELECT payload FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC").all(meshId);
             return rows.map((row2) => JSON.parse(row2.payload));
           }
-          /** Small scheduling graph; history can carry megabytes of prompts/images. */
+          /** Active tasks and their reachable prerequisites only. History can carry
+           * megabytes of prompts/images; unrelated terminal rows need no JSON work. */
           getQueueSchedulingGraph(meshId) {
             this.ensureLegacyQueueMigrated(meshId);
-            const rows = this.db.prepare(`SELECT id, status,
-            json_extract(payload, '$.phase') AS phase,
-            json_extract(payload, '$.dependsOn') AS deps,
-            json_extract(payload, '$.cancelReason') AS cancelReason
-            FROM mesh_queue WHERE mesh_id = ?`).all(meshId);
-            return rows.map(({ deps, ...row2 }) => ({ ...row2, dependsOn: deps ? JSON.parse(deps) : [] }));
+            const graph = [];
+            const seen2 = /* @__PURE__ */ new Set();
+            let frontier = this.getQueueHeads(meshId, ["pending"]).map((row2) => row2.id);
+            while (frontier.length) {
+              const batch = [...new Set(frontier)].filter((id4) => !seen2.has(id4));
+              frontier = [];
+              for (let offset = 0; offset < batch.length; offset += 500) {
+                const ids = batch.slice(offset, offset + 500);
+                for (const id4 of ids) seen2.add(id4);
+                const rows = this.db.prepare(`SELECT id, status,
+                    json_extract(payload, '$.phase') AS phase,
+                    json_extract(payload, '$.dependsOn') AS deps,
+                    json_extract(payload, '$.cancelReason') AS cancelReason
+                    FROM mesh_queue WHERE mesh_id = ? AND id IN (${ids.map(() => "?").join(",")})`).all(meshId, ...ids);
+                for (const { deps, ...row2 } of rows) {
+                  const entry = { ...row2, dependsOn: deps ? JSON.parse(deps) : [] };
+                  graph.push(entry);
+                  for (const id4 of entry.dependsOn ?? []) if (!seen2.has(id4)) frontier.push(id4);
+                }
+              }
+            }
+            return graph;
           }
           getQueueRevision(meshId) {
             this.ensureLegacyQueueMigrated(meshId);

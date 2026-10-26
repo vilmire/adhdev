@@ -29,17 +29,20 @@ function fixture(mode: 'absent' | 'live' | 'unreachable', scope: 'mesh_queue' | 
 }
 describe('rc32 verified dead writer retirement', () => {
     it('force retires a stopping attempt, audits host absence and releases the physical claim', async () => {
-        const f = fixture('absent');
+        const f = fixture('unreachable');
+        f.setMode('absent'); // persisted stop intent outlived its first failed host probe
         expect(f.store.hasActiveAssignment(f.meshId, f.sessionId, 'node')).toBe(true);
-        await settleQueueWriter(f.meshId, f.taskId, 'superseded');
+        const command = await meshStoreIpcHandlers.queue_requeue({ getMeshForCommand: async () => ({ mesh: {} }) } as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId: f.meshId, taskId: f.taskId, options: { force: true } });
+        expect(command).toMatchObject({ success: true, task: { status: 'pending' } });
         expect(f.ledger.getAttempt(f.attempt.attemptId)?.terminal?.reason).toBe('superseded');
         expect(requeueTaskWithOutcome(f.meshId, f.taskId, { force: true })?.entry.status).toBe('pending');
         expect(f.store.hasActiveAssignment(f.meshId, f.sessionId, 'node')).toBe(false);
-        const events = f.store.db.prepare("SELECT payload_json FROM turn_events WHERE event_id LIKE 'writer_settled:%'").all() as any[];
+        const events = f.store.db.prepare("SELECT payload_json FROM turn_events WHERE attempt_id = ? AND event_id LIKE 'writer_settled:%'").all(f.attempt.attemptId) as any[];
         expect(events.some(e => JSON.parse(e.payload_json).writerStopReceipt?.evidence?.kind === 'host_session_absent')).toBe(true);
     });
     it.each(['mesh_queue', 'mesh_direct'] as const)('cancel converges an absent %s session to terminal', async scope => {
-        const f = fixture('absent', scope); await settleQueueWriter(f.meshId, f.taskId, 'operator_cancel');
+        const f = fixture('absent', scope);
+        expect(await meshStoreIpcHandlers.queue_cancel({ getMeshForCommand: async () => ({ mesh: {} }) } as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId: f.meshId, taskId: f.taskId })).toMatchObject({ success: true, task: { status: 'cancelled' } });
         expect(cancelTask(f.meshId, f.taskId)?.status).toBe('cancelled');
         expect(f.ledger.getAttempt(f.attempt.attemptId)?.terminal?.outcome).toBe('cancelled');
         expect(f.store.hasActiveAssignment(f.meshId, f.sessionId, 'node')).toBe(false);
