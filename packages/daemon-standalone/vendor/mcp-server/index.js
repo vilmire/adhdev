@@ -148697,7 +148697,7 @@ ${output}` : "";
           const key5 = entry.sourceCommit ?? "";
           groups.set(key5, [...groups.get(key5) ?? [], entry]);
         }
-        for (const [sourceCommit, pending2] of groups) {
+        sourceGroups: for (const [sourceCommit, pending2] of groups) {
           const candidates = sourceCommit ? [archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl] : await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
           for (let attempt = 0; attempt < candidates.length; attempt += 1) {
             const transportUrl = candidates[attempt];
@@ -148717,14 +148717,14 @@ ${output}` : "";
               } catch (e) {
                 report.errors.push({ code: "TRANSPORT_FAILED", message: `provider tarball transport failed: ${e?.message || e}` });
                 report.status = "error";
-                this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-                return report;
+                this.log(`source group failed (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
+                continue sourceGroups;
               }
               const repoRoot = findTarballRepoRoot(extractDir);
               if (!repoRoot) {
                 report.errors.push({ code: "TRANSPORT_FAILED", message: "provider tarball has an unexpected structure (no repo root dir)" });
                 report.status = "error";
-                return report;
+                continue sourceGroups;
               }
               for (const entry of pending2) {
                 const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
