@@ -127,6 +127,22 @@ function notifyEntry(f: Fixture): DeliverCursorEntry {
 }
 
 describe('turn.deliver — local commit → one submit, exactly once', () => {
+    it('uses submitNotice only after inventory begins and defers held notices without a failure or durable claim', async () => {
+        const f = fixture();
+        await commitWithLocalSummary(f);
+        let noticeCalls = 0;
+        f.deps.port.submitNotice = async () => { noticeCalls++; return { kind: 'delivered' }; };
+        f.port.next.push({ kind: 'refused', reason: 'new_work_held' });
+        const entry = notifyEntry(f);
+        const handler = createTurnDeliverHandler(f.deps);
+        await expect(handler(entry, new AbortController().signal)).rejects.toThrow(/new_work_held/);
+        expect(noticeCalls).toBe(0);
+        expect(f.deps.counters!.submitFailures).toBe(0);
+        expect(claims(f.db)).toBe(0);
+        expect(await handler(entry, new AbortController().signal)).toMatchObject({ outcome: 'delivered' });
+        expect(claims(f.db)).toBe(1);
+    });
+
     it('renders the local summary at deliver time, submits once, and claims delivered:<mesh>:<writer>:<seq>', async () => {
         const f = fixture();
         await commitWithLocalSummary(f);

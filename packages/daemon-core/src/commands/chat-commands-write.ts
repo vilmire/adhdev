@@ -15,7 +15,7 @@ import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type P
 import { assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { pickApprovalButton, pickLeastPrivilegeApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
-import { mintLegacyMessageId, readCommandSource, readMessageId, readOutboundOrigin, readSendPolicy } from './command-args.js';
+import { mintLegacyMessageId, preserveTrustedOwnerIngress, readCommandSource, readMessageId, readOutboundOrigin, readSendPolicy } from './command-args.js';
 import { reportSessionChatInput } from '../assistant/assistant-human-input.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import { createSessionInputService, type SessionInputService } from '../sessions/session-input-service.js';
@@ -269,14 +269,14 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     }
     if (!messageId) messageId = mintLegacyMessageId();
     let prepared: ReturnType<typeof prepareOwnerActionChat> | undefined;
-    const outcome = await service.submit({
+    const outcome = await service.submit(preserveTrustedOwnerIngress(args, {
         messageId,
         sessionId: sessionKey,
         input,
         origin: readOutboundOrigin(args, 'dashboard'),
         policy,
         createdAt: Date.now(),
-    }, () => {
+    }), () => {
         prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity, args?.expectedOwnerApprovalTarget);
         if (!prepared.success) return { refusal: prepared.code };
         if (prepared.text === input.textFallback) return input;

@@ -5,6 +5,7 @@ import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
 import { maintenanceHeld, withMaintenanceAdmission, assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { buildNewWorkHeldRefusal, evaluateNewWorkHold, resolveNewWorkHoldSessionMeshId, NewWorkHeldError } from '../maintenance/new-work-hold.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 /**
@@ -880,6 +881,10 @@ export class DaemonCliManager {
 
     /** `restart_session`: stop the addressed CLI session (if any) and start a fresh one. */
     async restartSession(args: any): Promise<CommandResult> {
+        const holdEval = evaluateNewWorkHold({ meshId: resolveNewWorkHoldSessionMeshId(args, this.deps.getInstanceManager()) });
+        if (holdEval.held) {
+            return buildNewWorkHeldRefusal(holdEval.hold, { command: 'restart_session', surface: 'router_command' }) as unknown as CommandResult;
+        }
         const cliType = args?.cliType || args?.agentType || args?.ideType;
         const cfg = loadConfig();
         const rdir = resolveLaunchDirectory(
@@ -950,6 +955,9 @@ export class DaemonCliManager {
         } catch (restartError) {
             if (savedCoordinatorEntry) {
                 unregisterMeshCoordinator(savedCoordinatorEntry.sessionId);
+            }
+            if (restartError instanceof NewWorkHeldError) {
+                return restartError.refusal as unknown as CommandResult;
             }
             throw restartError;
         }

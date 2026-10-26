@@ -40,6 +40,7 @@ export interface SessionInputAdapterLike {
 
 /** The instance surface the projection reads. */
 export interface SessionInputInstanceLike {
+    getState?(): { settings?: Record<string, unknown> } | undefined;
     recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string, receipt?: OutgoingReceipt): void;
 }
 
@@ -93,6 +94,9 @@ export function buildSessionInputTarget(args: {
     if (typeof adapter.restoreQueuedSend === 'function') target.restoreQueuedSend = (c) => adapter.restoreQueuedSend!(c);
     if (typeof adapter.reserveDrain === 'function') target.reserveDrain = (ms) => adapter.reserveDrain!(ms);
     if (typeof adapter.releaseDrain === 'function') target.releaseDrain = () => adapter.releaseDrain!();
+    if (instance && typeof instance.getState === 'function') {
+        target.getSessionSettings = () => instance.getState?.()?.settings;
+    }
     if (instance && typeof instance.recordAcknowledgedUserInput === 'function') {
         target.recordAcknowledgedUserInput = (input, sourceMessageId, receipt) => instance.recordAcknowledgedUserInput!(toInputEnvelope(input), sourceMessageId, receipt);
     }

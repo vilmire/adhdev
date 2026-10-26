@@ -1,4 +1,5 @@
 import { notifyHeldQueueTasks } from './mesh-queue-hold-store.js';
+import { buildNewWorkHeldRefusal, evaluateNewWorkHold, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 // triggerMeshQueue — one drain pass over a mesh's queue: claim for every idle
 // session (local + remote), then the auto-launch scan, reporting before/after
 // counts. Split out of mesh-queue-assignment.ts (re-exported there).
@@ -112,6 +113,25 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     let localIdleSessionsChecked = 0;
     let remoteIdleSessionsChecked = 0;
     let autoLaunchStarted = false;
+    const activeHold = evaluateNewWorkHold({ meshId });
+    if (activeHold.held) {
+        const refusal = buildNewWorkHeldRefusal(activeHold.hold, `Mesh queue trigger refused for mesh '${meshId}' while new-work hold is active`);
+        return {
+            ...refusal,
+            meshId,
+            pendingBefore,
+            assignedBefore,
+            pendingAfter: pendingBefore,
+            assignedAfter: assignedBefore,
+            claimed: false,
+            newlyAssignedTasks: [],
+            localIdleSessionsChecked,
+            remoteIdleSessionsChecked,
+            skippedSessions: [{ reason: NEW_WORK_HELD_CODE }],
+            autoLaunchStarted,
+            noIdleMeshSessionAvailable: false,
+        } as unknown as MeshQueueTriggerResult;
+    }
     if (!mesh) {
         return {
             success: true,

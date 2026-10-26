@@ -4,6 +4,7 @@ import { getMachineId } from '../config/config.js';
 import { currentPhysicalScope } from './mesh-physical-ownership.js';
 import { recordQueueTaskHold } from './mesh-queue-hold-store.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
 /**
  * Queue auto-launch subsystem — extracted from mesh-queue-assignment.ts (pure move,
  * no behavior change) to keep that file under the repo file-size gate, following the
@@ -1073,8 +1074,17 @@ async function launchQueueTaskOnLocalNode(
 export async function maybeAutoLaunchOneQueueSession(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     try { return await withMaintenanceAdmission(() => autoLaunchUnderMaintenanceGate(components, meshId, mesh)); } catch { return false; }
 }
+/**
+ * H1 auto-launch gate.
+ *
+ * Per-daemon scope (F4): `isNewWorkHeld({ meshId })` below gates auto-launch on
+ * THIS daemon. When a remote node is targeted (`dispatchMeshCommand(..., 'launch_cli', ...)`),
+ * that remote daemon's own hold governs admission at its S1 / `startSession`
+ * choke point.
+ */
 async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     try { assertMaintenanceAdmission([meshId]); } catch { return false; }
+    if (isNewWorkHeld({ meshId })) return false;
     const queue = getQueue(meshId);
     // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
     // so the dependency gate below sees the terminal state of every referenced

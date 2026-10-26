@@ -2,6 +2,7 @@ import { beginAssistantSpawn } from '../assistant/assistant-launch-fence.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { assertMaintenanceAdmission, assertMaintenanceCommandIdentity, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { assertNewWorkHoldAdmission, buildNewWorkHeldRefusal, evaluateNewWorkHold, NewWorkHeldError } from '../maintenance/new-work-hold.js';
 /**
  * DaemonCliManager — session launch: `startSession` (CLI/PTY) and the
  * `launch_cli` command (delegated-worker launch preparation + launch ledger).
@@ -46,10 +47,22 @@ import { IDENTITY } from '../track-identity.js';
 export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'roleRestartInputs' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
 
  // ─── Session start/management ──────────────────────────────
+/**
+ * Session-start choke point (F4).
+ *
+ * Per-daemon scope: each daemon enforces its own new-work hold here next to
+ * `withMaintenanceAdmission`. A remote daemon's auto-launch or forwarded
+ * `launch_cli` is governed by that remote daemon's own hold when `startSession`
+ * / `launchCli` runs on it.
+ */
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
+    assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: 'start_session' });
     assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
     const plan = planSessionStart(host, cliType, workingDir, options);
-    return withMaintenanceAdmission(() => startCliPtySession(host, plan, cliType, cliArgs, initialModel));
+    return withMaintenanceAdmission(() => {
+        assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: 'start_session' });
+        return startCliPtySession(host, plan, cliType, cliArgs, initialModel);
+    });
 }
 
 /** What every start path shares: the resolved target and the finalized options. */
@@ -405,6 +418,15 @@ async function startCliPtySession(
 
 /** `launch_cli`: resolve the launch directory and start (or reuse) a CLI session. */
 export async function launchCli(host: CliLaunchHost, args: any): Promise<CommandResult> {
+    const requestedMeshId = typeof args?.settings?.meshNodeFor === 'string' && args.settings.meshNodeFor.trim()
+        ? args.settings.meshNodeFor.trim()
+        : typeof args?.settings?.meshCoordinatorFor === 'string' && args.settings.meshCoordinatorFor.trim()
+            ? args.settings.meshCoordinatorFor.trim()
+            : undefined;
+    const holdEval = evaluateNewWorkHold({ meshId: requestedMeshId });
+    if (holdEval.held) {
+        return buildNewWorkHeldRefusal(holdEval.hold, { command: 'launch_cli', surface: 'router_command' }) as unknown as CommandResult;
+    }
     const cliType = args?.cliType;
     const config = loadConfig();
     const resolved = resolveLaunchDirectory(
@@ -471,24 +493,32 @@ export async function launchCli(host: CliLaunchHost, args: any): Promise<Command
             hint: 'Resend launch_cli with confirmExternalUntrusted=true after the user explicitly approves running JavaScript from this 3rd-party source.',
         };
     }
-    const started = await host.startSession(
-        cliType,
-        dir,
-        delegatedLaunch ? delegatedLaunch.cliArgs : args?.cliArgs,
-        args?.initialModel,
-        {
-            resumeSessionId: args?.resumeSessionId,
-            settingsOverride,
-            extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
-            ...(delegatedLaunch && 'resolvedTrustPlan' in delegatedLaunch
-                ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan }
-                : {}),
-            ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
-            ...(!delegatedSessionKey && assistantSessionKey ? { presetSessionKey: assistantSessionKey } : {}),
-            ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
-            launchProvenance: resolveLaunchProvenance(args, settingsOverride),
-        },
-    );
+    let started: { runtimeSessionId: string; providerSessionId?: string };
+    try {
+        started = await host.startSession(
+            cliType,
+            dir,
+            delegatedLaunch ? delegatedLaunch.cliArgs : args?.cliArgs,
+            args?.initialModel,
+            {
+                resumeSessionId: args?.resumeSessionId,
+                settingsOverride,
+                extraEnv: delegatedLaunch ? delegatedLaunch.env : args?.env,
+                ...(delegatedLaunch && 'resolvedTrustPlan' in delegatedLaunch
+                    ? { resolvedTrustPlan: delegatedLaunch.resolvedTrustPlan }
+                    : {}),
+                ...(delegatedSessionKey ? { presetSessionKey: delegatedSessionKey } : {}),
+                ...(!delegatedSessionKey && assistantSessionKey ? { presetSessionKey: assistantSessionKey } : {}),
+                ...(typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim() ? { initialThinkingLevel: args.initialThinkingLevel.trim() } : {}),
+                launchProvenance: resolveLaunchProvenance(args, settingsOverride),
+            },
+        );
+    } catch (err) {
+        if (err instanceof NewWorkHeldError) {
+            return err.refusal as unknown as CommandResult;
+        }
+        throw err;
+    }
 
     const ledgerLaunchRecorded = delegatedMeshId
         ? recordDelegatedLaunch(delegatedMeshId, settingsOverride, providerType, started)

@@ -160,6 +160,7 @@ export type SendRefusal =
     | 'no_target'
     | 'bootstrap_pending'
     | 'duplicate_dispatch'
+    | 'new_work_held'
     | 'internal_error'
 
 /**
@@ -278,6 +279,7 @@ export const SEND_REFUSAL_REASONS = [
     'no_target',
     'bootstrap_pending',
     'duplicate_dispatch',
+    'new_work_held',
     'internal_error',
 ] as const satisfies readonly SendRefusal[]
 

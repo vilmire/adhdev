@@ -1,4 +1,6 @@
 import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { isTrustedOwnerIngress } from '../commands/command-args.js';
+import { evaluateNewWorkHold, formatNewWorkHeldMessage, isRunningWorkContinuation, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 import { OutgoingReceiptStore } from './outgoing-receipt-store.js';
 import { outgoingInputDigest, type OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
@@ -73,6 +75,8 @@ export interface SessionInputTarget {
     label?: string;
     /** Live status spelling; classified through the A1 status vocabulary. */
     getStatus?(options?: { allowParse?: boolean }): { status?: string } | undefined;
+    /** Session settings snapshot for active mesh task/attempt binding checks. */
+    getSessionSettings?(): Record<string, unknown> | undefined;
     /**
      * Build the driver body from the envelope (materialize images, check the
      * provider's declared input support). Throws with a human-readable message
@@ -563,6 +567,35 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     async function submitOwned(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void):Promise<SubmitOutcome> {
         if (!msg || typeof msg.messageId !== 'string' || !msg.messageId.trim()) return refuse('internal_error', { message: 'messageId required' });
         if (typeof msg.sessionId !== 'string' || !msg.sessionId.trim()) return refuse('no_target');
+        const isCoordinatorNotice = Boolean(noticeObserver) || (msg.origin === 'mesh' && msg.messageId.startsWith('notify:'));
+        const isVerifiedOwnerChat = isTrustedOwnerIngress(msg) && !msg.meshAttemptRef;
+        if (!isCoordinatorNotice && !isVerifiedOwnerChat) {
+            const resolvedForHold = await Promise.resolve(deps.resolveSession(msg.sessionId)).catch(() => null);
+            const settingsForHold = resolvedForHold?.getSessionSettings?.();
+            const meshId = typeof settingsForHold?.meshNodeFor === 'string' ? settingsForHold.meshNodeFor
+                : typeof settingsForHold?.meshCoordinatorFor === 'string' ? settingsForHold.meshCoordinatorFor : undefined;
+            const activeHold = evaluateNewWorkHold({ meshId });
+            if (activeHold.held) {
+                const isContinuation = isRunningWorkContinuation({
+                    sessionId: msg.sessionId,
+                    attemptId: msg.meshAttemptRef,
+                    taskId: (msg as { meshTaskId?: string }).meshTaskId,
+                    isMeshOrCoordinatorFollowUp: msg.origin === 'mesh',
+                    sessionSettings: resolvedForHold?.getSessionSettings?.(),
+                });
+                if (!isContinuation) {
+                    return refuse(NEW_WORK_HELD_CODE, {
+                        message: formatNewWorkHeldMessage({
+                            holdId: activeHold.hold.holdId || 'active',
+                            revision: activeHold.hold.revision,
+                            expiresAt: activeHold.hold.expiresAt || 0,
+                            phase: activeHold.hold.phase,
+                            reason: activeHold.hold.reason,
+                        }, `Outbound session input refused for session '${msg.sessionId}' while new-work hold is active`),
+                    });
+                }
+            }
+        }
         const pending = inFlight.get(msg.messageId);
         if (pending) {
             await pending.catch(() => undefined);
