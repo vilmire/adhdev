@@ -71,10 +71,11 @@ export function syncInlineMeshPoliciesFromDisk(host: InlineMeshRosterHost): void
     sync.checkedAtMs = now;
     const stat = statMeshConfigFile();
     if (!stat) return; // File absent/unreadable: nothing to sync; retry next window.
-    if (stat.mtimeMs === sync.mtimeMs && stat.size === sync.size) return;
+    if (stat.mtimeMs === sync.mtimeMs && stat.size === sync.size && stat.ino === sync.ino) return;
     const hadBaseline = sync.mtimeMs >= 0;
     sync.mtimeMs = stat.mtimeMs;
     sync.size = stat.size;
+    sync.ino = stat.ino;
     if (!hadBaseline) return; // First sight records the baseline only (see field comment).
     const disk = readMeshConfigFromDisk();
     if (!disk) {

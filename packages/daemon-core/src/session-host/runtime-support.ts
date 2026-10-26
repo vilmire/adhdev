@@ -498,19 +498,32 @@ export async function ensureSessionHostReady(options: {
     }
 }
 
-export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Promise<HostedCliRuntimeDescriptor[]> {
-    const existing = (SessionHostClient as { findConnectedClient?: (ep?: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint) ?? null;
-    const client = existing || new SessionHostClient({ endpoint });
-    const shouldClose = !existing;
+export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint, options?: { includeLaunchDetails?: boolean }): Promise<HostedCliRuntimeDescriptor[]> {
+    // Census/stop proof has its own control socket: shared PTY transports can
+    // have output and reconnect subscription replay ahead of this request.
+    const client = new SessionHostClient({ endpoint, registerAsShared: false, requestTimeoutMs: 5000 });
     try {
         const response = await client.request<SessionHostRecord[]>({
             type: 'list_sessions',
-            payload: {},
+            payload: { activeOnly: true },
         });
         if (!response.success || !Array.isArray(response.result)) {
             throw new Error(`session_host_inventory_unavailable: ${response.error || 'missing list_sessions result'}`);
         }
-        return response.result
+        const records = response.result;
+        if (options?.includeLaunchDetails) {
+            for (let i = 0; i < records.length; i++) {
+                const record = records[i];
+                if (record.meta?.cliArgsOmitted !== true || record.termination || !['running', 'interrupted'].includes(record.lifecycle)) continue;
+                const detail = await client.request<SessionHostRecord>({ type: 'get_session', payload: { sessionId: record.sessionId } });
+                if (!detail.success || !detail.result || detail.result.sessionId !== record.sessionId
+                    || detail.result.runtimeKey !== record.runtimeKey || detail.result.startedAt !== record.startedAt) {
+                    throw new Error('session_host_inventory_changed_during_detail_lookup');
+                }
+                records[i] = detail.result;
+            }
+        }
+        return records
             .filter((record) => record.category === 'cli' && !record.termination && ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
             .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
             .map((record) => ({
@@ -522,6 +535,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 recoveryState: typeof record.meta?.runtimeRecoveryState === 'string' ? String(record.meta.runtimeRecoveryState) : null,
                 cliType: record.providerType,
                 workspace: record.workspace,
+                cliArgsOmitted: record.meta?.cliArgsOmitted === true,
                 cliArgs: Array.isArray(record.meta?.cliArgs) ? (record.meta.cliArgs as string[]) : [],
                 providerSessionId: typeof record.meta?.providerSessionId === 'string' ? String(record.meta.providerSessionId) : undefined,
                 assistant: record.meta?.assistant === true ? true : undefined,
@@ -548,8 +562,6 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 ...(record.meta?.launchRecord !== undefined ? { launchRecord: record.meta.launchRecord } : {}),
             }));
     } finally {
-        if (shouldClose) {
-            await client.close().catch(() => {});
-        }
+        await client.close().catch(() => {});
     }
 }

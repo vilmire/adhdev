@@ -549,7 +549,8 @@ describe('session host runtime support compatibility', () => {
   })
 
   it('throws on a failed list_sessions rather than reporting an empty host', async () => {
-    mocks.state.existingClient = { request: vi.fn(async () => ({ success: false, error: 'ENFILE' })) }
+    // Census now reads through a dedicated control client, not the shared PTY client.
+    mocks.state.inventoryResults = [{ success: false, error: 'ENFILE' }]
     await expect(listHostedCliRuntimes({ kind: 'unix', path: '/tmp/list-r2.sock' })).rejects.toThrow('ENFILE')
   })
 

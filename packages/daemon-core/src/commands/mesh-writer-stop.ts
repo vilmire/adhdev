@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { pinnedMeshNodeIdMatches } from '../mesh/mesh-pinned-node-identity.js';
 /** Exact mesh stop. An RPC acknowledgement or disappearing adapter is never
  * quiescence. Keep owner authority unless the captured native tree is gone. */
@@ -57,6 +58,22 @@ export async function stopExactMeshWriter(
                 return { ...request, success: true, quiescent: true, incarnation: previous.incarnation };
             }
         } catch { return pending('native_observation_unknown'); }
+    }
+    // A restored daemon can have neither adapter nor native capture for a
+    // session that already exited. Only the session's HOST can attest absence;
+    // an empty local adapter map or an unreachable host is not evidence.
+    if (!previous && !host.adapters.has(request.sessionId)) {
+        try {
+            if (!host.deps.listHostedCliRuntimes) return pending('unknown, cannot prove dead: host inventory unavailable');
+            const records = await host.deps.listHostedCliRuntimes();
+            if (host.adapters.has(request.sessionId)) return pending('writer_reappeared');
+            if (!records.some(r => r.runtimeId === request.sessionId)) {
+                const evidence = { kind: 'host_session_absent', sessionId: request.sessionId, observedAt: Date.now() };
+                return { ...request, success: true, quiescent: true, evidence,
+                    incarnation: createHash('sha256').update(JSON.stringify([request, evidence])).digest('hex') };
+            }
+            return pending('unknown, cannot prove dead: host still reports session');
+        } catch { return pending('unknown, cannot prove dead: host unreachable'); }
     }
     if (request.inspectOnly) return pending('quiescence_not_confirmed');
     const adapter = host.adapters.get(request.sessionId);

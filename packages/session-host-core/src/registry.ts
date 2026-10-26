@@ -89,6 +89,16 @@ export class SessionHostRegistry {
     return this.cloneRecord(cloned);
   }
 
+  /** Census projection: omit launch arguments/environment and summarize stopped
+   * sessions. Full details remain available through getSession. */
+  listSessionSummaries(activeOnly = false): SessionHostRecord[] {
+    return Array.from(this.sessions.values()).map(s => s.record)
+      .filter(r => !activeOnly || (!r.termination && r.lifecycle !== 'stopped' && r.lifecycle !== 'failed'))
+      .map(r => this.cloneRecord({ ...r, launchCommand: { command: r.launchCommand.command, args: [] },
+        meta: r.termination || r.lifecycle === 'stopped' || r.lifecycle === 'failed' ? {} : { ...r.meta, cliArgs: [], cliArgsOmitted: true } }))
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  }
+
   listSessions(): SessionHostRecord[] {
     return Array.from(this.sessions.values())
       .map(state => this.cloneRecord(state.record))

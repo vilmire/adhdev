@@ -697,7 +697,7 @@ export function requeueTaskWithOutcome(
         // the worker's report then finds no provable attempt (mesh-queue-attempt-guard.ts).
         const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
         if (retirement.kind === 'refused') {
-            LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ''}).${retirement.reason === 'attempt_open' ? ' Pass force to cancel that attempt and requeue.' : ''}`);
+            LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ''}).${retirement.reason === 'attempt_open' && retirement.attempt.state !== 'stopping' ? ' Pass force to request verified retirement.' : ''}`);
             return {
                 entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false,
                 refusal: { reason: retirement.reason, attempt: retirement.attempt, ...(retirement.detail ? { detail: retirement.detail } : {}) },

@@ -158,6 +158,7 @@ export function saveMeshConfigDurable(config: LocalMeshConfig):
         try { writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`, 'utf8'); fsyncSync(fd); }
         finally { closeSync(fd); }
         renameSync(temp, path);
+        meshSnapshot = undefined;
         committed = true;
         // Windows cannot open a directory for fsync (EPERM/EISDIR); see sessions/outgoing-receipt-store.ts.
         if (process.platform !== 'win32') {
@@ -223,10 +224,10 @@ export function loadMeshConfigStrict(): LocalMeshConfig {
 }
 
 /** Cheap change signal for meshes.json; null when the file is absent/unreadable. */
-export function statMeshConfigFile(): { mtimeMs: number; size: number } | null {
+export function statMeshConfigFile(): { mtimeMs: number; size: number; ino: number } | null {
     try {
         const stat = statSync(getMeshConfigPath());
-        return { mtimeMs: stat.mtimeMs, size: stat.size };
+        return { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino };
     } catch {
         return null;
     }
@@ -237,7 +238,37 @@ function readMeshConfigFile(): LocalMeshConfig {
     return readMeshConfigFromDisk() ?? { meshes: [] };
 }
 
+// Cache only successful snapshots. Include inode so atomic replacements with
+// preserved timestamps and length invalidate too. Never share mutable objects
+// with callers: registry mutators edit their loaded snapshot before saving.
+let meshSnapshot: { key: string; config: LocalMeshConfig; persisted: boolean } | undefined;
+function meshSnapshotKey(): string | undefined {
+    try {
+        const s = statSync(getMeshConfigPath());
+        return `${getMeshConfigPath()}:${s.ino}:${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
+    } catch { return undefined; }
+}
+function cachedMeshConfig(options: { persistMigrations?: boolean }): LocalMeshConfig {
+    const key = meshSnapshotKey();
+    if (key && meshSnapshot?.key === key && (options.persistMigrations === false || meshSnapshot.persisted)) return meshSnapshot.config;
+    const config = loadMeshConfigUncached(options);
+    const after = meshSnapshotKey();
+    // A concurrent replacement must be read on the next call, never cached
+    // under the replacement's fingerprint with the old file's contents.
+    if (key && key === after) meshSnapshot = { key, config, persisted: options.persistMigrations !== false };
+    else meshSnapshot = undefined;
+    return config;
+}
 export function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
+    return structuredClone(cachedMeshConfig(options));
+}
+/** Clone just the selected mesh on hot node/scheduling reads. */
+export function loadMeshConfigEntry(meshId: string): LocalMeshEntry | undefined {
+    const mesh = cachedMeshConfig({}).meshes.find(m => m.id === meshId);
+    return mesh ? structuredClone(mesh) : undefined;
+}
+
+function loadMeshConfigUncached(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
     const config = readMeshConfigFile();
     const migrated = migrateLoadedMeshConfig(config);
     // Persist eagerly when the on-load migration changed anything, so the
@@ -508,6 +539,7 @@ export function saveMeshConfig(config: LocalMeshConfig): void {
     const tmpPath = `${path}.tmp-${process.pid}`;
     writeFileSync(tmpPath, JSON.stringify(config, null, 2), { encoding: 'utf-8', mode: 0o600 });
     renameSync(tmpPath, path);
+    meshSnapshot = undefined;
 }
 
 // ─── Repo Identity Normalization ────────────────

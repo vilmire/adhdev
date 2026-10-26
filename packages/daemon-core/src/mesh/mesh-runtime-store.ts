@@ -343,6 +343,35 @@ export class MeshRuntimeStore {
         return rows.map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
     }
 
+    /** Active tasks and their reachable prerequisites only. History can carry
+     * megabytes of prompts/images; unrelated terminal rows need no JSON work. */
+    getQueueSchedulingGraph(meshId: string): MeshWorkQueueEntry[] {
+        this.ensureLegacyQueueMigrated(meshId);
+        const graph: MeshWorkQueueEntry[] = [];
+        const seen = new Set<string>();
+        let frontier = this.getQueueHeads(meshId, ['pending']).map(row => row.id);
+        while (frontier.length) {
+            const batch = [...new Set(frontier)].filter(id => !seen.has(id));
+            frontier = [];
+            for (let offset = 0; offset < batch.length; offset += 500) {
+                const ids = batch.slice(offset, offset + 500);
+                for (const id of ids) seen.add(id);
+                const rows = this.db.prepare(`SELECT id, status,
+                    json_extract(payload, '$.phase') AS phase,
+                    json_extract(payload, '$.dependsOn') AS deps,
+                    json_extract(payload, '$.cancelReason') AS cancelReason
+                    FROM mesh_queue WHERE mesh_id = ? AND id IN (${ids.map(() => '?').join(',')})`)
+                    .all(meshId, ...ids) as Array<{ id: string; status: MeshTaskStatus; phase?: string; deps?: string; cancelReason?: string }>;
+                for (const { deps, ...row } of rows) {
+                    const entry = { ...row, dependsOn: deps ? JSON.parse(deps) : [] } as MeshWorkQueueEntry;
+                    graph.push(entry);
+                    for (const id of entry.dependsOn ?? []) if (!seen.has(id)) frontier.push(id);
+                }
+            }
+        }
+        return graph;
+    }
+
     getQueueRevision(meshId: string): string {
         this.ensureLegacyQueueMigrated(meshId);
         const rows = this.db
@@ -355,7 +384,10 @@ export class MeshRuntimeStore {
     replaceQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
         this.transaction(() => {
             assertSourceDependencyGraph(queue);
-            const deleteStmt = this.db.prepare('DELETE FROM mesh_queue WHERE mesh_id = ?');
+            const existing = this.db.prepare('SELECT id, payload FROM mesh_queue WHERE mesh_id = ?').all(meshId) as Array<{ id: string; payload: string }>;
+            const payloads = new Map(existing.map(row => [row.id, row.payload]));
+            const ids = new Set(queue.map(entry => entry.id));
+            const deleteStmt = this.db.prepare('DELETE FROM mesh_queue WHERE mesh_id = ? AND id = ?');
             const insert = this.db.prepare(`
                 INSERT INTO mesh_queue (
                     id, mesh_id, status, target_node_id, target_session_id,
@@ -363,10 +395,17 @@ export class MeshRuntimeStore {
                 ) VALUES (
                     @id, @meshId, @status, @targetNodeId, @targetSessionId,
                     @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
-                )
+                ) ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status, target_node_id = excluded.target_node_id,
+                    target_session_id = excluded.target_session_id, assigned_node_id = excluded.assigned_node_id,
+                    assigned_session_id = excluded.assigned_session_id, created_at = excluded.created_at,
+                    updated_at = excluded.updated_at, payload = excluded.payload
             `);
-            deleteStmt.run(meshId);
-            for (const entry of queue) insert.run(this.toRow(entry));
+            for (const row of existing) if (!ids.has(row.id)) deleteStmt.run(meshId, row.id);
+            for (const entry of queue) {
+                const row = this.toRow(entry);
+                if (payloads.get(entry.id) !== row.payload) insert.run(row);
+            }
             this.maybeCheckpointWal();
         });
     }

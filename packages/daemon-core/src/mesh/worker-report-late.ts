@@ -1,3 +1,4 @@
+import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
 /**
  * Late worker reports: a `report_completion` that arrives after its attempt already
  * went terminal (stall reclaim, cancel, timeout). Within a grace window the report is
@@ -287,6 +288,7 @@ export function acceptLateWorkerCompletionReport(
         + (duplicate ? ' (duplicate replay)' : '')
         + (handoffNoteRecorded ? ' with handoff note' : ''),
     );
+    recordAcceptedSessionCompletion(identity, nowMs);
     return {
         accepted: true,
         taskId: identity.taskId,

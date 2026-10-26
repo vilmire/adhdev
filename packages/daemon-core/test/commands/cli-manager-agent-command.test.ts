@@ -219,7 +219,7 @@ describe('DaemonCliManager agent_command', () => {
       cliType: 'hermes-cli',
       action: 'send_chat',
       message: 'task body that must NOT echo into the local session',
-    })).rejects.toThrow(/CLI agent not running/)
+    })).resolves.toMatchObject({ success: false, code: 'dispatch_not_started', error: expect.stringMatching(/CLI agent not running/) })
 
     // The local same-cliType session ('session-1') must NOT have received the message.
     expect(sendMessage).not.toHaveBeenCalled()

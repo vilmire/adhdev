@@ -22,7 +22,9 @@ export function recordQueueTaskHold(meshId: string, taskId: string, reason: stri
             const completed = new Set(store.getQueueHeads(meshId, ['completed']).map(head => head.id));
             context.blockingTaskIds = (task.dependsOn || []).filter(id => !completed.has(id));
         }
+        const before = JSON.stringify(task.hold);
         setQueueTaskHold(task, reason, context);
+        if (before === JSON.stringify(task.hold)) return;
         persistHold(store, task);
     });
 }

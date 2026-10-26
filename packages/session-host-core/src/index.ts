@@ -94,6 +94,7 @@ export type {
 } from './ipc.js';
 export {
   DEFAULT_CONFIG_DIR_NAME,
+  assertTestStorageIsolated,
   canonicalizeInstancePath,
   isDefaultInstanceConfigDir,
   resolveInstanceConfigDir,

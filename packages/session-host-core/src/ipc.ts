@@ -100,18 +100,19 @@ function serializeEnvelope(envelope: SessionHostWireEnvelope): string {
 function createLineParser<TEnvelope = SessionHostWireEnvelope>(
   onEnvelope: (envelope: TEnvelope) => void,
 ) {
-  let buffer = '';
+  let fragments: string[] = [];
   const decoder = new StringDecoder('utf8');
   const parser = (chunk: Buffer | string) => {
-    buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
-    let newlineIndex = buffer.indexOf('\n');
-    while (newlineIndex >= 0) {
-      const rawLine = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      if (rawLine) {
-        onEnvelope(JSON.parse(rawLine) as TEnvelope);
-      }
-      newlineIndex = buffer.indexOf('\n');
+    const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    let start = 0;
+    for (;;) {
+      const newline = text.indexOf('\n', start);
+      if (newline < 0) { if (start < text.length) fragments.push(text.slice(start)); break; }
+      fragments.push(text.slice(start, newline));
+      const rawLine = fragments.join('').trim();
+      fragments = [];
+      start = newline + 1;
+      if (rawLine) onEnvelope(JSON.parse(rawLine) as TEnvelope);
     }
   };
   /**
@@ -127,8 +128,8 @@ function createLineParser<TEnvelope = SessionHostWireEnvelope>(
    * mid-write into a crash of the process observing it.
    */
   parser.end = (): string => {
-    const remainder = buffer + decoder.end();
-    buffer = '';
+    const remainder = fragments.join('') + decoder.end();
+    fragments = [];
     return remainder;
   };
   return parser;
@@ -391,7 +392,11 @@ export class SessionHostClient {
       }
 
       if (envelope.kind === 'event') {
-        for (const listener of this.eventListeners) listener(envelope.event);
+        for (const listener of this.eventListeners) {
+          // An observer must never abort frame draining and strand a response
+          // behind an event in the same socket chunk.
+          try { listener(envelope.event); } catch { /* observer owns its error */ }
+        }
       }
     });
     socket.on('data', parser);

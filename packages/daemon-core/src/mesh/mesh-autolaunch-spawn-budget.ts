@@ -43,6 +43,11 @@ export function recordTaskAutoLaunch(
     return withEntryLock(() => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        // Re-evaluating the same hold every tick is observation, not progress.
+        if (!opts?.spendSpawnBudget && autoLaunch.status === 'skipped' && entry.autoLaunch) {
+            const { updatedAt: _at, ...previous } = entry.autoLaunch;
+            if (JSON.stringify(previous) === JSON.stringify(autoLaunch)) return entry;
+        }
         const now = new Date().toISOString();
         // AUTOLAUNCH-SPAWN-CAP (P3): spend one unit of the task's durable spawn budget —
         // but ONLY when the caller asserts a session actually came into existence.

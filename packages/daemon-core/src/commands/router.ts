@@ -391,13 +391,13 @@ export class DaemonCommandRouter {
     aggregateMeshStatusCache = new Map<string, { builtAt: number; snapshot: any; queueRevision: string }>();
     /**
      * meshes.json policy resync state (see syncInlineMeshPoliciesFromDisk).
-     * checkedAtMs throttles the stat; mtimeMs/size are the last-seen file
+     * checkedAtMs throttles the stat; mtimeMs/size/ino are the last-seen file
      * identity. -1 = no baseline recorded yet: the first check RECORDS the
      * baseline without applying, so a stale local file mirror can never
      * regress a fresher inline (cloud-coordinator) policy — only edits made
      * while this daemon is alive and watching are pulled into memory.
      */
-    meshPolicyDiskSync = { checkedAtMs: 0, mtimeMs: -1, size: -1 };
+    meshPolicyDiskSync = { checkedAtMs: 0, mtimeMs: -1, size: -1, ino: -1 };
     /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
      *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
      *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */

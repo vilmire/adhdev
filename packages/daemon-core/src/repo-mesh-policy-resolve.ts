@@ -105,9 +105,9 @@ export function resolveMaxNodes(value: unknown): number {
 
 /**
  * Resolve the delegate idle TTL in MINUTES from a raw policy value.
- * Returns 0 when the reaper is disabled (explicit `0`, `false`, or a negative value).
+ * Returns 0 when age-based reaping is disabled (explicit `0`, `false`, or a negative value).
  * A missing/NaN value takes the default; any other positive value is clamped into
- * [MIN, MAX] so a typo can neither disable the reaper silently nor make it aggressive
+ * [MIN, MAX] so a typo can neither disable age-based reaping silently nor make it aggressive
  * enough to kill working delegates.
  */
 export function resolveDelegatedSessionIdleTtlMinutes(value: unknown): number {
@@ -231,6 +231,8 @@ const POLICY_KEY_SPECS: Record<string, PolicyKeySpec> = {
         effective: (v) => (typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_MESH_POLICY.maxTaskRetries),
     },
     idleActiveMissionReminder: { effective: (v) => v !== false },
+    maxIdleDelegatedSessionsPerMachine: { effective: (v) => typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.floor(v))) : 2 },
+    stopDelegatedSessionOnAcceptedCompletion: { effective: (v) => v !== false },
     delegatedSessionIdleTtlMinutes: { effective: (v) => resolveDelegatedSessionIdleTtlMinutes(v) },
     coordinatorIdlePushPolicy: {
         effective: (v) => (v === 'auto_silent_on_dispatch' ? 'auto_silent_on_dispatch' : 'always'),

@@ -1,3 +1,4 @@
+import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 /**
@@ -85,10 +86,11 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const status = Array.isArray(args?.status)
                 ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
                 : undefined;
-            const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId))
+            const requested = status?.length ? [...new Set([...status, ...(status.includes('blocked') ? ['failed'] : [])])] : undefined;
+            const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId, { status: requested as any }))
                 .filter(task => !status?.length || status.includes(task.status));
             // M1: annotate dependency state at view time (waitingOn / dependenciesSatisfied).
-            const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId));
+            const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, MeshRuntimeStore.getInstance().getQueueDependencyHeads(meshId, rawQueue.flatMap(t => t.dependsOn ?? [])));
             const statusById = new Map(allQueue.map(task => [task.id, task.status]));
             const depMetaById = new Map(allQueue.map(task => [task.id, task] as const));
             // IPC load audit 2026-09-23: never echo a persisted image envelope from a view command.
@@ -122,10 +124,11 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { summarizeQueueEntryInputForView, cancelTask, takeCancelledTaskAssignment } = await import('../../mesh/mesh-work-queue.js');
             const reason = typeof args?.reason === 'string' ? args.reason : undefined;
+            await settleQueueWriter(meshId, taskId, 'operator_cancel');
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
             if (task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending',
-                error: 'Cancellation is stopping the physical writer; ownership remains retained until quiescence.', task: summarizeQueueEntryInputForView(task) };
+                error: WRITER_UNKNOWN_ERROR, task: summarizeQueueEntryInputForView(task) };
             // CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker that was bound to the
             // now-cancelled task. cancelTask already cleared the queue's assignment fields (so the
             // reclaim watchdog no longer sees it as a live assignment), but a still-running worker
@@ -153,6 +156,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { summarizeQueueEntryInputForView, requeueTaskWithOutcome, getQueueEntryById } = await import('../../mesh/mesh-work-queue.js');
             const { requeueRefusalResponse } = await import('../../mesh/mesh-queue-attempt-guard.js');
+            if (args?.force === true) await settleQueueWriter(meshId, taskId, 'superseded');
             // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
             // mark requeueTask consults is process-local and is lost across a daemon restart.
             // Independently of that mark, if the row is still 'assigned' to a session this

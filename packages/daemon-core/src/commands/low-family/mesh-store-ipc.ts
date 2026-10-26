@@ -1,3 +1,4 @@
+import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
@@ -381,9 +382,11 @@ const queueCancel: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
     if (!req) return badRequest('queue_cancel');
     try {
         // MESH-DISPATCH-MISROUTE: the PRE-cancel row carries the assignment a caller must stop.
-        const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
-        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, await ownQueueRole(_ctx, req.meshId)));
-        if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', task: queueWire(task) };
+        const before = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === 'host') await settleQueueWriter(req.meshId, req.taskId, 'operator_cancel');
+        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, role));
+        if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', error: WRITER_UNKNOWN_ERROR, task: queueWire(task) };
         const response: QueueCancelResponse = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
     } catch (e) {
@@ -395,6 +398,8 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     const req = decodeQueueRequeueRequest(args);
     if (!req) return badRequest('queue_requeue');
     try {
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === 'host' && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, 'superseded');
         const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTaskWithOutcome>[2]);
         // The turn ledger refused (attempt still running, foreign owner, no ledger):
         // the row is untouched — answer a refusal, never `success: true` with that row.

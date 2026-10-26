@@ -319,7 +319,7 @@ export async function maybeInjectIdleActiveMissionReminder(
         ]);
         const summary = buildMeshActiveWork({
             meshId,
-            queue: getQueue(meshId),
+            queue: getQueue(meshId, { status: ['pending', 'assigned'] }),
             directDispatches: getActiveDirectDispatches(meshId),
             ledgerEntries,
             ledgerSnapshot: sharedLedgerSnapshot,

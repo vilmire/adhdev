@@ -57,13 +57,17 @@ import { agentCommand } from './cli-manager-agent-command.js';
 import { colorize, resolveLaunchProvenance, type CommandResult, type CliStartOptions } from './cli-manager-launch.js';
 
 export interface CliManagerDeps {
+    idleSessionLifetimeControl?: {
+        listSessions(): Promise<import('@adhdev/session-host-core').SessionHostRecord[]>;
+        stopSession(sessionId: string): Promise<import('@adhdev/session-host-core').SessionHostRecord | null>;
+    };
  /** P2P — PTY output transmit */
     getP2p(): { broadcastSessionOutput(key: string, data: string): void } | null;
  /** InstanceManager — register in CLI unified status */
     getInstanceManager(): ProviderInstanceManager | null;
     getSessionRegistry?(): SessionRegistry | null;
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
-    listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+    listHostedCliRuntimes?: (options?: { includeLaunchDetails?: boolean }) => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
     getHostedBindingOwner?: () => HostedBindingOwner;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
@@ -74,6 +78,7 @@ export interface CliTransportFactoryParams {
     providerType: string;
     workspace: string;
     cliArgs?: string[];
+    cliArgsOmitted?: boolean;
     providerSessionId?: string;
     attachExisting?: boolean;
     /**
@@ -98,6 +103,7 @@ export interface HostedCliRuntimeDescriptor {
     cliType: string;
     workspace: string;
     cliArgs?: string[];
+    cliArgsOmitted?: boolean;
     providerSessionId?: string;
     managedBy?: string;
     /** Positive role mark persisted in session-host meta; never inferred from workspace/title. */

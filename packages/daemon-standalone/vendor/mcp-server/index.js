@@ -2874,6 +2874,7 @@ var require_dist = __commonJS({
       SessionHostRegistry: () => SessionHostRegistry,
       SessionRingBuffer: () => SessionRingBuffer,
       applyTerminalColorEnv: () => applyTerminalColorEnv,
+      assertTestStorageIsolated: () => assertTestStorageIsolated,
       buildRuntimeDisplayName: () => buildRuntimeDisplayName,
       buildRuntimeKey: () => buildRuntimeKey,
       canonicalizeInstancePath: () => canonicalizeInstancePath,
@@ -2934,6 +2935,7 @@ var require_dist = __commonJS({
       "send_signal",
       "restart_session",
       "prune_duplicate_sessions",
+      "get_session",
       "list_sessions"
     ];
     function classifyTermination(input) {
@@ -3404,6 +3406,15 @@ var require_dist = __commonJS({
         });
         return this.cloneRecord(cloned);
       }
+      /** Census projection: omit launch arguments/environment and summarize stopped
+       * sessions. Full details remain available through getSession. */
+      listSessionSummaries(activeOnly = false) {
+        return Array.from(this.sessions.values()).map((s) => s.record).filter((r) => !activeOnly || !r.termination && r.lifecycle !== "stopped" && r.lifecycle !== "failed").map((r) => this.cloneRecord({
+          ...r,
+          launchCommand: { command: r.launchCommand.command, args: [] },
+          meta: r.termination || r.lifecycle === "stopped" || r.lifecycle === "failed" ? {} : { ...r.meta, cliArgs: [], cliArgsOmitted: true }
+        })).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      }
       listSessions() {
         return Array.from(this.sessions.values()).map((state) => this.cloneRecord(state.record)).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
       }
@@ -3604,23 +3615,27 @@ var require_dist = __commonJS({
 `;
     }
     function createLineParser(onEnvelope) {
-      let buffer = "";
+      let fragments = [];
       const decoder = new import_string_decoder.StringDecoder("utf8");
       const parser = (chunk) => {
-        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-        let newlineIndex = buffer.indexOf("\n");
-        while (newlineIndex >= 0) {
-          const rawLine = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-          if (rawLine) {
-            onEnvelope(JSON.parse(rawLine));
+        const text = typeof chunk === "string" ? chunk : decoder.write(chunk);
+        let start = 0;
+        for (; ; ) {
+          const newline = text.indexOf("\n", start);
+          if (newline < 0) {
+            if (start < text.length) fragments.push(text.slice(start));
+            break;
           }
-          newlineIndex = buffer.indexOf("\n");
+          fragments.push(text.slice(start, newline));
+          const rawLine = fragments.join("").trim();
+          fragments = [];
+          start = newline + 1;
+          if (rawLine) onEnvelope(JSON.parse(rawLine));
         }
       };
       parser.end = () => {
-        const remainder = buffer + decoder.end();
-        buffer = "";
+        const remainder = fragments.join("") + decoder.end();
+        fragments = [];
         return remainder;
       };
       return parser;
@@ -3817,7 +3832,12 @@ var require_dist = __commonJS({
             return;
           }
           if (envelope.kind === "event") {
-            for (const listener of this.eventListeners) listener(envelope.event);
+            for (const listener of this.eventListeners) {
+              try {
+                listener(envelope.event);
+              } catch {
+              }
+            }
           }
         });
         socket.on("data", parser);
@@ -4025,9 +4045,23 @@ var require_dist = __commonJS({
     var os32 = __toESM2(require("os"));
     var path32 = __toESM2(require("path"));
     var DEFAULT_CONFIG_DIR_NAME = ".adhdev";
+    function assertTestStorageIsolated(destination) {
+      const env2 = process.env;
+      if (!env2.VITEST && env2.NODE_ENV !== "test" && !env2.NODE_TEST_CONTEXT && !process.execArgv.some((arg) => arg === "--test" || arg.startsWith("--test="))) return;
+      const target = canonicalizeInstancePath(destination);
+      const home = os32.userInfo().homedir;
+      for (const track of [".adhdev", ".adhdev-preview"]) {
+        const live = canonicalizeInstancePath(path32.join(home, track));
+        if (target === live || target.startsWith(live + path32.sep)) {
+          throw new Error("LIVE runtime storage is forbidden in a test process; pin ADHDEV_CONFIG_DIR or storageRootDir to a temporary directory");
+        }
+      }
+    }
     function resolveInstanceConfigDir(env2 = process.env, homeDir = os32.homedir()) {
       const override = typeof env2.ADHDEV_CONFIG_DIR === "string" ? env2.ADHDEV_CONFIG_DIR.trim() : "";
-      return override || path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+      const resolved = override || path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
+      if (env2 === process.env) assertTestStorageIsolated(resolved);
+      return resolved;
     }
     function realpathLongestExistingPrefix(resolved) {
       let current = resolved;
@@ -28921,6 +28955,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           // Stop a coordinator-launched delegate's CLI runtime after 30 idle minutes
           // (record preserved). Owner decision 2026-08-28. 0/false disables.
           delegatedSessionIdleTtlMinutes: DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES,
+          maxIdleDelegatedSessionsPerMachine: 2,
+          stopDelegatedSessionOnAcceptedCompletion: true,
           // Conservative default: every coordinator-dispatched worker completion still
           // notifies the owner. Opt into 'auto_silent_on_dispatch' to one-shot-silence the
           // routine idle push for a coordinator-driven task (approval/failure notifications
@@ -29264,6 +29300,8 @@ ${renderWorkerProtocolFooter2(input)}`;
             effective: (v) => typeof v === "number" && Number.isFinite(v) ? v : DEFAULT_MESH_POLICY.maxTaskRetries
           },
           idleActiveMissionReminder: { effective: (v) => v !== false },
+          maxIdleDelegatedSessionsPerMachine: { effective: (v) => typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.floor(v))) : 2 },
+          stopDelegatedSessionOnAcceptedCompletion: { effective: (v) => v !== false },
           delegatedSessionIdleTtlMinutes: { effective: (v) => resolveDelegatedSessionIdleTtlMinutes(v) },
           coordinatorIdlePushPolicy: {
             effective: (v) => v === "auto_silent_on_dispatch" ? "auto_silent_on_dispatch" : "always"
@@ -41159,6 +41197,7 @@ ${error.message || ""}`;
       STRICT_MESH_CONFIG_LOCK_WAIT_MS: () => STRICT_MESH_CONFIG_LOCK_WAIT_MS,
       getMeshConfigPath: () => getMeshConfigPath,
       loadMeshConfig: () => loadMeshConfig,
+      loadMeshConfigEntry: () => loadMeshConfigEntry,
       loadMeshConfigStrict: () => loadMeshConfigStrict,
       migrateMeshPolicyStorage: () => migrateMeshPolicyStorage,
       migrateProviderRolesToSlots: () => migrateProviderRolesToSlots,
@@ -41264,6 +41303,7 @@ ${error.message || ""}`;
           (0, import_fs8.closeSync)(fd);
         }
         (0, import_fs8.renameSync)(temp, path109);
+        meshSnapshot = void 0;
         committed = true;
         if (process.platform !== "win32") {
           const parent = (0, import_fs8.openSync)((0, import_path8.dirname)(path109), "r");
@@ -41310,7 +41350,7 @@ ${error.message || ""}`;
     function statMeshConfigFile() {
       try {
         const stat2 = (0, import_fs8.statSync)(getMeshConfigPath());
-        return { mtimeMs: stat2.mtimeMs, size: stat2.size };
+        return { mtimeMs: stat2.mtimeMs, size: stat2.size, ino: stat2.ino };
       } catch {
         return null;
       }
@@ -41318,7 +41358,31 @@ ${error.message || ""}`;
     function readMeshConfigFile() {
       return readMeshConfigFromDisk() ?? { meshes: [] };
     }
+    function meshSnapshotKey() {
+      try {
+        const s2 = (0, import_fs8.statSync)(getMeshConfigPath());
+        return `${getMeshConfigPath()}:${s2.ino}:${s2.mtimeMs}:${s2.ctimeMs}:${s2.size}`;
+      } catch {
+        return void 0;
+      }
+    }
+    function cachedMeshConfig(options) {
+      const key5 = meshSnapshotKey();
+      if (key5 && meshSnapshot?.key === key5 && (options.persistMigrations === false || meshSnapshot.persisted)) return meshSnapshot.config;
+      const config = loadMeshConfigUncached(options);
+      const after = meshSnapshotKey();
+      if (key5 && key5 === after) meshSnapshot = { key: key5, config, persisted: options.persistMigrations !== false };
+      else meshSnapshot = void 0;
+      return config;
+    }
     function loadMeshConfig(options = {}) {
+      return structuredClone(cachedMeshConfig(options));
+    }
+    function loadMeshConfigEntry(meshId) {
+      const mesh = cachedMeshConfig({}).meshes.find((m) => m.id === meshId);
+      return mesh ? structuredClone(mesh) : void 0;
+    }
+    function loadMeshConfigUncached(options = {}) {
       const config = readMeshConfigFile();
       const migrated = migrateLoadedMeshConfig(config);
       if (migrated && options.persistMigrations !== false) {
@@ -41452,6 +41516,7 @@ ${error.message || ""}`;
       const tmpPath = `${path109}.tmp-${process.pid}`;
       (0, import_fs8.writeFileSync)(tmpPath, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 384 });
       (0, import_fs8.renameSync)(tmpPath, path109);
+      meshSnapshot = void 0;
     }
     function normalizeRepoIdentity(remoteUrl) {
       let identity3 = remoteUrl.trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
@@ -41489,6 +41554,7 @@ ${error.message || ""}`;
     var STRICT_MESH_CONFIG_LOCK_WAIT_MS;
     var strictMeshWriteDepth;
     var MeshConfigUnreadableError;
+    var meshSnapshot;
     var init_mesh_config_store = __esm2({
       "src/config/mesh-config-store.ts"() {
         "use strict";
@@ -41682,7 +41748,7 @@ ${error.message || ""}`;
       return loadMeshConfig({ persistMigrations: false }).meshes;
     }
     function getMesh(meshId) {
-      return loadMeshConfig().meshes.find((m) => m.id === meshId);
+      return loadMeshConfigEntry(meshId);
     }
     function getMeshByRepo(repoIdentity) {
       const normalized = normalizeRepoIdentity(repoIdentity);
@@ -42159,17 +42225,20 @@ ${error.message || ""}`;
     });
     function getLedgerDir() {
       const dir = (0, import_path9.join)(getConfigDir2(), LEDGER_DIR_NAME);
+      (0, import_session_host_core4.assertTestStorageIsolated)(dir);
       if (!(0, import_fs9.existsSync)(dir)) {
         (0, import_fs9.mkdirSync)(dir, { recursive: true, mode: 448 });
       }
       return dir;
     }
+    var import_session_host_core4;
     var import_fs9;
     var import_path9;
     var LEDGER_DIR_NAME;
     var init_mesh_ledger_paths = __esm2({
       "src/mesh/mesh-ledger-paths.ts"() {
         "use strict";
+        import_session_host_core4 = require_dist();
         import_fs9 = require("fs");
         import_path9 = require("path");
         init_config();
@@ -45891,6 +45960,65 @@ ${error.message || ""}`;
         loggedMigrationFailureFlag = false;
       }
     });
+    function sessionClaimFence(state2) {
+      const s2 = state2?.settings ?? {};
+      return {
+        taskId: s2.meshActiveTaskId ?? null,
+        attemptId: s2.meshActiveAttemptId ?? null,
+        generation: s2.meshActiveAttemptGeneration ?? null,
+        dispatchNonce: s2.meshActiveDispatchNonce ?? null
+      };
+    }
+    function claimFenceMatches(expected, state2) {
+      return JSON.stringify(expected) === JSON.stringify(sessionClaimFence(state2));
+    }
+    function ensure(db2) {
+      db2.exec(`CREATE TABLE IF NOT EXISTS mesh_session_stop_fences (
+        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS ix_session_stop_pending ON mesh_session_stop_fences(mesh_id, state)`);
+    }
+    function sessionIsStopping(db2, sessionId) {
+      if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ?").get(sessionId.trim());
+    }
+    function reserveSessionStop(db2, meshId, sessionId, stopId) {
+      ensure(db2);
+      return db2.transaction(() => {
+        const held = db2.prepare("SELECT mesh_id, stop_id FROM mesh_session_stop_fences WHERE session_id = ?").get(sessionId.trim());
+        if (held) {
+          if (held.mesh_id !== meshId || stopId && held.stop_id !== stopId) throw new Error("session_stop_fence_conflict");
+          return held.stop_id;
+        }
+        const id4 = stopId ?? (0, import_node_crypto52.randomUUID)();
+        db2.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'reserved')").run(sessionId.trim(), meshId, id4);
+        return id4;
+      }).immediate();
+    }
+    function markSessionStopSent(db2, sessionId, stopId) {
+      const changed = db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopping' WHERE session_id = ? AND stop_id = ? AND state IN ('reserved', 'stopping')").run(sessionId.trim(), stopId);
+      if (changed.changes !== 1) throw new Error("session_stop_reservation_lost");
+    }
+    function releaseSessionStop(db2, sessionId, stopId) {
+      db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ? AND state = 'reserved'").run(sessionId.trim(), stopId);
+    }
+    function sessionStopPending(db2, sessionId) {
+      if (!sessionIsStopping(db2, sessionId)) return false;
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state IN ('reserved', 'stopping')").get(sessionId.trim());
+    }
+    function hasPendingSessionStops(db2, meshId) {
+      if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state IN ('reserved', 'stopping') LIMIT 1").get(meshId);
+    }
+    function confirmSessionStop(db2, sessionId, stopId) {
+      db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
+    }
+    var import_node_crypto52;
+    var init_mesh_session_stop_fence = __esm2({
+      "src/mesh/mesh-session-stop-fence.ts"() {
+        "use strict";
+        import_node_crypto52 = require("crypto");
+      }
+    });
     function pinnedMeshNodeIdMatches(actual, expected) {
       if (actual !== expected) return false;
       if (actual === void 0 || actual === null) return true;
@@ -46295,6 +46423,164 @@ ${error.message || ""}`;
         activeLedger = null;
       }
     });
+    function readAcceptedSessionEvents(db2, meshId, sessionId, kind) {
+      if (!indexed.has(db2)) {
+        db2.exec("CREATE INDEX IF NOT EXISTS ix_lifetime_accepted_session ON turn_events(mesh_id, kind, session_id, at_ms)");
+        indexed.add(db2);
+      }
+      return db2.prepare(`SELECT e.session_id AS sessionId, e.generation, a.task_id AS taskId
+        FROM turn_events e INDEXED BY ix_lifetime_accepted_session JOIN turn_attempts a ON a.attempt_id = e.attempt_id
+        WHERE e.mesh_id = ? AND e.kind = ? AND e.session_id = ?`).all(meshId, kind, sessionId.trim());
+    }
+    function readAcceptedOutput(store2, taskId) {
+      const version2 = store2.db.prepare("SELECT version FROM mesh_task_outputs WHERE task_id = ? ORDER BY version DESC LIMIT 1").get(taskId);
+      if (!version2) return null;
+      let cache3 = outputs.get(store2.db);
+      if (!cache3) {
+        cache3 = /* @__PURE__ */ new Map();
+        outputs.set(store2.db, cache3);
+      }
+      const cached5 = cache3.get(taskId);
+      if (cached5?.version === version2.version) return cached5.envelope;
+      const output = store2.getLatestTaskOutput(taskId);
+      if (!output) throw new Error("lifetime_output_version_disappeared");
+      const envelope = JSON.parse(output.envelopeJson);
+      if (cache3.size >= 2048) cache3.delete(cache3.keys().next().value);
+      cache3.set(taskId, { version: output.version, envelope });
+      return envelope;
+    }
+    var indexed;
+    var outputs;
+    var init_mesh_session_accepted_read = __esm2({
+      "src/mesh/mesh-session-accepted-read.ts"() {
+        "use strict";
+        indexed = /* @__PURE__ */ new WeakSet();
+        outputs = /* @__PURE__ */ new WeakMap();
+      }
+    });
+    function db(create = false) {
+      const db2 = MeshRuntimeStore.getInstance().db;
+      if (create) db2.exec("CREATE TABLE IF NOT EXISTS mesh_writer_stop_captures (request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, capture_json TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0)");
+      return db2;
+    }
+    function readWriterStopCapture(r) {
+      if (!db().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mesh_writer_stop_captures'").get()) return null;
+      const row2 = db().prepare("SELECT capture_json FROM mesh_writer_stop_captures WHERE request_id = ?").get(r.stopRequestId);
+      if (!row2) return null;
+      const capture = JSON.parse(row2.capture_json);
+      if (capture.requestKey !== key(r)) throw new Error("writer_stop_request_identity_changed");
+      return capture;
+    }
+    function captureWriterStop(r, root, tree, runtimeKey, startedAt) {
+      const requestKey = key(r);
+      const capture = { requestKey, runtimeKey, startedAt, root, tree, incarnation: (0, import_node_crypto6.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root, tree])).digest("hex") };
+      db(true).prepare("INSERT OR IGNORE INTO mesh_writer_stop_captures (request_id,session_id,capture_json) VALUES (?,?,?)").run(r.stopRequestId, r.sessionId, JSON.stringify(capture));
+      return readWriterStopCapture(r);
+    }
+    function isWriterStopPending(sessionId) {
+      if (!db().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mesh_writer_stop_captures'").get()) return false;
+      return !!db().prepare("SELECT 1 FROM mesh_writer_stop_captures WHERE session_id = ? AND settled = 0").get(sessionId);
+    }
+    function markWriterStopQuiescent(r) {
+      readWriterStopCapture(r);
+      db().prepare("UPDATE mesh_writer_stop_captures SET settled = 1 WHERE request_id = ?").run(r.stopRequestId);
+    }
+    var import_node_crypto6;
+    var key;
+    var init_mesh_writer_stop_journal = __esm2({
+      "src/commands/mesh-writer-stop-journal.ts"() {
+        "use strict";
+        import_node_crypto6 = require("crypto");
+        init_mesh_runtime_store();
+        key = (r) => JSON.stringify([r.meshId, r.taskId, r.attemptId, r.generation, r.dispatchNonce, r.sessionId, r.nodeId, r.providerType, r.ownerDaemonId, r.stopRequestId]);
+      }
+    });
+    function isSafeIdleTaskSession(state2, meta2 = {}) {
+      if (!state2) return false;
+      const settings2 = { ...meta2, ...state2.settings };
+      const launches = [state2.launchRecord, settings2.launchRecord];
+      if (launches.some((launch) => launch?.spawnedForTaskId === null || launch?.launchedBy === "assistant" || ["coordinator", "assistant"].includes(launch?.roleLaunch?.role))) return false;
+      const role = readText(settings2.meshRole || settings2.role || state2.role).toLowerCase();
+      if (settings2.meshCoordinatorFor || settings2.assistant || settings2.isAssistant || state2.assistant || state2.isAssistant || readText(settings2.launchedBy).toLowerCase() === "assistant" || role === "coordinator" || role === "assistant" || settings2.spawnedForTaskId === null || state2.spawnedForTaskId === null || state2.launchRecord?.spawnedForTaskId === null || state2.launchRecord?.launchedBy === "assistant" || settings2.launchRecord?.launchedBy === "assistant") return false;
+      if (isBusyStatus(state2.status) || isBusyStatus(state2.activeChat?.status)) return false;
+      if (state2.activeModal || state2.activeInteractivePrompt || state2.pendingApproval || state2.pendingPrompt || state2.activeChat?.activeModal || state2.activeChat?.activeInteractivePrompt) return false;
+      return isIdleSessionState(state2);
+    }
+    function recordAcceptedSessionCompletion(identity3, nowMs2) {
+      const store2 = MeshRuntimeStore.getInstance();
+      afterBridgeCommit(store2.db, () => {
+        try {
+          if (!identity3.attemptId || !identity3.sessionId) return;
+          const recorded = store2.turnStore().insertWorkerEvent({
+            eventId: (0, import_node_crypto7.randomUUID)(),
+            attemptId: identity3.attemptId,
+            sessionId: identity3.sessionId,
+            kind: SESSION_COMPLETION_ACCEPTED_EVENT,
+            dedupeKey: "accepted",
+            payload: {},
+            atMs: nowMs2
+          });
+          if (!recorded && !store2.turnStore().listWorkerEventsForTask(identity3.meshId, identity3.taskId, SESSION_COMPLETION_ACCEPTED_EVENT).some((event) => event.attemptId === identity3.attemptId && sessionIdsEquivalent(event.sessionId, identity3.sessionId))) {
+            throw new Error("accepted_lifetime_audit_not_persisted");
+          }
+        } catch (error) {
+          LOG.warn("MeshSessionLifetime", `Accepted report lifetime audit failed for task ${identity3.taskId}: ${String(error)}; TTL/cap remain active`);
+        }
+      });
+    }
+    function acceptedCompletionSessionIds(meshId, sessions) {
+      const ids = /* @__PURE__ */ new Set();
+      const store2 = MeshRuntimeStore.getInstance();
+      for (const { sessionId } of sessions) {
+        const turns = store2.turnStore();
+        const latest = turns.findPresentationAttemptForSession(sessionId)?.attempt;
+        if (!latest || latest.meshId !== meshId || !latest.taskId || !latest.terminal || latest.state === "stopping" || latest.data.writerStop && latest.data.writerStop.confirmed !== true) continue;
+        const audit = readAcceptedSessionEvents(store2.db, meshId, sessionId, SESSION_COMPLETION_ACCEPTED_EVENT);
+        const envelope = readAcceptedOutput(store2, latest.taskId);
+        const currentAudit = audit.filter((e) => e.taskId === latest.taskId);
+        if (currentAudit.length) {
+          if (currentAudit.some((e) => e.generation === latest.generation)) ids.add(sessionId);
+        } else if (envelope?.evidence?.summarySource === "tool_report" && sessionIdsEquivalent(envelope.source?.session_id, sessionId)) ids.add(sessionId);
+      }
+      return ids;
+    }
+    function sessionCheckpointPending(sessionId) {
+      if (isWriterStopPending(sessionId)) return true;
+      const attempt = MeshRuntimeStore.getInstance().turnStore().findPresentationAttemptForSession(sessionId)?.attempt;
+      return !!attempt && (!attempt.terminal || attempt.state === "stopping" || !!attempt.data.writerStop && attempt.data.writerStop.confirmed !== true);
+    }
+    function includesSession(ids, candidate) {
+      return [...ids].some((id4) => sessionIdsEquivalent(id4, candidate));
+    }
+    function sessionStopRetryDue(key5, now) {
+      return (retries.get(key5)?.nextAt ?? 0) <= now;
+    }
+    function recordSessionStopFailure(key5, now) {
+      const attempts = (retries.get(key5)?.attempts ?? 0) + 1;
+      const retry = { attempts, nextAt: now + Math.min(30 * 6e4, 6e4 * 2 ** Math.min(attempts - 1, 5)) };
+      retries.set(key5, retry);
+      return retry;
+    }
+    function clearSessionStopRetry(key5) {
+      retries.delete(key5);
+    }
+    var import_node_crypto7;
+    var SESSION_COMPLETION_ACCEPTED_EVENT;
+    var retries;
+    var init_mesh_session_lifetime = __esm2({
+      "src/mesh/mesh-session-lifetime.ts"() {
+        "use strict";
+        init_mesh_session_accepted_read();
+        import_node_crypto7 = require("crypto");
+        init_logger();
+        init_worker_bridge_transaction();
+        init_dist();
+        init_mesh_runtime_store();
+        init_mesh_writer_stop_journal();
+        SESSION_COMPLETION_ACCEPTED_EVENT = "session_lifetime_completion_accepted";
+        retries = /* @__PURE__ */ new Map();
+      }
+    });
     var worker_handoff_notes_exports = {};
     __export2(worker_handoff_notes_exports, {
       HANDOFF_ENCLOSE_MAX_BYTES: () => HANDOFF_ENCLOSE_MAX_BYTES,
@@ -46486,23 +46772,23 @@ ${block2.text}`,
         HANDOFF_ENCLOSE_MAX_BYTES = 8 * 1024;
       }
     });
-    function key(meshId, taskId) {
+    function key2(meshId, taskId) {
       return `${meshId}::${taskId}`;
     }
     function beginTaskDispatchInFlight(meshId, taskId) {
       if (!meshId || !taskId) return false;
-      const k = key(meshId, taskId);
+      const k = key2(meshId, taskId);
       if (inFlight.has(k)) return false;
       inFlight.add(k);
       return true;
     }
     function isTaskDispatchInFlight(meshId, taskId) {
       if (!meshId || !taskId) return false;
-      return inFlight.has(key(meshId, taskId));
+      return inFlight.has(key2(meshId, taskId));
     }
     function endTaskDispatchInFlight(meshId, taskId) {
       if (!meshId || !taskId) return;
-      inFlight.delete(key(meshId, taskId));
+      inFlight.delete(key2(meshId, taskId));
     }
     var inFlight;
     var init_mesh_task_inflight = __esm2({
@@ -47728,16 +48014,16 @@ ${pattern}
       }
     });
     function sha256Hex(input) {
-      return (0, import_node_crypto52.createHash)("sha256").update(input).digest("hex");
+      return (0, import_node_crypto8.createHash)("sha256").update(input).digest("hex");
     }
     function shortHash(input, length = 16) {
       return sha256Hex(input).slice(0, length);
     }
-    var import_node_crypto52;
+    var import_node_crypto8;
     var init_hash = __esm2({
       "src/system/hash.ts"() {
         "use strict";
-        import_node_crypto52 = require("crypto");
+        import_node_crypto8 = require("crypto");
       }
     });
     function privateDirectory(home, relative21 = "") {
@@ -49888,6 +50174,11 @@ ${rendered.join("\n\n")}`,
         commit(draft, "failed", "genuine", reason);
         return;
       }
+      const refusal2 = draft.ctx.evidence;
+      if (attempt.scope === "mesh_direct" && attempt.state === "accepted" && attempt.deliveredAt === null && attempt.consumedAt === null && refusal2.kind === "dispatch_failed" && refusal2.source === "dispatch" && refusal2.reason === "rejected_by_worker" && refusal2.refusalCode === "dispatch_not_started") {
+        commit(draft, "failed", "genuine", "dispatch_failed");
+        return;
+      }
       if (!attempt.data.writerStop?.confirmed) {
         beginWriterStop(draft, reason);
         return;
@@ -49981,6 +50272,10 @@ ${rendered.join("\n\n")}`,
         stop.reason = "hard_ceiling";
         stop.terminal = { outcome: "failed", strength: "genuine", source: "scheduler" };
         releaseHolds(draft, ["hard_ceiling"]);
+      }
+      if (ev.kind === "cancel") {
+        stop.reason = ev.reason;
+        stop.terminal = { outcome: "cancelled", strength: "genuine", source: ev.source };
       }
       if (input.stopConfirmed) {
         stop.confirmed = true;
@@ -61930,7 +62225,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function requeueRefusalResponse(taskId, refusal2, task) {
       const { attempt, reason } = refusal2;
-      const why = reason === "attempt_open" ? "Pass force:true to retire that attempt and requeue, or cancel and re-enqueue." : reason === "not_owner" ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.` : reason === "no_ledger" ? "No turn ledger is active on this daemon to retire it." : `The turn ledger did not apply the retirement${refusal2.detail ? ` (${refusal2.detail})` : ""}.`;
+      const why = reason === "attempt_open" ? attempt.state === "stopping" ? "unknown, cannot prove dead: the owning host has not confirmed session absence or writer quiescence. Ownership remains retained." : "Pass force:true to request verified retirement and requeue, or cancel and re-enqueue." : reason === "not_owner" ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.` : reason === "no_ledger" ? "No turn ledger is active on this daemon to retire it." : `The turn ledger did not apply the retirement${refusal2.detail ? ` (${refusal2.detail})` : ""}.`;
       return {
         success: false,
         error: `Task '${taskId}' was not requeued: its turn attempt ${attempt.attemptId} is still ${attempt.state} on session ${attempt.sessionId} (${reason}). ${why}`,
@@ -62387,6 +62682,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return withEntryLock(() => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        if (!opts?.spendSpawnBudget && autoLaunch.status === "skipped" && entry.autoLaunch) {
+          const { updatedAt: _at, ...previous } = entry.autoLaunch;
+          if (JSON.stringify(previous) === JSON.stringify(autoLaunch)) return entry;
+        }
         const now = (/* @__PURE__ */ new Date()).toISOString();
         if (opts?.spendSpawnBudget) {
           entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
@@ -63459,7 +63758,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
         const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
         if (retirement.kind === "refused") {
-          LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ""}).${retirement.reason === "attempt_open" ? " Pass force to cancel that attempt and requeue." : ""}`);
+          LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ""}).${retirement.reason === "attempt_open" && retirement.attempt.state !== "stopping" ? " Pass force to request verified retirement." : ""}`);
           return {
             entry,
             cascaded: [],
@@ -63918,6 +64217,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "WorkerReport",
         `Accepted LATE ${report.outcome} report for task ${identity3.taskId} attempt ${identity3.attemptId} (already ${identity3.terminalOutcome} ${Math.round((nowMs2 - identity3.terminalAtMs) / 1e3)}s ago)` + (duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       );
+      recordAcceptedSessionCompletion(identity3, nowMs2);
       return {
         accepted: true,
         taskId: identity3.taskId,
@@ -63937,6 +64237,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_worker_report_late = __esm2({
       "src/mesh/worker-report-late.ts"() {
         "use strict";
+        init_mesh_session_lifetime();
         init_worker_mcp_isolation();
         init_mesh_runtime_store();
         init_dist();
@@ -64447,6 +64748,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "WorkerReport",
         `Accepted ${report.outcome} report for task ${identity3.taskId}` + (identity3.attemptId ? ` attempt ${identity3.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       ));
+      recordAcceptedSessionCompletion({ ...identity3, attemptId: evidenceAttemptId }, nowMs2);
       return {
         accepted: true,
         taskId: identity3.taskId,
@@ -64525,6 +64827,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_worker_report = __esm2({
       "src/mesh/worker-report.ts"() {
         "use strict";
+        init_mesh_session_lifetime();
         init_worker_bridge_transaction();
         import_crypto14 = require("crypto");
         init_dist();
@@ -65006,7 +65309,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return JSON.stringify(value) ?? "null";
     }
     function bridgeDigest(envelope) {
-      return (0, import_node_crypto6.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
+      return (0, import_node_crypto9.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
     }
     function ensureBridgeSchema(db2) {
       db2.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_policy (mesh_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL);
@@ -65064,7 +65367,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         openAttempts: attempts.filter((a) => a.terminal_outcome === null).length,
         correctionOrLivenessHolds: holds.length,
         pendingDeliveries: pending.n,
-        ledgerDigest: (0, import_node_crypto6.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
+        ledgerDigest: (0, import_node_crypto9.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
       };
     }
     function findBridgeMemberDelivery(db2, senderId, deliveryId) {
@@ -65096,7 +65399,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     async function queryBridgePeer(dispatch2, peerId, meshId, policy, deliveryClaim) {
-      const nonce = (0, import_node_crypto6.randomUUID)();
+      const nonce = (0, import_node_crypto9.randomUUID)();
       const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce, ...deliveryClaim ? { deliveryClaim } : {} }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
       const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
       return valid ? reply : null;
@@ -65176,7 +65479,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const pending = db2.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all();
       for (const item of pending) await sendBridgeDelivery(db2, JSON.parse(item.envelope_json), dispatch2);
     }
-    var import_node_crypto6;
+    var import_node_crypto9;
     var BRIDGE_CAPABILITY_COMMAND;
     var BRIDGE_DELIVERY_COMMAND;
     var BRIDGE_MAX_AGE_MS;
@@ -65187,7 +65490,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       "src/mesh/worker-bridge.ts"() {
         "use strict";
         init_worker_bridge_transaction();
-        import_node_crypto6 = require("crypto");
+        import_node_crypto9 = require("crypto");
         init_dist();
         init_mesh_runtime_store();
         init_build_info();
@@ -65949,28 +66252,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         routerCommandIngressArgs = getRouterCommandIngressMap();
       }
     });
-    function readInstanceIdentity(inst) {
-      const field3 = inst?.instanceId;
-      if (typeof field3 === "string" && field3) return field3;
-      const sid = inst?.getState?.().instanceId;
-      return typeof sid === "string" ? sid : void 0;
-    }
-    function findLocalCliInstance(components, sessionId) {
-      if (!sessionId) return void 0;
-      const direct = components.instanceManager?.getInstance?.(sessionId);
-      if (direct && direct.category === "cli") return direct;
-      const instances2 = components.instanceManager?.getByCategory?.("cli") || [];
-      return instances2.find((inst) => {
-        const sid = readText(readInstanceIdentity(inst));
-        return !!sid && sessionIdsEquivalent(sid, sessionId);
-      });
-    }
-    var init_cli_instance_lookup = __esm2({
-      "src/mesh/cli-instance-lookup.ts"() {
-        "use strict";
-        init_dist();
-      }
-    });
     function liveLocalQuotaForRouting(isLocalNode) {
       const entries = readQuotaCache();
       if (!entries) return null;
@@ -66357,280 +66638,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = "all_providers_quota_gated";
         DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
         DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
-      }
-    });
-    function quotaClaimBlockKey(meshId, observation) {
-      return `${meshId}:${observation.nodeId}:${observation.sessionId}:${observation.providerType}`;
-    }
-    function quotaClaimBlockDescription(providerType, block2) {
-      if (block2.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
-        return `provider '${providerType}' reported quota exhausted`;
-      }
-      return `provider '${providerType}' had ${block2.remainingPercent.toFixed(1)}% ${block2.window} quota remaining (< ${block2.thresholdPercent}% threshold)`;
-    }
-    function rememberBounded(map2, key5, value) {
-      map2.set(key5, value);
-      if (map2.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
-        const oldest = map2.keys().next().value;
-        if (oldest !== void 0) map2.delete(oldest);
-      }
-    }
-    function logQuotaClaimBlockTransition(meshId, observation, phase = "blocked") {
-      const key5 = quotaClaimBlockKey(meshId, observation);
-      const fingerprint = `${phase}:${observation.block.reason}:${observation.block.window}:${observation.block.remainingPercent}:${observation.block.thresholdPercent}`;
-      if (lastQuotaClaimBlockLog.get(key5) === fingerprint) return;
-      const wasBlocked = lastQuotaClaimBlockLog.has(key5);
-      rememberBounded(lastQuotaClaimBlockLog, key5, fingerprint);
-      const overrideNote = phase === "overridden_by_pin" ? " (provider pinned by requiredTags \u2014 gate overridden to honor the pin)" : "";
-      LOG.info("MeshQueue", `QUOTA GATE: ${phase === "overridden_by_pin" ? "allowing" : "deferring"} queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)}${overrideNote}${phase === "blocked" ? " \u2014 trying remaining provider candidates; the task stays pending only if none can claim" : ""}`);
-      try {
-        const payload = {
-          phase,
-          nodeId: observation.nodeId,
-          sessionId: observation.sessionId,
-          providerType: observation.providerType,
-          reason: observation.block.reason,
-          window: observation.block.window,
-          remainingPercent: observation.block.remainingPercent,
-          thresholdPercent: observation.block.thresholdPercent,
-          previouslyBlocked: wasBlocked
-        };
-        if (observation.context?.trigger) {
-          payload.trigger = observation.context.trigger;
-        }
-        if (observation.context?.candidateTaskId) {
-          payload.candidateTaskId = observation.context.candidateTaskId;
-        }
-        if (observation.context?.pinOverride) {
-          payload.pinOverride = true;
-        }
-        meshRecord(meshId, "quota_claim_gate", {
-          nodeId: observation.nodeId,
-          sessionId: observation.sessionId,
-          providerType: observation.providerType,
-          payload
-        }, { local: true });
-      } catch {
-      }
-    }
-    function clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType) {
-      const key5 = quotaClaimBlockKey(meshId, { nodeId, sessionId, providerType });
-      if (lastQuotaClaimBlockLog.has(key5)) {
-        try {
-          meshRecord(meshId, "quota_claim_gate", {
-            nodeId,
-            sessionId,
-            providerType,
-            payload: { phase: "cleared", nodeId, sessionId, providerType }
-          }, { local: true });
-        } catch {
-        }
-      }
-      lastQuotaClaimBlockLog.delete(key5);
-    }
-    function logQuotaClaimFallbackSuccess(blocked, taskId, winner) {
-      if (!blocked.length) return;
-      const detail = blocked.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
-      LOG.info("MeshQueue", `QUOTA GATE: queue claim fallback succeeded for task ${taskId}: ${detail} \u2192 provider '${winner.providerType}' claimed on node ${winner.nodeId} (${winner.sessionId})`);
-    }
-    function logAllQuotaClaimCandidatesBlocked(meshId, trace, pendingTaskIds) {
-      if (!trace.blocked.length || trace.clear > 0 || trace.blocked.length !== trace.evaluated) return;
-      const detail = trace.blocked.map((item) => `${item.nodeId}/${quotaClaimBlockDescription(item.providerType, item.block)}`).join("; ");
-      const fingerprint = `${pendingTaskIds.slice().sort().join(",")}|${detail}`;
-      if (lastAllQuotaClaimBlockedLog.get(meshId) === fingerprint) return;
-      rememberBounded(lastAllQuotaClaimBlockedLog, meshId, fingerprint);
-      LOG.info("MeshQueue", `QUOTA GATE: every idle provider candidate was quota-gated for mesh ${meshId} (${detail}); task(s) ${pendingTaskIds.join(", ") || "pending"} remain queued until a quota window resets`);
-    }
-    function clearAllQuotaClaimCandidatesBlockedState(meshId) {
-      lastAllQuotaClaimBlockedLog.delete(meshId);
-    }
-    function claimRefusalKey(meshId, nodeId, sessionId) {
-      return `${meshId}:${nodeId}:${sessionId}`;
-    }
-    function recordClaimRefusal(meshId, args) {
-      if (!args.reason || args.reason === "no_pending_candidates") {
-        clearClaimRefusalState(meshId, args.nodeId, args.sessionId);
-        return;
-      }
-      const key5 = claimRefusalKey(meshId, args.nodeId, args.sessionId);
-      const fingerprint = `${args.reason}|${args.detail || ""}`;
-      if (lastClaimRefusalLog.get(key5) === fingerprint) return;
-      rememberBounded(lastClaimRefusalLog, key5, fingerprint);
-      LOG.info("MeshQueue", `CLAIM REFUSED on node ${args.nodeId} (${args.sessionId}${args.providerType ? `, ${args.providerType}` : ""}) for mesh ${meshId}: ${args.reason}${args.detail ? ` \u2014 ${args.detail}` : ""}`);
-      try {
-        meshRecord(meshId, "claim_refused", {
-          nodeId: args.nodeId,
-          sessionId: args.sessionId,
-          ...args.providerType ? { providerType: args.providerType } : {},
-          payload: {
-            reason: args.reason,
-            ...args.detail ? { detail: args.detail } : {}
-          }
-        }, { local: true });
-      } catch {
-      }
-    }
-    function clearClaimRefusalState(meshId, nodeId, sessionId) {
-      lastClaimRefusalLog.delete(claimRefusalKey(meshId, nodeId, sessionId));
-    }
-    function logWorktreeBootstrapStaleBypass(meshId, nodeId, sessionId) {
-      const key5 = `${meshId}:${nodeId}:${sessionId}`;
-      if (lastWorktreeBootstrapBypassLog.has(key5)) return;
-      rememberBounded(lastWorktreeBootstrapBypassLog, key5, "bypassed");
-      LOG.warn("MeshQueue", `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean \u2014 treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
-    }
-    function clearWorktreeBootstrapStaleBypassState(meshId, nodeId, sessionId) {
-      lastWorktreeBootstrapBypassLog.delete(`${meshId}:${nodeId}:${sessionId}`);
-    }
-    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId, sessionId, effectiveProviderType) {
-      const spawnedProviderType = typeof effectiveProviderType === "string" && effectiveProviderType.trim() ? effectiveProviderType.trim() : typeof resolved.providerType === "string" ? resolved.providerType.trim() : "";
-      if (!spawnedProviderType || !resolved.quotaGated?.length) return;
-      const detail = resolved.quotaGated.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
-      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ""}`);
-    }
-    function recordAutoLaunchEvent(meshId, args) {
-      const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ""}`;
-      const currentSig = `${args.phase}|${args.reason || ""}`;
-      if (args.phase === "skipped" && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
-        return;
-      }
-      lastAutoLaunchLedgerKey.set(dedupKey, currentSig);
-      if (lastAutoLaunchLedgerKey.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
-        const oldest = lastAutoLaunchLedgerKey.keys().next().value;
-        if (oldest !== void 0) lastAutoLaunchLedgerKey.delete(oldest);
-      }
-      try {
-        meshRecord(meshId, "session_auto_launch", {
-          nodeId: args.nodeId,
-          sessionId: args.sessionId,
-          providerType: args.providerType,
-          // (B) promote taskId so this entry joins the task lifecycle timeline.
-          ...args.taskId ? { taskId: args.taskId } : {},
-          payload: {
-            phase: args.phase,
-            taskId: args.taskId,
-            reason: args.reason,
-            error: args.error,
-            // (D) resolved execution profile for the spawned worker.
-            ...args.model ? { resolvedModel: args.model } : {},
-            ...args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}
-          }
-        }, { local: true });
-      } catch (e) {
-        LOG.warn("MeshQueue", `Failed to record auto-launch ledger event: ${e?.message || e}`);
-      }
-    }
-    var lastQuotaClaimBlockLog;
-    var lastAllQuotaClaimBlockedLog;
-    var lastClaimRefusalLog;
-    var lastWorktreeBootstrapBypassLog;
-    var lastAutoLaunchLedgerKey;
-    var AUTO_LAUNCH_LEDGER_DEDUP_MAX;
-    var init_mesh_queue_observability = __esm2({
-      "src/mesh/mesh-queue-observability.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_record();
-        init_mesh_quota_routing();
-        lastQuotaClaimBlockLog = /* @__PURE__ */ new Map();
-        lastAllQuotaClaimBlockedLog = /* @__PURE__ */ new Map();
-        lastClaimRefusalLog = /* @__PURE__ */ new Map();
-        lastWorktreeBootstrapBypassLog = /* @__PURE__ */ new Map();
-        lastAutoLaunchLedgerKey = /* @__PURE__ */ new Map();
-        AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2e3;
-      }
-    });
-    function selectClaimCandidate(candidates, gates) {
-      let deepestIndex = -1;
-      let deepestReason;
-      let deepest;
-      for (const candidate of candidates) {
-        const failedAt = gates.findIndex((gate) => !gate.test(candidate));
-        if (failedAt === -1) return { entry: candidate };
-        if (failedAt > deepestIndex) {
-          deepestIndex = failedAt;
-          deepestReason = gates[failedAt].reason;
-          deepest = candidate;
-        }
-      }
-      return { reason: deepestReason ?? "no_pending_candidates", ...deepest !== void 0 ? { deepest } : {} };
-    }
-    function claimDeferralKey(meshId, nodeId) {
-      return `${meshId}::${nodeId}`;
-    }
-    function noteClaimDeferredForNode(meshId, nodeId) {
-      if (!nodeId) return;
-      const key5 = claimDeferralKey(meshId, nodeId);
-      claimDeferredByFastForward.set(key5, (claimDeferredByFastForward.get(key5) || 0) + 1);
-      if (claimDeferredByFastForward.size > CLAIM_DEFERRAL_MAX_ENTRIES) {
-        const oldest = claimDeferredByFastForward.keys().next().value;
-        if (oldest !== void 0) claimDeferredByFastForward.delete(oldest);
-      }
-    }
-    function claimDeferralOwedForNode(meshId, nodeId) {
-      if (!nodeId) return false;
-      const seen2 = claimDeferredByFastForward.get(claimDeferralKey(meshId, nodeId)) || 0;
-      return seen2 > 0 && seen2 <= MAX_FAST_FORWARD_CLAIM_REDRIVES;
-    }
-    function shouldRedriveDeferredClaim(meshId, nodeId, sessionId, leaseHeld) {
-      if (!nodeId || !sessionId) return false;
-      if (!claimDeferralOwedForNode(meshId, nodeId)) return false;
-      return !leaseHeld();
-    }
-    function clearClaimDeferralForNode(meshId, nodeId) {
-      if (!nodeId) return;
-      claimDeferredByFastForward.delete(claimDeferralKey(meshId, nodeId));
-    }
-    function sessionRefusalKey(meshId, sessionId) {
-      return `${meshId}::${sessionId}`;
-    }
-    function noteSessionClaimRefusal(meshId, sessionId, refusal2) {
-      if (!meshId || !sessionId) return;
-      const key5 = sessionRefusalKey(meshId, sessionId);
-      if (!refusal2 || refusal2.reason === "no_pending_candidates") {
-        recentSessionClaimRefusals.delete(key5);
-        return;
-      }
-      recentSessionClaimRefusals.delete(key5);
-      recentSessionClaimRefusals.set(key5, {
-        reason: refusal2.reason,
-        ...refusal2.taskId ? { taskId: refusal2.taskId } : {},
-        atMs: refusal2.atMs ?? Date.now()
-      });
-      if (recentSessionClaimRefusals.size > SESSION_CLAIM_REFUSAL_MAX_ENTRIES) {
-        const oldest = recentSessionClaimRefusals.keys().next().value;
-        if (oldest !== void 0) recentSessionClaimRefusals.delete(oldest);
-      }
-    }
-    function readRecentSessionClaimRefusal(meshId, sessionId, nowMs2 = Date.now()) {
-      if (!meshId || !sessionId) return null;
-      const record7 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
-      if (!record7) return null;
-      const age = nowMs2 - record7.atMs;
-      if (!(age >= 0 && age <= SESSION_CLAIM_REFUSAL_FRESH_MS)) return null;
-      return record7;
-    }
-    function sessionClaimRefusalReleasesSpawnGate(meshId, sessionId, nowMs2 = Date.now()) {
-      const record7 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
-      return !!record7 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record7.reason);
-    }
-    var claimDeferredByFastForward;
-    var MAX_FAST_FORWARD_CLAIM_REDRIVES;
-    var CLAIM_DEFERRAL_MAX_ENTRIES;
-    var SPAWN_GATE_RELEASING_CLAIM_REFUSALS;
-    var SESSION_CLAIM_REFUSAL_FRESH_MS;
-    var SESSION_CLAIM_REFUSAL_MAX_ENTRIES;
-    var recentSessionClaimRefusals;
-    var init_mesh_claim_refusal = __esm2({
-      "src/mesh/mesh-claim-refusal.ts"() {
-        "use strict";
-        claimDeferredByFastForward = /* @__PURE__ */ new Map();
-        MAX_FAST_FORWARD_CLAIM_REDRIVES = 3;
-        CLAIM_DEFERRAL_MAX_ENTRIES = 2e3;
-        SPAWN_GATE_RELEASING_CLAIM_REFUSALS = /* @__PURE__ */ new Set(["parallel_cap_reached"]);
-        SESSION_CLAIM_REFUSAL_FRESH_MS = 3e4;
-        SESSION_CLAIM_REFUSAL_MAX_ENTRIES = 2e3;
-        recentSessionClaimRefusals = /* @__PURE__ */ new Map();
       }
     });
     function quotaRiskSnapshotForCandidates(node, orderedProviderTypes, policy, now = Date.now(), context2, ranking) {
@@ -67652,11 +67659,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_turn_presentation();
       }
     });
-    var import_session_host_core4;
+    var import_session_host_core5;
     var init_runtime_surface = __esm2({
       "src/session-host/runtime-surface.ts"() {
         "use strict";
-        import_session_host_core4 = require_dist();
+        import_session_host_core5 = require_dist();
       }
     });
     function readCachedInlineMeshActiveSessions(node) {
@@ -67806,7 +67813,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         providerApproval,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
         lifecycle: readStringValue(record7?.lifecycle),
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record7),
+        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record7),
         recoveryState: readStringValue(meta2.runtimeRecoveryState) ?? null,
         workspace: readStringValue(record7?.workspace) ?? null,
         title: readStringValue(record7?.displayName, record7?.workspaceLabel) ?? null,
@@ -69248,6 +69255,335 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         };
       }
     });
+    function reuseIdleTaskSession(components, meshId, task, nodes, claim) {
+      const candidates = [];
+      for (const inst of components.instanceManager?.getByCategory("cli") ?? []) {
+        const s2 = inst.getState();
+        const settings2 = s2.settings ?? {};
+        if (settings2.meshNodeFor !== meshId || !isSafeIdleTaskSession(s2, settings2)) continue;
+        candidates.push({ nodeId: readText(settings2.meshNodeId), sessionId: readText(s2.instanceId), provider: readText(s2.type) });
+      }
+      for (const remote of MeshRuntimeStore.getInstance().getRemoteIdleSessions?.(meshId) ?? []) {
+        if (!isSafeIdleTaskSession({ status: "idle", ...remote.metadata, settings: remote.metadata?.settings ?? remote.metadata }, remote.metadata)) continue;
+        candidates.push({ nodeId: remote.nodeId, sessionId: remote.sessionId, provider: remote.providerType });
+      }
+      for (const c of candidates) {
+        if (!c.nodeId || !c.sessionId || !c.provider) continue;
+        if (!nodes.some((node) => meshNodeIdMatches7(node, c.nodeId))) continue;
+        if (task.targetNodeId && !meshNodeIdMatches7({ nodeId: c.nodeId }, task.targetNodeId)) continue;
+        if (task.targetSessionId && !sessionIdsEquivalent(c.sessionId, task.targetSessionId)) continue;
+        if (sessionIsStopping(MeshRuntimeStore.getInstance().db, c.sessionId)) continue;
+        if (sessionHasActiveAssignment(meshId, c.sessionId)) continue;
+        if (claim(components, meshId, c.nodeId, c.sessionId, c.provider, void 0, void 0, "auto_launch_reuse")) return "claimed";
+      }
+      return "none";
+    }
+    var init_mesh_session_reuse = __esm2({
+      "src/mesh/mesh-session-reuse.ts"() {
+        "use strict";
+        init_mesh_session_stop_fence();
+        init_dist();
+        init_mesh_runtime_store();
+        init_mesh_scheduling_fitness();
+        init_mesh_session_lifetime();
+      }
+    });
+    function readInstanceIdentity(inst) {
+      const field3 = inst?.instanceId;
+      if (typeof field3 === "string" && field3) return field3;
+      const sid = inst?.getState?.().instanceId;
+      return typeof sid === "string" ? sid : void 0;
+    }
+    function findLocalCliInstance(components, sessionId) {
+      if (!sessionId) return void 0;
+      const direct = components.instanceManager?.getInstance?.(sessionId);
+      if (direct && direct.category === "cli") return direct;
+      const instances2 = components.instanceManager?.getByCategory?.("cli") || [];
+      return instances2.find((inst) => {
+        const sid = readText(readInstanceIdentity(inst));
+        return !!sid && sessionIdsEquivalent(sid, sessionId);
+      });
+    }
+    var init_cli_instance_lookup = __esm2({
+      "src/mesh/cli-instance-lookup.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
+    function quotaClaimBlockKey(meshId, observation) {
+      return `${meshId}:${observation.nodeId}:${observation.sessionId}:${observation.providerType}`;
+    }
+    function quotaClaimBlockDescription(providerType, block2) {
+      if (block2.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
+        return `provider '${providerType}' reported quota exhausted`;
+      }
+      return `provider '${providerType}' had ${block2.remainingPercent.toFixed(1)}% ${block2.window} quota remaining (< ${block2.thresholdPercent}% threshold)`;
+    }
+    function rememberBounded(map2, key5, value) {
+      map2.set(key5, value);
+      if (map2.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        const oldest = map2.keys().next().value;
+        if (oldest !== void 0) map2.delete(oldest);
+      }
+    }
+    function logQuotaClaimBlockTransition(meshId, observation, phase = "blocked") {
+      const key5 = quotaClaimBlockKey(meshId, observation);
+      const fingerprint = `${phase}:${observation.block.reason}:${observation.block.window}:${observation.block.remainingPercent}:${observation.block.thresholdPercent}`;
+      if (lastQuotaClaimBlockLog.get(key5) === fingerprint) return;
+      const wasBlocked = lastQuotaClaimBlockLog.has(key5);
+      rememberBounded(lastQuotaClaimBlockLog, key5, fingerprint);
+      const overrideNote = phase === "overridden_by_pin" ? " (provider pinned by requiredTags \u2014 gate overridden to honor the pin)" : "";
+      LOG.info("MeshQueue", `QUOTA GATE: ${phase === "overridden_by_pin" ? "allowing" : "deferring"} queue claim for node ${observation.nodeId} (${observation.sessionId}): ${quotaClaimBlockDescription(observation.providerType, observation.block)}${overrideNote}${phase === "blocked" ? " \u2014 trying remaining provider candidates; the task stays pending only if none can claim" : ""}`);
+      try {
+        const payload = {
+          phase,
+          nodeId: observation.nodeId,
+          sessionId: observation.sessionId,
+          providerType: observation.providerType,
+          reason: observation.block.reason,
+          window: observation.block.window,
+          remainingPercent: observation.block.remainingPercent,
+          thresholdPercent: observation.block.thresholdPercent,
+          previouslyBlocked: wasBlocked
+        };
+        if (observation.context?.trigger) {
+          payload.trigger = observation.context.trigger;
+        }
+        if (observation.context?.candidateTaskId) {
+          payload.candidateTaskId = observation.context.candidateTaskId;
+        }
+        if (observation.context?.pinOverride) {
+          payload.pinOverride = true;
+        }
+        meshRecord(meshId, "quota_claim_gate", {
+          nodeId: observation.nodeId,
+          sessionId: observation.sessionId,
+          providerType: observation.providerType,
+          payload
+        }, { local: true });
+      } catch {
+      }
+    }
+    function clearQuotaClaimBlockState(meshId, nodeId, sessionId, providerType) {
+      const key5 = quotaClaimBlockKey(meshId, { nodeId, sessionId, providerType });
+      if (lastQuotaClaimBlockLog.has(key5)) {
+        try {
+          meshRecord(meshId, "quota_claim_gate", {
+            nodeId,
+            sessionId,
+            providerType,
+            payload: { phase: "cleared", nodeId, sessionId, providerType }
+          }, { local: true });
+        } catch {
+        }
+      }
+      lastQuotaClaimBlockLog.delete(key5);
+    }
+    function logQuotaClaimFallbackSuccess(blocked, taskId, winner) {
+      if (!blocked.length) return;
+      const detail = blocked.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
+      LOG.info("MeshQueue", `QUOTA GATE: queue claim fallback succeeded for task ${taskId}: ${detail} \u2192 provider '${winner.providerType}' claimed on node ${winner.nodeId} (${winner.sessionId})`);
+    }
+    function logAllQuotaClaimCandidatesBlocked(meshId, trace, pendingTaskIds) {
+      if (!trace.blocked.length || trace.clear > 0 || trace.blocked.length !== trace.evaluated) return;
+      const detail = trace.blocked.map((item) => `${item.nodeId}/${quotaClaimBlockDescription(item.providerType, item.block)}`).join("; ");
+      const fingerprint = `${pendingTaskIds.slice().sort().join(",")}|${detail}`;
+      if (lastAllQuotaClaimBlockedLog.get(meshId) === fingerprint) return;
+      rememberBounded(lastAllQuotaClaimBlockedLog, meshId, fingerprint);
+      LOG.info("MeshQueue", `QUOTA GATE: every idle provider candidate was quota-gated for mesh ${meshId} (${detail}); task(s) ${pendingTaskIds.join(", ") || "pending"} remain queued until a quota window resets`);
+    }
+    function clearAllQuotaClaimCandidatesBlockedState(meshId) {
+      lastAllQuotaClaimBlockedLog.delete(meshId);
+    }
+    function claimRefusalKey(meshId, nodeId, sessionId) {
+      return `${meshId}:${nodeId}:${sessionId}`;
+    }
+    function recordClaimRefusal(meshId, args) {
+      if (!args.reason || args.reason === "no_pending_candidates") {
+        clearClaimRefusalState(meshId, args.nodeId, args.sessionId);
+        return;
+      }
+      const key5 = claimRefusalKey(meshId, args.nodeId, args.sessionId);
+      const fingerprint = `${args.reason}|${args.detail || ""}`;
+      if (lastClaimRefusalLog.get(key5) === fingerprint) return;
+      rememberBounded(lastClaimRefusalLog, key5, fingerprint);
+      LOG.info("MeshQueue", `CLAIM REFUSED on node ${args.nodeId} (${args.sessionId}${args.providerType ? `, ${args.providerType}` : ""}) for mesh ${meshId}: ${args.reason}${args.detail ? ` \u2014 ${args.detail}` : ""}`);
+      try {
+        meshRecord(meshId, "claim_refused", {
+          nodeId: args.nodeId,
+          sessionId: args.sessionId,
+          ...args.providerType ? { providerType: args.providerType } : {},
+          payload: {
+            reason: args.reason,
+            ...args.detail ? { detail: args.detail } : {}
+          }
+        }, { local: true });
+      } catch {
+      }
+    }
+    function clearClaimRefusalState(meshId, nodeId, sessionId) {
+      lastClaimRefusalLog.delete(claimRefusalKey(meshId, nodeId, sessionId));
+    }
+    function logWorktreeBootstrapStaleBypass(meshId, nodeId, sessionId) {
+      const key5 = `${meshId}:${nodeId}:${sessionId}`;
+      if (lastWorktreeBootstrapBypassLog.has(key5)) return;
+      rememberBounded(lastWorktreeBootstrapBypassLog, key5, "bypassed");
+      LOG.warn("MeshQueue", `Worktree node ${nodeId} (${sessionId}) bootstrap stuck 'running' beyond the stale backstop and its worktree is git-clean \u2014 treating bootstrap as silently complete and allowing the claim (the terminal-state stamp likely never reached this daemon's mesh view)`);
+    }
+    function clearWorktreeBootstrapStaleBypassState(meshId, nodeId, sessionId) {
+      lastWorktreeBootstrapBypassLog.delete(`${meshId}:${nodeId}:${sessionId}`);
+    }
+    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId, sessionId, effectiveProviderType) {
+      const spawnedProviderType = typeof effectiveProviderType === "string" && effectiveProviderType.trim() ? effectiveProviderType.trim() : typeof resolved.providerType === "string" ? resolved.providerType.trim() : "";
+      if (!spawnedProviderType || !resolved.quotaGated?.length) return;
+      const detail = resolved.quotaGated.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
+      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ""}`);
+    }
+    function recordAutoLaunchEvent(meshId, args) {
+      const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ""}`;
+      const currentSig = `${args.phase}|${args.reason || ""}`;
+      if (args.phase === "skipped" && lastAutoLaunchLedgerKey.get(dedupKey) === currentSig) {
+        return;
+      }
+      lastAutoLaunchLedgerKey.set(dedupKey, currentSig);
+      if (lastAutoLaunchLedgerKey.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        const oldest = lastAutoLaunchLedgerKey.keys().next().value;
+        if (oldest !== void 0) lastAutoLaunchLedgerKey.delete(oldest);
+      }
+      try {
+        meshRecord(meshId, "session_auto_launch", {
+          nodeId: args.nodeId,
+          sessionId: args.sessionId,
+          providerType: args.providerType,
+          // (B) promote taskId so this entry joins the task lifecycle timeline.
+          ...args.taskId ? { taskId: args.taskId } : {},
+          payload: {
+            phase: args.phase,
+            taskId: args.taskId,
+            reason: args.reason,
+            error: args.error,
+            // (D) resolved execution profile for the spawned worker.
+            ...args.model ? { resolvedModel: args.model } : {},
+            ...args.thinkingLevel ? { resolvedThinkingLevel: args.thinkingLevel } : {}
+          }
+        }, { local: true });
+      } catch (e) {
+        LOG.warn("MeshQueue", `Failed to record auto-launch ledger event: ${e?.message || e}`);
+      }
+    }
+    var lastQuotaClaimBlockLog;
+    var lastAllQuotaClaimBlockedLog;
+    var lastClaimRefusalLog;
+    var lastWorktreeBootstrapBypassLog;
+    var lastAutoLaunchLedgerKey;
+    var AUTO_LAUNCH_LEDGER_DEDUP_MAX;
+    var init_mesh_queue_observability = __esm2({
+      "src/mesh/mesh-queue-observability.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_record();
+        init_mesh_quota_routing();
+        lastQuotaClaimBlockLog = /* @__PURE__ */ new Map();
+        lastAllQuotaClaimBlockedLog = /* @__PURE__ */ new Map();
+        lastClaimRefusalLog = /* @__PURE__ */ new Map();
+        lastWorktreeBootstrapBypassLog = /* @__PURE__ */ new Map();
+        lastAutoLaunchLedgerKey = /* @__PURE__ */ new Map();
+        AUTO_LAUNCH_LEDGER_DEDUP_MAX = 2e3;
+      }
+    });
+    function selectClaimCandidate(candidates, gates) {
+      let deepestIndex = -1;
+      let deepestReason;
+      let deepest;
+      for (const candidate of candidates) {
+        const failedAt = gates.findIndex((gate) => !gate.test(candidate));
+        if (failedAt === -1) return { entry: candidate };
+        if (failedAt > deepestIndex) {
+          deepestIndex = failedAt;
+          deepestReason = gates[failedAt].reason;
+          deepest = candidate;
+        }
+      }
+      return { reason: deepestReason ?? "no_pending_candidates", ...deepest !== void 0 ? { deepest } : {} };
+    }
+    function claimDeferralKey(meshId, nodeId) {
+      return `${meshId}::${nodeId}`;
+    }
+    function noteClaimDeferredForNode(meshId, nodeId) {
+      if (!nodeId) return;
+      const key5 = claimDeferralKey(meshId, nodeId);
+      claimDeferredByFastForward.set(key5, (claimDeferredByFastForward.get(key5) || 0) + 1);
+      if (claimDeferredByFastForward.size > CLAIM_DEFERRAL_MAX_ENTRIES) {
+        const oldest = claimDeferredByFastForward.keys().next().value;
+        if (oldest !== void 0) claimDeferredByFastForward.delete(oldest);
+      }
+    }
+    function claimDeferralOwedForNode(meshId, nodeId) {
+      if (!nodeId) return false;
+      const seen2 = claimDeferredByFastForward.get(claimDeferralKey(meshId, nodeId)) || 0;
+      return seen2 > 0 && seen2 <= MAX_FAST_FORWARD_CLAIM_REDRIVES;
+    }
+    function shouldRedriveDeferredClaim(meshId, nodeId, sessionId, leaseHeld) {
+      if (!nodeId || !sessionId) return false;
+      if (!claimDeferralOwedForNode(meshId, nodeId)) return false;
+      return !leaseHeld();
+    }
+    function clearClaimDeferralForNode(meshId, nodeId) {
+      if (!nodeId) return;
+      claimDeferredByFastForward.delete(claimDeferralKey(meshId, nodeId));
+    }
+    function sessionRefusalKey(meshId, sessionId) {
+      return `${meshId}::${sessionId}`;
+    }
+    function noteSessionClaimRefusal(meshId, sessionId, refusal2) {
+      if (!meshId || !sessionId) return;
+      const key5 = sessionRefusalKey(meshId, sessionId);
+      if (!refusal2 || refusal2.reason === "no_pending_candidates") {
+        recentSessionClaimRefusals.delete(key5);
+        return;
+      }
+      recentSessionClaimRefusals.delete(key5);
+      recentSessionClaimRefusals.set(key5, {
+        reason: refusal2.reason,
+        ...refusal2.taskId ? { taskId: refusal2.taskId } : {},
+        atMs: refusal2.atMs ?? Date.now()
+      });
+      if (recentSessionClaimRefusals.size > SESSION_CLAIM_REFUSAL_MAX_ENTRIES) {
+        const oldest = recentSessionClaimRefusals.keys().next().value;
+        if (oldest !== void 0) recentSessionClaimRefusals.delete(oldest);
+      }
+    }
+    function readRecentSessionClaimRefusal(meshId, sessionId, nowMs2 = Date.now()) {
+      if (!meshId || !sessionId) return null;
+      const record7 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
+      if (!record7) return null;
+      const age = nowMs2 - record7.atMs;
+      if (!(age >= 0 && age <= SESSION_CLAIM_REFUSAL_FRESH_MS)) return null;
+      return record7;
+    }
+    function sessionClaimRefusalReleasesSpawnGate(meshId, sessionId, nowMs2 = Date.now()) {
+      const record7 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
+      return !!record7 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record7.reason);
+    }
+    var claimDeferredByFastForward;
+    var MAX_FAST_FORWARD_CLAIM_REDRIVES;
+    var CLAIM_DEFERRAL_MAX_ENTRIES;
+    var SPAWN_GATE_RELEASING_CLAIM_REFUSALS;
+    var SESSION_CLAIM_REFUSAL_FRESH_MS;
+    var SESSION_CLAIM_REFUSAL_MAX_ENTRIES;
+    var recentSessionClaimRefusals;
+    var init_mesh_claim_refusal = __esm2({
+      "src/mesh/mesh-claim-refusal.ts"() {
+        "use strict";
+        claimDeferredByFastForward = /* @__PURE__ */ new Map();
+        MAX_FAST_FORWARD_CLAIM_REDRIVES = 3;
+        CLAIM_DEFERRAL_MAX_ENTRIES = 2e3;
+        SPAWN_GATE_RELEASING_CLAIM_REFUSALS = /* @__PURE__ */ new Set(["parallel_cap_reached"]);
+        SESSION_CLAIM_REFUSAL_FRESH_MS = 3e4;
+        SESSION_CLAIM_REFUSAL_MAX_ENTRIES = 2e3;
+        recentSessionClaimRefusals = /* @__PURE__ */ new Map();
+      }
+    });
     function isWithinForeignFreshnessWindow(foreignAtMs, nowMs2, windowMs) {
       if (!Number.isFinite(foreignAtMs)) return false;
       const ageMs2 = nowMs2 - foreignAtMs;
@@ -69275,10 +69611,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function describeOrphanReclaim(idleTtlMinutes) {
       const ttl = idleTtlMinutes ?? DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
       if (!(ttl > 0)) {
-        return "The idle-session reaper is disabled for this mesh (delegatedSessionIdleTtlMinutes: 0), so nothing stops it automatically.";
+        return "The age-based idle-session reaper is disabled for this mesh (delegatedSessionIdleTtlMinutes: 0). Completion acceptance and the configured idle cap may still stop it automatically.";
       }
       const cadenceMinutes = Math.round(ORPHAN_NOTICE_REAP_CADENCE_MS / 6e4);
-      return `If it stays idle, the idle-session reaper stops it once it has been idle for ${ttl} min (checked every ${cadenceMinutes} min, so up to ~${ttl + cadenceMinutes} min).`;
+      return `If it stays idle, the idle-session reaper stops it once it has been idle for ${ttl} min (checked every ${cadenceMinutes} min, so up to ~${ttl + cadenceMinutes} min). Completion acceptance and the configured idle cap may reclaim it sooner.`;
     }
     function sweepAutoLaunchOrphanSessions(components, meshId, opts = {}) {
       let sessions;
@@ -69288,13 +69624,6 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return;
       }
       if (!sessions.length) return;
-      let queue;
-      try {
-        queue = getQueue(meshId);
-      } catch {
-        return;
-      }
-      const byId = new Map(queue.map((t) => [t.id, t]));
       for (const inst of sessions) {
         let state2;
         try {
@@ -69311,7 +69640,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!sessionId) continue;
         if (!isIdleSessionState(state2)) continue;
         if (sessionHasActiveAssignment(meshId, sessionId)) continue;
-        const originTask = byId.get(originTaskId);
+        const originTask = getQueueEntryById(meshId, originTaskId);
         const assignedElsewhere = !!originTask && originTask.status === "assigned" && !!readText(originTask.assignedSessionId) && !sessionIdsEquivalent(readText(originTask.assignedSessionId), sessionId);
         const originGone = !originTask || originTask.status !== "pending" && originTask.status !== "assigned";
         const dedupKey = `${meshId}::${sessionId}`;
@@ -69359,7 +69688,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               sessionId,
               reason: "auto_launch_orphan_session_detected"
             },
-            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3} Stop it sooner only if you do not want it held until then.`,
+            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3}`,
             queuedAt: Date.now(),
             ...readText(originTask?.sourceCoordinatorSessionId) ? { targetCoordinatorSessionId: readText(originTask.sourceCoordinatorSessionId) } : {},
             ...localCoordinatorDaemonId() ? { targetCoordinatorDaemonId: localCoordinatorDaemonId() } : {}
@@ -69847,7 +70176,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const completed = new Set(store2.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
         }
+        const before = JSON.stringify(task.hold);
         setQueueTaskHold(task, reason, context2);
+        if (before === JSON.stringify(task.hold)) return;
         persistHold(store2, task);
       });
     }
@@ -70109,7 +70440,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (e.code !== "EEXIST") throw e;
         }
         syncDir2();
-        const tmp = path34.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto7.randomUUID)()}.tmp`), fd = fs23.openSync(tmp, "wx", 384);
+        const tmp = path34.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto10.randomUUID)()}.tmp`), fd = fs23.openSync(tmp, "wx", 384);
         try {
           fs23.writeFileSync(fd, JSON.stringify(state2));
           fs23.fsyncSync(fd);
@@ -70131,12 +70462,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const h = s2.retainedHost;
       if (facts.pid !== h.pid || facts.socketOwnerPid !== h.pid || facts.birth !== h.birth || facts.entryPath !== h.entryPath || facts.nodePath !== h.nodePath || facts.hostEntryPath !== h.entryPath || facts.hostStartedAt !== h.hostStartedAt || facts.endpoint !== h.endpoint) throw new Error("maintenance_retained_host_identity_changed");
       for (const f of h.files) {
-        if (fs23.realpathSync(f.path) !== f.path || !fs23.statSync(f.path).isFile() || (0, import_node_crypto7.createHash)("sha256").update(fs23.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
+        if (fs23.realpathSync(f.path) !== f.path || !fs23.statSync(f.path).isFile() || (0, import_node_crypto10.createHash)("sha256").update(fs23.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
       }
     }
     var fs23;
     var path34;
-    var import_node_crypto7;
+    var import_node_crypto10;
     var import_node_async_hooks;
     var MAINTENANCE_BOOT_NONCE;
     var MAINTENANCE_FILE;
@@ -70152,18 +70483,18 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         "use strict";
         fs23 = __toESM2(require("fs"));
         path34 = __toESM2(require("path"));
-        import_node_crypto7 = require("crypto");
+        import_node_crypto10 = require("crypto");
         import_node_async_hooks = require("async_hooks");
         init_dist();
         init_config();
         init_load_better_sqlite3();
-        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto7.randomUUID)();
+        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto10.randomUUID)();
         MAINTENANCE_FILE = "cooperative-maintenance.json";
         marker = "cooperative-maintenance.enrolled";
         seen = /* @__PURE__ */ new Set();
         context = new import_node_async_hooks.AsyncLocalStorage();
         activeAdmissions = 0;
-        sha2 = (s2) => (0, import_node_crypto7.createHash)("sha256").update(s2).digest("hex");
+        sha2 = (s2) => (0, import_node_crypto10.createHash)("sha256").update(s2).digest("hex");
         hash2 = (s2) => typeof s2 === "string" && /^[a-f0-9]{64}$/.test(s2);
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
@@ -72843,14 +73174,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return { records: collected, readAllFiles };
     }
     function historyBoundaryDigest(message) {
-      return (0, import_node_crypto8.createHash)("sha256").update(JSON.stringify([
+      return (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify([
         buildHistoryMessageIdentity(message),
         message.role,
         message.receivedAt,
         message.content
       ])).digest("hex");
     }
-    var import_node_crypto8;
+    var import_node_crypto11;
     var fs26;
     var path37;
     var BOUNDED_TAIL_CACHE_MAX_ENTRIES;
@@ -72865,7 +73196,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_chat_history_tail = __esm2({
       "src/config/chat-history-tail.ts"() {
         "use strict";
-        import_node_crypto8 = require("crypto");
+        import_node_crypto11 = require("crypto");
         init_chat_history_messages();
         init_chat_message_normalization();
         fs26 = __toESM2(require("fs"));
@@ -79155,8 +79486,9 @@ ${continuationNotice}` } : task,
         return false;
       }
       if (isNewWorkHeld({ meshId })) return false;
-      const queue = getQueue(meshId);
-      const statusById = new Map(queue.map((task) => [task.id, task.status]));
+      const queue = getQueue(meshId, { status: ["pending"] });
+      const graph = MeshRuntimeStore.getInstance().getQueueSchedulingGraph(meshId);
+      const statusById = new Map(graph.map((task) => [task.id, task.status]));
       const pending = queue.filter((task) => task.status === "pending").sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
       pruneAwaitClaimBackoff(meshId, pending);
       if (!pending.length) return false;
@@ -79173,7 +79505,7 @@ ${continuationNotice}` } : task,
         }
         autoLaunchTaskInProgress.add(taskLaunchKey);
         try {
-          if (!taskDependenciesSatisfied(task, statusById, new Map(queue.map((t) => [t.id, t])))) {
+          if (!taskDependenciesSatisfied(task, statusById, new Map(graph.map((t) => [t.id, t])))) {
             markAutoLaunch(meshId, task.id, { status: "skipped", reason: "dependencies_unsatisfied" });
             continue;
           }
@@ -79199,6 +79531,11 @@ ${continuationNotice}` } : task,
               (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }),
               failRetentionExpiredParkedTask
             );
+            continue;
+          }
+          const reuse = reuseIdleTaskSession(components, meshId, task, mesh.nodes ?? [], tryAssignQueueTask);
+          if (reuse === "claimed") {
+            madeProgress = true;
             continue;
           }
           if (task.targetSessionId) {
@@ -79276,6 +79613,7 @@ ${continuationNotice}` } : task,
     var init_mesh_queue_autolaunch = __esm2({
       "src/mesh/mesh-queue-autolaunch.ts"() {
         "use strict";
+        init_mesh_session_reuse();
         import_node_fs8 = require("fs");
         init_mesh_task_routing_contract();
         init_config();
@@ -79922,8 +80260,8 @@ ${continuationNotice}` } : task,
           drain: currentDrain
         };
       }
-      const holdId2 = requestedHoldId ?? `hold_${(0, import_node_crypto9.randomUUID)()}`;
-      const holderToken = requestedHolderToken ?? `htok_${(0, import_node_crypto9.randomUUID)()}`;
+      const holdId2 = requestedHoldId ?? `hold_${(0, import_node_crypto12.randomUUID)()}`;
+      const holderToken = requestedHolderToken ?? `htok_${(0, import_node_crypto12.randomUUID)()}`;
       const freshDrain = collectNewWorkHoldDrainSummary({
         meshIds: requestedScope === "mesh" ? requestedMeshIds : void 0,
         active: true,
@@ -80411,13 +80749,13 @@ ${continuationNotice}` } : task,
         nextAction: "Do not retry immediately in a tight loop. Enqueue new tasks via mesh_enqueue_task (which stays pending while held) or wait until maintenance_new_work_hold_status reports held=false."
       };
     }
-    var import_node_crypto9;
+    var import_node_crypto12;
     var NewWorkHeldError;
     var init_new_work_hold = __esm2({
       "src/maintenance/new-work-hold.ts"() {
         "use strict";
         init_new_work_hold_storage();
-        import_node_crypto9 = require("crypto");
+        import_node_crypto12 = require("crypto");
         init_command_args();
         init_new_work_hold_storage();
         init_new_work_hold_lifecycle();
@@ -80453,7 +80791,7 @@ ${continuationNotice}` } : task,
       }
     });
     function readInFlightOwnershipMeshWide(host, meshId) {
-      const reservations = host.getQueueEntries?.(meshId).filter((t) => pendingLaunchReservation(t)).map((t) => ({ payload: JSON.stringify(t) })) ?? [];
+      const reservations = host.getQueueEntries?.(meshId, ["pending"]).filter((t) => pendingLaunchReservation(t)).map((t) => ({ payload: JSON.stringify(t) })) ?? [];
       return [...host.assignedRowsMeshWide(meshId), ...reservations].map((row2) => {
         try {
           const parsed = JSON.parse(row2.payload);
@@ -80500,7 +80838,7 @@ ${continuationNotice}` } : task,
     }
     function claimNextQueueTask(host, meshId, nodeId, sessionId, capabilityTags = [], opts) {
       return host.transaction(() => {
-        if (bridgeDispatchFrozen(host.db, meshId)) return null;
+        if (bridgeDispatchFrozen(host.db, meshId) || sessionIsStopping(host.db, sessionId)) return null;
         host.ensureLegacyQueueMigrated(meshId);
         const refuse3 = (reason, detail, deepest) => {
           if (opts?.outRefusal) {
@@ -80576,7 +80914,7 @@ ${continuationNotice}` } : task,
           ).all(meshId, ...depIds);
           for (const r of depRows) depStatus.set(r.id, r.status);
         }
-        const dependencyGraph = new Map(host.getQueueEntries(meshId).map((t) => [t.id, t]));
+        const dependencyGraph = new Map(host.getQueueSchedulingGraph(meshId).map((t) => [t.id, t]));
         const dependenciesSatisfied = (candidate) => taskDependenciesSatisfied(candidate, depStatus, dependencyGraph);
         const nodeConflictAllows = (candidate) => {
           if (isTaskReadonly3(candidate)) return true;
@@ -80626,7 +80964,14 @@ ${continuationNotice}` } : task,
           }
           return true;
         };
-        const reviewRefusal = (candidate) => reviewRoutingRefusal(candidate, candidate.review ? reviewSource(candidate.review.sourceTaskId) : void 0, providerType, opts?.physicalContext, host.getQueueEntries(meshId));
+        let reviewActive;
+        const reviewRefusal = (candidate) => candidate.review ? reviewRoutingRefusal(
+          candidate,
+          reviewSource(candidate.review.sourceTaskId),
+          providerType,
+          opts?.physicalContext,
+          reviewActive ??= host.getQueueEntries(meshId, ["pending", "assigned"])
+        ) : void 0;
         const targetMatches = (candidate) => {
           if (candidate.targetSessionId && !sessionIdsEquivalent(candidate.targetSessionId, sessionId)) return false;
           if (candidate.targetNodeId && !daemonIdsEquivalent4(candidate.targetNodeId, nodeId) && !meshNodeIdMatches7({ id: candidate.targetNodeId }, nodeId)) {
@@ -80675,8 +81020,11 @@ ${continuationNotice}` } : task,
             holdBlockers ??= host.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
             const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
             if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
+            const previousHold = JSON.stringify(candidate.hold);
             setQueueTaskHold(candidate, gate.reason, context2);
-            host.db.prepare("UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = 'pending'").run(JSON.stringify(candidate), candidate.id, meshId);
+            if (previousHold !== JSON.stringify(candidate.hold)) {
+              host.db.prepare("UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = 'pending'").run(JSON.stringify(candidate), candidate.id, meshId);
+            }
             return false;
           }
         })));
@@ -80739,6 +81087,7 @@ ${continuationNotice}` } : task,
     var init_mesh_runtime_store_claim = __esm2({
       "src/mesh/mesh-runtime-store-claim.ts"() {
         "use strict";
+        init_mesh_session_stop_fence();
         init_mesh_task_routing_contract();
         import_node_fs9 = require("fs");
         init_mesh_task_routing_contract();
@@ -81124,6 +81473,33 @@ ${continuationNotice}` } : task,
             const rows = this.db.prepare("SELECT payload FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC").all(meshId);
             return rows.map((row2) => JSON.parse(row2.payload));
           }
+          /** Active tasks and their reachable prerequisites only. History can carry
+           * megabytes of prompts/images; unrelated terminal rows need no JSON work. */
+          getQueueSchedulingGraph(meshId) {
+            this.ensureLegacyQueueMigrated(meshId);
+            const graph = [];
+            const seen2 = /* @__PURE__ */ new Set();
+            let frontier = this.getQueueHeads(meshId, ["pending"]).map((row2) => row2.id);
+            while (frontier.length) {
+              const batch = [...new Set(frontier)].filter((id4) => !seen2.has(id4));
+              frontier = [];
+              for (let offset = 0; offset < batch.length; offset += 500) {
+                const ids = batch.slice(offset, offset + 500);
+                for (const id4 of ids) seen2.add(id4);
+                const rows = this.db.prepare(`SELECT id, status,
+                    json_extract(payload, '$.phase') AS phase,
+                    json_extract(payload, '$.dependsOn') AS deps,
+                    json_extract(payload, '$.cancelReason') AS cancelReason
+                    FROM mesh_queue WHERE mesh_id = ? AND id IN (${ids.map(() => "?").join(",")})`).all(meshId, ...ids);
+                for (const { deps, ...row2 } of rows) {
+                  const entry = { ...row2, dependsOn: deps ? JSON.parse(deps) : [] };
+                  graph.push(entry);
+                  for (const id4 of entry.dependsOn ?? []) if (!seen2.has(id4)) frontier.push(id4);
+                }
+              }
+            }
+            return graph;
+          }
           getQueueRevision(meshId) {
             this.ensureLegacyQueueMigrated(meshId);
             const rows = this.db.prepare("SELECT id, status, updated_at FROM mesh_queue WHERE mesh_id = ? ORDER BY id ASC").all(meshId);
@@ -81132,7 +81508,10 @@ ${continuationNotice}` } : task,
           replaceQueue(meshId, queue) {
             this.transaction(() => {
               assertSourceDependencyGraph(queue);
-              const deleteStmt = this.db.prepare("DELETE FROM mesh_queue WHERE mesh_id = ?");
+              const existing = this.db.prepare("SELECT id, payload FROM mesh_queue WHERE mesh_id = ?").all(meshId);
+              const payloads = new Map(existing.map((row2) => [row2.id, row2.payload]));
+              const ids = new Set(queue.map((entry) => entry.id));
+              const deleteStmt = this.db.prepare("DELETE FROM mesh_queue WHERE mesh_id = ? AND id = ?");
               const insert = this.db.prepare(`
                 INSERT INTO mesh_queue (
                     id, mesh_id, status, target_node_id, target_session_id,
@@ -81140,10 +81519,17 @@ ${continuationNotice}` } : task,
                 ) VALUES (
                     @id, @meshId, @status, @targetNodeId, @targetSessionId,
                     @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
-                )
+                ) ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status, target_node_id = excluded.target_node_id,
+                    target_session_id = excluded.target_session_id, assigned_node_id = excluded.assigned_node_id,
+                    assigned_session_id = excluded.assigned_session_id, created_at = excluded.created_at,
+                    updated_at = excluded.updated_at, payload = excluded.payload
             `);
-              deleteStmt.run(meshId);
-              for (const entry of queue) insert.run(this.toRow(entry));
+              for (const row2 of existing) if (!ids.has(row2.id)) deleteStmt.run(meshId, row2.id);
+              for (const entry of queue) {
+                const row2 = this.toRow(entry);
+                if (payloads.get(entry.id) !== row2.payload) insert.run(row2);
+              }
               this.maybeCheckpointWal();
             });
           }
@@ -86357,13 +86743,13 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         if (!TERMINAL_LEDGER_KINDS.has(entry.kind) && entry.kind !== "task_approval_needed" && entry.kind !== "task_approval_resolved") continue;
         const timestampMs = timestampByEntry.get(entry);
         if (!Number.isFinite(timestampMs)) continue;
-        const indexed = { entry, timestampMs, order: order++ };
+        const indexed2 = { entry, timestampMs, order: order++ };
         const taskId = readString2(entry.payload?.taskId);
         if (taskId) {
-          pushTerminalBucket(taskBuckets, taskId, indexed);
+          pushTerminalBucket(taskBuckets, taskId, indexed2);
         } else {
-          pushTerminalBucket(sessionBuckets, readString2(entry.sessionId), indexed);
-          pushTerminalBucket(nodeBuckets, machineCoreFromDaemonId(entry.nodeId), indexed);
+          pushTerminalBucket(sessionBuckets, readString2(entry.sessionId), indexed2);
+          pushTerminalBucket(nodeBuckets, machineCoreFromDaemonId(entry.nodeId), indexed2);
         }
       }
       return {
@@ -87036,7 +87422,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         ]);
         const summary = buildMeshActiveWork({
           meshId,
-          queue: getQueue(meshId),
+          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
           directDispatches: getActiveDirectDispatches(meshId),
           ledgerEntries,
           ledgerSnapshot: sharedLedgerSnapshot,
@@ -87206,43 +87592,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         init_dist();
         init_mesh_node_slots();
         init_mesh_work_queue();
-      }
-    });
-    function db(create = false) {
-      const db2 = MeshRuntimeStore.getInstance().db;
-      if (create) db2.exec("CREATE TABLE IF NOT EXISTS mesh_writer_stop_captures (request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, capture_json TEXT NOT NULL, settled INTEGER NOT NULL DEFAULT 0)");
-      return db2;
-    }
-    function readWriterStopCapture(r) {
-      if (!db().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mesh_writer_stop_captures'").get()) return null;
-      const row2 = db().prepare("SELECT capture_json FROM mesh_writer_stop_captures WHERE request_id = ?").get(r.stopRequestId);
-      if (!row2) return null;
-      const capture = JSON.parse(row2.capture_json);
-      if (capture.requestKey !== key2(r)) throw new Error("writer_stop_request_identity_changed");
-      return capture;
-    }
-    function captureWriterStop(r, root, tree, runtimeKey, startedAt) {
-      const requestKey = key2(r);
-      const capture = { requestKey, runtimeKey, startedAt, root, tree, incarnation: (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify([requestKey, runtimeKey, startedAt, root, tree])).digest("hex") };
-      db(true).prepare("INSERT OR IGNORE INTO mesh_writer_stop_captures (request_id,session_id,capture_json) VALUES (?,?,?)").run(r.stopRequestId, r.sessionId, JSON.stringify(capture));
-      return readWriterStopCapture(r);
-    }
-    function isWriterStopPending(sessionId) {
-      if (!db().prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mesh_writer_stop_captures'").get()) return false;
-      return !!db().prepare("SELECT 1 FROM mesh_writer_stop_captures WHERE session_id = ? AND settled = 0").get(sessionId);
-    }
-    function markWriterStopQuiescent(r) {
-      readWriterStopCapture(r);
-      db().prepare("UPDATE mesh_writer_stop_captures SET settled = 1 WHERE request_id = ?").run(r.stopRequestId);
-    }
-    var import_node_crypto10;
-    var key2;
-    var init_mesh_writer_stop_journal = __esm2({
-      "src/commands/mesh-writer-stop-journal.ts"() {
-        "use strict";
-        import_node_crypto10 = require("crypto");
-        init_mesh_runtime_store();
-        key2 = (r) => JSON.stringify([r.meshId, r.taskId, r.attemptId, r.generation, r.dispatchNonce, r.sessionId, r.nodeId, r.providerType, r.ownerDaemonId, r.stopRequestId]);
       }
     });
     function readSettings(state2) {
@@ -87944,8 +88293,8 @@ ${closeSentinel}`;
         try {
           child = ptyLib.spawn(command, args, {
             name: "xterm-256color",
-            cols: import_session_host_core5.DEFAULT_SESSION_HOST_COLS,
-            rows: import_session_host_core5.DEFAULT_SESSION_HOST_ROWS,
+            cols: import_session_host_core6.DEFAULT_SESSION_HOST_COLS,
+            rows: import_session_host_core6.DEFAULT_SESSION_HOST_ROWS,
             cwd: options.cwd ?? process.cwd(),
             env: env2
           });
@@ -87980,7 +88329,7 @@ ${closeSentinel}`;
     }
     var import_node_fs12;
     var os20;
-    var import_session_host_core5;
+    var import_session_host_core6;
     var import_node_path9;
     var DEFAULT_SERVER_NAME;
     var DEFAULT_ADHDEV_MCP_COMMAND;
@@ -87990,7 +88339,7 @@ ${closeSentinel}`;
         "use strict";
         import_node_fs12 = require("fs");
         os20 = __toESM2(require("os"));
-        import_session_host_core5 = require_dist();
+        import_session_host_core6 = require_dist();
         import_node_path9 = require("path");
         init_logger();
         init_track_identity();
@@ -89616,21 +89965,21 @@ ${closeSentinel}`;
     function getTerminalBackendRuntimeStatus() {
       return { backend: "ghostty-vt" };
     }
-    var import_session_host_core6;
+    var import_session_host_core7;
     var DEFAULT_SCROLLBACK;
     var TerminalScreen;
     var init_terminal_screen = __esm2({
       "src/cli-adapters/terminal-screen.ts"() {
         "use strict";
         init_ghostty_vt_backend();
-        import_session_host_core6 = require_dist();
+        import_session_host_core7 = require_dist();
         DEFAULT_SCROLLBACK = 2e3;
         TerminalScreen = class {
           backendKind = "ghostty-vt";
           rows;
           cols;
           terminal;
-          constructor(rows = import_session_host_core6.DEFAULT_SESSION_HOST_ROWS, cols = import_session_host_core6.DEFAULT_SESSION_HOST_COLS) {
+          constructor(rows = import_session_host_core7.DEFAULT_SESSION_HOST_ROWS, cols = import_session_host_core7.DEFAULT_SESSION_HOST_COLS) {
             this.rows = Math.max(1, rows | 0);
             this.cols = Math.max(1, cols | 0);
             this.terminal = this.createBackend();
@@ -91201,6 +91550,9 @@ ${cleanBody}`;
               daemonId = node ? readMeshNodeDaemonId(node) || void 0 : void 0;
             } catch {
             }
+          }
+          if (args.writerStop && daemonId && daemonIdsEquivalent4(daemonId, components.statusInstanceId ?? getMachineId())) {
+            return await components.cliManager.stopCli(stopArgs);
           }
           if (daemonId && components.dispatchMeshCommand) {
             if (args.writerStop) {
@@ -96026,7 +96378,7 @@ ${result.stderr}`, result.code);
           continue;
         }
         const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto24.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto26.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
         try {
           (0, import_node_fs13.writeFileSync)((0, import_node_path11.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -96051,7 +96403,7 @@ ${result.stderr}`, result.code);
     var import_node_fs13;
     var import_node_path11;
     var import_node_child_process14;
-    var import_node_crypto24;
+    var import_node_crypto26;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var ownProcessStartId;
@@ -96061,7 +96413,7 @@ ${result.stderr}`, result.code);
         import_node_fs13 = require("fs");
         import_node_path11 = require("path");
         import_node_child_process14 = require("child_process");
-        import_node_crypto24 = require("crypto");
+        import_node_crypto26 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
         ownProcessStartId = processStartId(process.pid);
@@ -98599,7 +98951,7 @@ ${body}`;
     });
     var import_node_fs16;
     var import_node_path14;
-    var import_node_crypto26;
+    var import_node_crypto28;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -98608,7 +98960,7 @@ ${body}`;
         "use strict";
         import_node_fs16 = require("fs");
         import_node_path14 = require("path");
-        import_node_crypto26 = require("crypto");
+        import_node_crypto28 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -98632,7 +98984,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto26.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto28.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -98883,7 +99235,7 @@ ${body}`;
     }
     var import_node_fs17;
     var import_node_path15;
-    var import_node_crypto27;
+    var import_node_crypto29;
     var entryKeys;
     var origins;
     var integer;
@@ -98893,7 +99245,7 @@ ${body}`;
         "use strict";
         import_node_fs17 = require("fs");
         import_node_path15 = require("path");
-        import_node_crypto27 = require("crypto");
+        import_node_crypto29 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -98979,7 +99331,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto27.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto29.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs17.openSync)(temp, "wx", 384);
@@ -99118,7 +99470,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto28.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -99131,7 +99483,7 @@ ${body}`;
     }
     var import_node_fs18;
     var import_node_path16;
-    var import_node_crypto28;
+    var import_node_crypto30;
     var ID2;
     var proposalKeys;
     var text2;
@@ -99142,7 +99494,7 @@ ${body}`;
         "use strict";
         import_node_fs18 = require("fs");
         import_node_path16 = require("path");
-        import_node_crypto28 = require("crypto");
+        import_node_crypto30 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -99174,7 +99526,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto28.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto30.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -99185,7 +99537,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs18.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto28.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto30.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs18.openSync)(tmp, "wx", 384);
               try {
@@ -105396,7 +105748,7 @@ ${asText(streams.stderr)}
       if (ctx.sessions === void 0) {
         return skip("live_session", "Session inventory unavailable; refusing to plan removal without a liveness check (fail-closed).");
       }
-      const liveSession = ctx.sessions.find((record7) => sessionMatchesNode(record7, node, nodeId) && (0, import_session_host_core4.getSessionHostSurfaceKind)(record7) === "live_runtime");
+      const liveSession = ctx.sessions.find((record7) => sessionMatchesNode(record7, node, nodeId) && (0, import_session_host_core5.getSessionHostSurfaceKind)(record7) === "live_runtime");
       if (liveSession) {
         return skip("live_session", "A live/starting/generating/waiting/idle retained session is still attached to this node.");
       }
@@ -106328,7 +106680,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto31;
+    var import_node_crypto33;
     var import_node_os7;
     var import_node_path21;
     var refused;
@@ -106337,7 +106689,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto31 = require("crypto");
+        import_node_crypto33 = require("crypto");
         import_node_os7 = require("os");
         import_node_path21 = require("path");
         init_managed_mcp_process();
@@ -106542,7 +106894,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record7 = {
-              invocationId: (0, import_node_crypto31.randomUUID)(),
+              invocationId: (0, import_node_crypto33.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -106614,7 +106966,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto322;
+    var import_node_crypto34;
     var import_node_fs222;
     var import_node_path22;
     var ID3;
@@ -106623,7 +106975,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto322 = require("crypto");
+        import_node_crypto34 = require("crypto");
         import_node_fs222 = require("fs");
         import_node_path22 = require("path");
         init_config();
@@ -106643,7 +106995,7 @@ ${asText(streams.stderr)}
             const record7 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto322.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto34.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -106712,7 +107064,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto33.createHash)("sha256");
+      const hash3 = (0, import_node_crypto35.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs23.readFileSync)((0, import_node_path23.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path23.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -106735,13 +107087,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto33;
+    var import_node_crypto35;
     var import_node_fs23;
     var import_node_path23;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto33 = require("crypto");
+        import_node_crypto35 = require("crypto");
         import_node_fs23 = require("fs");
         import_node_path23 = require("path");
         init_manifest();
@@ -106839,8 +107191,8 @@ ${asText(streams.stderr)}
       const rec5 = runtime2;
       const lifecycle = readText2(rec5.lifecycle).toLowerCase();
       if (TERMINAL_RUNTIME_LIFECYCLES.has(lifecycle)) return false;
-      if ((0, import_session_host_core10.isTerminalRecord)(rec5)) return false;
-      return (0, import_session_host_core10.isSessionHostLiveRuntime)(rec5);
+      if ((0, import_session_host_core11.isTerminalRecord)(rec5)) return false;
+      return (0, import_session_host_core11.isSessionHostLiveRuntime)(rec5);
     }
     function isConfirmedTerminalCoordinator(candidate, sessionRegistry) {
       if (!candidate || typeof candidate !== "object") return true;
@@ -106927,7 +107279,7 @@ ${asText(streams.stderr)}
         return { ok: true, sessionId, launched: true, managedByAssistant: true };
       });
     }
-    var import_session_host_core10;
+    var import_session_host_core11;
     var ASSISTANT_COORDINATOR_EXTRA_PROMPT;
     var TERMINAL_STATUSES2;
     var TERMINAL_RAW_ADAPTER_STATUSES;
@@ -106936,7 +107288,7 @@ ${asText(streams.stderr)}
     var init_coordinator_lifecycle = __esm2({
       "src/assistant/coordinator-lifecycle.ts"() {
         "use strict";
-        import_session_host_core10 = require_dist();
+        import_session_host_core11 = require_dist();
         ASSISTANT_COORDINATOR_EXTRA_PROMPT = "";
         TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
         TERMINAL_RAW_ADAPTER_STATUSES = /* @__PURE__ */ new Set(["exited", "stopped", "terminated", "error"]);
@@ -107349,7 +107701,7 @@ ${asText(streams.stderr)}
     }
     function selectExpiredSessionHostRuntimes(files, now, maxAgeMs = SESSION_HOST_RUNTIME_MAX_AGE_MS) {
       return files.filter((f) => {
-        if ((0, import_session_host_core4.isSessionHostLiveRuntime)(f.record ?? void 0)) return false;
+        if ((0, import_session_host_core5.isSessionHostLiveRuntime)(f.record ?? void 0)) return false;
         return now - f.mtimeMs > maxAgeMs;
       });
     }
@@ -107578,11 +107930,17 @@ ${asText(streams.stderr)}
     function readStringValue2(value) {
       return typeof value === "string" ? value.trim() : "";
     }
-    function collectSessionIdsWithActiveWork(meshId) {
+    function collectSessionIdsWithActiveWork(meshId, records) {
       const ids = /* @__PURE__ */ new Set();
       for (const task of getQueue(meshId, { status: ["pending", "assigned"] })) {
         const sessionId = readStringValue2(task?.assignedSessionId);
         if (sessionId) ids.add(sessionId);
+        const target = readStringValue2(task.targetSessionId);
+        if (target) {
+          const record7 = records?.find((r) => sessionIdsEquivalent(r.sessionId, target));
+          const nodeId = readStringValue2(record7?.meta?.meshNodeId);
+          if (!task.targetNodeId || !nodeId || meshNodeIdMatches7({ nodeId }, task.targetNodeId)) ids.add(target);
+        }
       }
       for (const dispatch2 of getActiveDirectDispatchesStrict(meshId)) {
         const sessionId = readStringValue2(dispatch2?.sessionId);
@@ -107599,7 +107957,8 @@ ${asText(streams.stderr)}
     function planIdleSessionReap(args) {
       const { meshId, records, activeWorkSessionIds, ttlMs, now } = args;
       const plan = { reap: [], skipped: [] };
-      if (!Array.isArray(records) || ttlMs <= 0) return plan;
+      if (!Array.isArray(records)) return plan;
+      const eligible = [];
       for (const record7 of records) {
         const sessionId = readStringValue2(record7?.sessionId);
         if (!sessionId) continue;
@@ -107620,8 +107979,9 @@ ${asText(streams.stderr)}
           continue;
         }
         const meshNodeFor = readStringValue2(meta2.meshNodeFor);
-        if (meshNodeFor && meshNodeFor !== meshId) {
-          skip("other_mesh");
+        const inMesh = !meshNodeFor || meshNodeFor === meshId;
+        if (!isSafeIdleTaskSession(record7.state, meta2) || record7.checkpointPending) {
+          skip("unsafe_runtime");
           continue;
         }
         const lastActivityAt = typeof record7?.lastActivityAt === "number" && Number.isFinite(record7.lastActivityAt) ? record7.lastActivityAt : void 0;
@@ -107630,15 +107990,32 @@ ${asText(streams.stderr)}
           continue;
         }
         const idleMs = now - lastActivityAt;
-        if (idleMs < ttlMs) {
+        if (heldByActiveWork(sessionId, activeWorkSessionIds)) {
+          skip(ttlMs > 0 && idleMs >= ttlMs ? "holds_active_task" : "within_ttl", idleMs);
+          continue;
+        }
+        if (idleMs < 0) {
           skip("within_ttl");
           continue;
         }
-        if (heldByActiveWork(sessionId, activeWorkSessionIds)) {
-          skip("holds_active_task", idleMs);
+        eligible.push({ sessionId, idleMs, machineId: record7.machineId || "local", inMesh, stopping: record7.stopping === true });
+      }
+      const cap = args.maxIdleSessions ?? 0;
+      const excess = /* @__PURE__ */ new Set();
+      const machines = new Set(eligible.map((r) => r.machineId));
+      for (const machine of machines) {
+        const idle = eligible.filter((r) => r.machineId === machine).sort((a, b) => b.idleMs - a.idleMs || a.sessionId.localeCompare(b.sessionId));
+        const retained = idle.filter((r) => !r.stopping && !includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) && !(ttlMs > 0 && r.idleMs >= ttlMs));
+        if (cap > 0) for (const r of retained.slice(0, Math.max(0, retained.length - cap))) excess.add(r.sessionId);
+      }
+      for (const r of eligible.sort((a, b) => b.idleMs - a.idleMs)) {
+        if (!r.inMesh) {
+          plan.skipped.push({ sessionId: r.sessionId, reason: "other_mesh" });
           continue;
         }
-        plan.reap.push({ sessionId, idleMs });
+        const reason = r.stopping ? "stop_retry" : includesSession(args.acceptedSessionIds ?? /* @__PURE__ */ new Set(), r.sessionId) ? "accepted_completion" : ttlMs > 0 && r.idleMs >= ttlMs ? "idle_ttl_exceeded" : excess.has(r.sessionId) ? "idle_machine_cap" : void 0;
+        if (reason) plan.reap.push({ sessionId: r.sessionId, idleMs: r.idleMs, reason });
+        else plan.skipped.push({ sessionId: r.sessionId, reason: "within_ttl" });
       }
       return plan;
     }
@@ -107676,7 +108053,10 @@ ${asText(streams.stderr)}
       };
       const now = args.now ?? Date.now();
       const ttlMs = resolveDelegatedSessionIdleTtlMs(args.policy?.delegatedSessionIdleTtlMinutes);
-      if (ttlMs <= 0) return empty;
+      const rawCap = args.policy?.maxIdleDelegatedSessionsPerMachine;
+      const cap = typeof rawCap === "number" && Number.isFinite(rawCap) ? Math.max(0, Math.min(100, Math.floor(rawCap))) : 2;
+      const stopAccepted = args.policy?.stopDelegatedSessionOnAcceptedCompletion !== false;
+      if (ttlMs <= 0 && cap === 0 && !stopAccepted && !deps.hasPendingStops?.()) return empty;
       let records = [];
       try {
         records = await deps.listSessions();
@@ -107685,8 +108065,13 @@ ${asText(streams.stderr)}
         return empty;
       }
       let activeWorkSessionIds;
+      let acceptedSessionIds = /* @__PURE__ */ new Set();
       try {
-        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId);
+        activeWorkSessionIds = collectSessionIdsWithActiveWork(args.meshId, records);
+        for (const meshId of new Set(records.map((r) => readStringValue2(r.meta?.meshNodeFor)).filter(Boolean))) {
+          if (meshId !== args.meshId) for (const id4 of collectSessionIdsWithActiveWork(meshId, records)) activeWorkSessionIds.add(id4);
+        }
+        if (stopAccepted) acceptedSessionIds = deps.acceptedSessionIds?.(args.meshId) ?? acceptedCompletionSessionIds(args.meshId, records);
       } catch (e) {
         reportReapAborted(args.meshId, now, e);
         return { ...empty, abortedReason: "active_work_unreadable" };
@@ -107696,7 +108081,9 @@ ${asText(streams.stderr)}
         records,
         activeWorkSessionIds,
         ttlMs,
-        now
+        now,
+        maxIdleSessions: cap,
+        acceptedSessionIds
       });
       if (!args.dryRun) reportIdlePastTtlHolders({ meshId: args.meshId, plan, ttlMs, now });
       if (plan.reap.length === 0) return { ...empty, plan };
@@ -107705,8 +108092,10 @@ ${asText(streams.stderr)}
       }
       const stoppedSessionIds = [];
       for (const target of plan.reap) {
+        const retryKey = `${args.meshId}:${target.sessionId}`;
+        if (!sessionStopRetryDue(retryKey, now)) continue;
         try {
-          await deps.cleanupMeshSessions({
+          const result = await deps.cleanupMeshSessions({
             meshId: args.meshId,
             nodeId: "",
             node: void 0,
@@ -107714,16 +108103,21 @@ ${asText(streams.stderr)}
             sessionIds: [target.sessionId],
             source: "mesh_cleanup_sessions"
           });
+          if (!result.success || !Array.isArray(result.stoppedSessionIds) || !result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, target.sessionId))) {
+            throw new Error(String(result.error || "stop_not_confirmed"));
+          }
+          clearSessionStopRetry(retryKey);
           stoppedSessionIds.push(target.sessionId);
           reapedSessionCount += 1;
           LOG.info(
             "MeshIdleSessionReaper",
-            `Stopped idle delegated session ${target.sessionId} (mesh ${args.meshId}, idle ${Math.round(target.idleMs / 6e4)}m \u2265 TTL ${Math.round(ttlMs / 6e4)}m, reason=idle_ttl_exceeded, record preserved; total stopped=${reapedSessionCount})`
+            `Stopped idle delegated session ${target.sessionId} (mesh ${args.meshId}, idle ${Math.round(target.idleMs / 6e4)}m, TTL ${Math.round(ttlMs / 6e4)}m, reason=${target.reason}, record preserved; total stopped=${reapedSessionCount})`
           );
         } catch (e) {
+          const retry = recordSessionStopFailure(retryKey, now);
           LOG.warn(
             "MeshIdleSessionReaper",
-            `Failed to stop idle delegated session ${target.sessionId} (mesh ${args.meshId}): ${e?.message || e}`
+            `Stop retry ${retry.attempts} scheduled at ${new Date(retry.nextAt).toISOString()}. Failed to stop idle delegated session ${target.sessionId} (mesh ${args.meshId}): ${e?.message || e}`
           );
         }
       }
@@ -107739,6 +108133,7 @@ ${asText(streams.stderr)}
         "use strict";
         init_logger();
         init_repo_mesh_types();
+        init_mesh_session_lifetime();
         init_mesh_work_queue();
         init_mesh_direct_dispatch();
         init_dist();
@@ -107747,6 +108142,160 @@ ${asText(streams.stderr)}
         REAP_ABORT_REPORT_INTERVAL_MS = 15 * 6e4;
         reapAbortReportedAt = /* @__PURE__ */ new Map();
         reapedSessionCount = 0;
+      }
+    });
+    function sessionLifetimeDeps(components, mesh, now) {
+      const router = components.router;
+      const routes = /* @__PURE__ */ new Map();
+      const localRecords = /* @__PURE__ */ new Map();
+      const coordinatorDaemonId = getMachineId() ?? "";
+      const context2 = { meshId: mesh.id, coordinatorDaemonId };
+      return {
+        hasPendingStops: () => hasPendingSessionStops(MeshRuntimeStore.getInstance().db, mesh.id),
+        listSessions: async () => {
+          if (!router?.deps.sessionHostControl) throw new Error("session_host_unavailable");
+          const local = await router.deps.sessionHostControl.listSessions();
+          const records = local.map((record7) => ({
+            ...record7,
+            state: findLocalCliInstance(components, record7.sessionId)?.getState(),
+            stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, record7.sessionId),
+            claimFence: sessionClaimFence(findLocalCliInstance(components, record7.sessionId)?.getState()),
+            checkpointPending: sessionCheckpointPending(record7.sessionId),
+            machineId: canonicalDaemonId2(coordinatorDaemonId)
+          }));
+          for (const r of records) localRecords.set(r.sessionId, r);
+          const candidates = [
+            ...MeshRuntimeStore.getInstance().getRemoteIdleSessions(mesh.id),
+            ...getQueueHeads2(mesh.id, { status: ["assigned", "completed", "blocked", "failed", "cancelled"] }).reverse().filter((t) => t.assignedSessionId).map((t) => ({
+              nodeId: t.assignedNodeId ?? "",
+              sessionId: t.assignedSessionId,
+              providerType: "mesh"
+            }))
+          ];
+          const peers = /* @__PURE__ */ new Map();
+          for (const c of candidates) {
+            const node = mesh.nodes?.find((n) => meshNodeIdMatches7(n, c.nodeId));
+            if (!node || isLocalAutoLaunchNode(node)) continue;
+            const daemonId = readMeshNodeDaemonId(node);
+            if (!daemonId) continue;
+            const peer = canonicalDaemonId2(daemonId) ?? daemonId;
+            const anchors = peers.get(peer) ?? [];
+            if (!anchors.some((a) => sessionIdsEquivalent(a.sessionId, c.sessionId))) anchors.push(c);
+            peers.set(peer, anchors);
+          }
+          for (const [daemonId, anchors] of peers) {
+            const retryKey = `lifetime_inventory:${mesh.id}:${daemonId}`;
+            if (!sessionStopRetryDue(retryKey, now)) continue;
+            let failure7;
+            for (const c of anchors) {
+              try {
+                if (!components.dispatchMeshCommand) throw new Error("P2P_unavailable");
+                const result = unwrapMeshRelayResult(await components.dispatchMeshCommand(daemonId, "agent_command", {
+                  action: "mesh_idle_session_inventory",
+                  agentType: c.providerType || "mesh",
+                  targetSessionId: c.sessionId,
+                  meshContext: context2
+                }), { command: "agent_command", peerDaemonId: daemonId });
+                if (!result.success || !Array.isArray(result.sessions)) {
+                  failure7 = result.error || "inventory_unconfirmed";
+                  if (result.error === "mesh_session_not_mesh_owned") continue;
+                  throw new Error(String(failure7));
+                }
+                clearSessionStopRetry(retryKey);
+                failure7 = void 0;
+                for (const r of result.sessions) {
+                  if (r.meta?.meshNodeFor !== mesh.id) continue;
+                  const record7 = { ...r, machineId: daemonId, stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
+                  routes.set(record7.sessionId, { daemonId, record: record7, provider: c.providerType || "mesh" });
+                  records.push(record7);
+                }
+                break;
+              } catch (error) {
+                failure7 = error;
+                break;
+              }
+            }
+            if (failure7 !== void 0) {
+              const retry = recordSessionStopFailure(retryKey, now);
+              LOG.warn("MeshSessionLifetime", `Peer ${daemonId} inventory unavailable: ${String(failure7)}; retry ${retry.attempts} at ${new Date(retry.nextAt).toISOString()}`);
+            }
+          }
+          return records;
+        },
+        cleanupMeshSessions: async (args) => {
+          const sessionId = args.sessionIds[0];
+          const knownRecords = [...localRecords.values(), ...[...routes.values()].map((r) => r.record)];
+          if (sessionCheckpointPending(sessionId) || includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId)) {
+            return { success: false, error: "session_lifetime_safety_changed" };
+          }
+          if (!router) return { success: false, error: "router_unavailable" };
+          const route = [...routes.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
+          const record7 = [...localRecords.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
+          const preflight = () => {
+            if (route) {
+              if (!route.record.claimFence) return "lifetime_claim_fence_unsupported";
+              if (!components.dispatchMeshCommand) return "P2P_unavailable";
+            } else {
+              if (!record7 || !components.cliManager) return "lifetime_runtime_unavailable";
+              if (!isSafeIdleTaskSession(findLocalCliInstance(components, sessionId)?.getState())) return "session_lifetime_safety_changed";
+            }
+            return void 0;
+          };
+          const unavailable2 = preflight();
+          if (unavailable2) return { success: false, error: unavailable2 };
+          const db2 = MeshRuntimeStore.getInstance().db;
+          const stopId = reserveSessionStop(db2, args.meshId, sessionId);
+          try {
+            await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: "stop_session" });
+            if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
+              return { success: false, error: "session_lifetime_safety_changed" };
+            }
+            const changed = preflight();
+            if (changed) return { success: false, error: changed };
+            const acknowledged = (result) => {
+              if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, sessionId))) {
+                confirmSessionStop(db2, sessionId, stopId);
+              }
+              return result;
+            };
+            markSessionStopSent(db2, sessionId, stopId);
+            if (route) {
+              return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, "agent_command", {
+                action: "mesh_idle_session_stop",
+                agentType: route.provider,
+                targetSessionId: sessionId,
+                idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence },
+                meshContext: context2
+              }), { command: "agent_command", peerDaemonId: route.daemonId }));
+            }
+            return acknowledged(await components.cliManager.agentCommand({
+              action: "mesh_idle_session_stop",
+              agentType: "mesh",
+              targetSessionId: sessionId,
+              idleSessionLifetime: { lastActivityAt: record7.lastActivityAt, stopId, claimFence: record7.claimFence },
+              meshContext: context2
+            }));
+          } finally {
+            releaseSessionStop(db2, sessionId, stopId);
+          }
+        }
+      };
+    }
+    var init_mesh_session_lifetime_runtime = __esm2({
+      "src/mesh/mesh-session-lifetime-runtime.ts"() {
+        "use strict";
+        init_mesh_session_stop_fence();
+        init_dist();
+        init_config();
+        init_logger();
+        init_mesh_relay_result();
+        init_cli_instance_lookup();
+        init_mesh_idle_session_reaper();
+        init_mesh_session_lifetime();
+        init_mesh_runtime_store();
+        init_mesh_work_queue();
+        init_mesh_candidacy_predicates();
+        init_mesh_node_identity();
       }
     });
     var mesh_housekeeping_tick_exports = {};
@@ -107875,20 +108424,9 @@ ${asText(streams.stderr)}
         const reapDue = state2.lastIdleSessionReapRunAt === void 0 || nowMs2 - state2.lastIdleSessionReapRunAt >= IDLE_SESSION_REAP_INTERVAL_MS;
         if (reapDue) {
           state2.lastIdleSessionReapRunAt = nowMs2;
-          const router = components.router;
-          const reaperDeps = {
-            listSessions: async () => {
-              try {
-                return await router.deps.sessionHostControl?.listSessions() ?? [];
-              } catch {
-                return [];
-              }
-            },
-            cleanupMeshSessions: (args) => router.cleanupMeshSessions(args)
-          };
           for (const { mesh } of hosted) {
             try {
-              await runIdleSessionReapPass(reaperDeps, { meshId: mesh.id, policy: (() => {
+              await runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, nowMs2), { meshId: mesh.id, policy: (() => {
                 const m = getMesh(mesh.id);
                 return m ? resolveMeshPolicy2(m.policy) : void 0;
               })(), now: nowMs2 });
@@ -107936,6 +108474,7 @@ ${asText(streams.stderr)}
         init_mesh_disk_retention();
         init_mesh_runtime_store();
         init_mesh_worktree_retention();
+        init_mesh_session_lifetime_runtime();
         init_mesh_idle_session_reaper();
         init_mesh_retention_config();
         init_mesh_auto_fast_forward();
@@ -107990,7 +108529,7 @@ ${asText(streams.stderr)}
       try {
         const built = buildMeshActiveWork({
           meshId,
-          queue: getQueue(meshId),
+          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
           directDispatches: getActiveDirectDispatches(meshId),
           ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
           nodes,
@@ -110745,7 +111284,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path24.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key5 = (0, import_node_crypto34.createHash)("sha256").update(`${meshId}\0${identity3}`).digest("hex").slice(0, 24);
+      const key5 = (0, import_node_crypto36.createHash)("sha256").update(`${meshId}\0${identity3}`).digest("hex").slice(0, 24);
       return (0, import_node_path24.join)(root, key5);
     }
     async function verifyCheckout(workspace, identity3) {
@@ -110814,7 +111353,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path24.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto34.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto36.randomUUID)() };
       try {
         await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -110840,7 +111379,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises11.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto34.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto36.randomUUID)() };
         await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -110962,7 +111501,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process19;
     var import_node_util10;
-    var import_node_crypto34;
+    var import_node_crypto36;
     var import_promises11;
     var import_node_path24;
     var exec5;
@@ -110981,7 +111520,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process19 = require("child_process");
         import_node_util10 = require("util");
-        import_node_crypto34 = require("crypto");
+        import_node_crypto36 = require("crypto");
         import_promises11 = require("fs/promises");
         import_node_path24 = require("path");
         init_config();
@@ -111026,13 +111565,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity3) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key5 = (0, import_node_crypto35.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto35.createHmac)("sha256", key5).update(`${grant.target}
+      const key5 = (0, import_node_crypto37.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto37.createHmac)("sha256", key5).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto35.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto37.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity3) {
       const hostId = str9(args?.hostDaemonId);
@@ -111061,7 +111600,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto35;
+    var import_node_crypto37;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -111070,7 +111609,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto35 = require("crypto");
+        import_node_crypto37 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -111302,7 +111841,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto36.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto38.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -111339,7 +111878,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto36.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto38.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -111644,7 +112183,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto36.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto38.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -111721,7 +112260,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto36;
+    var import_node_crypto38;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -111733,7 +112272,7 @@ ${b.text}`).join("\n\n");
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
         init_chat_history_tail();
-        import_node_crypto36 = require("crypto");
+        import_node_crypto38 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -113254,9 +113793,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
         const anchor = () => opts.db.prepare("SELECT attempt_id,generation,accepted_at FROM turn_attempts WHERE session_id=? AND scope='plain' ORDER BY accepted_at,attempt_id").all(sessionId);
-        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto37.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto39.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now, { checkpoints, scope });
-        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto37.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto39.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         if (opts.isAuthorized?.(meshId, sessionId) === false || scope !== currentScope) {
           checkpoints.reset(sessionId);
           return { sessionId, skipped: true };
@@ -113302,7 +113841,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             meshId,
             messageId,
             ...attempt && window.complete && !open ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
-            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto37.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
+            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto39.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
             messageAt: bubble.at,
             chars: Array.from(bubble.text).length,
             text: bubble.text,
@@ -113315,7 +113854,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (failed && !successful) throw new Error("coordinator native audit unavailable");
       return complete ? out : Object.assign(out, { complete: false });
     }
-    var import_node_crypto37;
+    var import_node_crypto39;
     var TERMINAL2;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
@@ -113323,7 +113862,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
         init_native_scan_checkpoint();
-        import_node_crypto37 = require("crypto");
+        import_node_crypto39 = require("crypto");
         init_assistant_native_window();
         init_report_continuation();
         init_attempt_report_recovery();
@@ -113341,15 +113880,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto38;
+    var import_node_crypto40;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto38 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto38.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto40 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto40.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -113535,7 +114074,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto39;
+    var import_node_crypto41;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -113551,7 +114090,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto39 = require("crypto");
+        import_node_crypto41 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -113563,7 +114102,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto39.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto41.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -120657,7 +121196,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os38;
-    var import_session_host_core12;
+    var import_session_host_core13;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -120667,7 +121206,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os38 = __toESM2(require("os"));
-        import_session_host_core12 = require_dist();
+        import_session_host_core13 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -120715,7 +121254,7 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core12.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core13.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -121281,8 +121820,8 @@ ${tail}` : ""
       getRecentLogs: () => getRecentLogs,
       getSavedProviderSessions: () => getSavedProviderSessions,
       getSeqscribeDbPath: () => getSeqscribeDbPath,
-      getSessionHostRecoveryLabel: () => import_session_host_core4.getSessionHostRecoveryLabel,
-      getSessionHostSurfaceKind: () => import_session_host_core4.getSessionHostSurfaceKind,
+      getSessionHostRecoveryLabel: () => import_session_host_core5.getSessionHostRecoveryLabel,
+      getSessionHostSurfaceKind: () => import_session_host_core5.getSessionHostSurfaceKind,
       getSessionRecoveryContext: () => getSessionRecoveryContext,
       getTrackIdentity: () => getTrackIdentity,
       getTurnPresentationMetrics: () => getTurnPresentationMetrics,
@@ -121345,8 +121884,8 @@ ${tail}` : ""
       isRouterCommandMaintenanceExempt: () => isRouterCommandMaintenanceExempt,
       isRunningWorkContinuation: () => isRunningWorkContinuation,
       isSecretLikeEnvKey: () => isSecretLikeEnvKey,
-      isSessionHostLiveRuntime: () => import_session_host_core4.isSessionHostLiveRuntime,
-      isSessionHostRecoverySnapshot: () => import_session_host_core4.isSessionHostRecoverySnapshot,
+      isSessionHostLiveRuntime: () => import_session_host_core5.isSessionHostLiveRuntime,
+      isSessionHostRecoverySnapshot: () => import_session_host_core5.isSessionHostRecoverySnapshot,
       isSessionHostUnavailableTransientError: () => isSessionHostUnavailableTransientError,
       isSessionLaunchedBy: () => isSessionLaunchedBy,
       isSetupComplete: () => isSetupComplete,
@@ -121472,8 +122011,8 @@ ${tail}` : ""
       parseSessionLaunchRecord: () => parseSessionLaunchRecord,
       parseWorktreeListOutput: () => parseWorktreeListOutput,
       partitionChannelEntries: () => partitionChannelEntries,
-      partitionSessionHostDiagnosticsSessions: () => import_session_host_core4.partitionSessionHostDiagnosticsSessions,
-      partitionSessionHostRecords: () => import_session_host_core4.partitionSessionHostRecords,
+      partitionSessionHostDiagnosticsSessions: () => import_session_host_core5.partitionSessionHostDiagnosticsSessions,
+      partitionSessionHostRecords: () => import_session_host_core5.partitionSessionHostRecords,
       performMeshHandshake: () => performMeshHandshake,
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
@@ -124306,7 +124845,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         logMeshCommandEvent(event, fields);
       }
     };
-    var import_node_crypto11 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();
     init_logger();
@@ -124678,7 +125217,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.pingIntervalMs = options.pingIntervalMs ?? WS_MESH_PING_INTERVAL_MS;
         this.maxMissedPongs = options.maxMissedPongs ?? WS_MESH_MAX_MISSED_PONGS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-        this.idNonce = `${this.idNonce}_${(0, import_node_crypto11.randomBytes)(3).toString("hex")}`;
+        this.idNonce = `${this.idNonce}_${(0, import_node_crypto13.randomBytes)(3).toString("hex")}`;
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       /** Register the inbound-command handler. It returns a result or throws. */
@@ -125447,7 +125986,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var import_node_child_process12 = require("child_process");
     var fs45 = __toESM2(require("fs"));
     var path53 = __toESM2(require("path"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto18 = require("crypto");
     init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
@@ -126077,11 +126616,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_install();
     var fs34 = __toESM2(require("fs"));
     var path41 = __toESM2(require("path"));
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto14 = require("crypto");
     var import_node_child_process11 = require("child_process");
     init_config();
     init_cooperative_gate();
-    var sha3 = (v) => (0, import_node_crypto12.createHash)("sha256").update(v).digest("hex");
+    var sha3 = (v) => (0, import_node_crypto14.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs34.realpathSync(process.execPath), entryPath = fs34.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process11.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
@@ -126127,7 +126666,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return r;
     }
     function durable(file, r) {
-      const temp = file + "." + (0, import_node_crypto12.randomUUID)() + ".tmp", fd = fs34.openSync(temp, "wx", 384);
+      const temp = file + "." + (0, import_node_crypto14.randomUUID)() + ".tmp", fd = fs34.openSync(temp, "wx", 384);
       try {
         fs34.writeFileSync(fd, JSON.stringify(r));
         fs34.fsyncSync(fd);
@@ -126150,7 +126689,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
-      const dir = ensureDirectory(root), operationId = (0, import_node_crypto12.randomUUID)();
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto14.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path41.join(dir, operationId + ".json"), r);
       return operationId;
@@ -127064,7 +127603,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         log?.(`Failed to remove inactive prefix ${target}: ${error?.message || String(error)}`);
       }
     }
-    var import_session_host_core7 = require_dist();
+    var import_session_host_core8 = require_dist();
     init_config();
     init_logger();
     init_track_identity();
@@ -127630,8 +128169,8 @@ exec "${portableNode}" "${cliEntry}" "$@"
         }
         return String(execNpmCommandSync(args, execOptions, surface)).trim();
       };
-      const retries = effectiveTimeout === void 0 ? 0 : Math.max(0, options.timeoutRetries ?? 2);
-      const attempts = retries + 1;
+      const retries2 = effectiveTimeout === void 0 ? 0 : Math.max(0, options.timeoutRetries ?? 2);
+      const attempts = retries2 + 1;
       let lastError;
       for (let attempt = 1; attempt <= attempts; attempt++) {
         try {
@@ -128508,7 +129047,7 @@ ${marker2}`,
         const payload = JSON.parse(raw);
         targetVersion = typeof payload?.targetVersion === "string" ? payload.targetVersion : null;
         const envConfigDir = (process.env.ADHDEV_CONFIG_DIR || "").trim();
-        if (payload.configDir && envConfigDir && (0, import_session_host_core7.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core7.canonicalizeInstancePath)(envConfigDir)) {
+        if (payload.configDir && envConfigDir && (0, import_session_host_core8.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core8.canonicalizeInstancePath)(envConfigDir)) {
           throw new Error(
             `Upgrade helper instance conflict: payload configDir "${payload.configDir}" vs ADHDEV_CONFIG_DIR "${envConfigDir}" \u2014 refusing to run across instances`
           );
@@ -129136,18 +129675,18 @@ ${marker2}`,
     }, { meshSender: "authenticated_peer" });
     var fs43 = __toESM2(require("fs"));
     var path51 = __toESM2(require("path"));
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_config();
     init_cooperative_gate();
     var fs42 = __toESM2(require("fs"));
     var path50 = __toESM2(require("path"));
     init_config();
-    var import_node_crypto13 = require("crypto");
-    var import_session_host_core8 = require_dist();
+    var import_node_crypto15 = require("crypto");
+    var import_session_host_core9 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
-    var digest = (value) => (0, import_node_crypto13.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var digest = (value) => (0, import_node_crypto15.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     var text = (v) => typeof v === "string" ? v.trim() : "";
     function freshCoordinators(state2) {
       const select = (e) => ({ sessionId: e.sessionId, meshId: e.meshId, workspace: e.workspace, cliType: e.cliType, startedAt: e.startedAt });
@@ -129212,7 +129751,7 @@ ${marker2}`,
         if (!registry || !host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
         const endpoint = await host.deps.verifiedRetainedEndpoint();
         if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-        const client = new import_session_host_core8.SessionHostClient({ endpoint });
+        const client = new import_session_host_core9.SessionHostClient({ endpoint });
         try {
           await client.connect();
           const list2 = async () => {
@@ -129326,7 +129865,7 @@ ${marker2}`,
       if (!host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core8.SessionHostClient({ endpoint });
+      const client = new import_session_host_core9.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -129346,7 +129885,7 @@ ${marker2}`,
       if (!state2 || !p || p.epoch !== state2.epoch || p.bootNonce !== MAINTENANCE_BOOT_NONCE || p.receipt !== receipt || !p.observation || !host.deps.verifiedRetainedEndpoint) throw Error("maintenance_prepared_observation_lost");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core8.SessionHostClient({ endpoint });
+      const client = new import_session_host_core9.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -129361,7 +129900,7 @@ ${marker2}`,
     }
     var ACTOR_CONFIG_FILE = "cooperative-maintenance-actor.json";
     var used = /* @__PURE__ */ new Map();
-    var hash22 = (s2) => (0, import_node_crypto14.createHash)("sha256").update(s2).digest("hex");
+    var hash22 = (s2) => (0, import_node_crypto16.createHash)("sha256").update(s2).digest("hex");
     function privateFile(file) {
       const s2 = fs43.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.nlink !== 1 || s2.size > 256 * 1024 || s2.mode & 63 || process.getuid && s2.uid !== process.getuid() || fs43.realpathSync(file) !== file) throw new Error("maintenance_actor_private_pin_required");
@@ -129381,8 +129920,8 @@ ${marker2}`,
       if (key5.length !== 32 || hash22(key5) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request.schema !== 1 || request.operation !== operation || request.daemonId !== state2.daemonId || request.planDigest !== state2.planDigest || request.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request.nonce) || !Number.isSafeInteger(request.sentAt) || Math.abs(Date.now() - request.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request.mac)) throw new Error("maintenance_actor_challenge_invalid");
       if ((request.body !== void 0 || request.bodyDigest !== void 0) && (request.bodyDigest !== hash22(JSON.stringify(request.body)) || JSON.stringify(request.body).length > 256 * 1024)) throw new Error("maintenance_collection_body_invalid");
-      const expected = (0, import_node_crypto14.createHmac)("sha256", key5).update(actorObservationChallengeBytes(request)).digest();
-      if (!(0, import_node_crypto14.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
+      const expected = (0, import_node_crypto16.createHmac)("sha256", key5).update(actorObservationChallengeBytes(request)).digest();
+      if (!(0, import_node_crypto16.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
       const replayKey = `${root}:${request.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
@@ -129402,7 +129941,7 @@ ${marker2}`,
           entryPath: process.argv[1],
           observedAt: Date.now()
         };
-        return { success: true, reply, mac: (0, import_node_crypto14.createHmac)("sha256", key5).update(JSON.stringify(reply)).digest("hex") };
+        return { success: true, reply, mac: (0, import_node_crypto16.createHmac)("sha256", key5).update(JSON.stringify(reply)).digest("hex") };
       } };
     }
     async function authenticatedActorObservation(host, request) {
@@ -129412,8 +129951,8 @@ ${marker2}`,
     }
     var fs44 = __toESM2(require("fs"));
     var path52 = __toESM2(require("path"));
-    var import_node_crypto15 = require("crypto");
-    var sha4 = (x) => (0, import_node_crypto15.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
+    var import_node_crypto17 = require("crypto");
+    var sha4 = (x) => (0, import_node_crypto17.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
     function validateMcpIdentity(value) {
       if (!value || typeof value.birth !== "string" || !/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value.birth) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[a-f0-9-]{36}$/.test(value.bootNonce) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0 || !path52.isAbsolute(value.entryPath ?? "") || !path52.isAbsolute(value.nodePath ?? "") || ![value.entrySha256, value.nodeSha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw new Error("maintenance_mcp_identity_invalid");
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
@@ -129495,7 +130034,7 @@ ${marker2}`,
       const membershipDigest = sha4(records), members = await Promise.all(records.map((identity3) => new Promise((resolve59) => {
         const name = `${root}:${key3(identity3)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
-        const nonce = (0, import_node_crypto15.randomUUID)(), timer = setTimeout(() => {
+        const nonce = (0, import_node_crypto17.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
           resolve59({ identity: identity3, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
@@ -129508,7 +130047,7 @@ ${marker2}`,
     init_new_work_hold();
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
-    var digest2 = (v) => (0, import_node_crypto16.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
+    var digest2 = (v) => (0, import_node_crypto18.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
       const identity3 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
@@ -129737,10 +130276,10 @@ ${marker2}`,
       const drain = await withMaintenanceObservation((state2) => collectTargetDrain(components, state2, auth.root, request.nonce));
       return auth.reply({ drain });
     }
-    var import_node_crypto17 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_cooperative_gate();
     init_dist();
-    var sha5 = (b) => (0, import_node_crypto17.createHash)("sha256").update(b).digest("hex");
+    var sha5 = (b) => (0, import_node_crypto19.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
       throw Error(s2);
@@ -129768,16 +130307,16 @@ ${marker2}`,
           daemonId: peer.daemonId,
           planDigest: s2.planDigest,
           epoch: s2.epoch,
-          nonce: (0, import_node_crypto17.randomUUID)(),
+          nonce: (0, import_node_crypto19.randomUUID)(),
           sentAt: Date.now(),
           configSha256: peerConfigSha,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha5(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto17.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto19.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha5(fs46.readFileSync(pin.path)) !== pin.sha256 || sha5(fs46.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha5(fs46.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
         const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto17.timingSafeEqual)((0, import_node_crypto17.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto19.timingSafeEqual)((0, import_node_crypto19.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -131034,7 +131573,7 @@ ${marker2}`,
       }
     };
     var crypto6 = __toESM2(require("crypto"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto20 = require("crypto");
     init_contracts();
     var DEFAULT_MONITOR_CONFIG = {
       approvalAlert: true,
@@ -131755,7 +132294,7 @@ ${marker2}`,
             }
           } else if (agentStatus === "waiting_approval") {
             if (!this.generatingStartedAt) this.generatingStartedAt = now;
-            const modalKey = `modal:${(0, import_node_crypto18.randomUUID)()}`;
+            const modalKey = `modal:${(0, import_node_crypto20.randomUUID)()}`;
             this.currentApprovalModalKey = modalKey;
             this.pushEvent({
               event: "agent:waiting_approval",
@@ -134328,7 +134867,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return count;
     }
     init_message_source_address();
-    var import_node_crypto19 = require("crypto");
+    var import_node_crypto21 = require("crypto");
     function createCodexTurnProvenance(nativeSessionId) {
       let current4;
       let last;
@@ -134341,7 +134880,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (payload.type === "user_message" && current4 && typeof payload.message === "string" && at >= current4.startedAt) {
           if (current4.inputAt) current4.startedAt = 0;
           current4.inputAt = at;
-          current4.inputDigest = (0, import_node_crypto19.createHash)("sha256").update(payload.message.trim()).digest("hex");
+          current4.inputDigest = (0, import_node_crypto21.createHash)("sha256").update(payload.message.trim()).digest("hex");
         }
         if (marker2 && current4 && (id4 && current4.id && id4 !== current4.id || !id4 && current4.id)) return { ...marker2, startedAt: 0 };
         if (payload.type === "error" && current4 && at < current4.startedAt) {
@@ -134437,7 +134976,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
     }
     var fs51 = __toESM2(require("fs"));
-    var import_node_crypto20 = require("crypto");
+    var import_node_crypto222 = require("crypto");
     var PARSED_JSONL_CACHE_MAX_ENTRIES = 8;
     var PARSED_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
     var parsedJsonlCache = /* @__PURE__ */ new Map();
@@ -134480,7 +135019,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const length = Math.min(BOUNDARY_BYTES, committedBytes);
         const bytes = Buffer.allocUnsafe(length);
         if (fs51.readSync(fd, bytes, 0, length, committedBytes - length) !== length) return null;
-        return (0, import_node_crypto20.createHash)("sha256").update(bytes).digest("hex");
+        return (0, import_node_crypto222.createHash)("sha256").update(bytes).digest("hex");
       } catch {
         return null;
       } finally {
@@ -134670,14 +135209,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let recordsSinceYield = 0;
       let sliceStartedAt = performance.now();
       let readTail = Buffer.alloc(0);
-      let digest4 = resume ? cached5.boundaryDigest : (0, import_node_crypto20.createHash)("sha256").update("").digest("hex");
+      let digest4 = resume ? cached5.boundaryDigest : (0, import_node_crypto222.createHash)("sha256").update("").digest("hex");
       let readAnchorBytes = from;
       let readAnchorDigest = digest4;
       try {
         if (resume && from > 0) {
           readTail = Buffer.alloc(Math.min(BOUNDARY_BYTES, from));
           const count = fs51.readSync(fd, readTail, 0, readTail.length, from - readTail.length);
-          if (count !== readTail.length || (0, import_node_crypto20.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
+          if (count !== readTail.length || (0, import_node_crypto222.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
             return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
           }
         }
@@ -134688,7 +135227,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (position === from) {
             const length = Math.min(BOUNDARY_BYTES, count);
             readAnchorBytes = from + length;
-            readAnchorDigest = (0, import_node_crypto20.createHash)("sha256").update(Buffer.concat([readTail, chunk.subarray(0, length)]).subarray(-BOUNDARY_BYTES)).digest("hex");
+            readAnchorDigest = (0, import_node_crypto222.createHash)("sha256").update(Buffer.concat([readTail, chunk.subarray(0, length)]).subarray(-BOUNDARY_BYTES)).digest("hex");
           }
           parsedJsonlCacheStats.bytesRead += count;
           position += count;
@@ -134717,7 +135256,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           const settledEnd = committedBytes - (position - count);
           if (settledEnd > 0) {
             const boundary = settledEnd >= BOUNDARY_BYTES ? chunk.subarray(settledEnd - BOUNDARY_BYTES, settledEnd) : Buffer.concat([readTail, chunk.subarray(0, settledEnd)]).subarray(-BOUNDARY_BYTES);
-            digest4 = (0, import_node_crypto20.createHash)("sha256").update(boundary).digest("hex");
+            digest4 = (0, import_node_crypto222.createHash)("sha256").update(boundary).digest("hex");
           }
           readTail = count >= BOUNDARY_BYTES ? Buffer.from(chunk.subarray(count - BOUNDARY_BYTES, count)) : Buffer.concat([readTail, chunk.subarray(0, count)]).subarray(-BOUNDARY_BYTES);
           if (position < stat2.size) {
@@ -135027,6 +135566,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
       for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         const p = path61.join(dir, e.name);
         const mtime = safeMtimeMs(p);
@@ -135051,6 +135591,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           continue;
         }
         for (const e of entries) {
+          pattern.lastIndex = 0;
           if (!e.isFile() || !pattern.test(e.name)) continue;
           const p = path61.join(resolved, e.name);
           const mtime = safeMtimeMs(p);
@@ -135245,15 +135786,26 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return best ? best.p : null;
     }
+    var directoryListings = /* @__PURE__ */ new Map();
     function listMatchingFiles(dir, pattern) {
       let entries;
       try {
-        entries = fs52.readdirSync(dir, { withFileTypes: true });
+        const stat2 = fs52.statSync(dir);
+        const key5 = `${stat2.ino}:${stat2.mtimeMs}:${stat2.ctimeMs}:${stat2.size}`;
+        const cached5 = directoryListings.get(dir);
+        if (cached5?.key === key5) entries = cached5.entries;
+        else {
+          entries = fs52.readdirSync(dir, { withFileTypes: true });
+          if (directoryListings.size >= 256) directoryListings.delete(directoryListings.keys().next().value);
+          directoryListings.set(dir, { key: key5, entries });
+        }
       } catch {
+        directoryListings.delete(dir);
         return [];
       }
       const out = [];
       for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         out.push(path61.join(dir, e.name));
       }
@@ -142735,7 +143287,7 @@ ${output}` : "";
     }
     var fs73 = __toESM2(require("fs"));
     var path80 = __toESM2(require("path"));
-    var import_node_crypto23 = require("crypto");
+    var import_node_crypto25 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -143725,7 +144277,7 @@ ${output}` : "";
       };
     }
     var fs72 = __toESM2(require("fs"));
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto24 = require("crypto");
     init_logger();
     var import_crypto25 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -144809,10 +145361,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto21 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto21.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto23.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -145686,7 +146238,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto222.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto24.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -147923,7 +148475,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto23.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto25.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -148215,7 +148767,7 @@ ${output}` : "";
     }
     var import_node_fs14 = __toESM2(require("fs"));
     var import_node_path12 = __toESM2(require("path"));
-    var import_node_crypto25 = require("crypto");
+    var import_node_crypto27 = require("crypto");
     init_logger();
     init_owned_lock();
     var OutgoingReceiptStore = class {
@@ -148236,7 +148788,7 @@ ${output}` : "";
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path12.default.join(this.directory, (0, import_node_crypto25.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path12.default.join(this.directory, (0, import_node_crypto27.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -148326,7 +148878,7 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto25.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto27.randomUUID)()}.tmp`;
         const fd = import_node_fs14.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -148356,8 +148908,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto25.randomUUID)(),
-            generation: (0, import_node_crypto25.randomUUID)(),
+            attemptId: (0, import_node_crypto27.randomUUID)(),
+            generation: (0, import_node_crypto27.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -151564,7 +152116,7 @@ ${output}` : "";
       return {
         runtimeKey: typeof record7.runtimeKey === "string" ? record7.runtimeKey : void 0,
         lifecycle: typeof record7.lifecycle === "string" ? record7.lifecycle : void 0,
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record7),
+        surfaceKind: (0, import_session_host_core5.getSessionHostSurfaceKind)(record7),
         attachedClientCount: Array.isArray(record7.attachedClients) ? record7.attachedClients.length : void 0,
         hasWriteOwner: !!record7.writeOwner,
         writeOwnerClientId: typeof record7.writeOwner?.clientId === "string" ? record7.writeOwner.clientId : void 0
@@ -151572,7 +152124,7 @@ ${output}` : "";
     }
     function summarizeSessionHostRecords(result) {
       const records = Array.isArray(result) ? result : [];
-      const groups = (0, import_session_host_core4.partitionSessionHostRecords)(records);
+      const groups = (0, import_session_host_core5.partitionSessionHostRecords)(records);
       return {
         sessionCount: records.length,
         liveRuntimeCount: groups.liveRuntimes.length,
@@ -152993,6 +153545,29 @@ ${output}` : "";
     init_logger();
     init_mesh_operating_notes();
     init_worker_mcp_isolation();
+    init_dist();
+    init_active_ledger();
+    init_mesh_runtime_store();
+    async function settleQueueWriter(meshId, taskId, reason) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const attempt = store2.turnStore().findLatestAttemptForTask(meshId, taskId);
+      if (!attempt || attempt.terminal) return;
+      const ledger = getActiveTurnLedger();
+      if (!ledger || !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) return;
+      ledger.observe({
+        eventId: `queue-stop:${reason}:${attempt.attemptId}:g${attempt.generation}:${Date.now()}`,
+        kind: "cancel",
+        source: "operator",
+        at: Date.now(),
+        observedBy: ledger.selfDaemonId,
+        sessionId: attempt.sessionId,
+        taskId,
+        attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+        reason
+      });
+      await ledger.resumeStoppingWriters(attempt.attemptId);
+    }
+    var WRITER_UNKNOWN_ERROR = "unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained";
     init_mesh_config();
     init_dist();
     init_config();
@@ -153331,9 +153906,11 @@ ${output}` : "";
       const req = decodeQueueCancelRequest(args);
       if (!req) return badRequest("queue_cancel");
       try {
-        const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
-        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...req.reason !== void 0 ? { reason: req.reason } : {} }, await ownQueueRole(_ctx, req.meshId)));
-        if (task && task.status !== "cancelled") return { success: false, code: "writer_checkpoint_pending", task: queueWire(task) };
+        const before = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === "host") await settleQueueWriter(req.meshId, req.taskId, "operator_cancel");
+        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...req.reason !== void 0 ? { reason: req.reason } : {} }, role));
+        if (task && task.status !== "cancelled") return { success: false, code: "writer_checkpoint_pending", error: WRITER_UNKNOWN_ERROR, task: queueWire(task) };
         const response = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
       } catch (e) {
@@ -153344,6 +153921,8 @@ ${output}` : "";
       const req = decodeQueueRequeueRequest(args);
       if (!req) return badRequest("queue_requeue");
       try {
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === "host" && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, "superseded");
         const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options, await ownQueueRole(_ctx, req.meshId)));
         if (outcome?.refusal) return requeueRefusalResponse(req.taskId, outcome.refusal, queueWire(outcome.entry));
         const response = { task: queueWire(outcome?.entry ?? null) };
@@ -154320,7 +154899,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto29 = require("crypto");
+    var import_node_crypto31 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db2) {
@@ -154328,7 +154907,7 @@ ${output}` : "";
     }
     function key4(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto29.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto31.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db2, credential, claim) {
       schema2(db2);
@@ -154553,7 +155132,7 @@ ${output}` : "";
     init_runtime_defaults();
     init_worker_report_idempotency();
     init_mesh_pinned_node_identity();
-    var import_node_crypto30 = require("crypto");
+    var import_node_crypto322 = require("crypto");
     init_dist();
     init_mesh_runtime_store();
     init_logger();
@@ -154946,7 +155525,7 @@ ${output}` : "";
       }
     };
     init_mesh_writer_stop_journal();
-    var BOOT = (0, import_node_crypto30.randomUUID)();
+    var BOOT = (0, import_node_crypto322.randomUUID)();
     function journal(create = false) {
       const db2 = MeshRuntimeStore.getInstance().db;
       if (create) db2.exec("CREATE TABLE IF NOT EXISTS mesh_holder_attaches (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, identity_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, phase TEXT NOT NULL, prepared_json TEXT NOT NULL, runtime_json TEXT NOT NULL, boot_nonce TEXT NOT NULL)");
@@ -156004,7 +156583,7 @@ ${output}` : "";
     var os35 = __toESM2(require("os"));
     var path86 = __toESM2(require("path"));
     init_logger();
-    var import_session_host_core9 = require_dist();
+    var import_session_host_core10 = require_dist();
     init_provider_cli_shared();
     function isFlagToken(arg) {
       return typeof arg === "string" && arg.startsWith("-") && arg !== "-" && arg !== "--";
@@ -156116,8 +156695,8 @@ ${output}` : "";
         isWin,
         useShell,
         ptyOptions: {
-          cols: geometry?.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS,
-          rows: geometry?.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS,
+          cols: geometry?.cols ?? import_session_host_core10.DEFAULT_SESSION_HOST_COLS,
+          rows: geometry?.rows ?? import_session_host_core10.DEFAULT_SESSION_HOST_ROWS,
           cwd: workingDir,
           env: env2,
           envOverrides: buildCliSpawnEnv({}, { ...baseEnv || {}, ...extraEnv || {}, TERMINAL_CWD: workingDir })
@@ -157185,9 +157764,9 @@ ${output}` : "";
       };
       if (meshRecord2.inline) {
         const crypto18 = await import("crypto");
-        const randomUUID51 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
+        const randomUUID53 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
         const node2 = {
-          id: `node_${randomUUID51().replace(/-/g, "")}`,
+          id: `node_${randomUUID53().replace(/-/g, "")}`,
           workspace: fields.workspace,
           repoRoot: fields.repoRoot,
           daemonId: fields.daemonId,
@@ -158312,8 +158891,9 @@ ${output}` : "";
         try {
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, describeTaskDependencyState: describeTaskDependencyState22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const status = Array.isArray(args?.status) ? args.status.map((s2) => typeof s2 === "string" ? s2.trim() : "").filter(Boolean) : void 0;
-          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId)).filter((task) => !status?.length || status.includes(task.status));
-          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId));
+          const requested = status?.length ? [.../* @__PURE__ */ new Set([...status, ...status.includes("blocked") ? ["failed"] : []])] : void 0;
+          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId, { status: requested })).filter((task) => !status?.length || status.includes(task.status));
+          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, MeshRuntimeStore.getInstance().getQueueDependencyHeads(meshId, rawQueue.flatMap((t) => t.dependsOn ?? [])));
           const statusById = new Map(allQueue.map((task) => [task.id, task.status]));
           const depMetaById = new Map(allQueue.map((task) => [task.id, task]));
           const queue = rawQueue.map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
@@ -158342,12 +158922,13 @@ ${output}` : "";
         try {
           const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, cancelTask: cancelTask2, takeCancelledTaskAssignment: takeCancelledTaskAssignment2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const reason = typeof args?.reason === "string" ? args.reason : void 0;
+          await settleQueueWriter(meshId, taskId, "operator_cancel");
           const task = cancelTask2(meshId, taskId, { reason });
           if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
           if (task.status !== "cancelled") return {
             success: false,
             code: "writer_checkpoint_pending",
-            error: "Cancellation is stopping the physical writer; ownership remains retained until quiescence.",
+            error: WRITER_UNKNOWN_ERROR,
             task: summarizeQueueEntryInputForView22(task)
           };
           const prior = takeCancelledTaskAssignment2(meshId, taskId);
@@ -158368,6 +158949,7 @@ ${output}` : "";
         try {
           const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTaskWithOutcome: requeueTaskWithOutcome2, getQueueEntryById: getQueueEntryById2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const { requeueRefusalResponse: requeueRefusalResponse2 } = await Promise.resolve().then(() => (init_mesh_queue_attempt_guard(), mesh_queue_attempt_guard_exports));
+          if (args?.force === true) await settleQueueWriter(meshId, taskId, "superseded");
           if (args?.force !== true) {
             const { isSessionActivelyGenerating: isSessionActivelyGenerating2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
             const { isHeldRemoteSessionGenerating: isHeldRemoteSessionGenerating2 } = await Promise.resolve().then(() => (init_mesh_candidacy_predicates(), mesh_candidacy_predicates_exports));
@@ -159446,7 +160028,7 @@ ${output}` : "";
             };
           }
           const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
-          const liveMeshSessions = (0, import_session_host_core4.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
+          const liveMeshSessions = (0, import_session_host_core5.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
           const workspace = readLiveMeshNodeWorkspace({
             meshId,
             nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || ""),
@@ -160221,7 +160803,7 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const refreshReason = refreshRequested ? "explicit_refresh" : rebuildFromHeld ? "held_state_rebuild" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
-          const rawQueue = getQueue2(meshId);
+          const rawQueue = getQueue2(meshId, { status: ["pending", "assigned"] });
           const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
           const queueSummary = getMeshQueueStats2(meshId);
           const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime2 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
@@ -160232,7 +160814,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const asyncRefineLedgerEntries = readRefineJobRecords2(meshId);
           const ledgerSummary = getLocalRecordSummary2(meshId);
           const sessionHostRecords = ctx.deps.sessionHostControl?.listSessions ? await ctx.deps.sessionHostControl.listSessions().catch(() => []) : [];
-          const liveMeshSessions = (0, import_session_host_core4.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
+          const liveMeshSessions = (0, import_session_host_core5.partitionSessionHostRecords)(Array.isArray(sessionHostRecords) ? sessionHostRecords : []).liveRuntimes;
           const localMachineId = getMachineId() || "";
           const localMachineNickname = (() => {
             const nick = getMachineNickname();
@@ -163388,7 +163970,7 @@ ${ptyResult.output.slice(-2e3)}`);
     var import_node_path25 = require("path");
     init_dist();
     init_owned_lock();
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core12 = require_dist();
     var import_node_fs24 = require("fs");
     async function readPersistedRuntimeRecord(file) {
       const stream = (0, import_node_fs24.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
@@ -163437,8 +164019,8 @@ ${ptyResult.output.slice(-2e3)}`);
       return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
     }
     async function verifiedHostAssistants(configDir, namespace, ipcKey, boundSessionId) {
-      const endpoint = (0, import_session_host_core11.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
-      const client = new import_session_host_core11.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+      const endpoint = (0, import_session_host_core12.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
+      const client = new import_session_host_core12.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
       let timer;
       try {
         const response = await Promise.race([
@@ -163478,6 +164060,10 @@ ${ptyResult.output.slice(-2e3)}`);
       if (options.boundNamespace && !namespaces.includes(options.boundNamespace)) namespaces.push(options.boundNamespace);
       for (const namespace of namespaces) {
         if (!/^[\w.-]+$/.test(namespace) || namespace === "." || namespace === "..") continue;
+        if (namespace !== options.boundNamespace && namespace !== options.currentNamespace) {
+          if (/^adhdev-(?:test(?:-|$)|input-ann-)/.test(namespace)) continue;
+          if (["adhdev", "adhdev-preview"].includes(options.currentNamespace ?? "") && ["adhdev", "adhdev-preview"].includes(namespace)) continue;
+        }
         const runtimes = (0, import_node_path25.join)(hostRoot, namespace, "runtimes");
         let files;
         try {
@@ -163486,7 +164072,7 @@ ${ptyResult.output.slice(-2e3)}`);
           if (error.code === "ENOENT") files = [];
           else throw error;
         }
-        const candidates = new Set(options.boundSessionId ? [options.boundSessionId] : []);
+        const candidates = new Set(options.boundSessionId && namespace === options.boundNamespace ? [options.boundSessionId] : []);
         for (const file of files.filter((f) => /^[\w-]+\.json$/.test(f))) {
           let r;
           try {
@@ -163507,14 +164093,25 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         if (!candidates.size) continue;
         const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
-        if (verified) for (const id4 of verified) ids.add(id4);
-        else if (!options.allowUnverified) for (const id4 of candidates) ids.add(id4);
-        else options.onUnverified?.(namespace);
+        if (verified) for (const id4 of verified) {
+          ids.add(id4);
+          options.onConflictEvidence?.({ namespace, sessionId: id4, reason: "host census reports a live assistant" });
+        }
+        else {
+          for (const id4 of candidates) {
+            ids.add(id4);
+            options.onConflictEvidence?.({ namespace, sessionId: id4, reason: "host endpoint or identity unverifiable; cannot prove the writer dead" });
+          }
+          options.onUnverified?.(namespace);
+        }
       }
       return ids;
     }
     init_assistant_registry();
-    var refused2 = (code, error = code) => ({ success: false, code, error });
+    var refused2 = (code, error = code) => {
+      LOG.warn("Assistant", `${code}: ${error}`);
+      return { success: false, code, error };
+    };
     async function admitAssistantLaunch(ctx, args, isAborted) {
       const forceRequested = args?.force === true || args?.replace === true;
       if (forceRequested && !isTrustedOwnerIngress(args)) return refused2("assistant_owner_required");
@@ -163553,16 +164150,21 @@ ${ptyResult.output.slice(-2e3)}`);
         let entry = registry.reload();
         const candidate = entry?.sessionId && entry.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner) ? void 0 : assistantRestoreCandidate(entry, records);
         const attached = candidate ? ctx.deps.instanceManager.getInstance(candidate.runtimeId) : entry?.sessionId ? ctx.deps.instanceManager.getInstance(entry.sessionId) : void 0;
+        const conflicts = [];
         const persisted = attached ? /* @__PURE__ */ new Set() : await persistedAssistantRuntimeIds(getConfigDir2(), {
           ipcKey: getProcessInstanceContext({ standalone: owner.managedBy === "adhdev-standalone" }).ipcKey,
-          allowUnverified: forceRequested,
+          currentNamespace: owner.namespace,
+          onConflictEvidence: (evidence) => conflicts.push(`${evidence.sessionId} in namespace ${evidence.namespace}: ${evidence.reason}`),
           boundSessionId: entry?.sessionId ?? void 0,
           boundNamespace: entry?.hostOwner?.namespace,
-          onUnverified: (namespace) => LOG.warn("Assistant", `owner_force bypassed unverified assistant evidence in ${namespace}`)
+          onUnverified: (namespace) => LOG.warn("Assistant", `Unverifiable assistant evidence in namespace ${namespace}; duplicate launch remains blocked`)
         });
         if (isAborted?.()) return refused2("assistant_launch_timeout");
         if (forceRequested && !isTrustedOwnerIngress(args)) return refused2("assistant_owner_required");
-        if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2("assistant_identity_conflict");
+        if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2(
+          "assistant_identity_conflict",
+          conflicts.join("; ") || `Conflicting persisted assistant records: ${[...persisted].join(", ")}; namespace ${owner.namespace}`
+        );
         if (candidate) {
           if (candidate.lifecycle === "starting" || candidate.lifecycle === "stopping") return refused2("assistant_restore_pending");
           if (!shouldRestoreHostedRuntime(candidate, owner.managedBy)) return refused2("assistant_owned_by_other_host");
@@ -163577,7 +164179,7 @@ ${ptyResult.output.slice(-2e3)}`);
             instance.updateSettings({ assistant: true, ...candidate.autoApproveMode ? { autoApproveMode: candidate.autoApproveMode } : { autoApprove: false, autoApproveMode: void 0 } });
           }
           const latest = registry.reload();
-          if (latest?.sessionId && latest.sessionId !== candidate.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) return refused2("assistant_identity_conflict");
+          if (latest?.sessionId && latest.sessionId !== candidate.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) return refused2("assistant_identity_conflict", `Binding changed during restore: candidate ${candidate.runtimeId}, registry ${latest?.sessionId ?? "empty"}, namespace ${owner.namespace}`);
           registry.bindSession({
             sessionId: candidate.runtimeId,
             cliType: candidate.cliType,
@@ -163606,7 +164208,7 @@ ${ptyResult.output.slice(-2e3)}`);
         return void 0;
       } catch (error) {
         const message = error.message;
-        return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", message);
+        return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", `${message}; namespace ${owner.namespace}`);
       }
     }
     var import_crypto39 = require("crypto");
@@ -163622,7 +164224,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto40 = require("crypto");
+    var import_node_crypto422 = require("crypto");
     var import_node_fs25 = require("fs");
     var os37 = __toESM2(require("os"));
     var import_node_path27 = require("path");
@@ -163847,7 +164449,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path27.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto40.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto422.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -164135,6 +164737,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return typeof v === "string" ? v.trim() : "";
     }
     function fail6(code, error = code, extra = {}) {
+      LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
     async function promptProjects(ctx) {
@@ -164307,7 +164910,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       });
       const isCurrent = () => assistantGenerations.get(registry) === fence;
       const mayBind = () => isCurrent() && (!registry.reload()?.sessionId || registry.read()?.sessionId === sessionId);
-      if (fence.aborted || !mayBind()) {
+      const bindingConflict = !mayBind();
+      if (fence.aborted || bindingConflict) {
         if (launched?.success && sessionId) {
           const retainBinding = () => {
             if (mayBind()) registry.bindSession({
@@ -164347,12 +164951,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
+        if (bindingConflict && !fence.aborted) return fail6("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
         return fail6(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
         return fail6(str16(launched?.code) || "assistant_launch_failed", str16(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail6("assistant_identity_conflict");
+      if (!mayBind()) return fail6("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -165742,7 +166347,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!Array.isArray(sessions)) return { state: "unknown", error: "session inventory was not a list" };
       for (const record7 of sessions) {
         if (!sessionMatchesMeshNode(self, record7, node, nodeId)) continue;
-        if ((0, import_session_host_core4.getSessionHostSurfaceKind)(record7) !== "live_runtime") continue;
+        if ((0, import_session_host_core5.getSessionHostSurfaceKind)(record7) !== "live_runtime") continue;
         return { state: "occupied", sessionId: String(record7?.sessionId || "") };
       }
       return { state: "idle" };
@@ -166355,13 +166960,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         inactive_record: 0
       };
       for (const record7 of matched) {
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record7);
+        const surfaceKind = (0, import_session_host_core5.getSessionHostSurfaceKind)(record7);
         matchedBySurfaceKind[surfaceKind] += 1;
       }
       for (const record7 of matched) {
         const sessionId = String(record7.sessionId);
         const completed = self.isCompletedHostedSession(record7);
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record7);
+        const surfaceKind = (0, import_session_host_core5.getSessionHostSurfaceKind)(record7);
         const liveRuntime = surfaceKind === "live_runtime";
         const coordinatorSession = readStringValue(record7?.meta?.meshCoordinatorFor) === args.meshId;
         const recordNodeId = readStringValue(record7?.meta?.meshNodeId);
@@ -166731,10 +167336,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       sync.checkedAtMs = now;
       const stat2 = statMeshConfigFile();
       if (!stat2) return;
-      if (stat2.mtimeMs === sync.mtimeMs && stat2.size === sync.size) return;
+      if (stat2.mtimeMs === sync.mtimeMs && stat2.size === sync.size && stat2.ino === sync.ino) return;
       const hadBaseline = sync.mtimeMs >= 0;
       sync.mtimeMs = stat2.mtimeMs;
       sync.size = stat2.size;
+      sync.ino = stat2.ino;
       if (!hadBaseline) return;
       const disk = readMeshConfigFromDisk();
       if (!disk) {
@@ -167175,13 +167781,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       aggregateMeshStatusCache = /* @__PURE__ */ new Map();
       /**
        * meshes.json policy resync state (see syncInlineMeshPoliciesFromDisk).
-       * checkedAtMs throttles the stat; mtimeMs/size are the last-seen file
+       * checkedAtMs throttles the stat; mtimeMs/size/ino are the last-seen file
        * identity. -1 = no baseline recorded yet: the first check RECORDS the
        * baseline without applying, so a stale local file mirror can never
        * regress a fresher inline (cloud-coordinator) policy — only edits made
        * while this daemon is alive and watching are pulled into memory.
        */
-      meshPolicyDiskSync = { checkedAtMs: 0, mtimeMs: -1, size: -1 };
+      meshPolicyDiskSync = { checkedAtMs: 0, mtimeMs: -1, size: -1, ino: -1 };
       /** Shared per-peer git_status probe dedup + recently-probed reuse gate.
        *  Spans separate mesh_status/get_mesh calls so the dashboard auto-retry
        *  loop cannot storm a slow peer with back-to-back refreshUpstream probes. */
@@ -171252,6 +171858,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
+    var import_node_crypto43 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
@@ -171300,6 +171907,26 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
         } catch {
           return pending("native_observation_unknown");
+        }
+      }
+      if (!previous && !host.adapters.has(request.sessionId)) {
+        try {
+          if (!host.deps.listHostedCliRuntimes) return pending("unknown, cannot prove dead: host inventory unavailable");
+          const records = await host.deps.listHostedCliRuntimes();
+          if (host.adapters.has(request.sessionId)) return pending("writer_reappeared");
+          if (!records.some((r) => r.runtimeId === request.sessionId)) {
+            const evidence = { kind: "host_session_absent", sessionId: request.sessionId, observedAt: Date.now() };
+            return {
+              ...request,
+              success: true,
+              quiescent: true,
+              evidence,
+              incarnation: (0, import_node_crypto43.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
+            };
+          }
+          return pending("unknown, cannot prove dead: host still reports session");
+        } catch {
+          return pending("unknown, cannot prove dead: host unreachable");
         }
       }
       if (request.inspectOnly) return pending("quiescence_not_confirmed");
@@ -171366,7 +171993,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs106 = __toESM2(require("fs"));
     var path99 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto41 = require("crypto");
+    var import_node_crypto44 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -171410,7 +172037,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto41.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto44.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -171463,7 +172090,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os43 = __toESM2(require("os"));
     var path98 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core14 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -171484,8 +172111,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core13.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core13.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core14.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core14.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -172220,7 +172847,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core15 = require_dist();
     var fs102 = __toESM2(require("fs"));
     var path97 = __toESM2(require("path"));
     var fs98 = __toESM2(require("fs"));
@@ -172637,8 +173264,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core14.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core14.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core15.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core15.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -174933,7 +175560,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs105 = __toESM2(require("fs"));
-    var import_node_crypto422 = require("crypto");
+    var import_node_crypto45 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -174960,7 +175587,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto422.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto45.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -177598,7 +178225,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process23 = require("child_process");
-    var import_node_crypto43 = require("crypto");
+    var import_node_crypto46 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -177608,7 +178235,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto43.randomUUID)();
+      generation = (0, import_node_crypto46.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -177669,7 +178296,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto43.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto46.randomUUID)()}`;
         return new Promise((resolve59, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -177705,7 +178332,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto44 = require("crypto");
+    var import_node_crypto47 = require("crypto");
     init_dist();
     init_interactive_prompt();
     function record6(value) {
@@ -177837,7 +178464,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto44.randomUUID)(),
+          promptId: (0, import_node_crypto47.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -179610,7 +180237,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto45 = require("crypto");
+    var import_node_crypto48 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -179794,7 +180421,7 @@ ${buttons.join("\n")}`;
               now
             );
             const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
-            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto45.randomUUID)()}`;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto48.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
@@ -184058,7 +184685,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         refuseCoordinatorRestore("persisted runtime identity or coordinator provenance does not match");
       }
     }
-    function meshSnapshot(meshId) {
+    function meshSnapshot2(meshId) {
       return JSON.stringify(listCoordinatorsForMesh(meshId));
     }
     function planCoordinatorRestore(record7, owner, liveIds) {
@@ -184094,7 +184721,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (listCoordinatorsForMesh(entry.meshId).some((e) => e.sessionId !== record7.runtimeId)) {
         refuseCoordinatorRestore("another coordinator binding already exists for this mesh");
       }
-      return { entry, registrySnapshot: meshSnapshot(entry.meshId), recovered };
+      return { entry, registrySnapshot: meshSnapshot2(entry.meshId), recovered };
     }
     function planCoordinatorRestores(records, owner, liveIds, inventory = records) {
       const plans = /* @__PURE__ */ new Map();
@@ -184124,7 +184751,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     function repairCoordinatorBinding(plan, record7, owner, liveIds) {
       loadMeshCoordinatorRegistry({ strict: true });
-      if (meshSnapshot(plan.entry.meshId) !== plan.registrySnapshot) refuseCoordinatorRestore("binding changed during attach");
+      if (meshSnapshot2(plan.entry.meshId) !== plan.registrySnapshot) refuseCoordinatorRestore("binding changed during attach");
       if (plan.recovered) verifyPersistedCoordinator(record7, owner);
       const current4 = planCoordinatorRestore(record7, owner, liveIds);
       if (!current4 || current4.entry.meshId !== plan.entry.meshId) refuseCoordinatorRestore("coordinator identity changed during attach");
@@ -184169,7 +184796,17 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return 0;
       }
       const promoted = await verifyHeldObservationPromotion(host);
-      const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+      let sessions = records || await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true }) || [];
+      if (sessions.some((r) => r.cliArgsOmitted)) {
+        const details = await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true });
+        if (!details) throw new Error("session_host_launch_details_unavailable");
+        sessions = sessions.map((record7) => {
+          if (!record7.cliArgsOmitted) return record7;
+          const exact = details.find((r) => r.runtimeId === record7.runtimeId && r.runtimeKey === record7.runtimeKey && r.startedAtMs === record7.startedAtMs);
+          if (!exact || exact.cliArgsOmitted) throw new Error("session_host_inventory_changed_during_restore");
+          return exact;
+        });
+      }
       signal?.throwIfAborted();
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       const owner = host.deps.getHostedBindingOwner?.();
@@ -184398,6 +185035,57 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         );
       }
     }
+    init_mesh_session_stop_fence();
+    init_mesh_runtime_store();
+    init_mesh_idle_session_reaper();
+    init_mesh_session_lifetime();
+    init_mesh_session_stop_fence();
+    init_dist();
+    init_mesh_session_lifetime();
+    init_command_args();
+    async function idleSessionLifetimeCommand(host, args) {
+      const control = host.deps.idleSessionLifetimeControl;
+      const meshId = readMeshContext(args)?.meshId;
+      if (!control || !meshId || !args.targetSessionId) return { success: false, error: "lifetime_host_unavailable" };
+      const records = await control.listSessions();
+      const stateFor = (id4) => host.deps.getInstanceManager()?.getByCategory("cli").find((inst) => sessionIdsEquivalent(inst.getState().instanceId, id4))?.getState();
+      if (args.action === "mesh_idle_session_inventory") {
+        return { success: true, sessions: records.filter((r2) => r2.meta.meshNodeFor === meshId).map((r2) => {
+          const state2 = stateFor(r2.sessionId);
+          return {
+            sessionId: r2.sessionId,
+            lastActivityAt: r2.lastActivityAt,
+            lifecycle: r2.lifecycle,
+            surfaceKind: r2.surfaceKind,
+            stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, r2.sessionId),
+            claimFence: sessionClaimFence(state2),
+            meta: { meshNodeFor: r2.meta.meshNodeFor, meshNodeId: r2.meta.meshNodeId, launchedByCoordinator: r2.meta.launchedByCoordinator },
+            state: isSafeIdleTaskSession(state2, r2.meta) ? { status: "idle" } : void 0,
+            checkpointPending: sessionCheckpointPending(r2.sessionId)
+          };
+        }) };
+      }
+      const r = records.find((r2) => sessionIdsEquivalent(r2.sessionId, args.targetSessionId));
+      const fence = args.idleSessionLifetime;
+      if (!fence?.stopId || !fence.claimFence) return { success: false, error: "lifetime_claim_fence_required" };
+      if (!r || r.meta.meshNodeFor !== meshId || r.meta.launchedByCoordinator !== true || r.lastActivityAt !== args.idleSessionLifetime?.lastActivityAt || r.lifecycle !== "running" || !isSafeIdleTaskSession(stateFor(r.sessionId), r.meta) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+        return { success: false, error: "lifetime_safety_changed" };
+      }
+      const db2 = MeshRuntimeStore.getInstance().db;
+      reserveSessionStop(db2, meshId, r.sessionId, fence.stopId);
+      try {
+        if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+          return { success: false, error: "lifetime_assignment_changed" };
+        }
+        markSessionStopSent(db2, r.sessionId, fence.stopId);
+        const stopped = await control.stopSession(r.sessionId);
+        if (!stopped || stopped.lifecycle !== "stopped") return { success: false, error: "lifetime_stop_unconfirmed" };
+        confirmSessionStop(db2, r.sessionId, fence.stopId);
+        return { success: true, stoppedSessionIds: [r.sessionId] };
+      } finally {
+        releaseSessionStop(db2, r.sessionId, fence.stopId);
+      }
+    }
     init_worker_bridge();
     init_mesh_writer_stop_journal();
     init_mesh_runtime_store();
@@ -184428,6 +185116,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         meshWriterStopProtocol: 1,
         stopRequestId: args.meshWriterStop?.stopRequestId
       };
+      if (action2 === "mesh_idle_session_inventory" || action2 === "mesh_idle_session_stop") return idleSessionLifetimeCommand(host, args);
       if (action2 === "reconcile_mesh_holder") return reconcileMeshHolder(host, args);
       const meshScopeNodeId = (() => {
         const mc = readMeshContext(args);
@@ -184445,7 +185134,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           instanceKey: args?.targetSessionId
         });
       }
-      if (!found) throw new Error(`CLI agent not running: ${agentType}`);
+      if (!found) {
+        if (action2 === "send_chat") return { success: false, code: "dispatch_not_started", error: `CLI agent not running: ${agentType}` };
+        throw new Error(`CLI agent not running: ${agentType}`);
+      }
       const { adapter, key: key5 } = found;
       if (action2 === "send_chat") return agentSendChat(host, args, key5);
       if (action2 === "clear_history") {
@@ -184491,6 +185183,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
     }
     async function agentSendChat(host, args, key5) {
+      if (sessionIsStopping(MeshRuntimeStore.getInstance().db, key5)) throw new Error("session_lifetime_stopping");
       if (readMeshContext(args) && isWriterStopPending(key5)) throw new Error("mesh_writer_stopping_checkpoint_pending");
       if (readMeshContext(args) && isHolderAttachPending(key5)) throw new Error("mesh_holder_attach_checkpoint_pending");
       const meshContext = readMeshContext(args);
@@ -189889,7 +190582,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core15 = require_dist();
+    var import_session_host_core16 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record7) {
@@ -189902,7 +190595,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core15.SessionHostClient({
+        this.client = new import_session_host_core16.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -190460,7 +191153,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto41 = require("crypto");
-    var import_session_host_core16 = require_dist();
+    var import_session_host_core17 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -190558,7 +191251,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto41.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core16.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core17.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -190653,7 +191346,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     var fs114 = __toESM2(require("fs"));
-    var import_session_host_core17 = require_dist();
+    var import_session_host_core18 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -190811,7 +191504,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function probeHost(endpoint, requiredRequestTypes, timeoutMs, identity3, invocation) {
-      const client = new import_session_host_core17.SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
+      const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
       let requestTimeoutMs = timeoutMs;
@@ -190854,7 +191547,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core17.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core18.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const key5 = endpointKey(endpoint);
       const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
@@ -190896,9 +191589,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       };
       let lastError;
       let proven = false;
-      const retries = Math.max(0, options.canConnectRetries ?? options.verifyRetries ?? 2);
+      const retries2 = Math.max(0, options.canConnectRetries ?? options.verifyRetries ?? 2);
       const delay3 = options.canConnectRetryDelayMs ?? options.verifyRetryDelayMs ?? 150;
-      for (let attempt = 0; attempt <= retries && remaining() > 0; attempt++) {
+      for (let attempt = 0; attempt <= retries2 && remaining() > 0; attempt++) {
         if (attempt > 0) {
           await new Promise((resolve59) => setTimeout(resolve59, Math.min(remaining(), 250, delay3 * 2 ** (attempt - 1))));
           if (remaining() <= 0) break;
@@ -190932,7 +191625,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await options.beforeSpawnHost?.(endpoint);
         if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
         assertStartAdmission();
-        import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
+        import_session_host_core18.SessionHostClient.disconnectClients?.(endpoint);
         assertStartAdmission();
         options.spawnHost();
         probeEvidence2.delete(key5);
@@ -190958,19 +191651,29 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    async function listHostedCliRuntimes(endpoint) {
-      const existing = import_session_host_core17.SessionHostClient.findConnectedClient?.(endpoint) ?? null;
-      const client = existing || new import_session_host_core17.SessionHostClient({ endpoint });
-      const shouldClose = !existing;
+    async function listHostedCliRuntimes(endpoint, options) {
+      const client = new import_session_host_core18.SessionHostClient({ endpoint, registerAsShared: false, requestTimeoutMs: 5e3 });
       try {
         const response = await client.request({
           type: "list_sessions",
-          payload: {}
+          payload: { activeOnly: true }
         });
         if (!response.success || !Array.isArray(response.result)) {
           throw new Error(`session_host_inventory_unavailable: ${response.error || "missing list_sessions result"}`);
         }
-        return response.result.filter((record7) => record7.category === "cli" && !record7.termination && ["starting", "running", "stopping", "interrupted"].includes(record7.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record7) => ({
+        const records = response.result;
+        if (options?.includeLaunchDetails) {
+          for (let i = 0; i < records.length; i++) {
+            const record7 = records[i];
+            if (record7.meta?.cliArgsOmitted !== true || record7.termination || !["running", "interrupted"].includes(record7.lifecycle)) continue;
+            const detail = await client.request({ type: "get_session", payload: { sessionId: record7.sessionId } });
+            if (!detail.success || !detail.result || detail.result.sessionId !== record7.sessionId || detail.result.runtimeKey !== record7.runtimeKey || detail.result.startedAt !== record7.startedAt) {
+              throw new Error("session_host_inventory_changed_during_detail_lookup");
+            }
+            records[i] = detail.result;
+          }
+        }
+        return records.filter((record7) => record7.category === "cli" && !record7.termination && ["starting", "running", "stopping", "interrupted"].includes(record7.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record7) => ({
           runtimeId: record7.sessionId,
           runtimeKey: record7.runtimeKey,
           displayName: record7.displayName,
@@ -190979,6 +191682,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           recoveryState: typeof record7.meta?.runtimeRecoveryState === "string" ? String(record7.meta.runtimeRecoveryState) : null,
           cliType: record7.providerType,
           workspace: record7.workspace,
+          cliArgsOmitted: record7.meta?.cliArgsOmitted === true,
           cliArgs: Array.isArray(record7.meta?.cliArgs) ? record7.meta.cliArgs : [],
           providerSessionId: typeof record7.meta?.providerSessionId === "string" ? String(record7.meta.providerSessionId) : void 0,
           assistant: record7.meta?.assistant === true ? true : void 0,
@@ -191000,10 +191704,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           ...record7.meta?.launchRecord !== void 0 ? { launchRecord: record7.meta.launchRecord } : {}
         }));
       } finally {
-        if (shouldClose) {
-          await client.close().catch(() => {
-          });
-        }
+        await client.close().catch(() => {
+        });
       }
     }
     init_cooperative_gate();
@@ -191012,7 +191714,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs115 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
     var path108 = __toESM2(require("path"));
-    var import_session_host_core18 = require_dist();
+    var import_session_host_core19 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -191022,9 +191724,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => false);
       const canSignalPid = (pid) => pid > 0 && pid !== process.pid && isManagedPid(pid) && isManagedSessionHostCommandLine(getProcessCommandLine(pid), instance().configDir);
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core18.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core19.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core18.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core19.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         if (typeof baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE === "string" && baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim()) {
@@ -191361,7 +192063,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const endpoint = getEndpoint();
         const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
         const probeDeadline = Date.now() + probeTimeoutMs;
-        const client = new import_session_host_core18.SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
+        const client = new import_session_host_core19.SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported;
         let connected = false;
         let requestTimeoutMs = probeTimeoutMs;
@@ -191420,7 +192122,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core18.SessionHostClient({ endpoint, registerAsShared: false });
+          const client = new import_session_host_core19.SessionHostClient({ endpoint, registerAsShared: false });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -193627,7 +194329,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             attemptRef: { attemptId: request.attemptId, generation: request.generation },
             status: "failed",
             reason: "operator_update"
-          });
+          }, { writerStopReceipt: r });
           if (settled.rule === "writer_settled") ports.revokeWorkerBind?.(request);
         } finally {
           confirmedStops.delete(eventId);
@@ -193660,6 +194362,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           payload: {
             ...meshId ? { meshId } : {},
             evidence,
+            ...opts.writerStopReceipt ? { writerStopReceipt: opts.writerStopReceipt } : {},
             ...result.notes.length > 0 ? { notes: result.notes } : {},
             ...opts.envelope ? { local: { envelope: opts.envelope } } : {},
             ...publish ? { entry: publish.entry } : {}
@@ -194020,9 +194723,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
         observe,
-        async resumeStoppingWriters() {
+        async resumeStoppingWriters(attemptId) {
           for (const a of store2.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
-            if (a.state !== "stopping" || !a.data.writerStop) continue;
+            if (attemptId && a.attemptId !== attemptId || a.state !== "stopping" || !a.data.writerStop) continue;
             const request = {
               attemptId: a.attemptId,
               generation: a.generation,
@@ -194270,6 +194973,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
       const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
       let lastPruneAt = null;
+      let lastStopInspectAt = -Infinity;
+      let stopInspectionPending = false;
       let inFlight4 = null;
       let again = false;
       let wake = null;
@@ -194439,6 +195144,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (error) {
           log.error(`turn-scheduler: hold sweep failed: ${describe2(error)}`);
         }
+        if (!stopInspectionPending && at - lastStopInspectAt >= 3e4) {
+          lastStopInspectAt = at;
+          stopInspectionPending = true;
+          void Promise.resolve().then(() => ledger.resumeStoppingWriters?.()).catch((error) => {
+            log.warn(`turn-scheduler: writer absence inspection failed: ${describe2(error)}`);
+          }).finally(() => {
+            stopInspectionPending = false;
+          });
+        }
         if (deps.probe) {
           const force = new Set(forced);
           forced.clear();
@@ -194512,7 +195226,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }, { name: "turn-scheduler" });
       }
       return {
-        maintenanceInventory: () => ({ inFlight: inFlight4 !== null, forced: [...forced].sort(), stopped }),
+        maintenanceInventory: () => ({ inFlight: inFlight4 !== null || stopInspectionPending, forced: [...forced].sort(), stopped }),
         tick,
         requestProbe(attemptId) {
           forced.add(attemptId);
@@ -195405,6 +196119,7 @@ ${notice.notice}${supersededHint}`;
       const outputFanout = new SessionOutputFanout();
       const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
+        idleSessionLifetimeControl: cfg.sessionHost.control ?? void 0,
         verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
         getHostedBindingOwner: cfg.sessionHost.getBindingOwner,
         getInstanceManager: () => instanceManager,
@@ -196753,7 +197468,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto46 = require("crypto");
+    var import_node_crypto49 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db2 = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -196762,7 +197477,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto46.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto49.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db2.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db2.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -196772,7 +197487,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto46.randomUUID)();
+          const id4 = (0, import_node_crypto49.randomUUID)();
           active.add(id4);
           try {
             return await run3();
@@ -199455,13 +200170,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core19 = require_dist();
+    var import_session_host_core20 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core19.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core19.createSessionHostControlPlane)({
+        this.client = new import_session_host_core20.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core20.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }
@@ -199688,7 +200403,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
       let inFlight4 = null;
-      const ensure = () => {
+      const ensure2 = () => {
         if (inFlight4) return inFlight4;
         const operation = opts.ensureReady().then(async (endpoint) => {
           const nextIdentity = identityOf2(endpoint);
@@ -199708,13 +200423,13 @@ ${notice.notice}${supersededHint}`;
       const onEvent = (event) => {
         if (!maintenanceHeld()) opts.onHostEvent?.(event);
       };
-      const control = opts.createController ? opts.createController(current4, onEvent, ensure) : new SessionHostController(current4, onEvent, ensure);
+      const control = opts.createController ? opts.createController(current4, onEvent, ensure2) : new SessionHostController(current4, onEvent, ensure2);
       await control.start();
-      const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4);
+      const listHostedRuntimes = (options) => options ? (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4, options) : (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4);
       const ptyFactory = (params) => new SessionHostPtyTransportFactory({
         endpoint: current4,
         ensureReady: async () => {
-          await ensure();
+          await ensure2();
         },
         clientId: opts.clientId,
         runtimeId: params.runtimeId,
@@ -199734,14 +200449,14 @@ ${notice.notice}${supersededHint}`;
       });
       return {
         endpoint: () => current4,
-        ensure,
+        ensure: ensure2,
         control,
         ptyFactory,
         listHostedRuntimes,
         bootConfig: () => ({
           createPtyTransportFactory: ptyFactory,
           listHostedRuntimes,
-          verifiedRetainedEndpoint: ensure,
+          verifiedRetainedEndpoint: ensure2,
           managedByTag: opts.managedBy,
           getBindingOwner: () => ({ namespace: opts.appName ?? resolveSessionHostAppName({ standalone: opts.managedBy === "adhdev-standalone" }), endpoint: `${current4.kind}:${current4.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
           control,

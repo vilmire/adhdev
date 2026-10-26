@@ -155,6 +155,8 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
     const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
     let lastPruneAt: number | null = null;
+    let lastStopInspectAt = -Infinity;
+    let stopInspectionPending = false;
     let inFlight: Promise<TurnTickReport> | null = null;
     let again = false;
     let wake: (() => void) | null = null;
@@ -356,6 +358,16 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
             log.error(`turn-scheduler: hold sweep failed: ${describe(error)}`);
         }
 
+        // The bounded stop retries may have escalated before the host finished
+        // exiting. Continue read-only absence checks without blocking queue work.
+        if (!stopInspectionPending && at - lastStopInspectAt >= 30_000) {
+            lastStopInspectAt = at;
+            stopInspectionPending = true;
+            void Promise.resolve().then(() => ledger.resumeStoppingWriters?.()).catch(error => {
+                log.warn(`turn-scheduler: writer absence inspection failed: ${describe(error)}`);
+            }).finally(() => { stopInspectionPending = false; });
+        }
+
         // 2. probeDue
         if (deps.probe) {
             const force = new Set(forced);
@@ -442,7 +454,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     }
 
     return {
-        maintenanceInventory:()=>({inFlight:inFlight!==null,forced:[...forced].sort(),stopped}),
+        maintenanceInventory:()=>({inFlight:inFlight!==null||stopInspectionPending,forced:[...forced].sort(),stopped}),
         tick,
         requestProbe(attemptId: string) {
             forced.add(attemptId);

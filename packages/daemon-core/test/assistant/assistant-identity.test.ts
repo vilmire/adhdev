@@ -46,13 +46,13 @@ it('reads bounded metadata without parsing a large or torn terminal snapshot', a
     expect(await scan()).toEqual(new Set(['one']));
 });
 
-it('does not accept a reused PID as proof and audits owner bypass of unverifiable identity', async () => {
+it('never bypasses unverifiable identity even for a trusted owner', async () => {
     seed('stale');
     writeFileSync(join(dir, 'foreign-session-host.pid'), String(process.pid));
     host([], { hostEntryPath: '/opt/unrelated/index.js' });
     expect(await scan()).toEqual(new Set(['stale']));
     const audit = vi.fn();
-    expect(await scan({ allowUnverified: true, onUnverified: audit })).toEqual(new Set());
+    expect(await scan({ allowUnverified: true, onUnverified: audit })).toEqual(new Set(['stale']));
     expect(audit).toHaveBeenCalledWith('foreign');
 });
 
@@ -69,9 +69,22 @@ it('uses a verified empty census to dismiss a stale runtime even when both store
     expect(await scan()).toEqual(new Set());
 });
 
-it('bounds an unresponsive host probe, retaining uncertainty unless the owner overrides', async () => {
+it('bounds an unresponsive host probe, retaining uncertainty even for owner force', async () => {
     seed('stale');
     vi.spyOn(SessionHostClient.prototype, 'request').mockImplementation(() => new Promise(() => {}));
     expect(await scan()).toEqual(new Set(['stale']));
-    expect(await scan({ allowUnverified: true })).toEqual(new Set());
+    expect(await scan({ allowUnverified: true })).toEqual(new Set(['stale']));
+});
+
+it('ignores unrelated test and other-track namespaces, reporting exact conflict provenance', async () => {
+    seed('uncertain');
+    const root = join(dir, 'session-host');
+    for (const ns of ['adhdev-test-term-once', 'adhdev-input-ann-42', 'adhdev']) {
+        mkdirSync(join(root, ns, 'runtimes'), { recursive: true });
+        writeFileSync(join(root, ns, 'test.json'), '{broken');
+    }
+    host([], { hostEntryPath: '/opt/unrelated/index.js' });
+    const evidence = vi.fn();
+    expect(await scan({ currentNamespace: 'adhdev-preview', onConflictEvidence: evidence })).toEqual(new Set(['uncertain']));
+    expect(evidence).toHaveBeenCalledWith(expect.objectContaining({ namespace: 'foreign', sessionId: 'uncertain', reason: expect.stringContaining('unverifiable') }));
 });

@@ -10,7 +10,10 @@ import { resolveHostedBindingOwner, sameHostedBindingOwner } from '../session-ho
 import { assistantRestoreCandidate, persistedAssistantRuntimeIds } from './assistant-identity.js';
 import { getAssistantRegistry } from './assistant-registry.js';
 
-const refused = (code: string, error = code): CommandRouterResult => ({ success: false, code, error });
+const refused = (code: string, error = code): CommandRouterResult => {
+    LOG.warn('Assistant', `${code}: ${error}`);
+    return { success: false, code, error };
+};
 
 /** Called under the shared account-slot launch lock, before planning or writing MCP config. */
 export async function admitAssistantLaunch(
@@ -54,16 +57,19 @@ export async function admitAssistantLaunch(
             ? undefined : assistantRestoreCandidate(entry, records);
         const attached = candidate ? ctx.deps.instanceManager.getInstance(candidate.runtimeId)
             : entry?.sessionId ? ctx.deps.instanceManager.getInstance(entry.sessionId) : undefined;
+        const conflicts: string[] = [];
         const persisted = attached ? new Set<string>() : await persistedAssistantRuntimeIds(getConfigDir(), {
             ipcKey: getProcessInstanceContext({ standalone: owner.managedBy === 'adhdev-standalone' }).ipcKey,
-            allowUnverified: forceRequested,
+            currentNamespace: owner.namespace,
+            onConflictEvidence: evidence => conflicts.push(`${evidence.sessionId} in namespace ${evidence.namespace}: ${evidence.reason}`),
             boundSessionId: entry?.sessionId ?? undefined,
             boundNamespace: entry?.hostOwner?.namespace,
-            onUnverified: namespace => LOG.warn('Assistant', `owner_force bypassed unverified assistant evidence in ${namespace}`),
+            onUnverified: namespace => LOG.warn('Assistant', `Unverifiable assistant evidence in namespace ${namespace}; duplicate launch remains blocked`),
         });
         if (isAborted?.()) return refused('assistant_launch_timeout');
         if (forceRequested && !isTrustedOwnerIngress(args)) return refused('assistant_owner_required');
-        if ([...persisted].some(id => id !== candidate?.runtimeId)) return refused('assistant_identity_conflict');
+        if ([...persisted].some(id => id !== candidate?.runtimeId)) return refused('assistant_identity_conflict',
+            conflicts.join('; ') || `Conflicting persisted assistant records: ${[...persisted].join(', ')}; namespace ${owner.namespace}`);
         if (candidate) {
             if (candidate.lifecycle === 'starting' || candidate.lifecycle === 'stopping') return refused('assistant_restore_pending');
             if (!shouldRestoreHostedRuntime(candidate, owner.managedBy)) return refused('assistant_owned_by_other_host');
@@ -80,7 +86,7 @@ export async function admitAssistantLaunch(
             }
             const latest = registry.reload();
             if ((latest?.sessionId && latest.sessionId !== candidate.runtimeId)
-                || (latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner))) return refused('assistant_identity_conflict');
+                || (latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner))) return refused('assistant_identity_conflict', `Binding changed during restore: candidate ${candidate.runtimeId}, registry ${latest?.sessionId ?? 'empty'}, namespace ${owner.namespace}`);
             // An already-attached runtime also needs the durable binding healed.
             registry.bindSession({ sessionId: candidate.runtimeId, cliType: candidate.cliType,
                 workspace: candidate.workspace, hostOwner: owner, mcpConfigPath: entry?.mcpConfigPath, at: Date.now() });
@@ -103,6 +109,6 @@ export async function admitAssistantLaunch(
         return undefined;
     } catch (error) {
         const message = (error as Error).message;
-        return refused(message.startsWith('assistant_identity_conflict') ? 'assistant_identity_conflict' : 'assistant_inventory_unavailable', message);
+        return refused(message.startsWith('assistant_identity_conflict') ? 'assistant_identity_conflict' : 'assistant_inventory_unavailable', `${message}; namespace ${owner.namespace}`);
     }
 }

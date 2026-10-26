@@ -197,7 +197,7 @@ export function buildMeshStatusLineForNotification(meshId: string, now?: number,
     try {
         const built = buildMeshActiveWork({
             meshId,
-            queue: getQueue(meshId),
+            queue: getQueue(meshId, { status: ['pending', 'assigned'] }),
             directDispatches: getActiveDirectDispatches(meshId),
             ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
             nodes,

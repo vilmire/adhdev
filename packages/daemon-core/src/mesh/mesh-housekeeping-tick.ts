@@ -28,7 +28,8 @@ import { resolveCoordinatorDaemonIds, daemonHostsMesh, resolveCoordinatorSelfIds
 import { runDiskRetentionSweep, detectAndSignalOrphanWorktrees } from './mesh-disk-retention.js';
 import { pruneMeshRuntimeRetention } from './mesh-runtime-store.js';
 import { runWorktreeNodeRetentionTick, type WorktreeRetentionDeps } from './mesh-worktree-retention.js';
-import { runIdleSessionReapPass, type IdleSessionReaperDeps } from './mesh-idle-session-reaper.js';
+import { sessionLifetimeDeps } from './mesh-session-lifetime-runtime.js';
+import { runIdleSessionReapPass } from './mesh-idle-session-reaper.js';
 import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js';
 import { runPendingCoordinatorCatchupScan } from './mesh-auto-fast-forward.js';
 import { sweepQueueDependencyStalls } from './mesh-queue-dependency-notice.js';
@@ -201,16 +202,9 @@ export async function runMeshHousekeepingTick(
             || (nowMs - state.lastIdleSessionReapRunAt) >= IDLE_SESSION_REAP_INTERVAL_MS;
         if (reapDue) {
             state.lastIdleSessionReapRunAt = nowMs;
-            const router = components.router;
-            const reaperDeps: IdleSessionReaperDeps = {
-                listSessions: async () => {
-                    try { return await router.deps.sessionHostControl?.listSessions() ?? []; } catch { return []; }
-                },
-                cleanupMeshSessions: args => router.cleanupMeshSessions(args as Parameters<typeof router.cleanupMeshSessions>[0]),
-            };
             for (const { mesh } of hosted) {
                 try {
-                    await runIdleSessionReapPass(reaperDeps, { meshId: mesh.id, policy: (() => { const m = getMesh(mesh.id); return m ? resolveMeshPolicy(m.policy) : undefined; })(), now: nowMs });
+                    await runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, nowMs), { meshId: mesh.id, policy: (() => { const m = getMesh(mesh.id); return m ? resolveMeshPolicy(m.policy) : undefined; })(), now: nowMs });
                 } catch (e: any) {
                     LOG.warn('MeshHousekeeping', `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
                 }

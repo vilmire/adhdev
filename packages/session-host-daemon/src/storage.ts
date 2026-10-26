@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
+import { resolveInstanceConfigDir, assertTestStorageIsolated } from '@adhdev/session-host-core';
 import type { SessionBufferSnapshot, SessionHostRecord, SessionTermination } from '@adhdev/session-host-core';
 
 export interface PersistedRuntimeState {
@@ -36,6 +36,7 @@ export class SessionHostStorage {
     const appName = options.appName || 'adhdev';
     this.rootDir = options.rootDir
       || path.join(resolveInstanceConfigDir(process.env), 'session-host', appName);
+    assertTestStorageIsolated(this.rootDir);
     this.runtimesDir = path.join(this.rootDir, 'runtimes');
     this.tombstonesDir = path.join(this.rootDir, 'tombstones');
   }

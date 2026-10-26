@@ -310,6 +310,9 @@ export function stopStaleMeshWorker(
                     daemonId = node ? readMeshNodeDaemonId(node) || undefined : undefined;
                 } catch { /* best-effort */ }
             }
+            if (args.writerStop && daemonId && daemonIdsEquivalent(daemonId, components.statusInstanceId ?? getMachineId())) {
+                return await components.cliManager.stopCli(stopArgs);
+            }
             if (daemonId && components.dispatchMeshCommand) {
                 // Old daemons ignore the strict-stop payload on stop_cli.
                 // Probe a new read-only action first; an unknown action never
