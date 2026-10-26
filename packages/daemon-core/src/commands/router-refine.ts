@@ -44,6 +44,7 @@ import {
 // REFINE-CONCURRENCY-CAP: process-wide serial execution of refine pipelines —
 // see mesh-refine-concurrency.ts for the freeze RCA this comes from.
 import { runWithRefineExecutionSlot } from '../mesh/mesh-refine-concurrency.js';
+import { buildNewWorkHeldRefusal, evaluateNewWorkHold } from '../maintenance/new-work-hold.js';
 import {
     buildRefineJobKey,
     buildRefineJobHandle,
@@ -729,6 +730,10 @@ export async function refineBasePreflightStage(self: DaemonCommandRouter, ctx: R
 }
 
 export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: RefineCommandArgs): Promise<CommandRouterResult> {
+        const holdEval = evaluateNewWorkHold({ meshId });
+        if (holdEval.held) {
+            return buildNewWorkHeldRefusal(holdEval.hold, { command: 'refine_mesh_node', surface: 'router_command' }) as unknown as CommandRouterResult;
+        }
         const key = buildRefineJobKey(self, meshId, nodeId);
         const terminal = self.terminalRefineJobs.get(key);
 

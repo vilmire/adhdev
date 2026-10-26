@@ -79,7 +79,9 @@ export type MeshClaimRefusalReason =
      *  `autoFastForward.maxBehind` — the same `isMeshNodeFreshEnoughToLaunch` freshness
      *  predicate the auto-launch spawn gate already applies. Fail-open on missing
      *  telemetry; readonly candidates bypass this gate entirely. */
-    | 'node_stale_behind_upstream';
+    | 'node_stale_behind_upstream'
+    /** NEW-WORK-HOLD (mission c41fad0a): the daemon-owned expiring CAS new-work hold is active. */
+    | 'new_work_held';
 
 /** Sink passed in by a caller that wants to know why a claim returned null; mutated in place
  *  by `claimNextQueueTask`. Omitting it preserves the exact prior behavior. */

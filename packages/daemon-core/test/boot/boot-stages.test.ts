@@ -29,6 +29,12 @@ vi.mock('../../src/quota/refresh-loop.js', async (importOriginal) => ({
   setupQuotaRefreshLoop: () => ({ stop() {} }),
 }))
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { setNewWorkHold, resetNewWorkHoldForTests } from '../../src/maintenance/new-work-hold.js'
+import { resetProcessInstanceContextForTests } from '../../src/config/instance-context.js'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { bootDaemonRuntime, type DaemonBootStages } from '../../src/boot/daemon-runtime.js'
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { SessionRegistry } from '../../src/sessions/registry.js'
@@ -73,6 +79,44 @@ function recordingStages(log: string[]) {
 }
 
 describe('bootDaemonRuntime', () => {
+  it('starts hold renewal at S8 without a status poll and stops it on disposal', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hold-boot-'))
+    const previousConfig = process.env.ADHDEV_CONFIG_DIR
+    process.env.ADHDEV_CONFIG_DIR = root
+    resetProcessInstanceContextForTests()
+    MeshRuntimeStore.resetForTests()
+    resetNewWorkHoldForTests()
+    vi.useFakeTimers()
+    let dispose: (() => void) | undefined
+    try {
+      const noop = () => {}
+      setNewWorkHold({ ttlMs: 3000 })
+      const components: any = { providerLoader: { getAvailableProviderInfos: () => [] },
+        cliManager: { adapters: new Map([['working', { getStatus: () => ({ status: 'working' }) }]]) } }
+      dispose = await startLoops({ cfg: { restoreHostedSessions: true }, components,
+        cliManager: { hostedRestoreState: 'pending', restoreHostedSessions: () => new Promise(() => {}) },
+        cdpInitializer: { startPeriodicScan: noop, startDiscovery: noop, stop: noop },
+        poller: { start: noop, stop: noop }, instanceManager: { startTicking: noop, stopTicking: noop },
+        router: { resumePendingRefineJobsOnStartup: noop, resumeDeferredRestartsOnStartup: noop, resumeMeshNodeStatePushOnStartup: noop } } as any)
+      const file = path.join(root, 'new-work-hold.json')
+      vi.advanceTimersByTime(2500)
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).autoExtendCount).toBe(1)
+      dispose()
+      const disk = fs.readFileSync(file, 'utf8')
+      vi.advanceTimersByTime(6000)
+      expect(fs.readFileSync(file, 'utf8')).toBe(disk)
+    } finally {
+      dispose?.()
+      vi.useRealTimers()
+      resetNewWorkHoldForTests()
+      MeshRuntimeStore.resetForTests()
+      if (previousConfig === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfig
+      resetProcessInstanceContextForTests()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('returns readiness while hosted recovery is pending, and retries at most twice in the background', async () => {
     let rejectFirst!: (error: Error) => void
     let finishSecond!: (count: number) => void

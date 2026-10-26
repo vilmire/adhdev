@@ -1,4 +1,6 @@
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
+import { maintenanceHoldSpecs } from './low-family/maintenance-hold.js';
+import { admitRouterCommandUnderNewWorkHold, isRouterCommandMaintenanceExempt } from '../maintenance/new-work-hold.js';
 import { captureMaintenanceAdmission, withMaintenanceAdmission, assertMaintenanceDaemon, assertMaintenanceCommandIdentity } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCommandRouter — the single command entry point of the daemon.
@@ -103,71 +105,24 @@ import type { RepoMeshSessionCleanupMode, RepoMeshSpawnedSessionVisibility } fro
 import type { SeqscribeStatusSummary } from '../shared-types.js';
 
 // ─── Extracted-module imports (symbols the dispatch class consumes) ───
-import {
-    MESH_DIRECT_PROBE_REUSE_MS,
-    MeshGitProbeCache,
-    persistNodeReporterPlatform,
-    recordReportedNodeFacts,
-    readObjectRecord,
-    readStringValue,
-} from '../mesh/mesh-node-identity.js';
-import {
-    MeshRefineBatchJobHandle,
-    MeshRefineBatchTerminalJob,
-    MeshRefineJobHandle,
-    MeshRefineTerminalJob,
-} from '../mesh/mesh-refine-gates.js';
+import { MESH_DIRECT_PROBE_REUSE_MS, MeshGitProbeCache, persistNodeReporterPlatform, recordReportedNodeFacts, readObjectRecord, readStringValue } from '../mesh/mesh-node-identity.js';
+import { MeshRefineBatchJobHandle, MeshRefineBatchTerminalJob, MeshRefineJobHandle, MeshRefineTerminalJob } from '../mesh/mesh-refine-gates.js';
 // ─── Refinery job orchestration (bodies extracted from this file) ───
 import { startMeshRefineJob } from './router-refine.js';
 import { batchRefineMeshNodes, startMeshRefineBatchJob } from './router-refine-batch-jobs.js';
 import { resumePendingRefineJobsOnStartup } from './router-refine-resume.js';
 // ─── Worktree / mesh-session cleanup (bodies extracted from this file) ───
-import {
-    bestEffortRemoveWorktreeDir,
-    cleanupLocalWorktreeNode,
-    cleanupMeshSessions,
-    getWorktreeForceCleanupConvergence,
-    isCompletedHostedSession,
-    precheckLocalWorktreeRemovable,
-    recordIntentionalMeshSessionStop,
-    sessionMatchesMeshNode,
-} from './router-worktree-cleanup.js';
+import { bestEffortRemoveWorktreeDir, cleanupLocalWorktreeNode, cleanupMeshSessions, getWorktreeForceCleanupConvergence, isCompletedHostedSession, precheckLocalWorktreeRemovable, recordIntentionalMeshSessionStop, sessionMatchesMeshNode } from './router-worktree-cleanup.js';
 // ─── Aggregate mesh-status cache (bodies extracted from this file) ───
-import {
-    getCachedAggregateMeshStatus,
-    invalidateAggregateMeshStatusForPeer,
-    rememberAggregateMeshStatus,
-} from './router-aggregate-status.js';
+import { getCachedAggregateMeshStatus, invalidateAggregateMeshStatusForPeer, rememberAggregateMeshStatus } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
-import {
-    COMMAND_SOURCE_ARG,
-    COMMAND_SOURCE_STAMPED,
-    applyRouterCommandIngressProvenance,
-    isTrustedOwnerIngress,
-    preserveTrustedOwnerIngress,
-    readMeshDirectDispatchFlag,
-    withMeshDirectDispatch,
-    type TrustedOwnerIngressProof,
-} from './command-args.js';
+import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, applyRouterCommandIngressProvenance, isTrustedOwnerIngress, preserveTrustedOwnerIngress, readMeshDirectDispatchFlag, withMeshDirectDispatch, type TrustedOwnerIngressProof } from './command-args.js';
 import { evaluateMeshSender, markVerifiedMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, readMeshSender, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
-import {
-    syncInlineMeshPoliciesFromDisk,
-    getCachedInlineMeshNodes,
-    getCachedInlineMeshNodesWithVisibility,
-    getCachedInlineMesh,
-    getMeshForCommand,
-    updateInlineMeshNode,
-    removeInlineMeshNode,
-    markWorktreeBootstrapTerminalState,
-    seedRemoteClonedWorktreeNode,
-    persistRemoteClonedWorktreeNode,
-    adoptMemberWorktreeNodes,
-    tombstoneRemovedMeshNode,
-} from './router-inline-mesh-roster.js';
+import { syncInlineMeshPoliciesFromDisk, getCachedInlineMeshNodes, getCachedInlineMeshNodesWithVisibility, getCachedInlineMesh, getMeshForCommand, updateInlineMeshNode, removeInlineMeshNode, markWorktreeBootstrapTerminalState, seedRemoteClonedWorktreeNode, persistRemoteClonedWorktreeNode, adoptMemberWorktreeNodes, tombstoneRemovedMeshNode } from './router-inline-mesh-roster.js';
 
 // ─── Barrel re-exports: node-identity / git-freshness, refine gates, coordinator config ───
 // These modules were split out of router.ts. Re-export their public surface so the
@@ -338,6 +293,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...workerReportSpecs,
             ...workerBridgeSpecs,
             ...cooperativeMaintenanceSpecs,
+            ...maintenanceHoldSpecs,
             ...workerMailboxSpecs,
             ...workerPeerContextSpecs,
             ...transcriptReplicaSpecs,
@@ -859,8 +815,8 @@ export class DaemonCommandRouter {
         // both per-mesh topics as soon as that existing identifier arrives; the
         // seqscribe activation hook re-advertises grants on live peer sessions.
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
-        const maintenanceExempt = ['get_status_metadata', 'cooperative_maintenance_actor_control', 'cooperative_maintenance_actor_drain','cooperative_maintenance_mcp_poll','cooperative_maintenance_mcp_reply', 'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe', 'cooperative_maintenance_status', 'worker_report_completion', 'worker_progress_update', 'worker_bridge_delivery', 'worker_bridge_capabilities', 'worker_bridge_status'].includes(cmd);
         let maintenanceCheck = () => {};
+        const maintenanceExempt = isRouterCommandMaintenanceExempt(cmd);
         try {
             if (!maintenanceExempt) {
                 maintenanceCheck = captureMaintenanceAdmission(revealedMeshIds);
@@ -870,6 +826,9 @@ export class DaemonCommandRouter {
         } catch (e) { return { success: false, error: (e as Error).message }; }
         const newMeshDispatch = ['launch_cli','launch_mesh_coordinator'].includes(cmd) || (['agent_command','send_chat'].includes(cmd) && (!normalizedArgs.action || normalizedArgs.action === 'send_chat'));
         if (newMeshDispatch && revealedMeshIds.some((meshId) => bridgeDispatchFrozen(MeshRuntimeStore.getInstance().db, meshId))) return { success: false, error: 'worker_bridge_dispatch_frozen' };
+        const holdComponents = this.attachedComponentsOrNull() ?? ({ cliManager: this.deps.cliManager, instanceManager: this.deps.instanceManager } as unknown as DaemonComponents);
+        const holdRefusal = admitRouterCommandUnderNewWorkHold(cmd, normalizedArgs, revealedMeshIds, holdComponents);
+        if (holdRefusal) return holdRefusal;
         if (revealedMeshIds.length > 0) {
             const activated = activateKnownMeshTopics(revealedMeshIds);
             if (activated > 0) {

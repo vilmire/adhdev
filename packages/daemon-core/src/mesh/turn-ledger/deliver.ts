@@ -573,7 +573,7 @@ export type DeliverResult =
     | { outcome: 'not_now' }
     | { outcome: 'delivered' | 'queued' | 'duplicate'; sessionId: string; escalated: boolean; waitedMs: number };
 
-const RETRYABLE_REFUSALS = new Set(['no_target', 'session_exited', 'send_in_flight', 'not_ready', 'internal_error', 'bootstrap_pending']);
+const RETRYABLE_REFUSALS = new Set(['no_target', 'session_exited', 'send_in_flight', 'not_ready', 'internal_error', 'bootstrap_pending', 'new_work_held']);
 const MAX_SUBMIT_ROUNDS = 3;
 
 function sleepUntil(waiter: DeliverEdgeWaiter, meshId: string, untilMs: number, signal: AbortSignal, now: () => number): Promise<void> {
@@ -671,7 +671,7 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             let outcome: SubmitOutcome;
             const submitMetadata=deps.submitInventory?.begin(entry,route.sessionId);
             try {
-                const submit=submitMetadata&&deps.port.submitNotice?(msg:OutboundMessage)=>deps.port.submitNotice!(msg,submitMetadata.observe):(msg:OutboundMessage)=>deps.port.submit(msg);
+                const submit=submitMetadata && deps.port.submitNotice?(msg:OutboundMessage)=>deps.port.submitNotice!(msg,submitMetadata.observe):(msg:OutboundMessage)=>deps.port.submit(msg);
                 outcome = await submit({
                     messageId,
                     sessionId: route.sessionId,
@@ -689,12 +689,13 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
             }
             if (outcome.kind === 'refused') {
                 rounds++;
-                if (RETRYABLE_REFUSALS.has(outcome.reason) && rounds < MAX_SUBMIT_ROUNDS) {
-                    refusedSessions.add(route.sessionId);
-                    continue;
-                }
                 if (RETRYABLE_REFUSALS.has(outcome.reason)) {
-                    counters.submitFailures++;
+                    refusedSessions.add(route.sessionId);
+                    const hasRemainingCoordinator = deps.coordinators(entry.meshId).some((c) => !refusedSessions.has(c.sessionId));
+                    if (hasRemainingCoordinator && rounds < MAX_SUBMIT_ROUNDS) {
+                        continue;
+                    }
+                    if (outcome.reason !== 'new_work_held') counters.submitFailures++;
                     throw new Error(`notice ${messageId} refused (${outcome.reason}) by every coordinator of mesh ${entry.meshId}`);
                 }
                 deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: `refused:${outcome.reason}` });

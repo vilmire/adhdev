@@ -29,6 +29,7 @@ import {
 // REFINE-CONCURRENCY-CAP: process-wide serial execution of refine pipelines —
 // see mesh-refine-concurrency.ts for the freeze RCA this comes from.
 import { runWithRefineExecutionSlot } from '../mesh/mesh-refine-concurrency.js';
+import { buildNewWorkHeldRefusal, evaluateNewWorkHold } from '../maintenance/new-work-hold.js';
 // ★B3/B4 chain abort — base-axis vs node-local failure classification.
 import {
     decideRefineBatchChainAbort,
@@ -980,6 +981,11 @@ export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId:
             // ★Warn-only on the dry-run: the plan is still valid, but execute would be
             // refused, and the coordinator should learn that here rather than one call later.
             return attachBatchBasePreflightWarning(self, meshId, requestedNodeIds, args, plan);
+        }
+
+        const holdEval = evaluateNewWorkHold({ meshId });
+        if (holdEval.held) {
+            return buildNewWorkHeldRefusal(holdEval.hold, { command: 'batch_refine_mesh_nodes', surface: 'router_command' }) as unknown as CommandRouterResult;
         }
 
         const key = buildRefineBatchJobKey(self, meshId);

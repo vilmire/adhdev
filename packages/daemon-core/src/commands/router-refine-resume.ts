@@ -15,6 +15,7 @@ import { LOG } from '../logging/logger.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { resolveTunedReconcileMs } from '../mesh/mesh-tuned-env.js';
 import { evaluateRefineExecutorLiveness } from '../mesh/mesh-refine-executor-liveness.js';
+import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
 import {
     appendRefineJobLedger,
     buildRefineJobHandle,
@@ -74,6 +75,7 @@ function resolveRefineCloseOutNotifyHorizonMs(): number {
      */
 export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter): Promise<void> {
         try {
+            if (isNewWorkHeld()) return;
             const { listMeshes, getMesh } = await import('../config/mesh-config.js');
             const { readLocalRecords } = await import('../mesh/mesh-local-records.js');
             const { selectOpenRefineDispatches, classifyRefineDispatch, shouldNotifyRefineCloseOut } = await import('../mesh/mesh-refine-zombie-sweep.js');
@@ -83,6 +85,7 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
             const zombieCutoffMs = resolveRefineResumeZombieCutoffMs();
             const notifyHorizonMs = resolveRefineCloseOutNotifyHorizonMs();
             for (const meshId of meshIds) {
+                if (isNewWorkHeld({ meshId })) continue;
                 // Refine jobs are local records (dispatch + terminal), not turns.
                 const entries = readLocalRecords(meshId, { kind: ['task_dispatched', 'task_completed', 'task_failed'], turnTerminals: false });
 

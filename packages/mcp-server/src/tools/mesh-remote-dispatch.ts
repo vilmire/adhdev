@@ -16,6 +16,8 @@ import {
     filterProvidersByRequiredTags,
     classifySessionBusyWithTask,
     SESSION_BUSY_WITH_TASK_CODE,
+    classifyNewWorkHeld,
+    NEW_WORK_HELD_CODE,
 } from '@adhdev/daemon-core';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { type MeshTaskInput } from './mesh-tool-shared.js';
@@ -450,10 +452,12 @@ function directDispatchFailure(
     source?: Record<string, unknown>,
 ): DirectAgentTaskFailure {
     const busyRefusal = sessionBusyRefusalFields(source ? errorMessage : error, sessionId);
+    const heldRefusal = newWorkHeldRefusalFields(source ?? error, errorMessage, sessionId);
     if (route === 'local') {
         return {
             ...(source && typeof source === 'object' ? source : {}),
             ...(busyRefusal ?? {}),
+            ...(heldRefusal ?? {}),
             success: false,
             nodeId: node.id,
             ...(sessionId ? { sessionId } : {}),
@@ -462,6 +466,7 @@ function directDispatchFailure(
     }
     const daemonId = node.daemonId!;
     if (busyRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...busyRefusal };
+    if (heldRefusal) return { success: false, error: `P2P dispatch refused: ${errorMessage}`, nodeId: node.id, targetDaemonId: daemonId, ...heldRefusal };
     return {
         ...buildCoordinatorP2pRelayFailure(error, {
             command: 'agent_command',
@@ -641,5 +646,21 @@ function sessionBusyRefusalFields(error: unknown, sessionId: string): Record<str
         ...(busy.currentAttemptId ? { currentAttemptId: busy.currentAttemptId } : {}),
         nextAction: `Session${sessionId ? ` '${sessionId}'` : ''} is still running task '${busy.currentTaskId}'. Nothing was delivered. `
             + 'Use mesh_enqueue_task (the queue delivers when the session goes idle), target another idle session, or retry after the current task completes.',
+    };
+}
+
+function newWorkHeldRefusalFields(error: unknown, errorMessage: string, sessionId: string): Record<string, unknown> | null {
+    const held = classifyNewWorkHeld(error) ?? classifyNewWorkHeld(errorMessage);
+    if (!held) return null;
+    return {
+        code: NEW_WORK_HELD_CODE,
+        reason: NEW_WORK_HELD_CODE,
+        recoverable: true,
+        retryRecommended: false,
+        ...(sessionId ? { sessionId } : {}),
+        holdId: held.holdId,
+        revision: held.revision,
+        expiresAt: held.expiresAt,
+        nextAction: 'New work is currently held on the target daemon while in-flight work drains. Retry after the hold is released or expires, or use mesh_enqueue_task so the task waits in the queue.',
     };
 }

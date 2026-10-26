@@ -5,6 +5,7 @@ import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import { validateLaunchDefault } from '../../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../../launch-defaults/ports.js';
+import { buildNewWorkHeldRefusal, evaluateNewWorkHold, resolveNewWorkHoldSessionMeshId } from '../../maintenance/new-work-hold.js';
 /**
  * RF-ROUTER LOW family — session-host control commands.
  *
@@ -171,6 +172,10 @@ async function traceSessionHostAction<T>(
 /** Restart replays the session host's own argv/env/record, never machine defaults.
  * CLI restart shares this path for hosted roles so private HOME/MCP bindings survive. */
 export async function restartHostedSession(deps: LowFamilyContext['deps'], args: any) {
+    const holdEval = evaluateNewWorkHold({ meshId: resolveNewWorkHoldSessionMeshId(args, deps.instanceManager) });
+    if (holdEval.held) {
+        return buildNewWorkHeldRefusal(holdEval.hold, { command: 'session_host_restart_session', surface: 'router_command' });
+    }
     if (!deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
     const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
     if (!sessionId) return { success: false, error: 'sessionId required' };
@@ -240,6 +245,10 @@ export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
     },
 
     session_host_resume_session: async (ctx: LowFamilyContext, args: any) => {
+        const holdEval = evaluateNewWorkHold({ meshId: resolveNewWorkHoldSessionMeshId(args, ctx.deps.instanceManager) });
+        if (holdEval.held) {
+            return buildNewWorkHeldRefusal(holdEval.hold, { command: 'session_host_resume_session', surface: 'router_command' });
+        }
         if (!ctx.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
         const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
         if (!sessionId) return { success: false, error: 'sessionId required' };

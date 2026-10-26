@@ -1,5 +1,6 @@
 import { getMachineId } from '../config/config.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
+import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
 import { findLocalCliInstance } from './cli-instance-lookup.js';
 export { readInstanceIdentity } from './cli-instance-lookup.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -501,6 +502,7 @@ export function tryAssignQueueTask(
     // the row, and it stays `assigned` forever, blocking the node. Refuse BEFORE
     // the atomic claim so the row is untouched (still pending), loudly.
     try { assertMaintenanceAdmission([meshId]); } catch { return false; }
+    if (isNewWorkHeld({ meshId })) return false;
     const turnLedger = turnLedgerOf(components);
     if (!turnLedger) {
         LOG.warn('TurnLedger', `refusing queue claim for node ${nodeId} (${sessionId}) in mesh ${meshId}: no turn ledger on this daemon (claim path ${trigger}) — task left pending`);
