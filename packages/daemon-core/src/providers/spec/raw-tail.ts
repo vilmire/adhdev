@@ -66,7 +66,6 @@ export class RawTail {
     private strippedClearedAtSeq = 0;
     /** Lazily computed once per append, shared by repeated status/auth reads. */
     private strippedCache?: string;
-    private strippedStartPos = 0;
 
     constructor(private readonly capBytes: number = DEFAULT_CAP_BYTES) {}
 
@@ -85,7 +84,6 @@ export class RawTail {
         const trimmed = before + chunk.length - next.length;
         this.buf = next;
         this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed);
-        this.strippedStartPos = Math.max(0, this.strippedStartPos - trimmed);
         this.strippedCache = undefined;
         this.seqCounter++;
     }
@@ -113,22 +111,18 @@ export class RawTail {
      */
     strippedTail(maxBytes: number): string {
         if (this.seqCounter <= this.strippedClearedAtSeq) return '';
-        return (this.strippedCache ??= stripAnsi(this.buf.slice(this.strippedStartPos))).slice(-maxBytes);
+        return (this.strippedCache ??= stripAnsi(this.buf)).slice(-maxBytes);
     }
 
     /**
      * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
-     * until the next `append()`, then shows only output after this boundary.
-     * Does not touch the shared buffer or
+     * until the next `append()`. Does not touch the shared buffer or
      * `takeCompleteLines()`'s cursor — only `strippedTail()`'s own read is
      * affected. A classifier calls this after a dismissed live suspicion, so
      * the SAME already-seen bytes cannot re-raise it on the next read.
      */
     clearStrippedTail(): void {
         this.strippedClearedAtSeq = this.seqCounter;
-        // Discard dismissed evidence for this reader permanently; a later
-        // append must not resurrect the old banner. The line cursor is separate.
-        this.strippedStartPos = this.buf.length;
         this.strippedCache = undefined;
     }
 

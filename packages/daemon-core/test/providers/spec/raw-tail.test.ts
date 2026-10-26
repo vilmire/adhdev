@@ -167,7 +167,7 @@ describe('RawTail', () => {
 });
 
 
-describe('RawTail stripped view caching and dismissal', () => {
+describe('RawTail stripped view caching and clear boundaries', () => {
     it('strips once per append even with repeated readers and different limits', () => {
         const strip = vi.spyOn(classifier, 'stripAnsi');
         try {
@@ -194,7 +194,7 @@ describe('RawTail stripped view caching and dismissal', () => {
         expect(tail.strippedTail(100)).toBe('red\r\nplain\n');
     });
 
-    it('does not resurrect dismissed evidence when new bytes arrive, even after cap trimming', () => {
+    it('preserves the clear-until-next-append contract and independent line cursor under cap trimming', () => {
         const tail = new RawTail(40);
         tail.append('Authentication failed\npartial');
         const seq = tail.seq;
@@ -203,7 +203,7 @@ describe('RawTail stripped view caching and dismissal', () => {
         expect(tail.seq).toBe(seq);
         expect(tail.takeCompleteLines()).toEqual(['Authentication failed']);
         tail.append('-line\n');
-        expect(tail.strippedTail(100)).toBe('-line\n');
+        expect(tail.strippedTail(100)).toBe('Authentication failed\npartial-line\n');
         expect(tail.takeCompleteLines()).toEqual(['partial-line']);
         tail.append('x'.repeat(45));
         expect(tail.strippedTail(100)).toBe('x'.repeat(40));

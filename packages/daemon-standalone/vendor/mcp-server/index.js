@@ -181569,7 +181569,6 @@ ${text4}` : text4;
       strippedClearedAtSeq = 0;
       /** Lazily computed once per append, shared by repeated status/auth reads. */
       strippedCache;
-      strippedStartPos = 0;
       /**
        * Append one PTY chunk to the shared buffer. The single writer both read
        * views (`strippedTail`, `takeCompleteLines`) observe — callers must not
@@ -181582,7 +181581,6 @@ ${text4}` : text4;
         const trimmed2 = before + chunk.length - next.length;
         this.buf = next;
         this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed2);
-        this.strippedStartPos = Math.max(0, this.strippedStartPos - trimmed2);
         this.strippedCache = void 0;
         this.seqCounter++;
       }
@@ -181608,19 +181606,17 @@ ${text4}` : text4;
        */
       strippedTail(maxBytes) {
         if (this.seqCounter <= this.strippedClearedAtSeq) return "";
-        return (this.strippedCache ??= stripAnsi2(this.buf.slice(this.strippedStartPos))).slice(-maxBytes);
+        return (this.strippedCache ??= stripAnsi2(this.buf)).slice(-maxBytes);
       }
       /**
        * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
-       * until the next `append()`, then shows only output after this boundary.
-       * Does not touch the shared buffer or
+       * until the next `append()`. Does not touch the shared buffer or
        * `takeCompleteLines()`'s cursor — only `strippedTail()`'s own read is
        * affected. A classifier calls this after a dismissed live suspicion, so
        * the SAME already-seen bytes cannot re-raise it on the next read.
        */
       clearStrippedTail() {
         this.strippedClearedAtSeq = this.seqCounter;
-        this.strippedStartPos = this.buf.length;
         this.strippedCache = void 0;
       }
       /**
