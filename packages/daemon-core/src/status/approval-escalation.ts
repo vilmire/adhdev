@@ -102,6 +102,13 @@ export interface ApprovalEscalationGate {
 const MAX_ESCALATED_REMEMBERED = 512;
 /** Re-check cadence while a still-waiting session's episode key is momentarily unreadable. */
 const ESCALATION_RECHECK_MS = 5_000;
+/**
+ * A rejected delivery is retried for as long as the approval stays live (it must
+ * never be dropped silently), but with exponential backoff up to this ceiling so
+ * an unreachable server does not mean a send and a warning every 5 s per session.
+ */
+export const ESCALATION_DELIVERY_RETRY_MAX_MS = 60_000;
+const ESCALATION_DELIVERY_LOG_EVERY = 10;
 const ESCALATION_MAX_RECHECKS = 6;
 
 function stillWaiting(state: SessionStateLike): boolean {
@@ -221,6 +228,12 @@ function hasActionableEscalatedModal(rebuilt: Record<string, unknown>, state: Se
     return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
 }
 
+/** Delay before retrying the n-th consecutive failed delivery (n >= 1). */
+export function escalationDeliveryRetryDelayMs(failures: number): number {
+    const exp = Math.min(Math.max(failures, 1) - 1, 20);
+    return Math.min(ESCALATION_RECHECK_MS * 2 ** exp, ESCALATION_DELIVERY_RETRY_MAX_MS);
+}
+
 export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): ApprovalEscalationGate {
     const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
     const cooldownMs = deps.cooldownMs ?? OWNER_APPROVAL_SESSION_COOLDOWN_MS;
@@ -230,7 +243,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
     // firstHeldAt caps the total hold per session: a modal that keeps minting new
     // episode keys (a tall diff scrolling its buttons in and out) must not keep
     // restarting the window and starve the owner push.
-    const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
+    const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number; deliveryFailures: number }>();
     const escalated = new Set<string>();
     const lastEscalatedAt = new Map<string, number>();
     const statusOnlyWatchers = new Map<string, unknown>();
@@ -307,23 +320,32 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         }
         LOG.info('StatusEvent', `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1000)}s unresolved`);
         let delivered = false;
+        let failure = 'rejected';
         try {
             delivered = deps.escalate(sessionId, rebuilt) !== false;
         } catch (error) {
-            LOG.warn('StatusEvent', `approval escalation delivery failed session=${sessionId}: ${(error as Error)?.message ?? error}`);
+            failure = String((error as Error)?.message ?? error);
             delivered = false;
         }
         if (!delivered) {
             // Never drop a live approval without notifying the owner: keep
-            // re-checking while the session remains parked on a live episode.
+            // retrying while the session remains parked on a live episode, backing
+            // off so a dead delivery path is not hammered every few seconds.
+            entry.deliveryFailures += 1;
+            if (entry.deliveryFailures === 1 || entry.deliveryFailures % ESCALATION_DELIVERY_LOG_EVERY === 0) {
+                LOG.warn('StatusEvent', `approval escalation delivery failed session=${sessionId} attempts=${entry.deliveryFailures}: ${failure}`);
+            }
             if (stillWaiting(state)) {
                 entry.rechecks += 1;
                 entry.key = currentKey;
-                entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+                entry.timer = setTimer(() => fire(sessionId), escalationDeliveryRetryDelayMs(entry.deliveryFailures));
             } else {
                 held.delete(sessionId);
             }
             return;
+        }
+        if (entry.deliveryFailures > 0) {
+            LOG.info('StatusEvent', `approval escalation delivered session=${sessionId} after ${entry.deliveryFailures} failed attempt(s)`);
         }
         held.delete(sessionId);
         // Mark ONLY the episode actually delivered as escalated so an earlier
@@ -382,6 +404,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
                 raw: rawEvent,
                 firstHeldAt,
                 rechecks: 0,
+                deliveryFailures: 0,
                 timer: setTimer(() => fire(sessionId), waitMs),
             });
             return true;

@@ -9,7 +9,7 @@ import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { quotaSpreadBonusByProvider } from './mesh-quota-ranking-records.js';
 import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import { decideSlotForModel, isModelAllowedBySlot } from './slot-model-enforcement.js';
-import { getMesh } from '../config/mesh-config.js';
+import { getMeshNodesReadonly } from '../config/mesh-config.js';
 import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 
 /**
@@ -19,8 +19,7 @@ import { resolveDaemonSiblingNodeIds, effectiveSlotCap } from './mesh-daemon-slo
  */
 function nodesForMesh(meshId: string): readonly unknown[] | undefined {
     try {
-        const nodes = getMesh(meshId)?.nodes;
-        return Array.isArray(nodes) ? nodes : undefined;
+        return getMeshNodesReadonly(meshId);
     } catch {
         return undefined;
     }

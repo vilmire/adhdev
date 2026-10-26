@@ -41232,6 +41232,7 @@ ${error.message || ""}`;
       migrateProviderRolesToSlots: () => migrateProviderRolesToSlots,
       normalizeCapabilityTags: () => normalizeCapabilityTags,
       normalizeRepoIdentity: () => normalizeRepoIdentity,
+      peekMeshNodes: () => peekMeshNodes,
       readMeshConfigFromDisk: () => readMeshConfigFromDisk,
       saveMeshConfig: () => saveMeshConfig,
       saveMeshConfigDurable: () => saveMeshConfigDurable,
@@ -41406,6 +41407,10 @@ ${error.message || ""}`;
     }
     function loadMeshConfig(options = {}) {
       return structuredClone(cachedMeshConfig(options));
+    }
+    function peekMeshNodes(meshId) {
+      const nodes = cachedMeshConfig({}).meshes.find((m) => m.id === meshId)?.nodes;
+      return Array.isArray(nodes) ? nodes : void 0;
     }
     function loadMeshConfigEntry(meshId) {
       const mesh = cachedMeshConfig({}).meshes.find((m) => m.id === meshId);
@@ -41720,6 +41725,7 @@ ${error.message || ""}`;
       deleteMesh: () => deleteMesh,
       getMesh: () => getMesh,
       getMeshByRepo: () => getMeshByRepo,
+      getMeshNodesReadonly: () => getMeshNodesReadonly,
       listMeshes: () => listMeshes,
       listMeshesReadOnly: () => listMeshesReadOnly,
       normalizeAssistantRemoteAccessBinding: () => normalizeAssistantRemoteAccessBinding,
@@ -41778,6 +41784,9 @@ ${error.message || ""}`;
     }
     function getMesh(meshId) {
       return loadMeshConfigEntry(meshId);
+    }
+    function getMeshNodesReadonly(meshId) {
+      return peekMeshNodes(meshId);
     }
     function getMeshByRepo(repoIdentity) {
       const normalized = normalizeRepoIdentity(repoIdentity);
@@ -69049,8 +69058,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     function nodesForMesh(meshId) {
       try {
-        const nodes = getMesh(meshId)?.nodes;
-        return Array.isArray(nodes) ? nodes : void 0;
+        return getMeshNodesReadonly(meshId);
       } catch {
         return void 0;
       }
@@ -77792,7 +77800,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           meshNodeFor: p.meshId,
           meshNodeId: p.nodeId,
           launchedByCoordinator: true,
-          spawnedSessionVisibility: "hidden",
+          // Same source as a fresh auto-launch (mesh-queue-autolaunch.ts): a mesh whose
+          // policy shows worker sessions must not have them hidden just because an
+          // existing session claimed the task.
+          spawnedSessionVisibility: resolveMeshPolicy2(p.mesh?.policy).spawnedSessionVisibility || "hidden",
           ...delegatedWorkerAutoApproveSettingsForNode(
             p.mesh,
             p.node,
@@ -89875,6 +89886,12 @@ ${closeSentinel}`;
            * in isolation would miss the mode change and leave altScreenActive stale.
            */
           modeScanCarry = "";
+          /**
+           * formatPlainText walks the whole buffer including scrollback. getText,
+           * getTextWithScrollback and getCursorPosition each need it and are polled
+           * together, so the formatted rows are reused until the next write/resize.
+           */
+          formatted = null;
           constructor(options) {
             const binding = loadGhosttyVtBinding();
             this.rows = Math.max(1, options.rows | 0);
@@ -89887,11 +89904,13 @@ ${closeSentinel}`;
           resize(rows, cols) {
             this.rows = Math.max(1, rows | 0);
             this.terminal.resize(Math.max(1, cols | 0), this.rows);
+            this.formatted = null;
           }
           write(data) {
             if (!data || this.disposed) return;
             this.trackAltScreenMode(data);
             this.terminal.write(data);
+            this.formatted = null;
           }
           /**
            * Updates altScreenActive from any alt-screen mode sequence in `data`.
@@ -89914,7 +89933,12 @@ ${closeSentinel}`;
             if (last) this.altScreenActive = last === "h";
             this.modeScanCarry = haystack.slice(Math.max(lastMatchEnd, haystack.length - ALT_SCREEN_SEQ_MAX_PREFIX));
           }
+          /** Shared, read-only rows; callers must slice rather than mutate. */
           formatLines() {
+            if (!this.formatted) this.formatted = this.formatLinesUncached();
+            return this.formatted;
+          }
+          formatLinesUncached() {
             const raw = this.terminal.formatPlainText({ trim: false }) || "";
             if (!raw) return [];
             return raw.split("\n").map((row2) => row2.replace(/\s+$/, ""));
@@ -201031,6 +201055,8 @@ ${notice.notice}${supersededHint}`;
     }
     var MAX_ESCALATED_REMEMBERED = 512;
     var ESCALATION_RECHECK_MS = 5e3;
+    var ESCALATION_DELIVERY_RETRY_MAX_MS = 6e4;
+    var ESCALATION_DELIVERY_LOG_EVERY = 10;
     var ESCALATION_MAX_RECHECKS = 6;
     function stillWaiting(state2) {
       return !!state2 && (state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval");
@@ -201107,6 +201133,10 @@ ${notice.notice}${supersededHint}`;
       const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
       if (approval && approval.actionable === false && approval.source !== "legacy_provider") return false;
       return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
+    }
+    function escalationDeliveryRetryDelayMs(failures) {
+      const exp = Math.min(Math.max(failures, 1) - 1, 20);
+      return Math.min(ESCALATION_RECHECK_MS * 2 ** exp, ESCALATION_DELIVERY_RETRY_MAX_MS);
     }
     function createApprovalEscalationGate(deps) {
       const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
@@ -201200,21 +201230,29 @@ ${notice.notice}${supersededHint}`;
         }
         LOG.info("StatusEvent", `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1e3)}s unresolved`);
         let delivered = false;
+        let failure7 = "rejected";
         try {
           delivered = deps.escalate(sessionId, rebuilt) !== false;
         } catch (error) {
-          LOG.warn("StatusEvent", `approval escalation delivery failed session=${sessionId}: ${error?.message ?? error}`);
+          failure7 = String(error?.message ?? error);
           delivered = false;
         }
         if (!delivered) {
+          entry.deliveryFailures += 1;
+          if (entry.deliveryFailures === 1 || entry.deliveryFailures % ESCALATION_DELIVERY_LOG_EVERY === 0) {
+            LOG.warn("StatusEvent", `approval escalation delivery failed session=${sessionId} attempts=${entry.deliveryFailures}: ${failure7}`);
+          }
           if (stillWaiting(state2)) {
             entry.rechecks += 1;
             entry.key = currentKey;
-            entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+            entry.timer = setTimer(() => fire(sessionId), escalationDeliveryRetryDelayMs(entry.deliveryFailures));
           } else {
             held.delete(sessionId);
           }
           return;
+        }
+        if (entry.deliveryFailures > 0) {
+          LOG.info("StatusEvent", `approval escalation delivered session=${sessionId} after ${entry.deliveryFailures} failed attempt(s)`);
         }
         held.delete(sessionId);
         escalated.add(`${sessionId}\0${currentKey}`);
@@ -201276,6 +201314,7 @@ ${notice.notice}${supersededHint}`;
             raw: rawEvent,
             firstHeldAt,
             rechecks: 0,
+            deliveryFailures: 0,
             timer: setTimer(() => fire(sessionId), waitMs)
           });
           return true;

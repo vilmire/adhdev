@@ -262,6 +262,17 @@ function cachedMeshConfig(options: { persistMigrations?: boolean }): LocalMeshCo
 export function loadMeshConfig(options: { persistMigrations?: boolean } = {}): LocalMeshConfig {
     return structuredClone(cachedMeshConfig(options));
 }
+/**
+ * The cached snapshot's node list for one mesh, NOT cloned. Read-only: the
+ * array and its nodes are shared with every other reader until meshes.json
+ * changes. For per-tick scheduling reads that only inspect nodes — cloning
+ * the whole mesh entry there ran once per slot per tick (≈20% of the
+ * preview daemon's CPU on 2026-10-26).
+ */
+export function peekMeshNodes(meshId: string): readonly unknown[] | undefined {
+    const nodes = cachedMeshConfig({}).meshes.find(m => m.id === meshId)?.nodes;
+    return Array.isArray(nodes) ? nodes : undefined;
+}
 /** Clone just the selected mesh on hot node/scheduling reads. */
 export function loadMeshConfigEntry(meshId: string): LocalMeshEntry | undefined {
     const mesh = cachedMeshConfig({}).meshes.find(m => m.id === meshId);
