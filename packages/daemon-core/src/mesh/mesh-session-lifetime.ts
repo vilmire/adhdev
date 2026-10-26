@@ -1,3 +1,4 @@
+import { readAcceptedOutput, readAcceptedSessionEvents } from './mesh-session-accepted-read.js';
 /** Fail-closed lifetime safety shared by idle reuse and reclamation. */
 import { randomUUID } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
@@ -47,28 +48,26 @@ export function recordAcceptedSessionCompletion(identity: { meshId: string; task
     });
 }
 
-/** Immutable accepted output plus the audit marker for duplicate/late reports. */
-export function acceptedCompletionSessionIds(meshId: string, tasks: any[]): Set<string> {
+/** Union current live-session evidence; a generation-bearing audit is authoritative
+ * over the generationless legacy envelope for the same session.
+ */
+export function acceptedCompletionSessionIds(meshId: string, sessions: Array<{ sessionId: string }>): Set<string> {
     const ids = new Set<string>();
     const store = MeshRuntimeStore.getInstance();
-    for (const task of tasks) {
-        if (!['completed', 'failed', 'blocked', 'cancelled'].includes(task.status)) continue;
+    for (const { sessionId } of sessions) {
         const turns = store.turnStore();
-        const output = store.getLatestTaskOutput(task.id);
-        const envelope = output ? JSON.parse(output.envelopeJson) : null;
-        const candidates = envelope?.evidence?.summarySource === 'tool_report' && envelope.source?.session_id
-            ? [{ sessionId: envelope.source.session_id, generation: null }]
-            : turns.listWorkerEventsForTask(meshId, task.id, SESSION_COMPLETION_ACCEPTED_EVENT);
-        for (const candidate of candidates) {
-            const sessionId = candidate.sessionId;
-            if (!sessionId) continue;
-            const latest = turns.findPresentationAttemptForSession(sessionId)?.attempt;
-            // Old accepted evidence cannot terminate a session handed to a newer turn.
-            if (latest && (latest.meshId !== meshId || latest.taskId !== task.id || !latest.terminal
-                || (candidate.generation !== null && candidate.generation !== latest.generation)
-                || latest.state === 'stopping' || (latest.data.writerStop && latest.data.writerStop.confirmed !== true))) continue;
-            ids.add(sessionId);
-        }
+        const latest = turns.findPresentationAttemptForSession(sessionId)?.attempt;
+        if (!latest || latest.meshId !== meshId || !latest.taskId || !latest.terminal || latest.state === 'stopping'
+            || (latest.data.writerStop && latest.data.writerStop.confirmed !== true)) continue;
+        const audit = readAcceptedSessionEvents(store.db, meshId, sessionId, SESSION_COMPLETION_ACCEPTED_EVENT);
+        const envelope = readAcceptedOutput(store, latest.taskId);
+        // Always read BOTH sources. A stale audit may not be bypassed by an
+        // envelope without a generation; audit sessions do not hide one another.
+        const currentAudit = audit.filter(e => e.taskId === latest.taskId);
+        if (currentAudit.length) {
+            if (currentAudit.some(e => e.generation === latest.generation)) ids.add(sessionId);
+        } else if (envelope?.evidence?.summarySource === 'tool_report'
+            && sessionIdsEquivalent(envelope.source?.session_id, sessionId)) ids.add(sessionId);
     }
     return ids;
 }

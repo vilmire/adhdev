@@ -1,3 +1,4 @@
+import { sessionIsStopping } from '../mesh/mesh-session-stop-fence.js';
 import { idleSessionLifetimeCommand } from './mesh-idle-session-lifetime.js';
 /**
  * DaemonCliManager — the `agent_command` command: send_chat (mesh assignment
@@ -119,6 +120,7 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
 
 /** `send_chat`: stamp the mesh assignment (when dispatched by a mesh), then the ONE submit. */
 async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, key: string): Promise<CommandResult> {
+    if (sessionIsStopping(MeshRuntimeStore.getInstance().db, key)) throw new Error('session_lifetime_stopping');
     if (readMeshContext(args) && isWriterStopPending(key)) throw new Error('mesh_writer_stopping_checkpoint_pending');
     if (readMeshContext(args) && isHolderAttachPending(key)) throw new Error('mesh_holder_attach_checkpoint_pending');
     // Stamp mesh direct-dispatch assignment on the target

@@ -1,3 +1,4 @@
+import { sessionIsStopping } from './mesh-session-stop-fence.js';
 /** Explicit reuse before any spawn budget/model-slot admission, including review tasks. */
 import { readText, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -26,6 +27,7 @@ export function reuseIdleTaskSession(components: DaemonComponents, meshId: strin
         if (!c.nodeId || !c.sessionId || !c.provider) continue;
         if (task.targetNodeId && !meshNodeIdMatches({ nodeId: c.nodeId }, task.targetNodeId)) continue;
         if (task.targetSessionId && !sessionIdsEquivalent(c.sessionId, task.targetSessionId)) continue;
+        if (sessionIsStopping(MeshRuntimeStore.getInstance().db, c.sessionId)) continue;
         if (sessionHasActiveAssignment(meshId, c.sessionId)) continue;
         // All branch/tag, provider/model, review independence, slot capacity and
         // checkpoint admission remains in the ordinary atomic claim path.

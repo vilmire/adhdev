@@ -19,6 +19,7 @@ beforeEach(() => {
             return queueStub.queueRows;
         },
         getLatestTaskOutput: () => undefined,
+        turnStore: () => ({ findPresentationAttemptForSession: () => null }),
         getActiveDirectDispatches: () => {
             if (queueStub.throwDirect) throw queueStub.throwDirect;
             return queueStub.directRows;

@@ -25,10 +25,10 @@ function providerCompletedTask() {
 describe('accepted report lifetime audit through real report paths', () => {
     it('records duplicate acceptance when the provider already committed the task', () => {
         const { meshId, task, identity, now } = providerCompletedTask();
-        expect([...acceptedCompletionSessionIds(meshId, [task])]).toEqual([]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: identity.sessionId }])]).toEqual([]);
         const result = acceptWorkerCompletionReportForIdentity(identity, { outcome: 'completed', summary: 'inspected it', touchedFiles: [] }, { nowMs: now });
         expect(result).toMatchObject({ accepted: true, duplicate: true });
-        expect([...acceptedCompletionSessionIds(meshId, [task])]).toEqual([identity.sessionId]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: identity.sessionId }])]).toEqual([identity.sessionId]);
     });
     it('records accepted late evidence and preserves the provider terminal output', () => {
         const { meshId, task, identity, now } = providerCompletedTask();
@@ -37,7 +37,7 @@ describe('accepted report lifetime audit through real report paths', () => {
             const result = acceptLateWorkerCompletionReport({ ...identity, terminalOutcome: 'completed', terminalAtMs: now },
                 { outcome: 'completed', summary: 'late authoritative report', touchedFiles: [] }, now + 1000);
             expect(result.accepted).toBe(true);
-            expect([...acceptedCompletionSessionIds(meshId, [task])]).toEqual([identity.sessionId]);
+            expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: identity.sessionId }])]).toEqual([identity.sessionId]);
             expect(JSON.parse(MeshRuntimeStore.getInstance().getLatestTaskOutput(task.id)!.envelopeJson).evidence.summarySource).toBe('native');
         } finally { __setWorkerLateReportNoticeSinkForTests(undefined); }
     });
@@ -45,6 +45,6 @@ describe('accepted report lifetime audit through real report paths', () => {
         const { meshId, task, identity, now } = providerCompletedTask();
         const result = acceptWorkerCompletionReportForIdentity(identity, { outcome: 'completed', summary: 'invalid readonly changes', touchedFiles: ['wrong.ts'] }, { nowMs: now });
         expect(result.accepted).toBe(false);
-        expect([...acceptedCompletionSessionIds(meshId, [task])]).toEqual([]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: identity.sessionId }])]).toEqual([]);
     });
 });

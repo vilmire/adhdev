@@ -18,6 +18,7 @@ import { sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 export interface ReapableSessionRecord {
     sessionId: string;
     state?: any;
+    claimFence?: import('./mesh-session-stop-fence.js').SessionClaimFence;
     checkpointPending?: boolean;
     machineId?: string;
     lastActivityAt?: number;
@@ -379,7 +380,7 @@ export async function runIdleSessionReapPass(
             if (meshId !== args.meshId) for (const id of collectSessionIdsWithActiveWork(meshId, records)) activeWorkSessionIds.add(id);
         }
         if (stopAccepted) acceptedSessionIds = deps.acceptedSessionIds?.(args.meshId)
-            ?? acceptedCompletionSessionIds(args.meshId, getQueue(args.meshId));
+            ?? acceptedCompletionSessionIds(args.meshId, records);
     } catch (e: any) {
         reportReapAborted(args.meshId, now, e);
         return { ...empty, abortedReason: 'active_work_unreadable' };

@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { acceptedCompletionSessionIds, sessionCheckpointPending, resetSessionStopRetries } from '../../src/mesh/mesh-session-lifetime.js';
@@ -24,25 +25,34 @@ const meshId = 'lifetime';
 const now = 1_800_000_000_000;
 let tasks: any[], remotes: any[], outputs: Map<string, any>, attempts: Map<string, any>;
 let journalPending = false;
+let auditEvents: any[] = [], testDb: Database.Database;
+vi.mock('../../src/commands/mesh-writer-stop-journal.js', () => ({ isWriterStopPending: () => journalPending }));
+vi.mock('../../src/mesh/mesh-session-accepted-read.js', () => ({
+    readAcceptedSessionEvents: (_db: any, _mesh: string, session: string) => auditEvents.filter(e => e.sessionId === session),
+    readAcceptedOutput: (_store: any, id: string) => outputs.has(id) ? JSON.parse(outputs.get(id).envelopeJson) : null,
+}));
 const state = (extra: any = {}) => ({ instanceId: 'worker', type: 'codex-cli', status: 'idle',
     settings: { meshNodeFor: meshId, meshNodeId: 'node', launchedByCoordinator: true }, ...extra });
 const record = (extra: any = {}) => ({ sessionId: 'worker', lifecycle: 'running', surfaceKind: 'live_runtime', lastActivityAt: now - 1000,
+    claimFence: { taskId: null, attemptId: null, generation: null, dispatchNonce: null },
     meta: { meshNodeFor: meshId, meshNodeId: 'node', launchedByCoordinator: true }, state: state(), ...extra });
 let store: any;
 beforeEach(() => {
+    testDb = new Database(':memory:'); auditEvents = [];
     tasks = []; remotes = []; outputs = new Map(); attempts = new Map(); journalPending = false;
     claim.mockReset().mockReturnValue(true); resetSessionStopRetries();
     store = {
         getQueueEntries: (_mesh: string, statuses?: string[]) => tasks.filter(t => !statuses || statuses.includes(t.status)),
+        getQueueHeads: (_mesh: string, statuses?: string[]) => tasks.filter(t => !statuses || statuses.includes(t.status)),
         getRemoteIdleSessions: () => remotes, getActiveDirectDispatches: () => [],
         getLatestTaskOutput: (id: string) => outputs.get(id),
         findQueueEntryById: (_mesh: string, id: string) => tasks.find(t => t.id === id),
         turnStore: () => ({ listWorkerEventsForTask: () => [], findPresentationAttemptForSession: (id: string) => attempts.has(id) ? { attempt: attempts.get(id) } : null }),
-        db: { prepare: () => ({ get: () => journalPending ? { found: 1 } : undefined }) },
+        db: testDb,
     };
     vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue(store);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); testDb.close(); });
 
 function accept(id = 'task') {
     tasks.push({ id, status: 'completed', assignedSessionId: 'worker' });
@@ -61,7 +71,7 @@ describe('durable accepted completion', () => {
     });
     it('does not interpret refused or provider-only evidence as acceptance', () => {
         accept(); outputs.get('task').envelopeJson = JSON.stringify({ evidence: { summarySource: 'native' }, source: { session_id: 'worker' } });
-        expect([...acceptedCompletionSessionIds(meshId, tasks)]).toEqual([]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])]).toEqual([]);
     });
     it('preserves a queued targeted follow-up, even before it can claim', async () => {
         accept(); tasks.push({ id: 'followup', status: 'pending', targetSessionId: 'worker', targetNodeId: 'node', dependsOn: ['task'] });
@@ -83,10 +93,10 @@ describe('durable accepted completion', () => {
     });
     it('does not let old accepted output terminate a newer or stopping attempt', () => {
         accept(); attempts.set('worker', { meshId, taskId: 'new-task', state: 'generating', data: {} });
-        expect([...acceptedCompletionSessionIds(meshId, tasks)]).toEqual([]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])]).toEqual([]);
         expect(sessionCheckpointPending('worker')).toBe(true);
         attempts.set('worker', { meshId, taskId: 'task', terminal: {}, state: 'stopping', data: { writerStop: { confirmed: false } } });
-        expect([...acceptedCompletionSessionIds(meshId, tasks)]).toEqual([]);
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])]).toEqual([]);
         expect(sessionCheckpointPending('worker')).toBe(true);
     });
     it('normalizes defaults and invalid caps', () => {
@@ -125,7 +135,7 @@ describe('host safety recheck', () => {
         const stop = vi.fn();
         const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
             getInstanceManager: () => ({ getByCategory: () => s ? [{ getState: () => s }] : [] }) } };
-        const result = await idleSessionLifetimeCommand(host, { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000 } });
+        const result = await idleSessionLifetimeCommand(host, { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } });
         expect(result.success).toBe(false); expect(stop).not.toHaveBeenCalled();
     });
     it('wires authenticated agent_command lifetime actions to the guarded host executor', async () => {
@@ -133,7 +143,7 @@ describe('host safety recheck', () => {
         const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
             getInstanceManager: () => ({ getByCategory: () => [{ getState: () => state() }] }) } };
         const result = await agentCommand(host, { action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: 'worker',
-            meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000 } });
+            meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } });
         expect(result).toMatchObject({ success: true, stoppedSessionIds: ['worker'] });
         expect(stop).toHaveBeenCalledWith('worker');
     });
@@ -141,7 +151,7 @@ describe('host safety recheck', () => {
         const stop = vi.fn(async () => ({ lifecycle: 'running' }));
         const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
             getInstanceManager: () => ({ getByCategory: () => [{ getState: () => state() }] }) } };
-        const args: any = { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000 } };
+        const args: any = { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } };
         expect((await idleSessionLifetimeCommand(host, args)).success).toBe(false);
         expect(stop).toHaveBeenCalledOnce(); stop.mockClear(); journalPending = true;
         expect((await idleSessionLifetimeCommand(host, args)).success).toBe(false); expect(stop).not.toHaveBeenCalled();
@@ -187,7 +197,7 @@ describe('peer lifetime retry and acknowledgement', () => {
         expect(dispatch).toHaveBeenCalledTimes(1);
         const result = await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now + 60_000), { meshId, now: now + 60_000, policy: undefined });
         expect(result.stoppedSessionIds).toEqual(['worker']);
-        expect(dispatch.mock.calls.at(-1)?.[2]).toMatchObject({ action: 'mesh_idle_session_stop', targetSessionId: 'worker', idleSessionLifetime: { lastActivityAt: now - 1000 } });
+        expect(dispatch.mock.calls.at(-1)?.[2]).toMatchObject({ action: 'mesh_idle_session_stop', targetSessionId: 'worker', idleSessionLifetime: { lastActivityAt: now - 1000, stopId: expect.any(String), claimFence: record().claimFence } });
     });
     it('does not mistake a remote stop refusal for success', async () => {
         accept(); remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
@@ -221,5 +231,21 @@ describe('lifetime stop race', () => {
         const result = await deps.cleanupMeshSessions({ meshId, nodeId: '', node: undefined, mode: 'stop', sessionIds: ['worker'], source: 'mesh_cleanup_sessions' });
         expect(result.success).toBe(false); expect(intentional).not.toHaveBeenCalled();
         expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('review finding 3: accepted evidence union', () => {
+    it('retains audit sessions alongside an existing tool-report output session', () => {
+        accept();
+        attempts.set('second', { meshId, taskId: 'task', generation: 1, state: 'completed', terminal: {}, data: {} });
+        const turns = store.turnStore();
+        store.turnStore = () => turns; auditEvents = [{ sessionId: 'second', generation: 1, taskId: 'task' }];
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])].sort()).toEqual(['second', 'worker']);
+    });
+    it('does not let generationless output override a stale audit generation', () => {
+        accept(); attempts.get('worker').generation = 2;
+        const turns = store.turnStore();
+        store.turnStore = () => turns; auditEvents = [{ sessionId: 'worker', generation: 1, taskId: 'task' }];
+        expect([...acceptedCompletionSessionIds(meshId, [{ sessionId: 'worker' }, { sessionId: 'second' }])]).toEqual([]);
     });
 });
