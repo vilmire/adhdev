@@ -10,12 +10,16 @@ import { getDefaultSessionHostEndpoint, resolveSessionHostIpcKey } from '@adhdev
 import { packageNativeGuardian } from '../scripts/package-native-guardian.mjs';
 const sha=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 test('exact built host process launches pinned guardian and serves real idle lease IPC',{skip:process.platform!=='darwin'},async()=>{
+ let root='';
+ let child: ReturnType<typeof spawn> | undefined;
+ try {
  // Prefer the caller's temp root; use a short private root when Darwin's socket budget requires it.
  const appName='gh';
  const endpointFor=(root:string)=>path.join(root,path.basename(getDefaultSessionHostEndpoint(appName,{ipcKey:resolveSessionHostIpcKey(path.join(root,'instance'))}).path));
- let root=fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(),'gh-')));
+ root=fs.mkdtempSync(path.join(tmpdir(),'gh-'));root=fs.realpathSync(root);
  if(Buffer.byteLength(endpointFor(root),'utf8')>=104){
-  fs.rmdirSync(root);root=fs.realpathSync(fs.mkdtempSync('/tmp/gh-'));
+  fs.rmdirSync(root);root='';
+  root=fs.mkdtempSync('/tmp/gh-');root=fs.realpathSync(root);
  }
  fs.writeFileSync(path.join(root,'package.json'),JSON.stringify({name:'guardian-host-fixture',version:'1.0.81-fixture'}));const configDir=path.join(root,'instance');fs.mkdirSync(configDir,{mode:0o700});
  const host=path.join(root,'host.js');fs.copyFileSync(path.resolve('dist/index.js'),host);fs.writeFileSync(path.join(root,'daemon.js'),'synthetic daemon bytes');fs.writeFileSync(path.join(root,'cli.js'),'synthetic CLI bytes');
@@ -25,9 +29,8 @@ test('exact built host process launches pinned guardian and serves real idle lea
  const pinFile=path.join(root,'launch-pins.json');fs.writeFileSync(pinFile,JSON.stringify(pins),{mode:0o600});
  const endpoint={path:endpointFor(root)};
  assert.ok(Buffer.byteLength(endpoint.path,'utf8')<104,'fixture Unix socket path must reserve Darwin NUL byte');
- const child=spawn(nodePath,[host,'serve'],{stdio:['ignore','pipe','pipe'],env:{TMPDIR:root,PATH:process.env.PATH,NODE_PATH:path.resolve('../../../node_modules'),ADHDEV_CONFIG_DIR:configDir,ADHDEV_SESSION_HOST_NAME:appName,ADHDEV_WORKER_GUARDIAN_PINS_FILE:pinFile}});
- let stderr='';child.stderr.on('data',b=>{stderr+=String(b);});
- try {
+ child=spawn(nodePath,[host,'serve'],{stdio:['ignore','pipe','pipe'],env:{TMPDIR:root,PATH:process.env.PATH,NODE_PATH:path.resolve('../../../node_modules'),ADHDEV_CONFIG_DIR:configDir,ADHDEV_SESSION_HOST_NAME:appName,ADHDEV_WORKER_GUARDIAN_PINS_FILE:pinFile}});
+ let stderr='';child.stderr?.on('data',b=>{stderr+=String(b);});
   for(let i=0;i<100 && !fs.existsSync(endpoint.path);i++){if(child.exitCode!==null)throw new Error(`fixture exited: ${stderr}`);await new Promise(r=>setTimeout(r,30));}
   assert.equal(fs.existsSync(endpoint.path),true,stderr);await new Promise(r=>setTimeout(r,30));
   const socket=net.createConnection(endpoint.path);await new Promise<void>((r,j)=>{socket.once('connect',r);socket.once('error',j);});
@@ -36,5 +39,10 @@ test('exact built host process launches pinned guardian and serves real idle lea
   const req={bootId:proof.result.bootId,epoch:proof.result.epoch,owner:'fixture_owner_01',token:'a'.repeat(64)};assert.equal((await ipc({type:'acquire_upgrade_lease',payload:req})).success,true);
   assert.equal((await ipc({type:'release_upgrade_lease',payload:req})).success,true);socket.destroy();
   console.log(`BUILT_HOST_SHA256=${files.host.sha256} GUARDIAN_MANIFEST_SHA256=${built.manifestSha256} HELPER_SHA256=${built.manifest.files.helper.sha256}`);
- }finally{if(child.exitCode===null && child.signalCode===null)await new Promise<void>(r=>{child.once('exit',()=>r());child.kill('SIGTERM');});fs.rmSync(root,{recursive:true,force:true});}
+ }finally{
+  const runningChild=child;
+  try {
+   if(runningChild && runningChild.exitCode===null && runningChild.signalCode===null)await new Promise<void>(r=>{runningChild.once('exit',()=>r());runningChild.kill('SIGTERM');});
+  }finally{if(root)fs.rmSync(root,{recursive:true,force:true});}
+ }
 });
