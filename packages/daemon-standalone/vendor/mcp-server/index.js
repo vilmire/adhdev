@@ -42474,15 +42474,33 @@ ${error.message || ""}`;
       if (parts.length === 2) return { meshId: null, writer: parts[0], seq: seq2 };
       return { meshId: parts[0], writer: parts.slice(1, -1).join(":"), seq: seq2 };
     }
+    function livenessSampleKey(row2) {
+      const evidence = row2.payload.evidence;
+      if (row2.kind !== "liveness" || row2.source !== "coordinator_probe" || row2.verdict !== "applied" || !["R32", "R32u"].includes(row2.rule ?? "") || row2.fromState !== row2.toState || row2.publishState !== "none" || row2.srcWriter != null || row2.srcSeq != null || Object.keys(row2.payload).some((k) => !["meshId", "evidence", "notes", "livenessSamples"].includes(k)) || !evidence || !["alive", "unknown"].includes(String(evidence.result))) return null;
+      const { eventId: _id, at: _at, probeStartedAtMs: _started, ...semantic } = evidence;
+      return JSON.stringify([
+        row2.attemptId,
+        row2.generation,
+        row2.sessionId,
+        row2.observedBy,
+        row2.rule,
+        row2.fromState,
+        row2.toState,
+        semantic,
+        row2.payload.notes ?? null
+      ]);
+    }
     var TurnStore;
     var init_store = __esm2({
       "src/mesh/turn-ledger/store.ts"() {
         "use strict";
+        init_dist();
         TurnStore = class {
           constructor(db2) {
             this.db = db2;
           }
           stmts = /* @__PURE__ */ new Map();
+          livenessRetentionCursor = 0;
           stmt(sql) {
             let s2 = this.stmts.get(sql);
             if (!s2) {
@@ -42721,14 +42739,27 @@ ${error.message || ""}`;
             }
             return { armed: holds.length, resolved };
           }
+          /** Match observe's ownership comparator before limiting work. Foreign and
+           * orphan holds stay intact: only their owner may resolve or adopt them. */
+          holdOwnerScope(ownerDaemonId) {
+            if (ownerDaemonId === void 0) return { sql: "", ids: [] };
+            const ids = this.stmt("SELECT DISTINCT owner_daemon_id FROM turn_attempts WHERE terminal_outcome IS NULL").all().map((r) => r.owner_daemon_id).filter((id4) => daemonIdsEquivalent4(id4, ownerDaemonId));
+            return {
+              sql: ` AND attempt_id IN (SELECT attempt_id FROM turn_attempts WHERE terminal_outcome IS NULL
+                AND owner_daemon_id IN (${ids.map(() => "?").join(",") || "NULL"}))`,
+              ids
+            };
+          }
           /** Active holds whose deadline passed, in deadline order (scheduler `expiredHolds()`). */
-          dueHolds(nowMs2, limit = 500) {
-            const rows = this.stmt(`SELECT * FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL AND until_ms <= ? ORDER BY until_ms, hold_id LIMIT ?`).all(nowMs2, limit);
+          dueHolds(nowMs2, limit = 500, ownerDaemonId) {
+            const scope = this.holdOwnerScope(ownerDaemonId);
+            const rows = this.stmt(`SELECT * FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL AND until_ms <= ?${scope.sql} ORDER BY until_ms, hold_id LIMIT ?`).all(nowMs2, ...scope.ids, limit);
             return rows.map(holdFromRow);
           }
           /** Earliest active deadline, for the scheduler's single setTimeout (C4). */
-          nextHoldDeadline() {
-            const row2 = this.stmt(`SELECT MIN(until_ms) AS next FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL`).get();
+          nextHoldDeadline(ownerDaemonId, afterMs) {
+            const scope = this.holdOwnerScope(ownerDaemonId);
+            const row2 = this.stmt(`SELECT MIN(until_ms) AS next FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL${scope.sql}${afterMs === void 0 ? "" : " AND until_ms > ?"}`).get(...scope.ids, ...afterMs === void 0 ? [] : [afterMs]);
             return row2?.next ?? null;
           }
           // ── events ───────────────────────────────────────────────────────────
@@ -42772,6 +42803,71 @@ ${error.message || ""}`;
               row2.recordedAt
             );
             return info.changes > 0;
+          }
+          /** Reduce every fresh observation, but store a consecutive semantic run
+           * once. The original evidence stays immutable; the aggregate retains its
+           * latest sample and count. Freshness lives on the attempt, never this row. */
+          recordEvidence(row2) {
+            const key5 = livenessSampleKey(row2);
+            if (key5 && row2.attemptId) {
+              const raw = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                ORDER BY recorded_at DESC, rowid DESC LIMIT 1`).get(row2.attemptId);
+              const previous = raw ? eventFromRow(raw) : null;
+              if (previous && livenessSampleKey(previous) === key5) {
+                const aggregate = previous.payload.livenessSamples;
+                const latest = aggregate?.latest ?? previous.payload.evidence;
+                if (latest.eventId === row2.eventId || Number(latest.at) >= row2.atMs) return false;
+                this.stmt("UPDATE turn_events SET payload_json = ? WHERE event_id = ?").run(JSON.stringify({
+                  ...previous.payload,
+                  livenessSamples: { count: (aggregate?.count ?? 1) + 1, latest: row2.payload.evidence }
+                }), previous.eventId);
+                return true;
+              }
+            }
+            return this.insertEvent(row2);
+          }
+          /** Hourly, bounded retention of legacy redundant samples only. Terminal
+           * attempts must be locally owned and older than the window. First and last
+           * samples of every semantic run survive, as do imported/published rows and
+           * any sample with derived event evidence. No attempts or holds are removed. */
+          pruneTerminalLivenessSamples(olderThanMs, nowMs2, ownerDaemonId) {
+            return this.db.transaction(() => {
+              const rows = this.stmt(`SELECT e.*, e.rowid AS scan_id FROM turn_events e JOIN turn_attempts a ON a.attempt_id = e.attempt_id
+                WHERE a.terminal_outcome IS NOT NULL AND a.terminal_at < ? AND e.kind = 'liveness' AND e.rowid > ?
+                ORDER BY e.rowid LIMIT 500`).all(nowMs2 - olderThanMs, this.livenessRetentionCursor);
+              this.livenessRetentionCursor = rows.length === 500 ? rows[rows.length - 1].scan_id : 0;
+              let removed = 0;
+              for (const raw of rows) {
+                const row2 = eventFromRow(raw);
+                const key5 = livenessSampleKey(row2);
+                if (!key5) continue;
+                const previous = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                    AND (recorded_at < ? OR (recorded_at = ? AND rowid < ?))
+                    ORDER BY recorded_at DESC, rowid DESC LIMIT 1`).get(row2.attemptId, row2.recordedAt, row2.recordedAt, raw.scan_id);
+                const next = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                    AND (recorded_at > ? OR (recorded_at = ? AND rowid > ?))
+                    ORDER BY recorded_at, rowid LIMIT 1`).get(row2.attemptId, row2.recordedAt, row2.recordedAt, raw.scan_id);
+                if (!previous || !next || key5 !== livenessSampleKey(eventFromRow(previous)) || key5 !== livenessSampleKey(eventFromRow(next))) continue;
+                const owner = this.getAttempt(row2.attemptId)?.ownerDaemonId;
+                if (!daemonIdsEquivalent4(owner, ownerDaemonId) || !daemonIdsEquivalent4(row2.observedBy, ownerDaemonId) || row2.recordedAt >= nowMs2 - olderThanMs) continue;
+                const pointer = JSON.stringify(row2.eventId);
+                const referenced = this.stmt(`SELECT 1 FROM turn_events WHERE event_id != ?
+                    AND (substr(event_id, 1, length(?) + 1) = ? || '#' OR instr(payload_json, ?) > 0)
+                    UNION ALL SELECT 1 FROM turn_holds WHERE instr(data_json, ?) > 0
+                    UNION ALL SELECT 1 FROM turn_attempts WHERE instr(data_json, ?) > 0 LIMIT 1`).get(row2.eventId, row2.eventId, row2.eventId, pointer, pointer, pointer);
+                if (!referenced) {
+                  const prior = eventFromRow(previous);
+                  const samples = prior.payload.livenessSamples;
+                  const removedSamples = row2.payload.livenessSamples;
+                  this.stmt("UPDATE turn_events SET payload_json = ? WHERE event_id = ?").run(JSON.stringify({
+                    ...prior.payload,
+                    livenessSamples: { count: (samples?.count ?? 1) + (removedSamples?.count ?? 1), latest: removedSamples?.latest ?? row2.payload.evidence }
+                  }), prior.eventId);
+                  removed += this.stmt("DELETE FROM turn_events WHERE event_id = ?").run(row2.eventId).changes;
+                }
+              }
+              return removed;
+            })();
           }
           listEvents(attemptId) {
             const rows = this.stmt("SELECT * FROM turn_events WHERE attempt_id = ? ORDER BY recorded_at, rowid").all(attemptId);
@@ -127734,7 +127830,7 @@ ${tail}` : ""
           store2.upsertAttempt(next, nowMs2);
           store2.syncHolds(next.attemptId, result.holds, nowMs2);
         }
-        const inserted = store2.insertEvent(evidenceRow(evidence, {
+        const inserted = store2.recordEvidence(evidenceRow(evidence, {
           verdict: result.verdict,
           ...result.rule ? { rule: result.rule } : {},
           ...result.rejection ? { rejection: result.rejection } : {},
@@ -128009,17 +128105,17 @@ ${tail}` : ""
         getAttempt: (attemptId) => store2.getAttempt(attemptId),
         openAttemptForSession: (sessionId) => store2.findOpenAttemptForSession(sessionId),
         sessionIdFor: (attemptId) => store2.sessionIdForAttempt(attemptId),
-        expiredHoldEvidence: (nowMs2 = now()) => expireHolds(store2.dueHolds(nowMs2), nowMs2, {
+        expiredHoldEvidence: (nowMs2 = now()) => expireHolds(store2.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
           observedBy: deps.selfDaemonId,
           sessionIdFor: (attemptId) => store2.sessionIdForAttempt(attemptId)
         }),
         sweepExpiredHolds(nowMs2 = now()) {
-          return expireHolds(store2.dueHolds(nowMs2), nowMs2, {
+          return expireHolds(store2.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
             observedBy: deps.selfDaemonId,
             sessionIdFor: (attemptId) => store2.sessionIdForAttempt(attemptId)
           }).map((evidence) => observe(evidence));
         },
-        nextHoldDeadline: () => store2.nextHoldDeadline(),
+        nextHoldDeadline: (afterMs) => store2.nextHoldDeadline(deps.selfDaemonId, afterMs),
         flushPublish,
         republishPending: flushPublish,
         pendingPublishCount: (olderThanMs) => store2.countPendingPublish(olderThanMs),
@@ -128227,7 +128323,7 @@ ${tail}` : ""
       const selfDaemonId = deps.selfDaemonId ?? ledger.selfDaemonId;
       const log = deps.log ?? NOOP_LOG2;
       const now = deps.now ?? (() => Date.now());
-      const tickMs = deps.intervalMs ?? policy.tickMs;
+      const tickMs = Math.max(1, deps.intervalMs ?? policy.tickMs);
       const forced = /* @__PURE__ */ new Set();
       const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
       const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
@@ -128451,9 +128547,11 @@ ${tail}` : ""
           lastPruneAt = pruneAt;
           try {
             report.pruned = store2.pruneTerminalPlainAttempts(PLAIN_ATTEMPT_RETENTION_MS, pruneAt).attempts;
+            const samples = store2.pruneTerminalLivenessSamples(PLAIN_ATTEMPT_RETENTION_MS, pruneAt, selfDaemonId);
+            if (samples > 0) log.info(`turn-scheduler: pruned ${samples} redundant terminal liveness sample(s) older than 7 d`);
             if (report.pruned > 0) log.info(`turn-scheduler: pruned ${report.pruned} terminal plain attempt(s) older than 7 d`);
           } catch (error) {
-            log.warn(`turn-scheduler: plain-attempt prune failed: ${describe2(error)}`);
+            log.warn(`turn-scheduler: retention failed: ${describe2(error)}`);
           }
         }
         return report;
@@ -128510,7 +128608,7 @@ ${tail}` : ""
     }
     function startTurnScheduler(deps) {
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
-      const tickMs = deps.intervalMs ?? policy.tickMs;
+      const tickMs = Math.max(1, deps.intervalMs ?? policy.tickMs);
       const now = deps.now ?? (() => Date.now());
       const log = deps.log ?? NOOP_LOG2;
       const scheduler = createTurnScheduler(deps);
@@ -128527,13 +128625,14 @@ ${tail}` : ""
           deadlineTimer = null;
         }
         let next = null;
+        const armedAt = now();
         try {
-          next = deps.ledger.nextHoldDeadline();
+          next = deps.ledger.nextHoldDeadline(armedAt);
         } catch {
           next = null;
         }
-        if (next === null) return;
-        const delay3 = Math.max(0, next - now());
+        if (next === null || !Number.isFinite(next) || next <= armedAt) return;
+        const delay3 = next - armedAt;
         if (delay3 >= tickMs) return;
         deadlineTimer = setTimeout(() => {
           deadlineTimer = null;
@@ -130199,7 +130298,7 @@ ${tail}` : ""
           let delivered = 0;
           const meshIds = consumer?.meshIds() ?? [];
           for (const meshId of meshIds) {
-            if (!notices.hasUndelivered(meshId) || listLocalCoordinatorSessions(components, meshId).length === 0) continue;
+            if (listLocalCoordinatorSessions(components, meshId).length === 0 || !notices.hasUndelivered(meshId)) continue;
             try {
               delivered += await deliverNoticeBacklog(deliverDeps, meshId, abort.signal);
             } catch (error) {
