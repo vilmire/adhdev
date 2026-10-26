@@ -300,7 +300,8 @@ const SCHEDULER_SURFACES: SurfacePin[] = [
         // maybeAutoLaunchOneQueueSession moved out of mesh-queue-assignment.ts into
         // mesh-queue-autolaunch.ts (pure move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
-        gateCalls: ['taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))'],
+        // The compact graph retains reachable terminal dependencies and phase edges.
+        gateCalls: ['taskDependenciesSatisfied(task, statusById, new Map(graph.map(t => [t.id, t])))'],
         forbidGraphTokens: true,
     },
 ];

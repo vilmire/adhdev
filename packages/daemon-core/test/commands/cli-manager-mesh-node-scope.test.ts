@@ -177,6 +177,8 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
     // the dir fallback used to redirect the session-pinned dispatch onto whatever session
     // lives in that workspace — the sibling-worktree leak. With a session explicitly named,
     // resolution must be exact-or-null: never heal to a different session by workspace.
+    // The typed refusal proves no dispatch started, so retirement need not infer that
+    // from a thrown transport error. Both sibling sessions must still receive nothing.
     const { manager, base, worktree } = createDualNodeManager()
 
     await expect(manager.agentCommand({
@@ -187,7 +189,11 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
       message: 'must NOT leak to the worktree sibling',
       dir: WORKTREE_DIR, // would dir-match sess-worktree under the old fallback
       meshContext: { meshId: 'mesh-1', nodeId: 'node_worktree' },
-    })).rejects.toThrow(/CLI agent not running/)
+    })).resolves.toMatchObject({
+      success: false,
+      code: 'dispatch_not_started',
+      error: expect.stringMatching(/CLI agent not running/),
+    })
 
     expect(worktree.sendMessage).not.toHaveBeenCalled()
     expect(base.sendMessage).not.toHaveBeenCalled()

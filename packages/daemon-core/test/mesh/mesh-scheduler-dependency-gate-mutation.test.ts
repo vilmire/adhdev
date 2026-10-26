@@ -347,7 +347,8 @@ const SURFACES: SurfaceMutation[] = [
         // maybeAutoLaunchOneQueueSession moved out of mesh-queue-assignment.ts into
         // mesh-queue-autolaunch.ts (pure move). Only the path follows it.
         file: path.join(SRC_ROOT, 'mesh/mesh-queue-autolaunch.ts'),
-        gateCall: 'taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))',
+        // Match the same compact-graph call pinned by the invariant suite.
+        gateCall: 'taskDependenciesSatisfied(task, statusById, new Map(graph.map(t => [t.id, t])))',
         entryVar: 'task', statusMap: 'statusById', occurrences: 1,
     },
 ];
