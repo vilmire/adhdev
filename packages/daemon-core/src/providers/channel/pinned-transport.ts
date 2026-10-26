@@ -42,10 +42,10 @@
  *
  * Backward compatibility
  * ----------------------
- * Existing registry rows carry no commit information and none is added here:
- * the pin is DERIVED from the digest the row already has. So previously
- * published rows — including every row live today — resolve correctly with no
- * migration and no republish.
+ * New registry rows carry sourceCommit, which runtime.ts fetches directly,
+ * bypassing this discovery path. Legacy rows without it still use this bounded
+ * best-effort search; API limits or long publication lag can prevent recovery.
+ * Backfill sourceCommit through the publisher to make legacy rows deterministic.
  *
  * A URL this module does not recognize as a GitHub archive URL (a self-hoster
  * who repointed `providerTarballUrl`/`ADHDEV_PROVIDER_TARBALL_URL` at their own

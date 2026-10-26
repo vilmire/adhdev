@@ -56,6 +56,88 @@ const COMMIT_TIP = 'b'.repeat(40);
 const COMMIT_PUBLISHED = 'a'.repeat(40);
 
 describe('pinned provider transport', () => {
+  it.each(['stable', 'preview'] as const)('first sync on %s uses the published commit with main >20 commits ahead and API rate limited', async (channel) => {
+    const published = makeTmp('adhdev-immutable-published-');
+    buildRepoTree(published, [SPEC]);
+    const digest = digestFor(published, SPEC.category, SPEC.dirname);
+    // Model 37 newer commits: none of their trees can satisfy the channel digest.
+    const newer = Array.from({ length: 37 }, (_, i) => ({
+      sha: (i + 1).toString(16).padStart(40, '0'), tree: makeTmp('adhdev-immutable-newer-'),
+    }));
+    for (const [i, commit] of newer.entries()) {
+      buildRepoTree(commit.tree, [{ ...SPEC, files: { 'extra.md': `unpublished change ${i}` } }]);
+    }
+    const store = new ProviderChannelStore(makeTmp('adhdev-immutable-store-'));
+    expect(store.getPointer(channel, SPEC.type)).toBeNull();
+    const urls: string[] = [];
+    let source = newer[36].tree;
+    let apiCalls = 0;
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test/api/v1/registry', providerTarballUrl: VENDOR_URL,
+      fetchJson: async () => ({ channel, providers: [{ ...makeRegistryRow(SPEC, digest), sourceCommit: COMMIT_PUBLISHED }] }),
+      fetchTransportMetaJson: async () => { apiCalls++; throw new Error('HTTP 403 API rate limit exceeded'); },
+      downloadFile: async (url) => {
+        urls.push(url);
+        source = url.includes(COMMIT_PUBLISHED) ? published : newer[36].tree;
+      },
+      extractTarball: async (_tar, dest) => { cpSync(source, join(dest, 'providers'), { recursive: true }); },
+    });
+    const report = await runtime.sync({ channel, targetTypes: new Set(), bootstrapAll: true });
+    expect(report.errors).toEqual([]);
+    expect(report.status).toBe('activated');
+    expect(store.getPointer(channel, SPEC.type)?.active.digest).toBe(digest);
+    expect(apiCalls).toBe(0);
+    expect(urls).toEqual([buildPinnedArchiveUrl(parseGitHubArchiveUrl(VENDOR_URL)!, COMMIT_PUBLISHED)]);
+  });
+
+  it('fetches each entry from its own immutable commit in a mixed publication', async () => {
+    const other: FixtureProviderSpec = { ...SPEC, type: 'other-cli', dirname: 'other-cli' };
+    const first = makeTmp('adhdev-source-first-');
+    const second = makeTmp('adhdev-source-second-');
+    buildRepoTree(first, [SPEC]);
+    buildRepoTree(second, [other]);
+    const firstDigest = digestFor(first, SPEC.category, SPEC.dirname);
+    const secondDigest = digestFor(second, other.category, other.dirname);
+    const store = new ProviderChannelStore(makeTmp('adhdev-source-mixed-'));
+    let source = first;
+    const urls: string[] = [];
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test', providerTarballUrl: VENDOR_URL,
+      fetchJson: async () => ({ channel: PREVIEW, providers: [
+        { ...makeRegistryRow(SPEC, firstDigest), sourceCommit: COMMIT_PUBLISHED },
+        { ...makeRegistryRow(other, secondDigest), sourceCommit: COMMIT_TIP },
+      ] }),
+      fetchTransportMetaJson: async () => { throw new Error('rate limited'); },
+      downloadFile: async (url) => { urls.push(url); source = url.includes(COMMIT_PUBLISHED) ? first : second; },
+      extractTarball: async (_tar, dest) => { cpSync(source, join(dest, 'providers'), { recursive: true }); },
+    });
+    const result = await runtime.sync({ channel: PREVIEW, targetTypes: new Set(), bootstrapAll: true });
+    expect(result.errors).toEqual([]);
+    expect(result.activated.map((a) => a.digest)).toEqual([firstDigest, secondDigest]);
+    expect(urls).toHaveLength(2);
+  });
+
+  it('preserves the last known good pin when an immutable source serves mismatched bytes', async () => {
+    const repo = makeTmp('adhdev-immutable-bad-');
+    buildRepoTree(repo, [SPEC]);
+    const digest = digestFor(repo, SPEC.category, SPEC.dirname);
+    const store = new ProviderChannelStore(makeTmp('adhdev-immutable-lkg-'));
+    let offeredDigest = digest;
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test', providerTarballUrl: VENDOR_URL,
+      fetchJson: async () => ({ channel: PREVIEW, providers: [{ ...makeRegistryRow(SPEC, offeredDigest), sourceCommit: COMMIT_PUBLISHED }] }),
+      fetchTransportMetaJson: async () => { throw new Error('rate limited'); },
+      downloadFile: async () => {},
+      extractTarball: async (_tar, dest) => { cpSync(repo, join(dest, 'providers'), { recursive: true }); },
+    });
+    expect((await runtime.sync({ channel: PREVIEW, targetTypes: new Set([SPEC.type]) })).status).toBe('activated');
+    offeredDigest = `sha256:${'f'.repeat(64)}`;
+    const failed = await runtime.sync({ channel: PREVIEW, targetTypes: new Set([SPEC.type]) });
+    expect(failed.errors.map((e) => e.code)).toEqual(['DIGEST_MISMATCH']);
+    expect(failed.activated).toEqual([]);
+    expect(store.getPointer(PREVIEW, SPEC.type)?.active.digest).toBe(digest);
+  });
+
   /**
    * ★ The property: a push to main must not invalidate an already-published
    * registry row.

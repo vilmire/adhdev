@@ -148621,7 +148621,8 @@ ${output}` : "";
             providerVersion: raw.version,
             category: raw.category,
             bundleDigest: typeof raw.bundleDigest === "string" ? raw.bundleDigest : null,
-            digestAlgorithm: typeof raw.digestAlgorithm === "string" ? raw.digestAlgorithm : null
+            digestAlgorithm: typeof raw.digestAlgorithm === "string" ? raw.digestAlgorithm : null,
+            ...raw.sourceCommit != null ? { sourceCommit: raw.sourceCommit } : {}
           });
         }
         return entries;
@@ -148682,67 +148683,83 @@ ${output}` : "";
         if (pending.length === 0) {
           return report;
         }
-        const candidates = await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
-        for (let attempt = 0; attempt < candidates.length; attempt += 1) {
-          const transportUrl = candidates[attempt];
-          const isLastCandidate = attempt === candidates.length - 1;
-          const attemptErrors = [];
-          const attemptActivated = [];
-          const attemptBlocked = /* @__PURE__ */ new Set();
-          const stagingRoot = this.store.createStagingDir("sync");
-          let retryWithOlderCommit = false;
-          try {
-            const tarPath = path72.join(stagingRoot, "providers.tar.gz");
-            const extractDir = path72.join(stagingRoot, "repo");
-            fs66.mkdirSync(extractDir, { recursive: true });
-            try {
-              await this.downloadFile(transportUrl, tarPath);
-              await this.extractTarball(tarPath, extractDir);
-            } catch (e) {
-              report.errors.push({ code: "TRANSPORT_FAILED", message: `provider tarball transport failed: ${e?.message || e}` });
-              report.status = "error";
-              this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-              return report;
-            }
-            const repoRoot = findTarballRepoRoot(extractDir);
-            if (!repoRoot) {
-              report.errors.push({ code: "TRANSPORT_FAILED", message: "provider tarball has an unexpected structure (no repo root dir)" });
-              report.status = "error";
-              return report;
-            }
-            for (const entry of pending) {
-              const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
-              if (outcome && "blocked" in outcome) {
-                report.blocked.push(outcome.blocked);
-                attemptBlocked.add(entry.providerType);
-              } else if (outcome) {
-                attemptErrors.push(outcome);
-              } else {
-                const pointer = this.store.getPointer(channel, entry.providerType);
-                if (pointer) attemptActivated.push(pointer.active);
-              }
-            }
-            const mismatches = attemptErrors.filter((e) => e.code === "DIGEST_MISMATCH");
-            retryWithOlderCommit = mismatches.length > 0 && mismatches.length === attemptErrors.length && !isLastCandidate;
-            if (retryWithOlderCommit) {
-              this.log(
-                `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? "y" : "ies"} \u2014 the published rows were not built from this commit; trying the previous commit`
-              );
-            }
-          } finally {
-            this.store.removeStagingDir(stagingRoot);
-          }
-          if (retryWithOlderCommit) {
-            const resolved = /* @__PURE__ */ new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
-            report.activated.push(...attemptActivated);
-            for (let i = pending.length - 1; i >= 0; i -= 1) {
-              if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
-            }
+        const groups = /* @__PURE__ */ new Map();
+        const archive = parseGitHubArchiveUrl(this.providerTarballUrl);
+        for (const entry of pending) {
+          if (entry.sourceCommit !== void 0 && (typeof entry.sourceCommit !== "string" || !/^[0-9a-f]{40}$/.test(entry.sourceCommit))) {
+            report.errors.push({
+              code: "CHANNEL_METADATA_UNAVAILABLE",
+              providerType: entry.providerType,
+              message: `invalid sourceCommit for "${entry.providerType}"`
+            });
             continue;
           }
-          report.activated.push(...attemptActivated);
-          report.errors.push(...attemptErrors);
-          break;
+          const key5 = entry.sourceCommit ?? "";
+          groups.set(key5, [...groups.get(key5) ?? [], entry]);
+        }
+        for (const [sourceCommit, pending2] of groups) {
+          const candidates = sourceCommit ? [archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl] : await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
+          for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+            const transportUrl = candidates[attempt];
+            const isLastCandidate = attempt === candidates.length - 1;
+            const attemptErrors = [];
+            const attemptActivated = [];
+            const attemptBlocked = /* @__PURE__ */ new Set();
+            const stagingRoot = this.store.createStagingDir("sync");
+            let retryWithOlderCommit = false;
+            try {
+              const tarPath = path72.join(stagingRoot, "providers.tar.gz");
+              const extractDir = path72.join(stagingRoot, "repo");
+              fs66.mkdirSync(extractDir, { recursive: true });
+              try {
+                await this.downloadFile(transportUrl, tarPath);
+                await this.extractTarball(tarPath, extractDir);
+              } catch (e) {
+                report.errors.push({ code: "TRANSPORT_FAILED", message: `provider tarball transport failed: ${e?.message || e}` });
+                report.status = "error";
+                this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
+                return report;
+              }
+              const repoRoot = findTarballRepoRoot(extractDir);
+              if (!repoRoot) {
+                report.errors.push({ code: "TRANSPORT_FAILED", message: "provider tarball has an unexpected structure (no repo root dir)" });
+                report.status = "error";
+                return report;
+              }
+              for (const entry of pending2) {
+                const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
+                if (outcome && "blocked" in outcome) {
+                  report.blocked.push(outcome.blocked);
+                  attemptBlocked.add(entry.providerType);
+                } else if (outcome) {
+                  attemptErrors.push(outcome);
+                } else {
+                  const pointer = this.store.getPointer(channel, entry.providerType);
+                  if (pointer) attemptActivated.push(pointer.active);
+                }
+              }
+              const mismatches = attemptErrors.filter((e) => e.code === "DIGEST_MISMATCH");
+              retryWithOlderCommit = mismatches.length > 0 && mismatches.length === attemptErrors.length && !isLastCandidate;
+              if (retryWithOlderCommit) {
+                this.log(
+                  `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? "y" : "ies"} \u2014 the published rows were not built from this commit; trying the previous commit`
+                );
+              }
+            } finally {
+              this.store.removeStagingDir(stagingRoot);
+            }
+            if (retryWithOlderCommit) {
+              const resolved = /* @__PURE__ */ new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
+              report.activated.push(...attemptActivated);
+              for (let i = pending2.length - 1; i >= 0; i -= 1) {
+                if (resolved.has(pending2[i].providerType)) pending2.splice(i, 1);
+              }
+              continue;
+            }
+            report.activated.push(...attemptActivated);
+            report.errors.push(...attemptErrors);
+            break;
+          }
         }
         try {
           this.store.gc({ retainDigests: options.retainDigests });
