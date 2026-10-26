@@ -5,7 +5,9 @@
 
 import { MESH_CONNECT_TIMEOUT_MS } from '../runtime-defaults.js';
 import { LOG } from '../logging/logger.js';
-import { type MeshWorkQueueEntry, requeueTask } from './mesh-work-queue.js';
+import { retireOpenQueueAttemptForRequeue } from './mesh-queue-attempt-guard.js';
+import { type MeshWorkQueueEntry, requeueTask, requeueTaskForLedgerReclaim } from './mesh-work-queue.js';
+import { buildNewWorkHeldRefusal, classifyNewWorkHeld, evaluateNewWorkHold, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 import type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { type TurnAttemptRef, type TurnEvidence, sessionIdsEquivalent, meshNodeIdMatches, sanitizeRefusalCode, readText } from '@adhdev/mesh-shared';
@@ -282,6 +284,15 @@ export function deliverTaskToSession(
     // legacy session-delivery table row is retired. The id survives only as
     // this dispatch's correlation key (evidence event ids, ledger payloads).
     const delivery = { id: `dlv-${randomUUID()}` };
+    const activeHold = evaluateNewWorkHold({ meshId: ctx.meshId });
+    if (activeHold.held) {
+        handleDispatchFailure(
+            buildNewWorkHeldRefusal(activeHold.hold, `Queue dispatch of task ${ctx.task.id} refused while new-work hold is active`),
+            ctx,
+            delivery,
+        );
+        return;
+    }
 
     // LEDGER-TASK-TRACEABILITY (A): record the dispatch — the single funnel every
     // queue-claim dispatch (local + remote) flows through — so mesh_task_history and the
@@ -420,6 +431,40 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
         // holder session was actually named. Anything else falls through to the failure path
         // below unchanged — a blanket rebind on arbitrary errors would let a STALE session's
         // completion be accepted, which is precisely what session_mismatch must keep out.
+        const heldRefusal = classifyNewWorkHeld(e) ?? classifyNewWorkHeld(rawFailure);
+        if (heldRefusal) {
+            if (ctx.attemptRef) {
+                // Accepted claims retire through the normal native checkpoint.
+                // A consumed writer must keep its assignment (drain mode A).
+                const retirement = retireOpenQueueAttemptForRequeue(ctx.meshId, ctx.task.id, { force: false });
+                if (retirement.kind === 'refused') {
+                    endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
+                    LOG.warn('MeshQueue', `Held dispatch retained task ${ctx.task.id}: attempt retirement refused (${retirement.reason}).`);
+                    return;
+                }
+            }
+            LOG.info('MeshQueue', `Dispatch of task ${ctx.task.id} to node ${ctx.nodeId} refused by new-work hold (${heldRefusal.holdId}, rev=${heldRefusal.revision}); returning task to pending without spending retry/dispatch budgets.`);
+            endTaskDispatchInFlight(ctx.meshId, ctx.task.id);
+            requeueTaskForLedgerReclaim(ctx.meshId, ctx.task.id, NEW_WORK_HELD_CODE, new Date().toISOString());
+            try {
+                meshRecord(ctx.meshId, 'dispatch_failed', {
+                    nodeId: ctx.nodeId,
+                    sessionId: ctx.sessionId,
+                    payload: {
+                        taskId: ctx.task.id,
+                        deliveryId: delivery.id,
+                        transport: ctx.transport,
+                        reason: NEW_WORK_HELD_CODE,
+                        refusalCode: NEW_WORK_HELD_CODE,
+                        holdId: heldRefusal.holdId,
+                        revision: heldRefusal.revision,
+                        retryable: true,
+                        budgetExempt: true,
+                    },
+                }, { local: true });
+            } catch { /* ledger write is best-effort */ }
+            return;
+        }
         const duplicate = classifyDuplicateMeshDispatch(e);
         if (duplicate?.holderSessionId) {
             // A holder name only locates a possible writer. Source attach must

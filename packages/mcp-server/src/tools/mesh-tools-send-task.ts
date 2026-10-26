@@ -28,6 +28,7 @@ import {
 import {
     validateMeshTaskModeRequest,
     buildMeshTaskModeViolationError,
+    buildNewWorkHeldRefusal,
 } from '@adhdev/daemon-core';
 import { supportsMeshRelay } from '../transports/mode.js';
 import {
@@ -1026,6 +1027,25 @@ export async function meshSendTask(
 ): Promise<string> {
     const req = await parseSendTaskRequest(ctx, args);
     if (typeof req === 'string') return req;
+    const daemonHoldStatus = unwrapCommandPayload(
+        await ctx.transport.command('maintenance_new_work_hold_status', {
+            meshId: ctx.mesh.id,
+            autoExtend: false,
+        }).catch(() => null),
+    ) as { held?: boolean; hold?: Parameters<typeof buildNewWorkHeldRefusal>[0] } | null;
+    if (daemonHoldStatus?.held && daemonHoldStatus.hold) {
+        return JSON.stringify({
+            ...buildNewWorkHeldRefusal(daemonHoldStatus.hold, {
+                command: 'mesh_send_task',
+                surface: 'mcp_send_task',
+            }),
+            dispatched: false,
+            nodeId: args.node_id,
+            ...(args.session_id ? { sessionId: args.session_id } : {}),
+            taskMode: req.taskMode,
+            ...req.deliveryModeWarning,
+        });
+    }
     const node = await findNodeWithRefresh(ctx, args.node_id);
     const nodeRefusal = checkSendTaskNodeGates(ctx, node, args, req);
     if (nodeRefusal) return nodeRefusal;

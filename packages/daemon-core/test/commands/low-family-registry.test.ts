@@ -17,6 +17,7 @@ import { workerMailboxHandlers } from '../../src/commands/low-family/worker-mail
 import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-peer-context.js'
 import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
+import { maintenanceHoldSpecs } from '../../src/commands/low-family/maintenance-hold.js'
 import { cooperativeMaintenanceSpecs } from '../../src/commands/low-family/cooperative-maintenance.js'
 
 // RF-ROUTER LOW family: the command registry must carry exactly the low-family
@@ -121,14 +122,27 @@ const COOPERATIVE_MAINTENANCE_CMDS = [
   'cooperative_maintenance_status',
 ]
 
+const NEW_WORK_HOLD_CMDS = [
+  'maintenance_new_work_hold_set',
+  'maintenance_new_work_hold_extend',
+  'maintenance_new_work_hold_release',
+  'maintenance_new_work_hold_status',
+  'maintenance_new_work_hold',
+  'new_work_hold_set',
+  'new_work_hold_extend',
+  'new_work_hold_release',
+  'new_work_hold_status',
+  'new_work_hold',
+]
+
 describe('low-family registry', () => {
-  it('registers all 99 LOW family commands once, no overlap', () => {
+  it('registers all 109 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
-      ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS,
+      ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
@@ -141,8 +155,8 @@ describe('low-family registry', () => {
     // − list_coordinator_prompts − write_coordinator_prompt (coordinator-prompts/
     // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85; strict B adds six = 91;
     // + 7 cooperative-maintenance actor/collection commands (rc13 cooperative
-    // old-entry drain, 2026-10-14) + queue_revise = 99.
-    expect(all).toHaveLength(99)
+    // old-entry drain, 2026-10-14) + queue_revise + 10 hold commands/aliases = 109.
+    expect(all).toHaveLength(109)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -164,6 +178,7 @@ describe('low-family registry', () => {
     expect(Object.keys(workerPeerContextHandlers)).toEqual(WORKER_PEER_CONTEXT_CMDS)
     expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
     expect(Object.keys(turnLedgerIpcHandlers)).toEqual(TURN_LEDGER_IPC_CMDS)
+    expect(maintenanceHoldSpecs.map(spec => spec.name)).toEqual(NEW_WORK_HOLD_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -188,7 +203,7 @@ describe('low-family registry', () => {
       // cooperative-maintenance.ts exports the already-built spec ARRAY
       // (defineCommandSpecs returns CommandSpec[]), not a name→handler map, so
       // its names come off .name rather than Object.keys.
-      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name))
+      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name))
 
     expect(new Set(union).size).toBe(union.length)
     expect(lowFamilyNames().sort()).toEqual([...union].sort())

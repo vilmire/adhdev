@@ -34,6 +34,15 @@ function fixture(sendMessage = vi.fn(async (): Promise<any> => ({ status: 'deliv
 }
 
 describe('send_chat image ledger acknowledgement', () => {
+  it('delivers image input when the instance has no getState or settings', async () => {
+    const { instance, send, sendMessage } = fixture()
+    instance.getState = undefined
+    expect(instance.settings).toBeUndefined()
+    await expect(send()).resolves.toMatchObject({ success: true, sent: true, submitted: true })
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(instance.runtimeMessages).toHaveLength(1)
+  })
+
   it('appends a delivered image to both ledgers', async () => {
     const { instance, send } = fixture()
     await send()

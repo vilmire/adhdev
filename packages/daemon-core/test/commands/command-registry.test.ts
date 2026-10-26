@@ -249,6 +249,17 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'cooperative_maintenance_mcp_poll', 'cooperative_maintenance_mcp_reply',
     'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe',
     'cooperative_maintenance_status',
+    // Intentional hold commands and their compatibility aliases.
+    'maintenance_new_work_hold_set',
+    'maintenance_new_work_hold_extend',
+    'maintenance_new_work_hold_release',
+    'maintenance_new_work_hold_status',
+    'maintenance_new_work_hold',
+    'new_work_hold_set',
+    'new_work_hold_extend',
+    'new_work_hold_release',
+    'new_work_hold_status',
+    'new_work_hold',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */

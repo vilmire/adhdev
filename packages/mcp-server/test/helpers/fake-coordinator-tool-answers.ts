@@ -15,7 +15,7 @@
  * fake that never heard of these commands still answers them. A fake that
  * answers them itself (e.g. a test counting daemon calls) is left alone.
  */
-import { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes } from '@adhdev/daemon-core';
+import { composeMeshStatusView, decideDispatchRoute, decideNodeRoutes, evaluateNewWorkHold } from '@adhdev/daemon-core';
 
 type CommandFn = (command: string, args?: Record<string, unknown>) => Promise<any>;
 
@@ -97,6 +97,13 @@ export function withFakeCoordinatorToolAnswers(inner: CommandFn, owner?: any): C
             const routes = fakeNodeRoutes(args as any);
             if (!routes) return { success: false, error: 'the fake cannot say which daemon it is' };
             return { success: true, meshId: args.meshId, routes };
+        }
+        if (command === 'maintenance_new_work_hold_status') {
+            if ((inner as any).answersMaintenanceHold === true) return inner(command, args);
+            return evaluateNewWorkHold({
+                meshId: typeof args.meshId === 'string' ? args.meshId : null,
+                autoExtend: false,
+            });
         }
         if (command === 'mesh_dispatch_route') {
             const own = await inner(command, args).catch(() => undefined);

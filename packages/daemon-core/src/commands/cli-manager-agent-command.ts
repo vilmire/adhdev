@@ -20,7 +20,7 @@ import { LOG } from '../logging/logger.js';
 import { dispatchMessageId } from '../mesh/mesh-queue-dispatch-evidence.js';
 import { evaluateMeshStopTaskScope } from './mesh-stop-task-scope.js';
 import {
-    mintLegacyMessageId, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy,
+    mintLegacyMessageId, preserveTrustedOwnerIngress, readMeshContext, readMessageId, readOutboundOrigin, readSendPolicy,
     type AgentCommandArgs,
 } from './command-args.js';
 import type { DaemonCliManager } from './cli-manager.js';
@@ -113,8 +113,9 @@ function meshSubmitResult(outcome: SubmitOutcome, sessionKey: string): CommandRe
             LOG.warn('MeshDispatch', `Suppressed duplicate submission on session ${sessionKey}: messageId ${outcome.of} was already submitted — not re-injecting`);
             return { success: true, status: 'generating', duplicateSuppressed: true, messageId: outcome.of };
         case 'refused': {
-            const error = new Error(outcome.message || `send refused: ${outcome.reason}`) as Error & { reason?: string; restored?: boolean };
+            const error = new Error(outcome.message || `send refused: ${outcome.reason}`) as Error & { reason?: string; code?: string; restored?: boolean };
             error.reason = outcome.reason;
+            if (outcome.reason === 'new_work_held') error.code = 'new_work_held';
             if (outcome.restored !== undefined) error.restored = outcome.restored;
             throw error;
         }
@@ -227,7 +228,7 @@ async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, 
         ?? (meshTaskId ? dispatchMessageId({ id: meshTaskId, ...(typeof meshContext?.dispatchNonce === 'number' ? { dispatchNonce: meshContext.dispatchNonce } : {}) }) : undefined)
         ?? mintLegacyMessageId();
     LOG.info('MeshDispatch', `agent_command send_chat on session ${key}${meshTaskId ? ` task=${meshTaskId}` : ''} messageId=${messageId} policy=${policy.mode} dispatchSource=${dispatchSource}`);
-    const outcome = await host.input.submit({
+    const outcome = await host.input.submit(preserveTrustedOwnerIngress(args, {
         messageId,
         sessionId: key,
         input,
@@ -235,7 +236,8 @@ async function agentSendChat(host: CliAgentCommandHost, args: AgentCommandArgs, 
         policy,
         createdAt: Date.now(),
         ...(typeof meshContext?.attemptId === 'string' && meshContext.attemptId ? { meshAttemptRef: meshContext.attemptId } : {}),
-    });
+        ...(meshTaskId ? { meshTaskId } : {}),
+    }));
     return meshSubmitResult(outcome, key);
 }
 

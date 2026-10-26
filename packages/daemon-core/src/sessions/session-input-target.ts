@@ -41,6 +41,8 @@ export interface SessionInputAdapterLike {
 
 /** The instance surface the projection reads. */
 export interface SessionInputInstanceLike {
+    settings?: Record<string, unknown>;
+    getState?(): { settings?: Record<string, unknown> } | undefined;
     recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string, receipt?: OutgoingReceipt): void;
     reportSubmitUnconfirmed?(messageId: string, firstWrittenAt: number): boolean;
     confirmSubmitConsumption?(sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<'consumed' | 'not_consumed' | 'unknown'>;
@@ -101,6 +103,15 @@ export function buildSessionInputTarget(args: {
     if (typeof adapter.restoreQueuedSend === 'function') target.restoreQueuedSend = (c) => adapter.restoreQueuedSend!(c);
     if (typeof adapter.reserveDrain === 'function') target.reserveDrain = (ms) => adapter.reserveDrain!(ms);
     if (typeof adapter.releaseDrain === 'function') target.releaseDrain = () => adapter.releaseDrain!();
+    target.getSessionSettings = () => {
+        // CLI settings are already available without projecting provider status.
+        // Detached/partial instances may have no state yet, or their projection
+        // may require fields that are not initialized. That means no mesh scope;
+        // daemon-wide holds are still evaluated by the input service.
+        if (instance?.settings) return instance.settings;
+        try { return instance?.getState?.()?.settings; }
+        catch { return undefined; }
+    };
     if (instance && typeof instance.recordAcknowledgedUserInput === 'function') {
         target.recordAcknowledgedUserInput = (input, sourceMessageId, receipt) => instance.recordAcknowledgedUserInput!(toInputEnvelope(input), sourceMessageId, receipt);
     }

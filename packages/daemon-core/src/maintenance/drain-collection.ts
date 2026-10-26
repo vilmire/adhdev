@@ -12,6 +12,7 @@ import {authorizeMaintenanceCollection,type ActorObservationChallenge} from './a
 import {collectLifecycleSource} from './lifecycle-source-inventory.js';
 import {collectMcpInventories} from './mcp-collection.js';
 import {withMaintenanceObservation,MAINTENANCE_BOOT_NONCE,type CooperativeMaintenance} from './cooperative-gate.js';
+import {isNewWorkHeld,TERMINAL_MESH_QUEUE_STATUSES} from './new-work-hold.js';
 export const MAINTENANCE_DRAIN_CHANNELS=['runnableQueue','claims','launches','submits','attempts','corrections','livenessHolds','reportOutboxes','progressOutboxes','unreadableOutboxes','temporaryOutboxes','memoryOnlyOutboxes','coordinatorNotices','pendingNotifications','adapterOutbound','adapterSubmit','turnEvents','deferredLifecycle','refineJobs'] as const;
 export const MAINTENANCE_BLACKOUT_SOURCES=['queue','autoLaunch','direct','sessionInput','nativeOwnerInput','deferredLifecycle','reconnect','newMembership'] as const;
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
@@ -34,8 +35,10 @@ function census(components:DaemonComponents,state:CooperativeMaintenance,root:st
     const scoped=(rows:any[])=>rows.some(r=>r.mesh_id&&!state.meshIds.includes(r.mesh_id))?'unenrolled_mesh_work':undefined;
     read(['runnableQueue','claims'],'MeshRuntimeStore.db/mesh_queue',()=>{
         const rows=sql('SELECT id,mesh_id,status,assigned_node_id,assigned_session_id,updated_at FROM mesh_queue ORDER BY id');
-        const pending=rows.filter(r=>!['done','failed','cancelled'].includes(r.status));
-        set('runnableQueue','mesh_queue',rows,pending,scoped(pending));set('claims','mesh_queue/assigned',rows,rows.filter(r=>r.status==='assigned'),scoped(pending));
+        const nonTerminal=rows.filter(r=>!(TERMINAL_MESH_QUEUE_STATUSES as readonly string[]).includes(r.status));
+        const activeClaims=rows.filter(r=>r.status==='assigned'),heldPendingQueue=rows.filter(r=>r.status==='pending');
+        const pending=isNewWorkHeld()?activeClaims:nonTerminal;
+        set('runnableQueue','mesh_queue',rows,pending,scoped(nonTerminal));channels.runnableQueue.evidence={heldPendingQueue,activeClaims};set('claims','mesh_queue/assigned',rows,activeClaims,scoped(nonTerminal));
     });
     read(['attempts','corrections','livenessHolds','turnEvents','coordinatorNotices','pendingNotifications'],'TurnLedger.store.db',()=>{
         revision=db!.prepare('SELECT total_changes() AS revision').get();

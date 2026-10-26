@@ -14,6 +14,7 @@ import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
  * modules; the class keeps the delegating method.
  */
 import { bridgeDispatchFrozen } from './worker-bridge.js';
+import { evaluateNewWorkHold, formatNewWorkHeldToken, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 import { LOG } from '../logging/logger.js';
 import { nodeSatisfiesRequiredTags, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank } from './mesh-work-queue.js';
 import { taskIsParked } from './mesh-task-parking.js';
@@ -154,6 +155,15 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             }
             return null;
         };
+        const activeHold = evaluateNewWorkHold({ meshId });
+        if (activeHold.held) {
+            return refuse(NEW_WORK_HELD_CODE, formatNewWorkHeldToken({
+                holdId: activeHold.hold.holdId || 'active',
+                revision: activeHold.hold.revision,
+                expiresAt: activeHold.hold.expiresAt || 0,
+                phase: activeHold.hold.phase,
+            }));
+        }
         // A session executes one task at a time regardless of mode — block early.
         // The node-level conflict is evaluated per-candidate below so that
         // read-only (live_debug_readonly) tasks can claim concurrently on a node

@@ -33,7 +33,9 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }));
 
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
+import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, claimNextTask, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
+import { setNewWorkHold, releaseNewWorkHold, resetNewWorkHoldForTests } from '../../src/maintenance/new-work-hold.js';
+import type { MeshClaimRefusal } from '../../src/mesh/mesh-claim-refusal.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { dispatchMessageId } from '../../src/mesh/mesh-queue-dispatch-evidence.js';
 import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
@@ -42,6 +44,7 @@ import { T0, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
+    resetNewWorkHoldForTests();
     __resetMeshRuntimeStoreForTests();
     try { fs.rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
@@ -59,7 +62,8 @@ function setup() {
     const ports = recordingPorts();
     const baseCancel = ports.cancelDispatch;
     ports.cancelDispatch = (r) => { baseCancel?.(r); return { ...r, success: true, quiescent: true, incarnation: 'fixture-native-writer' }; };
-    const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => T0 + 10_000, publisher: fakePublisher(), ports: { bus: ports.bus, cancelDispatch: ports.cancelDispatch } });
+    let nowMs = T0 + 10_000;
+    const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => nowMs, publisher: fakePublisher(), ports: { bus: ports.bus, cancelDispatch: ports.cancelDispatch } });
     const nonce = store.findQueueEntryById(mesh, task.id)!.dispatchNonce ?? 0;
     const messageId = dispatchMessageId({ id: task.id, dispatchNonce: nonce });
     const ref = { attemptRef: { attemptId: `att-${task.id}`, generation: 0 }, taskId: task.id };
@@ -72,7 +76,7 @@ function setup() {
         settings: { meshNodeFor: mesh, meshActiveTaskId: task.id, meshActiveDispatchNonce: nonce, meshActiveAttemptId: ref.attemptRef.attemptId, meshActiveAttemptGeneration: 0 } as Record<string, any>,
         turnEvidencePort: createTurnEvidencePort({ observe: (e) => { ledger.observe(e); }, selfDaemonId: 'dc', confirmConsumption: async () => consumption.check }),
     };
-    return { mesh, task, store, ledger, ref, ports, nonce, messageId, host, firstWrittenAt: Date.now() - 1_000 };
+    return { mesh, task, store, ledger, ref, ports, nonce, messageId, host, firstWrittenAt: Date.now() - 1_000, advanceTo: (at: number) => { nowMs = at; } };
 }
 
 describe('submit unconfirmed → dispatch_failed → R24 reclaim under a new nonce', () => {
@@ -119,6 +123,32 @@ describe('submit unconfirmed → dispatch_failed → R24 reclaim under a new non
             expect(fUnknown.ports.calls.filter((c) => c.startsWith('cancel:'))).toEqual([]);
         } finally {
             __clearMeshQueueForTests(fUnknown.mesh);
+        }
+    });
+
+    it('keeps a quarantined dispatch retry pending under a hold after verified writer-stop recovery', async () => {
+        const f = setup();
+        try {
+            consumption.check = 'unknown';
+            expect(reportMeshSubmitUnconfirmed(f.host, f.messageId, f.firstWrittenAt)).toBe(true);
+            await flush();
+            expect(f.ports.calls.filter(c => c.startsWith('cancel:'))).toEqual([]);
+            expect(setNewWorkHold({ holdId: 'quarantine-retry', meshId: f.mesh }).success).toBe(true);
+            for (let i = 0; i < 3 && f.store.findQueueEntryById(f.mesh, f.task.id)!.status === 'assigned'; i++) {
+                f.advanceTo(f.ledger.nextHoldDeadline()! + 1);
+                f.ledger.sweepExpiredHolds();
+                await flush();
+            }
+            expect(f.ports.calls).toContain('cancel:s1:g0');
+            expect(f.store.findQueueEntryById(f.mesh, f.task.id)).toMatchObject({ status: 'pending', dispatchNonce: f.nonce + 1 });
+            const refusal: MeshClaimRefusal = {};
+            expect(claimNextTask(f.mesh, 'n2', 's2', [], { outRefusal: refusal })).toBeNull();
+            expect(refusal.reason).toBe('new_work_held');
+            expect(f.store.findQueueEntryById(f.mesh, f.task.id)!.status).toBe('pending');
+            expect(releaseNewWorkHold({ holdId: 'quarantine-retry' }).success).toBe(true);
+        } finally {
+            releaseNewWorkHold({ holdId: 'quarantine-retry' });
+            __clearMeshQueueForTests(f.mesh);
         }
     });
 

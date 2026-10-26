@@ -1,3 +1,4 @@
+import { startNewWorkHoldLifecycle } from '../../maintenance/new-work-hold.js';
 import { maintenanceHeld, readCooperativeMaintenance, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S8 startLoops — start everything that ticks, now that every subscriber is
@@ -306,6 +307,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // Turn lifecycle timer + mesh housekeeping + auto-ff cadence (C4). Started
     // before hosted-session restore: a restored session's `registered` edge and
     // any hold that expired while the daemon was down are both just a tick.
+    const stopNewWorkHold = startNewWorkHoldLifecycle(components);
     startTurnLoops(components as TurnWiredComponents);
 
     let disposed = false;
@@ -361,6 +363,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         s7.poller.stop();
         try { s7.instanceManager.stopTicking(); } catch { /* noop */ }
         s7.cdpInitializer.stop();
+        stopNewWorkHold();
         stopTurnLoops(components as TurnWiredComponents);
         try { s7.router.meshNodeStatePusher.stop(); } catch { /* noop */ }
         try { s7.router.localMeshNodeGitWatch.stop(); } catch { /* noop */ }
