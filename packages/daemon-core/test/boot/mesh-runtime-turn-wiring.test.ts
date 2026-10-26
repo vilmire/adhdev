@@ -38,7 +38,7 @@ import { parsePosixPsOutput, type ProcessNodeInfo } from '../../src/process/sess
 import type { TurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
 import { LOG } from '../../src/logging/logger.js';
 import { reportMeshSubmitUnconfirmed } from '../../src/providers/cli-provider-mesh-assignment.js';
-import { confirmLocalConsumption } from '../../src/boot/stages/mesh-runtime.js';
+import { confirmLocalConsumption, getProviderConsumptionCapability, PROVIDER_CONSUMPTION_CAPABILITIES } from '../../src/boot/stages/mesh-runtime.js';
 
 afterEach(() => {
     __setSharedProcessTableSourceForTests(null);
@@ -70,9 +70,23 @@ const baseEvidence = { at: 1_000, source: 'fsm_edge', observedBy: 'daemon_wiring
 describe('wireTurnLedger — S7 wiring', () => {
     it('review d75636d6 F4: a proven submit_unconfirmed reclaim through the REAL boot ports hard-stops the worker session — it is never reused with a revoked bind', async () => {
         const { components, portCalls } = fakeComponents({});
+        const firstWrittenAt = Date.now() - 35_590;
         components.cliManager.adapters = new Map([['s1', { cliType: 'antigravity-cli' }]]);
         components.cliManager.stopCli = vi.fn(async (args: any) => ({ ...(args?.meshWriterStop ?? {}), success: true, quiescent: true, incarnation: 'fixture-native-writer' }));
-        components.commandHandler = { handle: vi.fn(async () => ({ success: true, status: 'idle', messages: [{ role: 'user', content: 'TASK', timestamp: Date.now() - 30_000 }] })) };
+        components.commandHandler = {
+            handle: vi.fn(async () => ({
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: 'agy-session-f4',
+                messageSource: { selected: 'native-history', providerType: 'antigravity-cli', identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+                messages: [
+                    { role: 'user', content: 'PRIOR TASK', timestamp: firstWrittenAt - 60_000 },
+                    { role: 'assistant', content: 'prior answer', timestamp: firstWrittenAt - 50_000 },
+                ],
+            })),
+        };
         const wiring = wireTurnLedger(components, { runMigration: false });
         try {
             const ref = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: 't1' };
@@ -80,7 +94,7 @@ describe('wireTurnLedger — S7 wiring', () => {
             wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: 'task:t1:n0', meshId: 'm1', nodeId: 'n1', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
             wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: 'task:t1:n0', outcome: 'delivered', via: 'local' } as any);
             const host = { instanceId: 's1', settings: { meshActiveTaskId: 't1', meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a1', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
-            expect(reportMeshSubmitUnconfirmed(host, 'task:t1:n0', Date.now() - 35_590)).toBe(true);
+            expect(reportMeshSubmitUnconfirmed(host, 'task:t1:n0', firstWrittenAt)).toBe(true);
             for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
             expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
             expect(components.cliManager.stopCli).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 's1', mode: 'hard' }));
@@ -99,11 +113,145 @@ describe('wireTurnLedger — S7 wiring', () => {
         expect(await confirmLocalConsumption(components, 's1', Date.now() - 10_000)).toBe('unknown');
     });
 
-    it('review R5-1: a user row alone (the prompt echoed back) is not consumption', async () => {
+    it('review R5-1 / R10: a user row alone (the prompt echoed back) is `unknown` — neither `consumed` nor `not_consumed`', async () => {
         const { components } = fakeComponents({});
         const since = Date.now() - 10_000;
         components.commandHandler = { handle: vi.fn(async () => ({ success: true, messages: [{ role: 'user', content: 'TASK', timestamp: since + 1_000 }] })) };
-        expect(await confirmLocalConsumption(components, 's1', since)).toBe('not_consumed');
+        expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+    });
+
+    describe('R10 per-provider consumption capability matrix (all 7 CLI providers)', () => {
+        const ALL_PROVIDERS = ['codex-cli', 'claude-cli', 'antigravity-cli', 'grok-cli', 'cursor-cli', 'kimi', 'opencode'] as const;
+        const CAPABLE_PROVIDERS = ['codex-cli', 'claude-cli', 'antigravity-cli', 'kimi'] as const;
+        const INCAPABLE_PROVIDERS = ['grok-cli', 'cursor-cli', 'opencode'] as const;
+
+        it('defines explicit capabilities for all 7 CLI providers and rejects unknown providers', () => {
+            expect(Object.keys(PROVIDER_CONSUMPTION_CAPABILITIES).sort()).toEqual([...ALL_PROVIDERS].sort());
+            for (const p of CAPABLE_PROVIDERS) {
+                expect(getProviderConsumptionCapability(p)?.canProveNonConsumption).toBe(true);
+            }
+            for (const p of INCAPABLE_PROVIDERS) {
+                expect(getProviderConsumptionCapability(p)?.canProveNonConsumption).toBe(false);
+            }
+            expect(getProviderConsumptionCapability('unknown-cli')).toBeNull();
+        });
+
+        it.each(ALL_PROVIDERS)('provider %s returns `unknown` for empty, stale/loading-empty, and user-only transcripts', async (provider) => {
+            const { components } = fakeComponents({});
+            components.cliManager.adapters = new Map([['s1', { cliType: provider }]]);
+            const since = Date.now() - 10_000;
+            const authoritativeMeta = {
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: `${provider}-sess-1`,
+                messageSource: { selected: 'native-history', providerType: provider, identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+                turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior' }],
+            };
+
+            // 1. Empty transcript
+            components.commandHandler = { handle: vi.fn(async () => ({ ...authoritativeMeta, messages: [] })) };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+
+            // 2. Stale / native_history_loading empty transcript
+            components.commandHandler = { handle: vi.fn(async () => ({ ...authoritativeMeta, messages: [], stale: true, unavailableReason: 'native_history_loading' })) };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+
+            // 3. Stale non-empty transcript
+            components.commandHandler = {
+                handle: vi.fn(async () => ({
+                    ...authoritativeMeta,
+                    stale: true,
+                    messages: [
+                        { role: 'user', content: 'old prompt', timestamp: since - 50_000 },
+                        { role: 'assistant', content: 'old answer', timestamp: since - 40_000 },
+                    ],
+                })),
+            };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+
+            // 4. User-only transcript (after sinceMs and before sinceMs)
+            components.commandHandler = { handle: vi.fn(async () => ({ ...authoritativeMeta, messages: [{ role: 'user', content: 'TASK', timestamp: since + 1_000 }] })) };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+            components.commandHandler = { handle: vi.fn(async () => ({ ...authoritativeMeta, messages: [{ role: 'user', content: 'TASK', timestamp: since - 1_000 }] })) };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+
+            // 5. Missing native source / pty-parser fallback / incomplete tail
+            components.commandHandler = {
+                handle: vi.fn(async () => ({
+                    ...authoritativeMeta,
+                    messageSource: { selected: 'pty-parser', fallbackReason: 'native_history_empty', coverage: { safeMapping: false } },
+                    messages: [
+                        { role: 'user', content: 'old prompt', timestamp: since - 50_000 },
+                        { role: 'assistant', content: 'old answer', timestamp: since - 40_000 },
+                    ],
+                })),
+            };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+        });
+
+        it.each(CAPABLE_PROVIDERS)('capable provider %s returns `not_consumed` ONLY under an authoritative complete native transcript with a settled prior turn before sinceMs and no matching user turn', async (provider) => {
+            const { components } = fakeComponents({});
+            components.cliManager.adapters = new Map([['s1', { cliType: provider }]]);
+            const since = Date.now() - 10_000;
+            const basePayload = {
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: `${provider}-sess-ok`,
+                messageSource: { selected: 'native-history', providerType: provider, identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+                messages: [
+                    { role: 'user', content: 'prior prompt', timestamp: since - 50_000 },
+                    { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                ],
+                turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
+            };
+            components.commandHandler = { handle: vi.fn(async () => basePayload) };
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('not_consumed');
+
+            // If our expectedText is already present in a user message, never return not_consumed.
+            components.commandHandler = {
+                handle: vi.fn(async () => ({
+                    ...basePayload,
+                    messages: [
+                        { role: 'user', content: 'NEW TASK BODY', timestamp: since - 50_000 },
+                        { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                    ],
+                })),
+            };
+            expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t1:n0', expectedText: 'NEW TASK BODY' })).toBe('unknown');
+
+            // Providers requiring turnTerminalMarkers (codex-cli, kimi) return unknown if markers are absent.
+            if (getProviderConsumptionCapability(provider)?.requiresTurnTerminalMarkers) {
+                const { turnTerminalMarkers: _drop, ...withoutMarkers } = basePayload;
+                components.commandHandler = { handle: vi.fn(async () => withoutMarkers) };
+                expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+            }
+        });
+
+        it.each(INCAPABLE_PROVIDERS)('incapable provider %s never returns `not_consumed` (falls back to `unknown` even with a full native-history payload)', async (provider) => {
+            const { components } = fakeComponents({});
+            components.cliManager.adapters = new Map([['s1', { cliType: provider }]]);
+            const since = Date.now() - 10_000;
+            components.commandHandler = {
+                handle: vi.fn(async () => ({
+                    success: true,
+                    status: 'idle',
+                    transcriptAuthority: 'provider',
+                    coverage: 'full',
+                    providerSessionId: `${provider}-sess-1`,
+                    messageSource: { selected: 'native-history', providerType: provider, identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+                    messages: [
+                        { role: 'user', content: 'prior prompt', timestamp: since - 50_000 },
+                        { role: 'assistant', content: 'prior reply', timestamp: since - 40_000 },
+                    ],
+                    turnTerminalMarkers: [{ receivedAt: since - 40_000, outcome: 'completed', summary: 'prior reply' }],
+                })),
+            };
+            expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
+        });
     });
 
     it('review f8c79690 R4-1 (reviewer R4_CONSUMED): the agent started at +20 s but the FSM never noticed — the +35.59 s report re-reads the transcript since the FIRST write, reports turn_started, and nothing is stopped or requeued', async () => {

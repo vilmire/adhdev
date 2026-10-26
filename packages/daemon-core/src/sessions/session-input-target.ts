@@ -28,7 +28,7 @@ export interface SessionInputAdapterLike {
     cliType: string;
     getStatus?(options?: { allowParse?: boolean }): { status?: string } | undefined;
     observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
-    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
+    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
     sendMessage(text: string, options?: { bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position?: number } | { status: 'delivered' } | void>;
     sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean, messageId?: string): { accepted: boolean; reason?: string };
     interruptTurn?: SessionInputTarget['interruptTurn'];
@@ -43,7 +43,7 @@ export interface SessionInputAdapterLike {
 export interface SessionInputInstanceLike {
     recordAcknowledgedUserInput?(input: InputEnvelope | string, sourceMessageId?: string, receipt?: OutgoingReceipt): void;
     reportSubmitUnconfirmed?(messageId: string, firstWrittenAt: number): boolean;
-    confirmSubmitConsumption?(sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'>;
+    confirmSubmitConsumption?(sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<'consumed' | 'not_consumed' | 'unknown'>;
     canReportSubmitVerdict?(messageId: string, attemptRef: string): boolean;
 }
 
@@ -94,7 +94,7 @@ export function buildSessionInputTarget(args: {
     if (typeof adapter.observeSendWrite === 'function') target.observeSendWrite = (id, observer) => adapter.observeSendWrite!(id, observer);
     if (typeof adapter.observeSubmitUnconfirmed === 'function') target.observeSubmitUnconfirmed = (id, observer, confirmConsumption) => adapter.observeSubmitUnconfirmed!(id, observer, confirmConsumption);
     if (instance && typeof instance.reportSubmitUnconfirmed === 'function') target.reportSubmitUnconfirmed = (id, firstWrittenAt) => instance.reportSubmitUnconfirmed!(id, firstWrittenAt);
-    if (instance && typeof instance.confirmSubmitConsumption === 'function') target.confirmSubmitConsumption = (sinceMs) => instance.confirmSubmitConsumption!(sinceMs);
+    if (instance && typeof instance.confirmSubmitConsumption === 'function') target.confirmSubmitConsumption = (sinceMs, opts) => instance.confirmSubmitConsumption!(sinceMs, opts);
     if (instance && typeof instance.canReportSubmitVerdict === 'function') target.canReportSubmitVerdict = (id, ref) => instance.canReportSubmitVerdict!(id, ref);
     if (typeof adapter.hasQueuedSend === 'function') target.hasQueuedSend = (id) => adapter.hasQueuedSend!(id);
     if (typeof adapter.claimQueuedSend === 'function') target.claimQueuedSend = (id) => adapter.claimQueuedSend!(id);

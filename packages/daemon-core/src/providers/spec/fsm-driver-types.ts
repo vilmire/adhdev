@@ -131,7 +131,7 @@ export interface ISpecDriver {
      * body stayed the whole input row at an idle FSM (submit-verdict.ts); the
      * composer has been cleared. Registering opts the send in. Optional (test doubles).
      */
-    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
+    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
     /** SUBMIT-UNCONFIRMED-RECLAIM: what the engine knows about that send (see SubmitState). */
     submitState?(messageId: string): SubmitState;
     sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition;

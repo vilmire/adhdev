@@ -104045,7 +104045,7 @@ ${detail.join("\n")}` : stripped;
             const probe = this.consumptionProbe ?? this.host.confirmConsumption;
             if (!probe) return "unknown";
             try {
-              const check = await probe(send.firstWrittenAt);
+              const check = await probe(send.firstWrittenAt, { ...send.messageId ? { messageId: send.messageId } : {}, expectedText: send.text });
               if (check === "not_consumed") return "absent";
               if (check === "consumed") return "present";
               return "unknown";
@@ -127729,6 +127729,7 @@ ${tail}` : ""
           };
           return out;
         };
+        registerProbeTranscriptAnalyzer(analyzeProbeTranscript);
       }
     });
     function assembleDaemonComponents(s6) {
@@ -128075,7 +128076,7 @@ ${tail}` : ""
         // R9r: a live worker-MCP bind ⇒ the worker can report, so its idle end
         // awaits the report instead of committing (stamped on THIS daemon).
         reportExpectedFor: (sessionId) => hasLiveWorkerSessionBind(sessionId),
-        confirmConsumption: (sessionId, sinceMs) => confirmLocalConsumption(components, sessionId, sinceMs),
+        confirmConsumption: (sessionId, sinceMs, opts) => confirmLocalConsumption(components, sessionId, sinceMs, opts),
         attemptRefFor: (sessionId) => {
           const attempt = ledger.openAttemptForSession(sessionId);
           return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -128088,25 +128089,95 @@ ${tail}` : ""
       components.instanceManager.setTurnEvidencePort(port);
       return () => components.instanceManager.setTurnEvidencePort(null);
     }
-    async function confirmLocalConsumption(components, sessionId, sinceMs) {
+    function getProviderConsumptionCapability(providerType) {
+      if (!providerType || typeof providerType !== "string") return null;
+      return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
+    }
+    function hasAuthoritativeNonConsumptionProof(payload, ms3, observed2, providerType, sinceMs, opts) {
+      const capability = getProviderConsumptionCapability(providerType);
+      if (!capability || !capability.canProveNonConsumption) return false;
+      if (payload.stale === true || observed2.stale === true) return false;
+      if (typeof payload.unavailableReason === "string" && payload.unavailableReason.trim().length > 0) return false;
+      if (typeof observed2.unavailableReason === "string" && observed2.unavailableReason.trim().length > 0) return false;
+      if (observed2.activeModal) return false;
+      const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
+      if (status !== "idle" || observed2.providerObservedStatus && observed2.providerObservedStatus !== "idle") return false;
+      if (payload.transcriptAuthority !== "provider" || payload.coverage !== "full") return false;
+      const providerSessionId = typeof payload.providerSessionId === "string" ? payload.providerSessionId.trim() : "";
+      if (!providerSessionId) return false;
+      if (!ms3 || ms3.selected !== "native-history") return false;
+      if (typeof ms3.fallbackReason === "string" && ms3.fallbackReason.trim().length > 0) return false;
+      if (typeof ms3.unavailableReason === "string" && ms3.unavailableReason.trim().length > 0) return false;
+      if (typeof ms3.partialReason === "string" && ms3.partialReason.trim().length > 0) return false;
+      if (ms3.nativeSource && ms3.nativeSource !== "provider-native") return false;
+      if (ms3.nativeHistoryCoverage && ms3.nativeHistoryCoverage !== "full") return false;
+      if (ms3.identityStatus && ms3.identityStatus !== "safe") return false;
+      if (ms3.coverage?.safeMapping !== true) return false;
+      if (ms3.staleness?.freshEnough === false) return false;
+      const messages = payload.messages;
+      if (messages.length === 0) return false;
+      if (typeof payload.totalMessages === "number" && payload.totalMessages > messages.length) return false;
+      const expectedId = opts?.messageId?.trim() || "";
+      const expectedBody = opts?.expectedText?.trim() || "";
+      let hasCompletedPriorAssistant = false;
+      for (const msg of messages) {
+        if (!msg || typeof msg !== "object") return false;
+        const ts2 = readChatMessageTimestampMs(msg);
+        if (typeof ts2 !== "number" || !Number.isFinite(ts2) || ts2 <= 0 || ts2 >= sinceMs) return false;
+        const role = typeof msg.role === "string" ? msg.role.trim().toLowerCase() : "";
+        const msgId = typeof msg.id === "string" ? msg.id.trim() : typeof msg.messageId === "string" ? msg.messageId.trim() : "";
+        if (expectedId && msgId && msgId === expectedId) return false;
+        if (role === "user" || role === "human") {
+          const text4 = flattenContent(msg.content).trim();
+          if (expectedBody && text4 && (text4 === expectedBody || text4.includes(expectedBody))) return false;
+        } else if (role === "assistant" || role === "model") {
+          if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
+        }
+      }
+      if (!hasCompletedPriorAssistant) return false;
+      const lastMsg = messages[messages.length - 1];
+      const lastRole = typeof lastMsg?.role === "string" ? lastMsg.role.trim().toLowerCase() : "";
+      if (lastRole === "user" || lastRole === "human") return false;
+      if (capability.requiresTurnTerminalMarkers) {
+        if (!Array.isArray(payload.turnTerminalMarkers) || payload.turnTerminalMarkers.length === 0) return false;
+        for (const raw of payload.turnTerminalMarkers) {
+          const m = raw;
+          const receivedAt = typeof m?.receivedAt === "number" ? m.receivedAt : Number.NaN;
+          if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs) return false;
+          if (typeof m?.startedAt === "number" && m.startedAt >= sinceMs) return false;
+          if (typeof m?.inputAt === "number" && m.inputAt >= sinceMs) return false;
+        }
+      }
+      return true;
+    }
+    function registerProbeTranscriptAnalyzer(fn) {
+      cachedAnalyzeProbeTranscript = fn;
+    }
+    async function confirmLocalConsumption(components, sessionId, sinceMs, opts) {
+      if (typeof sinceMs !== "number" || !Number.isFinite(sinceMs) || sinceMs <= 0) return "unknown";
       try {
-        const instance = components.instanceManager.getInstance(sessionId);
-        const providerType = typeof instance?.type === "string" ? instance.type : void 0;
+        const instance = components.instanceManager?.getInstance?.(sessionId);
+        const adapter = components.cliManager?.adapters?.get?.(sessionId);
+        const regSession = components.sessionRegistry?.get?.(sessionId);
+        const configuredProviderType = [instance?.type, adapter?.cliType, regSession?.providerType].find((v) => typeof v === "string" && v.trim().length > 0)?.trim();
         const result = await components.commandHandler.handle("read_chat", {
           sessionId,
           targetSessionId: sessionId,
-          tailLimit: 10,
           includeActivity: true,
-          ...providerType ? { agentType: providerType, providerType } : {}
+          ...configuredProviderType ? { agentType: configuredProviderType, providerType: configuredProviderType } : {}
         });
         if (!result || typeof result !== "object" || result.success === false) return "unknown";
         const payload = unwrapReadChatPayload(result);
         if (!payload || payload.success === false || !Array.isArray(payload.messages)) return "unknown";
-        const { analyzeProbeTranscript: analyzeProbeTranscript2 } = await Promise.resolve().then(() => (init_loops(), loops_exports));
+        const ms3 = payload.messageSource && typeof payload.messageSource === "object" && !Array.isArray(payload.messageSource) ? payload.messageSource : payload.transcriptProvenance && typeof payload.transcriptProvenance === "object" && !Array.isArray(payload.transcriptProvenance) ? payload.transcriptProvenance : null;
+        const providerType = configuredProviderType || typeof payload.debugReadChat?.provider === "string" && payload.debugReadChat.provider.trim() || typeof ms3?.providerType === "string" && ms3.providerType.trim() || typeof ms3?.provider === "string" && ms3.provider.trim() || void 0;
+        const analyzeProbeTranscript2 = cachedAnalyzeProbeTranscript ?? (await Promise.resolve().then(() => (init_loops(), loops_exports))).analyzeProbeTranscript;
+        cachedAnalyzeProbeTranscript = analyzeProbeTranscript2;
         const observed2 = analyzeProbeTranscript2(payload, { turnStartedAtMs: sinceMs, ...providerType ? { providerType } : {} });
         if (!observed2) return "unknown";
         const at = observed2.newestAgentActivityAt;
-        return typeof at === "number" && Number.isFinite(at) && at >= sinceMs ? "consumed" : "not_consumed";
+        if (typeof at === "number" && Number.isFinite(at) && at >= sinceMs) return "consumed";
+        return hasAuthoritativeNonConsumptionProof(payload, ms3, observed2, providerType, sinceMs, opts) ? "not_consumed" : "unknown";
       } catch {
         return "unknown";
       }
@@ -128248,6 +128319,8 @@ ${tail}` : ""
         }
       });
     }
+    var PROVIDER_CONSUMPTION_CAPABILITIES;
+    var cachedAnalyzeProbeTranscript;
     var init_mesh_runtime = __esm2({
       "src/boot/stages/mesh-runtime.ts"() {
         "use strict";
@@ -128288,6 +128361,53 @@ ${tail}` : ""
         init_dist();
         init_mesh_dispatch_redelivery();
         init_probe();
+        init_chat_message_normalization();
+        init_contracts2();
+        PROVIDER_CONSUMPTION_CAPABILITIES = {
+          "codex-cli": {
+            providerType: "codex-cli",
+            canProveNonConsumption: true,
+            requiresTurnTerminalMarkers: true,
+            reason: "JSONL rollout records per-message timestamps and native turn-terminal markers (task_complete/turn_aborted) with exact session UUID."
+          },
+          "claude-cli": {
+            providerType: "claude-cli",
+            canProveNonConsumption: true,
+            requiresTurnTerminalMarkers: false,
+            reason: "Per-session JSONL records per-message timestamps on user and assistant rows with exact session UUID."
+          },
+          "antigravity-cli": {
+            providerType: "antigravity-cli",
+            canProveNonConsumption: true,
+            requiresTurnTerminalMarkers: false,
+            reason: "Per-session SQLite conversations/<uuid>.db records step creation timestamps in protobuf metadata under full coverage."
+          },
+          "kimi": {
+            providerType: "kimi",
+            canProveNonConsumption: true,
+            requiresTurnTerminalMarkers: true,
+            reason: "Per-session wire.jsonl records epoch-ms timestamps on user/assistant messages and turn.ended terminal markers."
+          },
+          "grok-cli": {
+            providerType: "grok-cli",
+            canProveNonConsumption: false,
+            requiresTurnTerminalMarkers: false,
+            reason: "chat_history.jsonl records carry no per-message timestamps; receivedAt is synthesized from created_at and file mtime."
+          },
+          "cursor-cli": {
+            providerType: "cursor-cli",
+            canProveNonConsumption: false,
+            requiresTurnTerminalMarkers: false,
+            reason: "agent-transcripts JSONL strips timestamps (no timestamp_ms in message_map); receivedAt is synthesized from file mtime."
+          },
+          "opencode": {
+            providerType: "opencode",
+            canProveNonConsumption: false,
+            requiresTurnTerminalMarkers: false,
+            reason: "SQLite part query only projects $.type=text parts and falls back to newest session when a session has no rows."
+          }
+        };
+        cachedAnalyzeProbeTranscript = null;
       }
     });
     var index_exports2 = {};
@@ -152373,7 +152493,7 @@ ${output}` : "";
             log("warn", `submit(${msg.messageId}) submit-unconfirmed report failed: ${e?.message ?? e}`);
             return false;
           }
-        }, target.confirmSubmitConsumption ? (sinceMs) => target.confirmSubmitConsumption(sinceMs) : void 0);
+        }, target.confirmSubmitConsumption ? (sinceMs, opts2) => target.confirmSubmitConsumption(sinceMs, opts2) : void 0);
         if (receipt || noticeObserver) target.observeSendWrite?.(msg.messageId, (state2) => {
           if (noticeObserver) {
             try {
@@ -152847,7 +152967,7 @@ ${output}` : "";
       if (typeof adapter.observeSendWrite === "function") target.observeSendWrite = (id4, observer) => adapter.observeSendWrite(id4, observer);
       if (typeof adapter.observeSubmitUnconfirmed === "function") target.observeSubmitUnconfirmed = (id4, observer, confirmConsumption) => adapter.observeSubmitUnconfirmed(id4, observer, confirmConsumption);
       if (instance && typeof instance.reportSubmitUnconfirmed === "function") target.reportSubmitUnconfirmed = (id4, firstWrittenAt) => instance.reportSubmitUnconfirmed(id4, firstWrittenAt);
-      if (instance && typeof instance.confirmSubmitConsumption === "function") target.confirmSubmitConsumption = (sinceMs) => instance.confirmSubmitConsumption(sinceMs);
+      if (instance && typeof instance.confirmSubmitConsumption === "function") target.confirmSubmitConsumption = (sinceMs, opts) => instance.confirmSubmitConsumption(sinceMs, opts);
       if (instance && typeof instance.canReportSubmitVerdict === "function") target.canReportSubmitVerdict = (id4, ref2) => instance.canReportSubmitVerdict(id4, ref2);
       if (typeof adapter.hasQueuedSend === "function") target.hasQueuedSend = (id4) => adapter.hasQueuedSend(id4);
       if (typeof adapter.claimQueuedSend === "function") target.claimQueuedSend = (id4) => adapter.claimQueuedSend(id4);
@@ -156937,10 +157057,10 @@ ${output}` : "";
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
       };
       if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) {
-        fail7();
-        return true;
+        LOG.warn("MeshTaskAttach", `${tag} \u2014 consumption check unavailable; quarantining without dispatch_failed reclaim`);
+        return false;
       }
-      void port.confirmConsumption(host.instanceId, firstWrittenAt).then(
+      void port.confirmConsumption(host.instanceId, firstWrittenAt, { messageId }).then(
         (check) => check,
         () => "unknown"
       ).then((check) => {
@@ -156951,6 +157071,10 @@ ${output}` : "";
         if (check === "consumed") {
           LOG.warn("MeshTaskAttach", `${tag} \u2014 but its transcript shows agent activity since the first write: the prompt was consumed; reporting turn_started, not a failure`);
           emitTurnStarted(port, { ...envelope, retro: true });
+          return;
+        }
+        if (check !== "not_consumed") {
+          LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
           return;
         }
         fail7();
@@ -185347,10 +185471,10 @@ ${buttons.join("\n")}`;
       }
       /** SUBMIT-UNCONFIRMED-RECLAIM (review R9-3): fresh transcript read before a re-paste.
        *  No port, or a failed read, is `unknown` — not proof the turn never started. */
-      confirmSubmitConsumption(sinceMs) {
+      confirmSubmitConsumption(sinceMs, opts) {
         const read2 = this.turnEvidencePort?.confirmConsumption;
         if (typeof read2 !== "function") return Promise.resolve("unknown");
-        return Promise.resolve(read2(this.instanceId, sinceMs)).then((check) => check === "consumed" || check === "not_consumed" ? check : "unknown", () => "unknown");
+        return Promise.resolve(read2(this.instanceId, sinceMs, opts)).then((check) => check === "consumed" || check === "not_consumed" ? check : "unknown", () => "unknown");
       }
       /** SUBMIT-UNCONFIRMED-RECLAIM: the input service saw the driver give up the write under `messageId`. */
       reportSubmitUnconfirmed(messageId, firstWrittenAt) {

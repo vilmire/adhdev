@@ -287,8 +287,11 @@ export function reportMeshSubmitUnconfirmed(host: SubmitVerdictHost, messageId: 
         LOG.warn('MeshTaskAttach', `${tag} — reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ''}`);
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: 'submit_unconfirmed' });
     };
-    if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) { fail(); return true; }
-    void port.confirmConsumption(host.instanceId, firstWrittenAt).then(
+    if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) {
+        LOG.warn('MeshTaskAttach', `${tag} — consumption check unavailable; quarantining without dispatch_failed reclaim`);
+        return false;
+    }
+    void port.confirmConsumption(host.instanceId, firstWrittenAt, { messageId }).then(
         (check) => check,
         () => 'unknown' as const,
     ).then((check) => {
@@ -296,6 +299,10 @@ export function reportMeshSubmitUnconfirmed(host: SubmitVerdictHost, messageId: 
         if (check === 'consumed') {
             LOG.warn('MeshTaskAttach', `${tag} — but its transcript shows agent activity since the first write: the prompt was consumed; reporting turn_started, not a failure`);
             emitTurnStarted(port, { ...envelope, retro: true });
+            return;
+        }
+        if (check !== 'not_consumed') {
+            LOG.warn('MeshTaskAttach', `${tag} — non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
             return;
         }
         fail();

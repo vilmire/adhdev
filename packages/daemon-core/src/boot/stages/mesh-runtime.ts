@@ -83,7 +83,10 @@ import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhd
 import type { DaemonComponents } from '../daemon-components.js';
 import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
 import { redeliverDispatch } from '../../mesh/mesh-dispatch-redelivery.js';
-import { unwrapReadChatPayload } from '../../mesh/turn-ledger/probe.js';
+import { unwrapReadChatPayload, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
+import { readChatMessageTimestampMs } from '../../providers/chat-message-normalization.js';
+import { flattenContent } from '../../providers/contracts.js';
+import type { ChatMessage } from '../../types.js';
 
 /** Build the components object hosts and mesh modules consume. */
 export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents {
@@ -502,7 +505,7 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
         // R9r: a live worker-MCP bind ⇒ the worker can report, so its idle end
         // awaits the report instead of committing (stamped on THIS daemon).
         reportExpectedFor: (sessionId) => hasLiveWorkerSessionBind(sessionId),
-        confirmConsumption: (sessionId, sinceMs) => confirmLocalConsumption(components, sessionId, sinceMs),
+        confirmConsumption: (sessionId, sinceMs, opts) => confirmLocalConsumption(components, sessionId, sinceMs, opts),
         attemptRefFor: (sessionId) => {
             const attempt = ledger.openAttemptForSession(sessionId);
             return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -516,37 +519,205 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
     return () => components.instanceManager.setTurnEvidencePort(null);
 }
 
+export interface ProviderConsumptionCapability {
+    readonly providerType: string;
+    readonly canProveNonConsumption: boolean;
+    readonly requiresTurnTerminalMarkers: boolean;
+    readonly reason: string;
+}
+
 /**
- * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1): a fresh read of a LOCAL
- * session's transcript, made the way the turn ledger's delivered probe reads it
- * (in-process `read_chat` with the activity surface, analysed by the probe's own
- * analyzer). `consumed` = agent activity at or after `sinceMs`; a user row
- * alone never counts. The caller uses ONLY `consumed` (a veto on a proven
- * unconfirmed report): an absent row in a tail read is not proof of anything
- * (review R5-1), so `not_consumed` is never a license on its own. A failed
- * command, a refused read (`success: false` at any level) or a payload without
- * a message list is `unknown`.
+ * Per-provider authoritative non-consumption capability matrix (R10):
+ * - Capable (`canProveNonConsumption: true`): providers whose native store
+ *   persists user and assistant turns with real per-record timestamps and exact
+ *   session identity (`codex-cli`, `claude-cli`, `antigravity-cli`, `kimi`),
+ *   plus native turn-terminal markers where supported (`codex-cli`, `kimi`).
+ * - Incapable (`canProveNonConsumption: false`): providers whose transcripts
+ *   synthesize timestamps from file mtime (`grok-cli`, `cursor-cli`) or only
+ *   project text parts with newest-session fallback (`opencode`).
  */
-export async function confirmLocalConsumption(components: DaemonComponents, sessionId: string, sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'> {
+export const PROVIDER_CONSUMPTION_CAPABILITIES: Readonly<Record<string, ProviderConsumptionCapability>> = {
+    'codex-cli': {
+        providerType: 'codex-cli',
+        canProveNonConsumption: true,
+        requiresTurnTerminalMarkers: true,
+        reason: 'JSONL rollout records per-message timestamps and native turn-terminal markers (task_complete/turn_aborted) with exact session UUID.',
+    },
+    'claude-cli': {
+        providerType: 'claude-cli',
+        canProveNonConsumption: true,
+        requiresTurnTerminalMarkers: false,
+        reason: 'Per-session JSONL records per-message timestamps on user and assistant rows with exact session UUID.',
+    },
+    'antigravity-cli': {
+        providerType: 'antigravity-cli',
+        canProveNonConsumption: true,
+        requiresTurnTerminalMarkers: false,
+        reason: 'Per-session SQLite conversations/<uuid>.db records step creation timestamps in protobuf metadata under full coverage.',
+    },
+    'kimi': {
+        providerType: 'kimi',
+        canProveNonConsumption: true,
+        requiresTurnTerminalMarkers: true,
+        reason: 'Per-session wire.jsonl records epoch-ms timestamps on user/assistant messages and turn.ended terminal markers.',
+    },
+    'grok-cli': {
+        providerType: 'grok-cli',
+        canProveNonConsumption: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'chat_history.jsonl records carry no per-message timestamps; receivedAt is synthesized from created_at and file mtime.',
+    },
+    'cursor-cli': {
+        providerType: 'cursor-cli',
+        canProveNonConsumption: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'agent-transcripts JSONL strips timestamps (no timestamp_ms in message_map); receivedAt is synthesized from file mtime.',
+    },
+    'opencode': {
+        providerType: 'opencode',
+        canProveNonConsumption: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'SQLite part query only projects $.type=text parts and falls back to newest session when a session has no rows.',
+    },
+};
+
+export function getProviderConsumptionCapability(providerType: string | undefined): ProviderConsumptionCapability | null {
+    if (!providerType || typeof providerType !== 'string') return null;
+    return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
+}
+
+function hasAuthoritativeNonConsumptionProof(
+    payload: Record<string, unknown>,
+    ms: Record<string, any> | null,
+    observed: TranscriptObservation,
+    providerType: string | undefined,
+    sinceMs: number,
+    opts?: { messageId?: string; expectedText?: string },
+): boolean {
+    const capability = getProviderConsumptionCapability(providerType);
+    if (!capability || !capability.canProveNonConsumption) return false;
+    if (payload.stale === true || observed.stale === true) return false;
+    if (typeof payload.unavailableReason === 'string' && payload.unavailableReason.trim().length > 0) return false;
+    if (typeof observed.unavailableReason === 'string' && observed.unavailableReason.trim().length > 0) return false;
+    if (observed.activeModal) return false;
+    const status = typeof payload.status === 'string' ? payload.status.trim().toLowerCase() : '';
+    if (status !== 'idle' || (observed.providerObservedStatus && observed.providerObservedStatus !== 'idle')) return false;
+    if (payload.transcriptAuthority !== 'provider' || payload.coverage !== 'full') return false;
+    const providerSessionId = typeof payload.providerSessionId === 'string' ? payload.providerSessionId.trim() : '';
+    if (!providerSessionId) return false;
+    if (!ms || ms.selected !== 'native-history') return false;
+    if (typeof ms.fallbackReason === 'string' && ms.fallbackReason.trim().length > 0) return false;
+    if (typeof ms.unavailableReason === 'string' && ms.unavailableReason.trim().length > 0) return false;
+    if (typeof ms.partialReason === 'string' && ms.partialReason.trim().length > 0) return false;
+    if (ms.nativeSource && ms.nativeSource !== 'provider-native') return false;
+    if (ms.nativeHistoryCoverage && ms.nativeHistoryCoverage !== 'full') return false;
+    if (ms.identityStatus && ms.identityStatus !== 'safe') return false;
+    if (ms.coverage?.safeMapping !== true) return false;
+    if (ms.staleness?.freshEnough === false) return false;
+
+    const messages = payload.messages as ChatMessage[];
+    if (messages.length === 0) return false;
+    if (typeof payload.totalMessages === 'number' && payload.totalMessages > messages.length) return false;
+
+    const expectedId = opts?.messageId?.trim() || '';
+    const expectedBody = opts?.expectedText?.trim() || '';
+    let hasCompletedPriorAssistant = false;
+    for (const msg of messages) {
+        if (!msg || typeof msg !== 'object') return false;
+        const ts = readChatMessageTimestampMs(msg);
+        if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0 || ts >= sinceMs) return false;
+        const role = typeof msg.role === 'string' ? msg.role.trim().toLowerCase() : '';
+        const msgId = typeof (msg as any).id === 'string' ? (msg as any).id.trim() : typeof (msg as any).messageId === 'string' ? (msg as any).messageId.trim() : '';
+        if (expectedId && msgId && msgId === expectedId) return false;
+        if (role === 'user' || role === 'human') {
+            const text = flattenContent(msg.content).trim();
+            if (expectedBody && text && (text === expectedBody || text.includes(expectedBody))) return false;
+        } else if (role === 'assistant' || role === 'model') {
+            if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
+        }
+    }
+    if (!hasCompletedPriorAssistant) return false;
+    const lastMsg = messages[messages.length - 1];
+    const lastRole = typeof lastMsg?.role === 'string' ? lastMsg.role.trim().toLowerCase() : '';
+    if (lastRole === 'user' || lastRole === 'human') return false;
+
+    if (capability.requiresTurnTerminalMarkers) {
+        if (!Array.isArray(payload.turnTerminalMarkers) || payload.turnTerminalMarkers.length === 0) return false;
+        for (const raw of payload.turnTerminalMarkers) {
+            const m = raw as { receivedAt?: unknown; startedAt?: unknown; inputAt?: unknown } | null;
+            const receivedAt = typeof m?.receivedAt === 'number' ? m.receivedAt : Number.NaN;
+            if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs) return false;
+            if (typeof m?.startedAt === 'number' && m.startedAt >= sinceMs) return false;
+            if (typeof m?.inputAt === 'number' && m.inputAt >= sinceMs) return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1 / R10): fresh read of a
+ * LOCAL session's transcript.
+ * - `consumed`: agent activity at or after `sinceMs`.
+ * - `not_consumed`: ONLY under a provider-specific authoritative positive
+ *   contract (capable provider, fresh/complete/safely-mapped `native-history`
+ *   transcript ending in a completed prior turn before `sinceMs`, no user or
+ *   agent turn at/after `sinceMs` or matching the dispatched messageId/body,
+ *   and turn-terminal markers before `sinceMs` when required).
+ * - `unknown`: every uncertain case (empty, stale, unavailable, loading,
+ *   unsupported provider, incomplete transcript, missing native source, read
+ *   errors, user-only transcript, or 'no agent activity seen' without positive
+ *   non-consumption proof) → quarantine, no re-paste and no reclaim.
+ */
+let cachedAnalyzeProbeTranscript: ((payload: Record<string, any>, ctx: { turnStartedAtMs?: number; providerType?: string }) => any) | null = null;
+
+export function registerProbeTranscriptAnalyzer(
+    fn: (payload: Record<string, any>, ctx: { turnStartedAtMs?: number; providerType?: string }) => any,
+): void {
+    cachedAnalyzeProbeTranscript = fn;
+}
+
+export async function confirmLocalConsumption(
+    components: DaemonComponents,
+    sessionId: string,
+    sinceMs: number,
+    opts?: { messageId?: string; expectedText?: string },
+): Promise<'consumed' | 'not_consumed' | 'unknown'> {
+    if (typeof sinceMs !== 'number' || !Number.isFinite(sinceMs) || sinceMs <= 0) return 'unknown';
     try {
-        const instance = components.instanceManager.getInstance(sessionId) as { type?: string } | undefined;
-        const providerType = typeof instance?.type === 'string' ? instance.type : undefined;
+        const instance = components.instanceManager?.getInstance?.(sessionId) as { type?: string } | undefined;
+        const adapter = (components.cliManager as { adapters?: Map<string, { cliType?: string }> } | undefined)?.adapters?.get?.(sessionId);
+        const regSession = (components as { sessionRegistry?: { get?: (id: string) => { providerType?: string } | undefined } }).sessionRegistry?.get?.(sessionId);
+        const configuredProviderType = [instance?.type, adapter?.cliType, regSession?.providerType]
+            .find((v): v is string => typeof v === 'string' && v.trim().length > 0)?.trim();
         const result = await components.commandHandler.handle('read_chat', {
             sessionId,
             targetSessionId: sessionId,
-            tailLimit: 10,
             includeActivity: true,
-            ...(providerType ? { agentType: providerType, providerType } : {}),
+            ...(configuredProviderType ? { agentType: configuredProviderType, providerType: configuredProviderType } : {}),
         });
         if (!result || typeof result !== 'object' || (result as { success?: unknown }).success === false) return 'unknown';
         const payload = unwrapReadChatPayload(result);
         if (!payload || (payload as { success?: unknown }).success === false || !Array.isArray(payload.messages)) return 'unknown';
-        // Dynamic: loops.ts imports this module (a static import would be a cycle).
-        const { analyzeProbeTranscript } = await import('./loops.js');
+        const ms = (payload.messageSource && typeof payload.messageSource === 'object' && !Array.isArray(payload.messageSource)
+            ? payload.messageSource
+            : payload.transcriptProvenance && typeof payload.transcriptProvenance === 'object' && !Array.isArray(payload.transcriptProvenance)
+                ? payload.transcriptProvenance
+                : null) as Record<string, any> | null;
+        const providerType = configuredProviderType
+            || (typeof (payload.debugReadChat as any)?.provider === 'string' && (payload.debugReadChat as any).provider.trim())
+            || (typeof ms?.providerType === 'string' && ms.providerType.trim())
+            || (typeof ms?.provider === 'string' && ms.provider.trim())
+            || undefined;
+        // Dynamic fallback: loops.ts imports this module (a static import would be a cycle).
+        const analyzeProbeTranscript = cachedAnalyzeProbeTranscript ?? (await import('./loops.js')).analyzeProbeTranscript;
+        cachedAnalyzeProbeTranscript = analyzeProbeTranscript;
         const observed = analyzeProbeTranscript(payload, { turnStartedAtMs: sinceMs, ...(providerType ? { providerType } : {}) });
         if (!observed) return 'unknown';
         const at = observed.newestAgentActivityAt;
-        return typeof at === 'number' && Number.isFinite(at) && at >= sinceMs ? 'consumed' : 'not_consumed';
+        if (typeof at === 'number' && Number.isFinite(at) && at >= sinceMs) return 'consumed';
+        return hasAuthoritativeNonConsumptionProof(payload, ms, observed, providerType, sinceMs, opts)
+            ? 'not_consumed'
+            : 'unknown';
     } catch {
         return 'unknown';
     }

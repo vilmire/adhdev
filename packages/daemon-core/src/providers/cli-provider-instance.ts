@@ -1074,10 +1074,10 @@ export class CliProviderInstance implements ProviderInstance {
 
     /** SUBMIT-UNCONFIRMED-RECLAIM (review R9-3): fresh transcript read before a re-paste.
      *  No port, or a failed read, is `unknown` — not proof the turn never started. */
-    confirmSubmitConsumption(sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'> {
+    confirmSubmitConsumption(sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<'consumed' | 'not_consumed' | 'unknown'> {
         const read = this.turnEvidencePort?.confirmConsumption;
         if (typeof read !== 'function') return Promise.resolve('unknown');
-        return Promise.resolve(read(this.instanceId, sinceMs)).then((check) => (
+        return Promise.resolve(read(this.instanceId, sinceMs, opts)).then((check) => (
             check === 'consumed' || check === 'not_consumed' ? check : 'unknown'
         ), () => 'unknown' as const);
     }

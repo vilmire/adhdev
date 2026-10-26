@@ -107,10 +107,25 @@ describe('submit unconfirmed → dispatch_failed → R24 reclaim under a new non
         }
     });
 
-    it.each(['not_consumed', 'unknown'] as const)('review R5-1: a %s transcript read is not evidence either way — the composer proof stands and the dispatch is reclaimed', async (check) => {
+    it('review R10: an `unknown` consumption check quarantines without reclaiming or cancelling', async () => {
+        const fUnknown = setup();
+        try {
+            consumption.check = 'unknown';
+            expect(reportMeshSubmitUnconfirmed(fUnknown.host, fUnknown.messageId, fUnknown.firstWrittenAt)).toBe(true);
+            await flush();
+            expect(fUnknown.store.findQueueEntryById(fUnknown.mesh, fUnknown.task.id)!.dispatchNonce ?? 0).toBe(fUnknown.nonce);
+            expect(fUnknown.store.findQueueEntryById(fUnknown.mesh, fUnknown.task.id)!.status).toBe('assigned');
+            expect(fUnknown.ledger.getAttempt(fUnknown.ref.attemptRef.attemptId)).toMatchObject({ state: 'delivered', generation: 0 });
+            expect(fUnknown.ports.calls.filter((c) => c.startsWith('cancel:'))).toEqual([]);
+        } finally {
+            __clearMeshQueueForTests(fUnknown.mesh);
+        }
+    });
+
+    it('review R5-1 / R10: a proven `not_consumed` transcript read reclaims the dispatch, and a late turn_started on the old session is ignored', async () => {
         const f = setup();
         try {
-            consumption.check = check;
+            consumption.check = 'not_consumed';
             expect(reportMeshSubmitUnconfirmed(f.host, f.messageId, f.firstWrittenAt)).toBe(true);
             await flush();
             expect(f.store.findQueueEntryById(f.mesh, f.task.id)!.dispatchNonce).toBe(f.nonce + 1);

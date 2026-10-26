@@ -127,7 +127,7 @@ export interface SubmitVerdictInfo {
 export type SubmitVerdictObserver = (verdict: SubmitVerdict, info: SubmitVerdictInfo) => boolean | void;
 /** What a fresh transcript read says about the turn since the first body write. */
 export type ConsumptionEvidence = 'consumed' | 'not_consumed' | 'unknown';
-export type ConsumptionProbe = (sinceMs: number) => Promise<ConsumptionEvidence>;
+export type ConsumptionProbe = (sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<ConsumptionEvidence>;
 
 /** The adapter surface this machine reads (TerminalAdapter satisfies it).
  *  Every member missing on a test double makes ownership unprovable. */
@@ -173,7 +173,7 @@ export interface SubmitVerdictHost {
      *  The write itself is guarded (input unchanged since this call). */
     rewrite(send: CurrentSend): void;
     /** Optional transcript read. Absent → non-consumption is unproven (R9-3). */
-    confirmConsumption?(sinceMs: number): Promise<ConsumptionEvidence>;
+    confirmConsumption?(sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<ConsumptionEvidence>;
     /** Whether the in-flight latch is held. */
     slotTaken(): boolean;
     /** Give the slot back and let the FIFO drain one resend gap later. */
@@ -361,7 +361,7 @@ export class SubmitVerdictMachine {
         const probe = this.consumptionProbe ?? this.host.confirmConsumption;
         if (!probe) return 'unknown';
         try {
-            const check = await probe(send.firstWrittenAt);
+            const check = await probe(send.firstWrittenAt, { ...(send.messageId ? { messageId: send.messageId } : {}), expectedText: send.text });
             if (check === 'not_consumed') return 'absent';
             if (check === 'consumed') return 'present';
             return 'unknown';

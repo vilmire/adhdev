@@ -105,9 +105,9 @@ export interface SessionInputTarget {
      * SUBMIT-UNCONFIRMED-RECLAIM: the driver proved the NEXT write under
      * `messageId` was not taken (see SendSubmitEngine `unconfirmed`).
      */
-    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
+    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
     /** Transcript read used before a recovery re-paste. Unknown/absent is not proof the turn never started. */
-    confirmSubmitConsumption?(sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'>;
+    confirmSubmitConsumption?(sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<'consumed' | 'not_consumed' | 'unknown'>;
     /** The instance's half: turn a proven-unconfirmed verdict on its mesh dispatch (first body write at `firstWrittenAt`) into ledger evidence; false = not its dispatch. */
     reportSubmitUnconfirmed?(messageId: string, firstWrittenAt: number): boolean;
     /** True only when `messageId` is the instance's CURRENTLY installed mesh dispatch (same attempt) and it can report a verdict. */
@@ -358,7 +358,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             log('warn', `submit(${msg.messageId}) submit verdict '${verdict}' (proven not taken after one re-paste; the composer was cleared) — reporting it (session ${msg.sessionId})`);
             try { return target.reportSubmitUnconfirmed?.(msg.messageId, info.firstWrittenAt) === true; }
             catch (e) { log('warn', `submit(${msg.messageId}) submit-unconfirmed report failed: ${(e as Error)?.message ?? e}`); return false; }
-        }, target.confirmSubmitConsumption ? (sinceMs) => target.confirmSubmitConsumption!(sinceMs) : undefined);
+        }, target.confirmSubmitConsumption ? (sinceMs, opts) => target.confirmSubmitConsumption!(sinceMs, opts) : undefined);
         if (receipt||noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
             if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}}
             if(!receipt)return;

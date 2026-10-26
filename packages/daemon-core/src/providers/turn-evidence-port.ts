@@ -98,7 +98,7 @@ export interface TurnEvidencePort {
      * `sinceMs` (the prompt was consumed). `unknown` on any read failure.
      * Boot-injected (the reader lives in mesh/); absent = cannot verify.
      */
-    confirmConsumption?(sessionId: string, sinceMs: number): Promise<ConsumptionCheck>;
+    confirmConsumption?(sessionId: string, sinceMs: number, opts?: { messageId?: string; expectedText?: string }): Promise<ConsumptionCheck>;
 }
 
 export type ConsumptionCheck = 'consumed' | 'not_consumed' | 'unknown';
@@ -164,7 +164,7 @@ export interface TurnEvidencePortDeps {
      */
     reportExpectedFor?: (sessionId: string) => boolean;
     /** See TurnEvidencePort.confirmConsumption; passed through unchanged. */
-    confirmConsumption?: (sessionId: string, sinceMs: number) => Promise<ConsumptionCheck>;
+    confirmConsumption?: (sessionId: string, sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<ConsumptionCheck>;
     /** Clock used to backfill `at` for evidence passed to `observe()` directly
      *  without one (defensive only — every `emit*` helper below already
      *  stamps `at`, so this path is for a future direct-`observe()` caller). */

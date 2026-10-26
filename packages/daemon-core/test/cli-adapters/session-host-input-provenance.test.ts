@@ -32,6 +32,8 @@ vi.mock('@adhdev/session-host-core', async (importOriginal) => {
 import { SessionHostServer } from '../../../session-host-daemon/src/server.js';
 import { SessionHostPtyTransportFactory } from '../../src/cli-adapters/session-host-transport.js';
 import { FsmDriver } from '../../src/providers/spec/fsm-driver.js';
+import { confirmLocalConsumption } from '../../src/boot/stages/mesh-runtime.js';
+import '../../src/boot/stages/loops.js';
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -383,7 +385,59 @@ it('R9-2 recovery re-paste: human X that lands as the re-paste is admitted is le
     } finally { h.server = server; driver.shutdown(); await (transport as any).closeClient(false); }
 });
 
-it('R9-3 delayed-thinking-repaint: input consumed on Enter with a delayed screen/Thinking repaint is not cleared or pasted twice', async () => {
+it('R9-3 delayed-thinking-repaint: input consumed on Enter with a delayed screen/Thinking repaint is not cleared or pasted twice (production confirmLocalConsumption)', async () => {
+    const { server, transport, writes } = await setup();
+    const driver = new FsmDriver({ specPath: hostSpec(), workingDir: os.tmpdir(), hotReload: false, transportFactory: { spawn: () => transport } });
+    let composer = '';
+    const consumed: Array<{ text: string; at: number }> = [];
+    const emit = (data: string) => server.emitEvent({ type: 'session_output', sessionId: 'r7-test', seq: 1, data });
+    server.runtimes.set('r7-test', { write: (data: string) => {
+        writes.push(data);
+        if (data.startsWith('\x1b[200~')) {
+            composer = `[Pasted text #${writes.filter((s) => s.startsWith('\x1b[200~')).length} +40 lines]`;
+            emit(inputRow(composer));
+        } else if (data === '\r') {
+            if (composer) {
+                consumed.push({ text: composer, at: Date.now() });
+                composer = '';
+                // Screen/Thinking repaint is delayed past the unsubmitted hold window.
+                setTimeout(() => emit(inputRow('') + footer('Thinking')), 12_000);
+            }
+        } else if (data === '\x7f') {
+            // Composer is already internally empty; a DEL triggers an empty-row repaint.
+            composer = Array.from(composer).slice(0, -1).join('');
+            emit(inputRow(composer));
+        }
+    } });
+    const components = {
+        instanceManager: { getInstance: () => ({ type: 'codex-cli' }) },
+        commandHandler: {
+            handle: vi.fn(async () => ({
+                success: true,
+                status: 'idle',
+                transcriptAuthority: 'provider',
+                coverage: 'full',
+                providerSessionId: 'codex-session-r9-3',
+                messageSource: { selected: 'native-history', providerType: 'codex-cli', identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+                messages: consumed.map((c) => ({ role: 'user', content: c.text, timestamp: c.at })),
+                turnTerminalMarkers: [],
+            })),
+        },
+    } as any;
+    const verdicts: string[] = [];
+    try {
+        driver.start(); emit('\x1b[?1049h' + inputRow('') + footer('? for shortcuts')); await vi.advanceTimersByTimeAsync(300);
+        driver.observeSubmitUnconfirmed('task:first:n0', (verdict) => { verdicts.push(verdict); return true; }, (sinceMs, opts) => confirmLocalConsumption(components, 'r7-test', sinceMs, opts));
+        expect(driver.sendMessageWithDisposition('TASK ' + 'body '.repeat(100), false, 'task:first:n0').status).toBe('delivered');
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(consumed).toHaveLength(1);
+        expect(writes.filter((s) => s.startsWith('\x1b[200~'))).toHaveLength(1);
+        expect(writes.filter((s) => s === '\x7f')).toHaveLength(0);
+        expect(verdicts).toEqual([]);
+    } finally { driver.shutdown(); await (transport as any).closeClient(false); }
+});
+
+it('R10 delayed-repaint-stale-loading: real confirmLocalConsumption with stale/loading/empty read_chat and 120s delayed repaint consumes at most once (no second DEL or paste)', async () => {
     const { server, transport, writes } = await setup();
     const driver = new FsmDriver({ specPath: hostSpec(), workingDir: os.tmpdir(), hotReload: false, transportFactory: { spawn: () => transport } });
     let composer = '';
@@ -398,21 +452,31 @@ it('R9-3 delayed-thinking-repaint: input consumed on Enter with a delayed screen
             if (composer) {
                 consumed.push(composer);
                 composer = '';
-                // Screen/Thinking repaint is delayed past the unsubmitted hold window.
-                setTimeout(() => emit(inputRow('') + footer('Thinking')), 12_000);
+                // Screen/Thinking repaint is delayed 120 s (past both hold windows).
+                setTimeout(() => emit(inputRow('') + footer('Thinking')), 120_000);
             }
         } else if (data === '\x7f') {
-            // Composer is already internally empty; a DEL triggers an empty-row repaint.
             composer = Array.from(composer).slice(0, -1).join('');
             emit(inputRow(composer));
         }
     } });
+    const components = {
+        instanceManager: { getInstance: () => ({ type: 'codex-cli' }) },
+        commandHandler: {
+            handle: vi.fn(async () => ({
+                success: true,
+                messages: [],
+                stale: true,
+                unavailableReason: 'native_history_loading',
+            })),
+        },
+    } as any;
     const verdicts: string[] = [];
     try {
         driver.start(); emit('\x1b[?1049h' + inputRow('') + footer('? for shortcuts')); await vi.advanceTimersByTimeAsync(300);
-        driver.observeSubmitUnconfirmed('task:first:n0', (verdict) => { verdicts.push(verdict); return true; }, async () => (consumed.length > 0 ? 'consumed' : 'not_consumed'));
+        driver.observeSubmitUnconfirmed('task:first:n0', (verdict) => { verdicts.push(verdict); return true; }, (sinceMs, opts) => confirmLocalConsumption(components, 'r7-test', sinceMs, opts));
         expect(driver.sendMessageWithDisposition('TASK ' + 'body '.repeat(100), false, 'task:first:n0').status).toBe('delivered');
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(130_000);
         expect(consumed).toHaveLength(1);
         expect(writes.filter((s) => s.startsWith('\x1b[200~'))).toHaveLength(1);
         expect(writes.filter((s) => s === '\x7f')).toHaveLength(0);
