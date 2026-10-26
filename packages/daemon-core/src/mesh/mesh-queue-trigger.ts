@@ -104,6 +104,12 @@ export async function awaitInFlightAutoLaunches(meshId?: string): Promise<void> 
     }
 }
 
+// Hot status is sampled afresh each pass, never a cached idle/claim verdict.
+// Periodically project even a persistently busy hot view so missed FSM edges or
+// parse-only readiness cannot starve a session. Weak keys follow instance lifetime.
+const busyProjectionCheckedAt = new WeakMap<object, number>();
+const BUSY_PROJECTION_RECHECK_MS = 20_000;
+
 export async function triggerMeshQueue(components: DaemonComponents, meshId: string): Promise<MeshQueueTriggerResult> {
     const mesh = getMeshWithCache(components, meshId);
     const pendingBefore = countQueueStatus(meshId, 'pending');
@@ -170,7 +176,29 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         const liveSettings = (inst as { settings?: unknown }).settings;
         if (liveSettings && typeof liveSettings === 'object'
             && readText((liveSettings as Record<string, unknown>).meshNodeFor) !== meshId) continue;
+        // Only skip a positive running observation. lastStatus === idle must
+        // still project: getState reconciles a stale generating adapter to idle.
+        // Missing/failed hot observations always fall through to the full view.
+        if (liveSettings && typeof liveSettings === 'object' && inst.getHotChatSessionState) {
+            try {
+                const hot = inst.getHotChatSessionState();
+                const status = readText((hot as { status?: unknown })?.status).toLowerCase();
+                const lastStatus = readText((inst as { lastStatus?: unknown }).lastStatus).toLowerCase();
+                const nodeId = readText((liveSettings as Record<string, unknown>).meshNodeId)
+                    || readText((liveSettings as Record<string, unknown>).nodeId);
+                if (status === 'generating' && lastStatus === 'generating' && nodeId) {
+                    const now = Date.now();
+                    const checkedAt = busyProjectionCheckedAt.get(inst);
+                    if (checkedAt === undefined) busyProjectionCheckedAt.set(inst, now);
+                    if (checkedAt === undefined || (now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS)) {
+                        skippedSessions.push({ nodeId, sessionId: readText((hot as { id?: unknown })?.id) || undefined, reason: 'session_not_idle', status });
+                        continue;
+                    }
+                }
+            } catch { /* full projection remains authoritative */ }
+        }
         const state = inst.getState();
+        busyProjectionCheckedAt.set(inst, Date.now());
         const settings = state.settings as Record<string, unknown> || {};
 
         const instMeshId = readText(settings.meshNodeFor);

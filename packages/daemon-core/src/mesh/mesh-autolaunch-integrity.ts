@@ -233,6 +233,14 @@ export function sweepAutoLaunchOrphanSessions(
     if (!sessions.length) return;
 
     for (const inst of sessions) {
+        // These stamps are the same live object returned by CLI getState().
+        // Keep the full-state fences below for legacy instances and real candidates.
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === 'object') {
+            if (readText(liveSettings.meshNodeFor) !== meshId) continue;
+            if (!readText(liveSettings.autoLaunchedForQueueTaskId)) continue;
+            if (isProtectedNonAutoLaunchSession(inst, liveSettings)) continue;
+        }
         let state: any;
         try { state = inst.getState(); } catch { continue; }
         const settings = (state?.settings as Record<string, unknown>) || {};

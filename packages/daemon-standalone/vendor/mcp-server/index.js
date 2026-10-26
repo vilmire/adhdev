@@ -69654,6 +69654,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       if (!sessions.length) return;
       for (const inst of sessions) {
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === "object") {
+          if (readText(liveSettings.meshNodeFor) !== meshId) continue;
+          if (!readText(liveSettings.autoLaunchedForQueueTaskId)) continue;
+          if (isProtectedNonAutoLaunchSession(inst, liveSettings)) continue;
+        }
         let state2;
         try {
           state2 = inst.getState();
@@ -75053,6 +75059,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function nodeHasActiveMeshWork(components, meshId, nodeId, currentSessionId) {
       if (nodeHasActiveAssignment(meshId, nodeId)) return true;
       return components.instanceManager.getByCategory("cli").some((inst) => {
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === "object") {
+          if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
@@ -75114,17 +75125,25 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     function liveSessionCountForNode(components, meshId, nodeId) {
+      const localSessionIds = [];
       const localInstances = components.instanceManager.getByCategory("cli").filter((inst) => {
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === "object") {
+          if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
         const instNodeId = readText(settings2.meshNodeId) || readText(settings2.nodeId);
         if (!daemonIdsEquivalent4(instNodeId, nodeId)) return false;
         const status = readText(state2.status).toLowerCase();
-        return !isTerminalSessionRecordStatus(status);
+        if (isTerminalSessionRecordStatus(status)) return false;
+        const sessionId = readText(state2.instanceId);
+        if (sessionId) localSessionIds.push(sessionId);
+        return true;
       });
       let count = localInstances.length;
-      const localSessionIds = localInstances.map((inst) => readText(inst.getState().instanceId)).filter(Boolean);
       for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId, nodeId)) {
         if (!localSessionIds.some((local) => sessionIdsEquivalent(local, sid))) count += 1;
       }
@@ -75136,6 +75155,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         getQueue(meshId, { status: ["assigned"] }).filter((task2) => daemonIdsEquivalent4(task2.assignedNodeId, nodeId)).map((task2) => readText(task2.assignedSessionId)).filter(Boolean)
       );
       return components.instanceManager.getByCategory("cli").some((inst) => {
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === "object") {
+          if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+          if (!daemonIdsEquivalent4(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         if (readText(settings2.meshNodeFor) !== meshId) return false;
@@ -77437,7 +77461,26 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       for (const inst of cliInstances2) {
         const liveSettings = inst.settings;
         if (liveSettings && typeof liveSettings === "object" && readText(liveSettings.meshNodeFor) !== meshId) continue;
+        if (liveSettings && typeof liveSettings === "object" && inst.getHotChatSessionState) {
+          try {
+            const hot = inst.getHotChatSessionState();
+            const status = readText(hot?.status).toLowerCase();
+            const lastStatus = readText(inst.lastStatus).toLowerCase();
+            const nodeId2 = readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId);
+            if (status === "generating" && lastStatus === "generating" && nodeId2) {
+              const now = Date.now();
+              const checkedAt = busyProjectionCheckedAt.get(inst);
+              if (checkedAt === void 0) busyProjectionCheckedAt.set(inst, now);
+              if (checkedAt === void 0 || now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS) {
+                skippedSessions.push({ nodeId: nodeId2, sessionId: readText(hot?.id) || void 0, reason: "session_not_idle", status });
+                continue;
+              }
+            }
+          } catch {
+          }
+        }
         const state2 = inst.getState();
+        busyProjectionCheckedAt.set(inst, Date.now());
         const settings2 = state2.settings || {};
         const instMeshId = readText(settings2.meshNodeFor);
         if (instMeshId !== meshId) continue;
@@ -77583,6 +77626,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       });
     }
     var inFlightAutoLaunches;
+    var busyProjectionCheckedAt;
+    var BUSY_PROJECTION_RECHECK_MS;
     var init_mesh_queue_trigger = __esm2({
       "src/mesh/mesh-queue-trigger.ts"() {
         "use strict";
@@ -77603,6 +77648,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_auto_fast_forward();
         init_mesh_pinned_remote_idle();
         inFlightAutoLaunches = /* @__PURE__ */ new Map();
+        busyProjectionCheckedAt = /* @__PURE__ */ new WeakMap();
+        BUSY_PROJECTION_RECHECK_MS = 2e4;
       }
     });
     function resolveClaimingSessionTranscriptProfile(components, sessionId) {
@@ -77838,10 +77885,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             noteClaimDeferredForNode(meshId, nodeId);
             return false;
           }
+          const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
+          if (!claiming) return false;
           let gateModel = routingDecision?.selectedSlot?.model;
           if (!gateModel) {
             try {
-              gateModel = readSessionModel2(components.instanceManager?.getInstance?.(sessionId)?.getState?.());
+              gateModel = readSessionModel2(claiming.claimState);
             } catch {
             }
           }
@@ -77850,8 +77899,6 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           }
           if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;
           assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
-          const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
-          if (!claiming) return false;
           const claim = buildClaimOptions({ components, meshId, nodeId, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
           const claimRefusal = {};
           const task = claimNextTask(meshId, nodeId, sessionId, claim.capabilityTags, { ...claim.options, outRefusal: claimRefusal });

@@ -43,6 +43,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 }))
 
 import { triggerMeshQueue } from '../../src/mesh/mesh-events.js'
+import { tryAssignQueueTask } from '../../src/mesh/mesh-queue-assignment.js'
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js'
 import { LOG } from '../../src/logging/logger.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
@@ -70,21 +71,23 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
     }
     if (s.meshNodeId !== undefined) settings.meshNodeId = s.meshNodeId
     return {
-      getState: () => ({
+      instanceId: s.sessionId,
+      settings,
+      getState: vi.fn(() => ({
         settings,
         status: s.status ?? 'idle',
         instanceId: s.sessionId,
         type: s.providerType ?? 'claude-cli',
         workspace: s.workingDir,
         controlValues: s.model ? { model: s.model } : undefined,
-      }),
+      })),
       updateSettings: vi.fn(),
     }
   })
   return withMeshRouter({
     instanceManager: {
       getByCategory: vi.fn((category: string) => (category === 'cli' ? cliInstances : [])),
-      getInstance: vi.fn((sid: string) => cliInstances.find((i) => i.getState().instanceId === sid)),
+      getInstance: vi.fn((sid: string) => cliInstances.find((i) => i.instanceId === sid)),
     },
     cliManager: {
       adapters,
@@ -188,5 +191,103 @@ describe('QUOTA GATE (claim path, no routing decision) — judged by the live mo
     } finally {
       cleanup(meshId)
     }
+  })
+})
+
+
+describe('queue projection operation counts', () => {
+  it.each([
+    ['Claude Opus 4.6 (Thinking)', true],
+    ['Gemini 4 Argon (Medium)', false],
+  ] as const)('projects the missing-slot-model quota/lineage claim once: %s', (model, accepted) => {
+    const meshId = `mesh_claim_once_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode({ 'antigravity-cli': agyQuota() })])
+      const components = createComponents(meshId, [
+        { sessionId: 'sess-once', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'antigravity-cli', model },
+      ])
+      const inst = components.instanceManager.getInstance('sess-once')
+      const task = enqueueTask(meshId, 'live model quota', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-once', 'antigravity-cli')).toBe(accepted)
+      expect(inst.getState).toHaveBeenCalledTimes(1)
+      expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe(accepted ? 'assigned' : 'pending')
+    } finally { cleanup(meshId) }
+  })
+
+  it('skips running and foreign sessions without projection, then claims on a fresh idle edge', async () => {
+    const meshId = `mesh_hot_edge_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode(undefined)])
+      const session = { sessionId: 'sess-hot', workingDir: NODE_WS, meshNodeId: NODE_ID, status: 'generating' }
+      const components = createComponents(meshId, [session])
+      const inst = components.instanceManager.getInstance(session.sessionId)
+      inst.lastStatus = 'generating'
+      inst.getHotChatSessionState = vi.fn(() => ({ id: session.sessionId, status: session.status }))
+      const foreign = { instanceId: 'foreign', settings: { meshNodeFor: 'another-mesh' }, getState: vi.fn(() => { throw new Error('foreign projection') }) }
+      components.instanceManager.getByCategory.mockReturnValue([foreign, inst])
+      for (let i = 0; i < 3; i++) await triggerMeshQueue(components, meshId)
+      expect(inst.getState).not.toHaveBeenCalled()
+      expect(foreign.getState).not.toHaveBeenCalled()
+      session.status = 'idle'
+      inst.lastStatus = 'idle'
+      const task = enqueueTask(meshId, 'idle edge work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
+      expect(getQueue(meshId).find(t => t.id === task.id)?.assignedSessionId).toBe(session.sessionId)
+      expect(foreign.getState).not.toHaveBeenCalled()
+    } finally { cleanup(meshId) }
+  })
+
+  it.each(['idle', 'generating'])('does not starve full idle behind hot generating when FSM is %s', async lastStatus => {
+    const meshId = `mesh_hot_stale_${randomUUID().slice(0, 8)}`
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      setMesh(meshId, [quotaNode(undefined)])
+      const components = createComponents(meshId, [{ sessionId: 'sess-stale', workingDir: NODE_WS, meshNodeId: NODE_ID }])
+      const inst = components.instanceManager.getInstance('sess-stale')
+      inst.lastStatus = lastStatus
+      inst.getHotChatSessionState = vi.fn(() => ({ id: 'sess-stale', status: 'generating' }))
+      await triggerMeshQueue(components, meshId)
+      if (lastStatus === 'generating') {
+        expect(inst.getState).not.toHaveBeenCalled()
+        clock.mockReturnValue(now + 20_000)
+      }
+      const task = enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
+      expect(getQueue(meshId).find(t => t.id === task.id)?.assignedSessionId).toBe('sess-stale')
+    } finally { clock.mockRestore(); cleanup(meshId) }
+  })
+})
+
+
+describe('queue projection safety fallbacks', () => {
+  it('keeps the lineage fence before claim while using one state', () => {
+    const meshId = `mesh_lineage_once_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode(undefined)])
+      const components = createComponents(meshId, [{ sessionId: 'wrong-node', workingDir: NODE_WS, meshNodeId: 'another-node' }])
+      const inst = components.instanceManager.getInstance('wrong-node')
+      const task = enqueueTask(meshId, 'bound work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      expect(tryAssignQueueTask(components, meshId, NODE_ID, 'wrong-node', 'claude-cli')).toBe(false)
+      expect(inst.getState).toHaveBeenCalledTimes(1)
+      expect(getQueue(meshId).find(t => t.id === task.id)?.status).toBe('pending')
+    } finally { cleanup(meshId) }
+  })
+
+  it.each(['missing', 'throw', 'unknown'])('projects idle when the hot view is %s', async kind => {
+    const meshId = `mesh_hot_fallback_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId, [quotaNode(undefined)])
+      const components = createComponents(meshId, [{ sessionId: 'fallback', workingDir: NODE_WS, meshNodeId: NODE_ID }])
+      const inst = components.instanceManager.getInstance('fallback')
+      inst.lastStatus = 'generating'
+      if (kind !== 'missing') inst.getHotChatSessionState = () => {
+        if (kind === 'throw') throw new Error('unavailable')
+        return { id: 'fallback', status: 'unknown' }
+      }
+      enqueueTask(meshId, 'fallback work', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+      expect((await triggerMeshQueue(components, meshId)).claimed).toBe(true)
+      expect(inst.getState).toHaveBeenCalled()
+    } finally { cleanup(meshId) }
   })
 })

@@ -80,6 +80,13 @@ export function sessionStateLooksActive(state: any): boolean {
 export function nodeHasActiveMeshWork(components: DaemonComponents, meshId: string, nodeId: string, currentSessionId?: string): boolean {
     if (nodeHasActiveAssignment(meshId, nodeId)) return true;
     return components.instanceManager.getByCategory('cli').some((inst: any) => {
+        // CLI getState returns these live settings unchanged. Reject unrelated
+        // sessions before building their transcript; legacy instances still project.
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === 'object') {
+            if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+            if (!daemonIdsEquivalent(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
@@ -234,7 +241,15 @@ export function resolveSessionBusyVerdict(components: DaemonComponents, sessionI
 }
 
 export function liveSessionCountForNode(components: DaemonComponents, meshId: string, nodeId: string): number {
+    const localSessionIds: string[] = [];
     const localInstances = components.instanceManager.getByCategory('cli').filter((inst: any) => {
+        // CLI getState returns these live settings unchanged. Reject unrelated
+        // sessions before building their transcript; legacy instances still project.
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === 'object') {
+            if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+            if (!daemonIdsEquivalent(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
@@ -244,7 +259,10 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
         // node's live sessions, which would defeat the maxConcurrentSessions cap.
         if (!daemonIdsEquivalent(instNodeId, nodeId)) return false;
         const status = readText(state.status).toLowerCase();
-        return !isTerminalSessionStatus(status);
+        if (isTerminalSessionStatus(status)) return false;
+        const sessionId = readText(state.instanceId);
+        if (sessionId) localSessionIds.push(sessionId);
+        return true;
     });
     let count = localInstances.length;
     // (A) AUTOLAUNCH-CLAIM-CHURN: also count launched-but-not-yet-claimed sessions targeting this
@@ -252,9 +270,6 @@ export function liveSessionCountForNode(components: DaemonComponents, meshId: st
     // instanceManager above, so without this the maxConcurrentSessions cap undercounts it and a
     // duplicate ghost launch slips through. Exclude any id already represented by a local instance
     // so a co-located launch is not double-counted.
-    const localSessionIds = localInstances
-        .map((inst: any) => readText(inst.getState().instanceId))
-        .filter(Boolean);
     for (const sid of inWindowAutoLaunchSessionIdsForNode(meshId, nodeId)) {
         if (!localSessionIds.some(local => sessionIdsEquivalent(local, sid))) count += 1;
     }
@@ -306,6 +321,13 @@ export function nodeHasLiveSessionPendingClaim(components: DaemonComponents, mes
             .filter(Boolean),
     );
     return components.instanceManager.getByCategory('cli').some((inst: any) => {
+        // CLI getState returns these live settings unchanged. Reject unrelated
+        // sessions before building their transcript; legacy instances still project.
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === 'object') {
+            if (readText(liveSettings.meshNodeFor) !== meshId) return false;
+            if (!daemonIdsEquivalent(readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId), nodeId)) return false;
+        }
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
         if (readText(settings.meshNodeFor) !== meshId) return false;
