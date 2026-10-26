@@ -123757,9 +123757,11 @@ ${defangRelayBody(text4)}`;
             const sessionChanged = Boolean(
               opts2?.reset || prevCoordinatorSessionId !== nextCoordinatorSessionId && (prevCoordinatorSessionId !== null || nextCoordinatorSessionId !== null)
             );
+            const clearStaleError = Boolean(observed2 && followed.lastErrorCode && followed.lastErrorCode !== "coordinator_replaced");
             registry.updateFollowedRemoteProject(followed.key, {
               lastCursor: cursor ?? (sessionChanged || nextCoordinatorSessionId === null ? null : followed.lastCursor ?? null),
               coordinatorSessionId: nextCoordinatorSessionId,
+              ...clearStaleError ? { lastErrorCode: void 0 } : {},
               ...observed2 ? {
                 lastObserved: {
                   ...followed.lastObserved,
@@ -169413,14 +169415,25 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
-      const { previous } = registry.bindSession({
-        hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
-        sessionId,
-        cliType,
-        workspace,
-        ...mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {},
-        at: Date.now()
-      });
+      let previous;
+      try {
+        ({ previous } = registry.bindSession({
+          hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+          sessionId,
+          cliType,
+          workspace,
+          ...mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {},
+          at: Date.now()
+        }));
+      } catch (error) {
+        try {
+          await ctx.deps.sessionHostControl?.stopSession(sessionId);
+          await ctx.deps.cliManager.stopSessionWithMode(sessionId, "hard");
+        } catch (stopError) {
+          LOG.warn("Assistant", `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
+        }
+        return fail6("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
+      }
       svc.inputLog.begin(sessionId);
       runtime2?.activate("launch");
       const restartNote = runtime2 ? runtime2.relay.armRestartNote({ previous }, sessionId) : false;

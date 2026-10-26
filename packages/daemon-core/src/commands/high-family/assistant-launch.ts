@@ -316,10 +316,24 @@ const launchAssistantOnce = async (
     const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
     const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
     assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
-    const { previous } = registry.bindSession({
-        hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
-        sessionId, cliType, workspace, ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now(),
-    });
+    let previous: ReturnType<typeof registry.bindSession>['previous'];
+    try {
+        ({ previous } = registry.bindSession({
+            hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+            sessionId, cliType, workspace, ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now(),
+        }));
+    } catch (error) {
+        // The session is already running but could not be recorded (unreadable registry,
+        // failed write). Left alone it is an unbound live assistant: every later launch
+        // sees it and refuses a duplicate. Stop it, then report why.
+        try {
+            await ctx.deps.sessionHostControl?.stopSession(sessionId);
+            await ctx.deps.cliManager.stopSessionWithMode(sessionId, 'hard');
+        } catch (stopError) {
+            LOG.warn('Assistant', `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
+        }
+        return fail('assistant_bind_failed', `Launched assistant ${sessionId} could not be bound and was stopped: ${(error as Error)?.message ?? error}`, { cliType, workspace });
+    }
     // A fresh process: its input log covers the whole session (review windows, §4.10.2).
     svc.inputLog.begin(sessionId);
     runtime?.activate('launch');

@@ -1004,3 +1004,19 @@ describe('assistant_pending_relays', () => {
         expect(submits).toEqual([]);
     });
 });
+
+describe('launch_assistant bind failure (rc34 807f3502 R-A2)', () => {
+    it('stops the just-launched session instead of leaving an unbound live assistant', async () => {
+        const c = ctx();
+        const stopHost = vi.fn(async () => {});
+        const stop = vi.fn(async () => {});
+        c.deps.sessionHostControl = { stopSession: stopHost };
+        c.deps.cliManager.stopSessionWithMode = stop;
+        vi.spyOn(registry, 'bindSession').mockImplementation(() => { throw new Error('registry write failed (ENOSPC)'); });
+        const result = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+        expect(result).toMatchObject({ success: false, code: 'assistant_bind_failed' });
+        expect(String((result as any).error)).toContain('ENOSPC');
+        expect(stopHost).toHaveBeenCalledWith('asst-1');
+        expect(stop).toHaveBeenCalledWith('asst-1', 'hard');
+    });
+});

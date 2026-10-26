@@ -447,9 +447,15 @@ export function wireAssistantRuntime(
                     opts?.reset
                     || (prevCoordinatorSessionId !== nextCoordinatorSessionId && (prevCoordinatorSessionId !== null || nextCoordinatorSessionId !== null)),
                 );
+                // `observed` is only passed after a successful host poll: access works again,
+                // so an earlier refusal code (e.g. remote_access_denied) must not keep showing
+                // on a healthy follow. A real refusal sets it again on the next refused poll.
+                // coordinator_replaced is informational and cleared by its own acknowledgement.
+                const clearStaleError = Boolean(observed && followed.lastErrorCode && followed.lastErrorCode !== 'coordinator_replaced');
                 registry.updateFollowedRemoteProject(followed.key, {
                     lastCursor: cursor ?? (sessionChanged || nextCoordinatorSessionId === null ? null : followed.lastCursor ?? null),
                     coordinatorSessionId: nextCoordinatorSessionId,
+                    ...(clearStaleError ? { lastErrorCode: undefined } : {}),
                     ...(observed
                         ? {
                             lastObserved: {
