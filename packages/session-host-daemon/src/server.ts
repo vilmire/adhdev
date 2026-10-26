@@ -559,6 +559,7 @@ export class SessionHostServer extends EventEmitter {
           }
           const runtime = this.requireRuntime(request.payload.sessionId);
           const beforeSnapshotSeq = this.registry.getSnapshot(request.payload.sessionId)?.seq ?? 0;
+          this.announceInput(request.payload.sessionId, request.payload.clientId);
           runtime.write(request.payload.data);
           this.scheduleNoOutputInputDiagnostic({
             sessionId: request.payload.sessionId,
@@ -567,6 +568,28 @@ export class SessionHostServer extends EventEmitter {
             beforeSnapshotSeq,
           });
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
+        }
+        case 'get_input_state':
+          return { success: true, result: this.registry.getInputState(request.payload.sessionId) };
+        case 'send_input_if_seq': {
+          // SUBMIT-UNCONFIRMED-RECLAIM (review R8-1): the check and the write are
+          // one step here, so no other input can land between them. No force:
+          // a caller that is not allowed to write as things stand is refused.
+          const p = request.payload;
+          const client = this.getAttachedClient(p.sessionId, p.clientId);
+          if (client?.readOnly) return { success: false, error: `Client ${p.clientId} is read-only` };
+          const session = this.registry.getSession(p.sessionId);
+          if (session?.writeOwner && session.writeOwner.clientId !== p.clientId) {
+            return { success: false, error: `Write owned by ${session.writeOwner.clientId}` };
+          }
+          const runtime = this.requireRuntime(p.sessionId);
+          const now = this.registry.getInputState(p.sessionId);
+          if (now.inputSeq !== p.expectedInputSeq || now.inputEpoch !== p.expectedInputEpoch) {
+            return { success: false, error: 'input_seq_mismatch' };
+          }
+          this.announceInput(p.sessionId, p.clientId);
+          runtime.write(p.data);
+          return { success: true, result: this.registry.getSession(p.sessionId) };
         }
         case 'resize_session': {
           this.requireRuntime(request.payload.sessionId).resize(request.payload.cols, request.payload.rows);
@@ -716,6 +739,14 @@ export class SessionHostServer extends EventEmitter {
   private getAttachedClient(sessionId: string, clientId: string): SessionAttachedClient | null {
     const session = this.registry.getSession(sessionId);
     return session?.attachedClients.find((client) => client.clientId === clientId) || null;
+  }
+
+  /** Count and announce one accepted input BEFORE it reaches the PTY, so a
+   *  subscriber sees who wrote it before any output it causes. */
+  private announceInput(sessionId: string, clientId: string): void {
+    const seq = this.registry.recordInput(sessionId);
+    const { inputEpoch } = this.registry.getInputState(sessionId);
+    this.emitEvent({ type: 'session_input', sessionId, seq, epoch: inputEpoch, clientId });
   }
 
   private emitEvent(event: SessionHostEvent): void {

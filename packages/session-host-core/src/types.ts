@@ -113,6 +113,21 @@ export interface SessionHostRecord {
   meta: Record<string, unknown>;
   /** Termination tombstone, stamped when the PTY process exits. Retained for post-mortem inspection. */
   termination?: SessionTermination;
+  /**
+   * Monotonic count of input accepted into this runtime by `send_input`, from
+   * any client (SUBMIT-UNCONFIRMED-RECLAIM: the authoritative input boundary).
+   * Every accepted input is also announced as a `session_input` event carrying
+   * this number and the writer. Absent on records from a host that predates it
+   * — a reader must then treat input provenance as unknown.
+   */
+  inputSeq?: number;
+  /**
+   * Identifies one lifetime of `inputSeq`. It changes whenever the counter
+   * could have restarted or been rewound — a new host process loading the
+   * record, or a restore with a lower count — so equal (epoch, seq) pairs
+   * really are the same point in the input stream.
+   */
+  inputEpoch?: string;
 }
 
 export interface CreateSessionPayload {
@@ -146,6 +161,29 @@ export interface SendInputPayload {
   sessionId: string;
   clientId: string;
   data: string;
+}
+
+/**
+ * `send_input_if_seq`: write `data` only if NOTHING else has been input since
+ * the caller last accounted the stream — the host's (inputEpoch, inputSeq) is
+ * still exactly (expectedInputEpoch, expectedInputSeq) — and the caller may
+ * write without taking ownership (no force). Atomic on the host, so no input
+ * can slip between the caller's check and this write.
+ */
+export interface SendInputIfSeqPayload extends SendInputPayload {
+  expectedInputSeq: number;
+  expectedInputEpoch: string;
+}
+
+export interface GetInputStatePayload {
+  sessionId: string;
+}
+
+/** `get_input_state`: the host's current input counter. A host without it
+ *  rejects the request type, which is how a client knows not to trust. */
+export interface SessionHostInputState {
+  inputSeq: number;
+  inputEpoch: string;
 }
 
 export interface ResizeSessionPayload {
@@ -324,6 +362,8 @@ export type SessionHostRequest =
   | { type: 'attach_session'; payload: AttachSessionPayload }
   | { type: 'detach_session'; payload: DetachSessionPayload }
   | { type: 'send_input'; payload: SendInputPayload }
+  | { type: 'send_input_if_seq'; payload: SendInputIfSeqPayload }
+  | { type: 'get_input_state'; payload: GetInputStatePayload }
   | { type: 'resize_session'; payload: ResizeSessionPayload }
   | { type: 'stop_session'; payload: StopSessionPayload }
   | { type: 'stop_mesh_writer'; payload: StopMeshWriterPayload }
@@ -352,6 +392,8 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'attach_session',
   'detach_session',
   'send_input',
+  'send_input_if_seq',
+  'get_input_state',
   'resize_session',
   'stop_session',
   'stop_mesh_writer',
@@ -382,6 +424,8 @@ export type SessionHostEvent =
   | { type: 'session_started'; sessionId: string; pid?: number }
   | { type: 'session_resumed'; sessionId: string; pid?: number }
   | { type: 'session_output'; sessionId: string; seq: number; data: string }
+  /** An input was accepted into the runtime (emitted BEFORE it reaches the PTY). */
+  | { type: 'session_input'; sessionId: string; seq: number; epoch: string; clientId: string }
   | { type: 'session_cleared'; sessionId: string }
   | { type: 'session_exit'; sessionId: string; exitCode: number | null; signal?: number | null; termination?: SessionTermination }
   | { type: 'session_stopped'; sessionId: string }

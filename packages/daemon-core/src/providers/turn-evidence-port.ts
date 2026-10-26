@@ -91,7 +91,17 @@ export interface ObserveOpts {
  */
 export interface TurnEvidencePort {
     observe(evidence: TurnEvidence, opts?: ObserveOpts): void;
+    /**
+     * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1): a FRESH read of the
+     * session's own transcript — the read the turn ledger's delivered probe
+     * makes — answering whether the agent produced activity at or after
+     * `sinceMs` (the prompt was consumed). `unknown` on any read failure.
+     * Boot-injected (the reader lives in mesh/); absent = cannot verify.
+     */
+    confirmConsumption?(sessionId: string, sinceMs: number): Promise<ConsumptionCheck>;
 }
+
+export type ConsumptionCheck = 'consumed' | 'not_consumed' | 'unknown';
 
 /** One dropped-evidence count per kind, exposed for tests/diagnostics. */
 export type DroppedEvidenceCounts = Readonly<Partial<Record<TurnEvidenceKind | 'unknown', number>>>;
@@ -153,6 +163,8 @@ export interface TurnEvidencePortDeps {
      * instead of committing on the idle edge (R9r, live rc.40 false idle).
      */
     reportExpectedFor?: (sessionId: string) => boolean;
+    /** See TurnEvidencePort.confirmConsumption; passed through unchanged. */
+    confirmConsumption?: (sessionId: string, sinceMs: number) => Promise<ConsumptionCheck>;
     /** Clock used to backfill `at` for evidence passed to `observe()` directly
      *  without one (defensive only — every `emit*` helper below already
      *  stamps `at`, so this path is for a future direct-`observe()` caller). */
@@ -224,6 +236,7 @@ export function createTurnEvidencePort(deps: TurnEvidencePortDeps): TurnEvidence
     }
 
     return {
+        ...(deps.confirmConsumption ? { confirmConsumption: deps.confirmConsumption } : {}),
         observe(evidence: TurnEvidence, callerOpts?: ObserveOpts): void {
             const kind = (evidence as { kind?: string } | null)?.kind ?? 'unknown';
             // Resolve attemptRef centrally when the call site didn't already
@@ -490,6 +503,28 @@ export function emitProcessExit(
         kind: 'process_exit',
         exitCode: opts.exitCode,
         ...(opts.providerFailure ? { providerFailure: opts.providerFailure } : {}),
+    }) as TurnEvidence, opts.envelope);
+}
+
+/** `dispatch_failed` — the worker side saw a dispatch it was handed never take
+ *  (SUBMIT-UNCONFIRMED-RECLAIM: the CLI never left its idle composer). The
+ *  reducer's R24 reclaims the attempt from `accepted` or `delivered`. */
+export function emitDispatchFailed(
+    port: TurnEvidencePort | null | undefined,
+    opts: EmitCommonOpts & {
+        source: TurnEvidence['source'];
+        workerAbsent: boolean;
+        reason: Extract<TurnEvidence, { kind: 'dispatch_failed' }>['reason'];
+        refusalCode?: string;
+    },
+): void {
+    guardEmit(port, 'dispatch_failed', opts.sessionId, () => ({
+        ...makeEnvelope('dispatch_failed', opts.sessionId, opts.observedBy, opts.attemptRef, opts.taskId, opts.at ?? nowMs()),
+        source: opts.source,
+        kind: 'dispatch_failed',
+        workerAbsent: opts.workerAbsent,
+        reason: opts.reason,
+        ...(opts.refusalCode ? { refusalCode: opts.refusalCode } : {}),
     }) as TurnEvidence, opts.envelope);
 }
 

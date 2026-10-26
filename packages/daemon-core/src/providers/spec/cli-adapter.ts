@@ -341,6 +341,9 @@ export class SpecCliAdapter implements CliAdapter {
     observeSendWrite(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void {
         this.driver.observeSendWrite?.(messageId, observer);
     }
+    /** SUBMIT-UNCONFIRMED-RECLAIM: see ISpecDriver.observeSubmitUnconfirmed / submitState. */
+    observeSubmitUnconfirmed(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void { this.driver.observeSubmitUnconfirmed?.(messageId, observer, confirmConsumption); }
+    submitState(messageId: string): 'in_flight' | 'confirmed' | 'unconfirmed' | 'unknown' { return this.driver.submitState?.(messageId) ?? 'unknown'; }
 
     async sendMessage(text: string, opts?: { force?: boolean; bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position: number } | { status: 'delivered' } | void> {
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessage(len=${text.length}${opts?.messageId ? ` id=${opts.messageId}` : ''})`);

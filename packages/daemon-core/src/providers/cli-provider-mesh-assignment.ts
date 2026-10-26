@@ -17,6 +17,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { isWorkerMcpEnabled } from '../runtime-defaults.js';
+import { emitDispatchFailed, emitTurnStarted, type TurnEvidencePort } from './turn-evidence-port.js';
 import {
 mergePendingMeshTaskAttachment,
 meshTaskAttachments,
@@ -219,6 +220,87 @@ export function currentMeshAttemptRef(settings: Record<string, any> | undefined)
     if (typeof attemptId !== 'string' || !attemptId.trim()) return null;
     const generation = settings?.meshActiveAttemptGeneration;
     return { attemptId, generation: typeof generation === 'number' && Number.isInteger(generation) && generation >= 0 ? generation : 0 };
+}
+
+/**
+ * The dispatch messageId of the task currently stamped on this session —
+ * `task:<taskId>:n<nonce>`, the same identity mesh/mesh-queue-dispatch-evidence.ts
+ * `dispatchMessageId` mints (spelled out here: providers/ must not value-import
+ * mesh/, check:boundaries). Null when no mesh task is stamped.
+ */
+export function currentMeshDispatchMessageId(settings: Record<string, any> | undefined): string | null {
+    const taskId = typeof settings?.meshActiveTaskId === 'string' ? settings.meshActiveTaskId.trim() : '';
+    if (!taskId) return null;
+    const nonce = settings?.meshActiveDispatchNonce;
+    return `task:${taskId}:n${typeof nonce === 'number' ? nonce : 0}`;
+}
+
+/** The narrow host the submit-verdict report reads (CliProviderInstance satisfies it). */
+type SubmitVerdictHost = { instanceId: string; settings: Record<string, any>; turnEvidencePort: TurnEvidencePort | null };
+
+/**
+ * Review f8c79690 R4-2: may a send under `messageId` / `attemptRef` be opted into
+ * the driver's verdict machinery? Only when it IS this session's installed mesh
+ * dispatch — the stamped task's `task:<id>:n<nonce>` and the stamped attempt —
+ * and a report could reach a ledger. An `attemptId` string alone (a malformed
+ * meshContext, a dashboard send) is not enough.
+ */
+export function canReportMeshSubmitVerdict(host: SubmitVerdictHost, messageId: string, attemptRef: string): boolean {
+    const expected = currentMeshDispatchMessageId(host.settings);
+    return !!expected && messageId === expected && !!host.turnEvidencePort
+        && typeof host.settings?.meshActiveAttemptId === 'string' && host.settings.meshActiveAttemptId === attemptRef;
+}
+
+/**
+ * SUBMIT-UNCONFIRMED-RECLAIM ①: the driver PROVED the write under `messageId`
+ * was not taken — after its budget and one re-paste its own body stayed the
+ * whole input row (exact native read) at an idle FSM with no other input, and
+ * the driver has cleared it (providers/spec/submit-verdict.ts). Returns false
+ * (synchronously) when that write is not this session's current mesh dispatch,
+ * or nothing could carry a report; the driver's composer is empty either way.
+ *
+ * Otherwise returns true and reports `dispatch_failed{submit_unconfirmed}`,
+ * which R24 reclaims (new nonce → new messageId; hard stop). One veto first
+ * (review f8c79690 R4-1): a fresh read of the session's own transcript since
+ * `firstWrittenAt` — the engine's FIRST body write under this messageId, never
+ * a re-stamped scalar (review R5-2) — that shows agent activity means the
+ * prompt WAS consumed after all: `turn_started{retro}` is reported instead.
+ * Only that positive read changes the outcome; an absent or unreadable
+ * transcript is not evidence either way (review R5-1), the composer proof is.
+ * After the read the dispatch identity (messageId, attempt, generation, port)
+ * is re-checked: a dispatch that moved on is not reported.
+ */
+export function reportMeshSubmitUnconfirmed(host: SubmitVerdictHost, messageId: string, firstWrittenAt: number): boolean {
+    const port = host.turnEvidencePort;
+    const expected = currentMeshDispatchMessageId(host.settings);
+    if (!expected || messageId !== expected || !port) return false;
+    const attemptRef = currentMeshAttemptRef(host.settings);
+    const taskId = String(host.settings.meshActiveTaskId);
+    const tag = `[${host.instanceId}] dispatch ${messageId} proven unconfirmed`;
+    const sameDispatch = (): boolean => {
+        const ref = currentMeshAttemptRef(host.settings);
+        return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port
+            && ref?.attemptId === attemptRef?.attemptId && ref?.generation === attemptRef?.generation;
+    };
+    const envelope = { sessionId: host.instanceId, observedBy: 'cli_fsm', source: 'input_service' as const, ...(attemptRef ? { attemptRef } : { taskId }) };
+    const fail = (): void => {
+        LOG.warn('MeshTaskAttach', `${tag} — reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ''}`);
+        emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: 'submit_unconfirmed' });
+    };
+    if (!port.confirmConsumption || !(Number.isFinite(firstWrittenAt) && firstWrittenAt > 0)) { fail(); return true; }
+    void port.confirmConsumption(host.instanceId, firstWrittenAt).then(
+        (check) => check,
+        () => 'unknown' as const,
+    ).then((check) => {
+        if (!sameDispatch()) { LOG.info('MeshTaskAttach', `${tag} — the dispatch moved on during the consumption read; not reported`); return; }
+        if (check === 'consumed') {
+            LOG.warn('MeshTaskAttach', `${tag} — but its transcript shows agent activity since the first write: the prompt was consumed; reporting turn_started, not a failure`);
+            emitTurnStarted(port, { ...envelope, retro: true });
+            return;
+        }
+        fail();
+    });
+    return true;
 }
 
 /**

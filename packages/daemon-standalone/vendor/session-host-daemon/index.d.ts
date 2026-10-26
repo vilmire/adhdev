@@ -107,6 +107,9 @@ declare class SessionHostServer extends EventEmitter {
     handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse>;
     private requireRuntime;
     private getAttachedClient;
+    /** Count and announce one accepted input BEFORE it reaches the PTY, so a
+     *  subscriber sees who wrote it before any output it causes. */
+    private announceInput;
     private emitEvent;
     private subscribeSocketToSession;
     private handleIncomingRequest;

@@ -36,6 +36,9 @@ import { startTurnLoops, stopTurnLoops } from '../../src/boot/stages/loops.js';
 import { __setSharedProcessTableSourceForTests, createProcessTableSource } from '../../src/process/process-table-snapshot.js';
 import { parsePosixPsOutput, type ProcessNodeInfo } from '../../src/process/session-process-tree.js';
 import type { TurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
+import { LOG } from '../../src/logging/logger.js';
+import { reportMeshSubmitUnconfirmed } from '../../src/providers/cli-provider-mesh-assignment.js';
+import { confirmLocalConsumption } from '../../src/boot/stages/mesh-runtime.js';
 
 afterEach(() => {
     __setSharedProcessTableSourceForTests(null);
@@ -65,6 +68,91 @@ function fakeComponents(settingsBySession: Record<string, Record<string, unknown
 const baseEvidence = { at: 1_000, source: 'fsm_edge', observedBy: 'daemon_wiring' } as const;
 
 describe('wireTurnLedger — S7 wiring', () => {
+    it('review d75636d6 F4: a proven submit_unconfirmed reclaim through the REAL boot ports hard-stops the worker session — it is never reused with a revoked bind', async () => {
+        const { components, portCalls } = fakeComponents({});
+        components.cliManager.adapters = new Map([['s1', { cliType: 'antigravity-cli' }]]);
+        components.cliManager.stopCli = vi.fn(async (args: any) => ({ ...(args?.meshWriterStop ?? {}), success: true, quiescent: true, incarnation: 'fixture-native-writer' }));
+        components.commandHandler = { handle: vi.fn(async () => ({ success: true, status: 'idle', messages: [{ role: 'user', content: 'TASK', timestamp: Date.now() - 30_000 }] })) };
+        const wiring = wireTurnLedger(components, { runMigration: false });
+        try {
+            const ref = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: 't1' };
+            const now = Date.now();
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: 'task:t1:n0', meshId: 'm1', nodeId: 'n1', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
+            wiring.ledger.observe({ ...baseEvidence, at: now, ...ref, eventId: 'r-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: 'task:t1:n0', outcome: 'delivered', via: 'local' } as any);
+            const host = { instanceId: 's1', settings: { meshActiveTaskId: 't1', meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a1', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
+            expect(reportMeshSubmitUnconfirmed(host, 'task:t1:n0', Date.now() - 35_590)).toBe(true);
+            for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+            expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'accepted', generation: 1 });
+            expect(components.cliManager.stopCli).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 's1', mode: 'hard' }));
+        } finally {
+            wiring.dispose();
+        }
+    });
+
+    it.each([
+        ['an outer command failure', { success: false, error: 'read failed' }],
+        ['a refused inner payload', { success: true, payload: { success: false, messages: [] } }],
+        ['a payload without a message list', { success: true, status: 'idle' }],
+    ])('review R5-1: %s is `unknown` — never `consumed`, never a license on its own', async (_label, result) => {
+        const { components } = fakeComponents({});
+        components.commandHandler = { handle: vi.fn(async () => result) };
+        expect(await confirmLocalConsumption(components, 's1', Date.now() - 10_000)).toBe('unknown');
+    });
+
+    it('review R5-1: a user row alone (the prompt echoed back) is not consumption', async () => {
+        const { components } = fakeComponents({});
+        const since = Date.now() - 10_000;
+        components.commandHandler = { handle: vi.fn(async () => ({ success: true, messages: [{ role: 'user', content: 'TASK', timestamp: since + 1_000 }] })) };
+        expect(await confirmLocalConsumption(components, 's1', since)).toBe('not_consumed');
+    });
+
+    it('review f8c79690 R4-1 (reviewer R4_CONSUMED): the agent started at +20 s but the FSM never noticed — the +35.59 s report re-reads the transcript since the FIRST write, reports turn_started, and nothing is stopped or requeued', async () => {
+        const { components, portCalls } = fakeComponents({});
+        components.cliManager.adapters = new Map([['s1', { cliType: 'antigravity-cli' }]]);
+        components.cliManager.stopCli = vi.fn(async () => ({ success: true }));
+        const injectedAt = Date.now() - 35_590;
+        components.commandHandler = { handle: vi.fn(async () => ({ success: true, status: 'idle', messages: [
+            { role: 'user', content: 'TASK', timestamp: injectedAt + 100 },
+            { role: 'assistant', content: 'working on it', timestamp: injectedAt + 20_000 },
+        ] })) };
+        const wiring = wireTurnLedger(components, { runMigration: false });
+        try {
+            const ref = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: 't1' };
+            wiring.ledger.observe({ ...baseEvidence, ...ref, eventId: 'c-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: 'task:t1:n0', meshId: 'm1', nodeId: 'n1', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
+            wiring.ledger.observe({ ...baseEvidence, ...ref, eventId: 'c-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: 'task:t1:n0', outcome: 'delivered', via: 'local' } as any);
+            const host = { instanceId: 's1', settings: { meshActiveTaskId: 't1', meshActiveDispatchNonce: 0, meshActiveAttemptId: 'a1', meshActiveAttemptGeneration: 0 }, turnEvidencePort: portCalls[0] };
+            expect(reportMeshSubmitUnconfirmed(host, 'task:t1:n0', injectedAt)).toBe(true);
+            for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+            expect(components.commandHandler.handle).toHaveBeenCalledWith('read_chat', expect.objectContaining({ sessionId: 's1', includeActivity: true }));
+            expect(wiring.ledger.getAttempt('a1')).toMatchObject({ state: 'generating', generation: 0 });
+            expect(components.cliManager.stopCli).not.toHaveBeenCalled();
+        } finally {
+            wiring.dispose();
+        }
+    });
+
+    it('SUBMIT-UNCONFIRMED-RECLAIM ② / R1: H2 (delivered, not consumed) reaches the wired redeliver port, which requests a probe of the attempt and re-sends nothing', async () => {
+        const { components } = fakeComponents({});
+        const submit = vi.fn(async () => ({ kind: 'delivered' }));
+        components.cliManager.input.submit = submit;
+        const wiring = wireTurnLedger(components, { runMigration: false });
+        const info = vi.spyOn(LOG, 'info');
+        try {
+            const ref = { attemptRef: { attemptId: 'a1', generation: 0 }, taskId: 't1' };
+            wiring.ledger.observe({ ...baseEvidence, ...ref, eventId: 'e-acc', source: 'dispatch', sessionId: 's1', kind: 'dispatch_accepted', scope: 'mesh_queue', messageId: 'task:t1:n0', meshId: 'm1', nodeId: 'n1', providerType: 'antigravity-cli', coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'r', sessionId: 'coord' } } as any);
+            wiring.ledger.observe({ ...baseEvidence, ...ref, eventId: 'e-dlv', source: 'dispatch', sessionId: 's1', kind: 'delivered', messageId: 'task:t1:n0', outcome: 'delivered', via: 'local' } as any);
+            const h2 = wiring.ledger.observe({ ...baseEvidence, ...ref, eventId: 'e-h2', source: 'scheduler', sessionId: 's1', kind: 'hold_expired', holdId: 'a1:await_consume', reason: 'await_consume' } as any);
+            expect(h2.rule).toBe('H2');
+            await new Promise((resolve) => setImmediate(resolve));
+            expect(info.mock.calls.some(([, m]) => String(m).includes('not re-sending'))).toBe(true);
+            expect(wiring.probePort.maintenanceInventory().early).toContain('a1'); // remembered until the scheduler binds
+            expect(submit).not.toHaveBeenCalled();
+        } finally {
+            info.mockRestore();
+            wiring.dispose();
+        }
+    });
+
     it('binds the turn IPC to the ONE ledger + the notice runtime, and unbinds both on dispose', () => {
         const { components } = fakeComponents({});
         const wiring = wireTurnLedger(components, { runMigration: false });

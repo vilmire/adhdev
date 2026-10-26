@@ -101,6 +101,17 @@ export interface SessionInputTarget {
     /** TASKBUBBLE-DUP ack; `sourceMessageId` lands on the ack's `meta.sourceMessageId`. */
     observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
     recordAcknowledgedUserInput?(input: OutboundMessage['input'], sourceMessageId?: string, receipt?: OutgoingReceipt): void;
+    /**
+     * SUBMIT-UNCONFIRMED-RECLAIM: the driver proved the NEXT write under
+     * `messageId` was not taken (see SendSubmitEngine `unconfirmed`).
+     */
+    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
+    /** Transcript read used before a recovery re-paste. Unknown/absent is not proof the turn never started. */
+    confirmSubmitConsumption?(sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'>;
+    /** The instance's half: turn a proven-unconfirmed verdict on its mesh dispatch (first body write at `firstWrittenAt`) into ledger evidence; false = not its dispatch. */
+    reportSubmitUnconfirmed?(messageId: string, firstWrittenAt: number): boolean;
+    /** True only when `messageId` is the instance's CURRENTLY installed mesh dispatch (same attempt) and it can report a verdict. */
+    canReportSubmitVerdict?(messageId: string, attemptRef: string): boolean;
 }
 
 /**
@@ -329,6 +340,25 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         noticeObserver?: (state: 'started'|'submitted'|'uncertain') => void,
     ): Promise<SubmitOutcome> {
         const receipt = outgoingAttempts.get(msg.messageId);
+        // SUBMIT-UNCONFIRMED-RECLAIM, MESH DISPATCHES ONLY (review 9719d681
+        // R3-1): registering this observer is what opts the write into the
+        // driver's verdict machinery (exact composer reads, one re-paste, a
+        // quarantined slot on doubt), and only a dispatch with a turn-ledger
+        // attempt has an owner that can reclaim it. Every other send (a human's
+        // chat, a notice) keeps main's give-up byte for byte. On a proven
+        // `unconfirmed` the composer has already been cleared; the instance
+        // reports it and the ledger reclaims under a new nonce — a NEW messageId,
+        // so this id's settled outcome is kept and it is never re-written.
+        // Review f8c79690 R4-2: an attemptId string alone proves nothing — the
+        // instance must confirm this messageId IS its installed dispatch (task,
+        // nonce and attempt as stamped) and that it can report a verdict.
+        let reportable = false;
+        try { reportable = !!msg.meshAttemptRef && target.canReportSubmitVerdict?.(msg.messageId, msg.meshAttemptRef) === true; } catch { reportable = false; }
+        if (reportable) target.observeSubmitUnconfirmed?.(msg.messageId, (verdict, info) => {
+            log('warn', `submit(${msg.messageId}) submit verdict '${verdict}' (proven not taken after one re-paste; the composer was cleared) — reporting it (session ${msg.sessionId})`);
+            try { return target.reportSubmitUnconfirmed?.(msg.messageId, info.firstWrittenAt) === true; }
+            catch (e) { log('warn', `submit(${msg.messageId}) submit-unconfirmed report failed: ${(e as Error)?.message ?? e}`); return false; }
+        }, target.confirmSubmitConsumption ? (sinceMs) => target.confirmSubmitConsumption!(sinceMs) : undefined);
         if (receipt||noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
             if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}}
             if(!receipt)return;

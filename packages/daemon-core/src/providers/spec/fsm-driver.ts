@@ -36,7 +36,7 @@ import {
     initialState, stateById, statusForState, modalKindForState, outgoingTransitions,
 } from './fsm-types.js';
 import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
-import { SendSubmitEngine, type ClaimedQueuedSend } from './send-submit-engine.js';
+import { SendSubmitEngine, type ClaimedQueuedSend, type SubmitState } from './send-submit-engine.js';
 import { RedrawNudger } from './redraw-nudge.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
@@ -298,6 +298,7 @@ export class FsmDriver implements ISpecDriver {
     }
 
     dispatch(cmd: DashboardCommand): void {
+        if (cmd.kind !== 'send_message' && cmd.kind !== 'resize' && cmd.kind !== 'shutdown') this.sends.noteForeignInput(); // review 2d2823f3 P1-b: other input revokes composer ownership
         switch (cmd.kind) {
             case 'send_message': this.sends.handleSendMessage(cmd.text, cmd.bracketedPaste); return;
             case 'pty_write': this.adapter.send_keys(cmd.data); return;
@@ -311,18 +312,13 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** QUEUED-SEND-LOSS: see ISpecDriver.sendMessageWithDisposition. */
-    observeSendWrite(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void {
-        this.sends.observeSendWrite(messageId, observer);
-    }
-
-    sendMessageWithDisposition(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition {
-        return this.sends.handleSendMessage(text, bracketedPaste, messageId);
-    }
-
+    observeSendWrite(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void { this.sends.observeSendWrite(messageId, observer); }
+    /** SUBMIT-UNCONFIRMED-RECLAIM: see ISpecDriver.observeSubmitUnconfirmed / submitState. */
+    observeSubmitUnconfirmed(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void { this.sends.observeSubmitUnconfirmed(messageId, observer, confirmConsumption); }
+    submitState(messageId: string): SubmitState { return this.sends.submitState(messageId); }
+    sendMessageWithDisposition(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition { return this.sends.handleSendMessage(text, bracketedPaste, messageId); }
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome {
-        return this.sends.sendMessageDuringGeneration(text, bracketedPaste, messageId);
-    }
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome { return this.sends.sendMessageDuringGeneration(text, bracketedPaste, messageId); }
 
     /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
     supportsMidGenerationQueue(): boolean {
@@ -1171,6 +1167,7 @@ export class FsmDriver implements ISpecDriver {
      * keeps ignoring the return (fire-and-forget UI clicks).
      */
     clickModalButton(index: number): boolean {
+        this.sends.noteForeignInput();
         return this.handleClickModalButton(index);
     }
 

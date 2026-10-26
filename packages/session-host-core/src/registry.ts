@@ -20,6 +20,14 @@ interface SessionRuntimeState {
 
 export class SessionHostRegistry {
   private sessions = new Map<string, SessionRuntimeState>();
+  /** This registry's lifetime; every inputEpoch it mints starts with it. */
+  private readonly lifetimeId = generateUUID();
+  private epochCounter = 0;
+
+  private mintInputEpoch(): string {
+    this.epochCounter += 1;
+    return `${this.lifetimeId}:${this.epochCounter}`;
+  }
 
   createSession(payload: CreateSessionPayload): SessionHostRecord {
     const sessionId = payload.sessionId || generateUUID();
@@ -55,6 +63,8 @@ export class SessionHostRegistry {
       lifecycle: 'starting',
       writeOwner: null,
       attachedClients: initialClient,
+      inputSeq: 0,
+      inputEpoch: this.mintInputEpoch(),
       buffer: {
         scrollbackBytes: 0,
         snapshotSeq: 0,
@@ -78,6 +88,16 @@ export class SessionHostRegistry {
 
   restoreSession(record: SessionHostRecord, snapshot?: { seq: number; text: string } | null): SessionHostRecord {
     const cloned = this.cloneRecord(record);
+    // A record persisted by a host that predates inputSeq: this host counts from here.
+    if (typeof cloned.inputSeq !== 'number') cloned.inputSeq = 0;
+    // A new counter lifetime unless this is the SAME live record restored in
+    // place with its count intact (resize does that): a record loaded into
+    // this process for the first time, or one whose count went backwards,
+    // cannot be compared with anything announced before (review R8-2).
+    const live = this.sessions.get(cloned.sessionId)?.record;
+    const sameLifetime = !!live && typeof live.inputEpoch === 'string' && cloned.inputEpoch === live.inputEpoch
+      && cloned.inputSeq >= (live.inputSeq ?? 0);
+    if (!sameLifetime) cloned.inputEpoch = this.mintInputEpoch();
     this.sessions.set(cloned.sessionId, {
       record: cloned,
       buffer: (() => {
@@ -151,6 +171,22 @@ export class SessionHostRegistry {
     }
     state.record.lastActivityAt = Date.now();
     return this.cloneRecord(state.record);
+  }
+
+  /** Count one accepted input (see SessionHostRecord.inputSeq); returns its number. */
+  recordInput(sessionId: string): number {
+    const state = this.requireSession(sessionId);
+    state.record.inputSeq = (typeof state.record.inputSeq === 'number' ? state.record.inputSeq : 0) + 1;
+    if (typeof state.record.inputEpoch !== 'string') state.record.inputEpoch = this.mintInputEpoch();
+    return state.record.inputSeq;
+  }
+
+  /** The current input counter (see SessionHostInputState). */
+  getInputState(sessionId: string): { inputSeq: number; inputEpoch: string } {
+    const state = this.requireSession(sessionId);
+    if (typeof state.record.inputSeq !== 'number') state.record.inputSeq = 0;
+    if (typeof state.record.inputEpoch !== 'string') state.record.inputEpoch = this.mintInputEpoch();
+    return { inputSeq: state.record.inputSeq, inputEpoch: state.record.inputEpoch };
   }
 
   acquireWrite(payload: AcquireWritePayload): SessionHostRecord {

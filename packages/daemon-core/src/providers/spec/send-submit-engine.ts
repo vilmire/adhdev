@@ -78,6 +78,8 @@ const UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
 /** A CLI's collapsed-paste chip in the composer (Claude Code / Codex). */
 export const PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
 import type { SendDisposition } from './submit-policy.js';
+import { SubmitVerdictMachine, UNCONFIRMED_VERDICT_GAP_MS, PASTE_GATE_MAX_WAIT_MS, type ConsumptionProbe, type CurrentSend, type SubmitState, type SubmitVerdictObserver } from './submit-verdict.js';
+export type { SubmitState, SubmitVerdict, SubmitVerdictInfo, SubmitVerdictObserver } from './submit-verdict.js';
 
 // ── send_message serialization (SEND-OVERLAP) ────────────────────────────────
 //
@@ -279,6 +281,18 @@ export class SendSubmitEngine {
         attempt.observer?.(state);
         if (state === 'submitted' && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
     }
+    /** A recovery write: only if the session host's input stream is still the
+     *  one captured at this call (review R9-1/R9-2). False = refused, or no host guard. */
+    private writeKeysGuarded(text: string): Promise<boolean> {
+        const write = this.host.adapter.writeIfInputUnchanged;
+        if (typeof write !== 'function') return Promise.resolve(false);
+        let result: Promise<boolean>;
+        try { result = Promise.resolve(write.call(this.host.adapter, text)).then((ok) => ok === true, () => false); }
+        catch { return Promise.resolve(false); }
+        this.verdicts.noteOwnWrite();
+        return result;
+    }
+
     private writeKeys(text: string, submit = false, attempt: WriteAttempt | null | undefined = this.writeAttempt): void {
         let result: ReturnType<TerminalAdapter['send_keys']>;
         try { result = this.host.adapter.send_keys(text); }
@@ -286,6 +300,7 @@ export class SendSubmitEngine {
             if (attempt) this.notifyWrite(attempt, 'uncertain');
             throw error;
         }
+        this.verdicts.noteOwnWrite();
         if (!attempt) return;
         // Promise<void> is the session-host send_input acknowledgment. Plain
         // void is an unacknowledged direct write and never becomes proof.
@@ -337,7 +352,39 @@ export class SendSubmitEngine {
     private plainSubmitTimer: ReturnType<typeof setTimeout> | null = null;
     private plainSubmitAttempt: WriteAttempt | null | undefined = null;
 
-    constructor(private readonly host: DriverHost) {}
+    /** SUBMIT-UNCONFIRMED-RECLAIM ①: the verdict on an opted-in (mesh) send — see submit-verdict.ts. */
+    private readonly verdicts: SubmitVerdictMachine;
+
+    constructor(private readonly host: DriverHost) {
+        this.verdicts = new SubmitVerdictMachine({
+            specTag: () => host.specTag(),
+            currentStatus: () => host.currentStatus(),
+            adapter: host.adapter,
+            writeOwnKeysGuarded: (keys) => {
+                const written = this.host.adapter.writeIfInputUnchanged(keys);
+                this.verdicts.noteOwnWrite();
+                return written;
+            },
+            rewrite: (send) => {
+                // The re-paste carries no write receipt: its first write was acknowledged.
+                // Its body and its submit key are guarded writes (review R9-2): a human
+                // draft that landed after the clear must not become 'X[paste]' plus a CR.
+                this.writeAttempt = undefined;
+                this.sendInFlight = true;
+                this.sendInFlightAt = Date.now();
+                this.actuallySendMessage(send.text, send.bracketedPaste, { guardedRecovery: true });
+            },
+            slotTaken: () => this.sendInFlight,
+            releaseSlot: () => { this.sendInFlight = false; this.armLatchWatchdog(UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS); },
+        });
+    }
+
+    /** SUBMIT-UNCONFIRMED-RECLAIM: observe (and opt into) the verdict on the NEXT write under `messageId`. */
+    observeSubmitUnconfirmed(messageId: string, observer: SubmitVerdictObserver, confirmConsumption?: ConsumptionProbe): void { this.verdicts.observe(messageId, observer, confirmConsumption); }
+    /** SUBMIT-UNCONFIRMED-RECLAIM: see SubmitState. */
+    submitState(messageId: string): SubmitState { return this.verdicts.submitState(messageId, this.sendInFlight || this.hasInFlightSubmit()); }
+    /** Any input into this PTY that is not the engine's own revokes composer ownership. */
+    noteForeignInput(): void { this.verdicts.noteForeignInput(); }
 
     /** Number of bodies still parked, for shutdown logging. */
     get queueDepth(): number { return this.pendingSends.length; }
@@ -353,6 +400,7 @@ export class SendSubmitEngine {
      *  so a torn-down driver never fires a CR into a dead PTY. */
     cancelTimers(): void {
         this.writeObservers.clear();
+        this.verdicts.cancel();
         this.writeAttempt = undefined;
         this.plainSubmitAttempt = null;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
@@ -547,6 +595,8 @@ export class SendSubmitEngine {
     /** Human-readable reason a send was queued — logged, never used for control flow. */
     private sendBlockedReason(): string {
         if (!this.host.readySeenOnce) return 'machine not ready yet';
+        const held = this.verdicts.holdReason();
+        if (held) return held;
         if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
         if (this.lastPreSendAuthBlocked) return 'auth_required';
         return `machine is ${this.host.currentStatus()}`;
@@ -556,6 +606,8 @@ export class SendSubmitEngine {
      *  visibly consumed cannot wedge the queue permanently. */
     private isSendInFlight(): boolean {
         if (!this.sendInFlight) return false;
+        // A held mesh composer has no self-expiry (submit-verdict.ts quarantine).
+        if (this.verdicts.holding()) return true;
         if (Date.now() - this.sendInFlightAt > SEND_IN_FLIGHT_MAX_MS) {
             LOG.warn('FsmDriver', `[${this.host.specTag()}] in-flight send latch expired after ${SEND_IN_FLIGHT_MAX_MS}ms — releasing`);
             this.sendInFlight = false;
@@ -571,6 +623,7 @@ export class SendSubmitEngine {
         this.sendInFlight = true;
         this.sendInFlightAt = Date.now();
         this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
+        this.verdicts.begin(messageId, text, bracketedPaste);
         this.actuallySendMessage(text, bracketedPaste);
     }
 
@@ -612,6 +665,8 @@ export class SendSubmitEngine {
         // Leaving idle is the observable proof the CLI consumed the submit.
         if (this.sendInFlight && status !== 'idle') {
             this.sendInFlight = false;
+            this.verdicts.releaseOnActivity();
+            this.verdicts.noteConfirmed(this.verdicts.current);
         }
         if (status !== 'idle') return;
         // SEND-NOW-WRONG-ITEM: an interrupt caller owns the next write. Draining
@@ -632,6 +687,7 @@ export class SendSubmitEngine {
         // Small delay for parity with the ready-gate drain: it lets the prompt
         // frame settle before the body lands.
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
+        this.verdicts.reserve(next.messageId, next.text);
         this.pendingSendDrainTimer = setTimeout(() => {
             this.pendingSendDrainTimer = null;
             if (this.host.currentStatus() !== 'idle' || this.isPreSendAuthRequired()) {
@@ -704,7 +760,8 @@ export class SendSubmitEngine {
         return this.win32SubmitTimer !== null
             || this.win32WriteTimer !== null
             || this.plainSubmitTimer !== null
-            || this.pendingSendDrainTimer !== null;
+            || this.pendingSendDrainTimer !== null
+            || this.verdicts.stepping();
     }
 
     /** ENTER-LOSS layer ① — see ISpecDriver.whenSubmitDrained. Polling rather
@@ -725,7 +782,7 @@ export class SendSubmitEngine {
     }
 
 
-    private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean; attempt?: WriteAttempt }): void {
+    private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean; attempt?: WriteAttempt; guardedRecovery?: boolean }): void {
         const attempt = opts?.midGeneration ? (opts.attempt ?? null) : this.writeAttempt;
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
@@ -740,6 +797,21 @@ export class SendSubmitEngine {
         const wrapInPaste = process.platform !== 'win32'
             && ((bracketedPaste === true && sm.posix_bracketed_paste_for_images === true)
                 || sm.posix_bracketed_paste_text === true);
+
+        // SUBMIT-UNCONFIRMED-RECLAIM (review R9-2): the one recovery re-paste.
+        // Body and submit key both go through the host's input-unchanged write.
+        // A refusal (human text landed) writes nothing further — no paste, no CR.
+        if (opts?.guardedRecovery) {
+            const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
+            const pasteGate = sm.posix_bracketed_paste_text === true && this.verdicts.isObserved(this.verdicts.current);
+            void this.writeKeysGuarded(body).then((ok) => {
+                if (!ok) { this.verdicts.abortRecovery('the session host refused the recovery re-paste because input changed'); return; }
+                if (this.verdicts.current?.phase === 'done') return;
+                this.markBodyWrite();
+                this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { ...(pasteGate ? { pasteGate: true } : { skipEchoGate: true }), guarded: true });
+            });
+            return;
+        }
 
         // SEND-NOW-AGENT-QUEUE: a mid-generation write takes the PLAIN split path
         // — body write, timed gap, submit key — and never the echo-verified one,
@@ -808,7 +880,12 @@ export class SendSubmitEngine {
             this.writeKeys(`${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}`, false, attempt);
             if (attempt) attempt.bodyFinished = true;
             this.markBodyWrite();
-            this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, { skipEchoGate: true });
+            // SUBMIT-UNCONFIRMED-RECLAIM: an opted-in mesh dispatch of a text
+            // paste waits for its own chip on the input row (submit-verdict.ts)
+            // — the rendered body is its proof later. Every other send keeps
+            // the ungated first CR.
+            const pasteGate = sm.posix_bracketed_paste_text === true && this.verdicts.isObserved(this.verdicts.current);
+            this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text, pasteGate ? { pasteGate: true } : { skipEchoGate: true });
             return;
         }
 
@@ -979,8 +1056,9 @@ export class SendSubmitEngine {
      *  idle and stop the instant the agent leaves idle (submitted → generating /
      *  approval). This preserves the win32 lone-CR-swallow handling.
      */
-    private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string, opts?: { skipEchoGate?: boolean }): void {
+    private scheduleVerifiedSubmit(submitKey: string, initialDelayMs: number, body: string, opts?: { skipEchoGate?: boolean; pasteGate?: boolean; guarded?: boolean }): void {
         const writeAttempt = this.writeAttempt;
+        const send: CurrentSend | null = this.verdicts.current;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         const startedAt = Date.now();
         // BLANK-ENTER-PILEUP: per-provider resend budget (default unchanged at
@@ -1041,8 +1119,16 @@ export class SendSubmitEngine {
         // attempts instead of spraying them in under 5 seconds.
         const fire = (attempt: number, bodyConfirmed: boolean): void => {
             this.win32SubmitTimer = null;
-            this.writeKeys(submitKey, true, writeAttempt);
+            const continueAfterKey = (): void => {
             if (attempt + 1 >= maxResends) {
+                if (this.verdicts.isObserved(send) && this.verdicts.current === send) {
+                    // SUBMIT-UNCONFIRMED-RECLAIM ①: an opted-in mesh dispatch is
+                    // judged one gap later, so the last key gets its chance — see
+                    // submit-verdict.ts. Every other send keeps main's give-up below.
+                    this.verdicts.awaitVerdict(send);
+                    this.win32SubmitTimer = setTimeout(() => { this.win32SubmitTimer = null; this.verdicts.judge(send); }, UNCONFIRMED_VERDICT_GAP_MS);
+                    return;
+                }
                 // SUBMIT-SILENT-FAILURE detection. We have spent the entire resend
                 // budget and the FSM never left 'idle' — the body is sitting unsent in
                 // the composer. This is precisely the state that previously presented
@@ -1083,6 +1169,7 @@ export class SendSubmitEngine {
                 // Left the idle composer → it submitted; stop resending.
                 if (this.host.currentStatus() !== 'idle') {
                     this.win32SubmitTimer = null;
+                    if (this.verdicts.isObserved(send)) this.verdicts.noteConfirmed(send);
                     if (attempt > 0) {
                         LOG.warn('FsmDriver', `[${this.host.specTag()}] submit confirmed only after ${attempt + 1} attempts (len=${body.length})`);
                     }
@@ -1092,8 +1179,23 @@ export class SendSubmitEngine {
                 // body may echo in LATER while resends are already underway (a slow
                 // CLI that is still ingesting), at which point remaining attempts
                 // should speed back up to the fast cadence.
+                if (opts?.pasteGate && send) this.verdicts.noteRendered(send);
                 fire(attempt + 1, bodyConfirmed || bodyEchoed());
             }, gapMs);
+            };
+            if (opts?.guarded) {
+                if (!send || !this.verdicts.noteRendered(send)) {
+                    this.verdicts.abortRecovery('the recovery paste is no longer the sole rendered composer content before the submit key');
+                    return;
+                }
+                void this.writeKeysGuarded(submitKey).then((ok) => {
+                    if (!ok) { this.verdicts.abortRecovery('the session host refused the submit key because input changed'); return; }
+                    continueAfterKey();
+                });
+                return;
+            }
+            this.writeKeys(submitKey, true, writeAttempt);
+            continueAfterKey();
         };
 
         // Echo-gate: hold the first CR until the body is CONFIRMED in the composer, not
@@ -1118,9 +1220,21 @@ export class SendSubmitEngine {
             // the verified-resend net below carries a CR eaten mid-paste.
             // Default: body present in the composer AND output quiet (full body
             // arrived) → submit.
-            if (opts?.skipEchoGate ? true : (bodyEchoed() && settled)) { fire(0, true); return; }
+            // pasteGate (an opted-in mesh text paste): "present" is this send's own
+            // chip/body on the exact input row (submit-verdict.ts noteRendered).
+            if (opts?.pasteGate) {
+                if (send && this.verdicts.noteRendered(send) && settled) { fire(0, true); return; }
+            } else if (opts?.skipEchoGate ? true : (bodyEchoed() && settled)) { fire(0, true); return; }
             // Last-resort blind fire so a body that truly never confirms cannot hang.
-            if (waited >= WIN32_ECHO_MAX_WAIT_MS) {
+            if (waited >= (opts?.pasteGate ? PASTE_GATE_MAX_WAIT_MS : WIN32_ECHO_MAX_WAIT_MS)) {
+                // A recovery re-paste must never blind-submit over text we did not
+                // just prove is ours (review R9-2: 'X[paste chip]' then a CR).
+                if (opts?.guarded) {
+                    if (send && this.verdicts.noteRendered(send)) { fire(0, true); return; }
+                    LOG.warn('FsmDriver', `[${this.host.specTag()}] re-paste was not seen on the input row after ${waited}ms (len=${body.length}) — not submitting`);
+                    this.verdicts.abortRecovery('the re-paste was not seen on the input row; not submitting');
+                    return;
+                }
                 LOG.warn(
                     'FsmDriver',
                     `[${this.host.specTag()}] body never confirmed in composer after ${waited}ms (len=${body.length}) — ` +

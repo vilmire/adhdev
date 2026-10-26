@@ -53,6 +53,16 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private currentPid = 0;
     private closed = false;
     private metadata: PtyRuntimeMetadata | null = null;
+    /**
+     * Host input provenance (see inputProvenance). `supported` is set only by a
+     * successful `get_input_state` — a host that rejects that request type
+     * cannot be trusted even if a record it passes through carries inputSeq.
+     * `connected` drops the moment the socket does (announcements may be lost).
+     */
+    private readonly input = {
+        supported: false, connected: true, epoch: null as string | null,
+        lastEventSeq: null as number | null, highestSeq: 0, foreign: 0, ownerAway: 0, gaps: 0,
+    };
     private bootFailure: PtyRuntimeExitInfo | null = null;
     private lostRuntimeReported = false;
 
@@ -101,6 +111,103 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             writeOwner: this.metadata.writeOwner ? { ...this.metadata.writeOwner } : null,
             attachedClients: this.metadata.attachedClients?.map((client) => ({ ...client })) || [],
         } : null;
+    }
+
+    /** See PtyRuntimeTransport.otherWritableClients. */
+    otherWritableClients(): boolean | null {
+        const clients = this.metadata?.attachedClients;
+        if (!Array.isArray(clients)) return null;
+        // The host lets an UNATTACHED client take ownership and write (review
+        // R7-1), so a foreign owner counts whether or not it is in the list.
+        const owner = this.metadata?.writeOwner;
+        if (owner && owner.clientId !== this.options.clientId) return true;
+        return clients.some((client) => client.clientId !== this.options.clientId && client.type !== 'daemon' && client.readOnly !== true);
+    }
+
+    /** See PtyRuntimeTransport.inputProvenance. */
+    inputProvenance(): { foreign: number; ownerAway: number; gaps: number; complete: boolean } | null {
+        const s = this.input;
+        if (!s.supported) return null;
+        return {
+            foreign: s.foreign, ownerAway: s.ownerAway, gaps: s.gaps,
+            complete: s.connected && s.lastEventSeq !== null && s.lastEventSeq >= s.highestSeq,
+        };
+    }
+
+    /** Start counting afresh from (epoch, seq) — after a counter we cannot
+     *  relate to the one we followed. Counted as a gap, so any key taken
+     *  before it never matches one taken after (review R8-2). */
+    private rebaselineInput(epoch: string, seq: number): void {
+        const s = this.input;
+        if (s.epoch !== null) s.gaps += 1;
+        s.epoch = epoch;
+        s.lastEventSeq = seq;
+        s.highestSeq = seq;
+    }
+
+    /** A host record's (inputEpoch, inputSeq): how far the host has counted. */
+    private noteRecordInputSeq(record: Partial<SessionHostRecord> | undefined): void {
+        const seq = record?.inputSeq;
+        if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return;
+        const s = this.input;
+        if (s.epoch === null) return; // not yet established by get_input_state
+        const epoch = typeof record?.inputEpoch === 'string' ? record.inputEpoch : null;
+        if (epoch !== s.epoch) { this.rebaselineInput(epoch ?? `unknown:${Date.now()}`, seq); return; }
+        if (seq < s.highestSeq) { this.rebaselineInput(epoch, seq); return; } // went backwards
+        if (seq > s.highestSeq) s.highestSeq = seq;
+    }
+
+    /**
+     * Ask the host for its input counter (connect / reconnect). A host that
+     * does not know `get_input_state` never becomes trusted; one that does
+     * re-establishes the account — as a NEW baseline after a reconnect, since
+     * announcements during the outage may have been lost.
+     */
+    private async refreshInputState(): Promise<void> {
+        const s = this.input;
+        try {
+            const res = await this.client.request<{ inputSeq: number; inputEpoch: string }>({ type: 'get_input_state', payload: { sessionId: this.options.runtimeId } });
+            const r = res.success ? res.result : undefined;
+            if (!r || typeof r.inputSeq !== 'number' || typeof r.inputEpoch !== 'string') { s.supported = false; return; }
+            this.rebaselineInput(r.inputEpoch, r.inputSeq);
+            s.supported = true;
+            s.connected = true;
+        } catch {
+            s.supported = false;
+        }
+    }
+
+    /**
+     * SUBMIT-UNCONFIRMED-RECLAIM (review R8-1, R9-1): write `data` only if the
+     * host's input stream is still exactly where this transport accounted it
+     * at the moment the caller decided to write. That (epoch, seq) is captured
+     * BEFORE the queue wait. An announcement that arrives while this write
+     * waits — a human's 'X' — must not be adopted as the expected sequence, or
+     * the host would accept the write and a guarded DEL would delete their
+     * text. The host then checks that same decision-time pair and writes in
+     * one step (`send_input_if_seq`). No ownership is taken. Resolves false
+     * when the stream moved, on any refusal, or when provenance is not known
+     * and complete; a host without the request refuses it.
+     */
+    writeIfInputUnchanged(data: string): Promise<boolean> {
+        const check = captureMaintenanceAdmission();
+        const decidedEpoch = this.input.epoch;
+        const decidedSeq = this.input.lastEventSeq;
+        const decided = this.inputProvenance();
+        return withMaintenanceAdmission(() => this.enqueue(async () => {
+            check();
+            if (!decided || !decided.complete || decidedEpoch === null || decidedSeq === null) return false;
+            const s = this.input;
+            const prov = this.inputProvenance();
+            if (!prov || !prov.complete || s.epoch !== decidedEpoch || s.lastEventSeq !== decidedSeq) return false;
+            const response = await this.client.request<SessionHostRecord>({
+                type: 'send_input_if_seq',
+                payload: { sessionId: this.options.runtimeId, clientId: this.options.clientId, data, expectedInputSeq: decidedSeq, expectedInputEpoch: decidedEpoch },
+            });
+            if (!response.success) return false;
+            this.noteRecordInputSeq(response.result);
+            return true;
+        }));
     }
 
     onData(callback: (data: string) => void): void {
@@ -158,6 +265,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 if (isLostRuntimeError(response.error)) this.reportLostRuntime(response.error!);
                 throw new Error(response.error || `Failed to write to runtime ${this.options.runtimeId}`);
             }
+            this.noteRecordInputSeq(response.result as Partial<SessionHostRecord> | undefined);
         }));
     }
 
@@ -309,6 +417,10 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         }
         this.unsubscribe = this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));
         this.unsubscribeDisconnect = this.client.onDisconnect(() => {
+            // Announcements may be lost from here on: provenance is unknown
+            // (and any earlier key void) until a fresh get_input_state (R8-3).
+            this.input.connected = false;
+            this.input.gaps += 1;
             if (this.closed) return;
             void this.reconnectAndReattach();
         });
@@ -376,6 +488,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         }
 
         this.currentPid = record.osPid || 0;
+        await this.refreshInputState();
         this.updateMetadata(record);
 
         const ownerResponse = await this.client.request<SessionHostRecord>({
@@ -422,13 +535,30 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             return;
         }
         if (event.type === 'write_owner_changed') {
+            const ownerId = event.owner?.clientId;
+            if (ownerId && ownerId !== this.options.clientId) this.input.ownerAway += 1;
             this.metadata = {
                 ...(this.metadata || { runtimeId: this.options.runtimeId }),
                 writeOwner: event.owner ? {
                     clientId: event.owner.clientId,
                     ownerType: event.owner.ownerType,
                 } : null,
+                // acquireWrite makes the host registry's client writable (and it
+                // stays so after release): mirror it, or a promoted viewer would
+                // still read as read-only here (review R7-2).
+                ...(ownerId && this.metadata?.attachedClients ? {
+                    attachedClients: this.metadata.attachedClients.map((client) => (client.clientId === ownerId ? { ...client, readOnly: false } : client)),
+                } : {}),
             };
+            return;
+        }
+        if (event.type === 'session_input') {
+            const s = this.input;
+            if (s.epoch !== null && event.epoch !== s.epoch) { this.rebaselineInput(event.epoch, event.seq); if (event.clientId !== this.options.clientId) s.foreign += 1; return; }
+            if (s.lastEventSeq !== null && event.seq !== s.lastEventSeq + 1) s.gaps += 1;
+            s.lastEventSeq = s.lastEventSeq === null ? event.seq : Math.max(s.lastEventSeq, event.seq);
+            if (event.seq > s.highestSeq) s.highestSeq = event.seq;
+            if (event.clientId !== this.options.clientId) s.foreign += 1;
             return;
         }
         if (event.type === 'client_attached') {
@@ -491,6 +621,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     }
 
     private updateMetadata(record: SessionHostRecord): void {
+        this.noteRecordInputSeq(record);
         this.metadata = {
             osPid: record.osPid,
             startedAt: record.startedAt,
@@ -525,11 +656,11 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         void this.enqueue(() => withMaintenanceAdmission(async () => { check(); await action(); })).catch(() => {});
     }
 
-    private enqueue(action: () => Promise<void>): Promise<void> {
+    private enqueue<T = void>(action: () => Promise<T>): Promise<T> {
         const operation = this.operationChain
             .then(() => this.ready)
             .then(action)
-        this.operationChain = operation.catch((error) => {
+        this.operationChain = operation.then(() => undefined, (error) => {
             LOG.warn('CLI', `[session-host:${this.options.runtimeId}] ${error?.message || error}`);
         });
         return operation;
@@ -574,6 +705,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                         continue;
                     }
                     if (attachResponse.result) {
+                        await this.refreshInputState();
                         this.updateMetadata(attachResponse.result);
                         if (attachResponse.result.lifecycle === 'stopped' || attachResponse.result.lifecycle === 'failed') {
                             const term = attachResponse.result.termination;

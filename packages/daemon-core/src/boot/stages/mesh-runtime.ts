@@ -82,6 +82,8 @@ import { LOG } from '../../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../daemon-components.js';
 import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
+import { redeliverDispatch } from '../../mesh/mesh-dispatch-redelivery.js';
+import { unwrapReadChatPayload } from '../../mesh/turn-ledger/probe.js';
 
 /** Build the components object hosts and mesh modules consume. */
 export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents {
@@ -289,6 +291,9 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             detachLocalMeshTaskStamp(components, request);
         },
         probe: (e) => lateProbe.port(e),
+        // SUBMIT-UNCONFIRMED-RECLAIM ②: H2 lands here — probe now, never
+        // re-send (mesh-dispatch-redelivery.ts explains why).
+        redeliver: (e) => { redeliverDispatch(e, { probe: (attemptId) => lateProbe.port({ attemptId }) }); },
     };
     const backgroundWork = createRuntimeBackgroundWorkMonitor(components);
     const ledger = createMeshRuntimeTurnLedger({
@@ -497,6 +502,7 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
         // R9r: a live worker-MCP bind ⇒ the worker can report, so its idle end
         // awaits the report instead of committing (stamped on THIS daemon).
         reportExpectedFor: (sessionId) => hasLiveWorkerSessionBind(sessionId),
+        confirmConsumption: (sessionId, sinceMs) => confirmLocalConsumption(components, sessionId, sinceMs),
         attemptRefFor: (sessionId) => {
             const attempt = ledger.openAttemptForSession(sessionId);
             return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -508,6 +514,42 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
     });
     components.instanceManager.setTurnEvidencePort(port);
     return () => components.instanceManager.setTurnEvidencePort(null);
+}
+
+/**
+ * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1): a fresh read of a LOCAL
+ * session's transcript, made the way the turn ledger's delivered probe reads it
+ * (in-process `read_chat` with the activity surface, analysed by the probe's own
+ * analyzer). `consumed` = agent activity at or after `sinceMs`; a user row
+ * alone never counts. The caller uses ONLY `consumed` (a veto on a proven
+ * unconfirmed report): an absent row in a tail read is not proof of anything
+ * (review R5-1), so `not_consumed` is never a license on its own. A failed
+ * command, a refused read (`success: false` at any level) or a payload without
+ * a message list is `unknown`.
+ */
+export async function confirmLocalConsumption(components: DaemonComponents, sessionId: string, sinceMs: number): Promise<'consumed' | 'not_consumed' | 'unknown'> {
+    try {
+        const instance = components.instanceManager.getInstance(sessionId) as { type?: string } | undefined;
+        const providerType = typeof instance?.type === 'string' ? instance.type : undefined;
+        const result = await components.commandHandler.handle('read_chat', {
+            sessionId,
+            targetSessionId: sessionId,
+            tailLimit: 10,
+            includeActivity: true,
+            ...(providerType ? { agentType: providerType, providerType } : {}),
+        });
+        if (!result || typeof result !== 'object' || (result as { success?: unknown }).success === false) return 'unknown';
+        const payload = unwrapReadChatPayload(result);
+        if (!payload || (payload as { success?: unknown }).success === false || !Array.isArray(payload.messages)) return 'unknown';
+        // Dynamic: loops.ts imports this module (a static import would be a cycle).
+        const { analyzeProbeTranscript } = await import('./loops.js');
+        const observed = analyzeProbeTranscript(payload, { turnStartedAtMs: sinceMs, ...(providerType ? { providerType } : {}) });
+        if (!observed) return 'unknown';
+        const at = observed.newestAgentActivityAt;
+        return typeof at === 'number' && Number.isFinite(at) && at >= sinceMs ? 'consumed' : 'not_consumed';
+    } catch {
+        return 'unknown';
+    }
 }
 
 /**

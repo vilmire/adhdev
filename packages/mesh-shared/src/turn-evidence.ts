@@ -56,7 +56,11 @@ export type DeliveryOutcome = typeof DELIVERY_OUTCOMES[number]
 export const DELIVERY_VIAS = ['local', 'p2p'] as const
 export type DeliveryVia = typeof DELIVERY_VIAS[number]
 
-export const DISPATCH_FAILURE_REASONS = ['worker_absent', 'transport_error', 'spawn_failed', 'rejected_by_worker', 'timeout'] as const
+/** `submit_unconfirmed` (SUBMIT-UNCONFIRMED-RECLAIM): the worker's CLI never
+ *  took the written prompt — the submit budget and one re-paste were spent at
+ *  an idle composer. An owner daemon older than this value drops the evidence
+ *  as invalid and falls back to its consume/turn holds (the pre-fix path). */
+export const DISPATCH_FAILURE_REASONS = ['worker_absent', 'transport_error', 'spawn_failed', 'rejected_by_worker', 'timeout', 'submit_unconfirmed'] as const
 export type DispatchFailureReason = typeof DISPATCH_FAILURE_REASONS[number]
 
 /**

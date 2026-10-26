@@ -14,7 +14,7 @@ import type { SignalSnapshot } from './signal-envelope.js';
 import type { SignalDetection } from './signal-rules.js';
 import type { FsmStatus } from './fsm-types.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
-import type { ClaimedQueuedSend } from './send-submit-engine.js';
+import type { ClaimedQueuedSend, SubmitState } from './send-submit-engine.js';
 import type { QueuedWriteOutcome, SendDisposition } from './submit-policy.js';
 
 export type DashboardEvent =
@@ -125,6 +125,15 @@ export interface ISpecDriver {
      * implementing ISpecDriver need not provide it.
      */
     observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
+    /**
+     * SUBMIT-UNCONFIRMED-RECLAIM: called once when the send written under
+     * `messageId` is proven not taken — after its budget and one re-paste its own
+     * body stayed the whole input row at an idle FSM (submit-verdict.ts); the
+     * composer has been cleared. Registering opts the send in. Optional (test doubles).
+     */
+    observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
+    /** SUBMIT-UNCONFIRMED-RECLAIM: what the engine knows about that send (see SubmitState). */
+    submitState?(messageId: string): SubmitState;
     sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition;
     /**
      * Wiring-unification D2 — the FIFO is keyed by `OutboundMessage.messageId`

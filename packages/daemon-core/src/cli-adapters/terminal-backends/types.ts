@@ -21,5 +21,12 @@ export interface TerminalViewportBackend {
      */
     getTextWithScrollback(): string;
     getCursorPosition(): { col: number; row: number };
+    /**
+     * The cursor's row, read exactly (SUBMIT-UNCONFIRMED-RECLAIM): `row` in the
+     * active-screen coordinates the cursor moves in, `left`/`right` the row's
+     * cells before / from the cursor column. Null when the backend cannot read
+     * it exactly. Optional: without it every composer read is `unknown`.
+     */
+    getCursorRow?(): { row: number; col: number; left: string; right: string } | null;
     dispose(): void;
 }
