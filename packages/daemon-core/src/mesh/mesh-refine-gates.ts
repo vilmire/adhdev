@@ -312,6 +312,12 @@ export type MeshRefineBatchTerminalJob = MeshRefineBatchJobHandle & { result?: R
 const REFINE_VALIDATION_TIMEOUT_MS = 120_000;
 const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
 
+function isRunnerTimeout(error: { timedOut?: unknown; code?: unknown } | null | undefined): boolean {
+    // Command errors embed stderr. A test's own timeout text is not runner metadata;
+    // the inactivity timer below explicitly marks its own kills with timedOut.
+    return error?.timedOut === true || error?.code === 'ETIMEDOUT';
+}
+
 /**
  * Classify a failed validation command. Exported (rather than inlined in the
  * gate) so the regression suite binds to the REAL logic — a test that mirrors a
@@ -340,7 +346,7 @@ export function classifyValidationFailure(
         || /maxBuffer length exceeded/i.test(String(error?.message || ''));
     const timedOut = !spawnResolutionFailed
         && !outputLimitExceeded
-        && (error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || '')));
+        && isRunnerTimeout(error);
     const missingDependencyFailure = !spawnResolutionFailed
         && !outputLimitExceeded
         && !timedOut
@@ -887,7 +893,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
 }
 
 function refineExecFailureExtras(error: any) {
-    const timedOut = error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || ''));
+    const timedOut = isRunnerTimeout(error);
     return {
         // REFINE-LANES: descendants still alive after a gate was terminated — reported, never signalled.
         ...(Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {}),

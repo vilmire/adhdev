@@ -103100,9 +103100,12 @@ ${mergeTreeErr?.stderr || ""}`;
         import_path35 = require("path");
       }
     });
+    function isRunnerTimeout(error) {
+      return error?.timedOut === true || error?.code === "ETIMEDOUT";
+    }
     function classifyValidationFailure(error, stderr, spawnResolutionFailed) {
       const outputLimitExceeded = error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer length exceeded/i.test(String(error?.message || ""));
-      const timedOut = !spawnResolutionFailed && !outputLimitExceeded && (error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || "")));
+      const timedOut = !spawnResolutionFailed && !outputLimitExceeded && isRunnerTimeout(error);
       const missingDependencyFailure = !spawnResolutionFailed && !outputLimitExceeded && !timedOut && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
       return { outputLimitExceeded, missingDependencyFailure, timedOut };
     }
@@ -103374,7 +103377,7 @@ ${asText(streams.stderr)}
       });
     }
     function refineExecFailureExtras(error) {
-      const timedOut = error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || ""));
+      const timedOut = isRunnerTimeout(error);
       return {
         // REFINE-LANES: descendants still alive after a gate was terminated — reported, never signalled.
         ...Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {},

@@ -5,6 +5,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'nod
 import { delimiter, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+// Quote generated script paths independently of shell metacharacters or spaces.
+const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
+
 let endpointFile: string
 const endpoints: Array<{ cwd: string; url: string; local: string }> = []
 export function bindPushDestination(repo: string, local: string, key = 'oss', remote = 'origin', url?: string) {
@@ -58,7 +61,19 @@ if(net && !args.includes('--get-url')) {
 const result=spawnSync(real,args,{stdio:'inherit',env:process.env});
 if(result.error) throw result.error; process.exit(result.status??1);
 `
-    writeFileSync(join(root, 'git'), shim, { mode: 0o755 })
+    const networkShim = join(root, 'git-network.cjs')
+    writeFileSync(networkShim, shim, { mode: 0o755 })
+    // Local Git must not pay for a Node startup, map read and extra child on
+    // every object/config lookup. Preserve the original network interception.
+    const dispatcher = process.platform === 'win32' ? shim : `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    push|fetch|ls-remote|clone) exec ${shellQuote(process.execPath)} ${shellQuote(networkShim)} "$@" ;;
+  esac
+done
+exec ${shellQuote(realGit)} "$@"
+`
+    writeFileSync(join(root, 'git'), dispatcher, { mode: 0o755 })
     process.env.PATH = root + delimiter + previous.path
   })
   afterAll(() => {
