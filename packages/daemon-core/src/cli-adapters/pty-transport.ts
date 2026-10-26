@@ -110,6 +110,30 @@ export interface PtyRuntimeTransport {
   getMetadata?(): PtyRuntimeMetadata | null;
   verifyMeta?(expected: Record<string, unknown>): Promise<boolean>;
   stopMeshWriter?(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean>;
+  /**
+   * SUBMIT-UNCONFIRMED-RECLAIM: whether a client other than this daemon could
+   * be typing into the runtime right now — a writable local terminal or web
+   * client attached to a hosted session. Null = not known (fail closed).
+   * Absent on a transport only this process can write to (a raw node-pty).
+   */
+  otherWritableClients?(): boolean | null;
+  /**
+   * SUBMIT-UNCONFIRMED-RECLAIM: the session host's own account of input into
+   * the runtime since this transport attached — counts of inputs by other
+   * clients, write-ownership moves to other clients, and sequence gaps (lost
+   * or replayed announcements), plus whether every input the host has counted
+   * has been announced to us yet. Null when the host does not announce inputs
+   * (an older host): provenance is then unknown. Absent on a raw node-pty —
+   * which therefore never proves input provenance either.
+   */
+  inputProvenance?(): { foreign: number; ownerAway: number; gaps: number; complete: boolean } | null;
+  /**
+   * SUBMIT-UNCONFIRMED-RECLAIM: write only if no input reached the runtime
+   * since this transport's last accounted point — checked and written in one
+   * step by the session host. Resolves false on refusal or unknown provenance.
+   * Absent on a raw node-pty (no host to make it atomic).
+   */
+  writeIfInputUnchanged?(data: string): Promise<boolean>;
   onData(callback: (data: string) => void): void;
   onExit(callback: (info: PtyRuntimeExitInfo) => void): void;
 }

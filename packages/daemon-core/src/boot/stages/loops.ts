@@ -41,7 +41,7 @@ import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
 import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
 import { createTurnScheduler, startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
-import { closeInterruptedPlainAttemptsOnBoot, createRuntimeBackgroundWorkMonitor, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
+import { closeInterruptedPlainAttemptsOnBoot, createRuntimeBackgroundWorkMonitor, reconcileOrphanedPlainAttemptsOnBoot, registerProbeTranscriptAnalyzer } from './mesh-runtime.js';
 
 /**
  * Quota: hydrate the last persisted snapshots, THEN the one-shot boot refresh.
@@ -181,6 +181,7 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
     };
     return out;
 };
+registerProbeTranscriptAnalyzer(analyzeProbeTranscript);
 
 /** `components` after S7: the ledger, its late-bound probe port and the notice wiring are typed fields. */
 type TurnWiredComponents = MeshRuntimeStage['components'];

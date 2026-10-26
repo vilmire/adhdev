@@ -1566,6 +1566,7 @@ var SessionHostServer = class extends EventEmitter {
           }
           const runtime = this.requireRuntime(request.payload.sessionId);
           const beforeSnapshotSeq = this.registry.getSnapshot(request.payload.sessionId)?.seq ?? 0;
+          this.announceInput(request.payload.sessionId, request.payload.clientId);
           runtime.write(request.payload.data);
           this.scheduleNoOutputInputDiagnostic({
             sessionId: request.payload.sessionId,
@@ -1574,6 +1575,25 @@ var SessionHostServer = class extends EventEmitter {
             beforeSnapshotSeq
           });
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
+        }
+        case "get_input_state":
+          return { success: true, result: this.registry.getInputState(request.payload.sessionId) };
+        case "send_input_if_seq": {
+          const p = request.payload;
+          const client = this.getAttachedClient(p.sessionId, p.clientId);
+          if (client?.readOnly) return { success: false, error: `Client ${p.clientId} is read-only` };
+          const session = this.registry.getSession(p.sessionId);
+          if (session?.writeOwner && session.writeOwner.clientId !== p.clientId) {
+            return { success: false, error: `Write owned by ${session.writeOwner.clientId}` };
+          }
+          const runtime = this.requireRuntime(p.sessionId);
+          const now = this.registry.getInputState(p.sessionId);
+          if (now.inputSeq !== p.expectedInputSeq || now.inputEpoch !== p.expectedInputEpoch) {
+            return { success: false, error: "input_seq_mismatch" };
+          }
+          this.announceInput(p.sessionId, p.clientId);
+          runtime.write(p.data);
+          return { success: true, result: this.registry.getSession(p.sessionId) };
         }
         case "resize_session": {
           this.requireRuntime(request.payload.sessionId).resize(request.payload.cols, request.payload.rows);
@@ -1712,6 +1732,13 @@ var SessionHostServer = class extends EventEmitter {
   getAttachedClient(sessionId, clientId) {
     const session = this.registry.getSession(sessionId);
     return session?.attachedClients.find((client) => client.clientId === clientId) || null;
+  }
+  /** Count and announce one accepted input BEFORE it reaches the PTY, so a
+   *  subscriber sees who wrote it before any output it causes. */
+  announceInput(sessionId, clientId) {
+    const seq = this.registry.recordInput(sessionId);
+    const { inputEpoch } = this.registry.getInputState(sessionId);
+    this.emitEvent({ type: "session_input", sessionId, seq, epoch: inputEpoch, clientId });
   }
   emitEvent(event) {
     const diagnosticOnly = event.type === "request_trace" || event.type === "runtime_transition" || event.type === "host_log";

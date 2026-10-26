@@ -82,6 +82,11 @@ import { LOG } from '../../logging/logger.js';
 import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../daemon-components.js';
 import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
+import { redeliverDispatch } from '../../mesh/mesh-dispatch-redelivery.js';
+import { unwrapReadChatPayload, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
+import { readChatMessageTimestampMs } from '../../providers/chat-message-normalization.js';
+import { flattenContent } from '../../providers/contracts.js';
+import type { ChatMessage } from '../../types.js';
 
 /** Build the components object hosts and mesh modules consume. */
 export function assembleDaemonComponents(s6: ProjectionsStage): DaemonComponents {
@@ -289,6 +294,9 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             detachLocalMeshTaskStamp(components, request);
         },
         probe: (e) => lateProbe.port(e),
+        // SUBMIT-UNCONFIRMED-RECLAIM ②: H2 lands here — probe now, never
+        // re-send (mesh-dispatch-redelivery.ts explains why).
+        redeliver: (e) => { redeliverDispatch(e, { probe: (attemptId) => lateProbe.port({ attemptId }) }); },
     };
     const backgroundWork = createRuntimeBackgroundWorkMonitor(components);
     const ledger = createMeshRuntimeTurnLedger({
@@ -497,6 +505,7 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
         // R9r: a live worker-MCP bind ⇒ the worker can report, so its idle end
         // awaits the report instead of committing (stamped on THIS daemon).
         reportExpectedFor: (sessionId) => hasLiveWorkerSessionBind(sessionId),
+        confirmConsumption: (sessionId, sinceMs, opts) => confirmLocalConsumption(components, sessionId, sinceMs, opts),
         attemptRefFor: (sessionId) => {
             const attempt = ledger.openAttemptForSession(sessionId);
             return attempt ? { attemptId: attempt.attemptId, generation: attempt.generation } : null;
@@ -508,6 +517,264 @@ export function wireTurnEvidencePort(components: DaemonComponents, ledger: TurnL
     });
     components.instanceManager.setTurnEvidencePort(port);
     return () => components.instanceManager.setTurnEvidencePort(null);
+}
+
+export interface DispatchAcknowledgementWatermark {
+    readonly messageId: string;
+    readonly nonce?: number;
+    readonly watermarkSeq: number;
+    readonly unacceptedConfirmed: boolean;
+}
+
+export interface ProviderConsumptionCapability {
+    readonly providerType: string;
+    readonly canProveNonConsumption: boolean;
+    readonly supportsDispatchAcknowledgementWatermark: boolean;
+    readonly requiresTurnTerminalMarkers: boolean;
+    readonly reason: string;
+}
+
+/**
+ * Per-provider authoritative non-consumption capability matrix (R10 / R11):
+ * - Coordinator decision (R11): positive non-consumption is NOT provable from
+ *   transcript inspection alone. Even when a provider's native store is fresh,
+ *   complete, safely-mapped, and ends in a completed prior turn, current-turn
+ *   persistence can lag behind input consumption, wall-clock timestamps can
+ *   skew across processes, and native stores can normalize prompt bodies.
+ * - Therefore `canProveNonConsumption` and `supportsDispatchAcknowledgementWatermark`
+ *   are `false` for ALL providers today. `confirmLocalConsumption` returns
+ *   `'consumed'` when there is positive evidence of agent activity for this
+ *   dispatch (`newestAgentActivityAt >= sinceMs`), otherwise `'unknown'` —
+ *   always, for every provider.
+ * - Future `'not_consumed'` contract: gated behind a provider capability with
+ *   `canProveNonConsumption: true` AND `supportsDispatchAcknowledgementWatermark: true`,
+ *   plus a runtime `DispatchAcknowledgementWatermark` (`payload.dispatchAcknowledgement`
+ *   or `messageSource.dispatchAcknowledgement`) bound to this dispatch's
+ *   `messageId`/nonce and serialized with the provider's input acceptance queue.
+ */
+export const PROVIDER_CONSUMPTION_CAPABILITIES: Readonly<Record<string, ProviderConsumptionCapability>> = {
+    'codex-cli': {
+        providerType: 'codex-cli',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: true,
+        reason: 'JSONL rollout persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
+    },
+    'claude-cli': {
+        providerType: 'claude-cli',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'Per-session JSONL persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
+    },
+    'antigravity-cli': {
+        providerType: 'antigravity-cli',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'Per-session SQLite step persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
+    },
+    'kimi': {
+        providerType: 'kimi',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: true,
+        reason: 'wire.jsonl persistence can lag behind PTY input acceptance and offers no dispatch-tied acknowledgement watermark serialized with input acceptance.',
+    },
+    'grok-cli': {
+        providerType: 'grok-cli',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'chat_history.jsonl records carry no per-message timestamps; receivedAt is synthesized from created_at and file mtime.',
+    },
+    'cursor-cli': {
+        providerType: 'cursor-cli',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'agent-transcripts JSONL strips timestamps (no timestamp_ms in message_map); receivedAt is synthesized from file mtime.',
+    },
+    'opencode': {
+        providerType: 'opencode',
+        canProveNonConsumption: false,
+        supportsDispatchAcknowledgementWatermark: false,
+        requiresTurnTerminalMarkers: false,
+        reason: 'SQLite part query only projects $.type=text parts and falls back to newest session when a session has no rows.',
+    },
+};
+
+export function getProviderConsumptionCapability(providerType: string | undefined): ProviderConsumptionCapability | null {
+    if (!providerType || typeof providerType !== 'string') return null;
+    return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
+}
+
+const DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS = 5_000;
+
+function normalizePromptWhitespace(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+export function hasAuthoritativeNonConsumptionProof(
+    payload: Record<string, unknown>,
+    ms: Record<string, any> | null,
+    observed: TranscriptObservation,
+    providerType: string | undefined,
+    sinceMs: number,
+    opts?: { messageId?: string; expectedText?: string; capabilityOverride?: ProviderConsumptionCapability },
+): boolean {
+    const capability = opts?.capabilityOverride ?? getProviderConsumptionCapability(providerType);
+    if (!capability || !capability.canProveNonConsumption || !capability.supportsDispatchAcknowledgementWatermark) return false;
+    if (payload.stale === true || observed.stale === true) return false;
+    if (typeof payload.unavailableReason === 'string' && payload.unavailableReason.trim().length > 0) return false;
+    if (typeof observed.unavailableReason === 'string' && observed.unavailableReason.trim().length > 0) return false;
+    if (observed.activeModal) return false;
+    const status = typeof payload.status === 'string' ? payload.status.trim().toLowerCase() : '';
+    if (status !== 'idle' || (observed.providerObservedStatus && observed.providerObservedStatus !== 'idle')) return false;
+    if (payload.transcriptAuthority !== 'provider' || payload.coverage !== 'full') return false;
+    const providerSessionId = typeof payload.providerSessionId === 'string' ? payload.providerSessionId.trim() : '';
+    if (!providerSessionId) return false;
+    if (!ms || ms.selected !== 'native-history') return false;
+    if (typeof ms.fallbackReason === 'string' && ms.fallbackReason.trim().length > 0) return false;
+    if (typeof ms.unavailableReason === 'string' && ms.unavailableReason.trim().length > 0) return false;
+    if (typeof ms.partialReason === 'string' && ms.partialReason.trim().length > 0) return false;
+    // R11 P2: require affirmative provenance values everywhere consulted; missing -> unknown.
+    if (ms.nativeSource !== 'provider-native') return false;
+    if (ms.nativeHistoryCoverage !== 'full') return false;
+    if (ms.identityStatus !== 'safe') return false;
+    if (ms.coverage?.safeMapping !== true) return false;
+    if (ms.staleness?.freshEnough !== true) return false;
+
+    const expectedId = opts?.messageId?.trim() || '';
+    if (!expectedId) return false;
+    const rawAck = (payload.dispatchAcknowledgement ?? ms.dispatchAcknowledgement) as Partial<DispatchAcknowledgementWatermark> | undefined;
+    if (
+        !rawAck
+        || typeof rawAck !== 'object'
+        || typeof rawAck.messageId !== 'string'
+        || rawAck.messageId.trim() !== expectedId
+        || rawAck.unacceptedConfirmed !== true
+        || typeof rawAck.watermarkSeq !== 'number'
+        || !Number.isFinite(rawAck.watermarkSeq)
+        || rawAck.watermarkSeq < sinceMs
+    ) {
+        return false;
+    }
+
+    const messages = payload.messages as ChatMessage[];
+    if (messages.length === 0) return false;
+    if (typeof payload.totalMessages === 'number' && payload.totalMessages > messages.length) return false;
+
+    const expectedBody = opts?.expectedText?.trim() || '';
+    const normalizedExpectedBody = expectedBody ? normalizePromptWhitespace(expectedBody) : '';
+    const skewCeilingMs = sinceMs - DISPATCH_TIMESTAMP_CLOCK_SKEW_GUARD_MS;
+    let hasCompletedPriorAssistant = false;
+    for (const msg of messages) {
+        if (!msg || typeof msg !== 'object') return false;
+        const ts = readChatMessageTimestampMs(msg);
+        if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0 || ts >= sinceMs || ts >= skewCeilingMs) return false;
+        const role = typeof msg.role === 'string' ? msg.role.trim().toLowerCase() : '';
+        const msgId = typeof (msg as any).id === 'string' ? (msg as any).id.trim() : typeof (msg as any).messageId === 'string' ? (msg as any).messageId.trim() : '';
+        if (expectedId && msgId && msgId === expectedId) return false;
+        if (role === 'user' || role === 'human') {
+            const text = flattenContent(msg.content).trim();
+            const normalizedText = text ? normalizePromptWhitespace(text) : '';
+            if (expectedBody && text && (text === expectedBody || text.includes(expectedBody))) return false;
+            if (normalizedExpectedBody && normalizedText && (normalizedText === normalizedExpectedBody || normalizedText.includes(normalizedExpectedBody))) return false;
+        } else if (role === 'assistant' || role === 'model') {
+            if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
+        }
+    }
+    if (!hasCompletedPriorAssistant) return false;
+    const lastMsg = messages[messages.length - 1];
+    const lastRole = typeof lastMsg?.role === 'string' ? lastMsg.role.trim().toLowerCase() : '';
+    if (lastRole === 'user' || lastRole === 'human') return false;
+
+    if (capability.requiresTurnTerminalMarkers) {
+        if (!Array.isArray(payload.turnTerminalMarkers) || payload.turnTerminalMarkers.length === 0) return false;
+        for (const raw of payload.turnTerminalMarkers) {
+            const m = raw as { receivedAt?: unknown; startedAt?: unknown; inputAt?: unknown } | null;
+            const receivedAt = typeof m?.receivedAt === 'number' ? m.receivedAt : Number.NaN;
+            if (!Number.isFinite(receivedAt) || receivedAt <= 0 || receivedAt >= sinceMs || receivedAt >= skewCeilingMs) return false;
+            if (typeof m?.startedAt === 'number' && (m.startedAt >= sinceMs || m.startedAt >= skewCeilingMs)) return false;
+            if (typeof m?.inputAt === 'number' && (m.inputAt >= sinceMs || m.inputAt >= skewCeilingMs)) return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * SUBMIT-UNCONFIRMED-RECLAIM (review f8c79690 R4-1 / R10 / R11): fresh read of
+ * a LOCAL session's transcript.
+ * - `consumed`: positive evidence of agent activity for this dispatch at or
+ *   after `sinceMs` (`observed.newestAgentActivityAt >= sinceMs`).
+ * - `unknown`: returned for every other case across all providers today,
+ *   because positive non-consumption is not provable from transcript inspection
+ *   alone (persistence lag, clock skew, prompt normalization). Consequently,
+ *   automatic clear+re-paste recovery is disabled and unconfirmed submits go to
+ *   quarantine and the ledger's verified recovery (H2 probe -> H2r/H3 hard
+ *   writer-stop -> queue recovery or coordinator notify).
+ * - `not_consumed`: gated behind `hasAuthoritativeNonConsumptionProof`, which
+ *   requires a future provider capability with `canProveNonConsumption: true`
+ *   AND `supportsDispatchAcknowledgementWatermark: true` plus a dispatch-tied
+ *   acknowledgement watermark bound to `messageId` and serialized with input
+ *   acceptance, as well as affirmative provenance fields (`nativeSource ===
+ *   'provider-native'`, `nativeHistoryCoverage === 'full'`, `identityStatus ===
+ *   'safe'`, `coverage.safeMapping === true`, `staleness.freshEnough === true`).
+ */
+let cachedAnalyzeProbeTranscript: ((payload: Record<string, any>, ctx: { turnStartedAtMs?: number; providerType?: string }) => any) | null = null;
+
+export function registerProbeTranscriptAnalyzer(
+    fn: (payload: Record<string, any>, ctx: { turnStartedAtMs?: number; providerType?: string }) => any,
+): void {
+    cachedAnalyzeProbeTranscript = fn;
+}
+
+export async function confirmLocalConsumption(
+    components: DaemonComponents,
+    sessionId: string,
+    sinceMs: number,
+    opts?: { messageId?: string; expectedText?: string },
+): Promise<'consumed' | 'not_consumed' | 'unknown'> {
+    if (typeof sinceMs !== 'number' || !Number.isFinite(sinceMs) || sinceMs <= 0) return 'unknown';
+    try {
+        const instance = components.instanceManager?.getInstance?.(sessionId) as { type?: string } | undefined;
+        const adapter = (components.cliManager as { adapters?: Map<string, { cliType?: string }> } | undefined)?.adapters?.get?.(sessionId);
+        const regSession = (components as { sessionRegistry?: { get?: (id: string) => { providerType?: string } | undefined } }).sessionRegistry?.get?.(sessionId);
+        const configuredProviderType = [instance?.type, adapter?.cliType, regSession?.providerType]
+            .find((v): v is string => typeof v === 'string' && v.trim().length > 0)?.trim();
+        const result = await components.commandHandler.handle('read_chat', {
+            sessionId,
+            targetSessionId: sessionId,
+            includeActivity: true,
+            ...(configuredProviderType ? { agentType: configuredProviderType, providerType: configuredProviderType } : {}),
+        });
+        if (!result || typeof result !== 'object' || (result as { success?: unknown }).success === false) return 'unknown';
+        const payload = unwrapReadChatPayload(result);
+        if (!payload || (payload as { success?: unknown }).success === false || !Array.isArray(payload.messages)) return 'unknown';
+        const ms = (payload.messageSource && typeof payload.messageSource === 'object' && !Array.isArray(payload.messageSource)
+            ? payload.messageSource
+            : payload.transcriptProvenance && typeof payload.transcriptProvenance === 'object' && !Array.isArray(payload.transcriptProvenance)
+                ? payload.transcriptProvenance
+                : null) as Record<string, any> | null;
+        const providerType = configuredProviderType
+            || (typeof (payload.debugReadChat as any)?.provider === 'string' && (payload.debugReadChat as any).provider.trim())
+            || (typeof ms?.providerType === 'string' && ms.providerType.trim())
+            || (typeof ms?.provider === 'string' && ms.provider.trim())
+            || undefined;
+        // Dynamic fallback: loops.ts imports this module (a static import would be a cycle).
+        const analyzeProbeTranscript = cachedAnalyzeProbeTranscript ?? (await import('./loops.js')).analyzeProbeTranscript;
+        cachedAnalyzeProbeTranscript = analyzeProbeTranscript;
+        const observed = analyzeProbeTranscript(payload, { turnStartedAtMs: sinceMs, ...(providerType ? { providerType } : {}) });
+        if (!observed) return 'unknown';
+        const at = observed.newestAgentActivityAt;
+        if (typeof at === 'number' && Number.isFinite(at) && at >= sinceMs) return 'consumed';
+        return hasAuthoritativeNonConsumptionProof(payload, ms, observed, providerType, sinceMs, opts)
+            ? 'not_consumed'
+            : 'unknown';
+    } catch {
+        return 'unknown';
+    }
 }
 
 /**

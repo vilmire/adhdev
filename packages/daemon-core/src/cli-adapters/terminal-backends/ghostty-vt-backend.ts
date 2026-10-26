@@ -3,11 +3,16 @@ import type {
     TerminalViewportBackendOptions,
 } from './types.js';
 
-type GhosttyVtViewportSnapshot = {
+/** The slice of ghostty-vt-node's API-level-2 viewport read used here. */
+type GhosttyVtCell = { text: string; wideKind: 'narrow' | 'wide' | 'spacer-tail' | 'spacer-head' };
+type GhosttyVtViewport = {
+    cols: number;
     cursorRow: number;
     cursorCol: number;
+    cursorPendingWrap: boolean;
     activeOriginRow: number;
     activeScreen: 'primary' | 'alternate';
+    lines?: Array<{ row: number; wrapped: boolean; wrapContinuation: boolean; cells?: GhosttyVtCell[] }>;
 };
 
 type GhosttyVtTerminal = {
@@ -15,7 +20,8 @@ type GhosttyVtTerminal = {
     resize(cols: number, rows: number): void;
     formatPlainText(options?: { trim?: boolean }): string;
     getCursorPosition(): { col: number; row: number };
-    getViewport?(options?: { includeRows?: 'none' | 'cursor' | 'all'; cells?: boolean }): GhosttyVtViewportSnapshot;
+    /** API level 2; absent on older binaries. */
+    getViewport?(options?: { includeRows?: 'none' | 'cursor' | 'all'; cells?: boolean }): GhosttyVtViewport;
     dispose(): void;
 };
 
@@ -310,6 +316,27 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         while (first < viewport.length && !viewport[first]) first += 1;
         if (first >= viewport.length) return { col: legacy.col, row: 0 };
         return { col: legacy.col, row: Math.max(0, legacy.row - first) };
+    }
+
+    /**
+     * See TerminalViewportBackend.getCursorRow. One native snapshot
+     * (getViewport, cursor row with cells), so the row, the cursor column and
+     * the cells all describe the same terminal state on either screen. Null
+     * without the API-level-2 binding, on a cursor parked past the last column
+     * (pending wrap), or on a row that is one physical piece of a soft-wrapped
+     * line — its content is not all on this row.
+     */
+    getCursorRow(): { row: number; col: number; left: string; right: string } | null {
+        if (this.disposed || typeof this.terminal.getViewport !== 'function') return null;
+        const vp = this.terminal.getViewport({ includeRows: 'cursor', cells: true });
+        const line = vp.lines?.[0];
+        if (!line?.cells || line.row !== vp.cursorRow || line.cells.length !== vp.cols) return null;
+        if (vp.cursorPendingWrap || line.wrapped || line.wrapContinuation) return null;
+        if (!Number.isInteger(vp.cursorCol) || vp.cursorCol < 0 || vp.cursorCol > vp.cols) return null;
+        const text = (cells: GhosttyVtCell[]): string => cells
+            .map((cell) => (cell.wideKind === 'spacer-tail' || cell.wideKind === 'spacer-head' ? '' : cell.text || ' '))
+            .join('');
+        return { row: vp.cursorRow, col: vp.cursorCol, left: text(line.cells.slice(0, vp.cursorCol)), right: text(line.cells.slice(vp.cursorCol)) };
     }
 
     dispose(): void {

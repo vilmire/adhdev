@@ -52,6 +52,11 @@ export class TerminalScreen {
         return this.terminal.getTextWithScrollback();
     }
 
+    /** The cursor's row read exactly, or null (see TerminalViewportBackend.getCursorRow). */
+    getCursorRow(): { row: number; col: number; left: string; right: string } | null {
+        return typeof this.terminal.getCursorRow === 'function' ? this.terminal.getCursorRow() : null;
+    }
+
     getCursorPosition(): { col: number; row: number } {
         if (typeof this.terminal.getCursorPosition !== 'function') return { col: 0, row: 0 };
         return this.terminal.getCursorPosition();

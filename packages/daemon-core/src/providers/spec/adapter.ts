@@ -210,6 +210,63 @@ export class TerminalAdapter {
         return { row: pos.row, col: pos.col };
     }
 
+    /** SUBMIT-UNCONFIRMED-RECLAIM: every write into the PTY, from any caller
+     *  (the one choke point), so the send engine can tell its own from others. */
+    private writeCount = 0;
+    getWriteCount(): number { return this.writeCount; }
+
+    /** SUBMIT-UNCONFIRMED-RECLAIM: called synchronously after each output chunk
+     *  reached the screen (before any debounce), so a reader sees every frame. */
+    private readonly screenWriteListeners = new Set<() => void>();
+    onScreenWrite(listener: () => void): () => void {
+        this.screenWriteListeners.add(listener);
+        return () => { this.screenWriteListeners.delete(listener); };
+    }
+
+    /** SUBMIT-UNCONFIRMED-RECLAIM: could anyone but this daemon type into the
+     *  PTY? false only for a transport no one else can reach, or a hosted
+     *  session with no other writable client attached; unknown counts as yes. */
+    otherWritersPossible(): boolean {
+        const pty = this.pty;
+        if (!pty) return true;
+        if (typeof pty.otherWritableClients !== 'function') return false;
+        try { return pty.otherWritableClients() !== false; } catch { return true; }
+    }
+
+    /** SUBMIT-UNCONFIRMED-RECLAIM: a key for the session host's account of
+     *  input by others (PtyRuntimeTransport.inputProvenance). Equal keys at two
+     *  moments = no foreign input, ownership move or lost announcement between
+     *  them. Null when unknown: an older host, announcements still in flight,
+     *  no PTY — and a transport with no session host at all (a raw node-pty
+     *  fallback): nothing authoritative accounts for its input (review R7-1),
+     *  so recovery never runs there. */
+    inputProvenanceKey(): string | null {
+        const pty = this.pty;
+        if (!pty || typeof pty.inputProvenance !== 'function') return null;
+        try {
+            const p = pty.inputProvenance();
+            return p && p.complete ? `${p.foreign}:${p.ownerAway}:${p.gaps}` : null;
+        } catch { return null; }
+    }
+
+    /** SUBMIT-UNCONFIRMED-RECLAIM: a write the session host performs only if
+     *  no input reached the runtime since the transport's accounted point
+     *  (PtyRuntimeTransport.writeIfInputUnchanged). Counted like every write.
+     *  Resolves false when refused, or on a transport without it (raw pty). */
+    writeIfInputUnchanged(text: string): Promise<boolean> {
+        const pty = this.pty;
+        if (!pty || typeof pty.writeIfInputUnchanged !== 'function') return Promise.resolve(false);
+        this.writeCount += 1;
+        this.recordEvent('input', capPreview(escapeControl(text)), text.length);
+        try { return Promise.resolve(pty.writeIfInputUnchanged(text)).then((ok) => ok === true, () => false); } catch { return Promise.resolve(false); }
+    }
+
+    /** The cursor's row read exactly from the native viewport — null when the
+     *  terminal cannot read it exactly (see TerminalViewportBackend.getCursorRow). */
+    getCursorRow(): { row: number; col: number; left: string; right: string } | null {
+        return this.screen.getCursorRow();
+    }
+
     /** Current terminal geometry (columns × rows). Tracked here rather than
      *  read off the screen buffer so a resize is reflected immediately, before
      *  the next repaint. Consumed by the mesh_read_terminal viewport read. */
@@ -227,6 +284,7 @@ export class TerminalAdapter {
     }
 
     send_keys(text: string, primeContext?: PrimeWriteContext): boolean | void | Promise<boolean | void> {
+        this.writeCount += 1;
         this.recordEvent('input', capPreview(escapeControl(text)), text.length);
         if (!primeContext) {
             return this.pty?.write(text);
@@ -352,6 +410,7 @@ export class TerminalAdapter {
         // is guaranteed to correspond to a screen state that includes it.
         this.screen.write(chunk);
         this.screenVersion += 1;
+        for (const listener of this.screenWriteListeners) { try { listener(); } catch { /* observer side */ } }
         try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
         // Coalesce snapshot emission — rapid bursts shouldn't fire 200x.
         if (this.screenTimer) return;
