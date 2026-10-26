@@ -45915,20 +45915,24 @@ ${error.message || ""}`;
           return held.stop_id;
         }
         const id4 = stopId ?? (0, import_node_crypto52.randomUUID)();
-        db2.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'stopping')").run(sessionId.trim(), meshId, id4);
+        db2.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'reserved')").run(sessionId.trim(), meshId, id4);
         return id4;
       }).immediate();
     }
+    function markSessionStopSent(db2, sessionId, stopId) {
+      const changed = db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopping' WHERE session_id = ? AND stop_id = ? AND state IN ('reserved', 'stopping')").run(sessionId.trim(), stopId);
+      if (changed.changes !== 1) throw new Error("session_stop_reservation_lost");
+    }
     function releaseSessionStop(db2, sessionId, stopId) {
-      db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
+      db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ? AND state = 'reserved'").run(sessionId.trim(), stopId);
     }
     function sessionStopPending(db2, sessionId) {
       if (!sessionIsStopping(db2, sessionId)) return false;
-      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state = 'stopping'").get(sessionId.trim());
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state IN ('reserved', 'stopping')").get(sessionId.trim());
     }
     function hasPendingSessionStops(db2, meshId) {
       if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
-      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state = 'stopping' LIMIT 1").get(meshId);
+      return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state IN ('reserved', 'stopping') LIMIT 1").get(meshId);
     }
     function confirmSessionStop(db2, sessionId, stopId) {
       db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
@@ -106494,42 +106498,55 @@ ${asText(streams.stderr)}
             return { success: false, error: "session_lifetime_safety_changed" };
           }
           if (!router) return { success: false, error: "router_unavailable" };
+          const route = [...routes.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
+          const record7 = [...localRecords.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
+          const preflight = () => {
+            if (route) {
+              if (!route.record.claimFence) return "lifetime_claim_fence_unsupported";
+              if (!components.dispatchMeshCommand) return "P2P_unavailable";
+            } else {
+              if (!record7 || !components.cliManager) return "lifetime_runtime_unavailable";
+              if (!isSafeIdleTaskSession(findLocalCliInstance(components, sessionId)?.getState())) return "session_lifetime_safety_changed";
+            }
+            return void 0;
+          };
+          const unavailable2 = preflight();
+          if (unavailable2) return { success: false, error: unavailable2 };
           const db2 = MeshRuntimeStore.getInstance().db;
           const stopId = reserveSessionStop(db2, args.meshId, sessionId);
-          await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: "stop_session" });
-          if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
-            releaseSessionStop(db2, sessionId, stopId);
-            return { success: false, error: "session_lifetime_safety_changed" };
-          }
-          const acknowledged = (result) => {
-            if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, sessionId))) {
-              confirmSessionStop(db2, sessionId, stopId);
+          try {
+            await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: "stop_session" });
+            if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
+              return { success: false, error: "session_lifetime_safety_changed" };
             }
-            return result;
-          };
-          const route = [...routes.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
-          if (route) {
-            if (!route.record.claimFence) return { success: false, error: "lifetime_claim_fence_unsupported" };
-            if (!components.dispatchMeshCommand) return { success: false, error: "P2P_unavailable" };
-            return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, "agent_command", {
+            const changed = preflight();
+            if (changed) return { success: false, error: changed };
+            const acknowledged = (result) => {
+              if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, sessionId))) {
+                confirmSessionStop(db2, sessionId, stopId);
+              }
+              return result;
+            };
+            markSessionStopSent(db2, sessionId, stopId);
+            if (route) {
+              return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, "agent_command", {
+                action: "mesh_idle_session_stop",
+                agentType: route.provider,
+                targetSessionId: sessionId,
+                idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence },
+                meshContext: context2
+              }), { command: "agent_command", peerDaemonId: route.daemonId }));
+            }
+            return acknowledged(await components.cliManager.agentCommand({
               action: "mesh_idle_session_stop",
-              agentType: route.provider,
+              agentType: "mesh",
               targetSessionId: sessionId,
-              idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence },
+              idleSessionLifetime: { lastActivityAt: record7.lastActivityAt, stopId, claimFence: record7.claimFence },
               meshContext: context2
-            }), { command: "agent_command", peerDaemonId: route.daemonId }));
+            }));
+          } finally {
+            releaseSessionStop(db2, sessionId, stopId);
           }
-          const state2 = findLocalCliInstance(components, sessionId)?.getState();
-          if (!isSafeIdleTaskSession(state2) || !router) return { success: false, error: "session_lifetime_safety_changed" };
-          const record7 = [...localRecords.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
-          if (!record7 || !components.cliManager) return { success: false, error: "lifetime_runtime_unavailable" };
-          return acknowledged(await components.cliManager.agentCommand({
-            action: "mesh_idle_session_stop",
-            agentType: "mesh",
-            targetSessionId: sessionId,
-            idleSessionLifetime: { lastActivityAt: record7.lastActivityAt, stopId, claimFence: record7.claimFence },
-            meshContext: context2
-          }));
         }
       };
     }
@@ -182981,14 +182998,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const db2 = MeshRuntimeStore.getInstance().db;
       reserveSessionStop(db2, meshId, r.sessionId, fence.stopId);
-      if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+      try {
+        if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+          return { success: false, error: "lifetime_assignment_changed" };
+        }
+        markSessionStopSent(db2, r.sessionId, fence.stopId);
+        const stopped = await control.stopSession(r.sessionId);
+        if (!stopped || stopped.lifecycle !== "stopped") return { success: false, error: "lifetime_stop_unconfirmed" };
+        confirmSessionStop(db2, r.sessionId, fence.stopId);
+        return { success: true, stoppedSessionIds: [r.sessionId] };
+      } finally {
         releaseSessionStop(db2, r.sessionId, fence.stopId);
-        return { success: false, error: "lifetime_assignment_changed" };
       }
-      const stopped = await control.stopSession(r.sessionId);
-      if (!stopped || stopped.lifecycle !== "stopped") return { success: false, error: "lifetime_stop_unconfirmed" };
-      confirmSessionStop(db2, r.sessionId, fence.stopId);
-      return { success: true, stoppedSessionIds: [r.sessionId] };
     }
     init_worker_bridge();
     init_mesh_writer_stop_journal();

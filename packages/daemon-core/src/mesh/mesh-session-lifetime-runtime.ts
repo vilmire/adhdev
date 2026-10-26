@@ -1,4 +1,4 @@
-import { sessionClaimFence, reserveSessionStop, releaseSessionStop, sessionStopPending, hasPendingSessionStops, confirmSessionStop } from './mesh-session-stop-fence.js';
+import { sessionClaimFence, reserveSessionStop, releaseSessionStop, markSessionStopSent, sessionStopPending, hasPendingSessionStops, confirmSessionStop } from './mesh-session-stop-fence.js';
 /** Local and peer lifetime binding; peer actions use the existing session-coordinator ACL. */
 import { canonicalDaemonId, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -92,34 +92,49 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                 return { success: false, error: 'session_lifetime_safety_changed' };
             }
             if (!router) return { success: false, error: 'router_unavailable' };
+            const route = [...routes.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
+            const record = [...localRecords.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
+            const preflight = () => {
+                if (route) {
+                    if (!route.record.claimFence) return 'lifetime_claim_fence_unsupported';
+                    if (!components.dispatchMeshCommand) return 'P2P_unavailable';
+                } else {
+                    if (!record || !components.cliManager) return 'lifetime_runtime_unavailable';
+                    if (!isSafeIdleTaskSession(findLocalCliInstance(components, sessionId)?.getState())) return 'session_lifetime_safety_changed';
+                }
+                return undefined;
+            };
+            const unavailable = preflight();
+            if (unavailable) return { success: false, error: unavailable };
             const db = MeshRuntimeStore.getInstance().db;
             const stopId = reserveSessionStop(db, args.meshId, sessionId);
-            await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: 'stop_session' });
-            if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
-                releaseSessionStop(db, sessionId, stopId);
-                return { success: false, error: 'session_lifetime_safety_changed' };
-            }
-            const acknowledged = (result: { success: boolean; [key: string]: unknown }) => {
-                if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some(id => sessionIdsEquivalent(id, sessionId))) {
-                    confirmSessionStop(db, sessionId, stopId);
+            try {
+                await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: 'stop_session' });
+                if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
+                    return { success: false, error: 'session_lifetime_safety_changed' };
                 }
-                return result;
-            };
-            const route = [...routes.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
-            if (route) {
-                if (!route.record.claimFence) return { success: false, error: 'lifetime_claim_fence_unsupported' };
-                if (!components.dispatchMeshCommand) return { success: false, error: 'P2P_unavailable' };
-                return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand(route.daemonId, 'agent_command', {
-                    action: 'mesh_idle_session_stop', agentType: route.provider, targetSessionId: sessionId,
-                    idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence }, meshContext: context,
-                }), { command: 'agent_command', peerDaemonId: route.daemonId }));
+                const changed = preflight();
+                if (changed) return { success: false, error: changed };
+                const acknowledged = (result: { success: boolean; [key: string]: unknown }) => {
+                    if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some(id => sessionIdsEquivalent(id, sessionId))) {
+                        confirmSessionStop(db, sessionId, stopId);
+                    }
+                    return result;
+                };
+                // From this point even a thrown RPC may have stopped the runtime.
+                markSessionStopSent(db, sessionId, stopId);
+                if (route) {
+                    return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand!(route.daemonId, 'agent_command', {
+                        action: 'mesh_idle_session_stop', agentType: route.provider, targetSessionId: sessionId,
+                        idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence! }, meshContext: context,
+                    }), { command: 'agent_command', peerDaemonId: route.daemonId }));
+                }
+                return acknowledged(await components.cliManager!.agentCommand({ action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: sessionId,
+                    idleSessionLifetime: { lastActivityAt: record!.lastActivityAt!, stopId, claimFence: record!.claimFence! }, meshContext: context }));
+            } finally {
+                // Releases every pre-send refusal/exception, but never a prior sent retry.
+                releaseSessionStop(db, sessionId, stopId);
             }
-            const state = findLocalCliInstance(components, sessionId)?.getState();
-            if (!isSafeIdleTaskSession(state) || !router) return { success: false, error: 'session_lifetime_safety_changed' };
-            const record = [...localRecords.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
-            if (!record || !components.cliManager) return { success: false, error: 'lifetime_runtime_unavailable' };
-            return acknowledged(await components.cliManager.agentCommand({ action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: sessionId,
-                idleSessionLifetime: { lastActivityAt: record.lastActivityAt!, stopId, claimFence: record.claimFence! }, meshContext: context }));
         },
     };
 }

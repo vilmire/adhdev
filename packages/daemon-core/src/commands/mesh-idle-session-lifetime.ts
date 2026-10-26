@@ -1,7 +1,7 @@
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { collectSessionIdsWithActiveWork } from '../mesh/mesh-idle-session-reaper.js';
 import { includesSession } from '../mesh/mesh-session-lifetime.js';
-import { sessionClaimFence, claimFenceMatches, reserveSessionStop, releaseSessionStop, sessionStopPending, confirmSessionStop } from '../mesh/mesh-session-stop-fence.js';
+import { sessionClaimFence, claimFenceMatches, reserveSessionStop, releaseSessionStop, markSessionStopSent, sessionStopPending, confirmSessionStop } from '../mesh/mesh-session-stop-fence.js';
 /** Host-side lifetime probe/stop, behind agent_command's session-coordinator ACL. */
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { CliAgentCommandHost } from './cli-manager-agent-command.js';
@@ -37,15 +37,19 @@ export async function idleSessionLifetimeCommand(host: CliAgentCommandHost, args
     }
     const db = MeshRuntimeStore.getInstance().db;
     reserveSessionStop(db, meshId, r.sessionId, fence.stopId);
-    // No await between the final local queue/attempt check and issuing the stop.
-    // Claims run the same reservation check inside their SQLite transaction.
-    if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId)
-        || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+    try {
+        // No await between the final local queue/attempt check and issuing the stop.
+        // Claims run the same reservation check inside their SQLite transaction.
+        if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId)
+            || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
+            return { success: false, error: 'lifetime_assignment_changed' };
+        }
+        markSessionStopSent(db, r.sessionId, fence.stopId);
+        const stopped = await control.stopSession(r.sessionId);
+        if (!stopped || stopped.lifecycle !== 'stopped') return { success: false, error: 'lifetime_stop_unconfirmed' };
+        confirmSessionStop(db, r.sessionId, fence.stopId);
+        return { success: true, stoppedSessionIds: [r.sessionId] };
+    } finally {
         releaseSessionStop(db, r.sessionId, fence.stopId);
-        return { success: false, error: 'lifetime_assignment_changed' };
     }
-    const stopped = await control.stopSession(r.sessionId);
-    if (!stopped || stopped.lifecycle !== 'stopped') return { success: false, error: 'lifetime_stop_unconfirmed' };
-    confirmSessionStop(db, r.sessionId, fence.stopId);
-    return { success: true, stoppedSessionIds: [r.sessionId] };
 }

@@ -31,21 +31,26 @@ export function reserveSessionStop(db: Database, meshId: string, sessionId: stri
             return held.stop_id;
         }
         const id = stopId ?? randomUUID();
-        db.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'stopping')").run(sessionId.trim(), meshId, id);
+        db.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'reserved')").run(sessionId.trim(), meshId, id);
         return id;
     }).immediate();
 }
-/** Release only before a stop can have been sent, or after an explicit no-stop refusal. */
+/** Mark before invoking a stop: a thrown/lost RPC response is ambiguous forever. */
+export function markSessionStopSent(db: Database, sessionId: string, stopId: string): void {
+    const changed = db.prepare("UPDATE mesh_session_stop_fences SET state = 'stopping' WHERE session_id = ? AND stop_id = ? AND state IN ('reserved', 'stopping')").run(sessionId.trim(), stopId);
+    if (changed.changes !== 1) throw new Error('session_stop_reservation_lost');
+}
+/** Release only a never-sent reservation; retries cannot unlock an ambiguous stop. */
 export function releaseSessionStop(db: Database, sessionId: string, stopId: string): void {
-    db.prepare('DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?').run(sessionId.trim(), stopId);
+    db.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ? AND state = 'reserved'").run(sessionId.trim(), stopId);
 }
 export function sessionStopPending(db: Database, sessionId: string): boolean {
     if (!sessionIsStopping(db, sessionId)) return false;
-    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state = 'stopping'").get(sessionId.trim());
+    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ? AND state IN ('reserved', 'stopping')").get(sessionId.trim());
 }
 export function hasPendingSessionStops(db: Database, meshId: string): boolean {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
-    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state = 'stopping' LIMIT 1").get(meshId);
+    return !!db.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE mesh_id = ? AND state IN ('reserved', 'stopping') LIMIT 1").get(meshId);
 }
 export function confirmSessionStop(db: Database, sessionId: string, stopId: string): void {
     // Keep a tombstone so a stale remote-idle row cannot claim the stopped runtime.
