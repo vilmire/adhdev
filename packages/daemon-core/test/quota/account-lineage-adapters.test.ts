@@ -96,11 +96,14 @@ describe('claude-cli lineage (oauthAccount.accountUuid + organizationUuid)', () 
     it('a test runtime without a synthetic CLAUDE_CONFIG_DIR never reads the real home', () => {
         expect(readClaudeQuotaAccountLineage({ env: {} })).toEqual(UNKNOWN_ACCOUNT_LINEAGE);
     });
-    it('fetch stamps the signed-in account on the statusline reading', async () => {
+    it('keeps a setup failure account-scoped without claiming a measurement', async () => {
         const { env, write } = setup();
         write(account('fixture-account-a'));
         // No wrapper installed → setup-required failure, still account-scoped.
         const quota = await fetchClaudeQuota({ env, now: () => 1_800_000_000_000 });
+        expect(quota.metadata?.failureKind).toBe('setup-required');
+        expect(quota.session).toBeNull();
+        expect(quota.weekly).toBeNull();
         expect(quota.metadata?.accountLineage).toEqual(readClaudeQuotaAccountLineage({ env }));
     });
     it('restart hydration keeps a matching reading and isolates a different account', async () => {
