@@ -9,6 +9,7 @@ import {
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
+  validateSessionHostEndpoint,
   isTerminalRecord,
 } from '@adhdev/session-host-core';
 import type {
@@ -285,6 +286,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    validateSessionHostEndpoint(this.endpoint);
     this.assertNoAutomaticReplacementContext();
     if (this.upgradeLease && fs.existsSync(this.endpoint.path)) {
       throw new Error('native_host_endpoint_owner_unproved');

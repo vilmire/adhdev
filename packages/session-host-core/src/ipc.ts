@@ -18,6 +18,20 @@ export interface SessionHostEndpoint {
   path: string;
 }
 
+/** Reserve the trailing NUL in sockaddr_un; named pipes have a separate namespace. */
+export function validateSessionHostEndpoint(
+  endpoint: SessionHostEndpoint,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (endpoint.kind !== 'unix') return;
+  // Darwin/BSD use 104 bytes; Linux provides 108. Default conservatively elsewhere.
+  const limit = platform === 'linux' ? 108 : 104;
+  const pathBytes = Buffer.byteLength(endpoint.path, 'utf8');
+  if (pathBytes + 1 > limit) {
+    throw new Error(`session_host_unix_socket_path_too_long: path_bytes=${pathBytes} required_bytes=${pathBytes + 1} limit_bytes=${limit} platform=${platform}`);
+  }
+}
+
 export interface SessionHostEndpointOptions {
   /**
    * Instance IPC namespace key (see instance-key.ts). '' / omitted yields the
