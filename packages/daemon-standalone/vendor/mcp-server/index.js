@@ -85072,8 +85072,8 @@ ${includeRefs[0]}`;
         argv = [node.comm, ...argv];
       }
       const argv0 = argv[0] ?? node.comm ?? "";
-      const exec7 = normalizeExecName(argv0 || node.comm || "");
-      const execName = SCRIPT_RUNTIMES.has(commExec) || PACKAGE_RUNNERS.has(commExec) ? commExec : exec7;
+      const exec8 = normalizeExecName(argv0 || node.comm || "");
+      const execName = SCRIPT_RUNTIMES.has(commExec) || PACKAGE_RUNNERS.has(commExec) ? commExec : exec8;
       let script = null;
       let scriptDirs = [];
       let scriptPackage = null;
@@ -117512,7 +117512,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function pythonResourcePreflight() {
       const commands = process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
       for (const [cmd, prefix] of commands) try {
-        await exec5(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
+        await exec6(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
           cwd: getConfigDir2(),
           shell: false,
           windowsHide: true,
@@ -117530,7 +117530,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var import_node_crypto36;
     var import_promises11;
     var import_node_path24;
-    var exec5;
+    var exec6;
     var REMOTE_GIT_TIMEOUT_MS;
     var REMOTE_GIT_CLONE_TIMEOUT_MS;
     var REMOTE_GIT_CLONE_WATCHDOG_MS;
@@ -117550,7 +117550,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         import_promises11 = require("fs/promises");
         import_node_path24 = require("path");
         init_config();
-        exec5 = (0, import_node_util10.promisify)(import_node_child_process19.execFile);
+        exec6 = (0, import_node_util10.promisify)(import_node_child_process19.execFile);
         REMOTE_GIT_TIMEOUT_MS = 12e4;
         REMOTE_GIT_CLONE_TIMEOUT_MS = 18 * 6e4;
         REMOTE_GIT_CLONE_WATCHDOG_MS = 12e4;
@@ -136008,11 +136008,11 @@ ${tail}` : ""
     function defaultExecFileSync() {
       return import_child_process7.execFileSync;
     }
-    function getWindowsProcessCommandLine(pid, exec7) {
+    function getWindowsProcessCommandLine(pid, exec8) {
       const pidFilter = `ProcessId=${pid}`;
       const failures = [];
       try {
-        const psOut = exec7("powershell.exe", [
+        const psOut = exec8("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -136027,7 +136027,7 @@ ${tail}` : ""
         failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
       }
       try {
-        const wmicOut = exec7("wmic", [
+        const wmicOut = exec8("wmic", [
           "process",
           "where",
           pidFilter,
@@ -136054,13 +136054,13 @@ ${tail}` : ""
     }
     function getProcessCommandLine(pid, options = {}) {
       if (!Number.isFinite(pid) || pid <= 0) return null;
-      const exec7 = options.execFileSync ?? defaultExecFileSync();
+      const exec8 = options.execFileSync ?? defaultExecFileSync();
       const platform10 = options.platform ?? process.platform;
       if (platform10 === "win32") {
-        return getWindowsProcessCommandLine(pid, exec7);
+        return getWindowsProcessCommandLine(pid, exec8);
       }
       try {
-        const text4 = String(exec7("ps", ["-o", "command=", "-p", String(pid)], {
+        const text4 = String(exec8("ps", ["-o", "command=", "-p", String(pid)], {
           encoding: "utf8",
           timeout: 3e3,
           stdio: ["ignore", "pipe", "ignore"]
@@ -136146,11 +136146,11 @@ ${tail}` : ""
     }
     function killProcess(pid, options = {}) {
       if (!Number.isFinite(pid) || pid <= 0) return false;
-      const exec7 = options.execFileSync ?? defaultExecFileSync();
+      const exec8 = options.execFileSync ?? defaultExecFileSync();
       const platform10 = options.platform ?? process.platform;
       try {
         if (platform10 === "win32") {
-          exec7("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          exec8("taskkill", ["/PID", String(pid), "/T", "/F"], {
             stdio: "ignore",
             windowsHide: true
           });
@@ -136177,13 +136177,13 @@ ${tail}` : ""
     function inspectOwnedNodeProcesses(options) {
       const platform10 = options.platform ?? process.platform;
       if (platform10 !== "win32") return { processes: [], probeFailed: false, probeFailureReason: null };
-      const exec7 = options.execFileSync ?? defaultExecFileSync();
+      const exec8 = options.execFileSync ?? defaultExecFileSync();
       const prefixes = options.prefixes.map((p) => normalizeWindowsPath(p));
       const exclude = new Set((options.excludePids ?? []).filter((n) => Number.isFinite(n) && n > 0));
       const markers = (options.markers ?? []).map((m) => m.toLowerCase().replace(/\//g, "\\"));
       let pids = [];
       try {
-        const out = String(exec7("powershell.exe", [
+        const out = String(exec8("powershell.exe", [
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",
@@ -136206,7 +136206,7 @@ ${tail}` : ""
       let unreadable = 0;
       for (const pid of pids) {
         if (!Number.isFinite(pid) || pid <= 0 || exclude.has(pid)) continue;
-        const commandLine = getProcessCommandLine(pid, { platform: platform10, execFileSync: exec7 });
+        const commandLine = getProcessCommandLine(pid, { platform: platform10, execFileSync: exec8 });
         if (!commandLine) {
           unreadable += 1;
           continue;
@@ -142209,7 +142209,7 @@ ${marker2}`,
         return false;
       }
     }
-    var import_child_process13 = require("child_process");
+    var import_child_process14 = require("child_process");
     var net = __toESM2(require("net"));
     var os322 = __toESM2(require("os"));
     var path78 = __toESM2(require("path"));
@@ -151020,6 +151020,17 @@ ${output}` : "";
       };
     }
     init_config();
+    var import_child_process13 = require("child_process");
+    var PS_ARGS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+    function listMacProcessArgs(execImpl = import_child_process13.exec) {
+      return new Promise((resolve59, reject) => {
+        execImpl(
+          "ps axww -o pid=,args=",
+          { encoding: "utf-8", timeout: 3e3, maxBuffer: PS_ARGS_MAX_BUFFER_BYTES, windowsHide: true },
+          (error, stdout) => error ? reject(error) : resolve59(String(stdout ?? ""))
+        );
+      });
+    }
     function normalizeMacAppPath(appPath) {
       const trimmed2 = String(appPath || "").trim();
       if (!trimmed2) return null;
@@ -151050,9 +151061,10 @@ ${output}` : "";
       }
       return pids;
     }
+    init_logger();
     async function execQuiet(command, options = {}) {
       return new Promise((resolve59) => {
-        (0, import_child_process13.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
+        (0, import_child_process14.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
           if (error) return resolve59("");
           resolve59(stdout.toString());
         });
@@ -151105,13 +151117,9 @@ ${output}` : "";
       const appPaths = getIdePathCandidates(ideId);
       if (appPaths.length === 0) return [];
       try {
-        const output = await execQuiet("ps axww -o pid=,args=", {
-          encoding: "utf-8",
-          timeout: 3e3,
-          stdio: ["pipe", "pipe", "pipe"]
-        });
-        return findMacAppProcessPids(output, appPaths);
-      } catch {
+        return findMacAppProcessPids(await listMacProcessArgs(), appPaths);
+      } catch (error) {
+        LOG.warn("Launch", `process listing failed \u2014 running ${ideId} processes cannot be detected: ${error?.message || error}`);
         return [];
       }
     }
@@ -151457,10 +151465,10 @@ ${output}` : "";
       const canUseAppLauncher = !!appName;
       const useAppLauncher = preferredMethod === "app" ? canUseAppLauncher : preferredMethod === "cli" ? false : !canUseCli && canUseAppLauncher;
       if (!useAppLauncher && ide.cliCommand) {
-        (0, import_child_process13.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        (0, import_child_process14.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
       } else if (appName) {
         const openArgs = ["-a", appName, "--args", ...args];
-        (0, import_child_process13.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
+        (0, import_child_process14.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
       } else {
         throw new Error(`No app identifier or CLI for ${ide.displayName}`);
       }
@@ -151486,7 +151494,7 @@ ${output}` : "";
       const args = ["--remote-debugging-port=" + port];
       if (newWindow) args.push("--new-window");
       if (workspace) args.push(workspace);
-      (0, import_child_process13.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      (0, import_child_process14.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
     function getAvailableIdeIds() {
       return getProviderLoader().getAvailableIdeTypes();
@@ -164223,7 +164231,7 @@ ${output}` : "";
     }
     var import_path39 = require("path");
     var fs88 = __toESM2(require("fs"));
-    var import_child_process14 = require("child_process");
+    var import_child_process15 = require("child_process");
     init_logger();
     init_config();
     init_mesh_host_ownership();
@@ -164312,7 +164320,7 @@ ${output}` : "";
     }
     function isGitTrackedFile(workspace, filePath2) {
       try {
-        (0, import_child_process14.execFileSync)("git", ["ls-files", "--error-unmatch", "--", filePath2], { cwd: workspace, stdio: "ignore", timeout: 5e3, windowsHide: true });
+        (0, import_child_process15.execFileSync)("git", ["ls-files", "--error-unmatch", "--", filePath2], { cwd: workspace, stdio: "ignore", timeout: 5e3, windowsHide: true });
         return true;
       } catch {
         return false;
@@ -196401,7 +196409,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     init_cooperative_gate();
-    var import_child_process15 = require("child_process");
+    var import_child_process16 = require("child_process");
     init_hidden_spawn();
     var fs115 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
@@ -196681,7 +196689,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           stdio = ["ignore", logFd, logFd];
         }
         assertStart();
-        const child = (0, import_child_process15.spawn)(nodeExecutable, [entry, "serve", sessionHostInstanceArg(instance().configDir)], {
+        const child = (0, import_child_process16.spawn)(nodeExecutable, [entry, "serve", sessionHostInstanceArg(instance().configDir)], {
           detached: true,
           stdio,
           windowsHide: true,
@@ -196918,8 +196926,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_hidden_spawn();
     var import_util2 = require("util");
-    var import_child_process16 = require("child_process");
-    var execAsync3 = (0, import_util2.promisify)(import_child_process16.exec);
+    var import_child_process17 = require("child_process");
+    var execAsync3 = (0, import_util2.promisify)(import_child_process17.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
       try {

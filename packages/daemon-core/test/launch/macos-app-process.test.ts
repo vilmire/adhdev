@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest'
 
-import { findMacAppProcessPids } from '../../src/launch/macos-app-process'
+import { PS_ARGS_MAX_BUFFER_BYTES, findMacAppProcessPids, listMacProcessArgs } from '../../src/launch/macos-app-process'
+
+describe('macOS process listing', () => {
+  it('asks exec for a buffer far above the 1 MiB default, since agent argv can be multi-KB each', async () => {
+    let seen: { maxBuffer: number; windowsHide: boolean } | null = null
+    const output = await listMacProcessArgs((_cmd, options, cb) => {
+      seen = options
+      cb(null, '1 /Applications/X.app/Contents/MacOS/X')
+    })
+    expect(output).toBe('1 /Applications/X.app/Contents/MacOS/X')
+    expect(seen!.maxBuffer).toBe(PS_ARGS_MAX_BUFFER_BYTES)
+    expect(PS_ARGS_MAX_BUFFER_BYTES).toBeGreaterThan(1024 * 1024)
+    expect(seen!.windowsHide).toBe(true)
+  })
+
+  it('rejects on exec failure (e.g. maxBuffer exceeded) instead of reporting an empty process list', async () => {
+    const overflow = Object.assign(new Error('stdout maxBuffer length exceeded'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' })
+    await expect(listMacProcessArgs((_cmd, _options, cb) => cb(overflow, 'partial'))).rejects.toThrow(/maxBuffer/)
+  })
+})
 
 describe('macOS app process matching', () => {
   it('matches an Electron main process by app bundle path, not by the visible app name', () => {
