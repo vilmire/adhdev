@@ -209,12 +209,12 @@ import { afterEach, vi } from 'vitest';
 vi.mock('node:fs', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs')>();
     return { ...actual, readdirSync: vi.fn(actual.readdirSync), statSync: vi.fn(actual.statSync),
-        realpathSync: vi.fn(actual.realpathSync), readFileSync: vi.fn(actual.readFileSync) };
+        realpathSync: vi.fn(actual.realpathSync), readFileSync: vi.fn(actual.readFileSync), openSync: vi.fn(actual.openSync), readSync: vi.fn(actual.readSync) };
 });
 const statusRoots: string[] = [];
 const statusAdapters: any[] = [];
 afterEach(() => {
-    for (const a of statusAdapters.splice(0)) a.kimiQuestionReader?.dispose();
+    for (const a of statusAdapters.splice(0)) { a.kimiQuestionReader?.dispose(); a.kimiBackgroundReader?.dispose(); }
     vi.restoreAllMocks();
     for (const root of statusRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -370,5 +370,118 @@ describe('Kimi initial tail/config reconciliation race', () => {
         await adapter.kimiQuestionReader.whenSettled(true);
         expect(adapter.activeInteractivePrompt?.promptId).toBe('status-question');
         expect(specPath).not.toBe(replacement);
+    });
+});
+
+import { buildProviderState } from '../../../src/providers/cli-provider-state-projection.js';
+import { decideCompletionPreflight } from '../../../src/providers/completion/completion-engine.js';
+import { transcriptClaimOwner, __resetTranscriptClaimRegistry } from '../../../src/providers/native-history/transcript-claim-registry.js';
+
+function projectionHost(adapter: any) {
+    return { adapter, type: 'kimi', instanceId: 'full-state', provider: { name: 'Kimi' }, workingDir: adapter.workingDir,
+        settings: {}, runtimeMessages: [], lastPersistedHistoryMessages: [], parsedIngestTimestamps: { stamp: (m: unknown[]) => m },
+        stabilizeFlappingApprovalStatus: (s: unknown) => s, maybeAutoApproveStatus: () => false, autoApproveMaskStalled: () => false,
+        maybeAppendRuntimeRecoveryMessage: () => {}, shouldSuppressFreshLaunchStartupReplay: () => false,
+        promoteProviderSessionId: () => {}, shouldHydrateExistingProviderHistory: () => false,
+        shouldSuppressStaleParsedBusyStatus: () => false, applyProviderResponse: () => {}, historyWriter: { appendNewMessages: () => {} },
+    } as any;
+}
+function backgroundRows() {
+    return [
+        { type: 'turn.prompt', input: [{ type: 'text', text: 'test' }] },
+        { type: 'context.append_loop_event', event: { type: 'tool.call', toolCallId: 'bg', name: 'Bash', args: { run_in_background: true } } },
+        { type: 'context.append_loop_event', event: { type: 'tool.result', toolCallId: 'bg', result: { output: 'task_id: bash-test\nstatus: running' } } },
+    ];
+}
+function completion(bg: any) {
+    return decideCompletionPreflight({ firstObservedAt: 0, previousStatus: 'generating' } as any,
+        { now: () => 1000, visibleStatus: () => 'idle', busyEpoch: () => 0, lastOutputAt: () => undefined,
+            backgroundTask: () => ({ active: bg.backgroundTaskActive === true, count: bg.backgroundTaskCount }) } as any,
+        { backgroundTaskHoldMaxMs: 300000, finalizationRetryMs: 1000 } as any);
+}
+function syncEvidenceSpies() {
+    const spies = [vi.mocked(fs.readdirSync), vi.mocked(fs.statSync), vi.mocked(fs.realpathSync), vi.mocked(fs.readFileSync),
+        vi.mocked(fs.openSync), vi.mocked(fs.readSync)];
+    spies.forEach(spy => spy.mockClear());
+    return spies;
+}
+
+describe('Kimi real full-state background producer', () => {
+    it('holds cold evidence and projects full states without sync discovery/read, including growing history', async () => {
+        const { adapter, wire } = statusWireFixture();
+        fs.writeFileSync(wire, backgroundRows().map(r => JSON.stringify(r)).join('\n') + '\n');
+        adapter.latestState.status = 'idle';
+        const host = projectionHost(adapter);
+        const cold = adapter.getScriptParsedStatus();
+        expect(cold).toMatchObject({ backgroundTaskActive: true, backgroundTaskPending: true });
+        expect(completion(cold)).toMatchObject({ kind: 'hold', reason: 'background_task_active' });
+        await Promise.all([adapter.kimiBackgroundReader.whenSettled(), adapter.kimiQuestionReader.whenSettled()]);
+        const scans = vi.spyOn(fs.promises, 'readdir');
+        const sync = syncEvidenceSpies();
+        for (let i = 0; i < 100; i++) buildProviderState(host);
+        expect(adapter.getScriptParsedStatus()).toMatchObject({ backgroundTaskActive: true, backgroundTaskCount: 1 });
+        expect(adapter.getScriptParsedStatus().backgroundTaskPending).toBeUndefined();
+        expect(sync.every(spy => spy.mock.calls.length === 0)).toBe(true);
+        for (let i = 0; i < 8; i++) {
+            fs.appendFileSync(wire, JSON.stringify({ type: 'context.append_loop_event', event: { type: 'content.part', part: { type: 'think', think: 'growing' } } }) + '\n');
+            await Promise.all([adapter.kimiBackgroundReader.whenSettled(true), adapter.kimiQuestionReader.whenSettled(true)]);
+            for (let n = 0; n < 25; n++) buildProviderState(host);
+        }
+        expect(scans).not.toHaveBeenCalled();
+        expect(sync.every(spy => spy.mock.calls.length === 0)).toBe(true);
+        // No background-task exemption based on coordinator role.
+        adapter.runtimeSettings = { meshCoordinatorFor: 'mesh' };
+        expect(completion(adapter.getScriptParsedStatus())).toMatchObject({ kind: 'hold' });
+        fs.appendFileSync(wire, JSON.stringify({ type: 'turn.steer', input: [{ type: 'text', text: '<notification category="task" type="task.completed" source_id="bash-test">done</notification>' }] }) + '\n');
+        await adapter.kimiBackgroundReader.whenSettled(true);
+        expect(adapter.kimiBackgroundReader.snapshot.background).toMatchObject({ active: true, pendingConsumption: true });
+        fs.appendFileSync(wire, JSON.stringify({ type: 'turn.prompt', input: [{ type: 'text', text: 'next turn' }] }) + '\n');
+        await adapter.kimiBackgroundReader.whenSettled(true);
+        const clear = adapter.getScriptParsedStatus();
+        expect(clear.backgroundTaskActive).toBeUndefined();
+        expect(completion(clear)).toMatchObject({ kind: 'proceed' });
+    });
+
+    it('does not borrow an owner binding or claim a source for an ambiguous non-owner read', async () => {
+        const { adapter, root, wire } = statusWireFixture();
+        const other = path.join(root, 'sessions', 'other', 'session_b0000000-0000-4000-8000-000000000002', 'agents', 'main');
+        fs.mkdirSync(other, { recursive: true });
+        fs.writeFileSync(path.join(other, '../../state.json'), JSON.stringify({ workDir: root }));
+        fs.writeFileSync(path.join(other, 'wire.jsonl'), '{}\n');
+        // Owner identity exists, but the background policy MUST omit it. With
+        // no spawn evidence and two candidates, its original policy is unknown.
+        adapter.spec.interactive_prompts = undefined;
+        const bg = adapter.getScriptParsedStatus();
+        expect(bg.backgroundTaskPending).toBe(true);
+        await adapter.kimiBackgroundReader.whenSettled();
+        expect(adapter.kimiBackgroundReader.snapshot.resolution?.outcome?.attribution).toBe('ambiguous');
+        expect(adapter.getScriptParsedStatus()).toMatchObject({ backgroundTaskPending: true, backgroundTaskSupport: 'unknown', backgroundTaskActive: true });
+        expect(transcriptClaimOwner(fs.realpathSync(wire))).toBeUndefined();
+        expect(completion(adapter.getScriptParsedStatus())).toMatchObject({ kind: 'hold' });
+        __resetTranscriptClaimRegistry();
+    });
+
+    it('keeps the bound background source when an unrelated sibling appears and invalidates on config change/detach', async () => {
+        const { adapter, root, wire, specPath, spec } = statusWireFixture();
+        adapter.spec.interactive_prompts = undefined;
+        fs.writeFileSync(wire, backgroundRows().map(r => JSON.stringify(r)).join('\n') + '\n');
+        adapter.getScriptParsedStatus();
+        await adapter.kimiBackgroundReader.whenSettled();
+        const scans = vi.spyOn(fs.promises, 'readdir');
+        const sibling = path.join(root, 'sessions', 'other', 'session_b0000000-0000-4000-8000-000000000002', 'agents', 'main');
+        fs.mkdirSync(sibling, { recursive: true });
+        fs.writeFileSync(path.join(sibling, '../../state.json'), JSON.stringify({ workDir: root }));
+        fs.writeFileSync(path.join(sibling, 'wire.jsonl'), '{}\n');
+        await adapter.kimiBackgroundReader.whenSettled(true);
+        expect(adapter.getScriptParsedStatus()).toMatchObject({ backgroundTaskCount: 1 });
+        expect(scans).not.toHaveBeenCalled();
+        fs.writeFileSync(specPath, JSON.stringify({ ...spec, interactive_prompts: undefined, native_history: { source: { ...spec.native_history.source, path: `${root}/missing/*` } } }));
+        adapter.refreshProviderDefinition({ _resolvedSpecPath: specPath });
+        expect(adapter.getScriptParsedStatus().backgroundTaskPending).toBe(true);
+        await adapter.kimiBackgroundReader.whenSettled(true);
+        expect(adapter.getScriptParsedStatus()).toMatchObject({ backgroundTaskSupport: 'unknown', backgroundTaskPending: true });
+        adapter.driver.detach = vi.fn();
+        adapter.detach();
+        expect(adapter.getScriptParsedStatus().backgroundTaskPending).toBe(true);
     });
 });

@@ -27,7 +27,7 @@ import { invokeSpecControl } from './picker-controls.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
-import { detectBackgroundTaskActive } from './background-task-detector.js';
+import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
 import {
     buildSpecDebugSnapshot, extractCodexSessionIdFromScreen,
     scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
@@ -197,6 +197,7 @@ export class SpecCliAdapter implements CliAdapter {
     private get rawTail(): RawTail { return (this.rawTailBuf ??= new RawTail()); }
     private failureScanBudget?: TailReadBudget;
     private kimiQuestionReader?: KimiPendingQuestionReader;
+    private kimiBackgroundReader?: KimiPendingQuestionReader;
     private specPath?: string;
     private exited = false;
     private spawned = false;
@@ -293,7 +294,7 @@ export class SpecCliAdapter implements CliAdapter {
 
     async spawn(): Promise<void> {
         if (this.spawned) return;
-        this.kimiQuestionReader?.dispose(); this.kimiQuestionReader = undefined;
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose(); this.kimiQuestionReader = undefined; this.kimiBackgroundReader = undefined;
         this.driver.start();
         this.spawned = true;
         this.spawnedAtMs = Date.now();
@@ -540,28 +541,27 @@ export class SpecCliAdapter implements CliAdapter {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
-        // Background-task passthrough: read the native-history transcript at
-        // poll time for causally-owned background tool work (claude-cli
-        // run_in_background bash; kimi run_in_background tool.call cells whose
-        // launch result returns immediately with `status: running`). This is a
-        // NEW signal that rides alongside `status` (it is NOT run through the
-        // 5-value FSM normalization). Providers whose transcript the detector
-        // cannot authoritatively read report backgroundTaskSupport:'unknown'
-        // (an explicit UNKNOWN — never a silent "no background work") and are
-        // not gated. Read at each poll — the JSONL trails the live idle
-        // transition, so it must be observed BEFORE completion fires, which
-        // SUB-B's hold + settle window give us.
+        // Kimi background evidence is a sealed async memory view; other providers
+        // retain the public synchronous detector and their original policies.
         const bg = this.detectBackgroundTask();
         return {
             ...status,
             messages: this.readScreenAssistantMessages(),
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
             backgroundTaskSupport: bg.support ?? 'unknown',
+            ...(bg.pending ? { backgroundTaskPending: true } : {}),
             ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
         };
     }
 
-    private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
+    private detectBackgroundTask(): BackgroundTaskDetection {
+        if (this.cliType === 'kimi' && (this.spec.native_history?.source?.kind === 'jsonl' || this.kimiBackgroundReader)) {
+            const reader = (this.kimiBackgroundReader ??= new KimiPendingQuestionReader(
+                () => this.notifyChange('fsm_state'), this.specPath, header => Object.assign(this.spec, header),
+                () => this.nativeHistoryInput({ withOwner: false }), true));
+            const view = reader.read(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
+            return backgroundTaskSnapshot(view.state, view.background);
+        }
         if (!this.spec.native_history?.source) {
             // antigravity-cli declares no declarative `source` (its authority is
             // the per-session conversations/<uuid>.db, read via the built-in
@@ -589,7 +589,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     shutdown(): void {
-        this.kimiQuestionReader?.dispose();
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
         (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
         this.win32RawInputWriter?.dispose();
         try { this.driver.dispatch({ kind: 'shutdown' }); } catch { /* ignore */ }
@@ -598,7 +598,7 @@ export class SpecCliAdapter implements CliAdapter {
     /** CliManager.detachAll() on daemon shutdown: release the runtime so it
      *  survives the restart (shutdown() would stop it). */
     detach(): void {
-        this.kimiQuestionReader?.dispose();
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
         try { this.driver.detach(); } catch { /* ignore */ }
     }
 
@@ -929,6 +929,7 @@ export class SpecCliAdapter implements CliAdapter {
         const specPath = (provider as { _resolvedSpecPath?: string })?._resolvedSpecPath;
         if (specPath) this.specPath = specPath;
         void this.kimiQuestionReader?.reloadConfig(specPath || this.specPath);
+        void this.kimiBackgroundReader?.reloadConfig(specPath || this.specPath);
     }
 
     /**
@@ -989,7 +990,7 @@ export class SpecCliAdapter implements CliAdapter {
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
-                this.kimiQuestionReader?.dispose();
+                this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
                 // Some CLIs repaint the failure off-screen before exit. Re-run the

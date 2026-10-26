@@ -54,7 +54,7 @@ import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
 import { resolveJsonlSourcePath, resolveJsonlSidecarSourceAsync, resolveJsonlSidecarSourceFromEvidence, type JsonlSourceResolution } from './spec/native-history-executor.js';
 import type { NativeHistoryInput } from './spec/native-history-types.js';
-import { readTailJsonlLines, readTailJsonlLinesAsync } from './spec/background-task-detector.js';
+import { readTailJsonlLines, readTailJsonlLinesAsync, detectFromRecords, type BackgroundTaskDetection } from './spec/background-task-detector.js';
 import { canonicalSourcePathAsync, expandPath, sourceRevisionAsync, type SidecarSourceEvidence } from './spec/native-history-paths.js';
 import { claimTranscript, transcriptClaimOwner, transcriptClaimOwnerToken } from './native-history/transcript-claim-registry.js';
 import { sentPromptSnippets } from './native-history/sent-prompt-registry.js';
@@ -364,6 +364,7 @@ export interface KimiQuestionSnapshot {
     state: 'loading' | 'ready' | 'unavailable';
     prompt: InteractivePrompt | null;
     resolution?: JsonlSourceResolution;
+    background?: BackgroundTaskDetection;
 }
 type KimiHeader = { native_history?: NativeHistoryConfig; interactive_prompts?: InteractivePrompts };
 
@@ -398,6 +399,9 @@ export class KimiPendingQuestionReader {
         private specPath?: string,
         private readonly onHeader?: (header: KimiHeader) => void,
         private readonly currentInput?: () => NativeHistoryInput,
+        // Background reads retain their owner-free resolution policy; never
+        // borrow an owner-claimed question binding across attribution policies.
+        private readonly backgroundOnly = false,
     ) {}
 
     private identity(cfg = this.cfg, input = this.currentInput?.() ?? this.input): string {
@@ -416,7 +420,8 @@ export class KimiPendingQuestionReader {
     }
     private emit(): void { if (!this.closed) this.onChange(); }
     private setSnapshot(next: KimiQuestionSnapshot): void {
-        const changed = next.state !== this.snapshot.state || next.prompt?.promptId !== this.snapshot.prompt?.promptId;
+        const changed = next.state !== this.snapshot.state || next.prompt?.promptId !== this.snapshot.prompt?.promptId
+            || JSON.stringify(next.background) !== JSON.stringify(this.snapshot.background);
         this.snapshot = next;
         if (changed) this.emit();
     }
@@ -548,11 +553,16 @@ export class KimiPendingQuestionReader {
             try {
                 const watched = bound ? path.dirname(p) : p;
                 const watcher = fs.watch(watched, { persistent: false }, (_event, name) => {
-                    if (!bound || !name || String(name) === path.basename(p)) { this.sourceEpoch++; this.request(); }
+                    if (!bound || !name || String(name) === path.basename(p)) { this.sourceEpoch++; this.markBackgroundPending(); this.request(); }
                 });
-                watcher.on('error', () => { this.sourceEpoch++; this.request(); });
+                watcher.on('error', () => { this.sourceEpoch++; this.markBackgroundPending(); this.request(); });
                 this.watchers.push(watcher);
             } catch { /* timer validates all levels, even if native watch limits are reached */ }
+        }
+    }
+    private markBackgroundPending(): void {
+        if (this.backgroundOnly && !this.closed && this.snapshot.state === 'ready') {
+            this.setSnapshot({ ...this.snapshot, state: 'loading' });
         }
     }
     private async refresh(): Promise<void> {
@@ -568,6 +578,7 @@ export class KimiPendingQuestionReader {
         let changed = false;
         for (const [p, revision] of this.revisions) if (await sourceRevisionAsync(p) !== revision) { changed = true; break; }
         if (!valid()) return;
+        if (changed) this.markBackgroundPending();
         if (this.evidence && input.workspace && await canonicalSourcePathAsync(input.workspace) !== this.evidence.workspaceKey) {
             if (valid()) { this.invalidate(); this.emit(); }
             return;
@@ -625,7 +636,8 @@ export class KimiPendingQuestionReader {
         }
         if (!valid()) return;
         this.revisions.set(source, tail.signature);
-        this.setSnapshot({ state: 'ready', prompt: detectKimiPendingQuestionFromRecords(tail.records), resolution: this.binding });
+        this.setSnapshot({ state: 'ready', prompt: this.backgroundOnly ? null : detectKimiPendingQuestionFromRecords(tail.records),
+            ...(this.backgroundOnly ? { background: detectFromRecords(tail.records, 'kimi') } : {}), resolution: this.binding });
     }
     dispose(): void {
         this.closed = true;

@@ -664,3 +664,58 @@ describe('negative-cache policy invalidation and late tail jobs', () => {
         expect(actualReads).toBe(1); // disposed job never installed the shared tail cache
     });
 });
+
+describe('owner-free background snapshots using the sealed Kimi reader', () => {
+    function backgroundReader(notify = vi.fn(), currentInput?: () => any) {
+        const reader = new KimiPendingQuestionReader(notify, undefined, undefined, currentInput, true);
+        questionReaders.push(reader);
+        return reader;
+    }
+    function rows() {
+        return [
+            { type: 'turn.prompt', input: [{ type: 'text', text: 'start' }] },
+            { type: 'context.append_loop_event', event: { type: 'tool.call', toolCallId: 'background', name: 'Bash', args: { run_in_background: true } } },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n';
+    }
+    it.each(['dispose', 'identity', 'config', 'append', 'rotate'] as const)('rejects late background publication across %s during tail I/O', async action => {
+        const f = questionStore(`bg-${action}`);
+        fs.writeFileSync(f.wire, rows());
+        let input: any = { ...f.input, instanceId: undefined };
+        const published: Array<boolean | undefined> = [];
+        let reader!: KimiPendingQuestionReader;
+        const notify = vi.fn(() => published.push((reader as any).snapshot.background?.active));
+        reader = backgroundReader(notify, () => input);
+        const original = fs.promises.open;
+        let release!: () => void; let entered!: () => void;
+        const barrier = new Promise<void>(resolve => { release = resolve; });
+        const reached = new Promise<void>(resolve => { entered = resolve; });
+        vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args: any[]) => {
+            const fd = await (original as any)(...args); const read = fd.read.bind(fd);
+            fd.read = async (...readArgs: any[]) => { entered(); await barrier; return read(...readArgs); };
+            return fd;
+        });
+        expect(reader.read(f.cfg, input).state).toBe('loading');
+        await reached;
+        if (action === 'dispose') reader.dispose();
+        if (action === 'identity') { input = { ...input, providerSessionId: 'b0000000-0000-4000-8000-000000000002' }; reader.read(f.cfg, input); }
+        if (action === 'config') reader.read({ source: { ...f.cfg.source, path: `${f.root}/missing/*` } }, input);
+        const clear = JSON.stringify({ type: 'turn.prompt', input: [{ type: 'text', text: 'new turn' }] }) + '\n';
+        if (action === 'append') fs.appendFileSync(f.wire, clear);
+        if (action === 'rotate') { fs.writeFileSync(f.wire + '.new', clear); fs.renameSync(f.wire + '.new', f.wire); }
+        notify.mockClear(); release();
+        await reader.whenSettled();
+        if (action === 'dispose') {
+            expect(reader.read(f.cfg, input)).toMatchObject({ state: 'unavailable' });
+            expect(notify).not.toHaveBeenCalled();
+        } else if (action === 'identity' || action === 'config') {
+            expect((reader as any).snapshot).toMatchObject({ state: 'unavailable' });
+            expect((reader as any).snapshot.background).toBeUndefined();
+        } else {
+            await reader.whenSettled(true);
+            expect((reader as any).snapshot).toMatchObject({ state: 'ready', background: { active: false } });
+            // No old active snapshot was published while the seal was changing.
+            expect(published).not.toContain(true);
+        }
+        expect(transcriptClaimOwner(fs.realpathSync(f.wire))).toBeUndefined();
+    });
+});

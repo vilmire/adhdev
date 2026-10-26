@@ -69287,7 +69287,28 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function reuseIdleTaskSession(components, meshId, task, nodes, claim) {
       const candidates = [];
       for (const inst of components.instanceManager?.getByCategory("cli") ?? []) {
+        const live = inst.settings;
+        if (live && typeof live === "object") {
+          if (readText(live.meshNodeFor) !== meshId) continue;
+          const role = readText(live.meshRole || live.role).toLowerCase();
+          const launch = live.launchRecord;
+          if (live.meshCoordinatorFor || live.assistant || live.isAssistant || live.spawnedForTaskId === null || role === "coordinator" || role === "assistant" || readText(live.launchedBy).toLowerCase() === "assistant" || launch?.spawnedForTaskId === null || launch?.launchedBy === "assistant" || ["coordinator", "assistant"].includes(launch?.roleLaunch?.role ?? "")) continue;
+          const nodeId = readText(live.meshNodeId);
+          if (!nodeId || !nodes.some((node) => meshNodeIdMatches7(node, nodeId))) continue;
+          if (task.targetNodeId && !meshNodeIdMatches7({ nodeId }, task.targetNodeId)) continue;
+          try {
+            const hot = inst.getHotChatSessionState?.();
+            if (readText(hot?.status) === "generating" && inst.lastStatus === "generating") {
+              const now = Date.now();
+              const checkedAt = busyProjectionCheckedAt.get(inst);
+              if (checkedAt === void 0) busyProjectionCheckedAt.set(inst, now);
+              if (checkedAt === void 0 || now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS) continue;
+            }
+          } catch {
+          }
+        }
         const s2 = inst.getState();
+        busyProjectionCheckedAt.set(inst, Date.now());
         const settings2 = s2.settings ?? {};
         if (settings2.meshNodeFor !== meshId || !isSafeIdleTaskSession(s2, settings2)) continue;
         candidates.push({ nodeId: readText(settings2.meshNodeId), sessionId: readText(s2.instanceId), provider: readText(s2.type) });
@@ -69307,6 +69328,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       return "none";
     }
+    var busyProjectionCheckedAt;
+    var BUSY_PROJECTION_RECHECK_MS;
     var init_mesh_session_reuse = __esm2({
       "src/mesh/mesh-session-reuse.ts"() {
         "use strict";
@@ -69315,6 +69338,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_runtime_store();
         init_mesh_scheduling_fitness();
         init_mesh_session_lifetime();
+        busyProjectionCheckedAt = /* @__PURE__ */ new WeakMap();
+        BUSY_PROJECTION_RECHECK_MS = 2e4;
       }
     });
     function readInstanceIdentity(inst) {
@@ -77469,9 +77494,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             const nodeId2 = readText(liveSettings.meshNodeId) || readText(liveSettings.nodeId);
             if (status === "generating" && lastStatus === "generating" && nodeId2) {
               const now = Date.now();
-              const checkedAt = busyProjectionCheckedAt.get(inst);
-              if (checkedAt === void 0) busyProjectionCheckedAt.set(inst, now);
-              if (checkedAt === void 0 || now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS) {
+              const checkedAt = busyProjectionCheckedAt2.get(inst);
+              if (checkedAt === void 0) busyProjectionCheckedAt2.set(inst, now);
+              if (checkedAt === void 0 || now >= checkedAt && now - checkedAt < BUSY_PROJECTION_RECHECK_MS2) {
                 skippedSessions.push({ nodeId: nodeId2, sessionId: readText(hot?.id) || void 0, reason: "session_not_idle", status });
                 continue;
               }
@@ -77480,7 +77505,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           }
         }
         const state2 = inst.getState();
-        busyProjectionCheckedAt.set(inst, Date.now());
+        busyProjectionCheckedAt2.set(inst, Date.now());
         const settings2 = state2.settings || {};
         const instMeshId = readText(settings2.meshNodeFor);
         if (instMeshId !== meshId) continue;
@@ -77626,8 +77651,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       });
     }
     var inFlightAutoLaunches;
-    var busyProjectionCheckedAt;
-    var BUSY_PROJECTION_RECHECK_MS;
+    var busyProjectionCheckedAt2;
+    var BUSY_PROJECTION_RECHECK_MS2;
     var init_mesh_queue_trigger = __esm2({
       "src/mesh/mesh-queue-trigger.ts"() {
         "use strict";
@@ -77648,8 +77673,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_auto_fast_forward();
         init_mesh_pinned_remote_idle();
         inFlightAutoLaunches = /* @__PURE__ */ new Map();
-        busyProjectionCheckedAt = /* @__PURE__ */ new WeakMap();
-        BUSY_PROJECTION_RECHECK_MS = 2e4;
+        busyProjectionCheckedAt2 = /* @__PURE__ */ new WeakMap();
+        BUSY_PROJECTION_RECHECK_MS2 = 2e4;
       }
     });
     function resolveClaimingSessionTranscriptProfile(components, sessionId) {
@@ -179820,6 +179845,10 @@ trust_level = "trusted"
     }
     var fs104 = __toESM2(require("fs"));
     init_logger();
+    function backgroundTaskSnapshot(state2, detection) {
+      if (state2 === "ready" && detection) return detection;
+      return { active: true, count: 0, ids: [], pending: true, support: state2 === "loading" ? "tracked" : "unknown" };
+    }
     var EMPTY = { active: false, count: 0, ids: [] };
     var TRACKED_AGENT_TYPES = /* @__PURE__ */ new Set(["claude-cli", "kimi", "antigravity-cli"]);
     var TAIL_BYTES = 512 * 1024;
@@ -180167,7 +180196,22 @@ trust_level = "trusted"
       return out;
     }
     var asyncTailJsonlCache = /* @__PURE__ */ new Map();
+    var asyncTailJsonlInFlight = /* @__PURE__ */ new Map();
     async function readTailJsonlLinesAsync(filePath2, maxBytes, isCurrent = () => true) {
+      if (!isCurrent()) return null;
+      const key5 = `${maxBytes}:${filePath2}`;
+      let pending = asyncTailJsonlInFlight.get(key5);
+      if (!pending) {
+        pending = readTailJsonlLinesAsyncOnce(filePath2, maxBytes, isCurrent).catch(() => null);
+        asyncTailJsonlInFlight.set(key5, pending);
+        void pending.finally(() => {
+          if (asyncTailJsonlInFlight.get(key5) === pending) asyncTailJsonlInFlight.delete(key5);
+        });
+      }
+      const snapshot = await pending;
+      return isCurrent() ? snapshot : null;
+    }
+    async function readTailJsonlLinesAsyncOnce(filePath2, maxBytes, isCurrent) {
       let fd;
       try {
         fd = await fs104.promises.open(filePath2, "r");
@@ -180640,11 +180684,12 @@ ${text4}` : text4;
       return steps;
     }
     var KimiPendingQuestionReader = class {
-      constructor(onChange, specPath, onHeader, currentInput) {
+      constructor(onChange, specPath, onHeader, currentInput, backgroundOnly = false) {
         this.onChange = onChange;
         this.specPath = specPath;
         this.onHeader = onHeader;
         this.currentInput = currentInput;
+        this.backgroundOnly = backgroundOnly;
       }
       generation = 0;
       sourceEpoch = 0;
@@ -180697,7 +180742,7 @@ ${text4}` : text4;
         if (!this.closed) this.onChange();
       }
       setSnapshot(next) {
-        const changed = next.state !== this.snapshot.state || next.prompt?.promptId !== this.snapshot.prompt?.promptId;
+        const changed = next.state !== this.snapshot.state || next.prompt?.promptId !== this.snapshot.prompt?.promptId || JSON.stringify(next.background) !== JSON.stringify(this.snapshot.background);
         this.snapshot = next;
         if (changed) this.emit();
       }
@@ -180857,16 +180902,23 @@ ${text4}` : text4;
             const watcher = fs105.watch(watched, { persistent: false }, (_event, name) => {
               if (!bound || !name || String(name) === path99.basename(p)) {
                 this.sourceEpoch++;
+                this.markBackgroundPending();
                 this.request();
               }
             });
             watcher.on("error", () => {
               this.sourceEpoch++;
+              this.markBackgroundPending();
               this.request();
             });
             this.watchers.push(watcher);
           } catch {
           }
+        }
+      }
+      markBackgroundPending() {
+        if (this.backgroundOnly && !this.closed && this.snapshot.state === "ready") {
+          this.setSnapshot({ ...this.snapshot, state: "loading" });
         }
       }
       async refresh() {
@@ -180888,6 +180940,7 @@ ${text4}` : text4;
           break;
         }
         if (!valid()) return;
+        if (changed) this.markBackgroundPending();
         if (this.evidence && input.workspace && await canonicalSourcePathAsync(input.workspace) !== this.evidence.workspaceKey) {
           if (valid()) {
             this.invalidate();
@@ -180963,7 +181016,12 @@ ${text4}` : text4;
         }
         if (!valid()) return;
         this.revisions.set(source2, tail.signature);
-        this.setSnapshot({ state: "ready", prompt: detectKimiPendingQuestionFromRecords(tail.records), resolution: this.binding });
+        this.setSnapshot({
+          state: "ready",
+          prompt: this.backgroundOnly ? null : detectKimiPendingQuestionFromRecords(tail.records),
+          ...this.backgroundOnly ? { background: detectFromRecords(tail.records, "kimi") } : {},
+          resolution: this.binding
+        });
       }
       dispose() {
         this.closed = true;
@@ -182419,6 +182477,7 @@ ${text4}` : text4;
       }
       failureScanBudget;
       kimiQuestionReader;
+      kimiBackgroundReader;
       specPath;
       exited = false;
       spawned = false;
@@ -182482,8 +182541,10 @@ ${text4}` : text4;
       }
       async spawn() {
         if (this.spawned) return;
+        this.kimiBackgroundReader?.dispose();
         this.kimiQuestionReader?.dispose();
         this.kimiQuestionReader = void 0;
+        this.kimiBackgroundReader = void 0;
         this.driver.start();
         this.spawned = true;
         this.spawnedAtMs = Date.now();
@@ -182714,10 +182775,22 @@ ${text4}` : text4;
           messages: this.readScreenAssistantMessages(),
           ...this.providerSessionId ? { providerSessionId: this.providerSessionId } : {},
           backgroundTaskSupport: bg.support ?? "unknown",
+          ...bg.pending ? { backgroundTaskPending: true } : {},
           ...bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}
         };
       }
       detectBackgroundTask() {
+        if (this.cliType === "kimi" && (this.spec.native_history?.source?.kind === "jsonl" || this.kimiBackgroundReader)) {
+          const reader = this.kimiBackgroundReader ??= new KimiPendingQuestionReader(
+            () => this.notifyChange("fsm_state"),
+            this.specPath,
+            (header) => Object.assign(this.spec, header),
+            () => this.nativeHistoryInput({ withOwner: false }),
+            true
+          );
+          const view = reader.read(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
+          return backgroundTaskSnapshot(view.state, view.background);
+        }
         if (!this.spec.native_history?.source) {
           if (this.cliType === "antigravity-cli") {
             try {
@@ -182735,6 +182808,7 @@ ${text4}` : text4;
         }
       }
       shutdown() {
+        this.kimiBackgroundReader?.dispose();
         this.kimiQuestionReader?.dispose();
         (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
         this.win32RawInputWriter?.dispose();
@@ -182746,6 +182820,7 @@ ${text4}` : text4;
       /** CliManager.detachAll() on daemon shutdown: release the runtime so it
        *  survives the restart (shutdown() would stop it). */
       detach() {
+        this.kimiBackgroundReader?.dispose();
         this.kimiQuestionReader?.dispose();
         try {
           this.driver.detach();
@@ -183006,6 +183081,7 @@ ${text4}` : text4;
         const specPath = provider?._resolvedSpecPath;
         if (specPath) this.specPath = specPath;
         void this.kimiQuestionReader?.reloadConfig(specPath || this.specPath);
+        void this.kimiBackgroundReader?.reloadConfig(specPath || this.specPath);
       }
       /**
        * (TOOL-EXPAND) Re-read one truncated tool bubble at full length.
@@ -183065,6 +183141,7 @@ ${text4}` : text4;
             }
             return;
           case "exit":
+            this.kimiBackgroundReader?.dispose();
             this.kimiQuestionReader?.dispose();
             this.exited = true;
             this.lastExitCode = ev.exit_code;

@@ -95,13 +95,25 @@ export interface BackgroundTaskDetection {
      * must still be held — tool exit alone is not the final answer.
      */
     pendingConsumption?: boolean;
+    /** Async evidence is not sealed yet; active holds completion without
+     * inventing a task id/count. Unavailable authority stays explicitly unknown. */
+    pending?: boolean;
     /**
+     * A pending async observation holds completion even when support is unknown;
+     * it does not assert a discovered background task. Otherwise:
      * 'tracked' = this provider's transcript is a understood authority for
      * background tool lifecycle; 'unknown' = no such authority exists for this
      * provider (the completion path is NOT gated on background work — an
      * explicit UNKNOWN, not a silent "no background work").
      */
     support?: BackgroundTaskSupport;
+}
+
+/** A cold/invalidated async snapshot is never a clean background verdict.
+ * Existing completion consumers already honor active with a bounded hold. */
+export function backgroundTaskSnapshot(state: 'loading' | 'ready' | 'unavailable', detection?: BackgroundTaskDetection): BackgroundTaskDetection {
+    if (state === 'ready' && detection) return detection;
+    return { active: true, count: 0, ids: [], pending: true, support: state === 'loading' ? 'tracked' : 'unknown' };
 }
 
 const EMPTY: BackgroundTaskDetection = { active: false, count: 0, ids: [] };
@@ -710,7 +722,20 @@ export interface AsyncTailJsonlSnapshot {
 const asyncTailJsonlCache = new Map<string, { token: object; snapshot?: AsyncTailJsonlSnapshot }>();
 /** Async bounded status reader. A changed revision is never installed or
  * returned as a current snapshot; callers coalesce/retry after the writer settles. */
+const asyncTailJsonlInFlight = new Map<string, Promise<AsyncTailJsonlSnapshot | null>>();
 export async function readTailJsonlLinesAsync(filePath: string, maxBytes: number, isCurrent: () => boolean = () => true): Promise<AsyncTailJsonlSnapshot | null> {
+    if (!isCurrent()) return null;
+    const key = `${maxBytes}:${filePath}`;
+    let pending = asyncTailJsonlInFlight.get(key);
+    if (!pending) {
+        pending = readTailJsonlLinesAsyncOnce(filePath, maxBytes, isCurrent).catch(() => null);
+        asyncTailJsonlInFlight.set(key, pending);
+        void pending.finally(() => { if (asyncTailJsonlInFlight.get(key) === pending) asyncTailJsonlInFlight.delete(key); });
+    }
+    const snapshot = await pending;
+    return isCurrent() ? snapshot : null;
+}
+async function readTailJsonlLinesAsyncOnce(filePath: string, maxBytes: number, isCurrent: () => boolean): Promise<AsyncTailJsonlSnapshot | null> {
     let fd: fs.promises.FileHandle | undefined;
     try {
         fd = await fs.promises.open(filePath, 'r');
