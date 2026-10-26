@@ -6,6 +6,7 @@ import { loadMeshConfig, saveMeshConfig } from '../../src/config/mesh-config-sto
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { recordTaskAutoLaunch } from '../../src/mesh/mesh-autolaunch-spawn-budget.js';
 import { recordQueueTaskHold } from '../../src/mesh/mesh-queue-hold-store.js';
+import { syncInlineMeshPoliciesFromDisk } from '../../src/commands/router-inline-mesh-roster.js';
 import { listMatchingFiles } from '../../src/providers/spec/native-history-paths.js';
 vi.mock('node:fs', async importOriginal => { const fs = await importOriginal<typeof import('node:fs')>(); return { ...fs, readdirSync: vi.fn(fs.readdirSync) }; });
 const task = (id: string) => ({ id, meshId: 'saturation', status: 'pending', message: id, createdAt: '2026-01-01', updatedAt: '2026-01-01', revision: 1 } as any);
@@ -26,6 +27,22 @@ describe('rc32 saturation regressions', () => {
         fs.utimesSync(path + '.replacement', stat.atime, stat.mtime);
         fs.renameSync(path + '.replacement', path);
         expect(loadMeshConfig().meshes[0].id).toBe('two');
+    });
+    it('inline policy snapshots also observe same-size same-mtime inode replacement', () => {
+        const path = join(getConfigDir(), 'meshes.json');
+        const document = { meshes: [{ id: 'inline', policy: { maxTaskRetries: 1 } }] };
+        fs.writeFileSync(path, JSON.stringify(document));
+        fs.utimesSync(path, new Date(1_000_000), new Date(1_000_000));
+        const host: any = { inlineMeshCache: new Map([['inline', { id: 'inline', policy: { maxTaskRetries: 1 }, nodes: [] }]]),
+            meshPolicyDiskSync: { checkedAtMs: 0, mtimeMs: -1, size: -1, ino: -1 }, invalidateAggregateMeshStatus: vi.fn() };
+        syncInlineMeshPoliciesFromDisk(host);
+        document.meshes[0].policy.maxTaskRetries = 2;
+        fs.writeFileSync(path + '.next', JSON.stringify(document));
+        fs.utimesSync(path + '.next', new Date(1_000_000), new Date(1_000_000));
+        fs.renameSync(path + '.next', path);
+        host.meshPolicyDiskSync.checkedAtMs = 0;
+        syncInlineMeshPoliciesFromDisk(host);
+        expect(host.inlineMeshCache.get('inline').policy.maxTaskRetries).toBe(2);
     });
     it('replacement only mutates changed rows and deletes removed rows', () => {
         const store = MeshRuntimeStore.getInstance();
