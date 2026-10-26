@@ -231,13 +231,7 @@ export function sweepAutoLaunchOrphanSessions(
         return; // best-effort: the sweep must never break the dispatch pass
     }
     if (!sessions.length) return;
-    let queue: MeshWorkQueueEntry[];
-    try {
-        queue = getQueue(meshId);
-    } catch {
-        return;
-    }
-    const byId = new Map(queue.map(t => [t.id, t] as const));
+
     for (const inst of sessions) {
         let state: any;
         try { state = inst.getState(); } catch { continue; }
@@ -252,7 +246,7 @@ export function sweepAutoLaunchOrphanSessions(
         // approval is doing something, and one that already holds an assigned task won.
         if (!isIdleSessionState(state)) continue;
         if (sessionHasActiveAssignment(meshId, sessionId)) continue;
-        const originTask = byId.get(originTaskId);
+        const originTask = getQueueEntryById(meshId, originTaskId);
         const assignedElsewhere = !!originTask
             && originTask.status === 'assigned'
             && !!readText(originTask.assignedSessionId)

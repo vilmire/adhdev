@@ -41149,6 +41149,7 @@ ${error.message || ""}`;
       STRICT_MESH_CONFIG_LOCK_WAIT_MS: () => STRICT_MESH_CONFIG_LOCK_WAIT_MS,
       getMeshConfigPath: () => getMeshConfigPath,
       loadMeshConfig: () => loadMeshConfig,
+      loadMeshConfigEntry: () => loadMeshConfigEntry,
       loadMeshConfigStrict: () => loadMeshConfigStrict,
       migrateMeshPolicyStorage: () => migrateMeshPolicyStorage,
       migrateProviderRolesToSlots: () => migrateProviderRolesToSlots,
@@ -41254,6 +41255,7 @@ ${error.message || ""}`;
           (0, import_fs8.closeSync)(fd);
         }
         (0, import_fs8.renameSync)(temp, path108);
+        meshSnapshot = void 0;
         committed = true;
         if (process.platform !== "win32") {
           const parent = (0, import_fs8.openSync)((0, import_path8.dirname)(path108), "r");
@@ -41300,7 +41302,7 @@ ${error.message || ""}`;
     function statMeshConfigFile() {
       try {
         const stat2 = (0, import_fs8.statSync)(getMeshConfigPath());
-        return { mtimeMs: stat2.mtimeMs, size: stat2.size };
+        return { mtimeMs: stat2.mtimeMs, size: stat2.size, ino: stat2.ino };
       } catch {
         return null;
       }
@@ -41308,7 +41310,31 @@ ${error.message || ""}`;
     function readMeshConfigFile() {
       return readMeshConfigFromDisk() ?? { meshes: [] };
     }
+    function meshSnapshotKey() {
+      try {
+        const s2 = (0, import_fs8.statSync)(getMeshConfigPath());
+        return `${getMeshConfigPath()}:${s2.ino}:${s2.mtimeMs}:${s2.ctimeMs}:${s2.size}`;
+      } catch {
+        return void 0;
+      }
+    }
+    function cachedMeshConfig(options) {
+      const key5 = meshSnapshotKey();
+      if (key5 && meshSnapshot?.key === key5 && (options.persistMigrations === false || meshSnapshot.persisted)) return meshSnapshot.config;
+      const config = loadMeshConfigUncached(options);
+      const after = meshSnapshotKey();
+      if (key5 && key5 === after) meshSnapshot = { key: key5, config, persisted: options.persistMigrations !== false };
+      else meshSnapshot = void 0;
+      return config;
+    }
     function loadMeshConfig(options = {}) {
+      return structuredClone(cachedMeshConfig(options));
+    }
+    function loadMeshConfigEntry(meshId) {
+      const mesh = cachedMeshConfig({}).meshes.find((m) => m.id === meshId);
+      return mesh ? structuredClone(mesh) : void 0;
+    }
+    function loadMeshConfigUncached(options = {}) {
       const config = readMeshConfigFile();
       const migrated = migrateLoadedMeshConfig(config);
       if (migrated && options.persistMigrations !== false) {
@@ -41442,6 +41468,7 @@ ${error.message || ""}`;
       const tmpPath = `${path108}.tmp-${process.pid}`;
       (0, import_fs8.writeFileSync)(tmpPath, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 384 });
       (0, import_fs8.renameSync)(tmpPath, path108);
+      meshSnapshot = void 0;
     }
     function normalizeRepoIdentity(remoteUrl) {
       let identity3 = remoteUrl.trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
@@ -41479,6 +41506,7 @@ ${error.message || ""}`;
     var STRICT_MESH_CONFIG_LOCK_WAIT_MS;
     var strictMeshWriteDepth;
     var MeshConfigUnreadableError;
+    var meshSnapshot;
     var init_mesh_config_store = __esm2({
       "src/config/mesh-config-store.ts"() {
         "use strict";
@@ -41672,7 +41700,7 @@ ${error.message || ""}`;
       return loadMeshConfig({ persistMigrations: false }).meshes;
     }
     function getMesh(meshId) {
-      return loadMeshConfig().meshes.find((m) => m.id === meshId);
+      return loadMeshConfigEntry(meshId);
     }
     function getMeshByRepo(repoIdentity) {
       const normalized = normalizeRepoIdentity(repoIdentity);
@@ -62376,6 +62404,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return withEntryLock(() => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        if (!opts?.spendSpawnBudget && autoLaunch.status === "skipped" && entry.autoLaunch) {
+          const { updatedAt: _at, ...previous } = entry.autoLaunch;
+          if (JSON.stringify(previous) === JSON.stringify(autoLaunch)) return entry;
+        }
         const now = (/* @__PURE__ */ new Date()).toISOString();
         if (opts?.spendSpawnBudget) {
           entry.autoLaunchUnclaimedCount = (entry.autoLaunchUnclaimedCount ?? 0) + 1;
@@ -68237,6 +68269,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             const rows = this.db.prepare("SELECT payload FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC").all(meshId);
             return rows.map((row2) => JSON.parse(row2.payload));
           }
+          /** Small scheduling graph; history can carry megabytes of prompts/images. */
+          getQueueSchedulingGraph(meshId) {
+            this.ensureLegacyQueueMigrated(meshId);
+            const rows = this.db.prepare(`SELECT id, status,
+            json_extract(payload, '$.phase') AS phase,
+            json_extract(payload, '$.dependsOn') AS deps,
+            json_extract(payload, '$.cancelReason') AS cancelReason
+            FROM mesh_queue WHERE mesh_id = ?`).all(meshId);
+            return rows.map(({ deps, ...row2 }) => ({ ...row2, dependsOn: deps ? JSON.parse(deps) : [] }));
+          }
           getQueueRevision(meshId) {
             this.ensureLegacyQueueMigrated(meshId);
             const rows = this.db.prepare("SELECT id, status, updated_at FROM mesh_queue WHERE mesh_id = ? ORDER BY id ASC").all(meshId);
@@ -68245,7 +68287,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           replaceQueue(meshId, queue) {
             this.transaction(() => {
               assertSourceDependencyGraph(queue);
-              const deleteStmt = this.db.prepare("DELETE FROM mesh_queue WHERE mesh_id = ?");
+              const existing = this.db.prepare("SELECT id, payload FROM mesh_queue WHERE mesh_id = ?").all(meshId);
+              const payloads = new Map(existing.map((row2) => [row2.id, row2.payload]));
+              const ids = new Set(queue.map((entry) => entry.id));
+              const deleteStmt = this.db.prepare("DELETE FROM mesh_queue WHERE mesh_id = ? AND id = ?");
               const insert = this.db.prepare(`
                 INSERT INTO mesh_queue (
                     id, mesh_id, status, target_node_id, target_session_id,
@@ -68253,10 +68298,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 ) VALUES (
                     @id, @meshId, @status, @targetNodeId, @targetSessionId,
                     @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
-                )
+                ) ON CONFLICT(id) DO UPDATE SET
+                    status = excluded.status, target_node_id = excluded.target_node_id,
+                    target_session_id = excluded.target_session_id, assigned_node_id = excluded.assigned_node_id,
+                    assigned_session_id = excluded.assigned_session_id, created_at = excluded.created_at,
+                    updated_at = excluded.updated_at, payload = excluded.payload
             `);
-              deleteStmt.run(meshId);
-              for (const entry of queue) insert.run(this.toRow(entry));
+              for (const row2 of existing) if (!ids.has(row2.id)) deleteStmt.run(meshId, row2.id);
+              for (const entry of queue) {
+                const row2 = this.toRow(entry);
+                if (payloads.get(entry.id) !== row2.payload) insert.run(row2);
+              }
               this.maybeCheckpointWal();
             });
           }
@@ -78219,13 +78271,6 @@ ${upstream}`;
         return;
       }
       if (!sessions.length) return;
-      let queue;
-      try {
-        queue = getQueue(meshId);
-      } catch {
-        return;
-      }
-      const byId = new Map(queue.map((t) => [t.id, t]));
       for (const inst of sessions) {
         let state2;
         try {
@@ -78242,7 +78287,7 @@ ${upstream}`;
         if (!sessionId) continue;
         if (!isIdleSessionState(state2)) continue;
         if (sessionHasActiveAssignment(meshId, sessionId)) continue;
-        const originTask = byId.get(originTaskId);
+        const originTask = getQueueEntryById(meshId, originTaskId);
         const assignedElsewhere = !!originTask && originTask.status === "assigned" && !!readText(originTask.assignedSessionId) && !sessionIdsEquivalent(readText(originTask.assignedSessionId), sessionId);
         const originGone = !originTask || originTask.status !== "pending" && originTask.status !== "assigned";
         const dedupKey = `${meshId}::${sessionId}`;
@@ -80468,7 +80513,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           const completed = new Set(store2.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
         }
+        const before = JSON.stringify(task.hold);
         setQueueTaskHold(task, reason, context2);
+        if (before === JSON.stringify(task.hold)) return;
         persistHold(store2, task);
       });
     }
@@ -81777,8 +81824,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       } catch {
         return false;
       }
-      const queue = getQueue(meshId);
-      const statusById = new Map(queue.map((task) => [task.id, task.status]));
+      const queue = getQueue(meshId, { status: ["pending"] });
+      const graph = MeshRuntimeStore.getInstance().getQueueSchedulingGraph(meshId);
+      const statusById = new Map(graph.map((task) => [task.id, task.status]));
       const pending = queue.filter((task) => task.status === "pending").sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
       pruneAwaitClaimBackoff(meshId, pending);
       if (!pending.length) return false;
@@ -81795,7 +81843,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         }
         autoLaunchTaskInProgress.add(taskLaunchKey);
         try {
-          if (!taskDependenciesSatisfied(task, statusById, new Map(queue.map((t) => [t.id, t])))) {
+          if (!taskDependenciesSatisfied(task, statusById, new Map(graph.map((t) => [t.id, t])))) {
             markAutoLaunch(meshId, task.id, { status: "skipped", reason: "dependencies_unsatisfied" });
             continue;
           }
@@ -85433,7 +85481,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         ]);
         const summary = buildMeshActiveWork({
           meshId,
-          queue: getQueue(meshId),
+          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
           directDispatches: getActiveDirectDispatches(meshId),
           ledgerEntries,
           ledgerSnapshot: sharedLedgerSnapshot,
@@ -106384,7 +106432,7 @@ ${asText(streams.stderr)}
       try {
         const built = buildMeshActiveWork({
           meshId,
-          queue: getQueue(meshId),
+          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
           directDispatches: getActiveDirectDispatches(meshId),
           ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
           nodes,
@@ -133258,6 +133306,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
       for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         const p = path60.join(dir, e.name);
         const mtime = safeMtimeMs(p);
@@ -133282,6 +133331,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           continue;
         }
         for (const e of entries) {
+          pattern.lastIndex = 0;
           if (!e.isFile() || !pattern.test(e.name)) continue;
           const p = path60.join(resolved, e.name);
           const mtime = safeMtimeMs(p);
@@ -133476,15 +133526,26 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return best ? best.p : null;
     }
+    var directoryListings = /* @__PURE__ */ new Map();
     function listMatchingFiles(dir, pattern) {
       let entries;
       try {
-        entries = fs51.readdirSync(dir, { withFileTypes: true });
+        const stat2 = fs51.statSync(dir);
+        const key5 = `${stat2.ino}:${stat2.mtimeMs}:${stat2.ctimeMs}:${stat2.size}`;
+        const cached5 = directoryListings.get(dir);
+        if (cached5?.key === key5) entries = cached5.entries;
+        else {
+          entries = fs51.readdirSync(dir, { withFileTypes: true });
+          if (directoryListings.size >= 256) directoryListings.delete(directoryListings.keys().next().value);
+          directoryListings.set(dir, { key: key5, entries });
+        }
       } catch {
+        directoryListings.delete(dir);
         return [];
       }
       const out = [];
       for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         out.push(path60.join(dir, e.name));
       }
@@ -156491,8 +156552,9 @@ ${output}` : "";
         try {
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, describeTaskDependencyState: describeTaskDependencyState22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const status = Array.isArray(args?.status) ? args.status.map((s2) => typeof s2 === "string" ? s2.trim() : "").filter(Boolean) : void 0;
-          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId)).filter((task) => !status?.length || status.includes(task.status));
-          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId));
+          const requested = status?.length ? [.../* @__PURE__ */ new Set([...status, ...status.includes("blocked") ? ["failed"] : []])] : void 0;
+          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId, { status: requested })).filter((task) => !status?.length || status.includes(task.status));
+          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, MeshRuntimeStore.getInstance().getQueueDependencyHeads(meshId, rawQueue.flatMap((t) => t.dependsOn ?? [])));
           const statusById = new Map(allQueue.map((task) => [task.id, task.status]));
           const depMetaById = new Map(allQueue.map((task) => [task.id, task]));
           const queue = rawQueue.map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
@@ -158400,7 +158462,7 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const refreshReason = refreshRequested ? "explicit_refresh" : rebuildFromHeld ? "held_state_rebuild" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
-          const rawQueue = getQueue2(meshId);
+          const rawQueue = getQueue2(meshId, { status: ["pending", "assigned"] });
           const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
           const queueSummary = getMeshQueueStats2(meshId);
           const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime2 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
@@ -182206,7 +182268,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         refuseCoordinatorRestore("persisted runtime identity or coordinator provenance does not match");
       }
     }
-    function meshSnapshot(meshId) {
+    function meshSnapshot2(meshId) {
       return JSON.stringify(listCoordinatorsForMesh(meshId));
     }
     function planCoordinatorRestore(record7, owner, liveIds) {
@@ -182242,7 +182304,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (listCoordinatorsForMesh(entry.meshId).some((e) => e.sessionId !== record7.runtimeId)) {
         refuseCoordinatorRestore("another coordinator binding already exists for this mesh");
       }
-      return { entry, registrySnapshot: meshSnapshot(entry.meshId), recovered };
+      return { entry, registrySnapshot: meshSnapshot2(entry.meshId), recovered };
     }
     function planCoordinatorRestores(records, owner, liveIds, inventory = records) {
       const plans = /* @__PURE__ */ new Map();
@@ -182272,7 +182334,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     function repairCoordinatorBinding(plan, record7, owner, liveIds) {
       loadMeshCoordinatorRegistry({ strict: true });
-      if (meshSnapshot(plan.entry.meshId) !== plan.registrySnapshot) refuseCoordinatorRestore("binding changed during attach");
+      if (meshSnapshot2(plan.entry.meshId) !== plan.registrySnapshot) refuseCoordinatorRestore("binding changed during attach");
       if (plan.recovered) verifyPersistedCoordinator(record7, owner);
       const current4 = planCoordinatorRestore(record7, owner, liveIds);
       if (!current4 || current4.entry.meshId !== plan.entry.meshId) refuseCoordinatorRestore("coordinator identity changed during attach");

@@ -476,6 +476,7 @@ function collectRecentFiles(dir: string, pattern: RegExp, windowMs: number, sess
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
     for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         const p = path.join(dir, e.name);
         const mtime = safeMtimeMs(p);
@@ -510,7 +511,8 @@ export function newestRecentFileAcrossDateWindow(
         let entries: fs.Dirent[];
         try { entries = fs.readdirSync(resolved, { withFileTypes: true }); } catch { continue; }
         for (const e of entries) {
-            if (!e.isFile() || !pattern.test(e.name)) continue;
+            pattern.lastIndex = 0;
+        if (!e.isFile() || !pattern.test(e.name)) continue;
             const p = path.join(resolved, e.name);
             const mtime = safeMtimeMs(p);
             if (mtime < cutoff) continue;
@@ -775,11 +777,23 @@ function pickBoundFromEntries(
     return best ? best.p : null;
 }
 
+const directoryListings = new Map<string, { key: string; entries: fs.Dirent[] }>();
 export function listMatchingFiles(dir: string, pattern: RegExp): string[] {
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+    try {
+        const stat = fs.statSync(dir);
+        const key = `${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;
+        const cached = directoryListings.get(dir);
+        if (cached?.key === key) entries = cached.entries;
+        else {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+            if (directoryListings.size >= 256) directoryListings.delete(directoryListings.keys().next().value!);
+            directoryListings.set(dir, { key, entries });
+        }
+    } catch { directoryListings.delete(dir); return []; }
     const out: string[] = [];
     for (const e of entries) {
+        pattern.lastIndex = 0;
         if (!e.isFile() || !pattern.test(e.name)) continue;
         out.push(path.join(dir, e.name));
     }

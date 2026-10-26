@@ -339,7 +339,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // (base64 image parts) for their 30-day lifetime; the dashboard status
                     // surface must never echo that data (it pushed mesh_status past the P2P
                     // chunk ceiling). Summarize at the read, before anything downstream sees it.
-                    const rawQueue = getQueue(meshId);
+                    const rawQueue = getQueue(meshId, { status: ['pending', 'assigned'] });
                     const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map(task => ({ ...summarizeQueueEntryInputForView(task), ...(task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {}) }));
                     const queueSummary = getMeshQueueStats(meshId);
 

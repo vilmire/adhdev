@@ -1075,11 +1075,13 @@ export async function maybeAutoLaunchOneQueueSession(components: DaemonComponent
 }
 async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, meshId: string, mesh: any): Promise<boolean> {
     try { assertMaintenanceAdmission([meshId]); } catch { return false; }
-    const queue = getQueue(meshId);
+    const queue = getQueue(meshId, { status: ['pending'] });
+    // Dependencies need phase/edge metadata, never historical task inputs.
+    const graph = MeshRuntimeStore.getInstance().getQueueSchedulingGraph(meshId);
     // DEPENDSON-GATE-SYMMETRY: status index over the FULL queue (incl. completed)
     // so the dependency gate below sees the terminal state of every referenced
     // dependency, not just the still-active rows.
-    const statusById = new Map(queue.map(task => [task.id, task.status] as const));
+    const statusById = new Map(graph.map(task => [task.id, task.status] as const));
     // G6: scan higher task-level priority first so a high-priority task auto-launches its
     // session ahead of an older normal/low task (getQueue is FIFO; a stable sort by priority
     // rank descending keeps created_at order within a priority band). The claim path applies
@@ -1125,7 +1127,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
             // claimNextQueueTask, producing orphan-session / re-launch churn. Skip it so
             // a later tick — after the dependency completes — launches it. Tasks with no
             // dependsOn pass through unchanged (predicate is true).
-            if (!taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))) {
+            if (!taskDependenciesSatisfied(task, statusById, new Map(graph.map(t => [t.id, t])))) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dependencies_unsatisfied' });
                 continue;
             }

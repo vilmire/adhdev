@@ -85,10 +85,11 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const status = Array.isArray(args?.status)
                 ? args.status.map((s: any) => typeof s === 'string' ? s.trim() : '').filter(Boolean)
                 : undefined;
-            const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId))
+            const requested = status?.length ? [...new Set([...status, ...(status.includes('blocked') ? ['failed'] : [])])] : undefined;
+            const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId, { status: requested as any }))
                 .filter(task => !status?.length || status.includes(task.status));
             // M1: annotate dependency state at view time (waitingOn / dependenciesSatisfied).
-            const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue(meshId));
+            const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, MeshRuntimeStore.getInstance().getQueueDependencyHeads(meshId, rawQueue.flatMap(t => t.dependsOn ?? [])));
             const statusById = new Map(allQueue.map(task => [task.id, task.status]));
             const depMetaById = new Map(allQueue.map(task => [task.id, task] as const));
             // IPC load audit 2026-09-23: never echo a persisted image envelope from a view command.
