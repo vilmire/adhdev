@@ -38,7 +38,7 @@ export type Disposer = () => void;
 /** How this daemon reaches its session host (the PTY runtime process). */
 export interface SessionHostBoot {
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
-    listHostedRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+    listHostedRuntimes?: (options?: { includeLaunchDetails?: boolean }) => Promise<HostedCliRuntimeDescriptor[]>;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
     managedByTag?: string;
     getBindingOwner?: () => import('../session-host/binding-owner.js').HostedBindingOwner;

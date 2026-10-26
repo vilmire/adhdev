@@ -49,7 +49,7 @@ export interface SessionHostBootOptions {
         respawn: () => Promise<unknown>,
     ): SessionHostController;
     /** Test seam: list hosted runtimes (default: core `listHostedCliRuntimes`). */
-    listHostedRuntimes?(endpoint: SessionHostEndpoint): Promise<HostedCliRuntimeDescriptor[]>;
+    listHostedRuntimes?(endpoint: SessionHostEndpoint, options?: { includeLaunchDetails?: boolean }): Promise<HostedCliRuntimeDescriptor[]>;
 }
 
 export interface SessionHostHandle {
@@ -61,7 +61,7 @@ export interface SessionHostHandle {
     readonly control: SessionHostController;
     /** Replaces both hosts' `createPtyTransportFactory` lambdas. */
     ptyFactory(params: CliTransportFactoryParams): PtyTransportFactory;
-    listHostedRuntimes(): Promise<HostedCliRuntimeDescriptor[]>;
+    listHostedRuntimes(options?: { includeLaunchDetails?: boolean }): Promise<HostedCliRuntimeDescriptor[]>;
     /** `DaemonBootConfig.sessionHost`. */
     bootConfig(): SessionHostBoot;
     /** Detach from the host WITHOUT killing it (hosted CLIs outlive the daemon). */
@@ -110,7 +110,9 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
         : new SessionHostController(current, onEvent, ensure);
     await control.start();
 
-    const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current);
+    const listHostedRuntimes = (options?: { includeLaunchDetails?: boolean }) => options
+        ? (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current, options)
+        : (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current);
     const ptyFactory = (params: CliTransportFactoryParams): PtyTransportFactory => new SessionHostPtyTransportFactory({
         endpoint: current,
         ensureReady: async () => { await ensure(); },

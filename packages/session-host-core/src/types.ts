@@ -340,7 +340,8 @@ export type SessionHostRequest =
   | { type: 'send_signal'; payload: SendSignalPayload }
   | { type: 'restart_session'; payload: RestartSessionPayload }
   | { type: 'prune_duplicate_sessions'; payload?: PruneDuplicateSessionsPayload }
-  | { type: 'list_sessions'; payload?: {} };
+  | { type: 'get_session'; payload: { sessionId: string } }
+  | { type: 'list_sessions'; payload?: { activeOnly?: boolean } };
 
 export type SessionHostRequestType = SessionHostRequest['type'];
 
@@ -368,6 +369,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'send_signal',
   'restart_session',
   'prune_duplicate_sessions',
+  'get_session',
   'list_sessions',
 ];
 

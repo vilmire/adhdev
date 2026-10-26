@@ -1,3 +1,4 @@
+import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 /**
@@ -123,10 +124,11 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { summarizeQueueEntryInputForView, cancelTask, takeCancelledTaskAssignment } = await import('../../mesh/mesh-work-queue.js');
             const reason = typeof args?.reason === 'string' ? args.reason : undefined;
+            await settleQueueWriter(meshId, taskId, 'operator_cancel');
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
             if (task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending',
-                error: 'Cancellation is stopping the physical writer; ownership remains retained until quiescence.', task: summarizeQueueEntryInputForView(task) };
+                error: WRITER_UNKNOWN_ERROR, task: summarizeQueueEntryInputForView(task) };
             // CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker that was bound to the
             // now-cancelled task. cancelTask already cleared the queue's assignment fields (so the
             // reclaim watchdog no longer sees it as a live assignment), but a still-running worker
@@ -154,6 +156,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { summarizeQueueEntryInputForView, requeueTaskWithOutcome, getQueueEntryById } = await import('../../mesh/mesh-work-queue.js');
             const { requeueRefusalResponse } = await import('../../mesh/mesh-queue-attempt-guard.js');
+            if (args?.force === true) await settleQueueWriter(meshId, taskId, 'superseded');
             // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
             // mark requeueTask consults is process-local and is lost across a daemon restart.
             // Independently of that mark, if the row is still 'assigned' to a session this

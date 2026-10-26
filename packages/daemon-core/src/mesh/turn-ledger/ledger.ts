@@ -96,6 +96,8 @@ export interface TurnLedgerDeps {
 }
 
 export interface ObserveOptions {
+    /** Local audit of the authenticated host stop receipt; never wire evidence. */
+    writerStopReceipt?: Record<string, unknown>;
     /** Worker side: the attempt's owner, when it is not this daemon (from the instance's attemptRef/dispatch). */
     owner?: { daemonId: string; meshId: string };
     /** `turn.ingest`: the topic coordinates of the entry that carried this evidence. */
@@ -174,7 +176,7 @@ export interface TurnLedger {
     readonly incarnationStartedAt: number;
     observe(evidence: TurnEvidence, opts?: ObserveOptions): ObserveResult;
     /** Bounded boot/manual inspection; never issues another kill. */
-    resumeStoppingWriters(): Promise<void>;
+    resumeStoppingWriters(attemptId?: string): Promise<void>;
     /** Attempt-less coordinator notice (`turn.notify{notify:'mesh_event'}`); replaces the legacy pending-events outbox insert. */
     notifyMeshEvent(notice: MeshEventNotice): { eventId: string; inserted: boolean };
     /** `turn.deliver` exactly-once claim: inserts the mesh-scoped deliveryClaimId row; false = already delivered. */
@@ -252,7 +254,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             const settled = observe({ eventId, kind: 'operator_status', source: 'scheduler', at: now(),
                 observedBy: deps.selfDaemonId, sessionId: request.sessionId,
                 attemptRef: { attemptId: request.attemptId, generation: request.generation },
-                status: 'failed', reason: 'operator_update' });
+                status: 'failed', reason: 'operator_update' }, { writerStopReceipt: r });
             if (settled.rule === 'writer_settled') ports.revokeWorkerBind?.(request);
         } finally { confirmedStops.delete(eventId); }
     }
@@ -285,6 +287,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             payload: {
                 ...(meshId ? { meshId } : {}),
                 evidence,
+                ...(opts.writerStopReceipt ? { writerStopReceipt: opts.writerStopReceipt } : {}),
                 ...(result.notes.length > 0 ? { notes: result.notes } : {}),
                 ...(opts.envelope ? { local: { envelope: opts.envelope } } : {}),
                 ...(publish ? { entry: publish.entry } : {}),
@@ -700,9 +703,9 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
         observe,
-        async resumeStoppingWriters() {
+        async resumeStoppingWriters(attemptId?: string) {
             for (const a of store.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
-                if (a.state !== 'stopping' || !a.data.writerStop) continue;
+                if ((attemptId && a.attemptId !== attemptId) || a.state !== 'stopping' || !a.data.writerStop) continue;
                 const request: CancelDispatchRequest = { attemptId: a.attemptId, generation: a.generation,
                     sessionId: a.sessionId, meshId: a.meshId, taskId: a.taskId, nodeId: a.nodeId,
                     dispatchNonce: a.dispatchNonce,

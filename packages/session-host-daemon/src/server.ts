@@ -454,7 +454,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse> {
-    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
+    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -493,7 +493,11 @@ export class SessionHostServer extends EventEmitter {
           }
         }
         case 'list_sessions':
-          return { success: true, result: this.registry.listSessions() };
+          return { success: true, result: this.registry.listSessionSummaries(request.payload?.activeOnly === true) };
+        case 'get_session': {
+          const record = this.registry.getSession(request.payload.sessionId);
+          return record ? { success: true, result: record } : { success: false, error: 'session_absent' };
+        }
         case 'attach_session': {
           const record = this.registry.attachClient(request.payload);
           this.schedulePersist(record.sessionId);

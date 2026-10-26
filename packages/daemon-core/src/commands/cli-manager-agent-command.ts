@@ -61,7 +61,10 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
             instanceKey: args?.targetSessionId,
         });
     }
-    if (!found) throw new Error(`CLI agent not running: ${agentType}`);
+    if (!found) {
+        if (action === 'send_chat') return { success: false, code: 'dispatch_not_started', error: `CLI agent not running: ${agentType}` };
+        throw new Error(`CLI agent not running: ${agentType}`);
+    }
     const { adapter, key } = found;
 
     if (action === 'send_chat') return agentSendChat(host, args, key);

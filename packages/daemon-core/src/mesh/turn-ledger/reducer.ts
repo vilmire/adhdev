@@ -624,6 +624,17 @@ function reclaim(draft: Draft, reason: TurnReason): void {
         commit(draft, 'failed', 'genuine', reason);
         return;
     }
+    const refusal = draft.ctx.evidence;
+    if (attempt.scope === 'mesh_direct' && attempt.state === 'accepted'
+        && attempt.deliveredAt === null && attempt.consumedAt === null
+        && refusal.kind === 'dispatch_failed' && refusal.source === 'dispatch'
+        && refusal.reason === 'rejected_by_worker' && refusal.refusalCode === 'dispatch_not_started') {
+        // The addressed host refused before resolving an adapter or submitting
+        // input. There is no writer for this attempt to stop. Transport errors
+        // and delivered/consumed attempts still require exact quiescence.
+        commit(draft, 'failed', 'genuine', 'dispatch_failed');
+        return;
+    }
     if (!attempt.data.writerStop?.confirmed) {
         beginWriterStop(draft, reason);
         return;
@@ -694,6 +705,10 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         stop.reason = 'hard_ceiling';
         stop.terminal = { outcome: 'failed', strength: 'genuine', source: 'scheduler' };
         releaseHolds(draft, ['hard_ceiling']);
+    }
+    if (ev.kind === 'cancel') {
+        stop.reason = ev.reason;
+        stop.terminal = { outcome: 'cancelled', strength: 'genuine', source: ev.source };
     }
     if (input.stopConfirmed) {
         stop.confirmed = true;

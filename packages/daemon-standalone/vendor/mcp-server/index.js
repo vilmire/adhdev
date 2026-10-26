@@ -2933,6 +2933,7 @@ var require_dist = __commonJS({
       "send_signal",
       "restart_session",
       "prune_duplicate_sessions",
+      "get_session",
       "list_sessions"
     ];
     function classifyTermination(input) {
@@ -3403,6 +3404,15 @@ var require_dist = __commonJS({
         });
         return this.cloneRecord(cloned);
       }
+      /** Census projection: omit launch arguments/environment and summarize stopped
+       * sessions. Full details remain available through getSession. */
+      listSessionSummaries(activeOnly = false) {
+        return Array.from(this.sessions.values()).map((s) => s.record).filter((r) => !activeOnly || !r.termination && r.lifecycle !== "stopped" && r.lifecycle !== "failed").map((r) => this.cloneRecord({
+          ...r,
+          launchCommand: { command: r.launchCommand.command, args: [] },
+          meta: r.termination || r.lifecycle === "stopped" || r.lifecycle === "failed" ? {} : { ...r.meta, cliArgs: [], cliArgsOmitted: true }
+        })).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      }
       listSessions() {
         return Array.from(this.sessions.values()).map((state) => this.cloneRecord(state.record)).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
       }
@@ -3595,23 +3605,27 @@ var require_dist = __commonJS({
 `;
     }
     function createLineParser(onEnvelope) {
-      let buffer = "";
+      let fragments = [];
       const decoder = new import_string_decoder.StringDecoder("utf8");
       const parser = (chunk) => {
-        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-        let newlineIndex = buffer.indexOf("\n");
-        while (newlineIndex >= 0) {
-          const rawLine = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-          if (rawLine) {
-            onEnvelope(JSON.parse(rawLine));
+        const text = typeof chunk === "string" ? chunk : decoder.write(chunk);
+        let start = 0;
+        for (; ; ) {
+          const newline = text.indexOf("\n", start);
+          if (newline < 0) {
+            if (start < text.length) fragments.push(text.slice(start));
+            break;
           }
-          newlineIndex = buffer.indexOf("\n");
+          fragments.push(text.slice(start, newline));
+          const rawLine = fragments.join("").trim();
+          fragments = [];
+          start = newline + 1;
+          if (rawLine) onEnvelope(JSON.parse(rawLine));
         }
       };
       parser.end = () => {
-        const remainder = buffer + decoder.end();
-        buffer = "";
+        const remainder = fragments.join("") + decoder.end();
+        fragments = [];
         return remainder;
       };
       return parser;
@@ -3808,7 +3822,12 @@ var require_dist = __commonJS({
             return;
           }
           if (envelope.kind === "event") {
-            for (const listener of this.eventListeners) listener(envelope.event);
+            for (const listener of this.eventListeners) {
+              try {
+                listener(envelope.event);
+              } catch {
+              }
+            }
           }
         });
         socket.on("data", parser);
@@ -49906,6 +49925,11 @@ ${rendered.join("\n\n")}`,
         commit(draft, "failed", "genuine", reason);
         return;
       }
+      const refusal2 = draft.ctx.evidence;
+      if (attempt.scope === "mesh_direct" && attempt.state === "accepted" && attempt.deliveredAt === null && attempt.consumedAt === null && refusal2.kind === "dispatch_failed" && refusal2.source === "dispatch" && refusal2.reason === "rejected_by_worker" && refusal2.refusalCode === "dispatch_not_started") {
+        commit(draft, "failed", "genuine", "dispatch_failed");
+        return;
+      }
       if (!attempt.data.writerStop?.confirmed) {
         beginWriterStop(draft, reason);
         return;
@@ -49999,6 +50023,10 @@ ${rendered.join("\n\n")}`,
         stop.reason = "hard_ceiling";
         stop.terminal = { outcome: "failed", strength: "genuine", source: "scheduler" };
         releaseHolds(draft, ["hard_ceiling"]);
+      }
+      if (ev.kind === "cancel") {
+        stop.reason = ev.reason;
+        stop.terminal = { outcome: "cancelled", strength: "genuine", source: ev.source };
       }
       if (input.stopConfirmed) {
         stop.confirmed = true;
@@ -61947,7 +61975,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function requeueRefusalResponse(taskId, refusal2, task) {
       const { attempt, reason } = refusal2;
-      const why = reason === "attempt_open" ? "Pass force:true to retire that attempt and requeue, or cancel and re-enqueue." : reason === "not_owner" ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.` : reason === "no_ledger" ? "No turn ledger is active on this daemon to retire it." : `The turn ledger did not apply the retirement${refusal2.detail ? ` (${refusal2.detail})` : ""}.`;
+      const why = reason === "attempt_open" ? attempt.state === "stopping" ? "unknown, cannot prove dead: the owning host has not confirmed session absence or writer quiescence. Ownership remains retained." : "Pass force:true to request verified retirement and requeue, or cancel and re-enqueue." : reason === "not_owner" ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.` : reason === "no_ledger" ? "No turn ledger is active on this daemon to retire it." : `The turn ledger did not apply the retirement${refusal2.detail ? ` (${refusal2.detail})` : ""}.`;
       return {
         success: false,
         error: `Task '${taskId}' was not requeued: its turn attempt ${attempt.attemptId} is still ${attempt.state} on session ${attempt.sessionId} (${reason}). ${why}`,
@@ -63480,7 +63508,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
         const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
         if (retirement.kind === "refused") {
-          LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ""}).${retirement.reason === "attempt_open" ? " Pass force to cancel that attempt and requeue." : ""}`);
+          LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ""}).${retirement.reason === "attempt_open" && retirement.attempt.state !== "stopping" ? " Pass force to request verified retirement." : ""}`);
           return {
             entry,
             cascaded: [],
@@ -89646,6 +89674,9 @@ ${cleanBody}`;
               daemonId = node ? readMeshNodeDaemonId(node) || void 0 : void 0;
             } catch {
             }
+          }
+          if (args.writerStop && daemonId && daemonIdsEquivalent4(daemonId, components.statusInstanceId ?? getMachineId())) {
+            return await components.cliManager.stopCli(stopArgs);
           }
           if (daemonId && components.dispatchMeshCommand) {
             if (args.writerStop) {
@@ -151233,6 +151264,29 @@ ${output}` : "";
     init_logger();
     init_mesh_operating_notes();
     init_worker_mcp_isolation();
+    init_dist();
+    init_active_ledger();
+    init_mesh_runtime_store();
+    async function settleQueueWriter(meshId, taskId, reason) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const attempt = store2.turnStore().findLatestAttemptForTask(meshId, taskId);
+      if (!attempt || attempt.terminal) return;
+      const ledger = getActiveTurnLedger();
+      if (!ledger || !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) return;
+      ledger.observe({
+        eventId: `queue-stop:${reason}:${attempt.attemptId}:g${attempt.generation}:${Date.now()}`,
+        kind: "cancel",
+        source: "operator",
+        at: Date.now(),
+        observedBy: ledger.selfDaemonId,
+        sessionId: attempt.sessionId,
+        taskId,
+        attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+        reason
+      });
+      await ledger.resumeStoppingWriters(attempt.attemptId);
+    }
+    var WRITER_UNKNOWN_ERROR = "unknown, cannot prove dead: the owning host has not confirmed session absence or exact writer quiescence; ownership remains retained";
     init_mesh_config();
     init_dist();
     init_config();
@@ -151571,9 +151625,11 @@ ${output}` : "";
       const req = decodeQueueCancelRequest(args);
       if (!req) return badRequest("queue_cancel");
       try {
-        const before = getQueue(req.meshId).find((t) => t.id === req.taskId) ?? null;
-        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...req.reason !== void 0 ? { reason: req.reason } : {} }, await ownQueueRole(_ctx, req.meshId)));
-        if (task && task.status !== "cancelled") return { success: false, code: "writer_checkpoint_pending", task: queueWire(task) };
+        const before = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === "host") await settleQueueWriter(req.meshId, req.taskId, "operator_cancel");
+        const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...req.reason !== void 0 ? { reason: req.reason } : {} }, role));
+        if (task && task.status !== "cancelled") return { success: false, code: "writer_checkpoint_pending", error: WRITER_UNKNOWN_ERROR, task: queueWire(task) };
         const response = { task: queueWire(task), before: queueWire(before) };
         return { success: true, ...response };
       } catch (e) {
@@ -151584,6 +151640,8 @@ ${output}` : "";
       const req = decodeQueueRequeueRequest(args);
       if (!req) return badRequest("queue_requeue");
       try {
+        const role = await ownQueueRole(_ctx, req.meshId);
+        if (role === "host" && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, "superseded");
         const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options, await ownQueueRole(_ctx, req.meshId)));
         if (outcome?.refusal) return requeueRefusalResponse(req.taskId, outcome.refusal, queueWire(outcome.entry));
         const response = { task: queueWire(outcome?.entry ?? null) };
@@ -156583,12 +156641,13 @@ ${output}` : "";
         try {
           const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, cancelTask: cancelTask2, takeCancelledTaskAssignment: takeCancelledTaskAssignment2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const reason = typeof args?.reason === "string" ? args.reason : void 0;
+          await settleQueueWriter(meshId, taskId, "operator_cancel");
           const task = cancelTask2(meshId, taskId, { reason });
           if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
           if (task.status !== "cancelled") return {
             success: false,
             code: "writer_checkpoint_pending",
-            error: "Cancellation is stopping the physical writer; ownership remains retained until quiescence.",
+            error: WRITER_UNKNOWN_ERROR,
             task: summarizeQueueEntryInputForView22(task)
           };
           const prior = takeCancelledTaskAssignment2(meshId, taskId);
@@ -156609,6 +156668,7 @@ ${output}` : "";
         try {
           const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTaskWithOutcome: requeueTaskWithOutcome2, getQueueEntryById: getQueueEntryById2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const { requeueRefusalResponse: requeueRefusalResponse2 } = await Promise.resolve().then(() => (init_mesh_queue_attempt_guard(), mesh_queue_attempt_guard_exports));
+          if (args?.force === true) await settleQueueWriter(meshId, taskId, "superseded");
           if (args?.force !== true) {
             const { isSessionActivelyGenerating: isSessionActivelyGenerating2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
             const { isHeldRemoteSessionGenerating: isHeldRemoteSessionGenerating2 } = await Promise.resolve().then(() => (init_mesh_candidacy_predicates(), mesh_candidacy_predicates_exports));
@@ -169481,6 +169541,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
+    var import_node_crypto40 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
@@ -169529,6 +169590,26 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
         } catch {
           return pending("native_observation_unknown");
+        }
+      }
+      if (!previous && !host.adapters.has(request.sessionId)) {
+        try {
+          if (!host.deps.listHostedCliRuntimes) return pending("unknown, cannot prove dead: host inventory unavailable");
+          const records = await host.deps.listHostedCliRuntimes();
+          if (host.adapters.has(request.sessionId)) return pending("writer_reappeared");
+          if (!records.some((r) => r.runtimeId === request.sessionId)) {
+            const evidence = { kind: "host_session_absent", sessionId: request.sessionId, observedAt: Date.now() };
+            return {
+              ...request,
+              success: true,
+              quiescent: true,
+              evidence,
+              incarnation: (0, import_node_crypto40.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
+            };
+          }
+          return pending("unknown, cannot prove dead: host still reports session");
+        } catch {
+          return pending("unknown, cannot prove dead: host unreachable");
         }
       }
       if (request.inspectOnly) return pending("quiescence_not_confirmed");
@@ -169594,7 +169675,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path98 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto40 = require("crypto");
+    var import_node_crypto41 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -169638,7 +169719,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto40.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto41.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -173161,7 +173242,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto41 = require("crypto");
+    var import_node_crypto422 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -173188,7 +173269,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto41.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto422.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -175826,7 +175907,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process23 = require("child_process");
-    var import_node_crypto422 = require("crypto");
+    var import_node_crypto43 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -175836,7 +175917,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto422.randomUUID)();
+      generation = (0, import_node_crypto43.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -175897,7 +175978,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto422.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto43.randomUUID)()}`;
         return new Promise((resolve58, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -175933,7 +176014,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto43 = require("crypto");
+    var import_node_crypto44 = require("crypto");
     init_dist();
     init_interactive_prompt();
     function record6(value) {
@@ -176065,7 +176146,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto43.randomUUID)(),
+          promptId: (0, import_node_crypto44.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -177838,7 +177919,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto44 = require("crypto");
+    var import_node_crypto45 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -178022,7 +178103,7 @@ ${buttons.join("\n")}`;
               now
             );
             const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
-            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto44.randomUUID)()}`;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto45.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
@@ -182379,7 +182460,17 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return 0;
       }
       const promoted = await verifyHeldObservationPromotion(host);
-      const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+      let sessions = records || await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true }) || [];
+      if (sessions.some((r) => r.cliArgsOmitted)) {
+        const details = await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true });
+        if (!details) throw new Error("session_host_launch_details_unavailable");
+        sessions = sessions.map((record7) => {
+          if (!record7.cliArgsOmitted) return record7;
+          const exact = details.find((r) => r.runtimeId === record7.runtimeId && r.runtimeKey === record7.runtimeKey && r.startedAtMs === record7.startedAtMs);
+          if (!exact || exact.cliArgsOmitted) throw new Error("session_host_inventory_changed_during_restore");
+          return exact;
+        });
+      }
       signal?.throwIfAborted();
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       const owner = host.deps.getHostedBindingOwner?.();
@@ -182655,7 +182746,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           instanceKey: args?.targetSessionId
         });
       }
-      if (!found) throw new Error(`CLI agent not running: ${agentType}`);
+      if (!found) {
+        if (action2 === "send_chat") return { success: false, code: "dispatch_not_started", error: `CLI agent not running: ${agentType}` };
+        throw new Error(`CLI agent not running: ${agentType}`);
+      }
       const { adapter, key: key5 } = found;
       if (action2 === "send_chat") return agentSendChat(host, args, key5);
       if (action2 === "clear_history") {
@@ -189159,19 +189253,29 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    async function listHostedCliRuntimes(endpoint) {
-      const existing = import_session_host_core17.SessionHostClient.findConnectedClient?.(endpoint) ?? null;
-      const client = existing || new import_session_host_core17.SessionHostClient({ endpoint });
-      const shouldClose = !existing;
+    async function listHostedCliRuntimes(endpoint, options) {
+      const client = new import_session_host_core17.SessionHostClient({ endpoint, registerAsShared: false, requestTimeoutMs: 5e3 });
       try {
         const response = await client.request({
           type: "list_sessions",
-          payload: {}
+          payload: { activeOnly: true }
         });
         if (!response.success || !Array.isArray(response.result)) {
           throw new Error(`session_host_inventory_unavailable: ${response.error || "missing list_sessions result"}`);
         }
-        return response.result.filter((record7) => record7.category === "cli" && !record7.termination && ["starting", "running", "stopping", "interrupted"].includes(record7.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record7) => ({
+        const records = response.result;
+        if (options?.includeLaunchDetails) {
+          for (let i = 0; i < records.length; i++) {
+            const record7 = records[i];
+            if (record7.meta?.cliArgsOmitted !== true || record7.termination || !["running", "interrupted"].includes(record7.lifecycle)) continue;
+            const detail = await client.request({ type: "get_session", payload: { sessionId: record7.sessionId } });
+            if (!detail.success || !detail.result || detail.result.sessionId !== record7.sessionId || detail.result.runtimeKey !== record7.runtimeKey || detail.result.startedAt !== record7.startedAt) {
+              throw new Error("session_host_inventory_changed_during_detail_lookup");
+            }
+            records[i] = detail.result;
+          }
+        }
+        return records.filter((record7) => record7.category === "cli" && !record7.termination && ["starting", "running", "stopping", "interrupted"].includes(record7.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record7) => ({
           runtimeId: record7.sessionId,
           runtimeKey: record7.runtimeKey,
           displayName: record7.displayName,
@@ -189180,6 +189284,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           recoveryState: typeof record7.meta?.runtimeRecoveryState === "string" ? String(record7.meta.runtimeRecoveryState) : null,
           cliType: record7.providerType,
           workspace: record7.workspace,
+          cliArgsOmitted: record7.meta?.cliArgsOmitted === true,
           cliArgs: Array.isArray(record7.meta?.cliArgs) ? record7.meta.cliArgs : [],
           providerSessionId: typeof record7.meta?.providerSessionId === "string" ? String(record7.meta.providerSessionId) : void 0,
           assistant: record7.meta?.assistant === true ? true : void 0,
@@ -189201,10 +189306,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           ...record7.meta?.launchRecord !== void 0 ? { launchRecord: record7.meta.launchRecord } : {}
         }));
       } finally {
-        if (shouldClose) {
-          await client.close().catch(() => {
-          });
-        }
+        await client.close().catch(() => {
+        });
       }
     }
     init_cooperative_gate();
@@ -191828,7 +191931,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             attemptRef: { attemptId: request.attemptId, generation: request.generation },
             status: "failed",
             reason: "operator_update"
-          });
+          }, { writerStopReceipt: r });
           if (settled.rule === "writer_settled") ports.revokeWorkerBind?.(request);
         } finally {
           confirmedStops.delete(eventId);
@@ -191861,6 +191964,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           payload: {
             ...meshId ? { meshId } : {},
             evidence,
+            ...opts.writerStopReceipt ? { writerStopReceipt: opts.writerStopReceipt } : {},
             ...result.notes.length > 0 ? { notes: result.notes } : {},
             ...opts.envelope ? { local: { envelope: opts.envelope } } : {},
             ...publish ? { entry: publish.entry } : {}
@@ -192221,9 +192325,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
         observe,
-        async resumeStoppingWriters() {
+        async resumeStoppingWriters(attemptId) {
           for (const a of store2.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
-            if (a.state !== "stopping" || !a.data.writerStop) continue;
+            if (attemptId && a.attemptId !== attemptId || a.state !== "stopping" || !a.data.writerStop) continue;
             const request = {
               attemptId: a.attemptId,
               generation: a.generation,
@@ -192471,6 +192575,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
       const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
       let lastPruneAt = null;
+      let lastStopInspectAt = -Infinity;
+      let stopInspectionPending = false;
       let inFlight4 = null;
       let again = false;
       let wake = null;
@@ -192640,6 +192746,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (error) {
           log.error(`turn-scheduler: hold sweep failed: ${describe2(error)}`);
         }
+        if (!stopInspectionPending && at - lastStopInspectAt >= 3e4) {
+          lastStopInspectAt = at;
+          stopInspectionPending = true;
+          void Promise.resolve().then(() => ledger.resumeStoppingWriters?.()).catch((error) => {
+            log.warn(`turn-scheduler: writer absence inspection failed: ${describe2(error)}`);
+          }).finally(() => {
+            stopInspectionPending = false;
+          });
+        }
         if (deps.probe) {
           const force = new Set(forced);
           forced.clear();
@@ -192713,7 +192828,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }, { name: "turn-scheduler" });
       }
       return {
-        maintenanceInventory: () => ({ inFlight: inFlight4 !== null, forced: [...forced].sort(), stopped }),
+        maintenanceInventory: () => ({ inFlight: inFlight4 !== null || stopInspectionPending, forced: [...forced].sort(), stopped }),
         tick,
         requestProbe(attemptId) {
           forced.add(attemptId);
@@ -194954,7 +195069,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto45 = require("crypto");
+    var import_node_crypto46 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db2 = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -194963,7 +195078,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto45.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto46.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db2.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db2.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -194973,7 +195088,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto45.randomUUID)();
+          const id4 = (0, import_node_crypto46.randomUUID)();
           active.add(id4);
           try {
             return await run3();
@@ -197908,7 +198023,7 @@ ${notice.notice}${supersededHint}`;
       };
       const control = opts.createController ? opts.createController(current4, onEvent, ensure) : new SessionHostController(current4, onEvent, ensure);
       await control.start();
-      const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4);
+      const listHostedRuntimes = (options) => options ? (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4, options) : (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current4);
       const ptyFactory = (params) => new SessionHostPtyTransportFactory({
         endpoint: current4,
         ensureReady: async () => {

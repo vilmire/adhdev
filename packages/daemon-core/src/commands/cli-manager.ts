@@ -62,7 +62,7 @@ export interface CliManagerDeps {
     getInstanceManager(): ProviderInstanceManager | null;
     getSessionRegistry?(): SessionRegistry | null;
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
-    listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
+    listHostedCliRuntimes?: (options?: { includeLaunchDetails?: boolean }) => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
     getHostedBindingOwner?: () => HostedBindingOwner;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
@@ -73,6 +73,7 @@ export interface CliTransportFactoryParams {
     providerType: string;
     workspace: string;
     cliArgs?: string[];
+    cliArgsOmitted?: boolean;
     providerSessionId?: string;
     attachExisting?: boolean;
     /**
@@ -97,6 +98,7 @@ export interface HostedCliRuntimeDescriptor {
     cliType: string;
     workspace: string;
     cliArgs?: string[];
+    cliArgsOmitted?: boolean;
     providerSessionId?: string;
     managedBy?: string;
     /** Positive role mark persisted in session-host meta; never inferred from workspace/title. */

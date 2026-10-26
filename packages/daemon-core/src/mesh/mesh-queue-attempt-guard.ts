@@ -107,7 +107,9 @@ export function requeueRefusalResponse(
 ): { success: false; error: string; code: 'requeue_refused_attempt_open'; refusalReason: QueueAttemptRetirementRefusal; attemptId: string; attemptState: TurnAttempt['state']; task: unknown } {
     const { attempt, reason } = refusal;
     const why = reason === 'attempt_open'
-        ? 'Pass force:true to retire that attempt and requeue, or cancel and re-enqueue.'
+        ? (attempt.state === 'stopping'
+            ? 'unknown, cannot prove dead: the owning host has not confirmed session absence or writer quiescence. Ownership remains retained.'
+            : 'Pass force:true to request verified retirement and requeue, or cancel and re-enqueue.')
         : reason === 'not_owner'
             ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.`
             : reason === 'no_ledger'

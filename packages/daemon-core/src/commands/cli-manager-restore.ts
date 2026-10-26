@@ -40,7 +40,17 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
         return 0;
     }
     const promoted = await verifyHeldObservationPromotion(host);
-    const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+    let sessions = records || await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true }) || [];
+    if (sessions.some(r => r.cliArgsOmitted)) {
+        const details = await host.deps.listHostedCliRuntimes?.({ includeLaunchDetails: true });
+        if (!details) throw new Error('session_host_launch_details_unavailable');
+        sessions = sessions.map(record => {
+            if (!record.cliArgsOmitted) return record;
+            const exact = details.find(r => r.runtimeId === record.runtimeId && r.runtimeKey === record.runtimeKey && r.startedAtMs === record.startedAtMs);
+            if (!exact || exact.cliArgsOmitted) throw new Error('session_host_inventory_changed_during_restore');
+            return exact;
+        });
+    }
     signal?.throwIfAborted();
     if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.providerSessionId===r.providerSessionId && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
     const owner = host.deps.getHostedBindingOwner?.();
