@@ -38,6 +38,7 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { CancelDispatchRequest } from './turn-ledger/effects.js';
 import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import { readWriterStopCapture } from '../commands/mesh-writer-stop-journal.js';
+import { resolveHostedBindingOwner } from '../session-host/binding-owner.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
@@ -313,6 +314,16 @@ export function stopStaleMeshWorker(
             if (args.writerStop && daemonId && daemonIdsEquivalent(daemonId, components.statusInstanceId ?? getMachineId())) {
                 return await components.cliManager.stopCli(stopArgs);
             }
+            if (args.writerStop) {
+                // Exact persisted session-host evidence can survive node removal.
+                // The attempt owner is its opener, not evidence of worker hosting.
+                const localOwner = resolveHostedBindingOwner(sessionId, undefined,
+                    components.cliManager?.deps?.getHostedBindingOwner?.(), new Set());
+                if (localOwner && daemonId) {
+                    return { success: false, code: 'writer_checkpoint_pending', reason: 'worker_host_conflict' };
+                }
+                if (localOwner) return await components.cliManager.stopCli(stopArgs);
+            }
             if (daemonId && components.dispatchMeshCommand) {
                 // Old daemons ignore the strict-stop payload on stop_cli.
                 // Probe a new read-only action first; an unknown action never
@@ -334,6 +345,7 @@ export function stopStaleMeshWorker(
         } catch (e: any) {
             LOG.warn('MeshQueue', `stopStaleMeshWorker error for ${sessionId}: ${e?.message || e}`);
         }
+        if (args.writerStop) return { success: false, code: 'writer_checkpoint_pending', reason: 'worker_host_unresolved' };
     });
 }
 
