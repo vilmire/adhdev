@@ -181553,7 +181553,7 @@ ${text4}` : text4;
        * `append()` returns nothing (not the same lines again), and one that
        * follows a new `append()` sees only the newly-appended tail joined onto
        * whatever partial line was left over. Independent of `strippedTail`,
-       * which always reads the full `buf` fresh and has no cursor of its own.
+       * whose dismissal boundary is independent of the line cursor.
        */
       lineCursorPos = 0;
       /** Monotonic append counter. Bumped once per `append()` call, never reset. */
@@ -181567,6 +181567,9 @@ ${text4}` : text4;
        * also reads.
        */
       strippedClearedAtSeq = 0;
+      /** Lazily computed once per append, shared by repeated status/auth reads. */
+      strippedCache;
+      strippedStartPos = 0;
       /**
        * Append one PTY chunk to the shared buffer. The single writer both read
        * views (`strippedTail`, `takeCompleteLines`) observe — callers must not
@@ -181579,6 +181582,8 @@ ${text4}` : text4;
         const trimmed2 = before + chunk.length - next.length;
         this.buf = next;
         this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed2);
+        this.strippedStartPos = Math.max(0, this.strippedStartPos - trimmed2);
+        this.strippedCache = void 0;
         this.seqCounter++;
       }
       /**
@@ -181597,23 +181602,26 @@ ${text4}` : text4;
        * not the raw buffer). Replaces `appendAuthTail`/`TAIL_BYTES`'s
        * `` `${tail}${stripAnsi(chunk)}`.slice(-TAIL_BYTES) `` — same semantics
        * (append-and-cap over stripped text), but reading is now decoupled from
-       * writing: this is a pure read over the shared raw buffer, so calling it
+       * writing: this is a memoized view over the shared raw buffer, so calling it
        * repeatedly with different `maxBytes` never mutates state and never
        * competes with `takeCompleteLines()`'s cursor.
        */
       strippedTail(maxBytes) {
         if (this.seqCounter <= this.strippedClearedAtSeq) return "";
-        return stripAnsi2(this.buf).slice(-maxBytes);
+        return (this.strippedCache ??= stripAnsi2(this.buf.slice(this.strippedStartPos))).slice(-maxBytes);
       }
       /**
        * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
-       * until the next `append()`. Does not touch the shared buffer or
+       * until the next `append()`, then shows only output after this boundary.
+       * Does not touch the shared buffer or
        * `takeCompleteLines()`'s cursor — only `strippedTail()`'s own read is
        * affected. A classifier calls this after a dismissed live suspicion, so
        * the SAME already-seen bytes cannot re-raise it on the next read.
        */
       clearStrippedTail() {
         this.strippedClearedAtSeq = this.seqCounter;
+        this.strippedStartPos = this.buf.length;
+        this.strippedCache = void 0;
       }
       /**
        * Consume every complete line (`\r?\n`-terminated) accumulated since the
@@ -181782,6 +181790,9 @@ ${text4}` : text4;
       get rawTail() {
         return this.rawTailBuf ??= new RawTail();
       }
+      failureScanBytes = 0;
+      failureScanAt;
+      failureScanSeq;
       exited = false;
       spawned = false;
       providerFailure = null;
@@ -182004,6 +182015,7 @@ ${text4}` : text4;
         }
       }
       getStatus(_options) {
+        if (!this.exited) this.observeProviderFailureOutput("", void 0, void 0, true);
         this.maybeConfirmLiveAuthBillingSuspect();
         if (!this.providerFailure && !this.exited && this.spawned) {
           this.refreshWirePendingQuestion();
@@ -182459,9 +182471,16 @@ ${text4}` : text4;
       }
       /** Auth/billing classification of PTY output. WHAT the daemon may do about a
        *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-      observeProviderFailureOutput(chunk, exitCode, exit) {
+      observeProviderFailureOutput(chunk, exitCode, exit, flush = false) {
         if (this.providerFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth)) return false;
-        void chunk;
+        this.failureScanBytes = (this.failureScanBytes ?? 0) + chunk.length;
+        if (!exit && exitCode === void 0) {
+          if (this.failureScanSeq === this.rawTail.seq) return false;
+          if (!flush && this.failureScanAt !== void 0 && this.failureScanBytes < 8 * 1024 && Date.now() - this.failureScanAt < 250) return false;
+        }
+        this.failureScanAt = Date.now();
+        this.failureScanSeq = this.rawTail.seq;
+        this.failureScanBytes = 0;
         const failure7 = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES4), exitCode);
         if (!failure7) return false;
         if (exitCode === void 0 && !this.exited) {

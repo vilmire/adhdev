@@ -195,6 +195,9 @@ export class SpecCliAdapter implements CliAdapter {
      *  pair — see raw-tail.ts. Lazy like `liveAuth` (Object.create-built suites skip field init). */
     private rawTailBuf?: RawTail;
     private get rawTail(): RawTail { return (this.rawTailBuf ??= new RawTail()); }
+    private failureScanBytes = 0;
+    private failureScanAt?: number;
+    private failureScanSeq?: number;
     private exited = false;
     private spawned = false;
     private providerFailure: ProviderFailure | null = null;
@@ -467,6 +470,9 @@ export class SpecCliAdapter implements CliAdapter {
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         // Side effects stay here (they touch adapter state / lazily refresh);
         // the DECISION is the pure projection in adapter-status-projection.ts.
+        // Flush the trailing chunk even if the stream stopped below the byte
+        // budget. Unchanged polls do no classification work.
+        if (!this.exited) this.observeProviderFailureOutput('', undefined, undefined, true);
         this.maybeConfirmLiveAuthBillingSuspect();
         // kimi_wire prompt hold: refresh on the ROUTINE status poll (not only
         // on chat reads) so a question asked while nobody reads the chat still
@@ -1029,12 +1035,23 @@ export class SpecCliAdapter implements CliAdapter {
 
     /** Auth/billing classification of PTY output. WHAT the daemon may do about a
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-    private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
+    private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }, flush = false): boolean {
         if (this.providerFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth))) return false;
-        // `chunk` is already appended into `rawTail` by handleEvent's 'pty_data'
-        // case (C6, one append before any reader) — this reads a fresh,
-        // ANSI-stripped view, replacing the former appendAuthTail accumulator.
-        void chunk;
+        // Keep the classifier's full window: its tool/code/prose filtering
+        // needs line context, so a small regex overlap alone is unsafe. Charge
+        // at most one 16KiB scan per 8KiB of output or 250ms of streaming;
+        // routine status reads flush the remainder, and exit always rechecks
+        // with exit attribution. The raw buffer still sees EVERY chunk first,
+        // preserving split ANSI sequences and split failure banners.
+        this.failureScanBytes = (this.failureScanBytes ?? 0) + chunk.length;
+        if (!exit && exitCode === undefined) {
+            if (this.failureScanSeq === this.rawTail.seq) return false;
+            if (!flush && this.failureScanAt !== undefined
+                && this.failureScanBytes < 8 * 1024 && Date.now() - this.failureScanAt < 250) return false;
+        }
+        this.failureScanAt = Date.now();
+        this.failureScanSeq = this.rawTail.seq;
+        this.failureScanBytes = 0;
         const failure = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES), exitCode);
         if (!failure) return false;
         if (exitCode === undefined && !this.exited) {
