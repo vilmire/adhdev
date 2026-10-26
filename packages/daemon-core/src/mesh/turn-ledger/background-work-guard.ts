@@ -369,13 +369,31 @@ export function createBackgroundWorkMonitor(
 
       const currentEntry = entries.get(attempt.attemptId);
       const normStatus = (status ?? '').trim().toLowerCase();
-      const isTurnEndedIdle = normStatus === 'idle' || normStatus === '';
+      // Only a positive 'idle' (the scheduler passes it for native/pending-text turn
+      // ends) starts the clock. An unknown/empty status once let a mid-turn read
+      // seed firstObservedAt, and a short command started much later then tripped
+      // the 120 s notice after a few seconds.
+      const isTurnEndedIdle = normStatus === 'idle';
 
       if (decision.complete && !currentEntry) {
         return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
       }
 
       if (!isTurnEndedIdle && !currentEntry) {
+        return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
+      }
+
+      // The worker is working again before anything was sent on this entry: the
+      // earlier "turn ended" read was not the turn's end. Forget it, so the clock
+      // restarts from the real end (re-created from the validated final timestamp,
+      // which survives a flapping TUI) instead of from that stale observation.
+      if (
+        !isTurnEndedIdle &&
+        currentEntry &&
+        currentEntry.nudgedAt === undefined &&
+        currentEntry.timeoutNotifiedAt === undefined
+      ) {
+        entries.delete(attempt.attemptId);
         return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
       }
 

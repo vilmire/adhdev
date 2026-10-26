@@ -86121,11 +86121,15 @@ ${includeRefs[0]}`;
           });
           const currentEntry = entries.get(attempt.attemptId);
           const normStatus = (status ?? "").trim().toLowerCase();
-          const isTurnEndedIdle = normStatus === "idle" || normStatus === "";
+          const isTurnEndedIdle = normStatus === "idle";
           if (decision.complete && !currentEntry) {
             return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
           }
           if (!isTurnEndedIdle && !currentEntry) {
+            return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
+          }
+          if (!isTurnEndedIdle && currentEntry && currentEntry.nudgedAt === void 0 && currentEntry.timeoutNotifiedAt === void 0) {
+            entries.delete(attempt.attemptId);
             return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
           }
           let liveNames = !decision.complete ? decision.liveProcessNames : [];
