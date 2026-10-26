@@ -173,3 +173,27 @@ export class RawTail {
         return Buffer.byteLength(this.buf, 'utf8');
     }
 }
+
+
+/** Charge expensive full-window readers to new output or elapsed streaming
+ * time, rather than chunk count. A flush consumes the trailing partial budget;
+ * unchanged flushes do no work. The raw tail still receives every chunk before
+ * this decision, preserving ANSI and line boundaries for the reader. */
+export class TailReadBudget {
+    private bytes = 0;
+    private readAt?: number;
+    private readSeq?: number;
+
+    constructor(private readonly byteBudget = 8 * 1024, private readonly intervalMs = 250) {}
+
+    take(seq: number, appended: number, flush = false, now = Date.now()): boolean {
+        this.bytes += appended;
+        if (this.readSeq === seq) return false;
+        if (!flush && this.readAt !== undefined
+            && this.bytes < this.byteBudget && now - this.readAt < this.intervalMs) return false;
+        this.readAt = now;
+        this.readSeq = seq;
+        this.bytes = 0;
+        return true;
+    }
+}

@@ -181656,6 +181656,24 @@ ${text4}` : text4;
         return Buffer.byteLength(this.buf, "utf8");
       }
     };
+    var TailReadBudget = class {
+      constructor(byteBudget = 8 * 1024, intervalMs = 250) {
+        this.byteBudget = byteBudget;
+        this.intervalMs = intervalMs;
+      }
+      bytes = 0;
+      readAt;
+      readSeq;
+      take(seq2, appended, flush = false, now = Date.now()) {
+        this.bytes += appended;
+        if (this.readSeq === seq2) return false;
+        if (!flush && this.readAt !== void 0 && this.bytes < this.byteBudget && now - this.readAt < this.intervalMs) return false;
+        this.readAt = now;
+        this.readSeq = seq2;
+        this.bytes = 0;
+        return true;
+      }
+    };
     init_pty_write_chunking();
     init_win32_input_mode();
     var Win32RawInputWriter = class {
@@ -181790,9 +181808,7 @@ ${text4}` : text4;
       get rawTail() {
         return this.rawTailBuf ??= new RawTail();
       }
-      failureScanBytes = 0;
-      failureScanAt;
-      failureScanSeq;
+      failureScanBudget;
       exited = false;
       spawned = false;
       providerFailure = null;
@@ -182473,14 +182489,7 @@ ${text4}` : text4;
        *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
       observeProviderFailureOutput(chunk, exitCode, exit, flush = false) {
         if (this.providerFailure || exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth)) return false;
-        this.failureScanBytes = (this.failureScanBytes ?? 0) + chunk.length;
-        if (!exit && exitCode === void 0) {
-          if (this.failureScanSeq === this.rawTail.seq) return false;
-          if (!flush && this.failureScanAt !== void 0 && this.failureScanBytes < 8 * 1024 && Date.now() - this.failureScanAt < 250) return false;
-        }
-        this.failureScanAt = Date.now();
-        this.failureScanSeq = this.rawTail.seq;
-        this.failureScanBytes = 0;
+        if (!exit && exitCode === void 0 && !(this.failureScanBudget ??= new TailReadBudget()).take(this.rawTail.seq, chunk.length, flush)) return false;
         const failure7 = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES4), exitCode);
         if (!failure7) return false;
         if (exitCode === void 0 && !this.exited) {

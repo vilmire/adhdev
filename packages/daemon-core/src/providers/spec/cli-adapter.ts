@@ -80,7 +80,7 @@ import {
 
 import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
-import { RawTail } from './raw-tail.js';
+import { RawTail, TailReadBudget } from './raw-tail.js';
 import { recordSentPrompt } from '../native-history/sent-prompt-registry.js';
 import { Win32RawInputWriter } from './win32-raw-input-writer.js';
 
@@ -195,9 +195,7 @@ export class SpecCliAdapter implements CliAdapter {
      *  pair — see raw-tail.ts. Lazy like `liveAuth` (Object.create-built suites skip field init). */
     private rawTailBuf?: RawTail;
     private get rawTail(): RawTail { return (this.rawTailBuf ??= new RawTail()); }
-    private failureScanBytes = 0;
-    private failureScanAt?: number;
-    private failureScanSeq?: number;
+    private failureScanBudget?: TailReadBudget;
     private exited = false;
     private spawned = false;
     private providerFailure: ProviderFailure | null = null;
@@ -1037,21 +1035,10 @@ export class SpecCliAdapter implements CliAdapter {
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
     private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }, flush = false): boolean {
         if (this.providerFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth))) return false;
-        // Keep the classifier's full window: its tool/code/prose filtering
-        // needs line context, so a small regex overlap alone is unsafe. Charge
-        // at most one 16KiB scan per 8KiB of output or 250ms of streaming;
-        // routine status reads flush the remainder, and exit always rechecks
-        // with exit attribution. The raw buffer still sees EVERY chunk first,
-        // preserving split ANSI sequences and split failure banners.
-        this.failureScanBytes = (this.failureScanBytes ?? 0) + chunk.length;
-        if (!exit && exitCode === undefined) {
-            if (this.failureScanSeq === this.rawTail.seq) return false;
-            if (!flush && this.failureScanAt !== undefined
-                && this.failureScanBytes < 8 * 1024 && Date.now() - this.failureScanAt < 250) return false;
-        }
-        this.failureScanAt = Date.now();
-        this.failureScanSeq = this.rawTail.seq;
-        this.failureScanBytes = 0;
+        // Full-window tool/code filtering needs line context. Budget streaming
+        // scans by bytes/time; status flushes the remainder, exit always rechecks.
+        if (!exit && exitCode === undefined
+            && !(this.failureScanBudget ??= new TailReadBudget()).take(this.rawTail.seq, chunk.length, flush)) return false;
         const failure = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES), exitCode);
         if (!failure) return false;
         if (exitCode === undefined && !this.exited) {
