@@ -344,14 +344,10 @@ export class SessionHostClient {
             observerLagMs,
           },
         );
-        if (this.socket === socket) {
-          this.disconnect(timeoutError);
-        } else {
-          this.requestWaiters.delete(requestId);
-          this.disconnectedSockets.add(socket);
-          try { socket.destroy(); } catch { /* noop */ }
-          reject(timeoutError);
-        }
+        // A deadline says nothing about socket or process liveness. Remove only
+        // this waiter; the parser safely discards its eventual late response.
+        this.requestWaiters.delete(requestId);
+        reject(timeoutError);
       }, timeoutMs);
       this.requestWaiters.set(requestId, {
         resolve: (value) => { clearTimeout(timeout); resolve(value as SessionHostResponse<T>); },
@@ -507,14 +503,15 @@ export class SessionHostClient {
     const deadline = Date.now() + timeoutMs;
     const alreadyConnected = this.isConnected() && !this.connectPromise;
     // A probe must also bound a connect/re-attach already in flight on this
-    // client; that task may have started with the normal 30s timeout.
+    // client; that task may have started with the normal 30s timeout. The
+    // request budget must not shorten or cancel that shared connection task.
     if (options.timeoutMs !== undefined) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const raceStartedAt = Date.now();
       const raceStartedMonotonicAt = performance.now();
       try {
         await Promise.race([
-          this.connect(timeoutMs),
+          this.connect(),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => {
               const actualElapsedMs = Math.max(0, Math.round(performance.now() - raceStartedMonotonicAt));
@@ -531,7 +528,6 @@ export class SessionHostClient {
                 },
               );
               reject(error);
-              this.disconnect(error);
             }, timeoutMs);
           }),
         ]);

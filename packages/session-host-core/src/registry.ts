@@ -125,6 +125,32 @@ export class SessionHostRegistry {
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
   }
 
+  /** No launch bodies are cloned. Unknown role evidence stays conservative. */
+  getSessionCensus(sessionIds: string[]): { liveSessionIds: string[]; hasOtherAssistantCandidates: boolean } {
+    if (!Array.isArray(sessionIds) || sessionIds.length > 128
+      || sessionIds.some(id => typeof id !== 'string' || id.length === 0 || id.length > 256)) {
+      throw new Error('Invalid session census: at most 128 identities of 256 characters');
+    }
+    const requested = new Set(sessionIds);
+    const liveSessionIds: string[] = [];
+    let hasOtherAssistantCandidates = false;
+    for (const { record } of this.sessions.values()) {
+      if (record.category !== 'cli' || record.termination
+        || !['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle)) continue;
+      if (requested.has(record.sessionId)) liveSessionIds.push(record.sessionId);
+      else {
+        const launch = record.meta?.launchRecord as { launchedBy?: unknown; roleLaunch?: { role?: unknown } } | undefined;
+        // This is uncertainty, never positive provenance or permission to attach.
+        // A role-marked writer created since the caller's disk scan must still
+        // prevent a duplicate, without returning any of its user-authored data.
+        if (record.meta?.assistant === true || launch?.launchedBy === 'assistant' || launch?.roleLaunch?.role === 'assistant') {
+          hasOtherAssistantCandidates = true;
+        }
+      }
+    }
+    return { liveSessionIds, hasOtherAssistantCandidates };
+  }
+
   getSession(sessionId: string): SessionHostRecord | null {
     const state = this.sessions.get(sessionId);
     return state ? this.cloneRecord(state.record) : null;

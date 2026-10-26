@@ -246,6 +246,17 @@ export interface UpdateSessionMetaPayload {
   replace?: boolean;
 }
 
+/** Bounded liveness check for identities whose provenance the caller already holds.
+ * No launch arguments, metadata, snapshots or diagnostic log bodies cross IPC. */
+export interface SessionHostCensus {
+  hostStartedAt: number;
+  endpoint: string;
+  hostEntryPath?: string;
+  liveSessionIds: string[];
+  /** A live role-marked writer outside the caller's persisted identities. */
+  hasOtherAssistantCandidates: boolean;
+}
+
 export interface GetHostDiagnosticsPayload {
   includeSessions?: boolean;
   limit?: number;
@@ -380,6 +391,7 @@ export type SessionHostRequest =
   | { type: 'send_signal'; payload: SendSignalPayload }
   | { type: 'restart_session'; payload: RestartSessionPayload }
   | { type: 'prune_duplicate_sessions'; payload?: PruneDuplicateSessionsPayload }
+  | { type: 'get_session_census'; payload: { sessionIds: string[] } }
   | { type: 'get_session'; payload: { sessionId: string } }
   | { type: 'list_sessions'; payload?: { activeOnly?: boolean } };
 
@@ -411,6 +423,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'send_signal',
   'restart_session',
   'prune_duplicate_sessions',
+  'get_session_census',
   'get_session',
   'list_sessions',
 ];

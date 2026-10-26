@@ -65,13 +65,15 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     };
     private bootFailure: PtyRuntimeExitInfo | null = null;
     private lostRuntimeReported = false;
+    private booting = true;
+    private retainedIncarnation: { runtimeKey: string; startedAt: number } | null = null;
 
     constructor(private readonly options: SessionHostRuntimeOptions) {
         this.client = new SessionHostClient({
             endpoint: options.endpoint,
             appName: options.appName,
         });
-        this.ready = withMaintenanceAdmission(() => this.boot());
+        this.ready = this.boot();
         // A runtime that never started must END, not sit there. Nothing awaits
         // `ready` except the write queue, so a failed create_session (2026-10-01:
         // a stale session-host whose install was deleted answered every spawn with
@@ -338,6 +340,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
 
     // Safe detach only releases ownership/observation; it sends no runtime input.
     detach(): void {
+        if (this.booting) { void this.closeClient(false); return; }
         this.enqueue(async () => {
             await this.client.request({
                 type: 'release_write',
@@ -382,10 +385,9 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         if (!incarnation?.runtimeKey || !incarnation.startedAt) return false;
         try {
             await this.operationChain;
-            const reply = await this.client.request<SessionHostRecord[]>({ type: 'list_sessions', payload: {} });
-            const record = reply.success && Array.isArray(reply.result)
-                ? reply.result.find(r => r.sessionId === this.options.runtimeId) : undefined;
-            return !!record && record.runtimeKey === incarnation.runtimeKey && record.startedAt === incarnation.startedAt
+            const reply = await this.client.request<SessionHostRecord>({ type: 'get_session', payload: { sessionId: this.options.runtimeId } });
+            const record = reply.success ? reply.result : undefined;
+            return !!record && record.sessionId === this.options.runtimeId && record.runtimeKey === incarnation.runtimeKey && record.startedAt === incarnation.startedAt
                 && record.writeOwner?.clientId === this.options.clientId && record.writeOwner.ownerType === 'agent'
                 && Object.entries(expected).every(([key, value]) => JSON.stringify(record.meta[key]) === JSON.stringify(value));
         } catch { return false; }
@@ -402,7 +404,50 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         } catch { return false; }
     }
 
+    private checkRetainedIncarnation(record: SessionHostRecord): void {
+        const previous = this.retainedIncarnation;
+        if (record.sessionId !== this.options.runtimeId || (previous
+            && (record.runtimeKey !== previous.runtimeKey || record.startedAt !== previous.startedAt))) {
+            throw new Error(`Runtime not found for session: ${this.options.runtimeId} (incarnation changed)`);
+        }
+        if (record.runtimeKey && record.startedAt) this.retainedIncarnation = { runtimeKey: record.runtimeKey, startedAt: record.startedAt };
+    }
+
     private async boot(): Promise<void> {
+        try {
+            let attempt = 0;
+            while (!this.closed) {
+                try {
+                    // Release admission while deferred, so an unreachable host
+                    // cannot hold maintenance ownership across retry sleeps.
+                    await withMaintenanceAdmission(() => this.bootOnce());
+                    return;
+                } catch (error) {
+                    // Reattachment must never certify a live writer dead merely
+                    // because its host is slow/unreachable. Keep the same transport,
+                    // identity and pending ready promise; never create a replacement.
+                    if (!this.options.attachExisting || isLostRuntimeError(error instanceof Error ? error.message : String(error))) throw error;
+                    LOG.warn('CLI', `[session-host:${this.options.runtimeId}] reattachment deferred: ${error instanceof Error ? error.message : String(error)}`);
+                    await this.waitForRetry(attempt++);
+                }
+            }
+        } finally { this.booting = false; }
+    }
+
+    private waitForRetry(attempt: number): Promise<void> {
+        if (this.closed) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+            this.reconnectWake = resolve;
+            this.reconnectTimer = setTimeout(() => {
+                this.reconnectTimer = null;
+                this.reconnectWake = null;
+                resolve();
+            }, Math.min(50 * Math.pow(2, Math.min(attempt, 4)), 500));
+            this.reconnectTimer.unref?.();
+        });
+    }
+
+    private async bootOnce(): Promise<void> {
         if (typeof this.options.ensureReady === 'function') {
             await this.options.ensureReady();
         }
@@ -415,25 +460,27 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             await this.options.ensureReady();
             await this.client.connect();
         }
-        this.unsubscribe = this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));
-        this.unsubscribeDisconnect = this.client.onDisconnect(() => {
+        this.unsubscribe ??= this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));
+        this.unsubscribeDisconnect ??= this.client.onDisconnect(() => {
             // Announcements may be lost from here on: provenance is unknown
             // (and any earlier key void) until a fresh get_input_state (R8-3).
             this.input.connected = false;
             this.input.gaps += 1;
-            if (this.closed) return;
+            if (this.closed || this.booting) return;
             void this.reconnectAndReattach();
         });
 
         let record: SessionHostRecord | null = null;
         if (this.options.attachExisting) {
-            const existingRecords = await this.client.request<SessionHostRecord[]>({
-                type: 'list_sessions',
-                payload: {},
+            const existing = await this.client.request<SessionHostRecord>({
+                type: 'get_session',
+                payload: { sessionId: this.options.runtimeId },
             });
-            const existingRecord = existingRecords.success && existingRecords.result
-                ? existingRecords.result.find((item) => item.sessionId === this.options.runtimeId) || null
-                : null;
+            if (!existing.success && isLostRuntimeError(existing.error)) throw new Error(existing.error);
+            // Older hosts may reject this read. attach_session is still the
+            // authoritative fallback; never request an entire legacy inventory.
+            const existingRecord = existing.success ? existing.result : null;
+            if (existingRecord && !shouldResumeAttachedSession(existingRecord)) this.checkRetainedIncarnation(existingRecord);
             if (shouldResumeAttachedSession(existingRecord)) {
                 assertMaintenanceAdmission();
                 const resumeResponse = await this.client.request<SessionHostRecord>({
@@ -459,6 +506,7 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                 throw new Error(attachResponse.error || `Failed to attach runtime ${this.options.runtimeId}`);
             }
             record = attachResponse.result;
+            this.checkRetainedIncarnation(record);
         } else {
             assertMaintenanceAdmission();
             const createResponse = await this.client.request<SessionHostRecord>({
@@ -487,6 +535,13 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             record = createResponse.result;
         }
 
+        if (this.options.attachExisting && (record.lifecycle === 'stopped' || record.lifecycle === 'failed')) {
+            const term = record.termination;
+            this.bootFailure = { exitCode: term?.exitCode ?? null, signal: term?.signal ?? null, termination: term };
+            for (const callback of this.exitCallbacks) callback(this.bootFailure);
+            await this.closeClient(false);
+            return;
+        }
         this.currentPid = record.osPid || 0;
         await this.refreshInputState();
         this.updateMetadata(record);
@@ -774,5 +829,5 @@ export class SessionHostPtyTransportFactory implements PtyTransportFactory {
 
 /** Host errors that mean the runtime no longer exists there (server.ts requireRuntime / registry). */
 export function isLostRuntimeError(error: string | undefined): boolean {
-    return typeof error === 'string' && /^(?:Runtime not found for session|Unknown session):/.test(error);
+    return typeof error === 'string' && (/^(?:Runtime not found for session|Unknown session):/.test(error) || error === 'session_absent');
 }

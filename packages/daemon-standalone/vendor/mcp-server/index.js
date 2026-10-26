@@ -2937,6 +2937,7 @@ var require_dist = __commonJS({
       "send_signal",
       "restart_session",
       "prune_duplicate_sessions",
+      "get_session_census",
       "get_session",
       "list_sessions"
     ];
@@ -3433,6 +3434,26 @@ var require_dist = __commonJS({
       listSessions() {
         return Array.from(this.sessions.values()).map((state) => this.cloneRecord(state.record)).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
       }
+      /** No launch bodies are cloned. Unknown role evidence stays conservative. */
+      getSessionCensus(sessionIds) {
+        if (!Array.isArray(sessionIds) || sessionIds.length > 128 || sessionIds.some((id2) => typeof id2 !== "string" || id2.length === 0 || id2.length > 256)) {
+          throw new Error("Invalid session census: at most 128 identities of 256 characters");
+        }
+        const requested = new Set(sessionIds);
+        const liveSessionIds = [];
+        let hasOtherAssistantCandidates = false;
+        for (const { record } of this.sessions.values()) {
+          if (record.category !== "cli" || record.termination || !["starting", "running", "stopping", "interrupted"].includes(record.lifecycle)) continue;
+          if (requested.has(record.sessionId)) liveSessionIds.push(record.sessionId);
+          else {
+            const launch = record.meta?.launchRecord;
+            if (record.meta?.assistant === true || launch?.launchedBy === "assistant" || launch?.roleLaunch?.role === "assistant") {
+              hasOtherAssistantCandidates = true;
+            }
+          }
+        }
+        return { liveSessionIds, hasOtherAssistantCandidates };
+      }
       getSession(sessionId) {
         const state = this.sessions.get(sessionId);
         return state ? this.cloneRecord(state.record) : null;
@@ -3811,17 +3832,8 @@ var require_dist = __commonJS({
                 observerLagMs
               }
             );
-            if (this.socket === socket) {
-              this.disconnect(timeoutError);
-            } else {
-              this.requestWaiters.delete(requestId);
-              this.disconnectedSockets.add(socket);
-              try {
-                socket.destroy();
-              } catch {
-              }
-              reject(timeoutError);
-            }
+            this.requestWaiters.delete(requestId);
+            reject(timeoutError);
           }, timeoutMs);
           this.requestWaiters.set(requestId, {
             resolve: (value) => {
@@ -3966,7 +3978,7 @@ var require_dist = __commonJS({
           const raceStartedMonotonicAt = performance.now();
           try {
             await Promise.race([
-              this.connect(timeoutMs),
+              this.connect(),
               new Promise((_resolve, reject) => {
                 timer = setTimeout(() => {
                   const actualElapsedMs = Math.max(0, Math.round(performance.now() - raceStartedMonotonicAt));
@@ -3983,7 +3995,6 @@ var require_dist = __commonJS({
                     }
                   );
                   reject(error);
-                  this.disconnect(error);
                 }, timeoutMs);
               })
             ]);
@@ -168456,20 +168467,22 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
     }
-    async function verifiedHostAssistants(configDir, namespace, ipcKey, boundSessionId) {
+    async function verifiedHostAssistants(configDir, namespace, ipcKey, candidates) {
       const endpoint = (0, import_session_host_core12.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
-      const client = new import_session_host_core12.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+      if (candidates.size > 128 || [...candidates].some((id4) => id4.length > 256)) return void 0;
+      const budgetMs = 2e3;
+      const client = new import_session_host_core12.SessionHostClient({ endpoint, requestTimeoutMs: budgetMs, registerAsShared: false });
       let timer;
       try {
         const response = await Promise.race([
-          client.request({ type: "get_host_diagnostics", payload: { includeSessions: true } }),
+          client.request({ type: "get_session_census", payload: { sessionIds: [...candidates] } }, { timeoutMs: budgetMs }),
           new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error("assistant_host_probe_timeout")), 500);
+            timer = setTimeout(() => reject(new Error("assistant_host_probe_timeout")), budgetMs);
           })
         ]);
         const host = response.result;
-        if (!response.success || !host || host.endpoint !== endpoint.path || !(host.hostStartedAt > 0) || typeof host.hostEntryPath !== "string" || !isManagedSessionHostCommandLine(`node "${host.hostEntryPath.replace(/\\/g, "/")}"`) || !Array.isArray(host.sessions)) return void 0;
-        return new Set(host.sessions.filter((r) => r.category === "cli" && !r.termination && ["starting", "running", "stopping", "interrupted"].includes(r.lifecycle) && (r.sessionId === boundSessionId || hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant === true, launchRecord: r.meta?.launchRecord }))).map((r) => r.sessionId));
+        if (!response.success || !host || host.endpoint !== endpoint.path || !(host.hostStartedAt > 0) || typeof host.hostEntryPath !== "string" || !isManagedSessionHostCommandLine(`node "${host.hostEntryPath.replace(/\\/g, "/")}"`) || host.hasOtherAssistantCandidates !== false || !Array.isArray(host.liveSessionIds) || host.liveSessionIds.length > candidates.size || host.liveSessionIds.some((id4) => typeof id4 !== "string" || !candidates.has(id4))) return void 0;
+        return new Set(host.liveSessionIds);
       } catch (error) {
         if (["ENOENT", "ECONNREFUSED"].includes(error.code ?? "")) {
           try {
@@ -168530,7 +168543,7 @@ ${ptyResult.output.slice(-2e3)}`);
           candidates.add(r.sessionId);
         }
         if (!candidates.size) continue;
-        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
+        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, candidates);
         if (verified) for (const id4 of verified) {
           ids.add(id4);
           options.onConflictEvidence?.({ namespace, sessionId: id4, reason: "host census reports a live assistant" });
@@ -195148,7 +195161,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           endpoint: options.endpoint,
           appName: options.appName
         });
-        this.ready = withMaintenanceAdmission(() => this.boot());
+        this.ready = this.boot();
         this.ready.catch((error) => this.failBoot(error));
       }
       ready;
@@ -195183,6 +195196,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       };
       bootFailure = null;
       lostRuntimeReported = false;
+      booting = true;
+      retainedIncarnation = null;
       failBoot(error) {
         if (this.closed) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -195431,6 +195446,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       // Safe detach only releases ownership/observation; it sends no runtime input.
       detach() {
+        if (this.booting) {
+          void this.closeClient(false);
+          return;
+        }
         this.enqueue(async () => {
           await this.client.request({
             type: "release_write",
@@ -195473,9 +195492,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!incarnation?.runtimeKey || !incarnation.startedAt) return false;
         try {
           await this.operationChain;
-          const reply = await this.client.request({ type: "list_sessions", payload: {} });
-          const record7 = reply.success && Array.isArray(reply.result) ? reply.result.find((r) => r.sessionId === this.options.runtimeId) : void 0;
-          return !!record7 && record7.runtimeKey === incarnation.runtimeKey && record7.startedAt === incarnation.startedAt && record7.writeOwner?.clientId === this.options.clientId && record7.writeOwner.ownerType === "agent" && Object.entries(expected).every(([key5, value]) => JSON.stringify(record7.meta[key5]) === JSON.stringify(value));
+          const reply = await this.client.request({ type: "get_session", payload: { sessionId: this.options.runtimeId } });
+          const record7 = reply.success ? reply.result : void 0;
+          return !!record7 && record7.sessionId === this.options.runtimeId && record7.runtimeKey === incarnation.runtimeKey && record7.startedAt === incarnation.startedAt && record7.writeOwner?.clientId === this.options.clientId && record7.writeOwner.ownerType === "agent" && Object.entries(expected).every(([key5, value]) => JSON.stringify(record7.meta[key5]) === JSON.stringify(value));
         } catch {
           return false;
         }
@@ -195495,7 +195514,43 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return false;
         }
       }
+      checkRetainedIncarnation(record7) {
+        const previous = this.retainedIncarnation;
+        if (record7.sessionId !== this.options.runtimeId || previous && (record7.runtimeKey !== previous.runtimeKey || record7.startedAt !== previous.startedAt)) {
+          throw new Error(`Runtime not found for session: ${this.options.runtimeId} (incarnation changed)`);
+        }
+        if (record7.runtimeKey && record7.startedAt) this.retainedIncarnation = { runtimeKey: record7.runtimeKey, startedAt: record7.startedAt };
+      }
       async boot() {
+        try {
+          let attempt = 0;
+          while (!this.closed) {
+            try {
+              await withMaintenanceAdmission(() => this.bootOnce());
+              return;
+            } catch (error) {
+              if (!this.options.attachExisting || isLostRuntimeError(error instanceof Error ? error.message : String(error))) throw error;
+              LOG.warn("CLI", `[session-host:${this.options.runtimeId}] reattachment deferred: ${error instanceof Error ? error.message : String(error)}`);
+              await this.waitForRetry(attempt++);
+            }
+          }
+        } finally {
+          this.booting = false;
+        }
+      }
+      waitForRetry(attempt) {
+        if (this.closed) return Promise.resolve();
+        return new Promise((resolve59) => {
+          this.reconnectWake = resolve59;
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.reconnectWake = null;
+            resolve59();
+          }, Math.min(50 * Math.pow(2, Math.min(attempt, 4)), 500));
+          this.reconnectTimer.unref?.();
+        });
+      }
+      async bootOnce() {
         if (typeof this.options.ensureReady === "function") {
           await this.options.ensureReady();
         }
@@ -195508,20 +195563,22 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           await this.options.ensureReady();
           await this.client.connect();
         }
-        this.unsubscribe = this.client.onEvent((event) => this.handleEvent(event));
-        this.unsubscribeDisconnect = this.client.onDisconnect(() => {
+        this.unsubscribe ??= this.client.onEvent((event) => this.handleEvent(event));
+        this.unsubscribeDisconnect ??= this.client.onDisconnect(() => {
           this.input.connected = false;
           this.input.gaps += 1;
-          if (this.closed) return;
+          if (this.closed || this.booting) return;
           void this.reconnectAndReattach();
         });
         let record7 = null;
         if (this.options.attachExisting) {
-          const existingRecords = await this.client.request({
-            type: "list_sessions",
-            payload: {}
+          const existing = await this.client.request({
+            type: "get_session",
+            payload: { sessionId: this.options.runtimeId }
           });
-          const existingRecord = existingRecords.success && existingRecords.result ? existingRecords.result.find((item) => item.sessionId === this.options.runtimeId) || null : null;
+          if (!existing.success && isLostRuntimeError(existing.error)) throw new Error(existing.error);
+          const existingRecord = existing.success ? existing.result : null;
+          if (existingRecord && !shouldResumeAttachedSession(existingRecord)) this.checkRetainedIncarnation(existingRecord);
           if (shouldResumeAttachedSession(existingRecord)) {
             assertMaintenanceAdmission();
             const resumeResponse = await this.client.request({
@@ -195547,6 +195604,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             throw new Error(attachResponse.error || `Failed to attach runtime ${this.options.runtimeId}`);
           }
           record7 = attachResponse.result;
+          this.checkRetainedIncarnation(record7);
         } else {
           assertMaintenanceAdmission();
           const createResponse = await this.client.request({
@@ -195573,6 +195631,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             throw new Error(createResponse.error || `Failed to create runtime ${this.options.runtimeId}`);
           }
           record7 = createResponse.result;
+        }
+        if (this.options.attachExisting && (record7.lifecycle === "stopped" || record7.lifecycle === "failed")) {
+          const term = record7.termination;
+          this.bootFailure = { exitCode: term?.exitCode ?? null, signal: term?.signal ?? null, termination: term };
+          for (const callback of this.exitCallbacks) callback(this.bootFailure);
+          await this.closeClient(false);
+          return;
         }
         this.currentPid = record7.osPid || 0;
         await this.refreshInputState();
@@ -195842,7 +195907,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     };
     function isLostRuntimeError(error) {
-      return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
+      return typeof error === "string" && (/^(?:Runtime not found for session|Unknown session):/.test(error) || error === "session_absent");
     }
     var import_crypto41 = require("crypto");
     var import_session_host_core17 = require_dist();
