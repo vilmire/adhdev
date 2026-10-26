@@ -365,7 +365,7 @@ export class ProviderChannelRuntime {
       const key = entry.sourceCommit ?? '';
       groups.set(key, [...(groups.get(key) ?? []), entry]);
     }
-    for (const [sourceCommit, pending] of groups) {
+    sourceGroups: for (const [sourceCommit, pending] of groups) {
       // Custom mirrors retain their configured transport; all trees still verify.
       const candidates = sourceCommit
         ? [archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl]
@@ -390,15 +390,15 @@ export class ProviderChannelRuntime {
           } catch (e: any) {
             report.errors.push({ code: 'TRANSPORT_FAILED', message: `provider tarball transport failed: ${e?.message || e}` });
             report.status = 'error';
-            this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-            return report;
+            this.log(`source group failed (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
+            continue sourceGroups;
           }
 
           const repoRoot = findTarballRepoRoot(extractDir);
           if (!repoRoot) {
             report.errors.push({ code: 'TRANSPORT_FAILED', message: 'provider tarball has an unexpected structure (no repo root dir)' });
             report.status = 'error';
-            return report;
+            continue sourceGroups;
           }
 
           // 5. Per entry: locate → stage → verify digest → activate. Per-entry

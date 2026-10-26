@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "readiness": "source_ready",
+  "releaseReady": false,
+  "batchId": "30b98508-808c-4438-878e-00fc11ee8080.source",
+  "contractSha256": "75600bd89a41de99caffeba52514a645246e9b18978d67c034f2a402916531c5",
+  "completedTaskIds": [
+    "30b98508-808c-4438-878e-00fc11ee8080"
+  ],
+  "sourceHash": "b7f09658283a142154a57d96b074c8cfa4cd35e7339e784872e7afdfee614152"
+}

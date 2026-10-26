@@ -28,7 +28,7 @@
  * does hash differently.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cpSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { ProviderChannelStore } from '../../../src/providers/channel/store.js';
@@ -115,6 +115,82 @@ describe('pinned provider transport', () => {
     expect(result.errors).toEqual([]);
     expect(result.activated.map((a) => a.digest)).toEqual([firstDigest, secondDigest]);
     expect(urls).toHaveLength(2);
+  });
+
+  it.each(['404', 'structure'])('isolates a failed SHA group (%s), preserves LKG and cleans up while another SHA activates', async (failure) => {
+    const other: FixtureProviderSpec = { ...SPEC, type: 'healthy-cli', dirname: 'healthy-cli' };
+    const repo = makeTmp('adhdev-group-');
+    buildRepoTree(repo, [SPEC, other]);
+    const digest = digestFor(repo, SPEC.category, SPEC.dirname);
+    const otherDigest = digestFor(repo, other.category, other.dirname);
+    const store = new ProviderChannelStore(makeTmp('adhdev-group-store-'));
+    let fail = false;
+    let currentUrl = '';
+    const urls: string[] = [];
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test', providerTarballUrl: VENDOR_URL,
+      fetchJson: async () => ({ channel: PREVIEW, providers: [
+        { ...makeRegistryRow(SPEC, fail ? `sha256:${'f'.repeat(64)}` : digest), sourceCommit: COMMIT_PUBLISHED },
+        ...(fail ? [{ ...makeRegistryRow(other, otherDigest), sourceCommit: COMMIT_TIP }] : []),
+      ] }),
+      downloadFile: async (url) => {
+        currentUrl = url; urls.push(url);
+        if (fail && url.includes(COMMIT_PUBLISHED) && failure === '404') throw new Error('HTTP 404');
+      },
+      extractTarball: async (_tar, dest) => {
+        if (fail && currentUrl.includes(COMMIT_PUBLISHED) && failure === 'structure') return;
+        cpSync(repo, join(dest, 'providers'), { recursive: true });
+      },
+    });
+    await runtime.sync({ channel: PREVIEW, targetTypes: new Set([SPEC.type]) });
+    const lkg = store.getPointer(PREVIEW, SPEC.type);
+    fail = true; urls.length = 0;
+    const gc = vi.spyOn(store, 'gc');
+    const cleanup = vi.spyOn(store, 'removeStagingDir');
+    const report = await runtime.sync({ channel: PREVIEW, targetTypes: new Set(), bootstrapAll: true });
+    expect(report.status).toBe('activated');
+    expect(report.errors).toEqual([expect.objectContaining({ code: 'TRANSPORT_FAILED' })]);
+    expect(report.activated.map((a) => a.providerType)).toEqual([other.type]);
+    expect(store.getPointer(PREVIEW, SPEC.type)).toEqual(lkg);
+    expect(store.getPointer(PREVIEW, other.type)?.active.digest).toBe(otherDigest);
+    expect(urls).toHaveLength(2);
+    expect(gc).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['main', 'A'.repeat(40), '', 123, {}, false])('rejects invalid sourceCommit %j without transport', async (sourceCommit) => {
+    const store = new ProviderChannelStore(makeTmp('adhdev-invalid-source-'));
+    const download = vi.fn();
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test', providerTarballUrl: VENDOR_URL,
+      fetchJson: async () => ({ channel: PREVIEW, providers: [{ ...makeRegistryRow(SPEC, `sha256:${'a'.repeat(64)}`), sourceCommit }] }),
+      downloadFile: download,
+    });
+    const report = await runtime.sync({ channel: PREVIEW, targetTypes: new Set(), bootstrapAll: true });
+    expect(report.errors).toEqual([expect.objectContaining({ code: 'CHANNEL_METADATA_UNAVAILABLE', providerType: SPEC.type })]);
+    expect(report.activated).toEqual([]);
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('verifies a custom mirror tree with an immutable pin (matching=%s)', async (matching) => {
+    const repo = makeTmp('adhdev-mirror-source-');
+    buildRepoTree(repo, [SPEC]);
+    const digest = digestFor(repo, SPEC.category, SPEC.dirname);
+    const mirror = 'https://mirror.example/providers.tar.gz';
+    const store = new ProviderChannelStore(makeTmp('adhdev-mirror-store-'));
+    const download = vi.fn(async (_url: string, _dest: string) => {});
+    const discovery = vi.fn(async () => { throw new Error('must not discover'); });
+    const runtime = new ProviderChannelRuntime({
+      store, registryBaseUrl: 'https://registry.test', providerTarballUrl: mirror,
+      fetchJson: async () => ({ channel: PREVIEW, providers: [{ ...makeRegistryRow(SPEC, matching ? digest : `sha256:${'f'.repeat(64)}`), sourceCommit: COMMIT_PUBLISHED }] }),
+      fetchTransportMetaJson: discovery, downloadFile: download,
+      extractTarball: async (_tar, dest) => { cpSync(repo, join(dest, 'providers'), { recursive: true }); },
+    });
+    const report = await runtime.sync({ channel: PREVIEW, targetTypes: new Set(), bootstrapAll: true });
+    expect(download.mock.calls[0][0]).toBe(mirror);
+    expect(discovery).not.toHaveBeenCalled();
+    expect(report.errors.map((e) => e.code)).toEqual(matching ? [] : ['DIGEST_MISMATCH']);
+    expect(store.getPointer(PREVIEW, SPEC.type)?.active.digest ?? null).toBe(matching ? digest : null);
   });
 
   it('preserves the last known good pin when an immutable source serves mismatched bytes', async () => {
