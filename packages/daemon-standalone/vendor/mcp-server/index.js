@@ -119560,6 +119560,7 @@ ${tail}` : ""
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       encodeDuplicateMeshDispatchCode: () => encodeDuplicateMeshDispatchCode,
       encodeMeshHandlerErrorCode: () => encodeMeshHandlerErrorCode,
+      endsPeerAuthorization: () => endsPeerAuthorization,
       enqueueTask: () => enqueueTask,
       enqueueTaskBatch: () => enqueueTaskBatch,
       ensureSessionHostReady: () => ensureSessionHostReady,
@@ -197892,6 +197893,17 @@ ${notice.notice}${supersededHint}`;
     init_mcp_command_ingress();
     init_assistant_human_input();
     init_cooperative_gate();
+    function endsPeerAuthorization(reason) {
+      return reason !== void 0 && (/* @__PURE__ */ new Set([
+        "token_revoked",
+        "credential_rejected",
+        "evicted",
+        "force_disconnected",
+        "clean_shutdown",
+        "version_incompatible",
+        "credentials_changed"
+      ])).has(reason);
+    }
   }
 });
 
