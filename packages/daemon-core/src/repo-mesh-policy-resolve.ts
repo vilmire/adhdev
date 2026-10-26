@@ -105,9 +105,9 @@ export function resolveMaxNodes(value: unknown): number {
 
 /**
  * Resolve the delegate idle TTL in MINUTES from a raw policy value.
- * Returns 0 when the reaper is disabled (explicit `0`, `false`, or a negative value).
+ * Returns 0 when age-based reaping is disabled (explicit `0`, `false`, or a negative value).
  * A missing/NaN value takes the default; any other positive value is clamped into
- * [MIN, MAX] so a typo can neither disable the reaper silently nor make it aggressive
+ * [MIN, MAX] so a typo can neither disable age-based reaping silently nor make it aggressive
  * enough to kill working delegates.
  */
 export function resolveDelegatedSessionIdleTtlMinutes(value: unknown): number {

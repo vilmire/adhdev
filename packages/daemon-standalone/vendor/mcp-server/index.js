@@ -78339,10 +78339,10 @@ ${upstream}`;
     function describeOrphanReclaim(idleTtlMinutes) {
       const ttl = idleTtlMinutes ?? DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
       if (!(ttl > 0)) {
-        return "The idle-session reaper is disabled for this mesh (delegatedSessionIdleTtlMinutes: 0), so nothing stops it automatically.";
+        return "The age-based idle-session reaper is disabled for this mesh (delegatedSessionIdleTtlMinutes: 0). Completion acceptance and the configured idle cap may still stop it automatically.";
       }
       const cadenceMinutes = Math.round(ORPHAN_NOTICE_REAP_CADENCE_MS / 6e4);
-      return `If it stays idle, the idle-session reaper stops it once it has been idle for ${ttl} min (checked every ${cadenceMinutes} min, so up to ~${ttl + cadenceMinutes} min).`;
+      return `If it stays idle, the idle-session reaper stops it once it has been idle for ${ttl} min (checked every ${cadenceMinutes} min, so up to ~${ttl + cadenceMinutes} min). Completion acceptance and the configured idle cap may reclaim it sooner.`;
     }
     function sweepAutoLaunchOrphanSessions(components, meshId, opts = {}) {
       let sessions;
@@ -78423,7 +78423,7 @@ ${upstream}`;
               sessionId,
               reason: "auto_launch_orphan_session_detected"
             },
-            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3} Stop it sooner only if you do not want it held until then.`,
+            coordinatorMessage: `[System] Mesh session ${sessionId}${nodeId ? ` on node ${nodeId}` : ""} was auto-launched for task ${originTaskId}, but ${detail}. The session is idle with no work assigned; it can still claim other queued work through the normal idle drain. ${reclaim3}`,
             queuedAt: Date.now(),
             ...readText(originTask?.sourceCoordinatorSessionId) ? { targetCoordinatorSessionId: readText(originTask.sourceCoordinatorSessionId) } : {},
             ...localCoordinatorDaemonId() ? { targetCoordinatorDaemonId: localCoordinatorDaemonId() } : {}

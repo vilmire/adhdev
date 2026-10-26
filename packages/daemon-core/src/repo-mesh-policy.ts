@@ -232,7 +232,8 @@ export interface RepoMeshPolicy {
      * (no launchedByCoordinator marker), or to a session still holding a non-terminal
      * queue/direct task — see mesh-idle-session-reaper.ts.
      *
-     * `0` (or false) disables the reaper entirely. Clamped to
+     * `0` (or false) disables only age-based reaping; completion acceptance and
+     * the machine idle cap remain independently configurable. Clamped to
      * [MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES, MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES];
      * see resolveDelegatedSessionIdleTtlMinutes.
      */
