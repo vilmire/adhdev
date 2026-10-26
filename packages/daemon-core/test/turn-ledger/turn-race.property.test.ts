@@ -40,6 +40,11 @@ import { LIVE_IDLE, SUMMARY, fakePublisher, ledgerOn, memDb, recordingHost, conf
 //   Invariant (8), content boundary, is turn-ledger-content-boundary.test.ts.
 
 const SEEDS = Number(process.env.ADHDEV_TURN_RACE_SEEDS ?? 500);
+// Each seed runs a deterministic SQLite-backed invariant sweep. CPU contention
+// in the full fast tier can exceed the global 30s limit even when isolated
+// timings match main. Budget 240ms per seed (at least 120s for the default 500)
+// without changing the seed count, scripts, or invariant checks.
+const LEDGER_PROPERTIES_TIMEOUT_MS = Math.max(120_000, SEEDS * 240);
 const T_BASE = 1_750_000_000_000;
 
 interface Scripted { attemptId: string; taskId: string; events: TurnEvidence[] }
@@ -192,7 +197,7 @@ describe('turn race — ledger properties (C8 1–4)', () => {
         for (let seed = 1; seed <= SEEDS && violations.length === 0; seed++) violations.push(...await runLedgerSeed(seed));
         if (violations.length > 0) console.error(JSON.stringify(violations[0], null, 2));
         expect(violations.map((v) => `seed ${v.seed}: ${v.message}`)).toEqual([]);
-    });
+    }, LEDGER_PROPERTIES_TIMEOUT_MS);
 });
 
 // ─── Part B: two nodes over a VirtualLink ────────────────────────────────
