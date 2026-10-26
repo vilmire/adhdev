@@ -2906,6 +2906,7 @@ var require_dist = __commonJS({
       resolveSessionHostRows: () => resolveSessionHostRows,
       sanitizeSpawnEnv: () => sanitizeSpawnEnv,
       spawnCliChild: () => spawnCliChild,
+      validateSessionHostEndpoint: () => validateSessionHostEndpoint,
       writeEnvelope: () => writeEnvelope
     });
     module2.exports = __toCommonJS2(index_exports2);
@@ -3572,6 +3573,14 @@ var require_dist = __commonJS({
     var path22 = __toESM2(require("path"));
     var net = __toESM2(require("net"));
     var import_string_decoder = require("string_decoder");
+    function validateSessionHostEndpoint(endpoint, platform2 = process.platform) {
+      if (endpoint.kind !== "unix") return;
+      const limit = platform2 === "linux" ? 108 : 104;
+      const pathBytes = Buffer.byteLength(endpoint.path, "utf8");
+      if (pathBytes + 1 > limit) {
+        throw new Error(`session_host_unix_socket_path_too_long: path_bytes=${pathBytes} required_bytes=${pathBytes + 1} limit_bytes=${limit} platform=${platform2}`);
+      }
+    }
     function getDefaultSessionHostEndpoint(appName = "adhdev", options = {}) {
       const rawKey = typeof options.ipcKey === "string" ? options.ipcKey.trim() : "";
       if (rawKey && !/^[0-9a-f]{12}$/.test(rawKey)) {
