@@ -15,6 +15,7 @@ import { resolve as pathResolve, dirname as pathDirname, join as pathJoin, sep a
 import type { DaemonCommandRouter } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { gitChildEnv } from '../git/git-locale.js';
+import { resolveLinkedWorktreeSource } from '../git/linked-worktree-source.js';
 import { meshNodeIdMatches, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { readStringValue } from '../mesh/mesh-node-identity.js';
 import { reconcileWorktreeBranch } from '../mesh/mesh-worktree-branch-reconcile.js';
@@ -320,11 +321,17 @@ export async function precheckLocalWorktreeRemovable(self: DaemonCommandRouter, 
         const sourceNode = args.node?.clonedFromNodeId
             ? args.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.node.clonedFromNodeId))
             : args.mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
-        const repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
+        let repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
             ? sourceNode.repoRoot.trim()
             : typeof sourceNode?.workspace === 'string' && sourceNode.workspace.trim()
                 ? sourceNode.workspace.trim()
                 : '';
+        // Parent node gone / source repo unusable: fall back to the worktree's own
+        // recorded source repository, only after proving it is a linked worktree of it.
+        if (!repoRootUsable(repoRoot)) {
+            const own = await resolveLinkedWorktreeSource(workspace);
+            if (own.ok) repoRoot = own.repoRoot;
+        }
         if (!repoRoot || !fs.existsSync(repoRoot)) {
             return {
                 ok: false,
@@ -489,7 +496,7 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
         const sourceNode = args.node?.clonedFromNodeId
             ? args.mesh?.nodes?.find((n: any) => meshNodeIdMatches(n, args.node.clonedFromNodeId))
             : args.mesh?.nodes?.find((n: any) => !n.isLocalWorktree);
-        const repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
+        let repoRoot = typeof sourceNode?.repoRoot === 'string' && sourceNode.repoRoot.trim()
             ? sourceNode.repoRoot.trim()
             : typeof sourceNode?.workspace === 'string' && sourceNode.workspace.trim()
                 ? sourceNode.workspace.trim()
@@ -497,6 +504,12 @@ export async function cleanupLocalWorktreeNode(self: DaemonCommandRouter, args: 
 
         if (!worktreeExists) {
             return { success: true, skipped: true, removedPath: workspace, repoRoot: repoRoot || undefined, reason: 'worktree_path_missing' };
+        }
+        // Parent node gone / source repo unusable: fall back to the worktree's own
+        // recorded source repository, only after proving it is a linked worktree of it.
+        if (!repoRootUsable(repoRoot)) {
+            const own = await resolveLinkedWorktreeSource(workspace);
+            if (own.ok) repoRoot = own.repoRoot;
         }
         if (!repoRoot || !fs.existsSync(repoRoot)) {
             return {

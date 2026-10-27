@@ -27,6 +27,7 @@
  * runtime.
  */
 export const GIT_HEAVY_SUITES: string[] = [
+  'test/commands/worktree-cleanup-parentless-fallback.test.ts',
   'test/commands/mesh-clone-node-registration.test.ts',
   'test/commands/mesh-clone-registration-rollback.test.ts',
   'test/commands/mesh-coordinator.test.ts',
