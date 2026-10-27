@@ -75,6 +75,8 @@ export interface RepoMeshHostMetadata {
      * host's own). Remote relays address the host with it.
      */
     hostMeshId?: string;
+    /** Host's Ed25519 public key (SPKI DER base64url) for verifying cross-origin artifact fetch grants. */
+    originGrantPublicKey?: string;
     /** Redacted pairing state only; raw join tokens must not be persisted here. */
     pairing?: RepoMeshHostPairingMetadata;
 }
@@ -112,6 +114,7 @@ export interface RepoMeshNode {
     policy: RepoMeshNodePolicy;
     health: RepoMeshNodeHealth;
     role?: RepoMeshDaemonRole;
+    originGrantPublicKey?: string;
     status: 'enabled' | 'disabled' | 'removed';
 }
 

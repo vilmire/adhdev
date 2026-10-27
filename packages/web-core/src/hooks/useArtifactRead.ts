@@ -431,8 +431,17 @@ export function readArtifactFetchCommandResponse(
         return { data: null, error: 'Artifact ID mismatch in response', errorCode: 'artifact_mismatch' }
     }
 
+    // The daemon answers with the artifact's OWN session. That equals the requested
+    // session for a bubble in the producing chat; a coordinator/assistant card shows
+    // another session's artifact, which the attachment's provenance names.
     const returnedSessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
-    if (!returnedSessionId || returnedSessionId !== expected.sessionId) {
+    const originSessionId = typeof expected.attachment.originSessionId === 'string'
+        ? expected.attachment.originSessionId.trim()
+        : ''
+    if (
+        !returnedSessionId
+        || (returnedSessionId !== expected.sessionId && (!originSessionId || returnedSessionId !== originSessionId))
+    ) {
         return { data: null, error: 'Session ID mismatch in response', errorCode: 'session_mismatch' }
     }
 

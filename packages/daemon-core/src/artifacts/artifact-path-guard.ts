@@ -25,6 +25,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { containsEncodedOrRawSecret } from '../logging/credential-redactor.js';
 import {
     ARTIFACT_EXTENSION_MAP,
     ARTIFACT_KINDS,
@@ -38,6 +39,76 @@ import {
 const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TITLE_CHARS = 200;
 const WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+const SECRET_BASENAME_PATTERNS: readonly RegExp[] = [
+    /^\.env/i,
+    /\.pem$/i,
+    /\.key$/i,
+    /\.p12$/i,
+    /\.pfx$/i,
+    /\.kdbx$/i,
+    /^id_(rsa|ed25519|ecdsa|dsa)/i,
+    /^\.npmrc$/i,
+    /^\.pypirc$/i,
+    /^\.netrc$/i,
+    /^credentials\.json$/i,
+    /^client_secret.*\.json$/i,
+];
+
+const SECRET_CONTENT_PATTERNS: readonly RegExp[] = [
+    /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
+    /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/,
+    /\bgithub_pat_[A-Za-z0-9_]{16,}\b/,
+    /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+    /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+    /\bAIza[0-9A-Za-z_-]{35}\b/,
+    /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
+    /\bmcp_sess_[A-Za-z0-9_-]{8,}\b/,
+    /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
+    /\bmcpSessionCredential(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/i,
+    /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{8,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{8,}={0,2}(?=$|[\s,;}\]&'"]))/i,
+];
+
+/**
+ * OD-6 fail-closed secret path check: refuses `.env*`, `*.pem`, `id_rsa*`, and
+ * common credential filenames before extension/MIME classification.
+ */
+export function assertNotSecretPath(candidatePathOrRel: string): void {
+    if (typeof candidatePathOrRel !== 'string' || !candidatePathOrRel) {
+        return;
+    }
+    const normalized = candidatePathOrRel.replace(/\\/g, '/');
+    const segments = normalized.split('/').filter(Boolean);
+    for (const seg of segments) {
+        for (const pattern of SECRET_BASENAME_PATTERNS) {
+            if (pattern.test(seg)) {
+                throw new ArtifactGuardError(
+                    'secret_file_refused',
+                    `Artifact path "${candidatePathOrRel}" matches secret filename pattern and is refused (secret_file_refused)`,
+                );
+            }
+        }
+    }
+}
+
+/**
+ * OD-6 fail-closed secret content check: refuses files containing private keys
+ * or credential/token patterns (including polyglot/embedded payloads in image files).
+ */
+export function assertNotSecretContent(buffer: Buffer, _kind: ArtifactKind): void {
+    if (buffer.byteLength === 0) {
+        return;
+    }
+    const text = buffer.toString('utf8');
+    if (containsEncodedOrRawSecret(text, SECRET_CONTENT_PATTERNS)) {
+        throw new ArtifactGuardError(
+            'secret_file_refused',
+            'Artifact content matches a secret or token pattern and is refused (secret_file_refused)',
+        );
+    }
+}
 
 export interface ArtifactTestRaceHooks {
     /** Invoked after pre-open `realpath`/`lstat` checks, right before `openSync`. */
@@ -436,6 +507,13 @@ function verifyAncestorAndTargetContainment(
         );
     }
 
+    if (targetLstat.nlink > 1) {
+        throw new ArtifactGuardError(
+            'path_outside_workspace',
+            `Hard-linked regular files (nlink=${targetLstat.nlink}) are refused for "${lexicalRel}" (path_outside_workspace)`,
+        );
+    }
+
     if (targetLstat.size > MAX_ARTIFACT_BYTES) {
         throw new ArtifactGuardError(
             'artifact_too_large',
@@ -478,6 +556,9 @@ export function readVerifiedArtifactFile(
         candidatePath,
         lexicalRel,
     );
+    assertNotSecretPath(rawPath);
+    assertNotSecretPath(lexicalRel);
+    assertNotSecretPath(path.relative(realWorkspaceRoot, realTargetPath));
     const { kind, mime } = validateExtensionKindAndMime(candidatePath, realTargetPath, options);
 
     let rootLstat: fs.Stats;
@@ -541,6 +622,12 @@ export function readVerifiedArtifactFile(
                 'Opened descriptor is not a regular file (not_a_regular_file)',
             );
         }
+        if (fdStat.nlink > 1) {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                `Opened descriptor has multiple hard links (nlink=${fdStat.nlink}) (path_outside_workspace)`,
+            );
+        }
         if (fdStat.dev !== targetLstat.dev || fdStat.ino !== targetLstat.ino) {
             throw new ArtifactGuardError(
                 'path_outside_workspace',
@@ -584,6 +671,12 @@ export function readVerifiedArtifactFile(
                 'Descriptor ceased to be a regular file after read (not_a_regular_file)',
             );
         }
+        if (postFdStat.nlink > 1) {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                `Descriptor acquired additional hard links during read (nlink=${postFdStat.nlink}) (path_outside_workspace)`,
+            );
+        }
         if (postFdStat.size > MAX_ARTIFACT_BYTES) {
             throw new ArtifactGuardError(
                 'artifact_too_large',
@@ -617,6 +710,7 @@ export function readVerifiedArtifactFile(
             !isStrictSubpath(realWorkspaceRoot, postRealTarget) ||
             postTargetLstat.isSymbolicLink() ||
             !postTargetLstat.isFile() ||
+            postTargetLstat.nlink > 1 ||
             postTargetLstat.dev !== fdStat.dev ||
             postTargetLstat.ino !== fdStat.ino
         ) {
@@ -634,6 +728,8 @@ export function readVerifiedArtifactFile(
             // Ignore close errors on already-closing descriptor.
         }
     }
+
+    assertNotSecretContent(buffer, kind);
 
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
     const relPath = lexicalRel.split(path.sep).join('/');

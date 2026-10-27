@@ -299,6 +299,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   artifact_register: WRITE_LOCAL_SAFE,
   // Lists registered session artifact metadata without reading file bytes.
   artifact_list: READ_LOCAL,
+  // Reads one registered artifact's content (paged; may fetch from a remote origin daemon over P2P).
+  artifact_read: READ_REMOTE,
   report_completion: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   // Each progress note is an additional note.
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

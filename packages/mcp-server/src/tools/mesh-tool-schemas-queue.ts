@@ -71,25 +71,26 @@ const ENQUEUE_TASK_DISCOVERY_META = {
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
     description: 'Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids — '
-        + 'grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational return warnings. '
+        + 'grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational warnings. '
         + 'mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. '
-        + 'Warns when an in-flight task has the same message+target.',
+        + 'Warns on in-flight duplicates.',
     _meta: ENQUEUE_TASK_DISCOVERY_META,
     inputSchema: {
         type: 'object' as const,
         properties: {
             message: { type: 'string', description: 'The task instruction.' },
             input: MESH_TASK_INPUT_SCHEMA,
-            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'live_debug_readonly lints the instruction TEXT and rejects write/push/deploy wording before dispatch, and may run in parallel on a busy node (cheap for investigation). '
-                + 'It does NOT remove the worker\'s Edit/Write/Bash tools — the worker stays read-only only if it follows the instruction; verify with mesh_git_status afterward.' },
-            readonly: { type: 'boolean', description: 'Read-only axis, composable with task_mode: separate parallel cap, no write isolation, exempt from the per-node write limit and the dirty/stale gates. '
-                + 'Instruction text is linted; the worker\'s own tools are NOT restricted.' },
+            task_mode: { ...enumOf(MESH_TASK_MODES), description: 'live_debug_readonly lints instruction TEXT and rejects write/push/deploy wording before dispatch, and may run in parallel on a busy node. '
+                + 'Does NOT remove Edit/Write/Bash tools — verify with mesh_git_status afterward.' },
+            readonly: { type: 'boolean', description: 'Read-only axis, composable with task_mode: separate parallel cap, no write isolation, exempt from per-node write limit and dirty/stale gates. '
+                + 'Instruction text is linted; worker tools are NOT restricted.' },
             required_tags: { type: 'array', items: { type: 'string' }, description: 'Capability constraints, e.g. os=darwin. Omit provider= unless intentionally restricting routing.' },
-            owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). A claim overlapping another in-flight code_change task\'s paths is refused (owned_paths_conflict).' },
+            owned_paths: { type: 'array', items: { type: 'string' }, description: 'code_change only: repo-relative files/dirs this task will touch (dir/** = subtree). Overlapping in-flight code_change paths refused (owned_paths_conflict).' },
             target_node_id: { type: 'string', description: 'HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected.' },
             prefer_worktree: { type: 'boolean', description: 'Route to the most recently cloned idle worktree node (no-op if none).' },
-            depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete first; their completion summaries are appended ("Upstream results"). Cycles rejected.' },
-            mission_id: { type: 'string', description: 'Mission id (full, exact); an unknown id is rejected (mission_not_found).' },
+            depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must complete first; completion summaries are appended ("Upstream results"). Cycles rejected.' },
+            input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Same-mission artifact ids this task may read (OD-4).' },
+            mission_id: { type: 'string', description: 'Mission id (full, exact); unknown id rejected (mission_not_found).' },
             priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'high jumps older normal/low work; default normal.' },
             model: { type: 'string', description: 'Model override, e.g. opus (best-effort).' },
             thinking_level: { ...enumOf(MESH_THINKING_LEVELS), description: 'Reasoning effort (best-effort).' },
@@ -128,6 +129,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         target_node_id: { type: 'string', description: 'HARD pin; an unresolvable id rejects the batch.' },
                         prefer_worktree: { type: 'boolean' },
                         depends_on: { type: 'array', items: { type: 'string' }, description: 'Sibling refs and/or existing task ids that must complete first.' },
+                        input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Same-mission artifact ids this task may read.' },
                         mission_id: { type: 'string', description: 'Overrides the top-level mission_id.' },
                         priority: enumOf(MESH_TASK_PRIORITIES),
                         model: { type: 'string' },

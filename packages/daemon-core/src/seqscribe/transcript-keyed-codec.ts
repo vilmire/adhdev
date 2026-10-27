@@ -1,6 +1,6 @@
 import { readOutgoingReceipt, type OutgoingReceipt } from './outgoing-receipt.js';
 export { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type OutgoingReceipt } from './outgoing-receipt.js';
-import type { ArtifactKind, ChatAttachmentMeta } from '../artifacts/types.js';
+import type { ArtifactKind, ArtifactProducerRole, ChatAttachmentMeta } from '../artifacts/types.js';
 export type { ArtifactKind, ChatAttachmentMeta } from '../artifacts/types.js';
 /**
  * `session.<safeSessionId>.chat` keyed wire contract — design 2026-09-28
@@ -441,6 +441,8 @@ function boundedStringList(value: unknown): string[] {
 
 const ARTIFACT_KINDS_WIRE: readonly ArtifactKind[] = ['markdown', 'image', 'diff', 'json', 'text'];
 const ARTIFACT_PREVIEW_WIRE_MAX = 600;
+// Mirrors ARTIFACT_PRODUCER_ROLES (artifacts/types.ts); kept local so this codec stays free of node built-ins.
+const ARTIFACT_PRODUCER_ROLES_WIRE: readonly ArtifactProducerRole[] = ['worker', 'coordinator', 'assistant', 'user', 'session'];
 
 export function readChatAttachment(value: unknown): ChatAttachmentMeta | null {
     const raw = recordField(value);
@@ -485,6 +487,16 @@ export function readChatAttachment(value: unknown): ChatAttachmentMeta | null {
     } else {
         return null;
     }
+    // Optional provenance identifiers: by-name and bounded; a malformed value is dropped
+    // rather than failing the whole bubble.
+    const originSessionId = boundedString(raw.originSessionId, CHAT_META_LABEL_MAX);
+    const taskId = boundedString(raw.taskId, CHAT_META_LABEL_MAX);
+    const meshId = boundedString(raw.meshId, CHAT_META_LABEL_MAX);
+    const missionId = boundedString(raw.missionId, CHAT_META_LABEL_MAX);
+    const originDaemonId = boundedString(raw.originDaemonId, CHAT_META_LABEL_MAX);
+    const producerRole = typeof raw.producerRole === 'string' && (ARTIFACT_PRODUCER_ROLES_WIRE as readonly string[]).includes(raw.producerRole)
+        ? (raw.producerRole as ArtifactProducerRole)
+        : undefined;
     return {
         artifactId,
         kind,
@@ -496,6 +508,12 @@ export function readChatAttachment(value: unknown): ChatAttachmentMeta | null {
         ...(previewText !== undefined ? { previewText } : {}),
         createdAt,
         updatedAt,
+        ...(originSessionId ? { originSessionId } : {}),
+        ...(taskId ? { taskId } : {}),
+        ...(meshId ? { meshId } : {}),
+        ...(missionId ? { missionId } : {}),
+        ...(originDaemonId ? { originDaemonId } : {}),
+        ...(producerRole ? { producerRole } : {}),
     };
 }
 

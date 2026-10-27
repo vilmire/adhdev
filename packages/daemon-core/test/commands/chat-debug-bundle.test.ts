@@ -250,4 +250,99 @@ describe('chat debug bundle', () => {
       error: 'No targetSessionId specified — cannot route command',
     })
   })
+
+  it('Finding 4: redacts mcpSessionCredential and mcp_sess_* bearer values across inline and daemon_file debug bundles', async () => {
+    const previousDir = process.env.ADHDEV_DEBUG_BUNDLE_DIR
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-chat-debug-bundle-r5-'))
+    process.env.ADHDEV_DEBUG_BUNDLE_DIR = tempRoot
+    const liveCred = 'mcp_sess_feedfacecafebeef1122334455667788'
+    const b64Cred = Buffer.from(liveCred, 'utf8').toString('base64')
+    const pctCred = 'mcp%5Fsess%5Ffeedfacecafebeef1122334455667788'
+
+    try {
+      const adapter = {
+        cliType: 'hermes',
+        cliName: 'Hermes CLI',
+        workingDir: '/tmp/project',
+        getStatus: vi.fn(() => ({
+          status: 'idle',
+          messages: [{ role: 'assistant', content: `leaked ${liveCred} ${b64Cred} ${pctCred}` }],
+        })),
+        getScriptParsedStatus: vi.fn(() => ({ status: 'idle' })),
+        getDebugSnapshot: vi.fn(() => ({
+          terminalScreenText: `ADHDEV_MCP_SESSION_CREDENTIAL=${liveCred}`,
+          accumulatedTail: `tail ${liveCred}`,
+          traceEntries: [
+            {
+              stage: 'received',
+              payload: {
+                mcpSessionCredential: liveCred,
+                _diagnostic: { value: liveCred, arr: [liveCred] },
+              },
+            },
+          ],
+        })),
+        isProcessing: () => false,
+        isReady: () => true,
+      }
+
+      const baseEnv = {
+        getProvider: () => ({ type: 'hermes', name: 'Hermes CLI', category: 'cli', scripts: {} }),
+        getCliAdapter: () => adapter,
+        getCdp: () => null,
+        currentSession: {
+          sessionId: 'session_r5',
+          providerType: 'hermes',
+          transport: 'pty',
+          adapterKey: 'cli:hermes:session_r5',
+        },
+        currentProviderType: 'hermes',
+        currentManagerKey: undefined,
+        currentIdeType: undefined,
+        agentStream: null,
+        ctx: {
+          sessionRegistry: { get: () => ({ sessionId: 'session_r5', instanceKey: 'cli:hermes:session_r5' }) },
+          instanceManager: { getInstance: () => null },
+        },
+        historyWriter: { appendNewMessages: () => {} },
+        evaluateProviderScript: vi.fn(),
+        getProviderScript: () => null,
+      } as any
+
+      // 1) Inline delivery
+      const inlineRes = await handleGetChatDebugBundle(baseEnv, {
+        targetSessionId: 'session_r5',
+        frontendSnapshot: {
+          mcpSessionCredential: liveCred,
+          _diagnostic: { value: liveCred, items: [liveCred] },
+          note: `token=${liveCred} b64=${b64Cred} pct=${pctCred}`,
+        },
+      })
+      expect(inlineRes.success).toBe(true)
+      const inlineSerialized = JSON.stringify(inlineRes)
+      expect(inlineSerialized).not.toContain(liveCred)
+      expect(inlineSerialized).not.toContain(b64Cred)
+      expect(inlineSerialized).not.toContain(pctCred)
+
+      // 2) daemon_file delivery
+      const fileRes = await handleGetChatDebugBundle(baseEnv, {
+        targetSessionId: 'session_r5',
+        delivery: 'daemon_file',
+        frontendSnapshot: {
+          mcpSessionCredential: liveCred,
+          _diagnostic: { value: liveCred, items: [liveCred] },
+          note: `token=${liveCred} b64=${b64Cred} pct=${pctCred}`,
+        },
+      })
+      expect(fileRes.success).toBe(true)
+      const savedContent = fs.readFileSync(String(fileRes.savedPath), 'utf8')
+      expect(savedContent).not.toContain(liveCred)
+      expect(savedContent).not.toContain(b64Cred)
+      expect(savedContent).not.toContain(pctCred)
+    } finally {
+      if (previousDir === undefined) delete process.env.ADHDEV_DEBUG_BUNDLE_DIR
+      else process.env.ADHDEV_DEBUG_BUNDLE_DIR = previousDir
+      fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
+  })
 })

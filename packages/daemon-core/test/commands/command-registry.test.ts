@@ -63,8 +63,8 @@ const LEGACY_SESSION_TARGET_COMMANDS = [
     'stop_cli',
     'restart_session',
     'agent_command',
-    // Artifact viewer: the router accepts sessionId as the target alias for all seven commands.
-    'artifact_fetch', 'artifact_list', 'artifact_read', 'artifact_register',
+    // Artifact viewer: the router accepts sessionId as the target alias for all artifact commands.
+    'artifact_fetch', 'artifact_fetch_origin', 'artifact_index_forwarded', 'artifact_list', 'artifact_read', 'artifact_register',
     'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
 ];
 
@@ -297,7 +297,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'mesh_task_output',
     'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled',
     // Artifact viewer additions use med-family contexts; not part of the legacy migration.
-    'artifact_fetch', 'artifact_list', 'artifact_read', 'artifact_register',
+    'artifact_fetch', 'artifact_fetch_origin', 'artifact_index_forwarded', 'artifact_list', 'artifact_read', 'artifact_register',
     'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
 ];
 
@@ -324,6 +324,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).
     'assistant_projects', 'assistant_project_status', 'assistant_project_send',
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
+    'assistant_artifact_list', 'assistant_artifact_read',
     // Authenticated remote project attach (high-family/remote-project-attach.ts): the
     // owner entry (assistant verb + mesh tool command), the owner settings verb, and the four server-api steps.
     'assistant_project_attach_remote', 'attach_remote_project', 'remote_project_attach_settings',

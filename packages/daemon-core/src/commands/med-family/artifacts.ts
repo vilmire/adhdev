@@ -24,85 +24,59 @@
  */
 
 import * as fs from 'node:fs';
-import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { readRouterCommandIngress } from '../command-args.js';
 import { hasWorkerCredentialInput, verifyArtifactCommandIngress } from './artifact-command-ingress.js';
-import { bindAuthenticatedMcpWorkspace } from '../mcp-command-ingress.js';
+import {
+    bindAuthenticatedMcpWorkspace,
+    readAuthenticatedMcpCommand,
+    readAuthenticatedMcpScope,
+} from '../mcp-command-ingress.js';
 import { defineCommandSpecs } from '../command-registry.js';
-import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
-import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import type { CommandRouterResult } from '../router.js';
+import type { MedFamilyHandler } from './types.js';
 import {
-    ArtifactGuardError,
-    ArtifactStore,
     toChatAttachmentMeta,
+    wrapUntrustedArtifactContent,
     type ArtifactKind,
+    type ArtifactProducerRole,
+    type ArtifactRecord,
 } from '../../artifacts/index.js';
-import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import {
-    findWorkerTaskTokenForSession,
     verifyWorkerSessionBind,
+    verifyWorkerTaskToken,
 } from '../../mesh/worker-mcp-isolation.js';
 import { classifyUnresolvedWorkerCredential, resolveWorkerIdentity } from '../../mesh/worker-report.js';
+import { type ForwardedWorkerReportClaim } from '../../mesh/worker-report-forwarded.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import { publishSessionArtifactBubble } from '../../seqscribe/transcript-publisher.js';
+import {
+    authorizeCrossSessionArtifactAccess,
+    fetchArtifactFromOriginDaemon,
+    handleArtifactError,
+    handleArtifactFetchOrigin,
+    handleArtifactIndexForwarded,
+    isSessionAuthorizedForMesh,
+    listWorkerAuthorizedArtifacts,
+    readWorkerAssignmentStamp,
+    resolveRegisteredSessionWorkspace,
+    resolveRemoteWorkerForArtifact,
+    resolveRemoteWorkerTaskScopeFromHost,
+    verifyLocalWorkerQueueAndLedgerFence,
+} from './artifact-sharing.js';
+import { getArtifactStore, getMeshRuntimeStore, type ArtifactCommandContext } from './artifact-runtime.js';
 
-export type ArtifactCommandContext = Pick<
-    MedFamilyContext,
-    'deps' | 'getMeshForCommand' | 'getCachedInlineMesh'
->;
+export { handleArtifactFetchOrigin, handleArtifactIndexForwarded };
 
-export interface ArtifactCommandRuntime {
-    readonly artifactStore?: ArtifactStore;
-    readonly meshRuntimeStore?: MeshRuntimeStore;
-}
-
-const ARTIFACT_RUNTIME_BY_DEPS_KEY = Symbol.for('adhdev.daemon-core.artifactCommandRuntimeByDeps');
-function getRuntimeByDepsMap(): WeakMap<CommandRouterDeps, ArtifactCommandRuntime> {
-    const g = globalThis as Record<symbol, WeakMap<CommandRouterDeps, ArtifactCommandRuntime> | undefined>;
-    let map = g[ARTIFACT_RUNTIME_BY_DEPS_KEY];
-    if (!map) {
-        map = new WeakMap<CommandRouterDeps, ArtifactCommandRuntime>();
-        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
-            value: map,
-            writable: false,
-            enumerable: false,
-            configurable: false,
-        });
-    }
-    return map;
-}
-const runtimeByDeps = getRuntimeByDepsMap();
-
-/** Optional test/embedding injection hook for custom store instances per router deps. */
-export function setArtifactCommandRuntimeForDeps(
-    deps: CommandRouterDeps,
-    runtime: ArtifactCommandRuntime | null,
-): void {
-    if (!runtime) {
-        runtimeByDeps.delete(deps);
-        return;
-    }
-    runtimeByDeps.set(deps, runtime);
-}
-
-function getMeshRuntimeStore(ctx: ArtifactCommandContext): MeshRuntimeStore {
-    const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : undefined;
-    return injected ?? MeshRuntimeStore.getInstance();
-}
-
-export function getArtifactStore(ctx: ArtifactCommandContext): ArtifactStore {
-    if (ctx.deps) {
-        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
-        if (existing) return existing;
-    }
-    const meshStore = getMeshRuntimeStore(ctx);
-    const store = new ArtifactStore(meshStore.db);
-    if (ctx.deps) {
-        const prev = runtimeByDeps.get(ctx.deps) ?? {};
-        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store });
-    }
-    return store;
-}
+export {
+    getArtifactStore,
+    getMeshRuntimeStore,
+    setArtifactCommandRuntimeForDeps,
+    type ArtifactCommandContext,
+    type ArtifactCommandRuntime,
+} from './artifact-runtime.js';
 
 function trimString(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -120,260 +94,25 @@ function canonicalizeDir(dirPath: string): string | null {
     }
 }
 
-interface ResolvedSessionAuthority {
+export interface ResolvedSessionAuthority {
     readonly sessionId: string;
     readonly taskId: string | null;
+    readonly meshId: string | null;
+    readonly missionId: string | null;
+    readonly producerRole: ArtifactProducerRole;
+    readonly originDaemonId: string | null;
     readonly workspaceRoot: string | null;
     readonly providerType: string;
     readonly status: string;
     readonly title: string | null;
-}
-
-async function resolveRegisteredSessionWorkspace(
-    ctx: ArtifactCommandContext,
-    sessionId: string,
-    opts?: {
-        meshId?: string;
-        nodeId?: string;
-        taskId?: string;
-        allowTrustedWorkerFallback?: boolean;
-    },
-): Promise<{
-    workspaceRoot: string | null;
-    nodeWorkspaceRoot: string | null;
-    providerType: string;
-    status: string;
-    title: string | null;
-}> {
-    let sessionWorkspace: string | null = null;
-    let providerType = 'unknown';
-    let status = 'running';
-    let title: string | null = null;
-
-    const regTarget = ctx.deps?.sessionRegistry?.get?.(sessionId);
-    if (regTarget) {
-        if (trimString(regTarget.workspace)) {
-            sessionWorkspace = trimString(regTarget.workspace);
-        }
-        if (trimString(regTarget.providerType)) {
-            providerType = trimString(regTarget.providerType);
-        }
-    }
-
-    const instMgr = ctx.deps?.instanceManager as any;
-    const inst = instMgr?.getInstance?.(sessionId) ?? instMgr?.get?.(sessionId);
-    if (inst) {
-        const instWorkspace =
-            trimString(inst.workspace) ||
-            trimString(inst.getWorkspace?.()) ||
-            trimString(inst.settings?.workspace);
-        if (!sessionWorkspace && instWorkspace) {
-            sessionWorkspace = instWorkspace;
-        }
-        const instProvider = trimString(inst.providerType) || trimString(inst.type);
-        if (providerType === 'unknown' && instProvider) {
-            providerType = instProvider;
-        }
-        const instStatus = trimString(inst.status) || trimString(inst.getStatus?.());
-        if (instStatus) {
-            status = instStatus;
-        }
-        const instTitle = trimString(inst.title) || trimString(inst.settings?.title);
-        if (instTitle) {
-            title = instTitle;
-        }
-    }
-
-    const cliMgr = ctx.deps?.cliManager as any;
-    const cliSession =
-        cliMgr?.getSessionByConversationId?.(sessionId) ??
-        cliMgr?.getSession?.(sessionId);
-    if (cliSession) {
-        const cliWorkspace = trimString(cliSession.workspace) || trimString(cliSession.cwd);
-        if (!sessionWorkspace && cliWorkspace) {
-            sessionWorkspace = cliWorkspace;
-        }
-        const cliProvider = trimString(cliSession.cliType) || trimString(cliSession.providerType);
-        if (providerType === 'unknown' && cliProvider) {
-            providerType = cliProvider;
-        }
-    }
-
-    if (!sessionWorkspace) {
-        const coord = getCoordinatorForSession(sessionId);
-        if (coord && trimString(coord.workspace)) {
-            sessionWorkspace = trimString(coord.workspace);
-            if (providerType === 'unknown' && trimString(coord.cliType)) {
-                providerType = trimString(coord.cliType);
-            }
-        }
-    }
-
-    if (!sessionWorkspace) {
-        try {
-            const assistantEntry = getAssistantRegistry().read();
-            if (
-                assistantEntry &&
-                assistantEntry.sessionId &&
-                sessionIdsEquivalent(assistantEntry.sessionId, sessionId) &&
-                trimString(assistantEntry.workspace)
-            ) {
-                sessionWorkspace = trimString(assistantEntry.workspace);
-                if (providerType === 'unknown' && trimString(assistantEntry.cliType)) {
-                    providerType = trimString(assistantEntry.cliType);
-                }
-            }
-        } catch {
-            // Best-effort assistant registry lookup.
-        }
-    }
-
-    let nodeWorkspaceRoot: string | null = null;
-    if (opts?.allowTrustedWorkerFallback) {
-        const meshId = trimString(opts.meshId);
-        const nodeId = trimString(opts.nodeId);
-        const taskId = trimString(opts.taskId);
-
-        if (meshId) {
-            try {
-                const meshStore = getMeshRuntimeStore(ctx);
-                if (taskId) {
-                    const queueEntry = meshStore.findQueueEntryById(meshId, taskId) as Record<string, unknown> | null;
-                    const assignedSession = trimString(queueEntry?.assignedSessionId);
-                    const queueStatus = trimString(queueEntry?.status);
-                    if (
-                        queueEntry &&
-                        (!queueStatus || queueStatus === 'assigned') &&
-                        (!assignedSession || sessionIdsEquivalent(assignedSession, sessionId))
-                    ) {
-                        const queuePayload = (queueEntry?.payload ?? {}) as Record<string, unknown>;
-                        const queueWs =
-                            trimString(queueEntry?.worktreePath) ||
-                            trimString(queueEntry?.workspace) ||
-                            trimString(queueEntry?.workspaceRoot) ||
-                            trimString(queuePayload.worktreePath) ||
-                            trimString(queuePayload.workspace) ||
-                            trimString(queuePayload.workspaceRoot);
-                        if (queueWs) {
-                            nodeWorkspaceRoot = queueWs;
-                        }
-                    }
-                }
-            } catch {
-                // Ignore queue lookup failures.
-            }
-
-            if (!nodeWorkspaceRoot && nodeId) {
-                try {
-                    const resolvedMesh =
-                        (await ctx.getMeshForCommand?.(meshId))?.mesh ??
-                        ctx.getCachedInlineMesh?.(meshId);
-                    const nodes: any[] = Array.isArray(resolvedMesh?.nodes) ? resolvedMesh.nodes : [];
-                    const matchedNode = nodes.find(
-                        (n) => trimString(n?.id) === nodeId || trimString(n?.nodeId) === nodeId,
-                    );
-                    const nodeWs = trimString(matchedNode?.workspace) || trimString(matchedNode?.worktreePath);
-                    if (nodeWs) {
-                        nodeWorkspaceRoot = nodeWs;
-                    }
-                } catch {
-                    // Ignore mesh lookup failures.
-                }
-            }
-        }
-    }
-
-    return {
-        workspaceRoot: sessionWorkspace ?? nodeWorkspaceRoot,
-        nodeWorkspaceRoot,
-        providerType,
-        status,
-        title,
-    };
-}
-
-async function isSessionAuthorizedForMesh(
-    ctx: ArtifactCommandContext,
-    meshStore: any,
-    meshId: string,
-    sessionId: string,
-): Promise<boolean> {
-    if (!meshId || !sessionId) return false;
-    try {
-        const coord = getCoordinatorForSession(sessionId);
-        if (coord) {
-            if (coord.meshId !== meshId) return false;
-            return true;
-        }
-    } catch {
-        // Continue to store/mesh membership checks.
-    }
-
-    if (meshStore) {
-        try {
-            const assigned = meshStore.findAssignedBySession?.(meshId, sessionId);
-            if (assigned) return true;
-        } catch {
-            // Continue.
-        }
-        try {
-            const queueEntries: any[] = meshStore.getQueue?.(meshId) ?? [];
-            if (
-                Array.isArray(queueEntries) &&
-                queueEntries.some((entry) =>
-                    sessionIdsEquivalent(trimString(entry?.assignedSessionId), sessionId),
-                )
-            ) {
-                return true;
-            }
-        } catch {
-            // Continue.
-        }
-    }
-
-    const matchesMeshNodes = (mesh: any): boolean => {
-        if (!mesh || !Array.isArray(mesh.nodes)) return false;
-        return mesh.nodes.some((node: any) => {
-            const nodeSid = trimString(node?.sessionId);
-            const activeSid = trimString(node?.activeSessionId);
-            const coordSid = trimString(node?.coordinatorSessionId);
-            if (
-                (nodeSid && sessionIdsEquivalent(nodeSid, sessionId)) ||
-                (activeSid && sessionIdsEquivalent(activeSid, sessionId)) ||
-                (coordSid && sessionIdsEquivalent(coordSid, sessionId))
-            ) {
-                return true;
-            }
-            const sessions = Array.isArray(node?.sessions) ? node.sessions : [];
-            if (
-                sessions.some((s: any) =>
-                    sessionIdsEquivalent(trimString(typeof s === 'string' ? s : s?.sessionId), sessionId),
-                )
-            ) {
-                return true;
-            }
-            const delegated = Array.isArray(node?.delegatedSessions) ? node.delegatedSessions : [];
-            return delegated.some((s: any) =>
-                sessionIdsEquivalent(trimString(typeof s === 'string' ? s : s?.sessionId), sessionId),
-            );
-        });
-    };
-
-    try {
-        const cachedMesh = ctx.getCachedInlineMesh?.(meshId);
-        if (matchesMeshNodes(cachedMesh)) return true;
-    } catch {
-        // Continue.
-    }
-
-    try {
-        const resolved = await ctx.getMeshForCommand?.(meshId);
-        if (matchesMeshNodes(resolved?.mesh)) return true;
-    } catch {
-        // Continue.
-    }
-
-    return false;
+    readonly isCoordinator?: boolean;
+    readonly isRemoteWorker?: boolean;
+    readonly hostDaemonId?: string | null;
+    readonly remoteClaim?: ForwardedWorkerReportClaim & { nodeId?: string };
+    readonly remoteInputArtifactIds?: readonly string[];
+    readonly remoteInputArtifacts?: readonly ArtifactRecord[];
+    readonly remoteRequestedArtifact?: ArtifactRecord | null;
+    readonly originFetchGrant?: unknown;
 }
 
 async function resolveCallerAuthority(
@@ -402,7 +141,31 @@ async function resolveCallerAuthority(
     }
 
     const explicitSessionId = rawSessionId || rawTargetSessionId;
-    if (rawCallerSessionId && explicitSessionId && !sessionIdsEquivalent(rawCallerSessionId, explicitSessionId)) {
+    const explicitMeshId = trimString(args?.meshId);
+    const routerIngress = readRouterCommandIngress(args);
+    const mcp = readAuthenticatedMcpCommand(args, routerIngress?.command ?? '');
+    const mcpScope = mcp.valid ? readAuthenticatedMcpScope(args, routerIngress?.command ?? '') : null;
+
+    const coordCandidateId =
+        mcp.valid && mcpScope?.sessionId
+            ? mcpScope.sessionId
+            : ownerTrusted
+              ? rawCallerSessionId || explicitSessionId
+              : '';
+    const coordEntry = coordCandidateId ? getCoordinatorForSession(coordCandidateId) : undefined;
+    const isVerifiedCoordinator = Boolean(
+        coordEntry &&
+            (ownerTrusted || (mcp.valid && mcpScope?.isCoordinator === true)) &&
+            (!explicitMeshId || coordEntry.meshId === explicitMeshId) &&
+            (!rawCallerSessionId || sessionIdsEquivalent(rawCallerSessionId, coordEntry.sessionId)),
+    );
+
+    if (
+        rawCallerSessionId &&
+        explicitSessionId &&
+        !sessionIdsEquivalent(rawCallerSessionId, explicitSessionId) &&
+        (!isVerifiedCoordinator || mode === 'register')
+    ) {
         return {
             ok: false,
             result: {
@@ -414,10 +177,261 @@ async function resolveCallerAuthority(
     }
 
     const payloadWorkspace = trimString(args?.workspaceRoot) || trimString(args?.workspace);
+    const selfDaemonId = trimString(ctx.deps?.statusInstanceId) || null;
+    const requestedArtifactId = trimString(args?.artifactId) || trimString(args?.id);
 
     if (hasWorkerCredential) {
+        const explicitTaskId = trimString(args?.taskId);
+        const explicitAttemptId = trimString(args?.attemptId);
+        const hasRawToken = typeof rawToken === 'string' && rawToken.trim().length > 0;
+        const directToken = hasRawToken ? verifyWorkerTaskToken(rawToken) : null;
+        if (hasRawToken && !directToken) {
+            const unresolved = classifyUnresolvedWorkerCredential({ token: rawToken, bind: rawBind });
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'unauthenticated',
+                    refusal: unresolved.refusal,
+                    error: unresolved.detail ?? 'Valid worker task token is required (unauthenticated)',
+                },
+            };
+        }
+        const tokenTaskId = trimString(directToken?.taskId);
+        const tokenAttemptId = trimString(directToken?.attemptId);
+        if (explicitTaskId && tokenTaskId && explicitTaskId !== tokenTaskId) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'task_mismatch',
+                    error: `Worker credential belongs to task "${tokenTaskId}", not "${explicitTaskId}" (task_mismatch)`,
+                },
+            };
+        }
+        if (explicitAttemptId && tokenAttemptId && explicitAttemptId !== tokenAttemptId) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'stale_attempt',
+                    error: `Worker credential attempt "${tokenAttemptId}" does not match requested attempt "${explicitAttemptId}" (stale_attempt)`,
+                },
+            };
+        }
+
         const meshStore = getMeshRuntimeStore(ctx);
         const identity = resolveWorkerIdentity(meshStore, rawBind, rawToken);
+        let hasLocalWorkerRow = false;
+        if (identity && trimString(identity.sessionId)) {
+            try {
+                const workerSid = trimString(identity.sessionId);
+                hasLocalWorkerRow = Boolean(
+                    meshStore.findAssignedBySession(identity.meshId, workerSid) ||
+                        meshStore.findQueueEntryById(identity.meshId, identity.taskId),
+                );
+            } catch {
+                hasLocalWorkerRow = false;
+            }
+        }
+
+        if (!identity || !trimString(identity.sessionId) || !hasLocalWorkerRow) {
+            const bindVerified =
+                typeof rawBind === 'string' && rawBind.trim().length > 0
+                    ? verifyWorkerSessionBind(rawBind)
+                    : null;
+            const candidateSessionId =
+                trimString(directToken?.sessionId) ||
+                trimString(bindVerified?.sessionId) ||
+                trimString(identity?.sessionId);
+            const liveStamp = candidateSessionId ? readWorkerAssignmentStamp(ctx, candidateSessionId) : null;
+            const liveStampTaskId = trimString(liveStamp?.taskId);
+            const liveStampAttemptId = trimString(liveStamp?.attemptId);
+            if (
+                liveStampTaskId &&
+                ((explicitTaskId && explicitTaskId !== liveStampTaskId) ||
+                    (tokenTaskId && tokenTaskId !== liveStampTaskId))
+            ) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'task_mismatch',
+                        error: `Worker credential task "${tokenTaskId || explicitTaskId}" does not match current session assignment "${liveStampTaskId}" (task_mismatch)`,
+                    },
+                };
+            }
+            if (
+                liveStampAttemptId &&
+                ((explicitAttemptId && explicitAttemptId !== liveStampAttemptId) ||
+                    (tokenAttemptId && tokenAttemptId !== liveStampAttemptId))
+            ) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'stale_attempt',
+                        error: `Worker credential attempt "${tokenAttemptId || explicitAttemptId}" is stale for current session assignment "${liveStampAttemptId}" (stale_attempt)`,
+                    },
+                };
+            }
+
+            const remote = await resolveRemoteWorkerForArtifact(ctx, {
+                bind: rawBind,
+                token: rawToken,
+                ...(explicitTaskId ? { taskId: explicitTaskId } : {}),
+                ...(explicitAttemptId ? { attemptId: explicitAttemptId } : {}),
+            });
+            if (remote) {
+                const remoteSessionId = trimString(remote.sessionId);
+                if (
+                    (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, remoteSessionId)) ||
+                    (rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, remoteSessionId)) ||
+                    (explicitMeshId && explicitMeshId !== remote.meshId)
+                ) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'artifact_session_mismatch',
+                            error: `Worker credential belongs to session "${remoteSessionId}" in mesh "${remote.meshId}" (artifact_session_mismatch)`,
+                        },
+                    };
+                }
+                const remoteTaskId = trimString(remote.taskId);
+                const remoteAttemptId = trimString(remote.attemptId);
+                if (
+                    (explicitTaskId && remoteTaskId && explicitTaskId !== remoteTaskId) ||
+                    (tokenTaskId && remoteTaskId && tokenTaskId !== remoteTaskId)
+                ) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'task_mismatch',
+                            error: `Worker credential belongs to task "${tokenTaskId || remoteTaskId}", not "${explicitTaskId || remoteTaskId}" (task_mismatch)`,
+                        },
+                    };
+                }
+                if (
+                    (explicitAttemptId && remoteAttemptId && explicitAttemptId !== remoteAttemptId) ||
+                    (tokenAttemptId && remoteAttemptId && tokenAttemptId !== remoteAttemptId)
+                ) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Worker credential attempt "${tokenAttemptId || explicitAttemptId}" does not match session attempt "${remoteAttemptId}" (stale_attempt)`,
+                        },
+                    };
+                }
+                const boundTaskId = tokenTaskId || explicitTaskId || remoteTaskId;
+                const boundAttemptId = tokenAttemptId || explicitAttemptId || remoteAttemptId;
+                const resolvedRemote = await resolveRegisteredSessionWorkspace(ctx, remoteSessionId, {
+                    meshId: remote.meshId,
+                    nodeId: remote.nodeId,
+                    taskId: boundTaskId || undefined,
+                    allowTrustedWorkerFallback: true,
+                    allowStoredArtifactWorkspaceFallback: mode !== 'register',
+                    artifactId: requestedArtifactId,
+                });
+                if (resolvedRemote.workspaceRoot && resolvedRemote.nodeWorkspaceRoot) {
+                    const canonSession = canonicalizeDir(resolvedRemote.workspaceRoot);
+                    const canonNode = canonicalizeDir(resolvedRemote.nodeWorkspaceRoot);
+                    if (canonSession && canonNode && canonSession !== canonNode) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'invalid_workspace_root',
+                                error: 'Worker session workspace does not match assigned node workspace (invalid_workspace_root)',
+                            },
+                        };
+                    }
+                }
+                if (payloadWorkspace) {
+                    const canonTrusted = resolvedRemote.workspaceRoot
+                        ? canonicalizeDir(resolvedRemote.workspaceRoot)
+                        : null;
+                    const canonPayload = canonicalizeDir(payloadWorkspace);
+                    if (!canonTrusted || !canonPayload || canonTrusted !== canonPayload) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'invalid_workspace_root',
+                                error: 'Caller-supplied workspace path is not allowed or does not match session workspace (invalid_workspace_root)',
+                            },
+                        };
+                    }
+                }
+                if (!resolvedRemote.workspaceRoot) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'invalid_workspace_root',
+                            error: `No registered workspace found for remote worker session "${remoteSessionId}" (invalid_workspace_root)`,
+                        },
+                    };
+                }
+                const remoteClaim: ForwardedWorkerReportClaim & { nodeId?: string } = {
+                    meshId: remote.meshId,
+                    sessionId: remoteSessionId,
+                    ...(boundTaskId ? { taskId: boundTaskId } : {}),
+                    ...(boundAttemptId ? { attemptId: boundAttemptId } : {}),
+                    ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
+                    ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
+                };
+                let hostScope:
+                    | {
+                          missionId: string | null;
+                          inputArtifactIds: readonly string[];
+                          inputArtifacts: readonly ArtifactRecord[];
+                          requestedArtifact: ArtifactRecord | null;
+                          originFetchGrant?: unknown;
+                      }
+                    | undefined;
+                if (mode === 'list' || mode === 'fetch') {
+                    const scopeRes = await resolveRemoteWorkerTaskScopeFromHost(
+                        ctx,
+                        remote.ownerDaemonId,
+                        remoteClaim,
+                        mode === 'fetch' ? requestedArtifactId || undefined : undefined,
+                    );
+                    if (!scopeRes.ok) return scopeRes;
+                    hostScope = scopeRes.scope;
+                }
+                return {
+                    ok: true,
+                    authority: {
+                        sessionId: remoteSessionId,
+                        taskId: boundTaskId || null,
+                        meshId: remote.meshId,
+                        missionId: hostScope?.missionId ?? null,
+                        producerRole: 'worker',
+                        originDaemonId: selfDaemonId,
+                        workspaceRoot: resolvedRemote.workspaceRoot,
+                        providerType: resolvedRemote.providerType,
+                        status: resolvedRemote.status,
+                        title: resolvedRemote.title,
+                        isRemoteWorker: true,
+                        hostDaemonId: remote.ownerDaemonId,
+                        remoteClaim,
+                        ...(hostScope
+                            ? {
+                                  remoteInputArtifactIds: hostScope.inputArtifactIds,
+                                  remoteInputArtifacts: hostScope.inputArtifacts,
+                                  remoteRequestedArtifact: hostScope.requestedArtifact,
+                                  ...(hostScope.originFetchGrant ? { originFetchGrant: hostScope.originFetchGrant } : {}),
+                              }
+                            : {}),
+                    },
+                };
+            }
+        }
+
         if (!identity || !trimString(identity.sessionId)) {
             const unresolved = classifyUnresolvedWorkerCredential({ token: rawToken, bind: rawBind });
             return {
@@ -432,18 +446,21 @@ async function resolveCallerAuthority(
         }
 
         const workerSessionId = trimString(identity.sessionId);
-        if (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId)) {
+        if (
+            (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId)) ||
+            (rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, workerSessionId)) ||
+            (explicitMeshId && explicitMeshId !== identity.meshId)
+        ) {
             return {
                 ok: false,
                 result: {
                     success: false,
                     code: 'artifact_session_mismatch',
-                    error: `Worker credential belongs to session "${workerSessionId}", not "${explicitSessionId}" (artifact_session_mismatch)`,
+                    error: `Worker credential belongs to session "${workerSessionId}" in mesh "${identity.meshId}", not "${explicitSessionId || rawCallerSessionId}" (artifact_session_mismatch)`,
                 },
             };
         }
 
-        const explicitTaskId = trimString(args?.taskId);
         if (explicitTaskId && explicitTaskId !== identity.taskId) {
             return {
                 ok: false,
@@ -454,304 +471,27 @@ async function resolveCallerAuthority(
                 },
             };
         }
-
-        let queueAssignedAttemptId = '';
-        let queueTaskAttemptId = '';
-        try {
-            const assigned = meshStore.findAssignedBySession(identity.meshId, workerSessionId) as Record<
-                string,
-                unknown
-            > | null;
-            if (assigned) {
-                const assignedId = trimString(assigned.id);
-                if (assignedId && assignedId !== identity.taskId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'task_mismatch',
-                            error: `Worker session "${workerSessionId}" is assigned to task "${assignedId}", not "${identity.taskId}" (task_mismatch)`,
-                        },
-                    };
-                }
-                const assignedStatus = trimString(assigned.status);
-                if (assignedStatus && assignedStatus !== 'assigned') {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Task "${identity.taskId}" is no longer actively assigned (stale_attempt)`,
-                        },
-                    };
-                }
-                queueAssignedAttemptId =
-                    trimString(assigned.attemptId) ||
-                    trimString((assigned.payload as Record<string, unknown> | undefined)?.attemptId);
-                if (queueAssignedAttemptId && identity.attemptId && queueAssignedAttemptId !== identity.attemptId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Worker credential attempt "${identity.attemptId}" does not match assigned attempt "${queueAssignedAttemptId}" (stale_attempt)`,
-                        },
-                    };
-                }
-            }
-
-            const taskEntry = meshStore.findQueueEntryById(identity.meshId, identity.taskId) as Record<
-                string,
-                unknown
-            > | null;
-            if (!taskEntry) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker task "${identity.taskId}" has no active queue assignment (unauthenticated)`,
-                    },
-                };
-            }
-
-            const taskStatus = trimString(taskEntry.status);
-            if (taskStatus !== 'assigned') {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Task "${identity.taskId}" is not in assigned state (status="${taskStatus || 'unknown'}") (stale_attempt)`,
-                    },
-                };
-            }
-            const taskAssignedSession = trimString(taskEntry.assignedSessionId);
-            if (!taskAssignedSession || !sessionIdsEquivalent(taskAssignedSession, workerSessionId)) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'artifact_session_mismatch',
-                        error: `Task "${identity.taskId}" is assigned to session "${taskAssignedSession}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                    },
-                };
-            }
-            queueTaskAttemptId =
-                trimString(taskEntry.attemptId) ||
-                trimString((taskEntry.payload as Record<string, unknown> | undefined)?.attemptId);
-            if (queueTaskAttemptId && identity.attemptId && queueTaskAttemptId !== identity.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${identity.attemptId}" is stale for task "${identity.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`,
-                    },
-                };
-            }
-            if (
-                queueAssignedAttemptId &&
-                queueTaskAttemptId &&
-                queueAssignedAttemptId !== queueTaskAttemptId
-            ) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Queue attempt mismatch between assigned row ("${queueAssignedAttemptId}") and task row ("${queueTaskAttemptId}") (stale_attempt)`,
-                    },
-                };
-            }
-            if (!assigned || trimString(assigned.id) !== identity.taskId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker session "${workerSessionId}" has no active queue assignment for task "${identity.taskId}" (unauthenticated)`,
-                    },
-                };
-            }
-        } catch {
+        if (tokenAttemptId && identity.attemptId && tokenAttemptId !== identity.attemptId) {
             return {
                 ok: false,
                 result: {
                     success: false,
-                    code: 'unauthenticated',
-                    error: 'Authoritative queue assignment store is unavailable (unauthenticated)',
+                    code: 'stale_attempt',
+                    error: `Worker credential attempt "${tokenAttemptId}" does not match resolved attempt "${identity.attemptId}" (stale_attempt)`,
                 },
             };
         }
 
-        // Fence worker credentials against the authoritative turn attempt ledger (fail-closed).
-        try {
-            const turns = meshStore.turnStore?.();
-            if (!turns) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: 'Authoritative turn attempt ledger is unavailable (unauthenticated)',
-                    },
-                };
-            }
-
-            const latestAttempt = turns.findLatestAttemptForTask?.(identity.meshId, identity.taskId) ?? null;
-            if (latestAttempt) {
-                if (latestAttempt.terminal) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Latest attempt "${latestAttempt.attemptId}" for task "${identity.taskId}" is already terminal (stale_attempt)`,
-                        },
-                    };
-                }
-                if (
-                    !latestAttempt.sessionId ||
-                    !sessionIdsEquivalent(latestAttempt.sessionId, workerSessionId)
-                ) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'artifact_session_mismatch',
-                            error: `Latest attempt "${latestAttempt.attemptId}" belongs to session "${latestAttempt.sessionId ?? ''}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                        },
-                    };
-                }
-            }
-
-            const credAttempt = identity.attemptId
-                ? (turns.getAttempt?.(identity.attemptId) ?? null)
-                : latestAttempt;
-
-            if (
-                !credAttempt ||
-                credAttempt.meshId !== identity.meshId ||
-                credAttempt.taskId !== identity.taskId
-            ) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker credential has no active turn attempt in ledger for task "${identity.taskId}" (unauthenticated)`,
-                    },
-                };
-            }
-
-            if (credAttempt.terminal) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" is terminal (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (!credAttempt.sessionId || !sessionIdsEquivalent(credAttempt.sessionId, workerSessionId)) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'artifact_session_mismatch',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" belongs to session "${credAttempt.sessionId ?? ''}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                    },
-                };
-            }
-
-            if (!latestAttempt || latestAttempt.attemptId !== credAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" was superseded by attempt "${latestAttempt?.attemptId ?? 'none'}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (queueAssignedAttemptId && queueAssignedAttemptId !== latestAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Assigned queue attempt "${queueAssignedAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (queueTaskAttemptId && queueTaskAttemptId !== latestAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Task queue attempt "${queueTaskAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (latestAttempt.attemptNo > 0 && !identity.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Retry attempt "${latestAttempt.attemptId}" requires an attempt-scoped worker credential (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (typeof rawBind === 'string' && rawBind.trim().length > 0 && latestAttempt.attemptNo > 0) {
-                const liveTok = findWorkerTaskTokenForSession(
-                    identity.meshId,
-                    identity.taskId,
-                    workerSessionId,
-                );
-                if (liveTok && liveTok.attemptId !== latestAttempt.attemptId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Worker bind resolves to superseded attempt "${liveTok.attemptId ?? 'unscoped'}" instead of "${latestAttempt.attemptId}" (stale_attempt)`,
-                        },
-                    };
-                }
-                if (!liveTok) {
-                    const binding = verifyWorkerSessionBind(rawBind);
-                    const acceptedAtMs =
-                        typeof latestAttempt.acceptedAt === 'number' ? latestAttempt.acceptedAt : NaN;
-                    if (binding && Number.isFinite(acceptedAtMs) && binding.mintedAtMs < acceptedAtMs) {
-                        return {
-                            ok: false,
-                            result: {
-                                success: false,
-                                code: 'stale_attempt',
-                                error: `Worker bind was minted before retry attempt "${latestAttempt.attemptId}" without a fresh attempt token (stale_attempt)`,
-                            },
-                        };
-                    }
-                }
-            }
-        } catch {
-            return {
-                ok: false,
-                result: {
-                    success: false,
-                    code: 'unauthenticated',
-                    error: 'Failed to verify worker credential against turn attempt ledger (unauthenticated)',
-                },
-            };
+        const fenceRes = verifyLocalWorkerQueueAndLedgerFence({
+            meshStore,
+            identity,
+            workerSessionId,
+            explicitTaskId,
+            explicitAttemptId: explicitAttemptId || tokenAttemptId,
+            rawBind,
+        });
+        if (!fenceRes.ok) {
+            return fenceRes;
         }
 
         const resolved = await resolveRegisteredSessionWorkspace(ctx, workerSessionId, {
@@ -759,6 +499,8 @@ async function resolveCallerAuthority(
             nodeId: identity.nodeId,
             taskId: identity.taskId,
             allowTrustedWorkerFallback: true,
+            allowStoredArtifactWorkspaceFallback: mode !== 'register',
+            artifactId: requestedArtifactId,
         });
 
         if (resolved.workspaceRoot && resolved.nodeWorkspaceRoot) {
@@ -802,34 +544,78 @@ async function resolveCallerAuthority(
             };
         }
 
+        let workerMissionId: string | null = null;
+        try {
+            const taskEntry = meshStore.findQueueEntryById(identity.meshId, identity.taskId) as Record<
+                string,
+                unknown
+            > | null;
+            workerMissionId =
+                trimString(taskEntry?.missionId) ||
+                trimString((taskEntry?.payload as Record<string, unknown> | undefined)?.missionId) ||
+                null;
+        } catch {
+            workerMissionId = null;
+        }
+
+        const boundLocalAttemptId = tokenAttemptId || explicitAttemptId || identity.attemptId || fenceRes.attemptId;
         return {
             ok: true,
             authority: {
                 sessionId: workerSessionId,
                 taskId: identity.taskId,
+                meshId: identity.meshId,
+                missionId: workerMissionId,
+                producerRole: 'worker',
+                originDaemonId: selfDaemonId,
                 workspaceRoot: resolved.workspaceRoot,
                 providerType: resolved.providerType,
                 status: resolved.status,
                 title: resolved.title,
+                remoteClaim: {
+                    meshId: identity.meshId,
+                    sessionId: workerSessionId,
+                    taskId: identity.taskId,
+                    ...(boundLocalAttemptId ? { attemptId: boundLocalAttemptId } : {}),
+                    ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+                },
             },
         };
     }
 
-    if (!explicitSessionId) {
+    if (routerIngress?.source === 'ipc' && !ownerTrusted && !mcp.valid && (mode === 'list' || mode === 'fetch')) {
         return {
             ok: false,
             result: {
                 success: false,
-                code: 'invalid_arguments',
-                error: 'sessionId is required',
+                code: 'COMMAND_SOURCE_REJECTED',
+                error: 'Unauthenticated IPC call has no coordinator or session authority',
             },
         };
     }
 
-    const explicitMeshId = trimString(args?.meshId);
+    const effectiveSessionId =
+        mcp.valid && mcpScope?.sessionId
+            ? mode === 'list' && isVerifiedCoordinator && explicitSessionId
+                ? explicitSessionId
+                : mcpScope.sessionId
+            : ownerTrusted
+              ? explicitSessionId || (isVerifiedCoordinator ? rawCallerSessionId : '')
+              : explicitSessionId;
+    if (!effectiveSessionId) {
+        return { ok: false, result: { success: false, code: 'invalid_arguments', error: 'sessionId is required' } };
+    }
+
+    const effectiveMeshId =
+        mcp.valid
+            ? mcpScope?.meshId || explicitMeshId || ''
+            : ownerTrusted
+              ? explicitMeshId || coordEntry?.meshId || ''
+              : explicitMeshId;
+
     const explicitTaskId = trimString(args?.taskId);
     if (explicitTaskId) {
-        if (!explicitMeshId && !ownerTrusted) {
+        if (!effectiveMeshId && !ownerTrusted) {
             return {
                 ok: false,
                 result: {
@@ -839,22 +625,19 @@ async function resolveCallerAuthority(
                 },
             };
         }
-        if (explicitMeshId) {
+        if (effectiveMeshId) {
             try {
                 const meshStore = getMeshRuntimeStore(ctx);
-                const queueEntry = meshStore.findQueueEntryById(explicitMeshId, explicitTaskId) as Record<
-                    string,
-                    unknown
-                > | null;
+                const queueEntry = meshStore.findQueueEntryById(effectiveMeshId, explicitTaskId) as Record<string, unknown> | null;
                 const assignedSession = trimString(queueEntry?.assignedSessionId);
                 const queueStatus = trimString(queueEntry?.status);
-                if (assignedSession && !sessionIdsEquivalent(assignedSession, explicitSessionId)) {
+                if (assignedSession && !sessionIdsEquivalent(assignedSession, effectiveSessionId)) {
                     return {
                         ok: false,
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Task "${explicitTaskId}" belongs to session "${assignedSession}", not "${explicitSessionId}" (task_mismatch)`,
+                            error: `Task "${explicitTaskId}" belongs to session "${assignedSession}", not "${effectiveSessionId}" (task_mismatch)`,
                         },
                     };
                 }
@@ -862,7 +645,7 @@ async function resolveCallerAuthority(
                     !ownerTrusted &&
                     (!queueEntry ||
                         !assignedSession ||
-                        !sessionIdsEquivalent(assignedSession, explicitSessionId) ||
+                        !sessionIdsEquivalent(assignedSession, effectiveSessionId) ||
                         (queueStatus && queueStatus !== 'assigned'))
                 ) {
                     return {
@@ -870,7 +653,7 @@ async function resolveCallerAuthority(
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Task "${explicitTaskId}" is not actively assigned to session "${explicitSessionId}" in mesh "${explicitMeshId}" (task_mismatch)`,
+                            error: `Task "${explicitTaskId}" is not actively assigned to session "${effectiveSessionId}" in mesh "${effectiveMeshId}" (task_mismatch)`,
                         },
                     };
                 }
@@ -881,7 +664,7 @@ async function resolveCallerAuthority(
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Task "${explicitTaskId}" ownership could not be verified in mesh "${explicitMeshId}" (task_mismatch)`,
+                            error: `Task "${explicitTaskId}" ownership could not be verified in mesh "${effectiveMeshId}" (task_mismatch)`,
                         },
                     };
                 }
@@ -889,37 +672,47 @@ async function resolveCallerAuthority(
         }
     }
 
-    if (!ownerTrusted && mode === 'register' && (rawCallerSessionId || (explicitMeshId && !explicitTaskId))) {
+    if (
+        !ownerTrusted &&
+        !isVerifiedCoordinator &&
+        mode === 'register' &&
+        (rawCallerSessionId || (explicitMeshId && !explicitTaskId))
+    ) {
         return {
             ok: false,
             result: {
                 success: false,
                 code: 'artifact_session_mismatch',
-                error: `Session "${explicitSessionId}" cannot register artifacts via unverified caller/mesh scope without worker credentials (artifact_session_mismatch)`,
+                error: `Session "${effectiveSessionId}" cannot register artifacts via unverified caller/mesh scope without worker credentials (artifact_session_mismatch)`,
             },
         };
     }
 
-    if (!ownerTrusted && mode === 'list' && explicitMeshId) {
+    // `requireMeshMembership` lets a caller that cannot see the full mesh history
+    // (the coordinator MCP server only knows live nodes) delegate the membership
+    // decision here, fail-closed even on owner-trusted ingress.
+    const requireMeshMembership = args?.requireMeshMembership === true && (mode === 'list' || mode === 'fetch');
+    if (requireMeshMembership && !effectiveMeshId) {
+        return {
+            ok: false,
+            result: {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: `Session "${effectiveSessionId}" mesh membership cannot be verified without a meshId (artifact_session_mismatch)`,
+            },
+        };
+    }
+    if ((!ownerTrusted || requireMeshMembership) && (mode === 'list' || mode === 'fetch') && effectiveMeshId) {
         let meshStore: any = null;
-        try {
-            meshStore = getMeshRuntimeStore(ctx);
-        } catch {
-            meshStore = null;
-        }
-        const authorizedInMesh = await isSessionAuthorizedForMesh(
-            ctx,
-            meshStore,
-            explicitMeshId,
-            explicitSessionId,
-        );
+        try { meshStore = getMeshRuntimeStore(ctx); } catch { meshStore = null; }
+        const authorizedInMesh = await isSessionAuthorizedForMesh(ctx, meshStore, effectiveMeshId, effectiveSessionId);
         if (!authorizedInMesh) {
             return {
                 ok: false,
                 result: {
                     success: false,
                     code: 'artifact_session_mismatch',
-                    error: `Session "${explicitSessionId}" is not an authorized member of mesh "${explicitMeshId}" (artifact_session_mismatch)`,
+                    error: `Session "${effectiveSessionId}" is not an authorized member of mesh "${effectiveMeshId}" (artifact_session_mismatch)`,
                 },
             };
         }
@@ -927,7 +720,10 @@ async function resolveCallerAuthority(
 
     // Never allow caller-supplied meshId/nodeId/taskId to invent workspace
     // authority for an unregistered session (F4).
-    const resolved = await resolveRegisteredSessionWorkspace(ctx, explicitSessionId);
+    const resolved = await resolveRegisteredSessionWorkspace(ctx, effectiveSessionId, {
+        allowStoredArtifactWorkspaceFallback: mode !== 'register',
+        artifactId: requestedArtifactId,
+    });
 
     if (payloadWorkspace) {
         const canonTrusted = resolved.workspaceRoot ? canonicalizeDir(resolved.workspaceRoot) : null;
@@ -944,44 +740,62 @@ async function resolveCallerAuthority(
         }
     }
 
-    if (!resolved.workspaceRoot) {
+    if (!resolved.workspaceRoot && !(isVerifiedCoordinator && mode !== 'register')) {
         return {
             ok: false,
             result: {
                 success: false,
                 code: 'invalid_workspace_root',
-                error: `Session "${explicitSessionId}" has no registered workspace on this daemon (invalid_workspace_root)`,
+                error: `Session "${effectiveSessionId}" has no registered workspace on this daemon (invalid_workspace_root)`,
             },
         };
+    }
+
+    let producerRole: ArtifactProducerRole = 'user';
+    if (isVerifiedCoordinator) {
+        producerRole = 'coordinator';
+    } else {
+        try {
+            const assistantEntry = getAssistantRegistry().read();
+            if (assistantEntry?.sessionId && sessionIdsEquivalent(assistantEntry.sessionId, effectiveSessionId)) {
+                producerRole = 'assistant';
+            }
+        } catch { /* Default to 'user'. */ }
     }
 
     return {
         ok: true,
         authority: {
-            sessionId: explicitSessionId,
+            sessionId: effectiveSessionId,
             taskId: explicitTaskId || null,
+            meshId: effectiveMeshId || null,
+            missionId: trimString(args?.missionId) || null,
+            producerRole,
+            originDaemonId: selfDaemonId,
             workspaceRoot: resolved.workspaceRoot,
             providerType: resolved.providerType,
             status: resolved.status,
             title: resolved.title,
+            isCoordinator: isVerifiedCoordinator,
         },
     };
 }
 
-function handleArtifactError(err: unknown): CommandRouterResult {
-    if (err instanceof ArtifactGuardError) {
-        return {
-            success: false,
-            code: err.code,
-            error: err.message,
-        };
+interface ArtifactRegistrationRevisionState {
+    latestSeq: number;
+    lastConfirmedRecord: ArtifactRecord | null;
+}
+
+const registrationStateByStore = new WeakMap<object, Map<string, ArtifactRegistrationRevisionState>>();
+let nextArtifactRegistrationSeq = 0;
+
+function getStoreRegistrationStateMap(store: object): Map<string, ArtifactRegistrationRevisionState> {
+    let map = registrationStateByStore.get(store);
+    if (!map) {
+        map = new Map();
+        registrationStateByStore.set(store, map);
     }
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-        success: false,
-        code: 'artifact_command_failed',
-        error: message,
-    };
+    return map;
 }
 
 const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
@@ -996,48 +810,119 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
     }
 
     const { authority } = auth;
-    const rawPath =
-        trimString(args?.path) ||
-        trimString(args?.relPath) ||
-        trimString(args?.rawPath) ||
-        trimString(args?.filePath);
+    const rawPath = trimString(args?.path) || trimString(args?.relPath) || trimString(args?.rawPath) || trimString(args?.filePath);
     if (!rawPath) {
-        return {
-            success: false,
-            code: 'invalid_arguments',
-            error: 'Artifact file path is required',
-        };
+        return { success: false, code: 'invalid_arguments', error: 'Artifact file path is required' };
     }
 
-    const declaredKind = (trimString(args?.kind) || trimString(args?.declaredKind) || undefined) as
-        | ArtifactKind
-        | undefined;
+    const declaredKind = (trimString(args?.kind) || trimString(args?.declaredKind) || undefined) as ArtifactKind | undefined;
     const declaredMime = trimString(args?.mime) || trimString(args?.declaredMime) || undefined;
     const title = typeof args?.title === 'string' ? args.title : undefined;
 
     try {
         const store = getArtifactStore(ctx);
+        const stateMap = getStoreRegistrationStateMap(store);
         const registered = store.register({
             sessionId: authority.sessionId,
             taskId: authority.taskId,
+            meshId: authority.meshId,
+            missionId: authority.missionId,
+            producerRole: authority.producerRole,
+            originDaemonId: authority.originDaemonId,
             workspaceRoot: authority.workspaceRoot!,
             path: rawPath,
             declaredKind,
             declaredMime,
             title,
         });
+        const artifactId = registered.record.artifactId;
+        const mySeq = ++nextArtifactRegistrationSeq;
+        const prevState = stateMap.get(artifactId);
+        stateMap.set(artifactId, {
+            latestSeq: mySeq,
+            lastConfirmedRecord: prevState?.lastConfirmedRecord ?? null,
+        });
+
+        let finalRecord = registered.record;
+        let finalAttachment = registered.attachment;
+        if (authority.isRemoteWorker && authority.hostDaemonId && authority.remoteClaim && ctx.deps?.dispatchMeshCommand) {
+            const rawForward = await ctx.deps.dispatchMeshCommand(
+                authority.hostDaemonId,
+                'artifact_index_forwarded',
+                { ...authority.remoteClaim, artifact: registered.record },
+            );
+            const forwardAns = unwrapMeshRelayResult(rawForward, {
+                command: 'artifact_index_forwarded',
+                peerDaemonId: authority.hostDaemonId,
+            });
+            const currentState = stateMap.get(artifactId);
+            if (forwardAns.success !== true) {
+                const isStillLatestPending = !currentState || currentState.latestSeq === mySeq;
+                if (!registered.isUpdate && isStillLatestPending && !currentState?.lastConfirmedRecord) {
+                    try {
+                        getMeshRuntimeStore(ctx)
+                            .db.prepare(
+                                'DELETE FROM session_artifacts WHERE artifact_id = ? AND updated_at = ? AND sha256 = ?',
+                            )
+                            .run(
+                                registered.record.artifactId,
+                                registered.record.updatedAt,
+                                registered.record.sha256,
+                            );
+                        if (stateMap.get(artifactId)?.latestSeq === mySeq) {
+                            stateMap.delete(artifactId);
+                        }
+                    } catch {
+                        // Best-effort cleanup of unforwarded local artifact record.
+                    }
+                } else if (isStillLatestPending && currentState?.lastConfirmedRecord) {
+                    try {
+                        store.upsertForwardedArtifact(currentState.lastConfirmedRecord);
+                    } catch {
+                        // Best-effort restore of last host-confirmed record.
+                    }
+                }
+                return {
+                    success: false,
+                    code: (typeof forwardAns.code === 'string' && forwardAns.code) || (typeof forwardAns.error === 'string' && forwardAns.error) || 'forward_failed',
+                    error: typeof forwardAns.detail === 'string' ? forwardAns.detail : String(forwardAns.error || 'Failed to forward artifact metadata to host daemon'),
+                };
+            }
+            if (forwardAns.artifact && typeof forwardAns.artifact === 'object') {
+                if (!currentState || currentState.latestSeq === mySeq) {
+                    const synced = store.upsertForwardedArtifact(forwardAns.artifact as ArtifactRecord);
+                    finalRecord = synced.record;
+                    finalAttachment = synced.attachment;
+                } else {
+                    const existingLocal = store.getById(artifactId);
+                    if (existingLocal) {
+                        finalRecord = existingLocal;
+                    }
+                }
+            }
+            const latestAfterConfirm = stateMap.get(artifactId);
+            if (!latestAfterConfirm || latestAfterConfirm.latestSeq === mySeq) {
+                stateMap.set(artifactId, {
+                    latestSeq: latestAfterConfirm?.latestSeq ?? mySeq,
+                    lastConfirmedRecord: finalRecord,
+                });
+            }
+        } else {
+            stateMap.set(artifactId, {
+                latestSeq: mySeq,
+                lastConfirmedRecord: finalRecord,
+            });
+        }
 
         try {
             const publishedFrame = await publishSessionArtifactBubble(authority.sessionId, {
-                attachment: registered.attachment,
+                attachment: finalAttachment,
                 providerType: authority.providerType,
                 status: authority.status,
                 title: authority.title,
                 forceUpsert: true,
             });
-            if (!publishedFrame) {
-                throw new Error('Transcript projection service is unavailable');
-            }
+            if (!publishedFrame) throw new Error('Transcript projection service is unavailable');
         } catch (pubErr) {
             const responseIngress = verifyArtifactCommandIngress(args, 'register');
             if (!responseIngress.ok) return responseIngress.result;
@@ -1045,12 +930,12 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             return {
                 success: false,
                 code: 'artifact_publication_failed',
-                error: `Artifact registered (${registered.record.artifactId}) but transcript bubble publication failed: ${pubMessage} (artifact_publication_failed)`,
-                artifact: registered.record,
-                attachment: registered.attachment,
-                artifactId: registered.record.artifactId,
-                sessionId: registered.record.sessionId,
-                taskId: registered.record.taskId,
+                error: `Artifact registered (${finalRecord.artifactId}) but transcript bubble publication failed: ${pubMessage} (artifact_publication_failed)`,
+                artifact: finalRecord,
+                attachment: finalAttachment,
+                artifactId: finalRecord.artifactId,
+                sessionId: finalRecord.sessionId,
+                taskId: finalRecord.taskId,
                 isUpdate: registered.isUpdate,
                 registered: true,
                 published: false,
@@ -1061,16 +946,16 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
         if (!responseIngress.ok) return responseIngress.result;
         return {
             success: true,
-            artifact: registered.record,
-            attachment: registered.attachment,
-            artifactId: registered.record.artifactId,
-            sessionId: registered.record.sessionId,
-            taskId: registered.record.taskId,
+            artifact: finalRecord,
+            attachment: finalAttachment,
+            artifactId: finalRecord.artifactId,
+            sessionId: finalRecord.sessionId,
+            taskId: finalRecord.taskId,
             isUpdate: registered.isUpdate,
             registered: true,
             published: true,
-            messageId: `artifact:${registered.record.artifactId}`,
-            messageKey: `m:artifact:${registered.record.artifactId}`,
+            messageId: `artifact:${finalRecord.artifactId}`,
+            messageKey: `m:artifact:${finalRecord.artifactId}`,
         };
     } catch (err) {
         return handleArtifactError(err);
@@ -1090,27 +975,41 @@ const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
 
     const { authority } = auth;
     const rawLimit = args?.limit;
-    const limit =
-        typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-            ? Math.trunc(rawLimit)
-            : undefined;
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.trunc(rawLimit) : undefined;
+    const filterMissionId = trimString(args?.missionId);
+    const hasExplicitSession = Boolean(trimString(args?.sessionId) || trimString(args?.targetSessionId));
 
     try {
         const store = getArtifactStore(ctx);
-        const artifacts = store.listBySession(authority.sessionId, { limit });
+        let artifacts: ArtifactRecord[];
+        if (filterMissionId && (authority.isCoordinator || ingress.ownerTrusted)) {
+            artifacts = store.listByMission(filterMissionId, {
+                ...(authority.meshId ? { meshId: authority.meshId } : {}),
+                limit,
+            });
+        } else if (!hasExplicitSession && authority.isCoordinator && authority.meshId) {
+            artifacts = store.listByMesh(authority.meshId, {
+                ...(filterMissionId ? { missionId: filterMissionId } : {}),
+                limit,
+            });
+        } else if (!hasExplicitSession && authority.producerRole === 'worker') {
+            artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store, { filterMissionId, limit });
+        } else {
+            artifacts = store.listBySession(authority.sessionId, { limit });
+            if (filterMissionId) artifacts = artifacts.filter((rec) => rec.missionId === filterMissionId);
+        }
         const attachments = artifacts.map((record) => toChatAttachmentMeta(record));
-        return {
-            success: true,
-            sessionId: authority.sessionId,
-            artifacts,
-            attachments,
-        };
+        return { success: true, sessionId: authority.sessionId, artifacts, attachments };
     } catch (err) {
         return handleArtifactError(err);
     }
 };
 
-const handleArtifactFetch: MedFamilyHandler = async (ctx, args) => {
+async function executeArtifactFetchOrRead(
+    ctx: ArtifactCommandContext,
+    args: any,
+    isReadCommand: boolean,
+): Promise<CommandRouterResult> {
     const ingress = verifyArtifactCommandIngress(args, 'fetch');
     if (!ingress.ok) return ingress.result;
     const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, 'fetch', ingress.ownerTrusted);
@@ -1124,29 +1023,89 @@ const handleArtifactFetch: MedFamilyHandler = async (ctx, args) => {
     const { authority } = auth;
     const artifactId = trimString(args?.artifactId) || trimString(args?.id);
     if (!artifactId) {
-        return {
-            success: false,
-            code: 'invalid_arguments',
-            error: 'artifactId is required',
-        };
+        return { success: false, code: 'invalid_arguments', error: 'artifactId is required' };
     }
 
     try {
         const store = getArtifactStore(ctx);
+        const localRecord = store.get(artifactId);
+        const record = localRecord ?? authority.remoteRequestedArtifact ?? null;
+        if (!record) {
+            return {
+                success: false,
+                code: 'artifact_not_found',
+                error: `Artifact not found: ${artifactId} (artifact_not_found)`,
+            };
+        }
+
+        const accessCheck = await authorizeCrossSessionArtifactAccess(ctx, authority, record);
+        if (!accessCheck.ok) return accessCheck.result;
+        const { trustedWorkspaceRoot } = accessCheck;
+
+        const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
+        const effectiveOriginDaemonId =
+            trimString(record.originDaemonId) ||
+            (!localRecord && authority.isRemoteWorker ? trimString(authority.hostDaemonId) : '');
+        const isRemoteOrigin = Boolean(
+            (!localRecord && authority.isRemoteWorker && effectiveOriginDaemonId) ||
+                (effectiveOriginDaemonId && selfDaemonId && !daemonIdsEquivalent(effectiveOriginDaemonId, selfDaemonId)),
+        );
+
+        if (isRemoteOrigin) {
+            return fetchArtifactFromOriginDaemon(
+                ctx,
+                authority,
+                effectiveOriginDaemonId && effectiveOriginDaemonId !== record.originDaemonId
+                    ? { ...record, originDaemonId: effectiveOriginDaemonId }
+                    : record,
+                args,
+                isReadCommand,
+            );
+        }
+
+        if (isReadCommand) {
+            const readOffset =
+                typeof args?.offset === 'number'
+                    ? args.offset
+                    : typeof args?.pageOffset === 'number'
+                      ? args.pageOffset
+                      : undefined;
+            const readLimit = typeof args?.limit === 'number' ? args.limit : undefined;
+            const readRes = store.readArtifactContent(artifactId, {
+                sessionId: record.sessionId,
+                ...(trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {}),
+                ...(readOffset !== undefined ? { offset: readOffset } : {}),
+                ...(readLimit !== undefined ? { limit: readLimit } : {}),
+            });
+            return {
+                success: true,
+                ...readRes,
+                content: wrapUntrustedArtifactContent(readRes.content),
+                artifact: record,
+                attachment: toChatAttachmentMeta(record),
+            };
+        }
+
         const fetched = store.fetchArtifactContent(artifactId, {
-            sessionId: authority.sessionId,
-            ...(authority.workspaceRoot ? { trustedWorkspaceRoot: authority.workspaceRoot } : {}),
+            sessionId: record.sessionId,
+            ...(trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {}),
         });
-        const record = store.get(artifactId);
         return {
             success: true,
             ...fetched,
-            ...(record ? { artifact: record, attachment: toChatAttachmentMeta(record) } : {}),
+            artifact: record,
+            attachment: toChatAttachmentMeta(record),
         };
     } catch (err) {
         return handleArtifactError(err);
     }
-};
+}
+
+const handleArtifactFetch: MedFamilyHandler = async (ctx, args) =>
+    executeArtifactFetchOrRead(ctx, args, false);
+
+const handleArtifactRead: MedFamilyHandler = async (ctx, args) =>
+    executeArtifactFetchOrRead(ctx, args, true);
 
 export const artifactHandlers: Record<string, MedFamilyHandler> = {
     artifact_register: handleArtifactRegister,
@@ -1154,12 +1113,15 @@ export const artifactHandlers: Record<string, MedFamilyHandler> = {
     artifact_list: handleArtifactList,
     session_artifact_list: handleArtifactList,
     artifact_fetch: handleArtifactFetch,
-    artifact_read: handleArtifactFetch,
+    artifact_read: handleArtifactRead,
     session_artifact_fetch: handleArtifactFetch,
+    artifact_index_forwarded: handleArtifactIndexForwarded,
+    artifact_fetch_origin: handleArtifactFetchOrigin,
 };
 
 /** Transport rejection precedes the router's topic/log/forwarding side effects. */
 export function rejectUntrustedArtifactIngress(command: string, args: unknown): CommandRouterResult | null {
+    if (command === 'artifact_index_forwarded' || command === 'artifact_fetch_origin') return null;
     const handler = artifactHandlers[command];
     if (!handler) return null;
     const mode = handler === handleArtifactRegister ? 'register' : handler === handleArtifactList ? 'list' : 'fetch';
@@ -1170,7 +1132,10 @@ export function rejectUntrustedArtifactIngress(command: string, args: unknown): 
 export const artifactSpecs = defineCommandSpecs(
     'med',
     artifactHandlers,
-    {},
+    {
+        artifact_index_forwarded: { sources: ['mesh'], meshSender: 'roster' },
+        artifact_fetch_origin: { sources: ['mesh'], meshSender: 'roster' },
+    },
     {
         sources: ['ipc', 'standalone', 'p2p'],
         session: { scope: 'optional', aliasSessionId: true },

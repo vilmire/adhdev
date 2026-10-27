@@ -33,7 +33,18 @@ import type { LocalMeshEntry } from '../repo-mesh-types.js';
 /** The host verb (daemon↔daemon only; source `mesh`). */
 export const ASSISTANT_REMOTE_PROJECT_COMMAND = 'assistant_remote_project';
 
-export const ASSISTANT_REMOTE_OPS = ['status', 'send', 'read', 'poll', 'note', 'terminal', 'inventory', 'report'] as const;
+export const ASSISTANT_REMOTE_OPS = [
+    'status',
+    'send',
+    'read',
+    'poll',
+    'note',
+    'terminal',
+    'inventory',
+    'report',
+    'artifact_list',
+    'artifact_read',
+] as const;
 export type AssistantRemoteOp = typeof ASSISTANT_REMOTE_OPS[number];
 
 /** Why a remote-hosted project cannot be driven right now. */
@@ -186,6 +197,8 @@ export const REMOTE_OP_TIMEOUT_MS: Record<AssistantRemoteOp, number> = {
     terminal: 15_000,
     inventory: 15_000,
     report: 30_000,
+    artifact_list: 20_000,
+    artifact_read: 30_000,
 };
 
 export type RemoteCallOutcome =
@@ -201,7 +214,7 @@ function unreachable(reason: ProjectUnreachableReason, error: string): RemoteCal
 
 class RemoteCallTimeout extends Error {}
 
-const FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_stale|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
+const FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|artifact_read_disabled|binding_revision_stale|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
 
 /**
  * One `assistant_remote_project` call on the host. `poll` carries the status

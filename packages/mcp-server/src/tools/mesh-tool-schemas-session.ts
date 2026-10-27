@@ -21,6 +21,7 @@ export const MESH_SEND_TASK_TOOL = {
             task_mode: { ...enumOf(MESH_TASK_MODES), description: 'Optional. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch — a lint of the instruction TEXT, not a sandbox: the worker\'s Edit/Write/Bash tools are NOT restricted, so verify with mesh_git_status afterward.' },
             readonly: { type: 'boolean', description: 'Read-only axis (any task_mode): no write isolation, read-only cap, exempt from the per-node write limit and the dirty/stale gates, rejects write instructions. The worker\'s own tools are NOT restricted.' },
             owned_paths: { type: 'array', items: { type: 'string' }, description: 'As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing — feeds the overlap check and the touched_files comparison.' },
+            input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Same-mission artifact ids this task may read (OD-4).' },
             mission_id: { type: 'string', description: 'Full/exact mission id (attributes the task and its completion); unresolvable → REJECTED (mission_not_found).' },
             difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger).' },
             delivery_mode: {

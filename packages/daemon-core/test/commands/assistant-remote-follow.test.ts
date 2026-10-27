@@ -3822,6 +3822,256 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         }
     });
 
+    it('OD-5: follower can list and read host mesh artifacts by default (read-only, wrapped in <untrusted_artifact_content>) and owner set_policy allowArtifactRead toggle disables/enables it', async () => {
+        const artifactWorkspace = mkdtempSync(join(tmpdir(), 'adhdev-od5-art-'));
+        try {
+            writeFileSync(join(artifactWorkspace, 'design.md'), '# Shared Design\nHello follower!\n');
+
+            // Seed an artifact in Host A's MeshRuntimeStore for MESH_PREFEX_SIM
+            await withHostEnv(async () => {
+                const { ArtifactStore } = await import('../../src/artifacts/index.js');
+                const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+                (store as any).register({
+                    sessionId: 'coord-alpha-1',
+                    meshId: MESH_PREFEX_SIM,
+                    producerRole: 'coordinator',
+                    originDaemonId: HOST_A,
+                    workspaceRoot: artifactWorkspace,
+                    path: 'design.md',
+                    title: 'Shared Design',
+                });
+            });
+
+            // 1. Grant follower access on Host A (default allowArtifactRead should be true)
+            const grantRes: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            expect(grantRes).toMatchObject({
+                success: true,
+                access: {
+                    status: 'active',
+                    allowArtifactRead: true,
+                },
+            });
+
+            // 2. Follow on Assistant B
+            installAssistantEnv();
+            const asstRouter = createRouter(ASSISTANT_B);
+            await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                    bindingRevision: 1,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+
+            // 3. Follower lists artifacts (allowed by default)
+            const listRes: any = await asstRouter.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+                { ownerVerified: true },
+            );
+            expect(listRes).toMatchObject({
+                success: true,
+                artifacts: [
+                    expect.objectContaining({
+                        title: 'Shared Design',
+                        relPath: 'design.md',
+                    }),
+                ],
+            });
+            const artifactId = listRes.artifacts[0].artifactId;
+
+            // 4. Follower reads artifact (allowed by default, wrapped in <untrusted_artifact_content>)
+            const readRes: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+                { ownerVerified: true },
+            );
+            expect(readRes).toMatchObject({
+                success: true,
+                artifactId,
+            });
+            expect(readRes.content).toContain('<untrusted_artifact_content>');
+            expect(readRes.content).toContain('# Shared Design\nHello follower!');
+            expect(readRes.content).toContain('</untrusted_artifact_content>');
+
+            // 5. Owner toggles allowArtifactRead off via set_policy on Host A
+            const disableRes: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: false },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            expect(disableRes).toMatchObject({
+                success: true,
+                access: {
+                    allowArtifactRead: false,
+                },
+            });
+
+            // 6. Follower list and read are now refused with artifact_read_disabled
+            const deniedList: any = await asstRouter.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+                { ownerVerified: true },
+            );
+            expect(deniedList).toMatchObject({
+                success: false,
+                code: 'artifact_read_disabled',
+            });
+
+            const deniedRead: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+                { ownerVerified: true },
+            );
+            expect(deniedRead).toMatchObject({
+                success: false,
+                code: 'artifact_read_disabled',
+            });
+
+            // 7. Non-owner cannot toggle allowArtifactRead
+            const nonOwnerToggle: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: true },
+                    'p2p',
+                    { ownerVerified: false },
+                ),
+            );
+            expect(nonOwnerToggle.success).toBe(false);
+
+            // 8. Owner re-enables allowArtifactRead: true -> follower read succeeds again
+            await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: true },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            const reenabledRead: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+                { ownerVerified: true },
+            );
+            expect(reenabledRead).toMatchObject({
+                success: true,
+                artifactId,
+            });
+
+            // 9. Local allowArtifactRead===false on followedRemote entry refuses locally without dispatching remote RPC
+            await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                    bindingRevision: 1,
+                    allowArtifactRead: false,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+            hostOnline = false;
+            try {
+                const localDeniedList: any = await asstRouter.execute(
+                    'assistant_artifact_list',
+                    { project: 'alpha-sim' },
+                    'standalone',
+                    { ownerVerified: true },
+                );
+                expect(localDeniedList).toMatchObject({
+                    success: false,
+                    code: 'artifact_read_disabled',
+                });
+                const localDeniedRead: any = await asstRouter.execute(
+                    'assistant_artifact_read',
+                    { project: 'alpha-sim', artifactId },
+                    'standalone',
+                    { ownerVerified: true },
+                );
+                expect(localDeniedRead).toMatchObject({
+                    success: false,
+                    code: 'artifact_read_disabled',
+                });
+            } finally {
+                hostOnline = true;
+            }
+
+            // 10. localArtifactRead rejects oversized P2P chunk sets before Buffer.concat
+            await withHostEnv(async () => {
+                const { localArtifactRead } = await import('../../src/commands/high-family/assistant.js');
+                const { ArtifactStore } = await import('../../src/artifacts/index.js');
+                const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+                const remoteRec = store.upsertForwarded({
+                    artifactId: 'art_1122334455667788',
+                    sessionId: 'sess-remote-w',
+                    meshId: MESH_PREFEX_SIM,
+                    originDaemonId: 'daemon_remote_origin',
+                    workspaceRoot: artifactWorkspace,
+                    relPath: 'remote.md',
+                    kind: 'markdown',
+                    mime: 'text/markdown',
+                    sizeBytes: 1024,
+                    sha256: 'c'.repeat(64),
+                }).record;
+                const concatSpy = vi.spyOn(Buffer, 'concat');
+                try {
+                    const overRes = await localArtifactRead(
+                        { selfDaemonId: () => HOST_A } as any,
+                        MESH_PREFEX_SIM,
+                        { artifactId: remoteRec.artifactId },
+                        {
+                            deps: {
+                                dispatchMeshCommand: async () => ({
+                                    success: true,
+                                    chunks: Array.from({ length: 18 }, () =>
+                                        Buffer.alloc(16 * 1024, 0x42).toString('base64'),
+                                    ),
+                                }),
+                            },
+                        } as any,
+                    );
+                    expect(overRes).toMatchObject({
+                        ok: false,
+                        code: 'artifact_too_large',
+                    });
+                    expect(concatSpy).not.toHaveBeenCalled();
+                } finally {
+                    concatSpy.mockRestore();
+                }
+            });
+        } finally {
+            rmSync(artifactWorkspace, { recursive: true, force: true });
+        }
+    });
+
     it('23f. [Re-review Finding 1 HIGH] live PTY coordinator with parse_error overlay is picked with no cold wake, while confirmed terminal runtimes are excluded', async () => {
         await withHostEnv(() =>
             createRouter(HOST_A).execute(
@@ -5499,6 +5749,139 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         }
     });
 
+    it('Round 3 Findings 1 & 6: assistant_artifact_list/read refuse unauthenticated IPC or unverified standalone callers before touching project ports, allow bound assistant session with credential or verified owner, and read a 262144-byte remote image', async () => {
+        const { mkdirSync } = await import('fs');
+        const { ArtifactStore } = await import('../../src/artifacts/index.js');
+        const hostWorkspace = join(hostDir, 'r3-asst-ws');
+        mkdirSync(hostWorkspace, { recursive: true });
+        writeFileSync(join(hostWorkspace, 'secret.md'), '# Top Secret\nDo not leak\n', 'utf-8');
+        const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const png256k = Buffer.concat([pngHeader, Buffer.alloc(262_144 - pngHeader.length, 0x55)]);
+        writeFileSync(join(hostWorkspace, 'exact-256k.png'), png256k);
+
+        let regMdId = '';
+        let regPngId = '';
+        await withHostEnv(async () => {
+            const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+            regMdId = store.register({
+                sessionId: 'sess-r3-host',
+                meshId: MESH_PREFEX_SIM,
+                workspaceRoot: hostWorkspace,
+                path: 'secret.md',
+                title: 'Secret Doc',
+                producerRole: 'coordinator',
+            }).record.artifactId;
+            regPngId = store.register({
+                sessionId: 'sess-r3-host',
+                meshId: MESH_PREFEX_SIM,
+                workspaceRoot: hostWorkspace,
+                path: 'exact-256k.png',
+                title: 'Exact 256 KiB Image',
+                producerRole: 'coordinator',
+                originDaemonId: 'daemon_origin_image_peer',
+            }).record.artifactId;
+        });
+
+        await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+            const originFetchPayloads: Array<Record<string, unknown>> = [];
+            (router as any).deps.dispatchMeshCommand = async (_target: string, cmd: string, payload: Record<string, unknown>) => {
+                expect(cmd).toBe('artifact_fetch_origin');
+                originFetchPayloads.push(payload);
+                const b64 = png256k.toString('base64');
+                const chunkLen = 16 * 1024;
+                const chunks: string[] = [];
+                for (let off = 0; off < b64.length; off += chunkLen) {
+                    chunks.push(Buffer.from(b64.slice(off, off + chunkLen), 'utf8').toString('base64'));
+                }
+                return {
+                    success: true,
+                    encoding: 'base64',
+                    sizeBytes: 262_144,
+                    totalBytes: 262_144,
+                    offset: 0,
+                    pageBytes: 262_144,
+                    hasMore: false,
+                    nextOffset: null,
+                    chunks,
+                };
+            };
+            const { getAssistantRegistry } = await import('../../src/assistant/assistant-registry.js');
+            const { getMcpSessionCredentialForSession } = await import('../../src/commands/mcp-command-ingress.js');
+
+            // Bind assistant session 'asst-bound-r3'
+            getAssistantRegistry().bindSession({
+                sessionId: 'asst-bound-r3',
+                cliType: 'claude-cli',
+                workspace: hostDir,
+                at: Date.now(),
+            });
+            const boundCred = getMcpSessionCredentialForSession('asst-bound-r3')!;
+            expect(boundCred).toBeTruthy();
+
+            // 1. Unauthenticated IPC calls (no session, wrong session, or even matching assistantSessionId without capability) are REFUSED
+            for (const badArgs of [
+                { project: 'alpha-sim' },
+                { project: 'alpha-sim', assistantSessionId: 'foreign-sess' },
+                { project: 'alpha-sim', assistantSessionId: 'asst-bound-r3' },
+                { project: 'alpha-sim', assistantSessionId: 'asst-bound-r3', mcpSessionCredential: 'mcp_sess_forged' },
+            ]) {
+                const deniedList: any = await router.execute('assistant_artifact_list', badArgs, 'ipc');
+                expect(deniedList).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+                expect(deniedList.artifacts).toBeUndefined();
+
+                const deniedRead: any = await router.execute(
+                    'assistant_artifact_read',
+                    { ...badArgs, artifactId: regMdId },
+                    'ipc',
+                );
+                expect(deniedRead).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+                expect(deniedRead.content).toBeUndefined();
+            }
+
+            // 2. Unverified standalone call is REFUSED
+            const unverifiedStandalone: any = await router.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+                { ownerVerified: false },
+            );
+            expect(unverifiedStandalone).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+
+            // 3. Bound assistant session WITH its minted session credential succeeds on IPC
+            const validAsstList: any = await router.execute(
+                'assistant_artifact_list',
+                {
+                    project: 'alpha-sim',
+                    assistantSessionId: 'asst-bound-r3',
+                    mcpSessionCredential: boundCred,
+                },
+                'ipc',
+            );
+            expect(validAsstList.success).toBe(true);
+            expect(validAsstList.artifacts.length).toBeGreaterThanOrEqual(2);
+
+            // 4. Finding 6: 262,144-byte remote image reads via assistant_artifact_read over P2P origin fetch
+            const validAsstImageRead: any = await router.execute(
+                'assistant_artifact_read',
+                {
+                    project: 'alpha-sim',
+                    artifactId: regPngId,
+                    assistantSessionId: 'asst-bound-r3',
+                    mcpSessionCredential: boundCred,
+                },
+                'ipc',
+            );
+            expect(validAsstImageRead.success).toBe(true);
+            expect(validAsstImageRead.pageBytes).toBe(262_144);
+            expect(validAsstImageRead.content).toContain(png256k.toString('base64'));
+            // U3 (mission b295ce35): the paged assistant read must ask the origin for
+            // read mode explicitly instead of relying on its fetch-by-default inference.
+            expect(originFetchPayloads.length).toBeGreaterThan(0);
+            expect(originFetchPayloads.every((p) => p.mode === 'read')).toBe(true);
+        });
+    });
+
     it('23o. [Round 7 Finding 1 MEDIUM] conflict separation (Case A SQL/JSON mismatch and Case B +30d/+60d) and duplicate wakeId groups survive durable normalization and hydrate -> restart -> hydrate idempotently', async () => {
         await withHostEnv(() =>
             createRouter(HOST_A).execute(
@@ -6707,6 +7090,4 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         }
     });
 });
-
-
 

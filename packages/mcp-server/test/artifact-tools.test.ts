@@ -7,16 +7,24 @@ import { WORKER_MCP_DAEMON_VERBS, isWorkerMcpDaemonVerb } from '@adhdev/daemon-c
 import {
   ALLOWED_ARTIFACT_KINDS,
   ARTIFACT_LIST_TOOL,
+  ARTIFACT_READ_TOOL,
   ARTIFACT_REGISTER_TOOL,
   STANDARD_ARTIFACT_REGISTER_TOOL,
   callCoordinatorArtifactList,
+  callCoordinatorArtifactRead,
+  callCoordinatorArtifactRegister,
   callStandardArtifactList,
+  callStandardArtifactRead,
   callStandardArtifactRegister,
+  callWorkerArtifactList,
+  callWorkerArtifactRead,
   callWorkerArtifactRegister,
 } from '../src/tools/artifact-tools.js';
 import {
   readWorkerCredentials,
   resolveWorkerModeTools,
+  workerArtifactList,
+  workerArtifactRead,
   workerArtifactRegister,
 } from '../src/tools/worker-tools.js';
 import { ALL_MESH_TOOLS } from '../src/tools/mesh-tool-schemas.js';
@@ -41,7 +49,7 @@ function createRecordingTransport(response: unknown = { success: true }) {
   return { transport, calls };
 }
 
-test('mode exposure: worker exposes artifact_register only; coordinator exposes artifact_list only; artifact_fetch/read never exposed on MCP', () => {
+test('mode exposure: worker exposes artifact_register/list/read; coordinator exposes artifact_list/read/register; assistant exposes artifact_list/read; artifact_fetch never exposed on MCP', () => {
   const workerNames = resolveWorkerModeTools().map((t) => t.name);
   const meshNames = ALL_MESH_TOOLS.map((t) => t.name);
   const assistantNames = ALL_ASSISTANT_TOOLS.map((t) => t.name);
@@ -49,38 +57,44 @@ test('mode exposure: worker exposes artifact_register only; coordinator exposes 
 
   // Worker mode
   assert.ok(WORKER_TOOLS.includes('artifact_register'));
+  assert.ok(WORKER_TOOLS.includes('artifact_list' as any));
+  assert.ok(WORKER_TOOLS.includes('artifact_read' as any));
   assert.ok(workerNames.includes('artifact_register'));
-  assert.equal(workerNames.includes('artifact_list'), false);
+  assert.equal(workerNames.includes('artifact_list'), true);
   assert.equal(workerNames.includes('artifact_fetch'), false);
-  assert.equal(workerNames.includes('artifact_read'), false);
+  assert.equal(workerNames.includes('artifact_read'), true);
 
   // Coordinator / mesh mode
   assert.ok(CANONICAL_MESH_TOOL_NAMES.includes('artifact_list'));
+  assert.ok(CANONICAL_MESH_TOOL_NAMES.includes('artifact_read' as any));
+  assert.ok(CANONICAL_MESH_TOOL_NAMES.includes('artifact_register' as any));
   assert.ok(meshNames.includes('artifact_list'));
-  assert.equal(meshNames.includes('artifact_register'), false);
+  assert.equal(meshNames.includes('artifact_register'), true);
   assert.equal(meshNames.includes('artifact_fetch'), false);
-  assert.equal(meshNames.includes('artifact_read'), false);
+  assert.equal(meshNames.includes('artifact_read'), true);
 
-  // Assistant mode untouched
+  // Assistant mode: read-only artifact_list and artifact_read
   assert.equal(assistantNames.includes('artifact_register'), false);
-  assert.equal(assistantNames.includes('artifact_list'), false);
+  assert.equal(assistantNames.includes('artifact_list'), true);
   assert.equal(assistantNames.includes('artifact_fetch'), false);
-  assert.equal(assistantNames.includes('artifact_read'), false);
+  assert.equal(assistantNames.includes('artifact_read'), true);
 
-  // Help text standard mode includes artifact_register and artifact_list, never fetch/read
+  // Help text standard mode includes artifact_register, artifact_list, artifact_read, never fetch
   const standardLine = help.split('\n').find((l) => l.startsWith('Standard tools:')) ?? '';
   assert.match(standardLine, /\bartifact_register\b/);
   assert.match(standardLine, /\bartifact_list\b/);
+  assert.match(standardLine, /\bartifact_read\b/);
   assert.doesNotMatch(help, /\bartifact_fetch\b/);
-  assert.doesNotMatch(help, /\bartifact_read\b/);
 });
 
-test('standalone worker-scope daemon verb allowlist admits artifact_register and denies list/fetch/read', () => {
+test('standalone worker-scope daemon verb allowlist admits artifact_register, artifact_list, artifact_read and denies artifact_fetch', () => {
   assert.ok(WORKER_MCP_DAEMON_VERBS.includes('artifact_register'));
+  assert.ok(WORKER_MCP_DAEMON_VERBS.includes('artifact_list' as any));
+  assert.ok(WORKER_MCP_DAEMON_VERBS.includes('artifact_read' as any));
   assert.equal(isWorkerMcpDaemonVerb('artifact_register'), true);
-  assert.equal(isWorkerMcpDaemonVerb('artifact_list'), false);
+  assert.equal(isWorkerMcpDaemonVerb('artifact_list'), true);
   assert.equal(isWorkerMcpDaemonVerb('artifact_fetch'), false);
-  assert.equal(isWorkerMcpDaemonVerb('artifact_read'), false);
+  assert.equal(isWorkerMcpDaemonVerb('artifact_read'), true);
 });
 
 test('behavior annotations and input schemas for artifact_register and artifact_list', () => {
@@ -196,9 +210,13 @@ test('worker artifact_register rejects missing path, disallowed kind, and propag
   assert.equal(calls.length, 1);
 });
 
-test('coordinator artifact_list resolves authorized session/mesh scope and rejects foreign session_id', async () => {
+test('coordinator artifact_list resolves authorized session/mesh scope, defers off-roster sessions to daemon membership', async () => {
   const { transport, calls } = createRecordingTransport((verb: string, payload: Record<string, unknown>) => {
     if (verb === 'tool_call_record') return { rateLimited: false };
+    // Daemon-side membership: only sessions with history in mesh_alpha pass.
+    if (payload.requireMeshMembership === true && payload.sessionId !== 'sess_worker_stopped') {
+      return { success: false, code: 'artifact_session_mismatch', error: 'not an authorized member of mesh' };
+    }
     return {
       success: true,
       sessionId: payload.sessionId,
@@ -247,15 +265,31 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
   assert.equal(listCalls2.length, 2);
   assert.deepEqual(listCalls2[1].payload, {
     sessionId: 'sess_worker_2',
+    callerSessionId: 'sess_coord_main',
     meshId: 'mesh_alpha',
     limit: 20,
   });
 
-  // 3) Foreign session outside coordinatorSessionId and mesh nodes is denied before reaching transport
+  // 3) A session outside the live roster is not trusted locally: it is forwarded with
+  //    requireMeshMembership so the daemon decides from the mesh's durable history, and a
+  //    foreign session is refused there (mission b295ce35 U6).
   const foreignOut = JSON.parse(await callCoordinatorArtifactList(ctx, { session_id: 'sess_foreign_other_project' }));
   assert.equal(foreignOut.success, false);
   assert.equal(foreignOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  const listCalls3 = calls.filter((c) => c.verb === 'artifact_list');
+  assert.equal(listCalls3.length, 3);
+  assert.deepEqual(listCalls3[2].payload, {
+    sessionId: 'sess_foreign_other_project',
+    callerSessionId: 'sess_coord_main',
+    meshId: 'mesh_alpha',
+    requireMeshMembership: true,
+  });
+
+  // 3b) A STOPPED worker of this mesh (no longer on any live node) is listable.
+  const stoppedOut = JSON.parse(await callCoordinatorArtifactList(ctx, { session_id: 'sess_worker_stopped' }));
+  assert.equal(stoppedOut.success, true);
+  assert.equal(stoppedOut.sessionId, 'sess_worker_stopped');
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 
   // 4) Empty coordinator/mesh session scope must fail closed before reaching transport
   const emptyCtx: MeshContext = {
@@ -265,12 +299,12 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
   const emptyScopeOut = JSON.parse(await callCoordinatorArtifactList(emptyCtx, { session_id: 'victim' }));
   assert.equal(emptyScopeOut.success, false);
   assert.equal(emptyScopeOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 
   const missingMeshOut = JSON.parse(await callCoordinatorArtifactList({ transport, coordinatorSessionId: 'sess_coord_main' } as any, {}));
   assert.equal(missingMeshOut.success, false);
   assert.equal(missingMeshOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 });
 
 test('standard mode artifact_register and artifact_list use transport.command and strip forged fields', async () => {
@@ -314,7 +348,7 @@ test('standard mode artifact_register and artifact_list use transport.command an
     limit: 15,
   });
 
-  // Direct callWorkerArtifactRegister also strips forged fields
+  //Direct callWorkerArtifactRegister also strips forged fields
   await callWorkerArtifactRegister(
     transport,
     { bind: 'wsb_direct' },
@@ -325,5 +359,124 @@ test('standard mode artifact_register and artifact_list use transport.command an
     path: 'a.json',
     kind: 'json',
     bind: 'wsb_direct',
+  });
+});
+
+test('worker and coordinator artifact_read and artifact_list forward paging and credentials without forged overrides', async () => {
+  const { transport, calls } = createRecordingTransport((verb: string) => {
+    if (verb === 'tool_call_record') return { rateLimited: false };
+    return {
+      success: true,
+      artifactId: 'art_0123456789abcdef',
+      content: '<untrusted_artifact_content>\nhello\n</untrusted_artifact_content>',
+      totalBytes: 5,
+      offset: 0,
+      pageBytes: 5,
+      hasMore: false,
+      nextOffset: null,
+    };
+  });
+
+  const creds = { bind: 'wsb_worker_1', token: 'wtt_worker_1' };
+
+  const wList = await workerArtifactList(transport, creds, {
+    mission_id: 'msn_1',
+    limit: 10,
+    session_id: 'forged_sess',
+  });
+  assert.equal(wList.isError, undefined);
+  const artifactCalls = () => calls.filter((c) => c.verb !== 'tool_call_record');
+  assert.deepEqual(artifactCalls()[0], {
+    verb: 'artifact_list',
+    payload: {
+      missionId: 'msn_1',
+      limit: 10,
+      bind: 'wsb_worker_1',
+      token: 'wtt_worker_1',
+    },
+  });
+
+  const wRead = await workerArtifactRead(transport, creds, {
+    artifact_id: 'art_0123456789abcdef',
+    offset: 1024,
+    limit: 4096,
+    workspace: '/forged',
+  });
+  assert.equal(wRead.isError, undefined);
+  assert.deepEqual(artifactCalls()[1], {
+    verb: 'artifact_read',
+    payload: {
+      artifactId: 'art_0123456789abcdef',
+      offset: 1024,
+      limit: 4096,
+      bind: 'wsb_worker_1',
+      token: 'wtt_worker_1',
+    },
+  });
+
+  const ctx: MeshContext = {
+    transport,
+    coordinatorSessionId: 'sess_coord_main',
+    mesh: {
+      id: 'mesh_alpha',
+      name: 'Alpha',
+      repoIdentity: 'github.com/acme/alpha',
+      nodes: [],
+    } as any,
+  };
+
+  const cReg = JSON.parse(await callCoordinatorArtifactRegister(ctx, {
+    path: 'docs/plan.md',
+    title: 'Plan',
+    kind: 'markdown',
+    mission_id: 'msn_1',
+    workspace: '/forged',
+  }));
+  assert.equal(cReg.success, true);
+  assert.deepEqual(artifactCalls()[2], {
+    verb: 'artifact_register',
+    payload: {
+      path: 'docs/plan.md',
+      title: 'Plan',
+      kind: 'markdown',
+      sessionId: 'sess_coord_main',
+      callerSessionId: 'sess_coord_main',
+      meshId: 'mesh_alpha',
+      missionId: 'msn_1',
+    },
+  });
+
+  const cRead = JSON.parse(await callCoordinatorArtifactRead(ctx, {
+    artifact_id: 'art_0123456789abcdef',
+    offset: 0,
+    limit: 262144,
+  }));
+  assert.equal(cRead.success, true);
+  assert.deepEqual(artifactCalls()[3], {
+    verb: 'artifact_read',
+    payload: {
+      artifactId: 'art_0123456789abcdef',
+      callerSessionId: 'sess_coord_main',
+      meshId: 'mesh_alpha',
+      offset: 0,
+      limit: 262144,
+    },
+  });
+
+  const sRead = JSON.parse(await callStandardArtifactRead(transport, {
+    artifact_id: 'art_0123456789abcdef',
+    session_id: 'sess_std_1',
+    offset: 10,
+    limit: 100,
+  }));
+  assert.equal(sRead.success, true);
+  assert.deepEqual(artifactCalls()[4], {
+    verb: 'artifact_read',
+    payload: {
+      artifactId: 'art_0123456789abcdef',
+      sessionId: 'sess_std_1',
+      offset: 10,
+      limit: 100,
+    },
   });
 });

@@ -382,6 +382,26 @@ export {
   MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS,
   MESH_HANDSHAKE_PROTOCOL_VERSION,
 } from './mesh/transport/mesh-peer-handshake.js';
+export {
+  getHostOriginGrantPublicKey,
+  getLatestHostKeyRotationProof,
+  rotateHostOriginGrantKeyPair,
+  verifyOriginGrantKeyRotationProof,
+  isValidOriginGrantPublicKey,
+  canonicalizeOriginGrantPublicKey,
+  canonicalOriginGrantPublicKeyBytes,
+  type OriginGrantKeyRotationProof,
+} from './mesh/origin-grant-keypair.js';
+export {
+  readMeshHostRecord,
+  writeMeshHostRecord,
+  migrateBogusPairingHostRecords,
+  readAuthenticatedPeerOriginGrantPublicKey,
+  canAcceptPeerOriginGrantPublicKey,
+  recordAuthenticatedPeerOriginGrantPublicKey,
+  clearAuthenticatedPeerOriginGrantPublicKey,
+  applyAuthenticatedHostKeyRotation,
+} from './mesh/mesh-host-memory.js';
 export type {
   MeshHandshakeResult,
   MeshHandshakeFailureCode,

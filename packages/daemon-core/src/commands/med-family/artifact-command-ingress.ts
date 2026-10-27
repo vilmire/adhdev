@@ -37,7 +37,7 @@ export function verifyArtifactCommandIngress(
     const recordArgs = args as Record<string, unknown>;
     const routerIngress = readRouterCommandIngress(recordArgs);
     const mcp = readAuthenticatedMcpCommand(recordArgs, routerIngress?.command ?? '');
-    if (mcp.present && (!mcp.valid || routerIngress?.source !== 'ipc')) {
+    if (mcp.present && (!mcp.valid || (routerIngress && routerIngress.source !== 'ipc'))) {
         return {
             ok: false,
             result: { success: false, code: 'COMMAND_SOURCE_REJECTED', error: 'Artifact MCP command authority is invalid, changed, or revoked' },
@@ -148,23 +148,23 @@ export function verifyArtifactCommandIngress(
             };
         }
         if (routerIngress.source === 'ipc' && !ownerTrusted && !hasWorkerCredentialInput(recordArgs)) {
-            if (mode === 'fetch') {
+            if (mode === 'fetch' && !mcp.valid) {
                 return {
                     ok: false,
                     result: {
                         success: false,
                         code: 'COMMAND_SOURCE_REJECTED',
-                        error: 'Artifact fetch over IPC requires verified owner or live worker credential',
+                        error: 'Artifact fetch/read over IPC requires verified owner, worker credential, or authenticated MCP scope',
                     },
                 };
             }
-            if (mode === 'list' && !mcp.valid && !trimString(recordArgs.meshId)) {
+            if (mode === 'list' && !mcp.valid) {
                 return {
                     ok: false,
                     result: {
                         success: false,
                         code: 'COMMAND_SOURCE_REJECTED',
-                        error: 'Artifact list over IPC requires verified owner, worker credential, or coordinator mesh scope',
+                        error: 'Artifact list over IPC requires verified owner, worker credential, or authenticated MCP scope',
                     },
                 };
             }

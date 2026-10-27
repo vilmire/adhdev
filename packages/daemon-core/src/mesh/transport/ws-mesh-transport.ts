@@ -33,6 +33,7 @@ import { P2pRelayFailureError } from '../p2p-relay-failure.js';
 import { MeshRpcEndpoint } from './mesh-rpc-endpoint.js';
 import { maskDaemonId } from './mask-daemon-id.js';
 import { summarizeMeshCommandArgs } from './mesh-command-summarizer.js';
+import { getHostOriginGrantPublicKey } from '../origin-grant-keypair.js';
 import { performMeshHandshake, MeshHandshakeError } from './mesh-peer-handshake.js';
 import { resultTimeoutForCommand } from './mesh-rpc-timeouts.js';
 import type { MeshPeerSnapshot } from './mesh-peer-types.js';
@@ -540,6 +541,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
             daemonId: this.localDaemonId,
             serverDaemonIdExpected: link.hostDaemonId,
             secret: link.secret,
+            originGrantPublicKey: getHostOriginGrantPublicKey(this.localDaemonId),
         }, this.handshakeTimeoutMs).then(() => {
             ws.off('message', onEarly);
             if (link.stopped || this.closed || link.ws !== ws) {

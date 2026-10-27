@@ -147,6 +147,8 @@ interface EnqueueTaskArgsShape {
     maxRetries?: number; max_retries?: number;
     /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths. */
     owned_paths?: unknown; ownedPaths?: unknown;
+    /** OD-4 (artifact sharing) — same-mission artifact IDs this worker task may read. */
+    input_artifact_ids?: unknown; inputArtifactIds?: unknown;
 }
 
 interface NormalizedEnqueueTaskArgs {
@@ -157,6 +159,7 @@ interface NormalizedEnqueueTaskArgs {
     readonly: boolean;
     requiredTags: string[];
     dependsOn: string[] | undefined;
+    inputArtifactIds: string[] | undefined;
     missionId: string | undefined;
     priority: ReturnType<typeof normalizeMeshTaskPriority> | undefined;
     model: string | undefined;
@@ -320,10 +323,12 @@ async function normalizeEnqueueTaskArgs(
     // enqueueTask normalizes and rejects bad paths.
     const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
     const ownedPaths = Array.isArray(rawOwnedPaths) ? (rawOwnedPaths as string[]) : undefined;
+    const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
+    const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? (rawInputArtifactIds as string[]) : undefined;
     return {
         ok: true,
         value: {
-            message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
+            message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
             explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
         },
@@ -386,7 +391,7 @@ export async function meshEnqueueTask(
         return respond({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
     }
     const {
-        message, taskMode, input, readonly, requiredTags, dependsOn, missionId, priority,
+        message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
         explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
     } = normalized.value;
@@ -421,7 +426,7 @@ export async function meshEnqueueTask(
             meshId: ctx.mesh.id,
             message,
             options: {
-                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, missionId, targetNodeId,
+                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, ...(inputArtifactIds ? { inputArtifactIds } : {}), missionId, targetNodeId,
                 ...(priority ? { priority } : {}),
                 ...(model ? { model } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -636,6 +641,7 @@ export async function meshEnqueueBatch(
             // H1 (path ownership): the same normalized declaration the single-task
             // tool forwards.
             ...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {}),
+            ...(v.inputArtifactIds ? { inputArtifactIds: v.inputArtifactIds } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
     }

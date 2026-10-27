@@ -217,7 +217,17 @@ const launchAssistantOnce = async (
     const cliArgs: string[] = [];
     // The private HOME env and the plan's own env (claude-cli: auto memory off) first;
     // the prompt injection may add its own keys.
-    const launchEnv: Record<string, string> = { ...(mcp.privateHome?.env ?? {}), ...(mcp.launchEnv ?? {}) };
+    const { ensureMcpSessionCredential } = await import('../mcp-command-ingress.js');
+    const { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } = await import('../../standalone-mcp-auth.js');
+    const assistantMcpCredential = ensureMcpSessionCredential({
+        sessionId: assistantSessionKey,
+        isCoordinator: false,
+    });
+    const launchEnv: Record<string, string> = {
+        ...(mcp.privateHome?.env ?? {}),
+        ...(mcp.launchEnv ?? {}),
+        [ADHDEV_MCP_SESSION_CREDENTIAL_ENV]: assistantMcpCredential,
+    };
     const { applyMeshCoordinatorSystemPromptInjection } = await import('../mesh-coordinator.js');
     const injection = applyMeshCoordinatorSystemPromptInjection(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
     if (injection.error) return fail(injection.errorCode ?? 'assistant_prompt_failed', injection.error, { cliType, workspace });

@@ -39,6 +39,10 @@ function normalizeDependsOn(value: unknown): string[] {
         });
 }
 
+function normalizeInputArtifactIds(value: unknown): string[] {
+    return normalizeDependsOn(value);
+}
+
 /**
  * M1: detect dependency cycles before enqueue. Walks the dependency graph of
  * existing queue entries plus the new task's edges. Fail-closed: a cycle
@@ -136,6 +140,7 @@ export function enqueueTask(
     }
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
+    const inputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
     // H1: normalize path ownership once, at the single enqueue choke point (mirrors
     // dependsOn above). An absent/empty declaration stores nothing on the entry —
     // opt-in only, per normalizeOwnedPaths's own backward-compat contract.
@@ -202,6 +207,7 @@ export function enqueueTask(
             requiredTags: resolvedRequiredTags,
             ...(ownedPaths ? { ownedPaths } : {}),
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
+            ...(inputArtifactIds.length > 0 ? { inputArtifactIds } : {}),
             // G6: only persist a non-default priority so legacy/normal rows stay minimal.
             ...(priority && priority !== 'normal' ? { priority } : {}),
             // G7: hold-until gate (stored ISO). Omitted when absent/immediate.
@@ -353,6 +359,9 @@ export function recordDirectDispatchTask(
          * for the report_completion.touched_files comparison — never a routing input.
          */
         ownedPaths?: string[];
+        /** OD-4 (artifact sharing): same-mission artifact ids this task's worker may read. */
+        inputArtifactIds?: string[];
+        input_artifact_ids?: string[];
         dispatchedAt?: string;
         /**
          * C2/C-W7: the attempt this dispatch delivers, opened by the CALLER before
@@ -395,6 +404,7 @@ export function recordDirectDispatchTask(
     // H1: same normalization as enqueueTask (see the note on MeshEnqueueTaskOptions.ownedPaths).
     const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
     const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : undefined;
+    const directInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
     return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
             // Already materialised (e.g. retry of the same dispatch) — leave it untouched.
@@ -413,6 +423,7 @@ export function recordDirectDispatchTask(
             ...(modeValidation.taskMode ? { taskMode: modeValidation.taskMode } : {}),
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
+            ...(directInputArtifactIds.length > 0 ? { inputArtifactIds: directInputArtifactIds } : {}),
             ...(directOwnedPaths ? { ownedPaths: directOwnedPaths } : {}),
             difficulty: taskDifficulty,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),
