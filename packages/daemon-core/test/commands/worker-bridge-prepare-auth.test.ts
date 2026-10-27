@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { setBridgePolicy } from '../../src/mesh/worker-bridge.js'
+import { bridgeDigest, BRIDGE_CAPABILITY_COMMAND, BRIDGE_DELIVERY_COMMAND, setBridgePolicy } from '../../src/mesh/worker-bridge.js'
 import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js'
@@ -14,9 +14,13 @@ import {
   __resetWorkerSessionBindsForTest,
   __resetWorkerTaskTokensForTest,
 } from '../../src/mesh/worker-mcp-isolation.js'
+import * as buildInfo from '../../src/build-info.js'
+import { rememberPreparedDelivery } from '../../src/mesh/worker-bridge-prepared.js'
+import { __setWorkerLateReportNoticeSinkForTests } from '../../src/mesh/worker-report-late.js'
 import { __setHandoffNoteSinkForTests } from '../../src/mesh/worker-report.js'
 import { __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js'
 import { WORKER_MCP_DAEMON_VERBS, isWorkerMcpDaemonVerb } from '../../src/standalone-mcp-auth.js'
+import { workerBridgeHandlers } from '../../src/commands/low-family/worker-bridge.js'
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
 import { fakePublisher } from '../turn-ledger/ledger-harness.js'
 
@@ -35,6 +39,7 @@ afterEach(() => {
   __resetWorkerTaskTokensForTest()
   __setHandoffNoteSinkForTests(undefined)
   __setWorkerProgressNoticeSinkForTests(undefined)
+  __setWorkerLateReportNoticeSinkForTests(undefined)
   vi.restoreAllMocks()
 })
 
@@ -283,4 +288,160 @@ describe('direct-dispatch creation and report provenance through actual IPC', ()
     expect(findWorkerTaskTokenForSession(MESH, d.taskId, d.sessionId, attemptId)?.token).toBe(token)
   })
 
+})
+
+
+describe('prepared report consumption binds the exact resolved identity', () => {
+  const report = { outcome: 'completed', summary: 'Created for this exact attempt.', touchedFiles: [] }
+  const context = (dispatchMeshCommand = vi.fn()) => ({ deps: { statusInstanceId: OWNER_DAEMON,
+    statusVersion: '1.0.82-bridge', dispatchMeshCommand, instanceManager: { getInstance: () => undefined } } } as any)
+  function successor(r: ReturnType<typeof rig>, sessionId = SESSION) {
+    r.ledger.observe({ eventId: 'consume-end-a', at: Date.now(), source: 'worker_tool', observedBy: OWNER_DAEMON,
+      sessionId: SESSION, attemptRef: { attemptId: ATTEMPT, generation: 0 }, kind: 'worker_report', outcome: 'completed', hasHandoffNotes: false })
+    const taskId = 'consume-task-b', attemptId = `mesh_direct:${taskId}`, iso = new Date(Date.now()).toISOString()
+    r.store.insertQueueEntry({ id: taskId, meshId: MESH, message: 'synthetic successor', status: 'assigned',
+      assignedSessionId: sessionId, assignedNodeId: NODE, createdAt: iso, updatedAt: iso })
+    const opened = r.ledger.observe({ eventId: taskId, at: Date.now(), source: 'dispatch', observedBy: OWNER_DAEMON,
+      sessionId, kind: 'dispatch_accepted', scope: 'mesh_direct', meshId: MESH, taskId, nodeId: NODE, messageId: taskId })
+    expect(opened.attempt?.attemptId).toBe(attemptId)
+    const token = mintWorkerTaskToken({ meshId: MESH, taskId, sessionId, attemptId, nodeId: NODE }).token
+    return { taskId, attemptId, token }
+  }
+  async function preparedA(r: ReturnType<typeof rig>, credential = { bind: r.bind }) {
+    const args = { ...credential, deliveryId: 'consume-report-a', reportedAtMs: Date.now() }
+    const prepared: any = await r.prepare(args)
+    expect(prepared.success).toBe(true)
+    return { ...args, prepared: prepared.prepared, report }
+  }
+  function untouched(r: ReturnType<typeof rig>, b: ReturnType<typeof successor>) {
+    expect(r.store.findQueueEntryById(MESH, b.taskId)?.status).toBe('assigned')
+    expect(r.ledger.getAttempt(b.attemptId)?.terminal).toBeNull()
+    expect(r.store.turnStore().listWorkerEventsForTask(MESH, b.taskId, 'worker_tool_report')).toEqual([])
+  }
+
+  it('refuses old prepared A on same-clock bind rollover, leaving B untouched; exact B and receipt replay work', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1793050000000)
+    const r = rig(), args = await preparedA(r), b = successor(r), ctx = context()
+    expect(await workerReportHandlers.worker_report_completion(ctx, args)).toMatchObject({ success: false, error: 'stale_report' })
+    untouched(r, b)
+    expect(ctx.deps.dispatchMeshCommand).not.toHaveBeenCalled()
+    const exact: any = await r.prepare({ bind: r.bind, deliveryId: 'consume-report-b', reportedAtMs: Date.now() })
+    const bArgs = { ...args, deliveryId: 'consume-report-b', prepared: exact.prepared }
+    const accepted = await workerReportHandlers.worker_report_completion(ctx, bArgs)
+    expect(accepted).toMatchObject({ success: true, taskId: b.taskId, attemptId: b.attemptId })
+    expect(await workerReportHandlers.worker_report_completion(ctx, bArgs)).toEqual(accepted)
+  })
+
+  it('cannot borrow prepared bind A with a different valid task token B', async () => {
+    const r = rig(), args = await preparedA(r), b = successor(r, 'consume-other-session')
+    // A timestamp is not an identity fence, including when B predates the report clock.
+    const current = r.ledger.getAttempt(b.attemptId)!
+    r.ledger.store.upsertAttempt({ ...current, acceptedAt: args.reportedAtMs }, Date.now())
+    expect(await workerReportHandlers.worker_report_completion(context(), { ...args, token: b.token })).toMatchObject({ success: false })
+    untouched(r, b)
+  })
+
+  it('does not reroute a locally prepared A through a later remote assignment', async () => {
+    const r = rig(), args = await preparedA(r)
+    __resetWorkerTaskTokensForTest()
+    const ctx = context()
+    ctx.deps.instanceManager.getInstance = () => ({ getState: () => ({ settings: { meshNodeFor: MESH, meshNodeId: NODE,
+      meshActiveTaskId: 'remote-b', meshActiveAttemptId: 'remote-attempt-b', meshActiveAttemptGeneration: 0,
+      meshCoordinatorDaemonId: 'daemon_mach_remote_b' } }) })
+    expect(await workerReportHandlers.worker_report_completion(ctx, args)).toMatchObject({ success: false })
+    expect(ctx.deps.dispatchMeshCommand).not.toHaveBeenCalled()
+    expect(r.ledger.getAttempt(ATTEMPT)?.terminal).toBeNull()
+  })
+
+  it('rechecks the claim inside receipt consumption after a pre-transaction identity mutation', async () => {
+    const r = rig(), args = await preparedA(r), original = r.ledger.getAttempt(ATTEMPT)!
+    const transaction = r.store.db.transaction.bind(r.store.db)
+    let changed = false
+    vi.spyOn(r.store.db, 'transaction').mockImplementation(((fn: any) => {
+      if (!changed) { changed = true; r.ledger.store.upsertAttempt({ ...original, generation: 1 }, Date.now()) }
+      return transaction(fn)
+    }) as any)
+    expect(await workerReportHandlers.worker_report_completion(context(), args)).toMatchObject({ success: false, error: 'stale_report' })
+    expect(r.ledger.getAttempt(ATTEMPT)?.terminal).toBeNull()
+    expect(r.store.turnStore().listWorkerEventsForTask(MESH, TASK, 'worker_tool_report')).toEqual([])
+  })
+
+  it('keeps a legitimate prepared late A report and a corrected report on their original attempt', async () => {
+    const r = rig(), args = await preparedA(r)
+    __setWorkerLateReportNoticeSinkForTests(null)
+    const invalid: any = await workerReportHandlers.worker_report_completion(context(), { ...args, report: { outcome: 'completed', summary: '' } })
+    expect(invalid).toMatchObject({ success: false, error: 'invalid_report' })
+    expect(r.ledger.getAttempt(ATTEMPT)?.terminal).toBeNull()
+    // A refusal is its own immutable delivery; correction uses a new delivery id.
+    const corrected: any = await r.prepare({ bind: r.bind, deliveryId: 'consume-corrected-a', reportedAtMs: Date.now() })
+    const correctedArgs = { ...args, deliveryId: 'consume-corrected-a', reportedAtMs: corrected.prepared.reportedAtMs, prepared: corrected.prepared }
+    const accepted = await workerReportHandlers.worker_report_completion(context(), correctedArgs)
+    expect(accepted).toMatchObject({ success: true, taskId: TASK })
+    expect(await workerReportHandlers.worker_report_completion(context(), correctedArgs)).toEqual(accepted)
+    const late: any = await workerReportHandlers.worker_report_completion(context(), args)
+    // The original refused delivery remains a refusal, never a substituted task receipt.
+    expect(late).toMatchObject({ success: false })
+  })
+
+  it('accepts a prepared report arriving after genuine A completion without changing the terminal', async () => {
+    const r = rig(), args = await preparedA(r)
+    __setWorkerLateReportNoticeSinkForTests(null)
+    const ended = r.ledger.observe({ eventId: 'consume-late-a', at: Date.now(), source: 'worker_tool', observedBy: OWNER_DAEMON,
+      sessionId: SESSION, attemptRef: { attemptId: ATTEMPT, generation: 0 }, kind: 'worker_report', outcome: 'completed', hasHandoffNotes: false })
+    const terminal = ended.attempt?.terminal
+    const accepted = await workerReportHandlers.worker_report_completion(context(), args)
+    expect(accepted).toMatchObject({ success: true, taskId: TASK, attemptId: ATTEMPT, late: true, terminalOutcome: 'completed' })
+    expect(r.ledger.getAttempt(ATTEMPT)?.terminal).toEqual(terminal)
+    expect(await workerReportHandlers.worker_report_completion(context(), args)).toEqual(accepted)
+  })
+
+  it('the owner refuses a forwarded A envelope after same-clock rollover without touching B', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1793050000000)
+    const r = rig(), args = await preparedA(r), b = successor(r), sender = 'daemon_mach_remote_member'
+    vi.spyOn(buildInfo, 'getDaemonBuildInfo').mockReturnValue({ commit: 'b'.repeat(40), version: '1.0.82-bridge' } as any)
+    const envelope = { protocol: 1, kind: 'report', senderDaemonId: sender, senderCommit: 'b'.repeat(40),
+      senderVersion: '1.0.82-bridge', ...args.prepared, payload: { report } }
+    const ctx = context(vi.fn(async (_peer: string, command: string, payload: any) => {
+      expect(command).toBe(BRIDGE_CAPABILITY_COMMAND)
+      return { success: true, protocol: 1, meshId: MESH, nonce: payload.nonce, rolloutId: 'prepare-auth-rollout',
+        daemonId: sender, commit: 'b'.repeat(40), version: '1.0.82-bridge' }
+    }))
+    ctx.getMeshForCommand = async () => ({ mesh: { nodes: [{ id: NODE, daemonId: sender }] } })
+    const refused: any = await workerBridgeHandlers[BRIDGE_DELIVERY_COMMAND](ctx, { meshId: MESH, envelope, _meshSenderDaemonId: sender })
+    expect(refused).toMatchObject({ success: false })
+    untouched(r, b)
+  })
+
+  it('forwards only the stored remote A claim across stamp rollover and rejects a conflicting saved envelope', async () => {
+    const r = rig(), remoteOwner = 'daemon_mach_remote_a'
+    vi.spyOn(buildInfo, 'getDaemonBuildInfo').mockReturnValue({ commit: 'b'.repeat(40), version: '1.0.82-bridge' } as any)
+    const prepared = { meshId: MESH, taskId: 'remote-a', attemptId: 'remote-attempt-a', generation: 0,
+      sessionId: SESSION, nodeId: NODE, ownerDaemonId: remoteOwner, deliveryId: 'consume-remote-a', reportedAtMs: Date.now() }
+    rememberPreparedDelivery(r.store.db, { bind: r.bind }, prepared)
+    const dispatch = vi.fn(async (owner: string, command: string, payload: any) => {
+      expect(owner).toBe(remoteOwner)
+      if (command === BRIDGE_CAPABILITY_COMMAND) return { success: true, protocol: 1, meshId: MESH, nonce: payload.nonce,
+        rolloutId: 'prepare-auth-rollout', daemonId: owner, commit: 'b'.repeat(40), version: '1.0.82-bridge' }
+      expect(command).toBe(BRIDGE_DELIVERY_COMMAND)
+      const e = payload.envelope
+      expect(e).toMatchObject(prepared)
+      return { success: true, taskId: e.taskId, attemptId: e.attemptId, deliveryReceipt: { protocol: 1, digest: bridgeDigest(e),
+        deliveryId: e.deliveryId, ownerDaemonId: e.ownerDaemonId, senderDaemonId: e.senderDaemonId,
+        taskId: e.taskId, attemptId: e.attemptId, generation: e.generation, sessionId: e.sessionId } }
+    })
+    const ctx = context(dispatch)
+    ctx.deps.instanceManager.getInstance = () => ({ getState: () => ({ settings: { meshNodeFor: MESH, meshNodeId: NODE,
+      meshActiveTaskId: 'remote-b', meshActiveAttemptId: 'remote-attempt-b', meshActiveAttemptGeneration: 1,
+      meshCoordinatorDaemonId: 'daemon_mach_remote_b' } }) })
+    const args = { bind: r.bind, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs, prepared, report }
+    const accepted = await workerReportHandlers.worker_report_completion(ctx, args)
+    expect(accepted).toMatchObject({ success: true, taskId: prepared.taskId, attemptId: prepared.attemptId })
+    expect(await workerReportHandlers.worker_report_completion(ctx, args)).toEqual(accepted)
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    // A same-id saved envelope must not substitute its different attempt on retry.
+    r.store.db.prepare("UPDATE worker_bridge_delivery SET envelope_json=json_set(envelope_json,'$.attemptId','wrong-saved-attempt') WHERE side='member'").run()
+    dispatch.mockClear()
+    expect(await workerReportHandlers.worker_report_completion(ctx, args)).toMatchObject({ success: false, error: 'worker_delivery_identity_conflict' })
+    expect(dispatch).not.toHaveBeenCalled()
+  })
 })

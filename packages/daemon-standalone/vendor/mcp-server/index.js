@@ -64495,11 +64495,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 6e4)} min ago`
         };
       }
+      const matchesPrepared = (identity3) => {
+        const expected = opts.preparedIdentity;
+        if (!expected) return true;
+        if (identity3.meshId !== expected.meshId || identity3.taskId !== expected.taskId || identity3.attemptId !== expected.attemptId || identity3.sessionId !== expected.sessionId || identity3.nodeId !== expected.nodeId) return false;
+        const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(expected.attemptId);
+        return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId && attempt.generation === expected.generation && daemonIdsEquivalent4(attempt.ownerDaemonId, expected.ownerDaemonId) && opts.isSelfDaemon?.(attempt.ownerDaemonId) === true;
+      };
       const live = resolveWorkerIdentity(credential);
       const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
-      if (live && !liveIsNewer) return acceptWorkerCompletionReportForIdentity(live, report, { ...opts, nowMs: nowMs2 });
+      if (live && !liveIsNewer) {
+        if (!matchesPrepared(live)) return { accepted: false, refusal: "stale_report", detail: "The consumed worker identity no longer matches the saved preparation." };
+        return acceptWorkerCompletionReportForIdentity(live, report, { nowMs: nowMs2 });
+      }
       const late = resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
-      if (late) return acceptLateWorkerCompletionReport(late, report, nowMs2);
+      if (late && matchesPrepared(late)) return acceptLateWorkerCompletionReport(late, report, nowMs2);
+      if (opts.preparedIdentity) return { accepted: false, refusal: "stale_report", detail: "The consumed worker identity no longer matches the saved preparation." };
       if (liveIsNewer) {
         return {
           accepted: false,
@@ -160224,7 +160235,8 @@ ${output}` : "";
         const summaryLength = typeof raw.summary === "string" ? raw.summary.trim().length : null;
         const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
         const fields = errors.map((e) => e.field);
-        if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        if (prepared ? !selfDaemonPredicate(ctx)?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
           const remote = await resolveRemoteWorker(ctx, args);
           if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
             const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
@@ -160237,7 +160249,6 @@ ${output}` : "";
             return { ...answer, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
           }
         }
-        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
         if (prepared && daemonIdsEquivalent4(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
           const db2 = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? "", ctx.deps.statusVersion);
           const handled = commitLocalBridgeDelivery(db2, {
@@ -160250,7 +160261,7 @@ ${output}` : "";
             payload: { fields: safeRefusalFields2(fields), summaryLength }
           }, () => {
             const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
-            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || !daemonIdsEquivalent4(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
+            if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent4(attempt.ownerDaemonId, prepared.ownerDaemonId) || !daemonIdsEquivalent4(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: "stale_report" };
             const receipt2 = recordRefusedWorkerReportForIdentity2(
               { token: "", ...prepared },
               { fields, summaryLength },
@@ -160333,7 +160344,7 @@ ${output}` : "";
           payload: content
         };
         const saved = typeof payload.deliveryId === "string" ? findBridgeMemberDelivery(db2, self.daemonId, payload.deliveryId) : null;
-        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
+        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent4(saved.ownerDaemonId, remote.ownerDaemonId) || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: "worker_delivery_identity_conflict" };
         try {
           return await sendBridgeDelivery(db2, saved ?? envelope, dispatch2);
         } catch {
@@ -160513,7 +160524,7 @@ ${output}` : "";
           const reportedAtMs = args?.reportedAtMs;
           const isSelfDaemon = selfDaemonPredicate(_ctx);
           let response;
-          if (!hasLocalWorkerIdentity2(credential, { isSelfDaemon, reportedAtMs })) {
+          if (prepared ? !isSelfDaemon?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity2(credential, { isSelfDaemon, reportedAtMs })) {
             const remote = await resolveRemoteWorker(_ctx, args);
             if (remote) {
               response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
@@ -160526,7 +160537,7 @@ ${output}` : "";
             if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent4(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
               return { success: false, error: "stale_report" };
             }
-            return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs }));
+            return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs, preparedIdentity: prepared ?? void 0 }));
           };
           if (prepared) {
             const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? "", _ctx.deps.statusVersion);
