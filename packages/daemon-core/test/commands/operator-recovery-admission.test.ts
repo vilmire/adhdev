@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { OPERATOR_RECOVERY_TARGET as t } from '@adhdev/session-host-core';
 import { startSession } from '../../src/commands/cli-manager-launch.js';
+import { markVerifiedMeshSender } from '../../src/commands/mesh-sender.js';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { restoreHostedSessions } from '../../src/commands/cli-manager-restore.js';
 import { applyRouterCommandIngressProvenance, issueTrustedOwnerIngressProof, isNondelegatedLocalOwnerIngress } from '../../src/commands/command-args.js';
-import { operatorRecoveryCommand } from '../../src/commands/low-family/operator-recovery.js';
+import { operatorRecoveryCommand, operatorRecoveryCensusCommand } from '../../src/commands/low-family/operator-recovery.js';
 
 function ownerArgs(nondelegated: boolean, live = () => true) {
     const proof = issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true,
@@ -49,4 +50,14 @@ it('does not treat unrelated prompt or audit text as a provider identity', async
     const { assertRecoveryLaunchIdentity } = await import('@adhdev/session-host-core');
     expect(() => assertRecoveryLaunchIdentity({ runtimeId: 'unrelated', options: { initialPrompt: t.sessionId },
         meta: { note: t.providerSessionId } })).not.toThrow();
+});
+
+it('refuses default READY labels without a verified successful full restore before opening any host socket', async () => {
+    const manager = { hostedRestoreState: 'ready', hostedFullRestoreState: 'ready', hostedPartialRestoreCount: 0,
+        hostedFullRestoreVerified: false, hostedRestoreEpoch: 0, adapters: new Map(),
+        operatorRecoveryReadiness: DaemonCliManager.prototype.operatorRecoveryReadiness };
+    const args = { nonce: 'a'.repeat(64), fenceDigest: 'b'.repeat(64) };
+    markVerifiedMeshSender(args, t.ownerDaemonId);
+    await expect(operatorRecoveryCensusCommand({ deps: { statusInstanceId: t.workerDaemonId, cliManager: manager } } as any, args))
+        .rejects.toThrow('full_restore_and_adapter_closure_required');
 });

@@ -28,7 +28,7 @@ function mint(e: Pick<Enrollment, 'owner' | 'key'>, message: string) {
 }
 function restoreSnapshot(ctx: LowFamilyContext): string {
     const s = ctx.deps.cliManager.operatorRecoveryReadiness();
-    if (s.hostedRestoreState !== 'ready' || s.hostedFullRestoreState !== 'ready' ||
+    if (s.hostedFullRestoreVerified !== true || s.hostedRestoreState !== 'ready' || s.hostedFullRestoreState !== 'ready' ||
         s.hostedPartialRestoreCount !== 0 || s.adapterCensus !== 'absent') throw new Error('recovery_full_restore_and_adapter_closure_required');
     return JSON.stringify(s);
 }

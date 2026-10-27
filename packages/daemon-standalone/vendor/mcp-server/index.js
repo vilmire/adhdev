@@ -135777,7 +135777,7 @@ CONSUMED:${nonceHash}`);
     }
     function restoreSnapshot(ctx) {
       const s2 = ctx.deps.cliManager.operatorRecoveryReadiness();
-      if (s2.hostedRestoreState !== "ready" || s2.hostedFullRestoreState !== "ready" || s2.hostedPartialRestoreCount !== 0 || s2.adapterCensus !== "absent") throw new Error("recovery_full_restore_and_adapter_closure_required");
+      if (s2.hostedFullRestoreVerified !== true || s2.hostedRestoreState !== "ready" || s2.hostedFullRestoreState !== "ready" || s2.hostedPartialRestoreCount !== 0 || s2.adapterCensus !== "absent") throw new Error("recovery_full_restore_and_adapter_closure_required");
       return JSON.stringify(s2);
     }
     async function operatorRecoveryCommand(ctx, args) {
@@ -190571,6 +190571,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       hostedFullRestoreState = "ready";
       hostedPartialRestoreCount = 0;
       hostedRestoreEpoch = 0;
+      hostedFullRestoreVerified = false;
       adapters = /* @__PURE__ */ new Map();
       roleRestartInputs = /* @__PURE__ */ new Map();
       deps;
@@ -190896,6 +190897,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           hostedRestoreState: this.hostedRestoreState,
           hostedFullRestoreState: this.hostedFullRestoreState,
           hostedPartialRestoreCount: this.hostedPartialRestoreCount,
+          hostedFullRestoreVerified: this.hostedFullRestoreVerified,
           epoch: this.hostedRestoreEpoch,
           adapterCensus
         };
@@ -190909,13 +190911,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
         if (full || this.hostedRestoreState === "pending" && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount) {
           this.hostedFullRestoreState = "pending";
+          this.hostedFullRestoreVerified = false;
         }
         if (!full) this.hostedPartialRestoreCount++;
         this.hostedRestoreState = "pending";
         const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records, signal)).then((count) => {
-          if (full) this.hostedFullRestoreState = "ready";
+          if (full) {
+            this.hostedFullRestoreState = "ready";
+            this.hostedFullRestoreVerified = true;
+          }
           return count;
         }, (error) => {
+          this.hostedFullRestoreVerified = false;
           if (full) this.hostedFullRestoreState = "failed";
           throw error;
         }).finally(() => {

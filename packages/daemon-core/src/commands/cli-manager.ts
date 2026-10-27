@@ -180,6 +180,7 @@ export class DaemonCliManager {
     private hostedFullRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
     private hostedPartialRestoreCount = 0;
     private hostedRestoreEpoch = 0;
+    private hostedFullRestoreVerified = false;
     readonly adapters = new Map<string, CliAdapter>();
     readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
@@ -620,7 +621,7 @@ export class DaemonCliManager {
             } catch { adapterCensus = 'live'; break; }
         }
         return { hostedRestoreState: this.hostedRestoreState, hostedFullRestoreState: this.hostedFullRestoreState,
-            hostedPartialRestoreCount: this.hostedPartialRestoreCount, epoch: this.hostedRestoreEpoch, adapterCensus };
+            hostedPartialRestoreCount: this.hostedPartialRestoreCount, hostedFullRestoreVerified: this.hostedFullRestoreVerified, epoch: this.hostedRestoreEpoch, adapterCensus };
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
@@ -629,14 +630,16 @@ export class DaemonCliManager {
         if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
         if (full || (this.hostedRestoreState === 'pending' && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount)) {
             this.hostedFullRestoreState = 'pending';
+            this.hostedFullRestoreVerified = false;
         }
         if (!full) this.hostedPartialRestoreCount++;
         this.hostedRestoreState = 'pending';
         // Serialize attachment work without letting a partial inventory satisfy a full restore.
         const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records, signal)).then(count => {
-            if (full) this.hostedFullRestoreState = 'ready';
+            if (full) { this.hostedFullRestoreState = 'ready'; this.hostedFullRestoreVerified = true; }
             return count;
         }, error => {
+            this.hostedFullRestoreVerified = false;
             if (full) this.hostedFullRestoreState = 'failed';
             throw error;
         }).finally(() => {
