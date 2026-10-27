@@ -41,7 +41,6 @@ export interface DashboardHeaderProps {
     onSetCliViewMode?: (mode: CliConversationViewMode) => void;
     onHideConversation?: (conversation: ActiveConversation) => void;
     hiddenConversations?: ActiveConversation[];
-    onRestoreConversation?: (conversation: ActiveConversation) => void;
     onShowConversation?: (conversation: ActiveConversation) => void;
     onShowAllHidden?: () => void;
     onResetPanelsToMain?: () => void;
@@ -257,7 +256,6 @@ export default function DashboardHeader({
     onSetCliViewMode,
     onHideConversation,
     hiddenConversations = [],
-    onRestoreConversation,
     onShowConversation,
     onShowAllHidden,
     onResetPanelsToMain,
@@ -623,9 +621,6 @@ export default function DashboardHeader({
                                         conversations={hiddenConversations}
                                         variant="desktop"
                                         showShortcuts
-                                        onRestoreConversation={conversation => {
-                                            (onRestoreConversation ?? onShowConversation)?.(conversation);
-                                        }}
                                         onOpenConversation={conversation => {
                                             onShowConversation?.(conversation);
                                             onHiddenOpenChange(false);

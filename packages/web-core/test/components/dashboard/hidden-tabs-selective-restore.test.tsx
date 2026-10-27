@@ -169,7 +169,7 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
         container.remove()
     })
 
-    it('expands the mobile hidden-tabs card to show each hidden chat with title/provider, machine/workspace, status, and Restore/Open actions', () => {
+    it('expands the mobile hidden-tabs card to show each hidden chat with title/provider, machine/workspace, status, and one full-row Open action', () => {
         const sendDaemonCommand = vi.fn().mockResolvedValue({ success: true })
         const onOpenedConversation = vi.fn()
 
@@ -219,16 +219,25 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
         expect(idleRow.textContent).toContain('mac-studio')
         expect(idleRow.querySelector('[data-testid="hidden-conversation-status"]')?.getAttribute('data-status')).toBe('collapsed')
 
-        // Touch-sized Restore and Open buttons exist on each row
-        const restoreBtn = workingRow.querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-restore"]')
+        // desktopOpen-only (owner decision rc35): no secondary Restore — the whole
+        // row is one >=52px button that restores AND opens.
+        expect(container.querySelector('[data-testid="hidden-conversation-restore"]')).toBeNull()
         const openBtn = workingRow.querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-open"]')
-        expect(restoreBtn).not.toBeNull()
         expect(openBtn).not.toBeNull()
-        expect(restoreBtn?.className).toContain('min-h-9')
-        expect(openBtn?.className).toContain('min-h-9')
+        expect(workingRow.querySelectorAll('button')).toHaveLength(1)
+        expect(openBtn?.className).toContain('min-h-[52px]')
+        expect(openBtn?.className).toContain('w-full')
+        expect(openBtn?.hasAttribute('aria-label')).toBe(false)
+        expect(openBtn?.textContent).toContain('Fix flaky worker stream')
+        // The generating spinner leads the row (left slot), before the title.
+        const leading = openBtn!.firstElementChild as HTMLElement
+        expect(leading.getAttribute('data-testid')).toBe('hidden-conversation-leading')
+        expect(leading.querySelector('[role="status"], .loading-spinner, span')).not.toBeNull()
+        const idleLeading = idleRow.querySelector('[data-testid="hidden-conversation-leading"]')!
+        expect(idleLeading.children).toHaveLength(0)
     })
 
-    it('restores ONE hidden chat while keeping the others hidden and persists across reload with the same daemon/session keys', () => {
+    it('opens ONE hidden chat (restoring it) while keeping the others hidden and persists across reload with the same daemon/session keys', () => {
         const persistedHiddenBySession: Record<string, boolean> = {
             'sess-hidden-working': true,
             'sess-hidden-idle': true,
@@ -256,11 +265,11 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
             container.querySelector<HTMLButtonElement>('[data-testid="mobile-hidden-tabs-toggle"]')!.click()
         })
 
-        // Click Restore on the working hidden chat only
+        // Tap the working hidden chat's row only
         const workingRow = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="hidden-conversation-row"]'))
             .find(row => row.getAttribute('data-session-id') === 'sess-hidden-working')!
         act(() => {
-            workingRow.querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-restore"]')!.click()
+            workingRow.querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-open"]')!.click()
         })
 
         // Only that one session received set_conversation_prefs { hidden: false } with its coordinator routing hint
@@ -270,8 +279,9 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
             hidden: false,
             meshCoordinatorDaemonId: 'daemon-coord',
         })
-        // Restore does not navigate away from the inbox
-        expect(onOpenedConversation).not.toHaveBeenCalled()
+        // desktopOpen-only: the tap opens that chat as well
+        expect(onOpenedConversation).toHaveBeenCalledTimes(1)
+        expect(onOpenedConversation.mock.calls[0][0].sessionId).toBe('sess-hidden-working')
 
         // The restored chat is now visible in the inbox list, while the other hidden chat stays in the hidden list
         const remainingHiddenRows = Array.from(container.querySelectorAll<HTMLElement>('[data-testid="hidden-conversation-row"]'))
@@ -351,9 +361,8 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
         expect(container.querySelector('[data-testid="mobile-hidden-tabs-card"]')).toBeNull()
     })
 
-    it('reuses the same shared list in desktop DashboardHeader with separate Restore and Open actions and does not resurrect ended sessions', () => {
+    it('reuses the same shared list in desktop DashboardHeader with one Open action per row and does not resurrect ended sessions', () => {
         const ides = makeDaemonFixtures({ 'sess-hidden-working': true, 'sess-hidden-idle': true })
-        const onRestoreConversation = vi.fn()
         const onShowConversation = vi.fn()
         const onHiddenOpenChange = vi.fn()
 
@@ -379,10 +388,6 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
                         conversations={visibleConversations}
                         hiddenConversations={hiddenConversations}
                         onOpenHistory={vi.fn()}
-                        onRestoreConversation={conv => {
-                            conversationPrefs.setHidden(conv, false)
-                            onRestoreConversation(conv)
-                        }}
                         onShowConversation={conv => {
                             conversationPrefs.setHidden(conv, false)
                             onShowConversation(conv)
@@ -411,14 +416,15 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
         expect(rows).toHaveLength(2)
         expect(rows.map(r => r.getAttribute('data-session-id'))).toEqual(['sess-hidden-working', 'sess-hidden-idle'])
 
-        // Clicking Restore unhides without closing the popover or switching active tab
+        expect(container.querySelector('[data-testid="hidden-conversation-restore"]')).toBeNull()
+
+        // Clicking a row unhides + opens it and closes the popover
         act(() => {
-            rows[0].querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-restore"]')!.click()
+            rows[0].querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-open"]')!.click()
         })
-        expect(onRestoreConversation).toHaveBeenCalledTimes(1)
-        expect(onRestoreConversation.mock.calls[0][0].sessionId).toBe('sess-hidden-working')
-        expect(onShowConversation).not.toHaveBeenCalled()
-        expect(onHiddenOpenChange).not.toHaveBeenCalled()
+        expect(onShowConversation).toHaveBeenCalledTimes(1)
+        expect(onShowConversation.mock.calls[0][0].sessionId).toBe('sess-hidden-working')
+        expect(onHiddenOpenChange).toHaveBeenCalledWith(false)
 
         // Ghost-tab check: after restoring sess-hidden-working, an ended session ('sess-ended-ghost')
         // and the still-hidden session ('sess-hidden-idle') remain dropped by storedCliPanelsToDrop,
@@ -443,8 +449,7 @@ describe('hidden tabs selective per-chat restore & open (mobile + desktop)', () 
         act(() => {
             remainingRows[0].querySelector<HTMLButtonElement>('[data-testid="hidden-conversation-open"]')!.click()
         })
-        expect(onShowConversation).toHaveBeenCalledTimes(1)
-        expect(onShowConversation.mock.calls[0][0].sessionId).toBe('sess-hidden-idle')
-        expect(onHiddenOpenChange).toHaveBeenCalledWith(false)
+        expect(onShowConversation).toHaveBeenCalledTimes(2)
+        expect(onShowConversation.mock.calls[1][0].sessionId).toBe('sess-hidden-idle')
     })
 })
