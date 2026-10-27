@@ -317,6 +317,8 @@ export type {
     RemoteProjectAttachSectionProps,
     RemoteProjectAttachMachine,
 } from './components/settings/RemoteProjectAttachSection'
+export { ProjectTransferSection } from './components/settings/ProjectTransferSection'
+export type { ProjectTransferSectionProps, ProjectTransferMachine } from './components/settings/ProjectTransferSection'
 
 // ── Icons ──
 export {

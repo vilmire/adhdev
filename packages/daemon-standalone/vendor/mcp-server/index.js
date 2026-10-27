@@ -32110,41 +32110,41 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     function validateRetirementProof(repo, layer, { ref: ref2, env: env2, proofFile } = {}) {
-      const fail7 = () => {
+      const fail8 = () => {
         throw Error("invalid_normal_retirement_proof: current source/output/config and successful command logs required");
       };
       try {
         const proof = JSON.parse((0, import_node_fs3.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
-        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail7();
+        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail8();
         for (const target of ["root", "oss"]) {
-          if (target !== layer && proof.snapshots[target] !== retirementSnapshot(proof[`${target}Repo`], target)) fail7();
-          if (proof.snapshots[target] !== retirementSnapshot(proof[`${target}Repo`], target, proof.trees?.[target])) fail7();
+          if (target !== layer && proof.snapshots[target] !== retirementSnapshot(proof[`${target}Repo`], target)) fail8();
+          if (proof.snapshots[target] !== retirementSnapshot(proof[`${target}Repo`], target, proof.trees?.[target])) fail8();
         }
         if (layer === "root") {
           const pin = retirementGit(repo, ref2 ? ["rev-parse", `${ref2}:oss`] : ["rev-parse", ":oss"], env2);
-          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail7();
+          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail8();
         }
         const specs = configuredRetirementGates(proof.rootRepo, layer === "root" ? env2 : void 0);
-        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail7();
+        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail8();
         const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs3.readFileSync)(receipt.log));
-        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail7();
+        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail8();
         for (const target of ["root", "oss"]) {
           const repo2 = proof[`${target}Repo`];
           const files = entries(repo2, proof.trees[target]);
           const generated = (name) => retirementVendorDirs[target].some((dir) => name.startsWith(`${dir}/`));
           const sources = files.filter((e) => !(target === "root" && e[2] === "oss") && !generated(e[2])).map(([mode, oid, path121]) => ({ mode, oid, path: path121 }));
           const outputs2 = files.filter((e) => generated(e[2])).map(([mode, oid, name]) => [name, mode, digest(retirementGit(repo2, ["cat-file", "blob", oid], void 0, true))]);
-          if (proof.generation.sources?.[target] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target]) !== JSON.stringify(outputs2)) fail7();
+          if (proof.generation.sources?.[target] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target]) !== JSON.stringify(outputs2)) fail8();
         }
         for (let i = 0; i < specs.length; i++) {
-          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail7();
+          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail8();
           const args = [...specs[i].args];
           if (["vendor-drift-root", "vendor-drift-oss"].includes(specs[i].id)) args.push("--tree", proof.trees[specs[i].id === "vendor-drift-root" ? "root" : "oss"]);
-          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail7();
+          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail8();
         }
         return proof;
       } catch {
-        fail7();
+        fail8();
       }
     }
     var import_node_child_process22;
@@ -55365,15 +55365,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         }
         return issued;
       };
-      const tick = () => {
+      const tick2 = () => {
         if (stopped)
           return;
         void runOnce().finally(() => {
           if (!stopped)
-            timer = timers.setTimeout(tick, o.intervalMs);
+            timer = timers.setTimeout(tick2, o.intervalMs);
         });
       };
-      timer = timers.setTimeout(tick, o.intervalMs);
+      timer = timers.setTimeout(tick2, o.intervalMs);
       return {
         stop() {
           stopped = true;
@@ -60865,13 +60865,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               return;
             ps.lastActivity = this.o.clock();
             this.startHaveRound(ps);
-            const tick = () => {
+            const tick2 = () => {
               if (s2.state() !== "ready")
                 return;
               this.startHaveRound(ps);
-              ps.antiEntropyTimer = this.o.timers.setTimeout(tick, this.o.constants.ANTI_ENTROPY_MS);
+              ps.antiEntropyTimer = this.o.timers.setTimeout(tick2, this.o.constants.ANTI_ENTROPY_MS);
             };
-            ps.antiEntropyTimer = this.o.timers.setTimeout(tick, this.o.constants.ANTI_ENTROPY_MS);
+            ps.antiEntropyTimer = this.o.timers.setTimeout(tick2, this.o.constants.ANTI_ENTROPY_MS);
           }
           onClosed(s2) {
             const ps = this.peers.get(s2);
@@ -83241,7 +83241,7 @@ ${continuationNotice}` } : task,
     function startContinuousAutoFastForwardScheduler(components, listMeshesFn = listMeshes) {
       let running = false;
       const pollMs = Math.max(1e3, Math.min(resolveAutoFastForwardScanBaseMs(), DEFAULT_AUTO_FF_SCAN_BASE_MS));
-      const tick = () => {
+      const tick2 = () => {
         if (running) return;
         running = true;
         void (async () => {
@@ -83261,7 +83261,7 @@ ${continuationNotice}` } : task,
           }
         })();
       };
-      const timer = setInterval(tick, pollMs);
+      const timer = setInterval(tick2, pollMs);
       if (typeof timer.unref === "function") timer.unref();
       return {
         stop() {
@@ -84815,7 +84815,7 @@ ${continuationNotice}` } : task,
     }
     function startNewWorkHoldLifecycle(components) {
       registerNewWorkHoldDaemonComponents(components);
-      const tick = () => {
+      const tick2 = () => {
         try {
           const now = resolveNow();
           const state2 = readState(void 0, now);
@@ -84824,8 +84824,8 @@ ${continuationNotice}` } : task,
           LOG.warn("NewWorkHold", `Lifecycle tick failed: ${String(error)}`);
         }
       };
-      tick();
-      const timer = setInterval(tick, 250);
+      tick2();
+      const timer = setInterval(tick2, 250);
       timer.unref?.();
       return () => {
         clearInterval(timer);
@@ -106261,21 +106261,21 @@ ${result.stderr}`, result.code);
               resolvedBy: resolving?.resolvedBy,
               reviewTurnId
             });
-            const fail7 = (outcome) => (journal2(outcome.result), outcome);
-            if (state2.unreadable) return fail7({ result: "memory_store_unreadable" });
-            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail7({ result: "memory_user_requires_human" });
+            const fail8 = (outcome) => (journal2(outcome.result), outcome);
+            if (state2.unreadable) return fail8({ result: "memory_store_unreadable" });
+            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail8({ result: "memory_user_requires_human" });
             if (content !== null) {
               const reason = validateContent(content);
-              if (reason) return fail7({ result: "memory_invalid_format", reason });
+              if (reason) return fail8({ result: "memory_invalid_format", reason });
             }
             let index = -1;
             if (op.action !== "add") {
               const match = typeof op.match === "string" ? op.match : "";
-              if (!match.trim()) return fail7({ result: "memory_invalid_format", reason: "empty_match" });
+              if (!match.trim()) return fail8({ result: "memory_invalid_format", reason: "empty_match" });
               const hits = state2.entries.map((e, i) => e.includes(match) ? i : -1).filter((i) => i >= 0);
-              if (hits.length === 0) return fail7({ result: "memory_no_match" });
+              if (hits.length === 0) return fail8({ result: "memory_no_match" });
               if (hits.length > 1) {
-                return fail7({
+                return fail8({
                   result: "memory_ambiguous",
                   candidates: hits.map((i) => firstChars(state2.entries[i], CANDIDATE_PREVIEW_CHARS))
                 });
@@ -106289,16 +106289,16 @@ ${result.stderr}`, result.code);
             else next.splice(index, 1);
             const used2 = usedOf(next);
             if (used2 > state2.budget && used2 > state2.used) {
-              return fail7({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
+              return fail8({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
             }
             if (content !== null && state2.entries.some((e, i) => e === content && i !== index)) {
-              return fail7({ result: "memory_duplicate" });
+              return fail8({ result: "memory_duplicate" });
             }
-            if (op.action === "replace" && before === content) return fail7({ result: "memory_duplicate" });
-            if (content !== null && detectCredential(content)) return fail7({ result: "memory_secret_rejected" });
+            if (op.action === "replace" && before === content) return fail8({ result: "memory_duplicate" });
+            if (content !== null && detectCredential(content)) return fail8({ result: "memory_secret_rejected" });
             const finding = content !== null ? scanWriteContent(content) : null;
             if (finding) {
-              return fail7(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
+              return fail8(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
             }
             if (!resolving && mustStage(origin)) {
               const stagedId = this.stage(op, origin, reviewTurnId);
@@ -107928,11 +107928,11 @@ ${body}`;
           }
           /** Owner import (Hermes): origin `imported`, no staging, every format/limit/credential check. */
           importSkill(input) {
-            const fail7 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
+            const fail8 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
             const { refusal: refusal2, files } = this.prepareImport(input);
-            if (refusal2) return fail7(refusal2);
+            if (refusal2) return fail8(refusal2);
             const live = this.liveCount();
-            if (live >= SKILL_LIMITS.liveSkills) return fail7({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
+            if (live >= SKILL_LIMITS.liveSkills) return fail8({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
             this.writeFiles(input.name, [{ path: SKILL_FILE, content: composeSkillMd(input.frontmatterRaw, input.body) }, ...files]);
             const { file } = this.loadState();
             file.skills[input.name] = newSkillState("imported", this.now().toISOString());
@@ -108407,21 +108407,21 @@ ${body}`;
           /** Called only behind assistant_staged_resolve's owner-source gate. Read the
            * currently installed tree, never caller-supplied type/digest/permissions. */
           resolve(id4, decision, store2, readCurrent) {
-            const fail7 = (code) => ({ success: false, code });
-            if (decision !== "apply" && decision !== "discard") return fail7("invalid_args");
+            const fail8 = (code) => ({ success: false, code });
+            if (decision !== "apply" && decision !== "discard") return fail8("invalid_args");
             const rec5 = this.read(id4);
-            if (!rec5) return fail7("staged_not_found");
+            if (!rec5) return fail8("staged_not_found");
             if (decision === "discard") {
               this.discarded.add(`${rec5.type}\0${rec5.treeDigest}`);
               this.remove(id4);
               return { success: true, result: "discarded" };
             }
-            if (this.now().getTime() - Date.parse(rec5.createdAt) >= MAX_AGE) return fail7("expired");
+            if (this.now().getTime() - Date.parse(rec5.createdAt) >= MAX_AGE) return fail8("expired");
             const current4 = readCurrent(rec5.type);
-            if (!current4) return fail7("driver_not_installed");
+            if (!current4) return fail8("driver_not_installed");
             const risk = deriveDriverRiskClass(current4.module);
-            if (current4.module.type !== rec5.type || current4.module.name !== rec5.name || current4.module.providerVersion !== rec5.providerVersion || (current4.module.publisher ?? void 0) !== (rec5.publisher ?? void 0) || current4.treeDigest !== rec5.treeDigest || risk.riskClass !== rec5.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec5.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec5.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec5.runtime)) return fail7("stale");
-            if (!store2.approve(current4.module, rec5.treeDigest)) return fail7("driver_disabled");
+            if (current4.module.type !== rec5.type || current4.module.name !== rec5.name || current4.module.providerVersion !== rec5.providerVersion || (current4.module.publisher ?? void 0) !== (rec5.publisher ?? void 0) || current4.treeDigest !== rec5.treeDigest || risk.riskClass !== rec5.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec5.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec5.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec5.runtime)) return fail8("stale");
+            if (!store2.approve(current4.module, rec5.treeDigest)) return fail8("driver_disabled");
             this.remove(id4);
             return { success: true, result: "applied", type: rec5.type, treeDigest: rec5.treeDigest };
           }
@@ -108528,35 +108528,35 @@ ${body}`;
       const issue = selectionSchemaIssue(candidate);
       if (!isLaunchRole(role) || issue) return { ok: false, issue: issue ?? { field: "provider", reason: "invalid_schema" } };
       const selection = { ...candidate };
-      const fail7 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
+      const fail8 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
       try {
         selection.provider = ports.resolveAlias(selection.provider);
         const facts = ports.getProvider(selection.provider, selection.model);
-        if (!facts || facts.type !== selection.provider) return fail7("provider", "provider_unknown");
-        if (facts.category !== "cli") return fail7("provider", "provider_not_cli");
-        if (facts.enabled !== true) return fail7("provider", "provider_disabled");
-        if (facts.detected !== true) return fail7("provider", "provider_not_detected");
-        if (facts.quotaGated === true) return fail7("provider", "provider_quota_gated");
+        if (!facts || facts.type !== selection.provider) return fail8("provider", "provider_unknown");
+        if (facts.category !== "cli") return fail8("provider", "provider_not_cli");
+        if (facts.enabled !== true) return fail8("provider", "provider_disabled");
+        if (facts.detected !== true) return fail8("provider", "provider_not_detected");
+        if (facts.quotaGated === true) return fail8("provider", "provider_quota_gated");
         if (role === "assistant" ? facts.assistant.supported !== true : !["supported", "manual"].includes(facts.coordinator)) {
-          return fail7("provider", "provider_not_eligible");
+          return fail8("provider", "provider_not_eligible");
         }
         const warnings = [];
         if (role === "coordinator" && facts.coordinator === "manual") warnings.push("manual_mcp_setup_required");
         if (selection.model !== void 0) {
-          if (!facts.modelLaunchArgs?.length) return fail7("model", "model_unsupported");
-          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail7("model", "model_provider_mismatch");
+          if (!facts.modelLaunchArgs?.length) return fail8("model", "model_unsupported");
+          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail8("model", "model_provider_mismatch");
           const options = resolveModelOptions(facts.modelOptions, facts.discovery, facts.modelLaunchValueMap);
           if (facts.discovery?.status === "ok") {
-            if (!facts.discovery.models.length) return fail7("model", "catalog_unavailable");
-            if (!options.includes(selection.model)) return fail7("model", "model_not_offered", options);
+            if (!facts.discovery.models.length) return fail8("model", "catalog_unavailable");
+            if (!options.includes(selection.model)) return fail8("model", "model_not_offered", options);
           } else {
             warnings.push("catalog_unverified");
           }
         }
         if (selection.thinkingLevel !== void 0) {
-          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail7("thinkingLevel", "thinking_unsupported");
+          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail8("thinkingLevel", "thinking_unsupported");
           if (!facts.thinkingLevelOptions?.includes(selection.thinkingLevel)) {
-            return fail7("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
+            return fail8("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
           }
         }
         const toolRestriction = facts.assistant.toolRestriction;
@@ -108568,7 +108568,7 @@ ${body}`;
           lowersToolLock: role === "assistant" && previousToolRestriction === "enforced" && toolRestriction === "prompt_only"
         };
       } catch {
-        return fail7("provider", "catalog_unavailable");
+        return fail8("provider", "catalog_unavailable");
       }
     }
     var init_validate = __esm2({
@@ -108646,25 +108646,25 @@ ${body}`;
           }
           /** Call only after owner/tool authorization and staging decisions. */
           write(request) {
-            const fail7 = (code, reason) => ({ ok: false, code, reason, committed: false });
+            const fail8 = (code, reason) => ({ ok: false, code, reason, committed: false });
             if (!isRecord9(request) || !hasOnlyKeys3(request, ["role", "selection", "expectedRevision", "by", "origin", "previousToolRestriction"]) || !isLaunchRole(request.role) || !integer(request.expectedRevision) || !["owner", "assistant"].includes(request.by) || !origins.includes(request.origin) || request.previousToolRestriction !== void 0 && !["enforced", "prompt_only"].includes(request.previousToolRestriction)) {
-              return fail7("invalid_args", "invalid_write_request");
+              return fail8("invalid_args", "invalid_write_request");
             }
             const dir = (0, import_node_path17.resolve)(this.path, "..");
             const lock = `${this.path}.lock`;
             try {
               (0, import_node_fs21.mkdirSync)(dir, { recursive: true, mode: 448 });
             } catch {
-              return fail7("persistence_failed", "config_directory_unavailable");
+              return fail8("persistence_failed", "config_directory_unavailable");
             }
             const acquired = acquireOwnedLock(lock, this.lockOptions);
-            if (!acquired.ok) return fail7(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
+            if (!acquired.ok) return fail8(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
             try {
               const current4 = this.read();
-              if (current4.status === "invalid" || current4.status === "unreadable") return fail7("store_unavailable", current4.reason);
+              if (current4.status === "invalid" || current4.status === "unreadable") return fail8("store_unavailable", current4.reason);
               const revision = current4.status === "ok" ? current4.document.revision : 0;
               if (revision !== request.expectedRevision) return { ok: false, code: "revision_conflict", reason: "document_revision_changed", committed: false, actualRevision: revision };
-              if (revision >= Number.MAX_SAFE_INTEGER) return fail7("store_unavailable", "revision_exhausted");
+              if (revision >= Number.MAX_SAFE_INTEGER) return fail8("store_unavailable", "revision_exhausted");
               let selection = null;
               let warnings = [];
               let lowersToolLock = false;
@@ -114540,7 +114540,7 @@ ${detail.join("\n")}` : stripped;
         return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
       };
       const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
-      const fail7 = () => {
+      const fail8 = () => {
         LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
       };
@@ -114565,7 +114565,7 @@ ${detail.join("\n")}` : stripped;
           LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
           return;
         }
-        fail7();
+        fail8();
       });
       return true;
     }
@@ -122032,7 +122032,7 @@ ${asText(streams.stderr)}
       const meshId = String(mesh?.id || mesh?.name || "");
       const nodeId = entry.nodeId;
       const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
-      const fail7 = (code, error) => {
+      const fail8 = (code, error) => {
         entry.execution = { attempted: true, success: false, code, error };
         metrics.removalFailures++;
       };
@@ -122058,7 +122058,7 @@ ${asText(streams.stderr)}
         const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
         if (precheck.ok === false) {
           entry.reasonCode = "execution_precheck_refused";
-          fail7(precheck.code, precheck.error);
+          fail8(precheck.code, precheck.error);
           return;
         }
         if (deps.cleanupMeshSessions) {
@@ -122070,7 +122070,7 @@ ${asText(streams.stderr)}
         const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId });
         if (cleanup.success === false) {
           entry.reasonCode = "execution_cleanup_failed";
-          fail7(cleanup.code, cleanup.error);
+          fail8(cleanup.code, cleanup.error);
           return;
         }
         if (cleanup.skipped !== true) {
@@ -122098,7 +122098,7 @@ ${asText(streams.stderr)}
         try {
           removed = removeNodeFromMesh(meshId, nodeId) === true;
         } catch (e) {
-          fail7("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
+          fail8("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
           return;
         }
         try {
@@ -122110,7 +122110,7 @@ ${asText(streams.stderr)}
         }
         if (!removed) {
           entry.reasonCode = "execution_membership_not_removed";
-          fail7("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
+          fail8("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
           return;
         }
         try {
@@ -122396,7 +122396,7 @@ ${asText(streams.stderr)}
       const pollMs = opts.pollMs ?? INJECTION_CLEANUP_POLL_MS;
       const startedAt = Date.now();
       return new Promise((resolve62) => {
-        const tick = () => {
+        const tick2 = () => {
           const elapsed = Date.now() - startedAt;
           let ready2 = true;
           if (opts.isReady) {
@@ -122411,10 +122411,10 @@ ${asText(streams.stderr)}
             resolve62();
             return;
           }
-          const t2 = setTimeout(tick, pollMs);
+          const t2 = setTimeout(tick2, pollMs);
           t2.unref?.();
         };
-        const t = setTimeout(tick, minSettleMs);
+        const t = setTimeout(tick2, minSettleMs);
         t.unref?.();
       });
     }
@@ -125060,7 +125060,7 @@ ${asText(streams.stderr)}
         REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
       }
     });
-    function fail2(code, error, detail = {}) {
+    function fail3(code, error, detail = {}) {
       return { success: false, code, error, ...detail };
     }
     function parse(args, write, assistant) {
@@ -125096,7 +125096,7 @@ ${asText(streams.stderr)}
     }
     function diskError(stored) {
       if (stored.status === "ok" && isLaunchDefaultsDocument(stored.document)) return null;
-      return stored.status === "missing" ? fail2("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail2(
+      return stored.status === "missing" ? fail3("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail3(
         "launch_default_unavailable",
         "Launch defaults cannot be read.",
         { reason: stored.status === "ok" ? "launch_defaults_schema_invalid" : stored.reason }
@@ -125118,7 +125118,7 @@ ${asText(streams.stderr)}
       return live === "enforced" || prior === "enforced" ? "enforced" : live ?? prior;
     }
     function persistenceFailure(result) {
-      return fail2(result.code, result.reason, {
+      return fail3(result.code, result.reason, {
         reason: result.reason,
         committed: result.committed,
         ...result.actualRevision !== void 0 ? { actualRevision: result.actualRevision } : {},
@@ -125129,12 +125129,12 @@ ${asText(streams.stderr)}
     function createLaunchDefaultsHandlers(ports) {
       const run4 = async (args, write2, assistant) => {
         const input = parse(args, write2, assistant);
-        if (!input) return fail2("invalid_args", "Invalid launch defaults request.");
+        if (!input) return fail3("invalid_args", "Invalid launch defaults request.");
         let origin = "owner";
         if (assistant) {
           const authority = ports.assistantContext?.(input.sessionId);
           if (authority?.reviewTurnOpen || authority?.origin === "review") {
-            return fail2("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
+            return fail3("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
           }
           origin = authority?.origin === "human" || authority?.origin === "review_tainted" ? authority.origin : "relay";
         }
@@ -125144,7 +125144,7 @@ ${asText(streams.stderr)}
         let project;
         if (input.project) {
           const read3 = projectState(ports, input.project);
-          if (!read3.ok) return fail2(read3.code, read3.code);
+          if (!read3.ok) return fail3(read3.code, read3.code);
           project = read3.state;
         }
         if (input.action === "get") {
@@ -125177,7 +125177,7 @@ ${asText(streams.stderr)}
         let lowersToolLock = false;
         if (input.selection) {
           const validated = validateLaunchDefault(role, input.selection, ports.validation, restriction);
-          if (!validated.ok) return fail2("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
+          if (!validated.ok) return fail3("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
           selection = validated.selection;
           warnings = validated.warnings;
           lowersToolLock = validated.lowersToolLock;
@@ -125192,10 +125192,10 @@ ${asText(streams.stderr)}
           };
         }
         const revision = project?.revision ?? (stored.status === "ok" ? stored.document.revision : 0);
-        if (input.expectedRevision !== revision) return fail2("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
+        if (input.expectedRevision !== revision) return fail3("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
         const providerChange = assistant && role === "assistant" && selection !== null && (!previous || ports.validation.resolveAlias(previous.provider) !== selection.provider);
         if (assistant && (mustStage(origin) || providerChange && lowersToolLock)) {
-          if (!ports.stage) return fail2("staging_unavailable", "Owner Inbox staging is unavailable.");
+          if (!ports.stage) return fail3("staging_unavailable", "Owner Inbox staging is unavailable.");
           let stagedId;
           try {
             stagedId = ports.stage({
@@ -125209,9 +125209,9 @@ ${asText(streams.stderr)}
               ...input.sessionId ? { callerSessionId: input.sessionId } : {}
             });
           } catch {
-            return fail2("staging_failed", "Could not stage launch defaults.");
+            return fail3("staging_failed", "Could not stage launch defaults.");
           }
-          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail2("staging_failed", "Invalid owner Inbox proposal identifier.");
+          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail3("staging_failed", "Invalid owner Inbox proposal identifier.");
           return {
             success: true,
             result: "staged",
@@ -125228,13 +125228,13 @@ ${asText(streams.stderr)}
           const projectId = project.projectId;
           return ports.projects.withWriteLock(() => {
             const fresh = projectState(ports, projectId);
-            if (!fresh.ok) return fail2(fresh.code, fresh.code);
-            if (fresh.state.projectId !== projectId) return fail2("project_storage_unavailable", "Host project identity changed.");
-            if (fresh.state.revision !== input.expectedRevision) return fail2("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
-            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail2("store_unavailable", "Project revision exhausted.");
+            if (!fresh.ok) return fail3(fresh.code, fresh.code);
+            if (fresh.state.projectId !== projectId) return fail3("project_storage_unavailable", "Host project identity changed.");
+            if (fresh.state.revision !== input.expectedRevision) return fail3("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
+            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail3("store_unavailable", "Project revision exhausted.");
             if (selection) {
               const checked = validateLaunchDefault(role, selection, ports.validation);
-              if (!checked.ok) return fail2("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
+              if (!checked.ok) return fail3("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
               warnings = checked.warnings;
             }
             const nextRevision = fresh.state.revision + 1;
@@ -125245,7 +125245,7 @@ ${asText(streams.stderr)}
               setAt: Date.now()
             } : null;
             const outcome = ports.projects.replace({ projectId, revision: nextRevision, entry });
-            if (!outcome.ok) return fail2("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
+            if (!outcome.ok) return fail3("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
             return {
               success: true,
               result: "applied",
@@ -125287,12 +125287,12 @@ ${asText(streams.stderr)}
         try {
           return await run4(args, write2, assistant);
         } catch (error) {
-          if (error instanceof MeshConfigStrictLockError) return fail2(error.code, error.message, {
+          if (error instanceof MeshConfigStrictLockError) return fail3(error.code, error.message, {
             committed: false,
             ...error.lockPath ? { reason: `${error.code === "store_busy" ? "write_lock_held" : "write_lock_unavailable"}: ${error.lockPath}` } : {}
           });
-          if (error instanceof LaunchDefaultsCatalogError) return fail2("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
-          return fail2("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
+          if (error instanceof LaunchDefaultsCatalogError) return fail3("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
+          return fail3("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
         }
       };
       const read2 = (args, assistant) => guarded(args, false, assistant);
@@ -127392,11 +127392,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           const terminate = async () => {
             try {
               if (process.platform === "win32" && child.pid) {
-                await new Promise((done, fail7) => {
-                  const deadline = setTimeout(() => fail7(new Error("Tree termination unconfirmed")), 5e3);
+                await new Promise((done, fail8) => {
+                  const deadline = setTimeout(() => fail8(new Error("Tree termination unconfirmed")), 5e3);
                   (0, import_node_child_process21.execFile)("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5e3 }, (err) => {
                     clearTimeout(deadline);
-                    if (err) fail7(err);
+                    if (err) fail8(err);
                     else done();
                   });
                 });
@@ -127787,7 +127787,7 @@ ${grant.exp}`).digest("hex");
     }
     var import_node_crypto51;
     var str10;
-    var fail3;
+    var fail4;
     var attachRemoteProject;
     var remoteProjectHandlers;
     var remoteProjectSpecs;
@@ -127803,15 +127803,15 @@ ${grant.exp}`).digest("hex");
         init_mesh_host_ownership();
         init_remote_project_checkout();
         str10 = (v) => typeof v === "string" ? v : "";
-        fail3 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
+        fail4 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
         attachRemoteProject = async (ctx, args) => {
-          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args?.targetDaemonId))) return fail3("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
+          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
           try {
             await prepare(ctx, args);
           } catch (e) {
             return refusal(e);
           }
-          if (!ctx.deps.attachRemoteProject) return fail3("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
+          if (!ctx.deps.attachRemoteProject) return fail4("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
           const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
           if (res && res.code === "PROJECT_ATTACH_DISABLED") {
             const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
@@ -127876,15 +127876,15 @@ ${grant.exp}`).digest("hex");
           remote_project_register: async (ctx, args) => {
             try {
               const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
-              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args.targetDaemonId)) || !str10(args.workspace)) return fail3("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
+              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args.targetDaemonId)) || !str10(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
               const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
               if (existing) return { success: true, nodeId: existing.id, attached: true };
               if (hostSynthesized) {
                 const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
-                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail3("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
+                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
               }
               const result = await ctx.execute("add_mesh_node", { meshId: mesh.id, workspace: args.workspace, repoRoot: args.workspace, daemonId: args.targetDaemonId }, "internal", { inProcess: true });
-              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail3("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
+              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
             } catch (e) {
               return refusal(e);
             }
@@ -127898,7 +127898,7 @@ ${grant.exp}`).digest("hex");
               if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
               const old = authorizeHost(ctx, args, remote.identity);
               await verifyCheckout(workspace, remote.identity);
-              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail3("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
+              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail4("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
               const resources = await pythonResourcePreflight();
               return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? "ready" : "resource_preflight" };
             } catch (e) {
@@ -129172,7 +129172,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function str11(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail4(code, error = code, extra = {}) {
+    function fail5(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     function wrap(project, meshId, result) {
@@ -129187,13 +129187,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (isTrustedOwnerIngress(rawArgs, expectedOwnerSource)) {
             return null;
           }
-          return fail4(
+          return fail5(
             "COMMAND_SOURCE_REJECTED",
             `${verb} requires an authenticated owner or bound assistant session`
           );
         }
         if (routerIngress.source !== "ipc" || routerIngress.inProcess) {
-          return fail4(
+          return fail5(
             "COMMAND_SOURCE_REJECTED",
             `${verb} requires an authenticated owner or bound assistant session`
           );
@@ -129202,7 +129202,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         return null;
       }
       if (routerIngress?.hasForgedProvenanceFields || routerIngress?.hasRevokedOwnerProof || hasRevokedTrustedOwnerIngress(rawArgs) || "ownerVerified" in rawArgs || "_ownerVerified" in rawArgs || "source" in rawArgs || COMMAND_SOURCE_ARG in rawArgs || rawArgs.bind !== void 0 || rawArgs.token !== void 0) {
-        return fail4(
+        return fail5(
           "COMMAND_SOURCE_REJECTED",
           `${verb} rejected forged provenance or worker credentials on assistant ingress`
         );
@@ -129210,7 +129210,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const boundSid = str11(getAssistantRegistry().read()?.sessionId);
       const callerSid = readAssistantSessionId(rawArgs);
       if (!boundSid || !callerSid || callerSid !== boundSid) {
-        return fail4(
+        return fail5(
           "COMMAND_SOURCE_REJECTED",
           `${verb} requires the bound assistant session`
         );
@@ -129218,14 +129218,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const mcpCmd = readAuthenticatedMcpCommand(rawArgs, verb);
       if (mcpCmd.present) {
         if (!mcpCmd.valid) {
-          return fail4(
+          return fail5(
             "COMMAND_SOURCE_REJECTED",
             `${verb} MCP capability is invalid or revoked`
           );
         }
         const mcpScope = readAuthenticatedMcpScope(rawArgs, verb);
         if (!mcpScope || mcpScope.isCoordinator || mcpScope.sessionId !== boundSid) {
-          return fail4(
+          return fail5(
             "COMMAND_SOURCE_REJECTED",
             `${verb} MCP scope does not match the bound assistant session`
           );
@@ -129236,7 +129236,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (credScope && !credScope.isCoordinator && credScope.sessionId === boundSid) {
         return null;
       }
-      return fail4(
+      return fail5(
         "COMMAND_SOURCE_REJECTED",
         `${verb} requires an authenticated owner or session-bound assistant capability`
       );
@@ -129281,14 +129281,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const r = resolveAssistantProject(ref2, candidates, ports.aliases());
       if (!r.ok) {
         const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
-        return { ok: false, result: fail4(r.code, r.code, detail) };
+        return { ok: false, result: fail5(r.code, r.code, detail) };
       }
       const entry = r.mesh._followedRemote;
       if (entry) {
         if (entry.state === "unfollowed") {
           return {
             ok: false,
-            result: fail4(
+            result: fail5(
               "remote_project_unfollowed",
               "Remote project is not currently followed. Follow it again from the dashboard before accessing or sending.",
               { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
@@ -129303,12 +129303,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const error = verify4 && !verify4.ok ? verify4.error : "Local assistant owner binding requires explicit owner reconciliation (ensure_binding) before this followed project can resume.";
             return {
               ok: false,
-              result: fail4(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
+              result: fail5(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
             };
           }
           return {
             ok: false,
-            result: fail4(
+            result: fail5(
               "host_revoked",
               "Remote host access for this project has been revoked.",
               { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
@@ -129319,7 +129319,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (verify3 && !verify3.ok) {
           return {
             ok: false,
-            result: fail4(verify3.code, verify3.error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
+            result: fail5(verify3.code, verify3.error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
           };
         }
         const remote = ports.followedRemoteHost ? ports.followedRemoteHost(entry) : {
@@ -129348,7 +129348,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       }
       if (out.kind === "unreachable") {
-        return fail4("project_unreachable", out.error, { ...where, host: remote.label, reason: out.reason });
+        return fail5("project_unreachable", out.error, { ...where, host: remote.label, reason: out.reason });
       }
       const raw = out.result && typeof out.result === "object" ? out.result : {};
       const replacementDetail = out.code === "coordinator_replaced" ? {
@@ -129356,7 +129356,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         ...typeof raw.originalCoordinatorSessionId === "string" ? { originalCoordinatorSessionId: raw.originalCoordinatorSessionId } : {},
         ...typeof raw.currentCoordinatorSessionId === "string" || raw.currentCoordinatorSessionId === null ? { currentCoordinatorSessionId: raw.currentCoordinatorSessionId } : {}
       } : {};
-      return fail4(out.code, out.error, {
+      return fail5(out.code, out.error, {
         ...where,
         host: remote.label,
         ...out.code === "host_unsupported" ? { reason: "host_unsupported" } : {},
@@ -129920,7 +129920,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           );
           if (!composed.ok) {
             const { ok: _ok2, code, error, ...detail } = composed;
-            return fail4(code, error, detail);
+            return fail5(code, error, detail);
           }
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
@@ -129985,7 +129985,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
           const sent = await localProjectSend(ports, p.mesh, composed.text, clientId);
-          if (!sent.ok) return fail4(sent.code, sent.error, { ...where, ...sent.detail });
+          if (!sent.ok) return fail5(sent.code, sent.error, { ...where, ...sent.detail });
           ports.relay.openThread?.(meshId);
           if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
           const { ok: _ok, cursor: _cursor, ...result } = sent;
@@ -130001,7 +130001,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (caller && caller === ports.relay.assistantSessionId?.()) ports.relay.recordProjectRead?.(result, caller);
           };
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail4("invalid_args", continuation);
+          if (typeof continuation === "string") return fail5("invalid_args", continuation);
           if (p.remote) {
             const out = await callRemote(ports, { ...p, remote: p.remote }, "read", { tail, ...continuation ?? {} });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
@@ -130029,17 +130029,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return wrap(p.slug, meshId, { ...rawBody, host: p.remote.label, via: "relay" });
           }
           const r = await localProjectRead(ports, meshId, tail, continuation);
-          if (!r.ok) return fail4("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
+          if (!r.ok) return fail5("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
           acknowledge(r.result);
           return wrap(p.slug, meshId, r.result);
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
         projectAdd = assistantVerb(ASSISTANT_VERB2.projectAdd, async (ports, args) => {
           const raw = str11(args.path);
-          if (!raw) return fail4("invalid_args", "path required");
-          if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail4("invalid_args", "path must be absolute");
+          if (!raw) return fail5("invalid_args", "path required");
+          if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail5("invalid_args", "path must be absolute");
           const path121 = (0, import_path43.resolve)(expandPath3(raw));
-          if (!(0, import_fs44.existsSync)(path121) || !(0, import_fs44.statSync)(path121).isDirectory()) return fail4("path_not_found", `not a directory: ${path121}`);
+          if (!(0, import_fs44.existsSync)(path121) || !(0, import_fs44.statSync)(path121).isDirectory()) return fail5("path_not_found", `not a directory: ${path121}`);
           const plan = await ports.execute("plan_mesh_onboarding", { workspace: path121, operation: "auto" });
           const identity3 = str11(plan?.discovery?.repoIdentity);
           const meshes = ports.listMeshes();
@@ -130047,19 +130047,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str11(plan?.code))) {
             const mesh = existing ?? meshes.find((m) => (m.nodes ?? []).some((n) => (0, import_path43.resolve)(n.workspace) === path121));
             const slug2 = mesh ? projectSlugs(meshes).get(mesh.id) ?? mesh.id : "";
-            return fail4("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity3 || null });
+            return fail5("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity3 || null });
           }
-          if (!plan?.success) return fail4(str11(plan?.code) || "onboarding_plan_failed", str11(plan?.error) || "onboarding plan failed", { action: plan?.action });
+          if (!plan?.success) return fail5(str11(plan?.code) || "onboarding_plan_failed", str11(plan?.error) || "onboarding plan failed", { action: plan?.action });
           const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
           const createStep = steps.find((s2) => s2?.command === "create_mesh");
           const addStep2 = steps.find((s2) => s2?.command === "add_mesh_node");
           if (plan.plan?.kind !== "create_mesh_and_onboard" || !createStep || !addStep2) {
-            return fail4("onboarding_plan_unexpected", `unexpected onboarding plan: ${str11(plan.plan?.kind) || "none"}`);
+            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str11(plan.plan?.kind) || "none"}`);
           }
           const name = str11(args.name) || projectSlugBase(identity3) || str11(createStep.args?.name);
           const created = await ports.execute("create_mesh", { ...createStep.args, name, workspace: path121 });
           const meshId = str11(created?.mesh?.id);
-          if (!created?.success || !meshId) return fail4("project_create_failed", str11(created?.error) || "create_mesh failed");
+          if (!created?.success || !meshId) return fail5("project_create_failed", str11(created?.error) || "create_mesh failed");
           const selfDaemonId = ports.selfDaemonId();
           const node = await ports.execute("add_mesh_node", {
             ...addStep2.args,
@@ -130069,7 +130069,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
           if (!node?.success) {
             await ports.execute("delete_mesh", { meshId }).catch(() => void 0);
-            return fail4("project_add_node_failed", str11(node?.error) || "add_mesh_node failed", { rolledBack: true });
+            return fail5("project_add_node_failed", str11(node?.error) || "add_mesh_node failed", { rolledBack: true });
           }
           const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity3) || meshId;
           return wrap(slug, meshId, {
@@ -130085,7 +130085,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const meshes = ports.listMeshes();
           const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str11(n.workspace)).filter(Boolean));
           const roots = Array.isArray(args.roots) && args.roots.length > 0 ? explicitDiscoverRoots(args.roots) : defaultDiscoverRoots(workspaces);
-          if (roots.length === 0) return fail4("invalid_args", "roots must be absolute paths");
+          if (roots.length === 0) return fail5("invalid_args", "roots must be absolute paths");
           const result = discoverRepos({
             roots,
             known: {
@@ -130104,7 +130104,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
-              return fail4("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
+              return fail5("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
             }
             const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_list", {
               ...sessionId ? { sessionId } : {},
@@ -130126,7 +130126,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
         artifactRead = assistantVerb(ASSISTANT_VERB2.artifactRead, async (ports, args, ctx) => {
           const artifactId = str11(args.artifactId ?? args.artifact_id);
-          if (!artifactId) return fail4("invalid_args", "artifactId required");
+          if (!artifactId) return fail5("invalid_args", "artifactId required");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
@@ -130134,7 +130134,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
-              return fail4("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
+              return fail5("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
             }
             const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_read", { artifactId, offset: rawOffset, limit: rawLimit });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
@@ -130142,7 +130142,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return { ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: "relay" }), ...body };
           }
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          if (!read2.ok) return fail4(read2.code, read2.error, { project: p.slug, meshId });
+          if (!read2.ok) return fail5(read2.code, read2.error, { project: p.slug, meshId });
           return { ...wrap(p.slug, meshId, read2.result), ...read2.result };
         });
         assistantProjectHandlers = {
@@ -130150,7 +130150,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           [ASSISTANT_VERB2.projectAttachRemote]: assistantVerb(ASSISTANT_VERB2.projectAttachRemote, async (ports, args, ctx) => {
             const p = await resolveProject(ports, args.project);
             if (!p.ok) return p.result;
-            if (p.remote) return fail4("project_host_required", "Run attachment on this project host.");
+            if (p.remote) return fail5("project_host_required", "Run attachment on this project host.");
             return attachRemoteProject(ctx, { meshId: p.mesh.id, targetDaemonId: args.targetDaemonId });
           }),
           [ASSISTANT_VERB2.projects]: projects,
@@ -131721,7 +131721,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function startAssistantCuratorTimer(curator, opts = {}) {
       const now = opts.now ?? (() => /* @__PURE__ */ new Date());
       let running = false;
-      const tick = () => {
+      const tick2 = () => {
         if (running) return null;
         running = true;
         try {
@@ -131737,9 +131737,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       };
       const set2 = opts.setInterval ?? ((fn, ms3) => setInterval(fn, ms3));
       const clear = opts.clearInterval ?? ((h) => clearInterval(h));
-      const handle = set2(() => void tick(), opts.intervalMs ?? CURATOR_RULES.intervalMs);
+      const handle = set2(() => void tick2(), opts.intervalMs ?? CURATOR_RULES.intervalMs);
       handle.unref?.();
-      return { stop: () => clear(handle), tick };
+      return { stop: () => clear(handle), tick: tick2 };
     }
     var import_fs45;
     var DAY_MS5;
@@ -132960,7 +132960,7 @@ ${defangRelayBody(text4)}`;
     function record4(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
     }
-    function fail5(code, error = code, extra = {}) {
+    function fail6(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     async function withMeshRemoteAccessMutex(meshId, fn) {
@@ -133035,21 +133035,21 @@ ${defangRelayBody(text4)}`;
     }
     async function note(meshId, args) {
       const op = parseNoteOp(args);
-      if (typeof op === "string") return fail5("invalid_args", op);
+      if (typeof op === "string") return fail6("invalid_args", op);
       const callerSessionId = str14(args.callerSessionId);
       if (op.action === "list" || op.action === "read") {
         const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
         if (out.result === "note_not_found") {
-          return fail5("note_not_found", String(out.error || "note_not_found"), {
+          return fail6("note_not_found", String(out.error || "note_not_found"), {
             ...typeof out.noteId === "string" ? { noteId: out.noteId } : {}
           });
         }
         return { success: true, ...out };
       }
       const origin = str14(args.origin);
-      if (origin !== "human" && origin !== "owner") return fail5("invalid_args", "origin must be human or owner");
+      if (origin !== "human" && origin !== "owner") return fail6("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
-      if (refusal2) return fail5(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
+      if (refusal2) return fail6(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
       const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || void 0);
       return { success: true, ...applied };
     }
@@ -133070,7 +133070,7 @@ ${defangRelayBody(text4)}`;
         const msg = e instanceof Error ? e.message : String(e);
         return {
           ok: false,
-          result: fail5(
+          result: fail6(
             "host_unavailable_transient",
             `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`
           )
@@ -133083,35 +133083,35 @@ ${defangRelayBody(text4)}`;
         if (!strictRead.ok) return strictRead;
         mesh = strictRead.mesh;
       }
-      if (!mesh) return { ok: false, result: fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
-      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail5("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh) return { ok: false, result: fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
+      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const self = ports.selfDaemonId();
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail5("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       if (self && !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail5("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail5("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
       if (!sender || !daemonIdsEquivalent4(acl.activeDaemonId, sender)) {
-        return { ok: false, result: fail5("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
       const claimedSlot = str14(followerClaim?.accountSlot) || str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail5("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail5("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail6("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -133120,14 +133120,14 @@ ${defangRelayBody(text4)}`;
       if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead !== true) {
         return {
           ok: false,
-          result: fail5("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+          result: fail6("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
             bindingRevision: acl.bindingRevision,
             grantRevision: acl.grantRevision
           })
         };
       }
       if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
-        return { ok: false, result: fail5("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
+        return { ok: false, result: fail6("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
       }
       return { ok: true, acl };
     }
@@ -133163,46 +133163,46 @@ ${defangRelayBody(text4)}`;
       return "live";
     }
     function verifyRemoteFollowerBindingForWake(ports, mesh, meshId, sender, args) {
-      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail5("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail5("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       const self = ports.selfDaemonId();
       if (!self || !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail5("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail5("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
-      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail5("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
+      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
       const canonSender = canonicalDaemonId2(sender);
       if (!canonSender || daemonIdsEquivalent4(canonSender, self) || !daemonIdsEquivalent4(acl.activeDaemonId, canonSender)) {
-        return { ok: false, result: fail5("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
       const localBindingErr = str14(followerClaim?.localBindingError);
-      if (localBindingErr) return { ok: false, result: fail5(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
+      if (localBindingErr) return { ok: false, result: fail6(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
       const claimedSlot = str14(followerClaim?.accountSlot) || str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail5("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedActiveDaemonId = str14(followerClaim?.activeDaemonId);
       if (claimedActiveDaemonId && !daemonIdsEquivalent4(claimedActiveDaemonId, acl.activeDaemonId)) {
-        return { ok: false, result: fail5("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedHostDaemonId = str14(followerClaim?.hostDaemonId);
       if (claimedHostDaemonId && !daemonIdsEquivalent4(claimedHostDaemonId, acl.hostDaemonId)) {
-        return { ok: false, result: fail5("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail6("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail5("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail6("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -133212,10 +133212,10 @@ ${defangRelayBody(text4)}`;
     }
     async function followerProjectSend(ports, meshId, sender, args) {
       const text4 = typeof args.text === "string" ? args.text : "";
-      if (!text4.trim()) return fail5("invalid_args", "text required");
-      if (text4.length > REMOTE_SEND_MAX_CHARS) return fail5("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+      if (!text4.trim()) return fail6("invalid_args", "text required");
+      if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
       const clientId = str14(args.clientId);
-      if (!clientId || clientId.length > 200) return fail5("invalid_args", "clientId required (at most 200 characters)");
+      if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str14(args.expectedCoordinatorSessionId);
       const bodyHash = (0, import_crypto40.createHash)("sha256").update(text4, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
@@ -133245,9 +133245,9 @@ ${defangRelayBody(text4)}`;
         }
       }
       if (prior) {
-        if (prior.bodyHash !== bodyHash) return fail5("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
+        if (prior.bodyHash !== bodyHash) return fail6("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
         if (!live || prior.coordinatorSessionId !== live.sessionId) {
-          return fail5("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
+          return fail6("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
             originalCoordinatorSessionId: prior.coordinatorSessionId,
             currentCoordinatorSessionId: live?.sessionId ?? null
           });
@@ -133304,7 +133304,7 @@ ${defangRelayBody(text4)}`;
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail5("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+              result: fail6("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                 bindingRevision: acl.bindingRevision,
                 grantRevision: acl.grantRevision
               })
@@ -133316,7 +133316,7 @@ ${defangRelayBody(text4)}`;
               recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
               return {
                 ok: false,
-                result: fail5(
+                result: fail6(
                   "wake_rate_limited",
                   reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                   { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -133357,7 +133357,7 @@ ${defangRelayBody(text4)}`;
               if (acl.allowCoordinatorLaunch === false) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
-                preLaunchDeniedResult = fail5("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+                preLaunchDeniedResult = fail6("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                   bindingRevision: acl.bindingRevision,
                   grantRevision: acl.grantRevision
                 });
@@ -133367,7 +133367,7 @@ ${defangRelayBody(text4)}`;
                 const reserved = reserveFollowerWakeSlot(meshId, sender, checkNow);
                 if (!reserved.ok) {
                   recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
-                  preLaunchDeniedResult = fail5(
+                  preLaunchDeniedResult = fail6(
                     "wake_rate_limited",
                     reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                     { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -133418,7 +133418,7 @@ ${defangRelayBody(text4)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
-              result: fail5("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
+              result: fail6("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
             };
           }
           if (coord.launched) {
@@ -133444,7 +133444,7 @@ ${defangRelayBody(text4)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail5("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
+              result: fail6("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
             };
           }
           return {
@@ -133457,7 +133457,7 @@ ${defangRelayBody(text4)}`;
       };
       if (live) {
         if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-          return fail5("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
+          return fail6("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
             expectedCoordinatorSessionId,
             currentCoordinatorSessionId: live.sessionId
           });
@@ -133504,7 +133504,7 @@ ${defangRelayBody(text4)}`;
             acl = bindingCheck.acl;
             if (acl.allowCoordinatorLaunch === false) {
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
-              return { ok: false, result: fail5("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
+              return { ok: false, result: fail6("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
             }
           }
           const cursor3 = ports.coordinatorTurns(target.sessionId, 1).committed[0]?.attemptId ?? null;
@@ -133537,7 +133537,7 @@ ${defangRelayBody(text4)}`;
       }
       const { sent, cursor, messageId } = sendAttempt;
       if (!sent.success) {
-        return fail5(str14(sent.reason) || str14(sent.code) || "send_failed", str14(sent.error) || "send_failed", {
+        return fail6(str14(sent.reason) || str14(sent.code) || "send_failed", str14(sent.error) || "send_failed", {
           launched,
           coordinatorSessionId: live.sessionId,
           messageId
@@ -133583,43 +133583,43 @@ ${defangRelayBody(text4)}`;
             return followerProjectSend(ports, meshId, sender, args);
           }
           const text4 = typeof args.text === "string" ? args.text : "";
-          if (!text4.trim()) return fail5("invalid_args", "text required");
-          if (text4.length > REMOTE_SEND_MAX_CHARS) return fail5("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          if (!text4.trim()) return fail6("invalid_args", "text required");
+          if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str14(args.clientId);
-          if (!clientId || clientId.length > 200) return fail5("invalid_args", "clientId required (at most 200 characters)");
+          if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
           const sent = await localProjectSend(ports, mesh, text4, clientId);
-          if (!sent.ok) return fail5(sent.code, sent.error, sent.detail);
+          if (!sent.ok) return fail6(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
         }
         case "read": {
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail5("invalid_args", continuation);
+          if (typeof continuation === "string") return fail6("invalid_args", continuation);
           const r = await localProjectRead(ports, meshId, readTailArg(args.tail), continuation);
-          return r.ok ? { success: true, result: r.result } : fail5("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
+          return r.ok ? { success: true, result: r.result } : fail6("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
         }
         case "report": {
-          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail5("invalid_args");
+          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail6("invalid_args");
           return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
         case "artifact_list":
           return { success: true, result: localArtifactList(meshId, args) };
         case "artifact_read": {
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          return read2.ok ? { success: true, result: read2.result } : fail5(read2.code, read2.error);
+          return read2.ok ? { success: true, result: read2.result } : fail6(read2.code, read2.error);
         }
         case "inventory":
-          if (isFollower) return fail5("remote_op_forbidden", "inventory is not permitted for remote followers");
+          if (isFollower) return fail6("remote_op_forbidden", "inventory is not permitted for remote followers");
           return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : void 0) };
         case "terminal": {
-          if (isFollower) return fail5("remote_op_forbidden", "terminal is not permitted for remote followers");
-          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail5("invalid_args");
+          if (isFollower) return fail6("remote_op_forbidden", "terminal is not permitted for remote followers");
+          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail6("invalid_args");
           return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind, args.entityId, 0, args.receipts) } };
         }
         case "poll":
           return poll(ports, meshId, args);
         case "note":
-          if (isFollower) return fail5("remote_op_forbidden", "note is not permitted for remote followers");
+          if (isFollower) return fail6("remote_op_forbidden", "note is not permitted for remote followers");
           return note(meshId, args);
       }
     }
@@ -133675,14 +133675,14 @@ ${defangRelayBody(text4)}`;
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const meshId = str14(args.meshId);
           const op = str14(args.op);
-          if (!meshId) return fail5("invalid_args", "meshId required");
-          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail5("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
+          if (!meshId) return fail6("invalid_args", "meshId required");
+          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail6("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
           try {
             const ports = await projectPortsFor(ctx);
             const meshRead = readHostMeshStrict(ports, meshId);
             if (!meshRead.ok) return meshRead.result;
             const mesh = meshRead.mesh;
-            if (!mesh) return fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+            if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
             const sender = readMeshSender(args);
             const self = ports.selfDaemonId();
             const onRoster = isSenderOnWorkerRoster(mesh, self, sender);
@@ -133691,7 +133691,7 @@ ${defangRelayBody(text4)}`;
               const verified = verifyFollowerAcl(ports, mesh, meshId, sender, op, args);
               if (!verified.ok) return verified.result;
             } else if (op !== "inventory" && !ports.isHostedHere(mesh)) {
-              return fail5("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
             }
             if (op === "send" || op === "note") {
               const who = sender && self && daemonIdsEquivalent4(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
@@ -133704,12 +133704,12 @@ ${defangRelayBody(text4)}`;
           }
         };
         assistantRemoteProjectCatalog = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail5("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail6("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail6("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             const now = Date.now();
             const hostedMeshes2 = ports.listMeshes().filter((m) => ports.isHostedHere(m));
             const projects2 = hostedMeshes2.map((m) => {
@@ -133749,25 +133749,25 @@ ${defangRelayBody(text4)}`;
           }
         };
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail5("owner_ingress_required", "Remote project access changes require verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail6("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const action2 = str14(args.action) || "get";
           const meshId = str14(args.meshId);
-          if (!meshId) return fail5("invalid_args", "meshId required");
+          if (!meshId) return fail6("invalid_args", "meshId required");
           if (action2 !== "grant" && action2 !== "revoke" && action2 !== "get" && action2 !== "set_policy") {
-            return fail5("invalid_args", "action must be grant, revoke, set_policy, or get");
+            return fail6("invalid_args", "action must be grant, revoke, set_policy, or get");
           }
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail6("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             if (action2 === "get") {
               const mesh = ports.listMeshes().find((m) => m.id === meshId);
-              if (!mesh) return fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-              if (!ports.isHostedHere(mesh)) return fail5("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+              if (!ports.isHostedHere(mesh)) return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
               if (mesh.assistantRemoteAccess !== void 0 && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
-                return fail5("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                return fail6("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
               }
               return { success: true, action: "get", access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
             }
@@ -133775,10 +133775,10 @@ ${defangRelayBody(text4)}`;
               try {
                 return withStrictMeshConfigWriteLock(() => {
                   const config = readMeshConfigFromDisk();
-                  if (!config) return fail5("project_storage_unavailable", "meshes.json is unavailable");
+                  if (!config) return fail6("project_storage_unavailable", "meshes.json is unavailable");
                   const mesh = config.meshes.find((m) => m.id === meshId);
-                  if (!mesh) return fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-                  if (!ports.isHostedHere(mesh)) return fail5("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+                  if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+                  if (!ports.isHostedHere(mesh)) return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
                   const rawAcl = mesh.assistantRemoteAccess;
                   const existing = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
                   const rawGrantRev = typeof record4(rawAcl)?.grantRevision === "number" && Number.isInteger(record4(rawAcl).grantRevision) && record4(rawAcl).grantRevision > 0 ? record4(rawAcl).grantRevision : 0;
@@ -133787,11 +133787,11 @@ ${defangRelayBody(text4)}`;
                   if (action2 === "set_policy") {
                     const hasLaunchToggle = typeof args.allowCoordinatorLaunch === "boolean";
                     const hasArtifactToggle = typeof args.allowArtifactRead === "boolean";
-                    if (!hasLaunchToggle && !hasArtifactToggle) return fail5("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
-                    if (rawAcl !== void 0 && !existing) return fail5("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                    if (!existing) return fail5("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
+                    if (!hasLaunchToggle && !hasArtifactToggle) return fail6("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
+                    if (rawAcl !== void 0 && !existing) return fail6("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                    if (!existing) return fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                     if (existing.status !== "active") {
-                      return fail5("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+                      return fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
                         grantRevision: existing.grantRevision,
                         bindingRevision: existing.bindingRevision
                       });
@@ -133804,21 +133804,21 @@ ${defangRelayBody(text4)}`;
                     mesh.assistantRemoteAccess = updated;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail5("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail6("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(updated.allowCoordinatorLaunch)}, allowArtifactRead=${String(updated.allowArtifactRead)}, grantRev=${updated.grantRevision})`);
                     return { success: true, action: "set_policy", access: updated };
                   }
                   if (action2 === "grant") {
                     const rawActiveDaemonId = str14(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
-                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail5("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail5("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail6("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail6("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
                     const slot = str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail5("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail6("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
-                    if (bindingRevision === null) return fail5("invalid_args", "bindingRevision must be a positive integer");
+                    if (bindingRevision === null) return fail6("invalid_args", "bindingRevision must be a positive integer");
                     if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                      return fail5("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
+                      return fail6("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
@@ -133839,7 +133839,7 @@ ${defangRelayBody(text4)}`;
                     mesh.assistantRemoteAccess = binding;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail5("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail6("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Granted remote assistant access on mesh ${meshId} to ${activeDaemonId.slice(0, 24)} (bindingRev=${bindingRevision}, grantRev=${nextGrantRevision2})`);
                     return { success: true, action: "grant", access: binding };
                   }
@@ -133863,12 +133863,12 @@ ${defangRelayBody(text4)}`;
                   mesh.assistantRemoteAccess = tombstone;
                   mesh.updatedAt = new Date(now).toISOString();
                   const saved = saveMeshConfigDurable(config);
-                  if (!saved.ok) return fail5("persistence_failed", saved.reason);
+                  if (!saved.ok) return fail6("persistence_failed", saved.reason);
                   LOG.info("Assistant", `Revoked remote assistant access on mesh ${meshId} (grantRev=${nextGrantRevision})`);
                   return { success: true, action: "revoke", access: tombstone };
                 });
               } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) return fail5(err.code, err.message);
+                if (err instanceof MeshConfigStrictLockError) return fail6(err.code, err.message);
                 throw err;
               }
             });
@@ -134242,7 +134242,7 @@ ${defangRelayBody(text4)}`;
       let tickTimer = null;
       let ticking = false;
       let lastMetricsPrune = 0;
-      const tick = () => {
+      const tick2 = () => {
         if (ticking) return;
         ticking = true;
         try {
@@ -134289,7 +134289,7 @@ ${defangRelayBody(text4)}`;
         }, { name: "assistant.context" }));
         relay.start();
         offs.push(() => relay.stop());
-        tickTimer = setInterval(tick, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);
+        tickTimer = setInterval(tick2, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);
         tickTimer.unref?.();
         offs.push(() => {
           if (tickTimer) clearInterval(tickTimer);
@@ -139051,7 +139051,7 @@ ${tail}` : ""
         }
         return report;
       }
-      function tick() {
+      function tick2() {
         if (inFlight4) {
           again = true;
           return inFlight4;
@@ -139079,7 +139079,7 @@ ${tail}` : ""
       }
       return {
         maintenanceInventory: () => ({ inFlight: inFlight4 !== null || stopInspectionPending, forced: [...forced].sort(), stopped }),
-        tick,
+        tick: tick2,
         requestProbe(attemptId) {
           forced.add(attemptId);
           wake?.();
@@ -141426,6 +141426,7 @@ ${tail}` : ""
       PROTOCOL_VERSION: () => PROTOCOL_VERSION,
       PROVIDER_CHANNEL_ENV_VAR: () => PROVIDER_CHANNEL_ENV_VAR,
       PRUNABLE_ORPHAN_STALE_REASONS: () => PRUNABLE_ORPHAN_STALE_REASONS,
+      ProjectTransferEngine: () => ProjectTransferEngine,
       ProviderChannelError: () => ProviderChannelError,
       ProviderChannelRuntime: () => ProviderChannelRuntime,
       ProviderChannelStore: () => ProviderChannelStore,
@@ -141619,6 +141620,7 @@ ${tail}` : ""
       configSettingsPolicy: () => configSettingsPolicy,
       configureDebugTraceStore: () => configureDebugTraceStore,
       configureMeshPublisher: () => configureMeshPublisher,
+      configureProjectTransfer: () => configureProjectTransfer,
       consoleSymbols: () => consoleSymbols,
       contentTopicsFor: () => contentTopicsFor,
       cooperativeMaintenanceStatus: () => cooperativeMaintenanceStatus,
@@ -141656,6 +141658,7 @@ ${tail}` : ""
       decideDispatchRoute: () => decideDispatchRoute,
       decideNodeRoutes: () => decideNodeRoutes,
       defaultNoticeEventId: () => defaultNoticeEventId,
+      defaultTransferBaseDir: () => defaultTransferBaseDir,
       defineCommandSpecs: () => defineCommandSpecs,
       delegatedWorkerAutoApproveSettings: () => delegatedWorkerAutoApproveSettings,
       deleteMesh: () => deleteMesh,
@@ -141694,6 +141697,7 @@ ${tail}` : ""
       extendNewWorkHold: () => extendNewWorkHold,
       extractFinalAssistantSummaryEvidence: () => extractFinalAssistantSummaryEvidence2,
       extractScriptPathFromCommand: () => extractScriptPathFromCommand,
+      extractSdpFingerprint: () => extractSdpFingerprint,
       failRetentionExpiredParkedTask: () => failRetentionExpiredParkedTask,
       fastForwardMeshNode: () => fastForwardMeshNode,
       fetchAntigravityQuota: () => fetchAntigravityQuota,
@@ -141769,6 +141773,7 @@ ${tail}` : ""
       getParkedTasks: () => getParkedTasks,
       getPeerSecret: () => getPeerSecret,
       getProcessInstanceContext: () => getProcessInstanceContext,
+      getProjectTransferEngine: () => getProjectTransferEngine,
       getQueue: () => getQueue,
       getRecentActivity: () => getRecentActivity,
       getRecentCommands: () => getRecentCommands,
@@ -145002,7 +145007,7 @@ ${tail}` : ""
       let serverOriginGrantPublicKey;
       let serverKeyRotation;
       let serverKeyRotationChain;
-      const fail7 = (code, notifyPeer) => {
+      const fail8 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -145031,28 +145036,28 @@ ${tail}` : ""
         },
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail7("bad_frame", false);
+          if (state2 === "done") return fail8("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail7(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail7(parsed.code, false);
-          if (state2 === "idle") return fail7("bad_frame", true);
+          if (isParseError(parsed)) return fail8(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail8(parsed.code, false);
+          if (state2 === "idle") return fail8("bad_frame", true);
           if (state2 === "awaiting_challenge") {
-            if (parsed.kind !== "mesh_challenge") return fail7("bad_frame", true);
+            if (parsed.kind !== "mesh_challenge") return fail8("bad_frame", true);
             if (opts.serverDaemonIdExpected && canon(opts.serverDaemonIdExpected) !== canon(parsed.daemonId)) {
-              return fail7("bad_proof", true);
+              return fail8("bad_proof", true);
             }
             const peerHasCap = hasOriginGrantCap(parsed.caps);
             const peerSentKeyMaterial = Boolean(
               parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
             );
             if (peerSentKeyMaterial && !peerHasCap) {
-              return fail7("bad_proof", true);
+              return fail8("bad_proof", true);
             }
             if (localHasOriginGrantCap && peerHasCap && !parsed.originGrantPublicKey) {
-              return fail7("bad_proof", true);
+              return fail8("bad_proof", true);
             }
             if (localHasOriginGrantCap && !peerHasCap && hasCapableNonceSentinel(parsed.nonce, opts.secret, "server", opts.meshId, parsed.daemonId)) {
-              return fail7("bad_proof", true);
+              return fail8("bad_proof", true);
             }
             negotiatedOriginGrant = localHasOriginGrantCap && peerHasCap;
             const inputs = negotiatedOriginGrant ? {
@@ -145078,7 +145083,7 @@ ${tail}` : ""
               clientDaemonId: opts.daemonId,
               serverDaemonId: parsed.daemonId
             };
-            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail7("bad_proof", true);
+            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail8("bad_proof", true);
             if (negotiatedOriginGrant && parsed.originGrantPublicKey) {
               if (!canAcceptPeerOriginGrantPublicKey(
                 opts.meshId,
@@ -145089,7 +145094,7 @@ ${tail}` : ""
                   rotationChain: parsed.keyRotationChain
                 }
               )) {
-                return fail7("bad_proof", true);
+                return fail8("bad_proof", true);
               }
               serverCaps = parsed.caps;
               serverOriginGrantPublicKey = parsed.originGrantPublicKey;
@@ -145111,11 +145116,11 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_ok") return fail7("bad_frame", true);
-          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail7("bad_frame", true);
+          if (parsed.kind !== "mesh_ok") return fail8("bad_frame", true);
+          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail8("bad_frame", true);
           if (!negotiatedOriginGrant) {
             if (parsed.originGrantPublicKey !== void 0 || parsed.keyRotation !== void 0 || parsed.keyRotationChain !== void 0 || parsed.proof !== void 0 || hasOriginGrantCap(parsed.caps)) {
-              return fail7("bad_proof", true);
+              return fail8("bad_proof", true);
             }
             state2 = "done";
             step = {
@@ -145126,16 +145131,16 @@ ${tail}` : ""
             return step;
           }
           if (!hasOriginGrantCap(parsed.caps) || !capsEquivalent(parsed.caps, serverCaps)) {
-            return fail7("bad_proof", true);
+            return fail8("bad_proof", true);
           }
           if (!originGrantPublicKeysEqual(serverOriginGrantPublicKey, parsed.originGrantPublicKey)) {
-            return fail7("bad_proof", true);
+            return fail8("bad_proof", true);
           }
           if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
-            return fail7("bad_proof", true);
+            return fail8("bad_proof", true);
           }
           if (parsed.keyRotationChain && !rotationChainsEquivalent(parsed.keyRotationChain, serverKeyRotationChain)) {
-            return fail7("bad_proof", true);
+            return fail8("bad_proof", true);
           }
           const okInputs = {
             secret: opts.secret,
@@ -145154,7 +145159,7 @@ ${tail}` : ""
             serverKeyRotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
           };
           if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
-            return fail7("bad_proof", true);
+            return fail8("bad_proof", true);
           }
           const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
           const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : void 0;
@@ -145168,7 +145173,7 @@ ${tail}` : ""
                 rotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
               }
             );
-            if (!recorded) return fail7("bad_proof", true);
+            if (!recorded) return fail8("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -145198,7 +145203,7 @@ ${tail}` : ""
       let clientOriginGrantPublicKey;
       let clientKeyRotation;
       let clientKeyRotationChain;
-      const fail7 = (code, notifyPeer) => {
+      const fail8 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -145212,12 +145217,12 @@ ${tail}` : ""
       return {
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail7("bad_frame", false);
+          if (state2 === "done") return fail8("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail7(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail7(parsed.code, false);
+          if (isParseError(parsed)) return fail8(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail8(parsed.code, false);
           if (state2 === "awaiting_hello") {
-            if (parsed.kind !== "mesh_hello") return fail7("bad_frame", true);
+            if (parsed.kind !== "mesh_hello") return fail8("bad_frame", true);
             const canonicalPeer = canon(parsed.daemonId);
             const secret = opts.resolveSecret(parsed.meshId, canonicalPeer);
             const serverNonce = localHasOriginGrantCap && secret ? mintCapableHandshakeNonce(secret, "server", parsed.meshId, opts.localDaemonId) : mintHandshakeNonce();
@@ -145227,15 +145232,15 @@ ${tail}` : ""
             );
             if (localHasOriginGrantCap) {
               if (clientSentKeyMaterial && !clientHasCap) {
-                if (secret === null || secret === "") return fail7("unknown_peer", true);
-                return fail7("bad_proof", true);
+                if (secret === null || secret === "") return fail8("unknown_peer", true);
+                return fail8("bad_proof", true);
               }
               if (clientHasCap && !parsed.originGrantPublicKey) {
-                if (secret === null || secret === "") return fail7("unknown_peer", true);
-                return fail7("bad_proof", true);
+                if (secret === null || secret === "") return fail8("unknown_peer", true);
+                return fail8("bad_proof", true);
               }
               if (!clientHasCap && secret && hasCapableNonceSentinel(parsed.nonce, secret, "client", parsed.meshId, parsed.daemonId)) {
-                return fail7("bad_proof", true);
+                return fail8("bad_proof", true);
               }
             }
             negotiatedOriginGrant = Boolean(
@@ -145269,7 +145274,7 @@ ${tail}` : ""
             const okProof = negotiatedOriginGrant ? computeOkProof(inputs) : void 0;
             if (secret === null || secret === "") {
               proofsEqual(serverProof, clientProof);
-              return fail7("unknown_peer", true);
+              return fail8("unknown_peer", true);
             }
             expectedClientProof = clientProof;
             expectedOkProof = okProof;
@@ -145295,8 +145300,8 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_proof") return fail7("bad_frame", true);
-          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail7("bad_proof", true);
+          if (parsed.kind !== "mesh_proof") return fail8("bad_frame", true);
+          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail8("bad_proof", true);
           const validClientPubKey = negotiatedOriginGrant && clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
           if (validClientPubKey) {
             const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
@@ -145308,7 +145313,7 @@ ${tail}` : ""
                 rotationChain: clientKeyRotationChain
               }
             );
-            if (!recorded) return fail7("bad_proof", true);
+            if (!recorded) return fail8("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -169833,13 +169838,446 @@ ${output}` : "";
     var fs88 = __toESM2(require("fs"));
     var path97 = __toESM2(require("path"));
     init_dist();
+    var TransferFsError = class extends Error {
+      reason;
+      code;
+      nativeMessage;
+      constructor(reason, message, nativeCode, nativeMessage) {
+        super(message);
+        this.name = "TransferFsError";
+        this.reason = reason;
+        this.code = nativeCode ?? reason;
+        this.nativeMessage = nativeMessage;
+      }
+    };
+    var MAX_RELATIVE_PATH_BYTES = 4096;
+    var MAX_PATH_SEGMENTS = 64;
+    var MAX_SEGMENT_BYTES = 255;
+    var WINDOWS_RESERVED_DOS_STEM_RE = /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$|clock\$)$/i;
+    var PROTECTED_METADATA_SEGMENTS = /* @__PURE__ */ new Set([
+      ".git",
+      ".hg",
+      ".svn",
+      ".adhdev-transfer-staging"
+    ]);
+    function hasUnpairedSurrogate(str18) {
+      for (let i = 0; i < str18.length; i++) {
+        const code = str18.charCodeAt(i);
+        if (code >= 55296 && code <= 56319) {
+          if (i + 1 >= str18.length) return true;
+          const low = str18.charCodeAt(i + 1);
+          if (low < 56320 || low > 57343) return true;
+          i++;
+        } else if (code >= 56320 && code <= 57343) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function isProtectedMetadataSegment(segment) {
+      return PROTECTED_METADATA_SEGMENTS.has(segment.toLowerCase());
+    }
+    function validateTransferSegment(segment, options) {
+      if (typeof segment !== "string" || segment.length === 0) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          "Path segment must be a non-empty string",
+          "EINVAL"
+        );
+      }
+      if (segment === "." || segment === "..") {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Dot segment "${segment}" is forbidden`,
+          "EINVAL"
+        );
+      }
+      if (hasUnpairedSurrogate(segment)) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          "Path segment contains unpaired UTF-16 surrogate",
+          "EINVAL"
+        );
+      }
+      if (segment !== segment.normalize("NFC")) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Path segment "${segment}" is not Unicode NFC normalized`,
+          "EINVAL"
+        );
+      }
+      const byteLen = Buffer.byteLength(segment, "utf8");
+      if (byteLen === 0 || byteLen > MAX_SEGMENT_BYTES) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Path segment byte length (${byteLen}) exceeds ${MAX_SEGMENT_BYTES}`,
+          "EINVAL"
+        );
+      }
+      if (segment.endsWith(".") || segment.endsWith(" ")) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Path segment "${segment}" has a trailing dot or space`,
+          "EINVAL"
+        );
+      }
+      for (let i = 0; i < segment.length; i++) {
+        const code = segment.charCodeAt(i);
+        if (code < 32 || code === 127) {
+          throw new TransferFsError(
+            "PATH_TRAVERSAL_REJECTED",
+            "Path segment contains NUL or control characters",
+            "EINVAL"
+          );
+        }
+        const ch = segment[i];
+        if (ch === "/" || ch === "\\") {
+          throw new TransferFsError(
+            "PATH_TRAVERSAL_REJECTED",
+            `Path segment "${segment}" contains a path separator`,
+            "EINVAL"
+          );
+        }
+        if (ch === ":") {
+          throw new TransferFsError(
+            "PATH_TRAVERSAL_REJECTED",
+            `Path segment "${segment}" contains ":" (NTFS Alternate Data Stream / drive syntax forbidden)`,
+            "EINVAL"
+          );
+        }
+        if (ch === "~") {
+          throw new TransferFsError(
+            "PATH_TRAVERSAL_REJECTED",
+            `Path segment "${segment}" contains "~" (Windows 8.3 short-name alias forbidden)`,
+            "EINVAL"
+          );
+        }
+      }
+      const dotIdx = segment.indexOf(".");
+      const rawStem = dotIdx === -1 ? segment : segment.slice(0, dotIdx);
+      const stem = rawStem.replace(/ +$/g, "");
+      if (WINDOWS_RESERVED_DOS_STEM_RE.test(stem)) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Path segment "${segment}" uses reserved Windows DOS device name "${stem}"`,
+          "EINVAL"
+        );
+      }
+      if (!options?.allowProtectedMetadata && isProtectedMetadataSegment(segment)) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Protected metadata segment "${segment}" is forbidden`,
+          "EINVAL"
+        );
+      }
+      return segment;
+    }
+    function splitPortableRelativePath(relPath, options) {
+      if (typeof relPath !== "string" || relPath.length === 0) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          "Relative path must be a non-empty string",
+          "EINVAL"
+        );
+      }
+      const totalBytes = Buffer.byteLength(relPath, "utf8");
+      if (totalBytes > MAX_RELATIVE_PATH_BYTES) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Relative path byte length (${totalBytes}) exceeds ${MAX_RELATIVE_PATH_BYTES}`,
+          "EINVAL"
+        );
+      }
+      if (relPath.startsWith("/") || relPath.endsWith("/") || relPath.includes("\\")) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Relative path "${relPath}" must use forward slashes without leading/trailing slashes or backslashes`,
+          "EINVAL"
+        );
+      }
+      const parts = relPath.split("/");
+      if (parts.length === 0 || parts.length > MAX_PATH_SEGMENTS) {
+        throw new TransferFsError(
+          "PATH_TRAVERSAL_REJECTED",
+          `Relative path segment count (${parts.length}) exceeds ${MAX_PATH_SEGMENTS}`,
+          "EINVAL"
+        );
+      }
+      for (const part of parts) {
+        validateTransferSegment(part, options);
+      }
+      return parts;
+    }
     var crypto10 = __toESM2(require("crypto"));
     var fs82 = __toESM2(require("fs"));
     var import_node_module2 = require("module");
     var path92 = __toESM2(require("path"));
     var import_node_url = require("url");
     var import_meta2 = {};
+    var ADDON_FILE = "transfer_fs_node.node";
     var requireNative = (0, import_node_module2.createRequire)(import_meta2.url);
+    function resolveNativeRootDirs() {
+      const moduleDir = path92.dirname((0, import_node_url.fileURLToPath)(import_meta2.url));
+      return [
+        path92.resolve(moduleDir, "native"),
+        path92.resolve(moduleDir, "../native"),
+        path92.resolve(moduleDir, "../src/transfer-fs/native"),
+        path92.resolve(moduleDir, "../../src/transfer-fs/native"),
+        path92.resolve(process.cwd(), "oss/packages/daemon-core/src/transfer-fs/native"),
+        path92.resolve(process.cwd(), "packages/daemon-core/src/transfer-fs/native"),
+        path92.resolve(process.cwd(), "src/transfer-fs/native")
+      ];
+    }
+    function listSamePlatformTriplets(prebuiltRoot, exactTriplet) {
+      const prefix = `${process.platform}-${process.arch}-`;
+      try {
+        return fs82.readdirSync(prebuiltRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && entry.name !== exactTriplet).map((entry) => entry.name).filter((name) => fs82.existsSync(path92.join(prebuiltRoot, name, ADDON_FILE))).sort();
+      } catch {
+        return [];
+      }
+    }
+    var cachedBinding2 = null;
+    function loadRawBinding() {
+      if (cachedBinding2) return cachedBinding2;
+      const triplet = `${process.platform}-${process.arch}-node${process.versions.modules}`;
+      const explicitPrebuiltDir = process.env.ADHDEV_TRANSFER_FS_PREBUILT_DIR ? path92.resolve(process.env.ADHDEV_TRANSFER_FS_PREBUILT_DIR) : null;
+      const candidates = [];
+      if (explicitPrebuiltDir) {
+        candidates.push(path92.join(explicitPrebuiltDir, triplet, ADDON_FILE));
+        candidates.push(path92.join(explicitPrebuiltDir, ADDON_FILE));
+      }
+      for (const nativeRoot of resolveNativeRootDirs()) {
+        const prebuiltRoot = path92.join(nativeRoot, "prebuilt");
+        candidates.push(path92.join(nativeRoot, "build", "Release", ADDON_FILE));
+        candidates.push(path92.join(nativeRoot, "build", "Debug", ADDON_FILE));
+        candidates.push(path92.join(prebuiltRoot, triplet, ADDON_FILE));
+        for (const fallback of listSamePlatformTriplets(prebuiltRoot, triplet)) {
+          candidates.push(path92.join(prebuiltRoot, fallback, ADDON_FILE));
+        }
+      }
+      const seen2 = /* @__PURE__ */ new Set();
+      const errors = [];
+      for (const candidate of candidates) {
+        if (seen2.has(candidate)) continue;
+        seen2.add(candidate);
+        if (!fs82.existsSync(candidate)) continue;
+        try {
+          const loaded = requireNative(candidate);
+          cachedBinding2 = loaded;
+          return loaded;
+        } catch (err) {
+          errors.push(`${candidate}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      throw new Error(
+        `Unable to load transfer_fs_node native binding for triplet "${triplet}". Attempts: ${errors.join(" | ") || "no candidate files found"}`
+      );
+    }
+    function classifyNativeError(op, err) {
+      if (err instanceof TransferFsError) return err;
+      const nativeErr = err;
+      const code = String(nativeErr?.code ?? "EIO");
+      const msg = String(nativeErr?.message ?? err);
+      let reason = "IO_ERROR";
+      if (code === "ATOMIC_NOREPLACE_UNSUPPORTED" || /WIN_(?:1|50|120)\b/.test(msg)) {
+        reason = "ATOMIC_NOREPLACE_UNSUPPORTED";
+      } else if (code === "PUBLISHED_HARDLINK_DETECTED") {
+        reason = "PUBLISHED_HARDLINK_DETECTED";
+      } else if (code === "POST_RENAME_QUARANTINED") {
+        reason = "POST_RENAME_QUARANTINED";
+      } else if (code === "ELOOP" || /WIN_1920\b/.test(msg)) {
+        reason = "SYMLINK_OR_REPARSE_REJECTED";
+      } else if (code === "EEXIST" || /WIN_(?:80|183)\b/.test(msg)) {
+        reason = "TARGET_EXISTS";
+      } else if (code === "EINVAL" || /WIN_(?:87|123|161|206)\b/.test(msg)) {
+        reason = "PATH_TRAVERSAL_REJECTED";
+      } else if (code === "EMLINK") {
+        reason = "HARDLINK_REJECTED";
+      } else if (code === "ENOSPC" || /WIN_(?:39|112)\b/.test(msg)) {
+        reason = "DISK_SPACE_EXHAUSTED";
+      } else if (code === "EBADF" || /WIN_6\b/.test(msg)) {
+        reason = "INVALID_HANDLE";
+      } else if (op === "openRoot" || op === "probeRoot") {
+        reason = "ROOT_UNAVAILABLE";
+      }
+      return new TransferFsError(reason, `${op}: ${msg}`, code, msg);
+    }
+    function getBindingInfo() {
+      return loadRawBinding().getBindingInfo();
+    }
+    function openRoot(rootPath) {
+      if (typeof rootPath !== "string" || rootPath.trim().length === 0 || rootPath.includes("\0")) {
+        throw new TransferFsError(
+          "ROOT_UNAVAILABLE",
+          "Root path must be a non-empty string without NUL bytes",
+          "EINVAL"
+        );
+      }
+      try {
+        return loadRawBinding().openRoot(rootPath);
+      } catch (err) {
+        throw classifyNativeError("openRoot", err);
+      }
+    }
+    function walkDir(parentHandle, segment, options) {
+      validateTransferSegment(segment, options);
+      try {
+        return loadRawBinding().walkDir(parentHandle, segment);
+      } catch (err) {
+        throw classifyNativeError("walkDir", err);
+      }
+    }
+    function mkdirExcl(parentHandle, segment, options) {
+      validateTransferSegment(segment, options);
+      try {
+        return loadRawBinding().mkdirExcl(parentHandle, segment);
+      } catch (err) {
+        throw classifyNativeError("mkdirExcl", err);
+      }
+    }
+    function createExcl(parentHandle, segment, options) {
+      validateTransferSegment(segment, options);
+      try {
+        return loadRawBinding().createExcl(parentHandle, segment);
+      } catch (err) {
+        throw classifyNativeError("createExcl", err);
+      }
+    }
+    function openFileRead(parentHandle, segment, options) {
+      validateTransferSegment(segment, options);
+      try {
+        return loadRawBinding().openFileRead(parentHandle, segment);
+      } catch (err) {
+        throw classifyNativeError("openFileRead", err);
+      }
+    }
+    function renameAtExcl(srcDirHandle, srcName, targetDirHandle, newName, options) {
+      validateTransferSegment(srcName, options);
+      validateTransferSegment(newName, options);
+      try {
+        return loadRawBinding().renameAtExcl(srcDirHandle, srcName, targetDirHandle, newName);
+      } catch (err) {
+        throw classifyNativeError("renameAtExcl", err);
+      }
+    }
+    function writeHandle(handle, buffer, offset, length, position) {
+      const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      try {
+        return loadRawBinding().writeHandle(handle, buf, offset, length, position);
+      } catch (err) {
+        throw classifyNativeError("writeHandle", err);
+      }
+    }
+    function readHandle(handle, buffer, offset, length, position) {
+      const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+      try {
+        return loadRawBinding().readHandle(handle, buf, offset, length, position);
+      } catch (err) {
+        throw classifyNativeError("readHandle", err);
+      }
+    }
+    function fullFsync(handle) {
+      try {
+        return loadRawBinding().fullFsync(handle);
+      } catch (err) {
+        throw classifyNativeError("fullFsync", err);
+      }
+    }
+    function unlinkAt(parentHandle, segment, isDirectory = false, options) {
+      validateTransferSegment(segment, options);
+      try {
+        return loadRawBinding().unlinkAt(parentHandle, segment, isDirectory);
+      } catch (err) {
+        throw classifyNativeError("unlinkAt", err);
+      }
+    }
+    function getIdentity(handle) {
+      try {
+        return loadRawBinding().getIdentity(handle);
+      } catch (err) {
+        throw classifyNativeError("getIdentity", err);
+      }
+    }
+    function probeRoot(rootPath, options) {
+      let probe;
+      try {
+        probe = loadRawBinding().probeRoot(rootPath);
+      } catch (err) {
+        throw classifyNativeError("probeRoot", err);
+      }
+      if (options?.requireAtomicNoReplace && !probe.supportsAtomicNoReplace) {
+        throw new TransferFsError(
+          "ATOMIC_NOREPLACE_UNSUPPORTED",
+          `probeRoot: Root "${rootPath}" on filesystem "${probe.filesystem}" does not support atomic no-replace rename`,
+          "ATOMIC_NOREPLACE_UNSUPPORTED"
+        );
+      }
+      return probe;
+    }
+    function close(handle) {
+      try {
+        return loadRawBinding().close(handle);
+      } catch (err) {
+        throw classifyNativeError("close", err);
+      }
+    }
+    function resolveParentDirHandle(rootHandle, relPath, options) {
+      const segments = splitPortableRelativePath(relPath, {
+        allowProtectedMetadata: options?.allowProtectedMetadata
+      });
+      const leafName = segments[segments.length - 1];
+      const dirSegments = segments.slice(0, -1);
+      const intermediateHandles = [];
+      const createdDirs = [];
+      let currentHandle = rootHandle;
+      try {
+        for (const seg of dirSegments) {
+          let nextHandle;
+          try {
+            nextHandle = walkDir(currentHandle, seg, {
+              allowProtectedMetadata: options?.allowProtectedMetadata
+            });
+          } catch (err) {
+            const tfErr = err;
+            if (options?.createDirs && tfErr.code === "ENOENT") {
+              try {
+                nextHandle = mkdirExcl(currentHandle, seg, {
+                  allowProtectedMetadata: options?.allowProtectedMetadata
+                });
+                createdDirs.push({ parentHandle: currentHandle, name: seg });
+              } catch (mkErr) {
+                const mkTfErr = mkErr;
+                if (mkTfErr.code === "EEXIST") {
+                  nextHandle = walkDir(currentHandle, seg, {
+                    allowProtectedMetadata: options?.allowProtectedMetadata
+                  });
+                } else {
+                  throw mkErr;
+                }
+              }
+            } else {
+              throw err;
+            }
+          }
+          intermediateHandles.push(nextHandle);
+          currentHandle = nextHandle;
+        }
+        return {
+          parentHandle: currentHandle,
+          leafName,
+          intermediateHandles,
+          createdDirs
+        };
+      } catch (err) {
+        for (let i = intermediateHandles.length - 1; i >= 0; i--) {
+          try {
+            close(intermediateHandles[i]);
+          } catch {
+          }
+        }
+        throw err;
+      }
+    }
     var MIB = 1024 * 1024;
     var GIB = 1024 * MIB;
     var TRANSFER_LIMITS = Object.freeze({
@@ -169872,21 +170310,1939 @@ ${output}` : "";
     });
     var MAX_FRAME_PAYLOAD_BYTES = TRANSFER_LIMITS.maxFrameBytes - TRANSFER_LIMITS.frameHeaderBytes;
     var import_node_crypto39 = require("crypto");
+    var ManifestError = class extends Error {
+      constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "ManifestError";
+      }
+    };
+    var SHA256_HEX = /^[0-9a-f]{64}$/;
+    var TRANSFER_ID_RE = /^[0-9a-f]{32}$/;
+    function isTransferId(v) {
+      return typeof v === "string" && TRANSFER_ID_RE.test(v);
+    }
+    function canonicalJson2(value) {
+      if (value === null || typeof value !== "object") return JSON.stringify(value);
+      if (Array.isArray(value)) return `[${value.map(canonicalJson2).join(",")}]`;
+      const obj = value;
+      const keys = Object.keys(obj).filter((k) => obj[k] !== void 0).sort();
+      return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson2(obj[k])}`).join(",")}}`;
+    }
+    function sha256Hex2(text4) {
+      return (0, import_node_crypto39.createHash)("sha256").update(text4, "utf8").digest("hex");
+    }
+    function byteCompare(a, b) {
+      return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+    }
+    function normalizeSelection(m) {
+      return {
+        ...m,
+        entries: [...m.entries].sort((a, b) => byteCompare(a.path, b.path)),
+        excluded: [...m.excluded].sort((a, b) => byteCompare(a.path, b.path))
+      };
+    }
+    function selectionDigest(m) {
+      return sha256Hex2(canonicalJson2(normalizeSelection(m)));
+    }
+    function manifestByteLength(m) {
+      return Buffer.byteLength(canonicalJson2(m), "utf8");
+    }
+    function blockCount(size) {
+      return size === 0 ? 0 : Math.ceil(size / TRANSFER_LIMITS.blockBytes);
+    }
+    function validateFinalName(name) {
+      if (typeof name !== "string" || name.length === 0) throw new ManifestError("INVALID_FINAL_NAME", "finalName required");
+      try {
+        const segs = splitPortableRelativePath(name);
+        if (segs.length !== 1) throw new ManifestError("INVALID_FINAL_NAME", "finalName must be a single path segment");
+        return segs[0];
+      } catch (err) {
+        if (err instanceof ManifestError) throw err;
+        if (err instanceof TransferFsError) throw new ManifestError("INVALID_FINAL_NAME", err.message);
+        throw err;
+      }
+    }
+    function validateSelectionManifest(raw) {
+      const m = raw;
+      if (!m || typeof m !== "object" || m.v !== 1) throw new ManifestError("MANIFEST_INVALID", "unsupported manifest version");
+      if (!isTransferId(m.transferId)) throw new ManifestError("MANIFEST_INVALID", "bad transferId");
+      for (const k of ["sourceDaemonId", "targetDaemonId", "sourceWorkspaceId", "targetWorkspaceId"]) {
+        if (typeof m[k] !== "string" || !m[k] || m[k].length > 256) throw new ManifestError("MANIFEST_INVALID", `bad ${k}`);
+      }
+      validateFinalName(m.finalName);
+      if (!Array.isArray(m.entries) || !Array.isArray(m.excluded)) throw new ManifestError("MANIFEST_INVALID", "entries/excluded required");
+      if (m.entries.length > TRANSFER_LIMITS.maxEntries) throw new ManifestError("LIMIT_EXCEEDED", `more than ${TRANSFER_LIMITS.maxEntries} entries`);
+      if (m.entries.length === 0) throw new ManifestError("MANIFEST_INVALID", "nothing selected");
+      if (m.excluded.length > TRANSFER_LIMITS.maxEntries * 4) throw new ManifestError("LIMIT_EXCEEDED", "too many excluded entries");
+      const seen2 = /* @__PURE__ */ new Map();
+      let total = 0;
+      for (const e of m.entries) {
+        if (!e || typeof e !== "object" || e.kind !== "file" && e.kind !== "dir" || typeof e.path !== "string") {
+          throw new ManifestError("MANIFEST_INVALID", "bad entry");
+        }
+        try {
+          splitPortableRelativePath(e.path);
+        } catch (err) {
+          throw new ManifestError("PATH_REJECTED", `entry path rejected: ${err.message}`);
+        }
+        const key5 = e.path.normalize("NFC").toLowerCase();
+        if (seen2.has(key5)) throw new ManifestError("CASE_COLLISION", "case-insensitive duplicate path");
+        seen2.set(key5, e.kind);
+        if (e.kind === "file") {
+          if (!Number.isSafeInteger(e.size) || e.size < 0) throw new ManifestError("MANIFEST_INVALID", "bad file size");
+          if (e.size > TRANSFER_LIMITS.maxFileBytes) throw new ManifestError("LIMIT_EXCEEDED", "file exceeds per-file limit");
+          total += e.size;
+        } else if (e.size !== void 0) {
+          throw new ManifestError("MANIFEST_INVALID", "dir entry with size");
+        }
+      }
+      if (total > TRANSFER_LIMITS.maxTransferBytes) throw new ManifestError("LIMIT_EXCEEDED", "transfer exceeds total size limit");
+      for (const e of m.entries) {
+        const segs = e.path.split("/");
+        for (let i = 1; i < segs.length; i++) {
+          const parent = segs.slice(0, i).join("/").normalize("NFC").toLowerCase();
+          if (seen2.get(parent) !== "dir") throw new ManifestError("MANIFEST_INVALID", "entry parent directory missing from manifest");
+        }
+      }
+      for (const x of m.excluded) {
+        if (!x || typeof x.path !== "string" || typeof x.reason !== "string" || x.path.length > 4096 || x.reason.length > 128) {
+          throw new ManifestError("MANIFEST_INVALID", "bad excluded entry");
+        }
+      }
+      if (manifestByteLength(m) > TRANSFER_LIMITS.maxManifestBytes) throw new ManifestError("LIMIT_EXCEEDED", "manifest exceeds 2 MiB");
+      return m;
+    }
+    function selectionTotalBytes(m) {
+      return m.entries.reduce((n, e) => n + (e.kind === "file" ? e.size : 0), 0);
+    }
+    function selectionFiles(m) {
+      return normalizeSelection(m).entries.filter((e) => e.kind === "file");
+    }
+    function validateContentManifest(raw, selection) {
+      const c = raw;
+      if (!c || typeof c !== "object" || c.v !== 1 || c.transferId !== selection.transferId) throw new ManifestError("MANIFEST_INVALID", "content manifest mismatch");
+      if (c.selectionDigest !== selectionDigest(selection)) throw new ManifestError("APPROVAL_MISMATCH", "content manifest is for a different selection");
+      const want = selectionFiles(selection);
+      if (!Array.isArray(c.files) || c.files.length !== want.length) throw new ManifestError("SOURCE_CHANGED", "file set differs from approved selection");
+      const sorted = [...c.files].sort((a, b) => byteCompare(a.path, b.path));
+      sorted.forEach((f, i) => {
+        const w = want[i];
+        if (f.path !== w.path || f.size !== w.size) throw new ManifestError("SOURCE_CHANGED", "file differs from approved selection");
+        if (!SHA256_HEX.test(f.sha256) || !Array.isArray(f.blockHashes) || f.blockHashes.length !== blockCount(f.size) || !f.blockHashes.every((h) => SHA256_HEX.test(h))) {
+          throw new ManifestError("MANIFEST_INVALID", "bad file hashes");
+        }
+      });
+      if (manifestByteLength(c) > TRANSFER_LIMITS.maxManifestBytes) throw new ManifestError("LIMIT_EXCEEDED", "content manifest exceeds 2 MiB");
+      return { ...c, files: sorted };
+    }
     var import_node_crypto43 = require("crypto");
     var fs86 = __toESM2(require("fs"));
     var import_node_crypto40 = require("crypto");
     var FRAME_MAGIC = Buffer.from("ATF1", "ascii");
+    var FrameError = class extends Error {
+      constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "FrameError";
+      }
+    };
+    function encodeFrame(f) {
+      if (f.payload.length > MAX_FRAME_PAYLOAD_BYTES) throw new FrameError("PROTOCOL_ERROR", "payload too large");
+      const out = Buffer.alloc(TRANSFER_LIMITS.frameHeaderBytes + f.payload.length);
+      FRAME_MAGIC.copy(out, 0);
+      out.writeUInt8(f.type, 4);
+      Buffer.from(f.transferId, "hex").copy(out, 8);
+      out.writeUInt32BE(f.fileIndex, 24);
+      out.writeBigUInt64BE(BigInt(f.offset), 28);
+      out.writeUInt32BE(f.payload.length, 36);
+      out.writeBigUInt64BE(BigInt(f.seq), 40);
+      f.payload.copy(out, TRANSFER_LIMITS.frameHeaderBytes);
+      return out;
+    }
+    function decodeFrame(buf) {
+      const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+      if (b.length < TRANSFER_LIMITS.frameHeaderBytes || b.length > TRANSFER_LIMITS.maxFrameBytes) throw new FrameError("PROTOCOL_ERROR", "bad frame size");
+      if (!b.subarray(0, 4).equals(FRAME_MAGIC)) throw new FrameError("PROTOCOL_ERROR", "bad magic");
+      const type2 = b.readUInt8(4);
+      if (!(type2 >= 1 && type2 <= 8)) throw new FrameError("PROTOCOL_ERROR", "bad frame type");
+      if (b.readUInt8(5) !== 0 || b.readUInt16BE(6) !== 0) throw new FrameError("PROTOCOL_ERROR", "reserved bits set");
+      for (let i = 48; i < TRANSFER_LIMITS.frameHeaderBytes; i++) if (b[i] !== 0) throw new FrameError("PROTOCOL_ERROR", "reserved header bytes set");
+      const length = b.readUInt32BE(36);
+      if (length !== b.length - TRANSFER_LIMITS.frameHeaderBytes) throw new FrameError("PROTOCOL_ERROR", "length mismatch");
+      const offset = b.readBigUInt64BE(28);
+      const seq2 = b.readBigUInt64BE(40);
+      if (offset > BigInt(Number.MAX_SAFE_INTEGER) || seq2 > BigInt(Number.MAX_SAFE_INTEGER)) throw new FrameError("PROTOCOL_ERROR", "counter overflow");
+      return {
+        type: type2,
+        transferId: b.subarray(8, 24).toString("hex"),
+        fileIndex: b.readUInt32BE(24),
+        offset: Number(offset),
+        seq: Number(seq2),
+        payload: Buffer.from(b.subarray(TRANSFER_LIMITS.frameHeaderBytes))
+      };
+    }
+    function jsonPayload(obj) {
+      const buf = Buffer.from(JSON.stringify(obj), "utf8");
+      if (buf.length > MAX_FRAME_PAYLOAD_BYTES) throw new FrameError("PROTOCOL_ERROR", "json payload too large");
+      return buf;
+    }
+    function parseJsonPayload(p) {
+      try {
+        const v = JSON.parse(p.toString("utf8"));
+        if (v && typeof v === "object" && !Array.isArray(v)) return v;
+      } catch {
+      }
+      throw new FrameError("PROTOCOL_ERROR", "bad json payload");
+    }
+    function extractSdpFingerprint(sdp) {
+      const m = /^a=fingerprint:\s*(\S+)\s+([0-9A-Fa-f:]+)\s*$/m.exec(sdp);
+      return m ? `${m[1].toLowerCase()} ${m[2].toUpperCase()}` : null;
+    }
+    function computeBindingTag(linkKey, transferId, linkGen, fpA, fpB) {
+      const [lo, hi] = [fpA, fpB].sort();
+      return (0, import_node_crypto40.createHmac)("sha256", linkKey).update(`adhdev-file/1|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
+    }
+    function bindingTagsEqual(a, b) {
+      const x = Buffer.from(a, "hex");
+      const y = Buffer.from(b, "hex");
+      return x.length === 32 && x.length === y.length && (0, import_node_crypto40.timingSafeEqual)(x, y);
+    }
     var import_node_crypto41 = require("crypto");
     var fs83 = __toESM2(require("fs"));
     var path93 = __toESM2(require("path"));
+    var STAGING_DIR_NAME = ".adhdev-transfer-staging";
+    var ReceiverError = class extends Error {
+      constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "ReceiverError";
+      }
+    };
+    function safeClose(h) {
+      if (h === null || h === void 0) return;
+      try {
+        close(h);
+      } catch {
+      }
+    }
+    var TransferReceiver = class {
+      constructor(rootPath, selection, content, onCheckpoint) {
+        this.rootPath = rootPath;
+        this.selection = selection;
+        this.content = content;
+        this.onCheckpoint = onCheckpoint;
+      }
+      rootH = null;
+      stagingParentH = null;
+      stageH = null;
+      cur = null;
+      get files() {
+        return this.content.files;
+      }
+      /** Verified, checkpointed blocks per file. */
+      blocksDone = [];
+      nextFile = 0;
+      get stagePath() {
+        return path93.join(this.rootPath, STAGING_DIR_NAME, this.selection.transferId);
+      }
+      /** Prepare staging; returns per-file validated (re-hashed) block counts to resume from. */
+      init(claimedBlocks = []) {
+        this.rootH = openRoot(this.rootPath);
+        probeRoot(this.rootPath, { requireAtomicNoReplace: true });
+        this.stagingParentH = this.walkOrMake(this.rootH, STAGING_DIR_NAME, true);
+        this.stageH = this.walkOrMake(this.stagingParentH, this.selection.transferId, false);
+        for (const e of [...this.selection.entries].filter((x) => x.kind === "dir").sort((a, b) => a.path.split("/").length - b.path.split("/").length)) {
+          this.ensureDir(e.path);
+        }
+        this.blocksDone = this.files.map((f, i) => this.validateRetained(i, claimedBlocks[i] ?? 0, f.size));
+        const firstOpen = this.blocksDone.findIndex((b, i) => b < blockCount(this.files[i].size));
+        if (firstOpen >= 0) {
+          for (let i = firstOpen + 1; i < this.blocksDone.length; i++) {
+            if (this.blocksDone[i] > 0) {
+              this.dropFile(i);
+              this.blocksDone[i] = 0;
+            }
+          }
+        }
+        this.nextFile = 0;
+        this.advance();
+        return [...this.blocksDone];
+      }
+      walkOrMake(parent, name, protectedMeta) {
+        const opt = protectedMeta ? { allowProtectedMetadata: true } : void 0;
+        try {
+          return walkDir(parent, name, opt);
+        } catch (err) {
+          if (err.code !== "ENOENT") throw err;
+          try {
+            return mkdirExcl(parent, name, opt);
+          } catch (e2) {
+            if (e2.code === "EEXIST") return walkDir(parent, name, opt);
+            throw e2;
+          }
+        }
+      }
+      ensureDir(rel) {
+        let h = this.stageH;
+        const held = [];
+        try {
+          for (const seg of rel.split("/")) {
+            h = this.walkOrMake(h, seg, false);
+            held.push(h);
+          }
+        } finally {
+          for (const x of held.reverse()) safeClose(x);
+        }
+      }
+      /** Re-hash a retained prefix against the authenticated manifest; returns the count of valid leading blocks. */
+      validateRetained(i, claimed, size) {
+        const want = Math.min(claimed, blockCount(size));
+        if (want === 0) {
+          this.dropFile(i);
+          return 0;
+        }
+        const f = this.files[i];
+        const chain = resolveParentDirHandle(this.stageH, f.path, { createDirs: false });
+        let fh = null;
+        let ok = 0;
+        try {
+          fh = openFileRead(chain.parentHandle, chain.leafName);
+          const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
+          for (let b = 0; b < want; b++) {
+            const len = Math.min(TRANSFER_LIMITS.blockBytes, size - b * TRANSFER_LIMITS.blockBytes);
+            let got = 0;
+            while (got < len) {
+              const n = readHandle(fh, buf, got, len - got, b * TRANSFER_LIMITS.blockBytes + got);
+              if (n <= 0) break;
+              got += n;
+            }
+            if (got !== len || (0, import_node_crypto41.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
+            ok = b + 1;
+          }
+        } catch {
+          ok = 0;
+        } finally {
+          safeClose(fh);
+          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+        }
+        if (ok === 0) this.dropFile(i);
+        return ok;
+      }
+      dropFile(i) {
+        const f = this.files[i];
+        const chain = resolveParentDirHandle(this.stageH, f.path, { createDirs: true });
+        try {
+          try {
+            unlinkAt(chain.parentHandle, chain.leafName, false);
+          } catch {
+          }
+        } finally {
+          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+        }
+      }
+      /** Move to the first incomplete file, creating zero-byte files on the way. */
+      advance() {
+        this.closeCur();
+        while (this.nextFile < this.files.length) {
+          const i = this.nextFile;
+          const f = this.files[i];
+          if (this.blocksDone[i] >= blockCount(f.size) && (f.size === 0 ? this.fileExists(i) : true)) {
+            if (f.size > 0) {
+              this.nextFile++;
+              continue;
+            }
+          }
+          if (f.size === 0) {
+            const chain = resolveParentDirHandle(this.stageH, f.path, { createDirs: true });
+            try {
+              try {
+                const h = createExcl(chain.parentHandle, chain.leafName);
+                fullFsync(h);
+                safeClose(h);
+              } catch (err) {
+                if (err.code !== "EEXIST") throw err;
+              }
+            } finally {
+              for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+            }
+            this.nextFile++;
+            continue;
+          }
+          this.openCurrent(i);
+          return;
+        }
+      }
+      fileExists(i) {
+        const chain = resolveParentDirHandle(this.stageH, this.files[i].path, { createDirs: false });
+        try {
+          safeClose(openFileRead(chain.parentHandle, chain.leafName));
+          return true;
+        } catch {
+          return false;
+        } finally {
+          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+        }
+      }
+      openCurrent(i) {
+        const f = this.files[i];
+        const done = this.blocksDone[i];
+        const chain = resolveParentDirHandle(this.stageH, f.path, { createDirs: true });
+        let handle;
+        try {
+          if (done > 0) {
+            const tmp = `.adhdev-reopen-${process.pid}-${Date.now().toString(36)}`;
+            const src = openFileRead(chain.parentHandle, chain.leafName);
+            handle = createExcl(chain.parentHandle, tmp, { allowProtectedMetadata: true });
+            const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
+            for (let b = 0; b < done; b++) {
+              const len = Math.min(TRANSFER_LIMITS.blockBytes, f.size - b * TRANSFER_LIMITS.blockBytes);
+              let got = 0;
+              while (got < len) {
+                const n = readHandle(src, buf, got, len - got, b * TRANSFER_LIMITS.blockBytes + got);
+                if (n <= 0) throw new ReceiverError("VERIFY_FAILED", "retained data vanished");
+                got += n;
+              }
+              writeHandle(handle, buf, 0, len, b * TRANSFER_LIMITS.blockBytes);
+            }
+            safeClose(src);
+            unlinkAt(chain.parentHandle, chain.leafName, false);
+            renameAtExcl(chain.parentHandle, tmp, chain.parentHandle, chain.leafName, { allowProtectedMetadata: true });
+          } else {
+            try {
+              unlinkAt(chain.parentHandle, chain.leafName, false);
+            } catch {
+            }
+            handle = createExcl(chain.parentHandle, chain.leafName);
+          }
+        } catch (err) {
+          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          throw err;
+        }
+        const whole = (0, import_node_crypto41.createHash)("sha256");
+        this.cur = { index: i, parentChain: chain, handle, blockHash: (0, import_node_crypto41.createHash)("sha256"), whole, blockFill: 0 };
+      }
+      closeCur() {
+        if (!this.cur) return;
+        safeClose(this.cur.handle);
+        for (const h of this.cur.parentChain.intermediateHandles.slice().reverse()) safeClose(h);
+        this.cur = null;
+      }
+      get bytesDone() {
+        return this.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, this.files[i].size), 0);
+      }
+      get complete() {
+        return this.nextFile >= this.files.length && this.cur === null;
+      }
+      get currentFile() {
+        return this.cur ? this.cur.index : this.files.length;
+      }
+      handleData(fileIndex, offset, payload) {
+        const c = this.cur;
+        if (!c || c.index !== fileIndex) throw new ReceiverError("PROTOCOL_ERROR", "data for unexpected file");
+        const expected = this.blocksDone[c.index] * TRANSFER_LIMITS.blockBytes + c.blockFill;
+        if (offset < expected) return;
+        if (offset !== expected) throw new ReceiverError("PROTOCOL_ERROR", "gap in data stream");
+        const f = this.files[c.index];
+        const blockStart = this.blocksDone[c.index] * TRANSFER_LIMITS.blockBytes;
+        const blockLen = Math.min(TRANSFER_LIMITS.blockBytes, f.size - blockStart);
+        if (c.blockFill + payload.length > blockLen) throw new ReceiverError("PROTOCOL_ERROR", "data past block end");
+        writeHandle(c.handle, payload, 0, payload.length, offset);
+        c.blockHash.update(payload);
+        c.whole.update(payload);
+        c.blockFill += payload.length;
+      }
+      /** Returns the next-file transition info after a verified block. */
+      handleBlockEnd(fileIndex, offset, senderHashHex) {
+        const c = this.cur;
+        if (!c || c.index !== fileIndex) throw new ReceiverError("PROTOCOL_ERROR", "block end for unexpected file");
+        const b = this.blocksDone[c.index];
+        const f = this.files[c.index];
+        if (offset !== b * TRANSFER_LIMITS.blockBytes) {
+          if (offset < b * TRANSFER_LIMITS.blockBytes) return { blockIndex: offset / TRANSFER_LIMITS.blockBytes, fileDone: false };
+          throw new ReceiverError("PROTOCOL_ERROR", "block end out of order");
+        }
+        const blockLen = Math.min(TRANSFER_LIMITS.blockBytes, f.size - offset);
+        if (c.blockFill !== blockLen) throw new ReceiverError("PROTOCOL_ERROR", "block incomplete");
+        const got = c.blockHash.digest("hex");
+        if (got !== f.blockHashes[b] || got !== senderHashHex) throw new ReceiverError("HASH_MISMATCH", `block ${b} of file ${c.index} failed verification`);
+        fullFsync(c.handle);
+        this.blocksDone[c.index] = b + 1;
+        c.blockHash = (0, import_node_crypto41.createHash)("sha256");
+        c.blockFill = 0;
+        this.onCheckpoint?.(c.index, b + 1, this.bytesDone);
+        const fileDone = b + 1 >= blockCount(f.size);
+        if (fileDone) {
+          this.nextFile++;
+          this.advance();
+        }
+        return { blockIndex: b, fileDone };
+      }
+      /** Full re-hash of every staged file from disk plus an unexpected-entry scan. */
+      verifyAll() {
+        const expected = /* @__PURE__ */ new Set([""]);
+        for (const e of this.selection.entries) expected.add(e.path);
+        const walk = (rel) => {
+          for (const n of fs83.readdirSync(path93.join(this.stagePath, ...rel ? rel.split("/") : []))) {
+            const r = rel ? `${rel}/${n}` : n;
+            if (!expected.has(r)) throw new ReceiverError("VERIFY_FAILED", "unexpected entry in staging");
+            const st = fs83.lstatSync(path93.join(this.stagePath, ...r.split("/")));
+            if (st.isDirectory()) walk(r);
+            else if (!st.isFile()) throw new ReceiverError("VERIFY_FAILED", "non-regular entry in staging");
+          }
+        };
+        walk("");
+        for (const f of this.files) {
+          const chain = resolveParentDirHandle(this.stageH, f.path, { createDirs: false });
+          let fh = null;
+          try {
+            fh = openFileRead(chain.parentHandle, chain.leafName);
+            const id4 = getIdentity(fh);
+            if (Number(id4.size) !== f.size) throw new ReceiverError("VERIFY_FAILED", "size mismatch");
+            const h = (0, import_node_crypto41.createHash)("sha256");
+            const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
+            for (let o = 0; o < f.size; ) {
+              const n = readHandle(fh, buf, 0, Math.min(buf.length, f.size - o), o);
+              if (n <= 0) throw new ReceiverError("VERIFY_FAILED", "short read");
+              h.update(buf.subarray(0, n));
+              o += n;
+            }
+            if (h.digest("hex") !== f.sha256) throw new ReceiverError("HASH_MISMATCH", "file hash mismatch");
+          } finally {
+            safeClose(fh);
+            for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          }
+        }
+      }
+      /** Atomic no-replace publish of the verified tree. Returns the folder name actually used. */
+      publish(finalName) {
+        this.closeCur();
+        fullFsync(this.stageH);
+        const candidates = [finalName, ...Array.from({ length: 19 }, (_, i) => `${finalName}-${i + 2}`)];
+        for (const name of candidates) {
+          try {
+            renameAtExcl(this.stagingParentH, this.selection.transferId, this.rootH, name);
+            try {
+              fullFsync(this.rootH);
+            } catch {
+            }
+            try {
+              unlinkAt(this.rootH, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
+            } catch {
+            }
+            return name;
+          } catch (err) {
+            if (err.reason === "TARGET_EXISTS") continue;
+            throw err;
+          }
+        }
+        throw new ReceiverError("PUBLISH_CONFLICT", "target folder name is taken");
+      }
+      /** Remove the staging tree handle-relatively and release all handles. */
+      abort() {
+        this.closeCur();
+        try {
+          if (this.stagingParentH !== null && this.stageH !== null) {
+            this.removeTree(this.stagingParentH, this.selection.transferId, this.stagePath);
+            try {
+              if (this.rootH !== null) unlinkAt(this.rootH, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
+            } catch {
+            }
+          }
+        } finally {
+          this.dispose();
+        }
+      }
+      removeTree(parent, name, abs) {
+        let dh = null;
+        try {
+          dh = walkDir(parent, name, { allowProtectedMetadata: true });
+        } catch {
+          try {
+            unlinkAt(parent, name, false, { allowProtectedMetadata: true });
+          } catch {
+          }
+          return;
+        }
+        try {
+          let names = [];
+          try {
+            names = fs83.readdirSync(abs);
+          } catch {
+            names = [];
+          }
+          for (const n of names) this.removeTree(dh, n, path93.join(abs, n));
+        } finally {
+          safeClose(dh);
+        }
+        try {
+          unlinkAt(parent, name, true, { allowProtectedMetadata: true });
+        } catch {
+        }
+      }
+      dispose() {
+        this.closeCur();
+        safeClose(this.stageH);
+        this.stageH = null;
+        safeClose(this.stagingParentH);
+        this.stagingParentH = null;
+        safeClose(this.rootH);
+        this.rootH = null;
+      }
+    };
+    function removeStagingFor(rootPath, transferId) {
+      let root = null;
+      let parent = null;
+      try {
+        root = openRoot(rootPath);
+        parent = walkDir(root, STAGING_DIR_NAME, { allowProtectedMetadata: true });
+        const rm3 = (p, name, abs) => {
+          let dh = null;
+          try {
+            dh = walkDir(p, name, { allowProtectedMetadata: true });
+          } catch {
+            try {
+              unlinkAt(p, name, false, { allowProtectedMetadata: true });
+            } catch {
+            }
+            return;
+          }
+          try {
+            for (const n of fs83.readdirSync(abs)) rm3(dh, n, path93.join(abs, n));
+          } finally {
+            safeClose(dh);
+          }
+          try {
+            unlinkAt(p, name, true, { allowProtectedMetadata: true });
+          } catch {
+          }
+        };
+        rm3(parent, transferId, path93.join(rootPath, STAGING_DIR_NAME, transferId));
+        safeClose(parent);
+        parent = null;
+        try {
+          unlinkAt(root, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
+        } catch {
+        }
+      } catch {
+      } finally {
+        safeClose(parent);
+        safeClose(root);
+      }
+    }
     var import_node_crypto422 = require("crypto");
     var fs85 = __toESM2(require("fs"));
     var path95 = __toESM2(require("path"));
+    var EXCLUDED_DIRS = /* @__PURE__ */ new Set([
+      ".git",
+      ".hg",
+      ".svn",
+      ".ssh",
+      ".gnupg",
+      ".aws",
+      ".azure",
+      ".gcloud",
+      ".kube",
+      ".docker",
+      ".password-store",
+      ".terraform",
+      ".adhdev",
+      ".adhdev-transfer-staging"
+    ]);
+    var EXCLUDED_DIR_PAIRS = [[".config", "gh"], [".config", "gcloud"]];
+    var EXCLUDED_NAMES = /* @__PURE__ */ new Set([
+      ".npmrc",
+      ".pypirc",
+      ".netrc",
+      "_netrc",
+      ".envrc",
+      ".git-credentials",
+      ".pgpass",
+      ".my.cnf",
+      ".dockercfg",
+      ".htpasswd",
+      ".vault-token",
+      ".boto",
+      ".s3cfg",
+      "credentials",
+      "credentials.json",
+      "kubeconfig",
+      "auth.json",
+      "tokens.json",
+      "token",
+      "secrets.json",
+      "secrets.yml",
+      "secrets.yaml",
+      "wallet.dat",
+      ".dev.vars",
+      ".yarnrc.yml",
+      ".env"
+    ]);
+    var EXCLUDED_PATTERNS = [
+      { rule: "env-file", re: /^\.env\..+$/ },
+      { rule: "env-file", re: /^.+\.env$/ },
+      { rule: "dev-vars", re: /^\.dev\.vars\..+$/ },
+      { rule: "ssh-key", re: /^id_(rsa|dsa|ecdsa|ed25519)/ },
+      { rule: "key-material", re: /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg|asc)$/ },
+      { rule: "terraform-state", re: /\.(tfstate|tfvars)(\..*)?$/ },
+      { rule: "cloud-credential", re: /^(client_secret|service-?account).*\.json$/ },
+      { rule: "secret-file", re: /(\.secrets?$|^secrets?\.)/ },
+      { rule: "kubeconfig", re: /\.kubeconfig$/ },
+      { rule: "mobileprovision", re: /\.mobileprovision$/ }
+    ];
+    var PRIVATE_KEY_HEAD = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
+    var SECRET_SNIFF_BYTES = 4096;
+    function matchSecretPath(relPath) {
+      const segments = relPath.split("/").filter(Boolean).map((s2) => s2.toLowerCase());
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (EXCLUDED_DIRS.has(seg)) return `dir:${seg}`;
+        for (const [a, b] of EXCLUDED_DIR_PAIRS) {
+          if (seg === a && segments[i + 1] === b) return `dir:${a}/${b}`;
+        }
+      }
+      const name = segments[segments.length - 1];
+      if (!name) return null;
+      if (EXCLUDED_NAMES.has(name)) return `name:${name}`;
+      for (const p of EXCLUDED_PATTERNS) if (p.re.test(name)) return p.rule;
+      return null;
+    }
+    function sniffSecretContent(head) {
+      const text4 = Buffer.from(head.subarray(0, SECRET_SNIFF_BYTES)).toString("latin1");
+      return PRIVATE_KEY_HEAD.test(text4) ? "private-key-content" : null;
+    }
     var fs84 = __toESM2(require("fs"));
     var path94 = __toESM2(require("path"));
+    function safeClose2(h) {
+      if (h === null) return;
+      try {
+        close(h);
+      } catch {
+      }
+    }
+    function classifyOpenError(err) {
+      const reason = err?.reason;
+      if (reason === "SYMLINK_OR_REPARSE_REJECTED") return "link";
+      if (reason === "HARDLINK_REJECTED") return "hardlink";
+      if (err?.code === "ENOENT") return "vanished";
+      return "unreadable";
+    }
+    function openSourceFile(rootHandle, relPath) {
+      const chain = resolveParentDirHandle(rootHandle, relPath, { createDirs: false });
+      let handle = null;
+      try {
+        handle = openFileRead(chain.parentHandle, chain.leafName);
+        const identity3 = getIdentity(handle);
+        if (identity3.isDirectory || identity3.isReparsePoint) {
+          throw new TransferFsError("SYMLINK_OR_REPARSE_REJECTED", "not a regular file", "ELOOP");
+        }
+        if (identity3.linkCount > 1) throw new TransferFsError("HARDLINK_REJECTED", "hardlinked file", "EMLINK");
+        const h = handle;
+        return {
+          handle: h,
+          identity: identity3,
+          release() {
+            safeClose2(h);
+            for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
+          }
+        };
+      } catch (err) {
+        safeClose2(handle);
+        for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
+        throw err;
+      }
+    }
+    function browseDirectory(rootPath, relDir) {
+      const root = openRoot(rootPath);
+      try {
+        const abs = relDir ? path94.join(rootPath, ...relDir.split("/")) : rootPath;
+        let dirHandle = null;
+        const held = [];
+        try {
+          if (relDir) {
+            for (const seg of splitPortableRelativePath(relDir)) {
+              dirHandle = walkDir(dirHandle ?? root, seg);
+              held.push(dirHandle);
+            }
+          }
+          const names = fs84.readdirSync(abs).sort();
+          const out = [];
+          for (const name of names.slice(0, 5e3)) {
+            const rel = relDir ? `${relDir}/${name}` : name;
+            const secret = matchSecretPath(rel);
+            let kind = "other";
+            let size;
+            try {
+              const dh = walkDir(dirHandle ?? root, name, { allowProtectedMetadata: true });
+              close(dh);
+              kind = "dir";
+            } catch {
+              try {
+                const fh = openFileRead(dirHandle ?? root, name, { allowProtectedMetadata: true });
+                try {
+                  size = Number(getIdentity(fh).size);
+                  kind = "file";
+                } finally {
+                  safeClose2(fh);
+                }
+              } catch {
+                kind = "other";
+              }
+            }
+            out.push({ name, kind, ...size !== void 0 ? { size } : {}, ...secret ? { excluded: `secret:${secret}` } : kind === "other" ? { excluded: "link-or-special" } : {} });
+          }
+          return out;
+        } finally {
+          for (let i = held.length - 1; i >= 0; i--) safeClose2(held[i]);
+        }
+      } finally {
+        safeClose2(root);
+      }
+    }
+    function scanSelection(rootPath, selected2) {
+      const root = openRoot(rootPath);
+      const entries2 = /* @__PURE__ */ new Map();
+      const excluded = [];
+      let totalBytes = 0;
+      const addDirChain = (rel) => {
+        const segs = rel.split("/");
+        for (let i = 1; i <= segs.length; i++) {
+          const p = segs.slice(0, i).join("/");
+          if (!entries2.has(p)) entries2.set(p, { path: p, kind: "dir" });
+        }
+      };
+      const bump = () => {
+        if (entries2.size > TRANSFER_LIMITS.maxEntries) throw new ManifestError("LIMIT_EXCEEDED", `more than ${TRANSFER_LIMITS.maxEntries} entries`);
+      };
+      const visit = (rel, depth) => {
+        if (depth > 64) {
+          excluded.push({ path: rel, reason: "too-deep" });
+          return;
+        }
+        const secret = matchSecretPath(rel);
+        if (secret) {
+          excluded.push({ path: rel, reason: `secret:${secret}` });
+          return;
+        }
+        try {
+          splitPortableRelativePath(rel);
+        } catch {
+          excluded.push({ path: rel, reason: "unportable_name" });
+          return;
+        }
+        let chain;
+        try {
+          chain = resolveParentDirHandle(root, rel, { createDirs: false });
+        } catch (err) {
+          excluded.push({ path: rel, reason: classifyOpenError(err) });
+          return;
+        }
+        try {
+          let dirHandle = null;
+          try {
+            dirHandle = walkDir(chain.parentHandle, chain.leafName);
+          } catch {
+          }
+          if (dirHandle !== null) {
+            try {
+              addDirChain(rel);
+              bump();
+              const abs = path94.join(rootPath, ...rel.split("/"));
+              let names = [];
+              try {
+                names = fs84.readdirSync(abs).sort();
+              } catch {
+                names = [];
+              }
+              for (const n of names) visit(`${rel}/${n}`, depth + 1);
+            } finally {
+              safeClose2(dirHandle);
+            }
+            return;
+          }
+          let fh = null;
+          try {
+            fh = openFileRead(chain.parentHandle, chain.leafName);
+            const id4 = getIdentity(fh);
+            if (id4.isDirectory || id4.isReparsePoint) {
+              excluded.push({ path: rel, reason: "link" });
+              return;
+            }
+            if (id4.linkCount > 1) {
+              excluded.push({ path: rel, reason: "hardlink" });
+              return;
+            }
+            const size = Number(id4.size);
+            if (size > TRANSFER_LIMITS.maxFileBytes) throw new ManifestError("LIMIT_EXCEEDED", "file exceeds per-file limit");
+            if (size > 0) {
+              const head = Buffer.alloc(Math.min(size, SECRET_SNIFF_BYTES));
+              const n = readHandle(fh, head, 0, head.length, 0);
+              const sniff = sniffSecretContent(head.subarray(0, n));
+              if (sniff) {
+                excluded.push({ path: rel, reason: `secret:${sniff}` });
+                return;
+              }
+            }
+            const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+            if (parent) addDirChain(parent);
+            entries2.set(rel, { path: rel, kind: "file", size });
+            totalBytes += size;
+            if (totalBytes > TRANSFER_LIMITS.maxTransferBytes) throw new ManifestError("LIMIT_EXCEEDED", "transfer exceeds total size limit");
+            bump();
+          } catch (err) {
+            if (err instanceof ManifestError) throw err;
+            excluded.push({ path: rel, reason: classifyOpenError(err) });
+          } finally {
+            safeClose2(fh);
+          }
+        } finally {
+          for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
+        }
+      };
+      try {
+        for (const rel of selected2) visit(rel, 0);
+      } finally {
+        safeClose2(root);
+      }
+      return { entries: [...entries2.values()], excluded };
+    }
+    function spoolFilePath(spoolDir, fileIndex) {
+      return path95.join(spoolDir, `f${fileIndex}`);
+    }
+    var tick = () => new Promise((r) => setImmediate(r));
+    function requireFreeDisk(dir, needBytes) {
+      try {
+        fs85.mkdirSync(dir, { recursive: true, mode: 448 });
+        const s2 = fs85.statfsSync(dir);
+        const free = Number(s2.bavail) * Number(s2.bsize);
+        if (free < needBytes + TRANSFER_LIMITS.diskMarginBytes) {
+          throw new ManifestError("DISK_SPACE_EXHAUSTED", "not enough free disk space");
+        }
+      } catch (err) {
+        if (err instanceof ManifestError) throw err;
+      }
+    }
+    async function freezeSelection(opts) {
+      const { selection, spoolDir } = opts;
+      requireFreeDisk(spoolDir, selectionTotalBytes(selection));
+      fs85.mkdirSync(spoolDir, { recursive: true, mode: 448 });
+      fs85.chmodSync(spoolDir, 448);
+      const root = openRoot(opts.rootPath);
+      const files = [];
+      try {
+        const list2 = selectionFiles(selection);
+        for (let i = 0; i < list2.length; i++) {
+          const entry = list2[i];
+          if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
+          let src;
+          try {
+            src = openSourceFile(root, entry.path);
+          } catch {
+            throw new ManifestError("SOURCE_CHANGED", "a selected file is no longer readable as a regular file");
+          }
+          const out = fs85.openSync(spoolFilePath(spoolDir, i), "wx", 384);
+          try {
+            if (Number(src.identity.size) !== entry.size) throw new ManifestError("SOURCE_CHANGED", "file size changed since preview");
+            const whole = (0, import_node_crypto422.createHash)("sha256");
+            const blockHashes = [];
+            const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
+            let done = 0;
+            while (done < entry.size) {
+              const want = Math.min(buf.length, entry.size - done);
+              let got = 0;
+              while (got < want) {
+                const n = readHandle(src.handle, buf, got, want - got, done + got);
+                if (n <= 0) throw new ManifestError("SOURCE_CHANGED", "file shrank while freezing");
+                got += n;
+              }
+              if (done === 0) {
+                const secret = sniffSecretContent(buf.subarray(0, Math.min(got, SECRET_SNIFF_BYTES)));
+                if (secret) throw new ManifestError("SOURCE_CHANGED", "file now matches a secret rule");
+              }
+              fs85.writeSync(out, buf, 0, got);
+              whole.update(buf.subarray(0, got));
+              blockHashes.push((0, import_node_crypto422.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
+              done += got;
+              await tick();
+            }
+            fs85.fsyncSync(out);
+            const after = getIdentity(src.handle);
+            if (after.size !== src.identity.size || after.fileId !== src.identity.fileId || after.volumeId !== src.identity.volumeId) {
+              throw new ManifestError("SOURCE_CHANGED", "file changed while freezing");
+            }
+            files.push({ path: entry.path, size: entry.size, sha256: whole.digest("hex"), blockHashes });
+          } finally {
+            fs85.closeSync(out);
+            src.release();
+          }
+        }
+      } catch (err) {
+        fs85.rmSync(spoolDir, { recursive: true, force: true });
+        throw err;
+      } finally {
+        try {
+          close(root);
+        } catch {
+        }
+      }
+      for (const f of files) if (f.blockHashes.length !== blockCount(f.size)) throw new ManifestError("SOURCE_CHANGED", "internal block accounting");
+      return { v: 1, transferId: selection.transferId, selectionDigest: selectionDigest(selection), files };
+    }
+    var SessionError = class extends Error {
+      constructor(code, message) {
+        super(message);
+        this.code = code;
+        this.name = "SessionError";
+      }
+    };
+    var IDLE_TIMEOUT_MS = 6e4;
+    var BaseSession = class {
+      constructor(link, transferId, linkGen, linkKey, roleName) {
+        this.link = link;
+        this.transferId = transferId;
+        this.linkGen = linkGen;
+        this.linkKey = linkKey;
+        this.roleName = roleName;
+        this.promise = new Promise((resolve62, reject) => {
+          this.settle = { resolve: resolve62, reject };
+        });
+        this.promise.catch(() => {
+        });
+        link.onMessage((d) => this.onRaw(d));
+        link.onClose((reason) => this.fail(new SessionError("LINK_LOST", `link closed: ${reason}`)));
+        link.onOpen(() => this.sendHello());
+        this.touch();
+      }
+      outSeq = 0;
+      inSeq = -1;
+      helloOk = false;
+      done = false;
+      settle;
+      promise;
+      idle;
+      touch() {
+        clearTimeout(this.idle);
+        this.idle = setTimeout(() => this.fail(new SessionError("LINK_LOST", "link idle timeout")), IDLE_TIMEOUT_MS);
+        this.idle.unref?.();
+      }
+      finish() {
+        if (this.done) return;
+        this.done = true;
+        clearTimeout(this.idle);
+        this.settle.resolve();
+      }
+      fail(err) {
+        if (this.done) return;
+        this.done = true;
+        clearTimeout(this.idle);
+        this.settle.reject(err);
+      }
+      abort(code) {
+        if (!this.done) this.sendFrame(8, 0, 0, jsonPayload({ code }));
+        this.fail(new SessionError(code, `aborted: ${code}`));
+        try {
+          this.link.close();
+        } catch {
+        }
+      }
+      sendFrame(type2, fileIndex, offset, payload) {
+        return this.link.send(encodeFrame({ type: type2, transferId: this.transferId, fileIndex, offset, seq: this.outSeq++, payload }));
+      }
+      sendHello() {
+        const local = this.link.localFingerprint();
+        const remote = this.link.remoteFingerprint();
+        if (!local || !remote) {
+          this.abort("BINDING_MISMATCH");
+          return;
+        }
+        const tag = computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote);
+        this.sendFrame(1, 0, 0, jsonPayload({ tag, role: this.roleName }));
+      }
+      onRaw(data) {
+        if (this.done) return;
+        this.touch();
+        let frame2;
+        try {
+          frame2 = decodeFrame(data);
+          if (frame2.transferId !== this.transferId) throw new FrameError("PROTOCOL_ERROR", "foreign transferId");
+          if (frame2.seq <= this.inSeq) return;
+          if (frame2.seq !== this.inSeq + 1) throw new FrameError("PROTOCOL_ERROR", "sequence gap");
+          this.inSeq = frame2.seq;
+          if (frame2.type === 8) {
+            this.fail(new SessionError(String(parseJsonPayload(frame2.payload).code ?? "PEER_ABORT"), "peer aborted"));
+            return;
+          }
+          if (!this.helloOk) {
+            if (frame2.type !== 1) throw new FrameError("PROTOCOL_ERROR", "expected HELLO");
+            const local = this.link.localFingerprint();
+            const remote = this.link.remoteFingerprint();
+            const peerTag = String(parseJsonPayload(frame2.payload).tag ?? "");
+            if (!local || !remote || !bindingTagsEqual(peerTag, computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote))) {
+              this.abort("BINDING_MISMATCH");
+              return;
+            }
+            this.helloOk = true;
+            this.onHelloOk();
+            return;
+          }
+          this.onFrame(frame2);
+        } catch (err) {
+          if (err instanceof FrameError) this.abort("PROTOCOL_ERROR");
+          else if (err instanceof ReceiverError) this.abort(err.code === "HASH_MISMATCH" ? "HASH_MISMATCH" : "PROTOCOL_ERROR");
+          else this.abort("IO_ERROR");
+        }
+      }
+      wait() {
+        return this.promise;
+      }
+    };
+    var SenderSession = class extends BaseSession {
+      constructor(link, transferId, linkGen, linkKey, content, spoolDir, rate, onProgress) {
+        super(link, transferId, linkGen, linkKey, "sender");
+        this.content = content;
+        this.spoolDir = spoolDir;
+        this.rate = rate;
+        this.onProgress = onProgress;
+      }
+      ackedBlocks = 0;
+      sentBlocks = 0;
+      ackWaiters = [];
+      resume = null;
+      onHelloOk() {
+      }
+      onFrame(f) {
+        if (f.type === 2 && this.resume === null) {
+          const blocks = parseJsonPayload(f.payload).blocks;
+          if (!Array.isArray(blocks) || blocks.length !== this.content.files.length || !blocks.every((b, i) => Number.isInteger(b) && b >= 0 && b <= blockCount(this.content.files[i].size))) {
+            throw new FrameError("PROTOCOL_ERROR", "bad resume state");
+          }
+          this.resume = blocks;
+          void this.pump().catch((e) => this.fail(e instanceof SessionError ? e : new SessionError("IO_ERROR", String(e?.message ?? e))));
+          return;
+        }
+        if (f.type === 5) {
+          this.ackedBlocks++;
+          this.ackWaiters.splice(0).forEach((w) => w());
+          this.onProgress?.(f.fileIndex, f.offset / TRANSFER_LIMITS.blockBytes);
+          return;
+        }
+        if (f.type === 7) {
+          this.finish();
+          return;
+        }
+        throw new FrameError("PROTOCOL_ERROR", "unexpected frame for sender");
+      }
+      async waitForWindow() {
+        while (!this.done && this.sentBlocks - this.ackedBlocks >= TRANSFER_LIMITS.windowBlocks) {
+          await new Promise((r) => this.ackWaiters.push(r));
+        }
+      }
+      async pump() {
+        const resume = this.resume;
+        const buf = Buffer.allocUnsafe(MAX_FRAME_PAYLOAD_BYTES);
+        for (let i = 0; i < this.content.files.length && !this.done; i++) {
+          const f = this.content.files[i];
+          const nBlocks = blockCount(f.size);
+          if (resume[i] >= nBlocks) continue;
+          const fd = fs86.openSync(spoolFilePath(this.spoolDir, i), "r");
+          try {
+            for (let b = resume[i]; b < nBlocks && !this.done; b++) {
+              await this.waitForWindow();
+              if (this.done) return;
+              const start = b * TRANSFER_LIMITS.blockBytes;
+              const end = Math.min(f.size, start + TRANSFER_LIMITS.blockBytes);
+              const hash3 = (0, import_node_crypto43.createHash)("sha256");
+              for (let o = start; o < end; ) {
+                const len = Math.min(buf.length, end - o);
+                const n = fs86.readSync(fd, buf, 0, len, o);
+                if (n !== len) throw new SessionError("SOURCE_CHANGED", "spool file truncated");
+                hash3.update(buf.subarray(0, len));
+                await this.rate.take(len);
+                while (this.link.bufferedAmount() > TRANSFER_LIMITS.maxBufferedBytes && !this.done) await new Promise((r) => setTimeout(r, 10));
+                if (this.done) return;
+                this.sendFrame(3, i, o, Buffer.from(buf.subarray(0, len)));
+                o += len;
+              }
+              const digest5 = hash3.digest("hex");
+              if (digest5 !== f.blockHashes[b]) throw new SessionError("SOURCE_CHANGED", "spool block no longer matches manifest");
+              this.sendFrame(4, i, start, Buffer.from(digest5, "hex"));
+              this.sentBlocks++;
+            }
+          } finally {
+            fs86.closeSync(fd);
+          }
+        }
+        while (!this.done && this.ackedBlocks < this.sentBlocks) await new Promise((r) => this.ackWaiters.push(r));
+        if (!this.done) {
+          this.sendFrame(7, 0, 0, Buffer.alloc(0));
+          this.finish();
+        }
+      }
+    };
+    var ReceiverSession = class extends BaseSession {
+      constructor(link, transferId, linkGen, linkKey, receiver, resumeBlocks) {
+        super(link, transferId, linkGen, linkKey, "receiver");
+        this.receiver = receiver;
+        this.resumeBlocks = resumeBlocks;
+      }
+      onHelloOk() {
+        this.sendFrame(2, 0, 0, jsonPayload({ blocks: this.resumeBlocks }));
+        if (this.receiver.complete) {
+          this.sendFrame(7, 0, 0, Buffer.alloc(0));
+          this.finish();
+        }
+      }
+      onFrame(f) {
+        if (f.type === 3) {
+          this.receiver.handleData(f.fileIndex, f.offset, f.payload);
+          return;
+        }
+        if (f.type === 4) {
+          if (f.payload.length !== 32) throw new FrameError("PROTOCOL_ERROR", "bad block hash");
+          const r = this.receiver.handleBlockEnd(f.fileIndex, f.offset, f.payload.toString("hex"));
+          this.sendFrame(5, f.fileIndex, f.offset, Buffer.alloc(0));
+          void r;
+          return;
+        }
+        if (f.type === 7) {
+          if (!this.receiver.complete) throw new FrameError("PROTOCOL_ERROR", "DONE before all files received");
+          this.finish();
+          return;
+        }
+        throw new FrameError("PROTOCOL_ERROR", "unexpected frame for receiver");
+      }
+      /** The receiver finishes the stream after the last BLOCK_ACK; the sender then sends DONE. */
+    };
+    var TransferRateLimiter = class {
+      constructor(bytesPerSecond = TRANSFER_LIMITS.totalBytesPerSecond, now = () => Date.now(), sleep3 = (ms3) => new Promise((r) => setTimeout(r, ms3))) {
+        this.bytesPerSecond = bytesPerSecond;
+        this.now = now;
+        this.sleep = sleep3;
+        this.tokens = bytesPerSecond;
+        this.last = now();
+      }
+      tokens;
+      last;
+      refill() {
+        const t = this.now();
+        this.tokens = Math.min(this.bytesPerSecond, this.tokens + (t - this.last) / 1e3 * this.bytesPerSecond);
+        this.last = t;
+      }
+      async take(bytes) {
+        for (; ; ) {
+          this.refill();
+          if (this.tokens >= bytes) {
+            this.tokens -= bytes;
+            return;
+          }
+          const waitMs = Math.max(5, Math.ceil((bytes - this.tokens) / this.bytesPerSecond * 1e3));
+          await this.sleep(waitMs);
+        }
+      }
+    };
     var fs87 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
+    var TERMINAL_STATES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "expired", "revoked"]);
+    var ACTIVE_STATES = /* @__PURE__ */ new Set(["freezing", "linking", "transferring", "paused", "verifying", "publishing"]);
+    var TransferStore = class {
+      constructor(baseDir) {
+        this.baseDir = baseDir;
+      }
+      p(...parts) {
+        return path96.join(this.baseDir, ...parts);
+      }
+      spoolDir(id4) {
+        return this.p("spool", id4);
+      }
+      ensure(sub) {
+        const dir = this.p(sub);
+        fs87.mkdirSync(dir, { recursive: true, mode: 448 });
+        return dir;
+      }
+      atomicWrite(file, data) {
+        fs87.mkdirSync(path96.dirname(file), { recursive: true, mode: 448 });
+        const tmp = `${file}.${process.pid}.tmp`;
+        const fd = fs87.openSync(tmp, "w", 384);
+        try {
+          fs87.writeSync(fd, data);
+          fs87.fsyncSync(fd);
+        } finally {
+          fs87.closeSync(fd);
+        }
+        fs87.renameSync(tmp, file);
+      }
+      save(rec5) {
+        this.ensure("records");
+        this.atomicWrite(this.p("records", `${rec5.id}.json`), JSON.stringify(rec5));
+      }
+      load(id4) {
+        try {
+          return JSON.parse(fs87.readFileSync(this.p("records", `${id4}.json`), "utf8"));
+        } catch {
+          return null;
+        }
+      }
+      list() {
+        let names = [];
+        try {
+          names = fs87.readdirSync(this.p("records"));
+        } catch {
+          return [];
+        }
+        const out = [];
+        for (const n of names) {
+          if (!n.endsWith(".json")) continue;
+          const rec5 = this.load(n.slice(0, -5));
+          if (rec5) out.push(rec5);
+        }
+        return out;
+      }
+      remove(id4) {
+        fs87.rmSync(this.p("records", `${id4}.json`), { force: true });
+        this.removeSpool(id4);
+      }
+      removeSpool(id4) {
+        fs87.rmSync(this.spoolDir(id4), { recursive: true, force: true });
+      }
+      writeReceipt(r) {
+        this.atomicWrite(this.p("receipts", `${r.id}.json`), JSON.stringify(r));
+      }
+      readReceipt(id4) {
+        try {
+          return JSON.parse(fs87.readFileSync(this.p("receipts", `${id4}.json`), "utf8"));
+        } catch {
+          return null;
+        }
+      }
+      /** Masked audit line: no file names, no paths. */
+      audit(entry, now = Date.now()) {
+        this.ensure(".");
+        const line = JSON.stringify({ t: now, id: entry.id.slice(0, 8), role: entry.role, event: entry.event, ...entry.code ? { code: entry.code } : {}, ...entry.files !== void 0 ? { files: entry.files } : {}, ...entry.bytes !== void 0 ? { bytes: entry.bytes } : {} });
+        fs87.appendFileSync(this.p("audit.jsonl"), `${line}
+`, { mode: 384 });
+      }
+      /** Drop receipts > 7 d, audit lines > 30 d, terminal records > 7 d. Returns ids whose temp data is now stale. */
+      gc(now = Date.now()) {
+        try {
+          for (const n of fs87.readdirSync(this.p("receipts"))) {
+            const f = this.p("receipts", n);
+            if (now - fs87.statSync(f).mtimeMs > TRANSFER_RETENTION_MS.receipt) fs87.rmSync(f, { force: true });
+          }
+        } catch {
+        }
+        try {
+          const file = this.p("audit.jsonl");
+          const kept = fs87.readFileSync(file, "utf8").split("\n").filter((l) => {
+            if (!l) return false;
+            try {
+              return now - JSON.parse(l).t <= TRANSFER_RETENTION_MS.audit;
+            } catch {
+              return false;
+            }
+          });
+          this.atomicWrite(file, kept.length ? `${kept.join("\n")}
+` : "");
+        } catch {
+        }
+        const staleTempIds = [];
+        for (const rec5 of this.list()) {
+          const idle = now - rec5.activityAt;
+          const age = now - rec5.createdAt;
+          if (TERMINAL_STATES.has(rec5.state)) {
+            this.removeSpool(rec5.id);
+            if (age > TRANSFER_RETENTION_MS.receipt) this.remove(rec5.id);
+          } else if (idle > TRANSFER_RETENTION_MS.tempIdle || age > TRANSFER_RETENTION_MS.tempMax) {
+            staleTempIds.push(rec5.id);
+          }
+        }
+        return { staleTempIds };
+      }
+    };
+    var fail2 = (code, detail) => ({ ok: false, code, ...detail ? { detail } : {} });
+    var ProjectTransferEngine = class {
+      constructor(ports) {
+        this.ports = ports;
+        this.store = new TransferStore(ports.baseDir);
+        this.rate = ports.rate ?? new TransferRateLimiter();
+        this.recover();
+      }
+      store;
+      rate;
+      restartEpoch = (0, import_node_crypto44.randomBytes)(8).toString("hex");
+      records = /* @__PURE__ */ new Map();
+      runs = /* @__PURE__ */ new Map();
+      now() {
+        return this.ports.now ? this.ports.now() : Date.now();
+      }
+      // ── lifecycle ────────────────────────────────────────────────────────────────
+      /** Boot: every non-terminal approved transfer needs re-approval (restart invalidates consent). */
+      recover() {
+        for (const rec5 of this.store.list()) {
+          if (!TERMINAL_STATES.has(rec5.state) && rec5.state !== "previewed" && rec5.state !== "offered") {
+            rec5.state = "needs_reapproval";
+            delete rec5.localApproval;
+            rec5.peerApproved = false;
+            this.persist(rec5, "needs_reapproval");
+          }
+          this.records.set(rec5.id, rec5);
+        }
+        this.sweep();
+      }
+      /** Expiry + retention sweep; call on a timer. */
+      sweep() {
+        const t = this.now();
+        for (const rec5 of this.records.values()) {
+          if (TERMINAL_STATES.has(rec5.state)) continue;
+          const awaitingFirstApproval = rec5.state === "previewed" || rec5.state === "offered";
+          if (awaitingFirstApproval && t > rec5.previewExpiresAt) this.terminate(rec5, "expired", "PREVIEW_EXPIRED");
+          else if (!awaitingFirstApproval && t - rec5.createdAt > TRANSFER_RETENTION_MS.consent && rec5.state === "needs_reapproval") this.terminate(rec5, "expired", "CONSENT_EXPIRED");
+          else if (rec5.localApproval && t - rec5.localApproval.at > TRANSFER_RETENTION_MS.consent && !ACTIVE_STATES.has(rec5.state)) this.terminate(rec5, "expired", "CONSENT_EXPIRED");
+        }
+        const { staleTempIds } = this.store.gc(t);
+        for (const id4 of staleTempIds) {
+          const rec5 = this.records.get(id4);
+          if (rec5) this.terminate(rec5, "expired", "TEMP_DATA_EXPIRED");
+        }
+      }
+      /** Host hook: owner auth generation / peer authorisation changed. Revokes unauthorised runs. */
+      onAuthorityChanged() {
+        for (const rec5 of this.records.values()) {
+          if (TERMINAL_STATES.has(rec5.state) || !rec5.localApproval) continue;
+          if (this.authorizationProblem(rec5)) this.terminate(rec5, "revoked", "REVOKED", true);
+        }
+      }
+      authorizationProblem(rec5) {
+        const a = rec5.localApproval;
+        if (!a) return null;
+        if (a.ownerAuthGeneration !== this.ports.ownerAuthGeneration()) return "owner-auth-changed";
+        if (a.restartEpoch !== this.restartEpoch) return "restart";
+        if (!this.ports.isPeerAuthorized(rec5.peerDaemonId)) return "peer-unauthorized";
+        return null;
+      }
+      persist(rec5, event) {
+        rec5.updatedAt = this.now();
+        rec5.activityAt = rec5.updatedAt;
+        this.records.set(rec5.id, rec5);
+        this.store.save(rec5);
+        if (event) this.store.audit({ id: rec5.id, role: rec5.role, event, ...rec5.errorCode ? { code: rec5.errorCode } : {}, files: rec5.selection.entries.filter((e) => e.kind === "file").length, bytes: rec5.totalBytes }, this.now());
+      }
+      setState(rec5, state2, event) {
+        rec5.state = state2;
+        this.persist(rec5, event ?? state2);
+      }
+      /** Terminal transition with full cleanup of runtime, spool and staging. */
+      terminate(rec5, state2, code, notifyPeer = false) {
+        if (TERMINAL_STATES.has(rec5.state)) return;
+        const run4 = this.runs.get(rec5.id);
+        if (run4) run4.cancelled = true;
+        const hadReceiver = !!run4?.receiver;
+        this.teardownRun(rec5.id, true);
+        if (rec5.role === "target" && !hadReceiver) {
+          const ws = this.ports.resolveWorkspace(rec5.selection.targetWorkspaceId);
+          if (ws) removeStagingFor(ws.path, rec5.id);
+        }
+        rec5.errorCode = code;
+        rec5.state = state2;
+        delete rec5.localApproval;
+        this.persist(rec5, state2);
+        this.store.removeSpool(rec5.id);
+        this.store.writeReceipt({
+          id: rec5.id,
+          role: rec5.role,
+          outcome: state2,
+          errorCode: code,
+          finishedAt: this.now(),
+          files: (rec5.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
+          excluded: rec5.selection.excluded
+        });
+        if (notifyPeer) void this.ports.dispatchPeer(rec5.peerDaemonId, { op: "cancel", transferId: rec5.id, code }).catch(() => {
+        });
+      }
+      teardownRun(id4, cleanStaging) {
+        const run4 = this.runs.get(id4);
+        if (!run4) return;
+        clearInterval(run4.watchdog);
+        clearTimeout(run4.retryTimer);
+        try {
+          run4.session?.abort("CANCELLED");
+        } catch {
+        }
+        try {
+          run4.link?.close();
+        } catch {
+        }
+        if (run4.receiver) {
+          try {
+            cleanStaging ? run4.receiver.abort() : run4.receiver.dispose();
+          } catch {
+          }
+        }
+        run4.linkKey?.fill(0);
+        this.runs.delete(id4);
+      }
+      // ── capabilities ─────────────────────────────────────────────────────────────
+      capabilities() {
+        const reasons = [];
+        try {
+          getBindingInfo();
+        } catch {
+          reasons.push("NATIVE_HELPER_UNAVAILABLE");
+        }
+        if (!this.ports.linkFactory) reasons.push("LINK_UNAVAILABLE");
+        return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch };
+      }
+      requireSupport() {
+        const c = this.capabilities();
+        return c.supported ? null : fail2(c.reasons[0], c.reasons.join(","));
+      }
+      activeCount() {
+        let n = 0;
+        for (const r of this.records.values()) if (ACTIVE_STATES.has(r.state)) n++;
+        return n;
+      }
+      // ── owner API ────────────────────────────────────────────────────────────────
+      browse(workspaceId, relDir) {
+        const ws = this.ports.resolveWorkspace(workspaceId);
+        if (!ws) return fail2("WORKSPACE_NOT_REGISTERED");
+        try {
+          return { ok: true, entries: browseDirectory(ws.path, relDir) };
+        } catch (e) {
+          return fail2("BROWSE_FAILED", e.message);
+        }
+      }
+      list() {
+        return [...this.records.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+      }
+      get(id4) {
+        return this.records.get(id4) ?? null;
+      }
+      async create(input) {
+        const unsupported = this.requireSupport();
+        if (unsupported) return unsupported;
+        const ws = this.ports.resolveWorkspace(input.workspaceId);
+        if (!ws) return fail2("WORKSPACE_NOT_REGISTERED");
+        const self = this.ports.selfDaemonId();
+        if (!input.targetDaemonId || daemonIdsEquivalent4(input.targetDaemonId, self)) return fail2("INVALID_TARGET", "target must be another of your machines");
+        if (!this.ports.isPeerAuthorized(input.targetDaemonId)) return fail2("PEER_UNAUTHORIZED");
+        if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= 10) return fail2("TOO_MANY_TRANSFERS");
+        let finalName;
+        try {
+          finalName = validateFinalName(input.finalName);
+        } catch (e) {
+          return fail2(e.code ?? "INVALID_FINAL_NAME", e.message);
+        }
+        if (!Array.isArray(input.selected) || input.selected.length === 0 || input.selected.length > TRANSFER_LIMITS.maxEntries) return fail2("MANIFEST_INVALID", "selection required");
+        let manifest;
+        try {
+          const scan = scanSelection(ws.path, input.selected.map(String));
+          manifest = validateSelectionManifest({
+            v: 1,
+            transferId: (0, import_node_crypto44.randomBytes)(16).toString("hex"),
+            sourceDaemonId: self,
+            targetDaemonId: input.targetDaemonId,
+            sourceWorkspaceId: ws.id,
+            targetWorkspaceId: input.targetWorkspaceId,
+            finalName,
+            entries: scan.entries,
+            excluded: scan.excluded
+          });
+        } catch (e) {
+          if (e instanceof ManifestError) return fail2(e.code, e.message);
+          if (e instanceof TransferFsError) return fail2("SOURCE_UNREADABLE", e.message);
+          throw e;
+        }
+        const digest5 = selectionDigest(manifest);
+        const t = this.now();
+        const rec5 = {
+          v: 1,
+          id: manifest.transferId,
+          role: "source",
+          peerDaemonId: input.targetDaemonId,
+          selection: manifest,
+          selectionDigest: digest5,
+          state: "previewed",
+          createdAt: t,
+          updatedAt: t,
+          activityAt: t,
+          previewExpiresAt: t + TRANSFER_RETENTION_MS.preview,
+          linkGen: 0,
+          blocksDone: [],
+          bytesDone: 0,
+          totalBytes: selectionTotalBytes(manifest)
+        };
+        let reply;
+        try {
+          reply = await this.ports.dispatchPeer(input.targetDaemonId, { op: "offer", transferId: manifest.transferId, selection: manifest, selectionDigest: digest5 });
+        } catch (e) {
+          return fail2("PEER_UNREACHABLE", e.message);
+        }
+        if (!reply?.ok) return fail2(String(reply?.code ?? "OFFER_REFUSED"));
+        this.persist(rec5, "previewed");
+        return { ok: true, transferId: rec5.id, record: rec5 };
+      }
+      /** Owner approval on THIS machine. `digest` must be the selection digest the owner saw. */
+      async approve(id4, digest5) {
+        const rec5 = this.records.get(id4);
+        if (!rec5) return fail2("NOT_FOUND");
+        if (TERMINAL_STATES.has(rec5.state)) return fail2("TRANSFER_FINISHED");
+        if (digest5 !== rec5.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        const first = rec5.state === "previewed" || rec5.state === "offered";
+        if (first && this.now() > rec5.previewExpiresAt) {
+          this.terminate(rec5, "expired", "PREVIEW_EXPIRED", true);
+          return fail2("PREVIEW_EXPIRED");
+        }
+        if (!first && rec5.state !== "needs_reapproval") return fail2("ALREADY_APPROVED");
+        if (!this.ports.isPeerAuthorized(rec5.peerDaemonId)) return fail2("PEER_UNAUTHORIZED");
+        const unsupported = this.requireSupport();
+        if (unsupported) return unsupported;
+        rec5.localApproval = { at: this.now(), ownerAuthGeneration: this.ports.ownerAuthGeneration(), restartEpoch: this.restartEpoch };
+        rec5.state = "awaiting_approval";
+        this.persist(rec5, "approved");
+        try {
+          await this.ports.dispatchPeer(rec5.peerDaemonId, { op: "approval", transferId: id4, selectionDigest: digest5, approved: true });
+        } catch {
+        }
+        void this.maybeStart(rec5);
+        return { ok: true, record: rec5 };
+      }
+      async revokeApproval(id4) {
+        const rec5 = this.records.get(id4);
+        if (!rec5) return fail2("NOT_FOUND");
+        if (!rec5.localApproval) return fail2("NOT_APPROVED");
+        this.terminate(rec5, "revoked", "REVOKED", true);
+        return { ok: true };
+      }
+      async cancel(id4) {
+        const rec5 = this.records.get(id4);
+        if (!rec5) return fail2("NOT_FOUND");
+        if (TERMINAL_STATES.has(rec5.state)) return fail2("TRANSFER_FINISHED");
+        this.terminate(rec5, "cancelled", "CANCELLED", true);
+        return { ok: true };
+      }
+      // ── start / run ──────────────────────────────────────────────────────────────
+      async maybeStart(rec5) {
+        if (!rec5.localApproval || !rec5.peerApproved || TERMINAL_STATES.has(rec5.state)) return;
+        if (rec5.role !== "source") return;
+        const run4 = this.runs.get(rec5.id) ?? { retries: 0, cancelled: false, starting: false };
+        this.runs.set(rec5.id, run4);
+        if (run4.starting) return;
+        run4.starting = true;
+        try {
+          await this.startSource(rec5, run4);
+        } catch (e) {
+          const code = e instanceof ManifestError || e instanceof SessionError ? e.code : "INTERNAL_ERROR";
+          this.terminate(rec5, "failed", code, true);
+        } finally {
+          run4.starting = false;
+        }
+      }
+      guard(rec5) {
+        const problem = this.authorizationProblem(rec5);
+        if (problem) {
+          this.terminate(rec5, "revoked", "REVOKED", true);
+          throw new SessionError("REVOKED", problem);
+        }
+      }
+      async startSource(rec5, run4) {
+        this.guard(rec5);
+        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec5.state)) throw new SessionError("TOO_MANY_TRANSFERS", "concurrent transfer limit");
+        const ws = this.ports.resolveWorkspace(rec5.selection.sourceWorkspaceId);
+        if (!ws) throw new ManifestError("WORKSPACE_NOT_REGISTERED", "source workspace gone");
+        if (!rec5.content) {
+          this.setState(rec5, "freezing");
+          rec5.content = await freezeSelection({ rootPath: ws.path, selection: rec5.selection, spoolDir: this.store.spoolDir(rec5.id), isCancelled: () => run4.cancelled });
+          rec5.blocksDone = rec5.content.files.map(() => 0);
+          this.persist(rec5);
+        }
+        await this.openSourceLink(rec5, run4);
+      }
+      async openSourceLink(rec5, run4) {
+        this.guard(rec5);
+        const factory = this.ports.linkFactory;
+        if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
+        run4.linkKey = (0, import_node_crypto44.randomBytes)(32);
+        rec5.linkGen += 1;
+        this.setState(rec5, "linking");
+        const reply = await this.ports.dispatchPeer(rec5.peerDaemonId, {
+          op: "content",
+          transferId: rec5.id,
+          selectionDigest: rec5.selectionDigest,
+          content: rec5.content,
+          linkGen: rec5.linkGen,
+          linkKeyB64: run4.linkKey.toString("base64")
+        });
+        if (!reply?.ok) throw new SessionError(String(reply?.code ?? "PEER_REFUSED"), "peer refused content");
+        const link = factory.create({ transferId: rec5.id, role: "initiator", linkGen: rec5.linkGen });
+        run4.link = link;
+        link.onSignalOut((s2) => {
+          void this.ports.dispatchPeer(rec5.peerDaemonId, { op: "signal", transferId: rec5.id, linkGen: rec5.linkGen, signal: s2 }).catch(() => {
+          });
+        });
+        const session = new SenderSession(link, rec5.id, rec5.linkGen, run4.linkKey, rec5.content, this.store.spoolDir(rec5.id), this.rate, (fi, bi) => {
+          rec5.blocksDone[fi] = Math.max(rec5.blocksDone[fi] ?? 0, bi + 1);
+          rec5.bytesDone = rec5.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, rec5.content.files[i].size), 0);
+          rec5.activityAt = this.now();
+        });
+        run4.session = session;
+        this.setState(rec5, "transferring");
+        this.armWatchdog(rec5, run4);
+        session.wait().then(() => {
+          if (!TERMINAL_STATES.has(rec5.state)) this.setState(rec5, "verifying");
+        }, (e) => this.onSessionFailure(rec5, run4, e));
+      }
+      armWatchdog(rec5, run4) {
+        clearInterval(run4.watchdog);
+        run4.watchdog = setInterval(() => {
+          if (TERMINAL_STATES.has(rec5.state)) {
+            clearInterval(run4.watchdog);
+            return;
+          }
+          if (this.authorizationProblem(rec5)) this.terminate(rec5, "revoked", "REVOKED", true);
+        }, 2e3);
+        run4.watchdog.unref?.();
+      }
+      onSessionFailure(rec5, run4, err) {
+        if (TERMINAL_STATES.has(rec5.state) || run4.cancelled) return;
+        const code = err instanceof SessionError ? err.code : "INTERNAL_ERROR";
+        if (code === "LINK_LOST" || code === "PEER_ABORT") {
+          this.setState(rec5, "paused", "paused");
+          try {
+            run4.link?.close();
+          } catch {
+          }
+          run4.link = void 0;
+          run4.session = void 0;
+          if (rec5.role === "source") this.scheduleRetry(rec5, run4);
+          return;
+        }
+        this.terminate(rec5, "failed", code, true);
+      }
+      scheduleRetry(rec5, run4) {
+        if (run4.retries >= 5) {
+          this.terminate(rec5, "failed", "DIRECT_UNAVAILABLE", true);
+          return;
+        }
+        const delay3 = Math.min(3e4, 1e3 * 2 ** run4.retries++);
+        run4.retryTimer = setTimeout(() => {
+          if (TERMINAL_STATES.has(rec5.state)) return;
+          this.openSourceLink(rec5, run4).catch((e) => this.onSessionFailure(rec5, run4, e instanceof Error ? e : new SessionError("INTERNAL_ERROR", String(e))));
+        }, delay3);
+        run4.retryTimer.unref?.();
+      }
+      // ── peer API (control plane) ─────────────────────────────────────────────────
+      async handlePeerOp(sender, args) {
+        const op = String(args?.op ?? "");
+        const id4 = args?.transferId;
+        if (!isTransferId(id4)) return fail2("PROTOCOL_ERROR");
+        if (!sender || !this.ports.isPeerAuthorized(sender)) return fail2("PEER_UNAUTHORIZED");
+        try {
+          if (op === "offer") return this.onOffer(sender, id4, args);
+          const rec5 = this.records.get(id4);
+          if (!rec5) return fail2("NOT_FOUND");
+          if (!daemonIdsEquivalent4(rec5.peerDaemonId, sender)) return fail2("PEER_UNAUTHORIZED");
+          switch (op) {
+            case "approval":
+              return this.onPeerApproval(rec5, args);
+            case "content":
+              return await this.onContent(rec5, args);
+            case "signal":
+              return this.onSignal(rec5, args);
+            case "cancel":
+              this.terminate(rec5, "cancelled", "PEER_CANCELLED", false);
+              return { ok: true };
+            case "state":
+              return this.onPeerState(rec5, args);
+            default:
+              return fail2("PROTOCOL_ERROR");
+          }
+        } catch (e) {
+          if (e instanceof ManifestError || e instanceof SessionError) return fail2(e.code, e.message);
+          return fail2("INTERNAL_ERROR");
+        }
+      }
+      onOffer(sender, id4, args) {
+        const unsupported = this.requireSupport();
+        if (unsupported) return unsupported;
+        if (this.records.has(id4)) return fail2("DUPLICATE");
+        const selection = validateSelectionManifest(args.selection);
+        const self = this.ports.selfDaemonId();
+        if (selection.transferId !== id4 || !daemonIdsEquivalent4(selection.sourceDaemonId, sender) || !daemonIdsEquivalent4(selection.targetDaemonId, self)) return fail2("PEER_UNAUTHORIZED");
+        if (selectionDigest(selection) !== args.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        const ws = this.ports.resolveWorkspace(selection.targetWorkspaceId);
+        if (!ws) return fail2("WORKSPACE_NOT_REGISTERED");
+        try {
+          probeRoot(ws.path, { requireAtomicNoReplace: true });
+        } catch {
+          return fail2("ATOMIC_NOREPLACE_UNSUPPORTED");
+        }
+        try {
+          requireFreeDisk(ws.path, selectionTotalBytes(selection));
+        } catch (e) {
+          return fail2(e.code ?? "DISK_SPACE_EXHAUSTED");
+        }
+        const t = this.now();
+        this.persist({
+          v: 1,
+          id: id4,
+          role: "target",
+          peerDaemonId: sender,
+          selection,
+          selectionDigest: args.selectionDigest,
+          state: "offered",
+          createdAt: t,
+          updatedAt: t,
+          activityAt: t,
+          previewExpiresAt: t + TRANSFER_RETENTION_MS.preview,
+          linkGen: 0,
+          blocksDone: [],
+          bytesDone: 0,
+          totalBytes: selectionTotalBytes(selection)
+        }, "offered");
+        return { ok: true };
+      }
+      onPeerApproval(rec5, args) {
+        if (args.selectionDigest !== rec5.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        rec5.peerApproved = args.approved === true;
+        this.persist(rec5, rec5.peerApproved ? "peer_approved" : "peer_unapproved");
+        if (rec5.peerApproved) void this.maybeStart(rec5);
+        else if (rec5.localApproval && !TERMINAL_STATES.has(rec5.state)) this.terminate(rec5, "revoked", "REVOKED", false);
+        return { ok: true };
+      }
+      async onContent(rec5, args) {
+        if (rec5.role !== "target") return fail2("PROTOCOL_ERROR");
+        if (!rec5.localApproval || !rec5.peerApproved) return fail2("APPROVAL_REQUIRED");
+        this.guard(rec5);
+        if (args.selectionDigest !== rec5.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        const content = validateContentManifest(args.content, rec5.selection);
+        if (!Number.isInteger(args.linkGen) || args.linkGen <= rec5.linkGen) return fail2("PROTOCOL_ERROR");
+        const key5 = Buffer.from(String(args.linkKeyB64 ?? ""), "base64");
+        if (key5.length !== 32) return fail2("PROTOCOL_ERROR");
+        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec5.state)) return fail2("TOO_MANY_TRANSFERS");
+        const factory = this.ports.linkFactory;
+        if (!factory) return fail2("LINK_UNAVAILABLE");
+        const ws = this.ports.resolveWorkspace(rec5.selection.targetWorkspaceId);
+        if (!ws) return fail2("WORKSPACE_NOT_REGISTERED");
+        const prev = this.runs.get(rec5.id);
+        if (prev) {
+          clearInterval(prev.watchdog);
+          try {
+            prev.session?.abort("SUPERSEDED");
+            prev.link?.close();
+          } catch {
+          }
+          prev.receiver?.dispose();
+        }
+        const run4 = { retries: 0, cancelled: false, starting: false, linkKey: key5 };
+        rec5.content = content;
+        rec5.linkGen = args.linkGen;
+        if (rec5.blocksDone.length !== content.files.length) rec5.blocksDone = content.files.map(() => 0);
+        const receiver = new TransferReceiver(ws.path, rec5.selection, content, (fi, blocks, bytes) => {
+          rec5.blocksDone[fi] = blocks;
+          rec5.bytesDone = bytes;
+          this.persist(rec5);
+        });
+        let resume;
+        try {
+          resume = receiver.init(rec5.blocksDone);
+        } catch (e) {
+          receiver.dispose();
+          throw e;
+        }
+        rec5.blocksDone = [...resume];
+        run4.receiver = receiver;
+        this.runs.set(rec5.id, run4);
+        this.setState(rec5, "linking");
+        const link = factory.create({ transferId: rec5.id, role: "responder", linkGen: rec5.linkGen });
+        run4.link = link;
+        link.onSignalOut((s2) => {
+          void this.ports.dispatchPeer(rec5.peerDaemonId, { op: "signal", transferId: rec5.id, linkGen: rec5.linkGen, signal: s2 }).catch(() => {
+          });
+        });
+        const session = new ReceiverSession(link, rec5.id, rec5.linkGen, key5, receiver, resume);
+        run4.session = session;
+        this.armWatchdog(rec5, run4);
+        this.setState(rec5, "transferring");
+        session.wait().then(() => this.finishTarget(rec5, run4), (e) => this.onSessionFailure(rec5, run4, e));
+        return { ok: true };
+      }
+      onSignal(rec5, args) {
+        const run4 = this.runs.get(rec5.id);
+        if (!run4?.link || args.linkGen !== rec5.linkGen) return fail2("STALE_LINK");
+        const s2 = args.signal;
+        if (!s2 || !["offer", "answer", "candidate"].includes(s2.kind)) return fail2("PROTOCOL_ERROR");
+        if (typeof s2.candidate === "string" && / typ relay\b/.test(s2.candidate)) return fail2("RELAY_CANDIDATE_REFUSED");
+        run4.link.signalIn(s2);
+        return { ok: true };
+      }
+      onPeerState(rec5, args) {
+        if (rec5.role !== "source") return { ok: true };
+        if (args.state === "completed") {
+          if (typeof args.publishedName === "string") rec5.publishedName = args.publishedName;
+          this.completeRecord(rec5);
+        } else if (args.state === "failed") {
+          this.terminate(rec5, "failed", String(args.code ?? "TARGET_FAILED"), false);
+        }
+        return { ok: true };
+      }
+      async finishTarget(rec5, run4) {
+        try {
+          this.setState(rec5, "verifying");
+          run4.receiver.verifyAll();
+          this.setState(rec5, "publishing");
+          rec5.publishedName = run4.receiver.publish(rec5.selection.finalName);
+          run4.receiver.dispose();
+          run4.receiver = void 0;
+          this.completeRecord(rec5);
+          await this.ports.dispatchPeer(rec5.peerDaemonId, { op: "state", transferId: rec5.id, state: "completed", publishedName: rec5.publishedName }).catch(() => {
+          });
+        } catch (e) {
+          const code = e.code && /^[A-Z_]+$/.test(String(e.code)) ? String(e.code) : "VERIFY_FAILED";
+          this.terminate(rec5, "failed", code, false);
+          await this.ports.dispatchPeer(rec5.peerDaemonId, { op: "state", transferId: rec5.id, state: "failed", code }).catch(() => {
+          });
+        }
+      }
+      completeRecord(rec5) {
+        this.teardownRun(rec5.id, false);
+        rec5.errorCode = void 0;
+        rec5.bytesDone = rec5.totalBytes;
+        delete rec5.localApproval;
+        this.setState(rec5, "completed");
+        this.store.removeSpool(rec5.id);
+        this.store.writeReceipt({
+          id: rec5.id,
+          role: rec5.role,
+          outcome: "completed",
+          finishedAt: this.now(),
+          publishedName: rec5.publishedName,
+          files: (rec5.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
+          excluded: rec5.selection.excluded
+        });
+      }
+      /** Remove everything (tests / shutdown). */
+      shutdown() {
+        for (const id4 of [...this.runs.keys()]) this.teardownRun(id4, false);
+      }
+    };
+    function defaultTransferBaseDir(configDir) {
+      return path97.join(configDir, "project-transfers");
+    }
+    function ensureBaseDir(dir) {
+      fs88.mkdirSync(dir, { recursive: true, mode: 448 });
+    }
     var engine = null;
+    var sweepTimer;
+    function configureProjectTransfer(ports) {
+      if (engine) {
+        engine.shutdown();
+        clearInterval(sweepTimer);
+      }
+      ensureBaseDir(ports.baseDir);
+      engine = new ProjectTransferEngine(ports);
+      sweepTimer = setInterval(() => engine?.sweep(), 60 * 6e4);
+      sweepTimer.unref?.();
+      return engine;
+    }
     function getProjectTransferEngine() {
       return engine;
     }
@@ -178507,7 +180863,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function str17(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail6(code, error = code, extra = {}) {
+    function fail7(code, error = code, extra = {}) {
       LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
@@ -178558,7 +180914,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var launchAssistantOnce = async (ctx, args, fence) => {
       const registry = getAssistantRegistry();
       const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
-      if (fence.aborted) return fail6("assistant_launch_timeout");
+      if (fence.aborted) return fail7("assistant_launch_timeout");
       if (admission) {
         if (admission.success) {
           const { getAssistantRuntime: getAssistantRuntime3 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -178590,9 +180946,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         sessionId: assistantSessionKey,
         declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path
       });
-      if (!mcp.ok) return fail6(mcp.code, mcp.error, { cliType });
+      if (!mcp.ok) return fail7(mcp.code, mcp.error, { cliType });
       const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
-      if (!approval.ok) return fail6(approval.code, approval.error, { cliType });
+      if (!approval.ok) return fail7(approval.code, approval.error, { cliType });
       let projects2;
       try {
         projects2 = await promptProjects(ctx);
@@ -178600,15 +180956,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
       }
-      if (fence.aborted) return fail6("assistant_launch_timeout");
-      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail6("assistant_restore_pending");
+      if (fence.aborted) return fail7("assistant_launch_timeout");
+      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail7("assistant_restore_pending");
       const svc = getAssistantServices();
       const prompt = buildAssistantSystemPrompt({ projects: projects2, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: /* @__PURE__ */ new Date() });
-      if (!prompt.withinLimit) return fail6("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
+      if (!prompt.withinLimit) return fail7("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
       try {
         ensurePrivateAssistantWorkspace(configDir, workspace);
       } catch (e) {
-        return fail6("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
+        return fail7("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
       }
       if (mcp.privateHome) {
         try {
@@ -178616,7 +180972,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
           if (prepared.failed.length) LOG.warn("Assistant", `[${cliType}] private HOME imports failed: ${prepared.failed.join(", ")}`);
         } catch (e) {
-          return fail6("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
+          return fail7("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
         }
       }
       try {
@@ -178628,7 +180984,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           });
         }
       } catch (e) {
-        return fail6("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
+        return fail7("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
       }
       const cliArgs = [];
       const { ensureMcpSessionCredential: ensureMcpSessionCredential2 } = await Promise.resolve().then(() => (init_mcp_command_ingress(), mcp_command_ingress_exports));
@@ -178644,7 +181000,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
       const injection = applyMeshCoordinatorSystemPromptInjection2(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
-      if (injection.error) return fail6(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
+      if (injection.error) return fail7(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
       const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
       if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a) => typeof a === "string" && !!a.trim()));
       cliArgs.push(...mcp.cliArgs);
@@ -178653,11 +181009,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       try {
         if (fence.aborted) {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail6("assistant_launch_timeout");
+          return fail7("assistant_launch_timeout");
         }
         if (ctx.deps.cliManager.hostedRestoreState !== "ready") {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail6("assistant_restore_pending");
+          return fail7("assistant_restore_pending");
         }
         registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
@@ -178732,13 +181088,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
-        if (bindingConflict && !fence.aborted) return fail6("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
-        return fail6(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
+        if (bindingConflict && !fence.aborted) return fail7("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
+        return fail7(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
-        return fail6(str17(launched?.code) || "assistant_launch_failed", str17(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
+        return fail7(str17(launched?.code) || "assistant_launch_failed", str17(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail6("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
+      if (!mayBind()) return fail7("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -178759,7 +181115,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         } catch (stopError) {
           LOG.warn("Assistant", `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
         }
-        return fail6("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
+        return fail7("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
       }
       svc.inputLog.begin(sessionId);
       runtime2?.activate("launch");
@@ -178779,9 +181135,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
       const failures = assistantCleanupFailures.get(registry);
       if (failures?.size) {
-        if (!forced) return fail6("assistant_launch_cleanup_pending");
+        if (!forced) return fail7("assistant_launch_cleanup_pending");
         for (const [id4, failure7] of failures) {
-          if (!await failure7.cleanup()) return fail6("assistant_launch_cleanup_pending");
+          if (!await failure7.cleanup()) return fail7("assistant_launch_cleanup_pending");
           failure7.fence.cleanupPending = false;
           failure7.fence.onCleanupAcknowledged?.();
           failures.delete(id4);
@@ -178790,7 +181146,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let pending = assistantStarts.get(registry);
       const meta2 = assistantStartMeta.get(registry);
       if (pending && meta2 && forced && Date.now() - meta2.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
-        if (!meta2.fence.cancelBeforeSpawn()) return fail6("assistant_launch_cancellation_pending");
+        if (!meta2.fence.cancelBeforeSpawn()) return fail7("assistant_launch_cancellation_pending");
         LOG.warn("Assistant", "owner_force cancelled a launch before spawning after the hard ceiling");
         assistantGenerations.delete(registry);
         meta2.clear();
@@ -178804,7 +181160,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const lockPath = (0, import_path44.join)(lockDir, ".assistant-launch.lock");
       const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
-      if (!lock.ok) return fail6(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
+      if (!lock.ok) return fail7(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
       const fence = new AssistantLaunchFence();
       assistantGenerations.set(registry, fence);
       let timer;
@@ -178825,7 +181181,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         timer = setTimeout(() => {
           fence.aborted = true;
           if (!fence.dispatched) clear();
-          resolve62(fail6("assistant_launch_timeout"));
+          resolve62(fail7("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
       });
@@ -178848,7 +181204,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const caller = readAssistantSessionId(args);
       const live = runtime2.liveSessionId();
       if (live && caller !== live) {
-        return fail6("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
+        return fail7("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
       }
       return { success: true, assistantEvents: await runtime2.pull(caller || null) };
     };
@@ -182870,7 +185226,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           dial: async () => {
             const socket = await dial();
             if (link.stopped || this.closed) {
-              safeClose(socket);
+              safeClose3(socket);
               throw new Error("mesh replication link stopped during dial");
             }
             return webSocketChannel(socket);
@@ -182914,7 +185270,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       acceptMemberSocket(meshId, memberDaemonId, socket) {
         const peerId = this.admissiblePeerId(memberDaemonId, "member socket");
         if (peerId === null) {
-          safeClose(socket);
+          safeClose3(socket);
           return false;
         }
         const previous = this.members.get(peerId);
@@ -183017,7 +185373,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** Runs inside the member's first-frame dispatch. */
       attachMember(session, deferred) {
         if (session.ended || this.closed || this.members.get(session.peerId) !== session) {
-          safeClose(session.socket);
+          safeClose3(session.socket);
           return;
         }
         if (session.firstFrameTimer !== null) {
@@ -183065,7 +185421,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           session.peer?.detach();
         } catch {
         }
-        safeClose(session.socket);
+        safeClose3(session.socket);
       }
       dropMember(session, reason) {
         if (this.members.get(session.peerId) === session) this.members.delete(session.peerId);
@@ -183176,7 +185532,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function errorMessage2(error) {
       return error instanceof Error ? error.message : String(error);
     }
-    function safeClose(socket) {
+    function safeClose3(socket) {
       try {
         socket.close();
       } catch {
@@ -208121,11 +210477,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         clearFollowUp();
         activeFollowUp = setTimeout(() => {
           activeFollowUp = null;
-          void tick();
+          void tick2();
         }, Math.max(1, delayMs));
         activeFollowUp.unref?.();
       };
-      const tick = async () => {
+      const tick2 = async () => {
         if (running || !stillOwned()) return;
         const result = await runOnce();
         if (result.budgetExhausted) {
@@ -208134,7 +210490,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       };
       if (!opts.once) {
         activeTimer = setInterval(() => {
-          void tick();
+          void tick2();
         }, Math.max(1, opts.intervalMs ?? TRANSCRIPT_PRUNE_INTERVAL_MS));
         activeTimer.unref?.();
         scheduleFollowUp(opts.initialDelayMs ?? TRANSCRIPT_PRUNE_INITIAL_DELAY_MS);
@@ -210468,7 +212824,7 @@ ${notice.notice}${supersededHint}`;
        */
       accept(socket) {
         if (this.closed) {
-          safeClose2(socket);
+          safeClose4(socket);
           return null;
         }
         while (this.lanes.size >= this.maxLanes) {
@@ -210491,7 +212847,7 @@ ${notice.notice}${supersededHint}`;
             "Seqscribe",
             `standalone replica lane attach refused peer=${peerId}: ${error instanceof Error ? error.message : String(error)}`
           );
-          safeClose2(socket);
+          safeClose4(socket);
           return null;
         }
         this.lanes.set(peerId, { peer, socket });
@@ -210515,7 +212871,7 @@ ${notice.notice}${supersededHint}`;
           entry.peer.detach();
         } catch {
         }
-        safeClose2(entry.socket);
+        safeClose4(entry.socket);
       }
       /** Detach every lane and stop listening for topic activation. Idempotent. */
       close() {
@@ -210558,7 +212914,7 @@ ${notice.notice}${supersededHint}`;
     function transcriptTopicsAvailableFrame(topics) {
       return { type: TRANSCRIPT_TOPICS_AVAILABLE_TYPE, topics: [...topics] };
     }
-    function safeClose2(socket) {
+    function safeClose4(socket) {
       try {
         socket.close();
       } catch {
@@ -211332,7 +213688,7 @@ ${notice.notice}${supersededHint}`;
           newestEdgeByTopic.set(topic, { at, label: edgeLabel(e) });
         }
       }, { name: "host.reconcile-edge-tracker" });
-      const tick = () => {
+      const tick2 = () => {
         for (const topic of RECONCILE_TOPICS) {
           if (!topics.hasSubscriptions(topic)) continue;
           const edge = newestEdgeByTopic.get(topic);
@@ -211345,7 +213701,7 @@ ${notice.notice}${supersededHint}`;
           LOG.warn("HostRuntime", `topic reconciliation: ${topic} has subscribers but no flush since ${ageMs2}ms ago (newest ${topic} edge (${edge.label}) was ${now() - edge.at}ms ago) \u2014 a bus subscriber may be silently broken`);
         }
       };
-      const timer = setIntervalFn(tick, intervalMs);
+      const timer = setIntervalFn(tick2, intervalMs);
       if (typeof timer.unref === "function") {
         timer.unref();
       }

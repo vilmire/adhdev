@@ -1147,3 +1147,7 @@ export type {
   RunningWorkContinuationCheck,
   SetNewWorkHoldOptions,
 } from './maintenance/new-work-hold.js';
+
+// Project file transfer (owner-to-owner; hosts inject the STUN-only link factory)
+export { ProjectTransferEngine, configureProjectTransfer, getProjectTransferEngine, defaultTransferBaseDir, type TransferHostPorts, type TransferLink, type TransferLinkFactory, type TransferSignal } from './transfer/index.js';
+export { extractSdpFingerprint } from './transfer/protocol.js';

@@ -103,6 +103,7 @@ function resolveNativeRootDirs(): string[] {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   return [
     path.resolve(moduleDir, 'native'),
+    path.resolve(moduleDir, '../native'),
     path.resolve(moduleDir, '../src/transfer-fs/native'),
     path.resolve(moduleDir, '../../src/transfer-fs/native'),
     path.resolve(process.cwd(), 'oss/packages/daemon-core/src/transfer-fs/native'),
