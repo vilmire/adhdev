@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, openSync, closeSync, fstatSync, constants } from 'node:fs';
 import { getMeshConfigPath, inRecoveryMeshOwnershipFence } from '../../config/mesh-config-store.js';
 import { createHash } from 'node:crypto';
 import type { Database } from 'better-sqlite3';
@@ -10,7 +10,21 @@ import type { RecoveryCurrentAssignment } from './operator-recovery.js';
 export function readRecoveryCurrentAssignment(db: Database, selfDaemonId: string): RecoveryCurrentAssignment {
     if (!db.inTransaction || selfDaemonId !== target.ownerDaemonId) throw new Error('recovery_owner_transaction_required');
     if (!inRecoveryMeshOwnershipFence()) throw new Error('recovery_physical_owner_fence_required');
-    const currentMesh = JSON.parse(readFileSync(getMeshConfigPath(), 'utf8')).meshes?.find((m: any) => m.id === target.meshId);
+    const fd = openSync(getMeshConfigPath(), constants.O_RDONLY | constants.O_NOFOLLOW);
+    let ownerBytes: string; let ownerFileIdentity: string;
+    try {
+        const before = fstatSync(fd, { bigint: true });
+        if (!before.isFile() || before.nlink !== 1n || before.ino <= 0n || before.birthtimeNs <= 0n || before.ctimeNs <= 0n) {
+            throw new Error('recovery_owner_file_identity_unproved');
+        }
+        const identity = (s: typeof before) => [s.dev, s.ino, s.birthtimeNs, s.ctimeNs, s.mtimeNs, s.size].map(n => n.toString()).join(':');
+        ownerBytes = readFileSync(fd, 'utf8');
+        ownerFileIdentity = identity(fstatSync(fd, { bigint: true }));
+        if (ownerFileIdentity !== identity(before)) throw new Error('recovery_owner_file_changed');
+    } finally { closeSync(fd); }
+    // Current file incarnation detects owner transfer-and-return even when
+    // payload fields are restored. It is not historical process provenance.
+    const currentMesh = JSON.parse(ownerBytes).meshes?.find((m: any) => m.id === target.meshId);
     if (currentMesh?.meshHost?.role !== 'host' || currentMesh.meshHost.hostDaemonId !== selfDaemonId) throw new Error('recovery_current_mesh_owner_mismatch');
     const a = db.prepare(`SELECT * FROM turn_attempts WHERE mesh_id=? AND task_id=?
         ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(target.meshId, target.taskId) as Record<string, any> | undefined;
@@ -25,6 +39,6 @@ export function readRecoveryCurrentAssignment(db: Database, selfDaemonId: string
         attemptId: a.attempt_id, generation: a.generation, dispatchNonce: a.dispatch_nonce,
         sessionId: a.session_id, nodeId: a.node_id, deliveryId: a.message_id, state: a.state,
         queueStatus: q.status, queueNodeId: q.assigned_node_id, queueSessionId: q.assigned_session_id,
-        ownerRevision: hash([a.owner_daemon_id, a.attempt_id, a.updated_at, a.data_json, currentMesh.meshHost]),
+        ownerRevision: hash([a.owner_daemon_id, a.attempt_id, a.updated_at, a.data_json, currentMesh.meshHost, ownerFileIdentity]),
         queueRevision: hash(q) };
 }

@@ -61,3 +61,13 @@ it('refuses default READY labels without a verified successful full restore befo
     await expect(operatorRecoveryCensusCommand({ deps: { statusInstanceId: t.workerDaemonId, cliManager: manager } } as any, args))
         .rejects.toThrow('full_restore_and_adapter_closure_required');
 });
+
+it('refuses a mismatched explicit target before touching owner/queue dependencies', async () => {
+    const args = { ...ownerArgs(true), taskId: 'another-task' };
+    // Preserve private provenance on this exact object rather than copying it.
+    const proof = issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true,
+        nondelegatedLocalOwner: true, verifyCurrent: () => true });
+    applyRouterCommandIngressProvenance({}, args, 'standalone', undefined, { ownerProof: proof }, false, 'operator_recovery');
+    const result = await operatorRecoveryCommand({ deps: new Proxy({}, { get() { throw Error('deps touched'); } }) } as any, args);
+    expect(result.error).toBe('recovery_exact_target_required');
+});

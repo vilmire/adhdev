@@ -106,6 +106,17 @@ describe.skipIf(process.platform === 'win32')('real runtime ledger operator reco
         expect(f.ledger.getAttempt(t.attemptId)?.state).toBe('stopping');
         f.witness.assertAvailable();
     });
+    it('rejects persisted owner transfer-and-return ABA even if final owner fields match', async () => {
+        const f = fixture(); const original = f.peer.requestPhysicalProof;
+        f.peer.requestPhysicalProof = async n => {
+            const r = await original(n); const old = readFileSync(getMeshConfigPath(), 'utf8');
+            writeFileSync(getMeshConfigPath(), old.replace(t.ownerDaemonId, 'temporary-owner'));
+            writeFileSync(getMeshConfigPath(), old);
+            return r;
+        };
+        await expect(f.recover()).rejects.toThrow('expired_revoked_or_reassigned');
+        expect(f.ledger.getAttempt(t.attemptId)?.state).toBe('stopping'); f.witness.assertAvailable();
+    });
     it('rereads the actual SQL queue assignment after observation', async () => {
         const f = fixture(); const original = f.peer.requestPhysicalProof;
         f.peer.requestPhysicalProof = async n => { const r = await original(n); f.db.prepare('UPDATE mesh_queue SET assigned_session_id=? WHERE id=?').run('reassigned', t.taskId); return r; };

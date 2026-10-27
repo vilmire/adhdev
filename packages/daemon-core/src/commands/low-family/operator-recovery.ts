@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+import { createRecoveryCliSession } from '../operator-recovery-cli-session.js';
 import { generateKeyPairSync, randomUUID, randomBytes, sign, type KeyObject } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -12,10 +14,12 @@ import { isNondelegatedLocalOwnerIngress } from '../command-args.js';
 import { readMeshSender } from '../mesh-sender.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import type { LowFamilyContext } from './types.js';
+import type { CommandRouterResult } from '../router.js';
 
 interface Enrollment { owner: RecoveryOwnerAdmission; key: KeyObject; boot: string; witness: RecoveryWitness; message: string }
 const enrollments = new WeakMap<object, Enrollment>();
 const ownerGenerations = new WeakMap<object, string>();
+const cliEpochs = new WeakMap<object, string>();
 function endpoint() {
     const i = getProcessInstanceContext();
     return getDefaultSessionHostEndpoint(i.sessionHostAppName, { ipcKey: i.ipcKey });
@@ -35,10 +39,27 @@ function restoreSnapshot(ctx: LowFamilyContext): string {
 /** Supported surface: verified password-session owner enrolls an operation-local
  * in-memory signer. Neither a config token nor internal MCP grants enrollment.
  * Every subsequent operation ALSO requires the current nondelegated channel. */
-export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any) {
+export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any): Promise<CommandRouterResult> {
     try {
         requireOwner(args);
+        for (const key of Object.keys(target) as Array<keyof typeof target>) {
+            if (args[key] !== undefined && args[key] !== target[key]) throw new Error('recovery_exact_target_required');
+        }
+        if (args.target !== undefined && !isDeepStrictEqual(args.target, target)) throw new Error('recovery_exact_target_required');
         const action = args.action;
+        if (action === 'cli_session') {
+            if (![target.ownerDaemonId, target.workerDaemonId].some(id => id === ctx.deps.statusInstanceId)) throw new Error('recovery_wrong_daemon');
+            const epoch = cliEpochs.get(ctx.deps) || randomUUID(); cliEpochs.set(ctx.deps, epoch);
+            return { success: true, result: { ...await createRecoveryCliSession(args, body => operatorRecoveryCommand(ctx, body),
+                () => cliEpochs.get(ctx.deps) === epoch), target, association: 'operator_asserted' } };
+        }
+        if (action === 'revoke') {
+            if (![target.ownerDaemonId, target.workerDaemonId].some(id => id === ctx.deps.statusInstanceId)) throw new Error('recovery_wrong_daemon');
+            cliEpochs.set(ctx.deps, randomUUID());
+            ownerGenerations.set(ctx.deps, randomUUID());
+            enrollments.delete(ctx.deps);
+            return { success: true, result: { revoked: true } };
+        }
         if (action === 'fence') {
             if (ctx.deps.statusInstanceId !== target.workerDaemonId) throw new Error('recovery_wrong_worker');
             const restore = restoreSnapshot(ctx);
@@ -56,11 +77,6 @@ export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any) 
         }
         const ledger = getActiveTurnLedger();
         if (!ledger || ledger.selfDaemonId !== target.ownerDaemonId) throw new Error('recovery_wrong_coordinator');
-        if (action === 'revoke') {
-            ownerGenerations.set(ctx.deps, randomUUID());
-            enrollments.delete(ctx.deps);
-            return { success: true, result: { revoked: true } };
-        }
         if (action === 'enroll') {
             if (enrollments.has(ctx.deps)) throw new Error('recovery_owner_already_enrolled_this_boot');
             const boot = randomUUID();
