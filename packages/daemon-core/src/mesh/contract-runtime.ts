@@ -285,15 +285,23 @@ export function contractAfterAcceptedCompletion(input: {
         LOG.warn('Contract', `evidence join failed for task ${input.taskId}: ${e?.message || e}`);
     }
     const eligibility = contractTaskEligibility(input.meshId, input.taskId, 'handoff');
-    return { eligibility, publishHandoff: eligibility.usable ? takeHeldHandoff(s.ctx, input.meshId, input.taskId) : null };
+    return { eligibility, publishHandoff: eligibility.usable ? takeHeldHandoff(s.ctx, input.meshId, input.taskId, eligibility.resultKey) : null };
 }
 
-function takeHeldHandoff(ctx: ContractCtx, meshId: string, taskId: string): HeldHandoffNote | null {
+/**
+ * RN-01: a held note publishes only with the exact result it was written for —
+ * the assessed result's attempt must be the note's attempt. A note from a
+ * superseded attempt stays private even when a later attempt is usable.
+ */
+function takeHeldHandoff(ctx: ContractCtx, meshId: string, taskId: string, resultKey: string | undefined): HeldHandoffNote | null {
+    if (!resultKey) return null;
     const r = ctx.db.prepare('SELECT * FROM contract_held_handoffs WHERE mesh_id = ? AND task_id = ? AND published_at IS NULL').get(meshId, taskId) as {
         attempt_id: string; session_id: string | null; node_id: string | null; notes_json: string; recorded_at: number;
     } | undefined;
     if (!r) return null;
-    ctx.db.prepare('UPDATE contract_held_handoffs SET published_at = ? WHERE mesh_id = ? AND task_id = ?').run(ctx.rt.nowMs(), meshId, taskId);
+    const ev = ctx.db.prepare('SELECT attempt_id FROM contract_result_evidence WHERE result_key = ? AND mesh_id = ? AND task_id = ?').get(resultKey, meshId, taskId) as { attempt_id: string } | undefined;
+    if (!ev || !r.attempt_id || ev.attempt_id !== r.attempt_id) return null;
+    ctx.db.prepare('UPDATE contract_held_handoffs SET published_at = ?, result_key = ? WHERE mesh_id = ? AND task_id = ?').run(ctx.rt.nowMs(), resultKey, meshId, taskId);
     return { meshId, taskId, attemptId: r.attempt_id, sessionId: r.session_id, nodeId: r.node_id, notesJson: r.notes_json, recordedAt: r.recorded_at };
 }
 
@@ -311,8 +319,9 @@ export function contractPublishableHeldHandoffs(meshId: string): HeldHandoffNote
     const rows = ctx.db.prepare('SELECT task_id FROM contract_held_handoffs WHERE mesh_id = ? AND published_at IS NULL').all(meshId) as Array<{ task_id: string }>;
     const out: HeldHandoffNote[] = [];
     for (const r of rows) {
-        if (!contractTaskEligibility(meshId, r.task_id, 'handoff').usable) continue;
-        const note = takeHeldHandoff(ctx, meshId, r.task_id);
+        const e = contractTaskEligibility(meshId, r.task_id, 'handoff');
+        if (!e.usable) continue;
+        const note = takeHeldHandoff(ctx, meshId, r.task_id, e.resultKey);
         if (note) out.push(note);
     }
     return out;

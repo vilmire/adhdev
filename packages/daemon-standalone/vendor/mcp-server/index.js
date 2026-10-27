@@ -71610,12 +71610,15 @@ ${body}`;
         LOG.warn("Contract", `evidence join failed for task ${input.taskId}: ${e?.message || e}`);
       }
       const eligibility = contractTaskEligibility(input.meshId, input.taskId, "handoff");
-      return { eligibility, publishHandoff: eligibility.usable ? takeHeldHandoff(s2.ctx, input.meshId, input.taskId) : null };
+      return { eligibility, publishHandoff: eligibility.usable ? takeHeldHandoff(s2.ctx, input.meshId, input.taskId, eligibility.resultKey) : null };
     }
-    function takeHeldHandoff(ctx, meshId, taskId) {
+    function takeHeldHandoff(ctx, meshId, taskId, resultKey) {
+      if (!resultKey) return null;
       const r = ctx.db.prepare("SELECT * FROM contract_held_handoffs WHERE mesh_id = ? AND task_id = ? AND published_at IS NULL").get(meshId, taskId);
       if (!r) return null;
-      ctx.db.prepare("UPDATE contract_held_handoffs SET published_at = ? WHERE mesh_id = ? AND task_id = ?").run(ctx.rt.nowMs(), meshId, taskId);
+      const ev = ctx.db.prepare("SELECT attempt_id FROM contract_result_evidence WHERE result_key = ? AND mesh_id = ? AND task_id = ?").get(resultKey, meshId, taskId);
+      if (!ev || !r.attempt_id || ev.attempt_id !== r.attempt_id) return null;
+      ctx.db.prepare("UPDATE contract_held_handoffs SET published_at = ?, result_key = ? WHERE mesh_id = ? AND task_id = ?").run(ctx.rt.nowMs(), resultKey, meshId, taskId);
       return { meshId, taskId, attemptId: r.attempt_id, sessionId: r.session_id, nodeId: r.node_id, notesJson: r.notes_json, recordedAt: r.recorded_at };
     }
     function contractHandoffVisible(meshId, taskId) {
@@ -71629,8 +71632,9 @@ ${body}`;
       const rows = ctx.db.prepare("SELECT task_id FROM contract_held_handoffs WHERE mesh_id = ? AND published_at IS NULL").all(meshId);
       const out = [];
       for (const r of rows) {
-        if (!contractTaskEligibility(meshId, r.task_id, "handoff").usable) continue;
-        const note2 = takeHeldHandoff(ctx, meshId, r.task_id);
+        const e = contractTaskEligibility(meshId, r.task_id, "handoff");
+        if (!e.usable) continue;
+        const note2 = takeHeldHandoff(ctx, meshId, r.task_id, e.resultKey);
         if (note2) out.push(note2);
       }
       return out;
