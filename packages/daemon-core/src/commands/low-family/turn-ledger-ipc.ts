@@ -248,6 +248,7 @@ const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
                 && attempt && !attempt.terminal && attempt.generation === original.generation
                 && attempt.sessionId === evidence.sessionId && attempt.ownerDaemonId === ledger.selfDaemonId
                 && attempt.scope === 'mesh_direct' && attempt.meshId === (evidence.meshId ?? null)
+                // eslint-disable-next-line no-restricted-syntax -- Replay must match the exact nodeId stored in this attempt's creation evidence; aliases cannot authorize token re-minting.
                 && attempt.taskId === (evidence.taskId ?? null) && attempt.nodeId === (evidence.nodeId ?? null)
                 && attempt.messageId === evidence.messageId) {
                 result = { ...result, attempt };

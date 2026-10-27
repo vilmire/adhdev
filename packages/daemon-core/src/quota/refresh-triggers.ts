@@ -345,7 +345,12 @@ export async function forceRefreshQuota(
     const entries: QuotaForceRefreshEntry[] = [];
     const probe: QuotaProvider[] = [];
 
-    for (const name of requested) {
+    // CLI shorthand and canonical names address the same quota cache entry.
+    const aliases: Record<string, string> = {
+        claude: 'claude-cli', codex: 'codex-cli', grok: 'grok-cli',
+        cursor: 'cursor-cli', antigravity: 'antigravity-cli', agy: 'antigravity-cli',
+    };
+    for (const name of new Set(requested.map((name) => Object.hasOwn(aliases, name) ? aliases[name] : name))) {
         const refresher = REFRESHERS.find(({ provider }) => provider === name);
         if (!refresher) {
             entries.push({

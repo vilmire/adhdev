@@ -7,6 +7,7 @@ import {
     parseSnapshotFile,
     shouldWriteSnapshot,
     snapshotFromStatuslineInput,
+    statuslineProducerLineage,
     type StatuslineSnapshot,
 } from '../../src/quota/statusline/snapshot';
 
@@ -193,5 +194,31 @@ describe('parseSnapshotFile', () => {
         void capturedAt;
 
         expect(parseSnapshotFile(JSON.stringify({ ...withoutTime, version: SNAPSHOT_VERSION }))).toBeNull();
+    });
+});
+
+describe('snapshot producer lineage contract', () => {
+    const source = { CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-a', CLAUDE_CODE_ORGANIZATION_UUID: 'fixture-org' };
+
+    it('round trips a producer digest while rejecting malformed lineage', () => {
+        const captured = snapshotFromStatuslineInput(statuslineInput(), NOW, source)!;
+        expect(captured.accountLineage?.kind).toBe('account');
+        expect(parseSnapshotFile(JSON.stringify(captured))?.accountLineage).toEqual(statuslineProducerLineage(source));
+        expect(parseSnapshotFile(JSON.stringify({ ...captured, accountLineage: { version: 1, kind: 'account', key: 'raw-id' } }))?.accountLineage)
+            .toEqual({ version: 1, kind: 'unknown' });
+    });
+
+    it('ignores self-asserted stdin identity without inherited producer evidence', () => {
+        expect(snapshotFromStatuslineInput(statuslineInput({ accountLineage: statuslineProducerLineage(source) }), NOW)?.accountLineage)
+            .toEqual({ version: 1, kind: 'unknown' });
+    });
+
+    it('bypasses throttling on identity changes but retains same-account throttling', () => {
+        const a = snapshot({ accountLineage: statuslineProducerLineage(source) });
+        const b = snapshot({ accountLineage: statuslineProducerLineage({ ...source, CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-b' }) });
+        expect(shouldWriteSnapshot(a, b, NOW + 1)).toBe(true);
+        expect(shouldWriteSnapshot(b, a, NOW + 1)).toBe(true);
+        expect(shouldWriteSnapshot(a, snapshot(), NOW + 1)).toBe(true);
+        expect(shouldWriteSnapshot(a, a, NOW + 1)).toBe(false);
     });
 });

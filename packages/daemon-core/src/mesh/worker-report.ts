@@ -579,9 +579,11 @@ export function acceptWorkerCompletionReport(
         if (!expected) return true;
         if (identity.meshId !== expected.meshId || identity.taskId !== expected.taskId
             || identity.attemptId !== expected.attemptId || identity.sessionId !== expected.sessionId
+            // eslint-disable-next-line no-restricted-syntax -- The identity actually resolved from the credential must match the saved preparation's exact nodeId, including on late delivery.
             || identity.nodeId !== expected.nodeId) return false;
         const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(expected.attemptId);
         return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId
+            // eslint-disable-next-line no-restricted-syntax -- The current stored attempt must retain the prepared nodeId exactly; canonical equivalence cannot authorize a changed claim.
             && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId
             && attempt.generation === expected.generation
             && daemonIdsEquivalent(attempt.ownerDaemonId, expected.ownerDaemonId)

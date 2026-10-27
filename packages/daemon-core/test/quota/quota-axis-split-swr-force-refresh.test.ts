@@ -46,6 +46,7 @@ vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPE
 
 const { QUOTA_AXIS, QUOTA_AXIS_TTL_MS, QUOTA_SWR_TTL_MS, QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isDueByAxisTtl, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaAmbientEnableGateForTests, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
 const { forceRefreshQuota, isQuotaRevalidateInFlight, readQuotaCacheWithRevalidate, __resetQuotaBootRefreshForTests } = await import('../../src/quota/refresh-triggers.js')
+const { printQuotaRefreshOutcome } = await import('../../src/quota/cli.js')
 const { startQuotaRefreshLoop } = await import('../../src/quota/refresh-loop.js')
 
 const START = 1_800_000_000_000
@@ -333,6 +334,21 @@ describe('★429 cooldown is not bypassable — explicit force refresh', () => {
         expect(entries[0]?.outcome).toBe('disabled')
         expect(fetchKimiQuota).not.toHaveBeenCalled()
         handle.stop()
+    })
+
+    it('canonicalizes and deduplicates claude shorthand before probing and rendering success', async () => {
+        fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli', START))
+        const { entries, quota } = await forceRefreshQuota(['claude', 'claude-cli', ' claude '], START)
+        expect(entries).toEqual([{ provider: 'claude-cli', outcome: 'refreshed' }])
+        expect(fetchClaudeQuota).toHaveBeenCalledTimes(1)
+        expect(quota?.['claude-cli']?.updatedAt).toBe(START)
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+        try {
+            printQuotaRefreshOutcome(entries)
+            const output = log.mock.calls.map((args) => args.join(' ')).join('\n')
+            expect(output).toContain('Refreshed claude-cli')
+            expect(output).not.toContain('does not report')
+        } finally { log.mockRestore() }
     })
 
     it('reports an unknown provider name instead of throwing', async () => {

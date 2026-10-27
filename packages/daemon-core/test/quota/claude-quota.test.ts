@@ -5,9 +5,11 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { STALE_AFTER_MS, fetchClaudeQuota } from '../../src/quota/fetchers/claude';
-import { SNAPSHOT_VERSION } from '../../src/quota/statusline/snapshot';
+import { evaluateProviderQuotaGate } from '../../src/mesh/mesh-quota-routing';
+import { statuslineProducerLineage, SNAPSHOT_VERSION } from '../../src/quota/statusline/snapshot';
 import { installClaudeStatusline, resolveInstallPaths } from '../../src/quota/statusline/install';
 
+const PRODUCER_ENV = { CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-a', CLAUDE_CODE_ORGANIZATION_UUID: 'fixture-org' };
 const NOW = Date.UTC(2026, 7, 3, 12, 0, 0);
 
 let tempRoot: string;
@@ -20,11 +22,24 @@ beforeEach(() => {
         CLAUDE_CONFIG_DIR: path.join(tempRoot, 'claude'),
     } as NodeJS.ProcessEnv;
     fs.mkdirSync(path.join(tempRoot, 'claude'), { recursive: true });
+    writeCurrentAccount();
 });
 
 afterEach(() => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
 });
+
+function writeCurrentAccount(accountUuid = 'fixture-account-a', organizationUuid = 'fixture-org'): void {
+    fs.writeFileSync(path.join(tempRoot, 'claude', '.claude.json'), JSON.stringify({
+        oauthAccount: { accountUuid, organizationUuid },
+    }));
+}
+
+function quotaGate(quota: Awaited<ReturnType<typeof fetch>>) {
+    return evaluateProviderQuotaGate({ id: 'fixture-node', nodeFacts: {
+        reportedAt: NOW, quota: { 'claude-cli': quota },
+    } }, 'claude-cli', { weeklyMinRemainingPercent: 80 }, NOW);
+}
 
 function writeSnapshot(overrides: Record<string, unknown> = {}): void {
     const paths = resolveInstallPaths(env);
@@ -38,6 +53,7 @@ function writeSnapshot(overrides: Record<string, unknown> = {}): void {
         JSON.stringify({
             version: SNAPSHOT_VERSION,
             capturedAt: NOW,
+            accountLineage: statuslineProducerLineage(PRODUCER_ENV),
             fiveHour: { usedPercent: 23.5, resetsAt: 1786337423000 },
             sevenDay: { usedPercent: 41.2, resetsAt: 1786857600000 },
             cliVersion: '2.1.220',
@@ -63,6 +79,57 @@ describe('fetchClaudeQuota', () => {
         expect(quota.session).toEqual({ usedPercent: 23.5, windowMinutes: 300, resetsAt: 1786337423000 });
         expect(quota.weekly).toEqual({ usedPercent: 41.2, windowMinutes: 10080, resetsAt: 1786857600000 });
         expect(quota.metadata).toMatchObject({ source: 'statusline' });
+    });
+
+    it('gates only measurements with matching producer and current account', async () => {
+        writeSnapshot();
+        expect(quotaGate(await fetch())).not.toBeNull();
+        writeCurrentAccount('fixture-account-b');
+        const quota = await fetch();
+        expect(quota.metadata?.accountLineage).toEqual(statuslineProducerLineage(PRODUCER_ENV));
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quota.session).toBeNull();
+        expect(quota.weekly).toBeNull();
+        expect(quotaGate(quota)).toBeNull();
+    });
+
+    it.each([
+        ['legacy', undefined],
+        ['unknown', { version: 1, kind: 'unknown' }],
+        ['malformed', { version: 1, kind: 'account', key: 'not-a-digest' }],
+    ])('never trusts a %s snapshot just because current account is stable', async (_label, accountLineage) => {
+        writeSnapshot({ accountLineage, capturedAt: NOW - STALE_AFTER_MS - 1 });
+        const quota = await fetch();
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quota.metadata?.lastGoodWindows).toBeUndefined();
+        expect(quota.session).toBeNull();
+        expect(quota.weekly).toBeNull();
+        expect(quotaGate(quota)).toBeNull();
+    });
+
+    it('isolates an organization mismatch', async () => {
+        writeSnapshot();
+        writeCurrentAccount('fixture-account-a', 'fixture-other-org');
+        expect(quotaGate(await fetch())).toBeNull();
+        expect((await fetch()).metadata?.lineageUncertain).toBe(true);
+    });
+
+    it('isolates an account switch during collection', async () => {
+        writeSnapshot();
+        const quota = await fetchClaudeQuota({ env, now: () => {
+            writeCurrentAccount('fixture-account-b');
+            return NOW;
+        } });
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quotaGate(quota)).toBeNull();
+    });
+
+    it('requires current account identity even when the producer is confirmed', async () => {
+        writeSnapshot();
+        fs.writeFileSync(path.join(tempRoot, 'claude', '.claude.json'), '{}');
+        const quota = await fetch();
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quotaGate(quota)).toBeNull();
     });
 
     it('reports the capture time, not the read time, as updatedAt', async () => {
@@ -132,6 +199,7 @@ describe('fetchClaudeQuota', () => {
         // decision 2026-08-24). Without this mark the routing layer discarded
         // the retained measurement wholesale.
         expect(quota.metadata?.lastGoodWindows).toBe(true);
+        expect(quotaGate(quota)).not.toBeNull();
     });
 
     it('reports a dangling wrapper as setup-required even when an old snapshot exists', async () => {

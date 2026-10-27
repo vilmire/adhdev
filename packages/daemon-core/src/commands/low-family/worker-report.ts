@@ -288,6 +288,7 @@ async function refuseInvalidReport(
                 senderVersion: self.version, ...prepared, payload: { fields: safeRefusalFields(fields), summaryLength } }, () => {
                 const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
                 if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId
+                    // eslint-disable-next-line no-restricted-syntax -- Refusal receipt consumption requires the exact nodeId pinned by this credential's saved preparation; an alias is a different claim.
                     || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId
                     || !daemonIdsEquivalent(attempt.ownerDaemonId, prepared.ownerDaemonId)
                     || !daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: 'stale_report' };
@@ -389,6 +390,7 @@ async function forwardToOwner(
         const saved = typeof payload.deliveryId === 'string' ? findBridgeMemberDelivery(db, self.daemonId, payload.deliveryId) : null;
         if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId
             || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation
+            // eslint-disable-next-line no-restricted-syntax -- A saved delivery must retain its original envelope nodeId byte-for-byte; equivalent node forms cannot replace that claim.
             || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent(saved.ownerDaemonId, remote.ownerDaemonId)
             || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs
             || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: 'worker_delivery_identity_conflict' };
@@ -606,6 +608,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             const apply = () => {
                 const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
                 if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId
+                    // eslint-disable-next-line no-restricted-syntax -- Report receipt consumption requires the exact nodeId pinned by this credential's saved preparation; aliases cannot authorize completion.
                     || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId
                     || !daemonIdsEquivalent(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
                     return { success: false, error: 'stale_report' };
