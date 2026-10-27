@@ -30,6 +30,7 @@ export default defineConfig({
             'test-browser/components/mobile-inbox-row-menu-overlay.browser.test.tsx',
             'test-browser/components/mobile-approvals-entry.browser.test.tsx',
             'test-browser/components/artifact-viewer.browser.test.tsx',
+            'test-browser/components/touch-targets.browser.test.tsx',
         ],
         testTimeout: 30_000,
         browser: {

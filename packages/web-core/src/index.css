@@ -1894,6 +1894,36 @@
         background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     }
 
+    /* Shared by starters and answer buttons (AssistantChipGroup). */
+    .assistant-chip {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .assistant-chip:focus-visible {
+        outline: 2px solid var(--accent-primary);
+        outline-offset: 2px;
+    }
+
+    .assistant-chip[aria-disabled="true"] {
+        cursor: default;
+        opacity: 0.55;
+    }
+
+    .assistant-chip-spinner {
+        display: inline-flex;
+        flex-shrink: 0;
+    }
+
+    .btn.assistant-chip-cancel {
+        height: auto;
+        min-height: 32px;
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
     /* Assistant panels (permissions, followed projects, held writes) share one
        look: a quiet outlined action, a radio row that highlights on hover. */
     .btn.assistant-panel-action {
@@ -3162,6 +3192,28 @@
         gap: 8px;
     }
 
+    /* Hidden-tab rows are one button edge to edge (>=52px tall): the card's
+       padding moves onto the button so the whole card is the hit area. */
+    .dashboard-header-inbox-item.dashboard-hidden-row {
+        padding: 0;
+    }
+
+    .dashboard-hidden-row-button {
+        padding: 8px 12px;
+        border-radius: inherit;
+        cursor: pointer;
+    }
+
+    .dashboard-hidden-row-button:focus-visible {
+        outline: 2px solid var(--accent-primary);
+        outline-offset: -2px;
+    }
+
+    .dashboard-hidden-row-button[aria-disabled="true"] {
+        cursor: default;
+        opacity: 0.6;
+    }
+
     .dashboard-header-hidden-current {
         width: 100%;
         display: flex;
@@ -3494,11 +3546,15 @@
             right: -7px;
         }
 
-        .assistant-starters .assistant-starter::after {
-            top: -4px;
-            bottom: -4px;
-            left: -4px;
-            right: -4px;
+        /* Assistant chips are 32px pills in a 6px-gap row: extend 6px up and
+           down to reach 44px, and split the gap (-3px) sideways. */
+        .assistant-chip-group .assistant-chip::after {
+            content: '';
+            position: absolute;
+            top: -6px;
+            bottom: -6px;
+            left: -3px;
+            right: -3px;
         }
     }
 

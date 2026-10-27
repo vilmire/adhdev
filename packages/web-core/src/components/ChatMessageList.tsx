@@ -52,6 +52,7 @@ import { useChatRowExpansion, type FetchToolBlock } from './ChatMessageList/chat
 import { mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
 import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonContext';
 import { resolveArtifactSessionTarget, type FetchArtifactCommandFn } from '../hooks/useArtifactRead';
+import AssistantChipGroup from './AssistantChipGroup';
 
 // ─── Types ────────────────────────────────────
 
@@ -146,7 +147,8 @@ export interface ChatMessageListProps {
      * that carries reply choices, tapping one sends it through this. Omitted
      * by read-only hosts, which then show no buttons.
      */
-    onChooseReply?: (text: string) => void;
+    /** May return the send's promise — the answer buttons then single-flight until it settles. */
+    onChooseReply?: (text: string) => unknown;
 }
 
 export interface ChatMessageListRef {
@@ -704,13 +706,13 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
             {/* Answer buttons for the latest assistant question. */}
             {onChooseReply && !isWorking && latestReplyChoices.length > 0 && (
-                <div className="chat-reply-choices self-start" data-testid="chat-reply-choices">
-                    {latestReplyChoices.map((choice) => (
-                        <button key={choice} type="button" className="chat-reply-choice" onClick={() => onChooseReply(choice)}>
-                            {choice}
-                        </button>
-                    ))}
-                </div>
+                <AssistantChipGroup
+                    className="chat-reply-choices self-start"
+                    chipClassName="chat-reply-choice"
+                    testId="chat-reply-choices"
+                    chips={latestReplyChoices.map(choice => ({ id: choice, label: choice }))}
+                    onChoose={label => onChooseReply(label)}
+                />
             )}
 
             {/* Typing indicator */}

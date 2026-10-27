@@ -700,7 +700,6 @@ export default function DashboardMainView({
                     hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
                     onHideConversation={onHideConversation}
-                    onRestoreConversation={handleRestoreHiddenConversationWithDock}
                     onShowConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onResetPanelsToMain={handleResetAllPanelsToMain}

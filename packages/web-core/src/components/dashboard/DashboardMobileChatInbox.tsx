@@ -1151,9 +1151,6 @@ export default function DashboardMobileChatInbox({
                                 <DashboardHiddenConversationsList
                                     conversations={hiddenConversations}
                                     variant="mobile"
-                                    onRestoreConversation={conversation => {
-                                        (onRestoreHiddenConversation ?? onShowHiddenConversation)?.(conversation)
-                                    }}
                                     onOpenConversation={conversation => {
                                         (onRestoreHiddenConversation ?? onShowHiddenConversation)?.(conversation)
                                         onOpenConversation(conversation)

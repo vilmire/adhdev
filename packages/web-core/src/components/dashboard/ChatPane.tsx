@@ -45,6 +45,7 @@ import { buildVisibleConversationMessages, getConversationLiveMessages, withPend
 import { shouldShowOpenPanelAction } from './dashboardSessionCapabilities';
 import { publishChatTyping } from './chat-typing-indicator-store';
 import { buildGitSystemBubbleMessages } from './git-system-bubbles';
+import AssistantChipGroup from '../AssistantChipGroup';
 import {
     filterChatActivityMessages,
     readChatActivityVisiblePreference,
@@ -386,7 +387,9 @@ export default function ChatPane({
     const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
     // getConversationTitle names the assistant in the user's language (input placeholder, panel buttons).
     const panelLabel = getConversationTitle(activeConv)
-    const handleChooseReply = useCallback((text: string) => { void handleSendChat(text) }, [handleSendChat])
+    // One-tap chips send their own label (never the composer draft); returning
+    // the send lets AssistantChipGroup single-flight until it settles.
+    const handleChooseReply = useCallback((text: string) => handleSendChat(text), [handleSendChat])
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     // A session parked for owner attention (e.g. Grok's consent prompt) is answered
@@ -698,13 +701,13 @@ export default function ChatPane({
                         <div className="text-xxs opacity-40">{t('chatPane.noMessagesYet')}</div>
                         {/* A new assistant shows what it is for: one tap sends the request. */}
                         {isAssistantPane && (
-                            <div className="assistant-starters" data-testid="assistant-starters">
-                                {ASSISTANT_STARTER_KEYS.map(key => (
-                                    <button key={key} type="button" className="btn btn-quiet assistant-starter" onClick={() => { void handleSendChat(t(key)) }}>
-                                        {t(key)}
-                                    </button>
-                                ))}
-                            </div>
+                            <AssistantChipGroup
+                                className="assistant-starters"
+                                chipClassName="btn btn-quiet assistant-starter"
+                                testId="assistant-starters"
+                                chips={ASSISTANT_STARTER_KEYS.map(key => ({ id: key, label: t(key) }))}
+                                onChoose={label => handleChooseReply(label)}
+                            />
                         )}
                     </div>
                 );
@@ -717,7 +720,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.connectionState, activeConv.status, canOpenPanel, firstViewState.awaitingFirstView, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating, isAssistantPane, handleSendChat, t]);
+    }, [activeConv.connectionState, activeConv.status, canOpenPanel, firstViewState.awaitingFirstView, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating, isAssistantPane, handleChooseReply, t]);
 
     return (
         /* Keyed-view coverage readout — see `buildTranscriptPaneAttributes`
