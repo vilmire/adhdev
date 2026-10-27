@@ -47,7 +47,8 @@ export interface CommandLogEntry {
 }
 
 // ─── Sensitive field masking ─────────────────
-const CONTENT_KEYS = new Set(['content', 'message', 'text']);
+// project_transfer_peer: SDP / ICE / one-time link key / manifests never reach the command log (IG02).
+const CONTENT_KEYS = new Set(['content', 'message', 'text', 'sdp', 'candidate', 'linkKeyB64', 'signal', 'selection']);
 const MAX_MASK_DEPTH = 8;
 
 function isSensitiveArgKey(key: string): boolean {
