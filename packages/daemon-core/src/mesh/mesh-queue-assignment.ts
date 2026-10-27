@@ -19,6 +19,7 @@ import { recordLastQuotaRanking, recordLastQuotaRankingOutcome } from './mesh-qu
 import { evaluateQuotaClaimGateForAssignment } from './mesh-queue-claim-gate.js';
 import { readMeshNodeDaemonId, isMeshNodeFreshEnoughToLaunch, readNumberValue } from './mesh-node-identity.js';
 import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js';
+import { dispatchReadinessClaimVerdict } from './mesh-dispatch-readiness.js';
 import { beginTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispatch-evidence.js';
@@ -552,6 +553,18 @@ export function tryAssignQueueTask(
         return false;
     }
     if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;
+    // DISPATCH-READINESS (mesh-dispatch-readiness.ts): a local WORKTREE node whose
+    // declared build outputs are missing (or whose git is mid-write) is prepared under
+    // the workspace lease BEFORE an attempt exists; the task stays pending meanwhile.
+    // Base nodes (a person's checkout) are never prepared.
+    if (node?.isLocalWorktree === true && isLocalAutoLaunchNode(node)) {
+        const readiness = dispatchReadinessClaimVerdict(mesh, readText(node?.workspace) || undefined);
+        if (readiness.defer) {
+            LOG.info('MeshQueue', `Deferring queue claim for node ${nodeId} (${sessionId}): ${readiness.reason} — task left pending, claim re-fires next tick`);
+            noteClaimDeferredForNode(meshId, nodeId);
+            return false;
+        }
+    }
     assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
     const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
     if (!claiming) return false;
