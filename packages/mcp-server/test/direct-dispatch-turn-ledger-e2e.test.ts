@@ -196,6 +196,7 @@ test('mesh_send_task (local direct) embeds the new-ledger attemptRef in agent_co
             const turnHandler = turnLedgerIpcHandlers[command];
             if (turnHandler) return turnHandler(emptyLowFamilyCtx, args);
             if (command === 'get_mesh') return { success: true, mesh };
+            if (command === 'mesh_dispatch_route') return { success: true, route: 'local', ownerDaemonId: selfDaemonId, reason: 'synthetic local owner' };
             if (command === 'get_pending_mesh_events') return { events: [] };
             if (command === 'get_status_metadata') return { success: true, status: { sessions: [idleSession] } };
             if (command === 'agent_command') {
@@ -212,7 +213,7 @@ test('mesh_send_task (local direct) embeds the new-ledger attemptRef in agent_co
         const res = JSON.parse(await meshSendTask(ctx, {
             node_id: 'node-local', session_id: 'sess-idle', message: 'thread the attempt ref', difficulty: 'medium',
         } as any));
-        assert.equal(res.success, true);
+        assert.equal(res.success, true, JSON.stringify(res));
         assert.equal(res.dispatched, true);
 
         assert.equal(agentCommandCalls.length, 1);
