@@ -913,12 +913,14 @@ describe('launch_assistant', () => {
             expect(lstatSync(join(home, '.gemini', 'antigravity-cli', 'brain')).isSymbolicLink()).toBe(true);
             expect(realpathSync(join(home, '.gemini', 'antigravity-cli', 'brain'))).toBe(realpathSync(join(agyDir, 'brain')));
 
-            // Stable dir: a relaunch re-takes the copy (assistant-side settings edits do not survive or flow back).
+            // Stable dir: settings.json is a managed copy (mesh/managed-home-copy.ts) — an edit the
+            // assistant's agy made in-session (a persisted trust answer) is kept on relaunch, and
+            // never flows back to the real home.
             writeFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), '{"theme":"assistant-edit"}');
             const again: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
             expect(again).toMatchObject({ success: true, launched: true });
             expect(launchCalls()[1].env).toMatchObject({ HOME: home });
-            expect(readFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf-8')).toBe('{"theme":"dark"}');
+            expect(readFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf-8')).toBe('{"theme":"assistant-edit"}');
             expect(readFileSync(join(agyDir, 'settings.json'), 'utf-8')).toBe('{"theme":"dark"}');
         } finally {
             if (prevHome === undefined) delete process.env.HOME;
