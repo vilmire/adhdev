@@ -20,6 +20,7 @@ import { type WorkerPrivateHomeSpec, deriveCursorWorkspaceSlug, findWorkerPrivat
 import * as os from 'os';
 import { shortHash } from '../system/hash.js';
 import { LOG } from '../logging/logger.js';
+import { ManagedHomeCopies } from './managed-home-copy.js';
 
 export interface PreparedWorkerHome {
     /** Absolute path to the worker-private HOME. */
@@ -286,7 +287,11 @@ export function materializePrivateHome(
     // launched with no credentials. See `WorkerHomeImport.relativePath`.
     const importPrefix = String(spec.configRootPrefix || '').trim();
     const sourceBase = importPrefix ? path.join(realHome, importPrefix) : realHome;
+    // Copy imports are reconciled, not blindly re-taken (see managed-home-copy.ts).
+    // grok-cli rewrites its copied config.toml itself below, so it keeps the old path.
+    const managedCopies = new ManagedHomeCopies(home, spec.providerType);
     for (const entry of spec.imports) {
+        const managedCopy = entry.mode !== 'symlink' && spec.providerType !== 'grok-cli';
         const source = entry.sourceRelativePath
             ? path.join(realHome, entry.sourceRelativePath)
             : path.join(sourceBase, entry.relativePath);
@@ -295,6 +300,7 @@ export function materializePrivateHome(
             ? entry.required(process.platform)
             : Boolean(entry.required);
         if (!existsSync(source)) {
+            if (managedCopy && !isRequired) managedCopies.sourceGone(entry.relativePath, target);
             if (isRequired) {
                 throw new Error(
                     `worker_private_home_missing_required_import: ${entry.relativePath} not found under ${sourceBase}`,
@@ -335,7 +341,12 @@ export function materializePrivateHome(
 
         privateDirectory(home, path.dirname(entry.relativePath));
         // Replace any stale entry from a previous launch that reused this key.
-        removePrivateEntry(target);
+        // A managed copy that is a regular file is reconciled in place below.
+        let keepExistingCopy = false;
+        if (managedCopy) {
+            try { keepExistingCopy = lstatSync(target).isFile(); } catch { /* absent */ }
+        }
+        if (!keepExistingCopy) removePrivateEntry(target);
 
         // ★Per-import failure policy (release blocker, 2026-09-27).
         //
@@ -360,10 +371,16 @@ export function materializePrivateHome(
                     LOG.info('WorkerMcp', `[${spec.providerType}] ${entry.relativePath} imported as ${kind} (${process.platform})`);
                 }
             } else if (entry.stripJsonKeys?.length) {
-                const parsed = JSON.parse(readFileSync(source, 'utf8'));
+                const raw = readFileSync(source);
+                const parsed = JSON.parse(raw.toString('utf8'));
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not a JSON object');
                 for (const key of entry.stripJsonKeys) delete parsed[key];
-                writeFileSync(target, JSON.stringify(parsed, null, 2), { mode: 0o600 });
+                const desired = JSON.stringify(parsed, null, 2);
+                if (managedCopy) managedCopies.sync(entry.relativePath, target, raw, desired);
+                else writeFileSync(target, desired, { mode: 0o600 });
+            } else if (managedCopy) {
+                const raw = readFileSync(source);
+                managedCopies.sync(entry.relativePath, target, raw, raw);
             } else {
                 copyFileSync(source, target);
             }
@@ -383,6 +400,8 @@ export function materializePrivateHome(
         }
         imported.push(entry.relativePath);
     }
+
+    managedCopies.flush();
 
     if (spec.providerType === 'grok-cli') {
         const configPath = path.join(home, '.grok', 'config.toml');
