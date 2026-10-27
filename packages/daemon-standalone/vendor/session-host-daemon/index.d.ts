@@ -49,6 +49,10 @@ interface SessionHostServerOptions {
     instanceConfigDir?: string;
     /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
     pidFilePath?: string;
+    /** Exclusive host lock dir; defaults to `<pidFilePath>.lock`. No pidfile and no path = no lock. */
+    instanceLockPath?: string;
+    /** Keep the instance lock through stop() so only process death releases it (the CLI host sets this). */
+    holdInstanceLockUntilExit?: boolean;
     /** Optional predicate override for testing whether a prior pid is alive. */
     isPidAlive?: (pid: number) => boolean;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
@@ -74,6 +78,9 @@ declare class SessionHostServer extends EventEmitter {
     private readonly upgradeLease;
     private readonly instanceConfigDir;
     private readonly pidFilePath;
+    private readonly instanceLockPath;
+    private readonly holdInstanceLockUntilExit;
+    private instanceLock;
     private readonly isPidAliveOverride?;
     private readonly getOwnerBirth?;
     private readonly getSocketOwnerPids?;
@@ -102,6 +109,7 @@ declare class SessionHostServer extends EventEmitter {
     private assertNoAutomaticReplacementContext;
     private evictPriorEndpointOwners;
     start(): Promise<void>;
+    private startAfterLock;
     stop(): Promise<void>;
     private runStop;
     handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse>;

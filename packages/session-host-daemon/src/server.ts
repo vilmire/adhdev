@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'node:path';
-import { assertOrphanUnixSocket } from './socket-probe.js';
+import { assertOrphanUnixSocket, lsofSocketOwnerPids } from './socket-probe.js';
 import {
   SessionHostRegistry,
   classifyTermination,
@@ -32,6 +32,7 @@ import type {
 import { PtySessionRuntime } from './runtime.js';
 import { HostUpgradeLease, type HostUpgradeBinding } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
+import { acquireHostInstanceLock, type HostInstanceLock } from './host-instance-lock.js';
 import type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 
 export {
@@ -68,6 +69,10 @@ export interface SessionHostServerOptions {
   instanceConfigDir?: string;
   /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
   pidFilePath?: string;
+  /** Exclusive host lock dir; defaults to `<pidFilePath>.lock`. No pidfile and no path = no lock. */
+  instanceLockPath?: string;
+  /** Keep the instance lock through stop() so only process death releases it (the CLI host sets this). */
+  holdInstanceLockUntilExit?: boolean;
   /** Optional predicate override for testing whether a prior pid is alive. */
   isPidAlive?: (pid: number) => boolean;
   /** Optional predicate override for testing whether a prior pid is a managed session-host. */
@@ -94,6 +99,9 @@ export class SessionHostServer extends EventEmitter {
   private readonly upgradeLease: HostUpgradeLease | null;
   private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
+  private readonly instanceLockPath: string | null;
+  private readonly holdInstanceLockUntilExit: boolean;
+  private instanceLock: HostInstanceLock | null = null;
   private readonly isPidAliveOverride?: (pid: number) => boolean;
   private readonly getOwnerBirth?: (pid: number) => string | null;
   private readonly getSocketOwnerPids?: (endpointPath: string) => number[] | null;
@@ -137,6 +145,8 @@ export class SessionHostServer extends EventEmitter {
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
+    this.instanceLockPath = options.instanceLockPath || (this.pidFilePath ? `${this.pidFilePath}.lock` : null);
+    this.holdInstanceLockUntilExit = options.holdInstanceLockUntilExit === true;
     this.isPidAliveOverride = options.isPidAlive;
     this.hasReplacementContext = Object.prototype.hasOwnProperty.call(options, 'replacementProvenance');
     this.getOwnerBirth = options.getOwnerBirth;
@@ -179,34 +189,7 @@ export class SessionHostServer extends EventEmitter {
 
   private readSocketOwnerPids(): number[] | null {
     if (this.getSocketOwnerPids) return this.getSocketOwnerPids(this.endpoint.path);
-    if (process.platform === 'win32' || !fs.existsSync(this.endpoint.path)) return [];
-    const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
-    try {
-      // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
-      // which would enumerate every unix-socket process on the machine. Passing only
-      // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
-      const out = String(
-        execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-          timeout: 2_000,
-          windowsHide: true,
-        }),
-      );
-      const pids: number[] = [];
-      for (const line of out.split(/\r?\n/)) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        if (!/^\d+$/.test(trimmed)) return null;
-        const pid = Number.parseInt(trimmed, 10);
-        if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-        pids.push(pid);
-      }
-      return pids;
-    } catch (error: any) {
-      if (error?.status === 1 && String(error?.stdout ?? '').trim() === '') return [];
-      return null;
-    }
+    return lsofSocketOwnerPids(this.endpoint.path);
   }
 
   private assertNoAutomaticReplacementContext(): void {
@@ -294,6 +277,21 @@ export class SessionHostServer extends EventEmitter {
   async start(): Promise<void> {
     validateSessionHostEndpoint(this.endpoint);
     this.assertNoAutomaticReplacementContext();
+    // Singleton gate for EVERY start path, before any pidfile/endpoint effect.
+    if (this.instanceLockPath && !this.instanceLock) {
+      this.instanceLock = acquireHostInstanceLock({
+        lockPath: this.instanceLockPath,
+        isPidAlive: this.isPidAliveOverride,
+      });
+    }
+    try { await this.startAfterLock(); } catch (error) {
+      this.instanceLock?.release();
+      this.instanceLock = null;
+      throw error;
+    }
+  }
+
+  private async startAfterLock(): Promise<void> {
     if (this.upgradeLease && fs.existsSync(this.endpoint.path)) {
       throw new Error('native_host_endpoint_owner_unproved');
     }
@@ -458,6 +456,7 @@ export class SessionHostServer extends EventEmitter {
       }
     }
     await this.upgradeLease?.close();
+    if (!this.holdInstanceLockUntilExit) { this.instanceLock?.release(); this.instanceLock = null; }
     this.removeAllListeners();
   }
 
