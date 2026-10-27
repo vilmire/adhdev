@@ -184,8 +184,11 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
       getSocketOwnerPids: () => {
         ownerChecks += 1
         if (ownerChecks === 2) {
-          fs.unlinkSync(sock2)
-          fs.writeFileSync(sock2, 'second-endpoint-bound-by-peer')
+          // Create the replacement while the first endpoint still holds its inode, then
+          // rename it over: unlink-then-create can get the same inode back (ext4 reuses
+          // freed inodes), which makes the swap invisible to a dev:ino identity check.
+          fs.writeFileSync(`${sock2}.peer`, 'second-endpoint-bound-by-peer')
+          fs.renameSync(`${sock2}.peer`, sock2)
           replacementInode = fs.lstatSync(sock2, { bigint: true }).ino
         }
         return []
