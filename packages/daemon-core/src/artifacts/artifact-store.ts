@@ -293,6 +293,17 @@ function runInImmediateTransaction<T>(db: ArtifactStoreDatabase, fn: () => T): T
     }
 }
 
+/**
+ * Wrap a filtered `session_artifacts` select (which must expose `rowid AS window_rowid`)
+ * so its trailing `LIMIT ?` keeps the newest rows, then return them oldest-first.
+ */
+function newestWindowSql(filteredSelect: string): string {
+    return `SELECT * FROM (${filteredSelect}
+                 ORDER BY created_at DESC, window_rowid DESC
+                 LIMIT ?)
+             ORDER BY created_at ASC, window_rowid ASC`;
+}
+
 export class ArtifactStore {
     readonly db: ArtifactStoreDatabase;
 
@@ -935,7 +946,10 @@ export class ArtifactStore {
         return this.upsertForwarded(input);
     }
 
-    /** List artifacts across a mesh (optionally filtered by sessionId or missionId). */
+    /**
+     * List artifacts across a mesh (optionally filtered by sessionId or missionId).
+     * A `limit` keeps the newest records; the result stays in creation order.
+     */
     listByMesh(
         meshId: string,
         options?: { sessionId?: string; missionId?: string; limit?: number },
@@ -961,16 +975,17 @@ export class ArtifactStore {
         params.push(limit);
         const rows = this.db
             .prepare<SessionArtifactDbRow>(
-                `SELECT * FROM session_artifacts
-                 WHERE ${clauses.join(' AND ')}
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`,
+                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE ${clauses.join(' AND ')}`),
             )
             .all(...params);
         return rows.map(rowToArtifactRecord);
     }
 
-    /** List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4). */
+    /**
+     * List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4).
+     * A `limit` keeps the newest records; the result stays in creation order.
+     */
     listByMission(
         missionId: string,
         options?: { artifactIds?: readonly string[]; limit?: number },
@@ -991,20 +1006,16 @@ export class ArtifactStore {
             const placeholders = ids.map(() => '?').join(', ');
             const rows = this.db
                 .prepare<SessionArtifactDbRow>(
-                    `SELECT * FROM session_artifacts
-                     WHERE mission_id = ? AND artifact_id IN (${placeholders})
-                     ORDER BY created_at ASC, rowid ASC
-                     LIMIT ?`,
+                    newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                     WHERE mission_id = ? AND artifact_id IN (${placeholders})`),
                 )
                 .all(missionId.trim(), ...ids, limit);
             return rows.map(rowToArtifactRecord);
         }
         const rows = this.db
             .prepare<SessionArtifactDbRow>(
-                `SELECT * FROM session_artifacts
-                 WHERE mission_id = ?
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`,
+                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE mission_id = ?`),
             )
             .all(missionId.trim(), limit);
         return rows.map(rowToArtifactRecord);

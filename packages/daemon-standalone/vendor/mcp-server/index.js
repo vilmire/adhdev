@@ -115687,6 +115687,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         throw err;
       }
     }
+    function newestWindowSql(filteredSelect) {
+      return `SELECT * FROM (${filteredSelect}
+                 ORDER BY created_at DESC, window_rowid DESC
+                 LIMIT ?)
+             ORDER BY created_at ASC, window_rowid ASC`;
+    }
     function verifyAndReadArtifactBuffer(record7, options) {
       if (options?.sessionId !== void 0 && record7.sessionId !== options.sessionId) {
         throw new ArtifactGuardError(
@@ -116356,7 +116362,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           upsertForwardedArtifact(input) {
             return this.upsertForwarded(input);
           }
-          /** List artifacts across a mesh (optionally filtered by sessionId or missionId). */
+          /**
+           * List artifacts across a mesh (optionally filtered by sessionId or missionId).
+           * A `limit` keeps the newest records; the result stays in creation order.
+           */
           listByMesh(meshId, options) {
             if (typeof meshId !== "string" || !meshId.trim()) {
               return [];
@@ -116375,14 +116384,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
             params.push(limit);
             const rows = this.db.prepare(
-              `SELECT * FROM session_artifacts
-                 WHERE ${clauses.join(" AND ")}
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`
+              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE ${clauses.join(" AND ")}`)
             ).all(...params);
             return rows.map(rowToArtifactRecord);
           }
-          /** List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4). */
+          /**
+           * List artifacts in a mission (optionally restricted to an allowlist of artifactIds for OD-4).
+           * A `limit` keeps the newest records; the result stays in creation order.
+           */
           listByMission(missionId, options) {
             if (typeof missionId !== "string" || !missionId.trim()) {
               return [];
@@ -116396,18 +116406,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               }
               const placeholders = ids.map(() => "?").join(", ");
               const rows2 = this.db.prepare(
-                `SELECT * FROM session_artifacts
-                     WHERE mission_id = ? AND artifact_id IN (${placeholders})
-                     ORDER BY created_at ASC, rowid ASC
-                     LIMIT ?`
+                newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                     WHERE mission_id = ? AND artifact_id IN (${placeholders})`)
               ).all(missionId.trim(), ...ids, limit);
               return rows2.map(rowToArtifactRecord);
             }
             const rows = this.db.prepare(
-              `SELECT * FROM session_artifacts
-                 WHERE mission_id = ?
-                 ORDER BY created_at ASC, rowid ASC
-                 LIMIT ?`
+              newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
+                 WHERE mission_id = ?`)
             ).all(missionId.trim(), limit);
             return rows.map(rowToArtifactRecord);
           }
