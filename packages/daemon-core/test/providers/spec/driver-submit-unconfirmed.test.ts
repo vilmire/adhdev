@@ -1029,3 +1029,64 @@ describe('a human send (no verdict observer) keeps main exactly (review 9719d681
         }
     });
 });
+
+describe('DISPATCH-ACK PRODUCER — the engine serializes each dispatch\'s input acceptance', () => {
+    it('a proven-unsent dispatch carries an unaccepted watermark bound to its exact messageId, readable from the verdict observer', async () => {
+        vi.useFakeTimers();
+        setPlatform('darwin');
+        const { driver, pty } = await readyDriver();
+        fakeCli(pty, { del: 'whole' });
+        try {
+            const seen: Array<ReturnType<FsmDriver['dispatchAcknowledgement']>> = [];
+            let firstWrittenAt = 0;
+            driver.observeSubmitUnconfirmed('task:ack:n0', (_verdict, info) => {
+                firstWrittenAt = info.firstWrittenAt;
+                seen.push(driver.dispatchAcknowledgement('task:ack:n0'));
+                return true;
+            }, async () => 'not_consumed');
+            driver.sendMessageWithDisposition(BODY, false, 'task:ack:n0');
+            expect(driver.dispatchAcknowledgement('task:ack:n0')).toMatchObject({ messageId: 'task:ack:n0', unacceptedConfirmed: false });
+            await until(() => seen.length === 1);
+            expect(seen[0]).toMatchObject({ messageId: 'task:ack:n0', unacceptedConfirmed: true });
+            expect(seen[0]!.watermarkSeq).toBeGreaterThanOrEqual(firstWrittenAt);
+            // Exact id only — a neighbouring nonce or an unseen id has no watermark.
+            expect(driver.dispatchAcknowledgement('task:ack:n1')).toBeNull();
+            expect(driver.dispatchAcknowledgement(' task:ack:n0')).toBeNull();
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('a dispatch the CLI took is never claimed unaccepted', async () => {
+        vi.useFakeTimers();
+        setPlatform('darwin');
+        const { driver, pty } = await readyDriver();
+        fakeCli(pty, { takeEnterOnPaste: 1 });
+        try {
+            observe(driver, 'task:ack-taken:n0');
+            driver.sendMessageWithDisposition(BODY, false, 'task:ack-taken:n0');
+            await until(() => driver.submitState('task:ack-taken:n0') === 'confirmed');
+            expect(driver.dispatchAcknowledgement('task:ack-taken:n0')).toMatchObject({ unacceptedConfirmed: false });
+        } finally {
+            driver.shutdown();
+        }
+    });
+
+    it('an unproven (quarantined) dispatch is never claimed unaccepted', async () => {
+        vi.useFakeTimers();
+        setPlatform('darwin');
+        const { driver, pty } = await readyDriver();
+        fakeCli(pty, { del: 'whole' });
+        try {
+            observe(driver, 'task:ack-unk:n0');
+            driver.sendMessageWithDisposition(BODY, false, 'task:ack-unk:n0');
+            await until(() => crs(pty) === 3);
+            driver.dispatch({ kind: 'pty_write', data: 'x' });
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(driver.submitState('task:ack-unk:n0')).toBe('unknown');
+            expect(driver.dispatchAcknowledgement('task:ack-unk:n0')).toMatchObject({ unacceptedConfirmed: false });
+        } finally {
+            driver.shutdown();
+        }
+    });
+});

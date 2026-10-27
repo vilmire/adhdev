@@ -81,6 +81,8 @@
  */
 
 import { LOG } from '../../logging/logger.js';
+import { DispatchAcceptanceLog } from './dispatch-acceptance-log.js';
+import type { DispatchAcknowledgementWatermark } from '../../boot/stages/mesh-runtime.js';
 import { classifyRender, isStrictPrefixOf, readComposer, rightChrome, sameRow, sameVisibleRow, type ComposerRead, type ComposerScreen, type RowCells } from './composer-evidence.js';
 
 /** How long after the LAST submit key of a budget the verdict waits. */
@@ -211,6 +213,8 @@ export class SubmitVerdictMachine {
     private delInFlight = false;
     /** Transcript read for the opted-in dispatch. One session, one in-flight send. */
     private consumptionProbe: ConsumptionProbe | null = null;
+    /** DISPATCH-ACK PRODUCER: every write/acceptance/verdict in engine order (dispatch-acceptance-log.ts). */
+    private readonly acceptance = new DispatchAcceptanceLog();
 
     constructor(private readonly host: SubmitVerdictHost) {}
 
@@ -232,6 +236,7 @@ export class SubmitVerdictMachine {
         this.provenanceAtBegin = this.provenance();
         let firstWrittenAt = Date.now();
         if (messageId) {
+            this.acceptance.record('written', messageId);
             this.outcomes.delete(messageId);
             firstWrittenAt = this.firstWrites.get(messageId) ?? firstWrittenAt;
             bounded(this.firstWrites, messageId, firstWrittenAt);
@@ -251,14 +256,14 @@ export class SubmitVerdictMachine {
     }
 
     /** Any driver input into this PTY that is not the engine's own. */
-    noteForeignInput(): void { this.epoch += 1; }
+    noteForeignInput(): void { this.epoch += 1; this.acceptance.record('foreign_input'); }
 
     /** The engine just wrote into the PTY. A count that moved by more than this
      *  one write means someone else wrote in between. */
     noteOwnWrite(): void {
         const n = this.writes();
         if (n === null) return;
-        if (this.lastOwnWrites !== null && n !== this.lastOwnWrites + 1) this.epoch += 1;
+        if (this.lastOwnWrites !== null && n !== this.lastOwnWrites + 1) { this.epoch += 1; this.acceptance.record('foreign_input'); }
         this.lastOwnWrites = n;
     }
 
@@ -269,6 +274,9 @@ export class SubmitVerdictMachine {
         if (this.recovering) return 'judging / recovering a mesh dispatch whose submit was not confirmed';
         return this.hold ? `${this.hold.reason} (${Date.now() - this.hold.since}ms)` : null;
     }
+
+    /** DISPATCH-ACK PRODUCER: the serialized acceptance watermark for one exact dispatch. */
+    dispatchAcknowledgement(messageId: string, nonce?: number): DispatchAcknowledgementWatermark | null { return this.acceptance.watermark(messageId, nonce); }
 
     submitState(messageId: string, inFlight: boolean): SubmitState {
         if (this.recovering?.messageId === messageId) return 'in_flight';
@@ -287,6 +295,7 @@ export class SubmitVerdictMachine {
     /** The FSM left idle while `send` held the composer: the CLI took it. */
     noteConfirmed(send: CurrentSend | null): void {
         if (!send) return;
+        this.acceptance.record('accepted', send.messageId);
         if (send.messageId) { bounded(this.outcomes, send.messageId, 'confirmed'); this.observers.delete(send.messageId); }
         send.phase = 'done';
         if (this.current === send) { this.current = null; this.stopWatching(); }
@@ -296,11 +305,13 @@ export class SubmitVerdictMachine {
 
     /** The FSM left idle: whatever was held or recovered was consumed. */
     releaseOnActivity(): void {
+        this.acceptance.record('activity');
         this.releaseHold();
         if (this.recovering) this.noteConfirmed(this.recovering);
     }
 
     cancel(): void {
+        this.acceptance.record('reset');
         this.observers.clear();
         this.current = null;
         this.recovering = null;
@@ -545,6 +556,8 @@ export class SubmitVerdictMachine {
         this.recovering = null;
         if (this.current === send) { this.current = null; this.stopWatching(); }
         if (!send.messageId) { this.host.releaseSlot(); return; }
+        // Recorded before the observers run, so a watermark read from one already sees it.
+        this.acceptance.record('unaccepted', send.messageId);
         bounded(this.outcomes, send.messageId, 'unconfirmed');
         const observers = this.observers.get(send.messageId) ?? [];
         this.observers.delete(send.messageId);
@@ -562,6 +575,7 @@ export class SubmitVerdictMachine {
      *  the three events that end it — there is no local time limit. */
     private quarantine(send: CurrentSend, why: string): void {
         LOG.warn('FsmDriver', `[${this.host.specTag()}] submit of ${send.messageId ?? '(anonymous)'} (len=${send.text.length}) is not proven either way — ${why}; holding the composer (nothing cleared, re-sent or reported; the turn ledger's own deadlines decide the dispatch)`);
+        this.acceptance.record('indeterminate', send.messageId);
         if (send.messageId) this.outcomes.delete(send.messageId);
         send.phase = 'done';
         this.recovering = null;
