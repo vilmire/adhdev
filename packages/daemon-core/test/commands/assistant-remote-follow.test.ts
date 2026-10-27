@@ -5784,8 +5784,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
 
         await withHostEnv(async () => {
             const router = createRouter(HOST_A);
-            (router as any).deps.dispatchMeshCommand = async (_target: string, cmd: string) => {
+            const originFetchPayloads: Array<Record<string, unknown>> = [];
+            (router as any).deps.dispatchMeshCommand = async (_target: string, cmd: string, payload: Record<string, unknown>) => {
                 expect(cmd).toBe('artifact_fetch_origin');
+                originFetchPayloads.push(payload);
                 const b64 = png256k.toString('base64');
                 const chunkLen = 16 * 1024;
                 const chunks: string[] = [];
@@ -5873,6 +5875,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             expect(validAsstImageRead.success).toBe(true);
             expect(validAsstImageRead.pageBytes).toBe(262_144);
             expect(validAsstImageRead.content).toContain(png256k.toString('base64'));
+            // U3 (mission b295ce35): the paged assistant read must ask the origin for
+            // read mode explicitly instead of relying on its fetch-by-default inference.
+            expect(originFetchPayloads.length).toBeGreaterThan(0);
+            expect(originFetchPayloads.every((p) => p.mode === 'read')).toBe(true);
         });
     });
 

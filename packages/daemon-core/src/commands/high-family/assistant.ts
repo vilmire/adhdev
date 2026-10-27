@@ -1079,7 +1079,7 @@ export async function localArtifactRead(
     if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
         try {
             const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
-                artifactId, meshId, offset: rawOffset, limit: rawLimit, asChunks: true,
+                artifactId, meshId, mode: 'read', offset: rawOffset, limit: rawLimit, asChunks: true,
             });
             const p2pRes = p2pRaw && typeof p2pRaw === 'object' && 'result' in p2pRaw && p2pRaw.result && typeof p2pRaw.result === 'object' ? p2pRaw.result : p2pRaw;
             if (!p2pRes || p2pRes.success === false) {

@@ -129570,6 +129570,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const p2pRaw = await ctx.deps.dispatchMeshCommand(record7.originDaemonId, "artifact_fetch_origin", {
             artifactId,
             meshId,
+            mode: "read",
             offset: rawOffset,
             limit: rawLimit,
             asChunks: true
