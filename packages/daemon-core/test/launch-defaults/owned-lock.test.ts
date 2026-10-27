@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,4 +112,76 @@ it('treats a failed OS identity probe as unknown', () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
     try { expect(processStartId(42)).toBeUndefined(); }
     finally { Object.defineProperty(process, 'platform', { value: original }); }
+});
+
+describe('acquireOwnedLock orphaned reclaim guard recovery', () => {
+    const DEAD = 424242;
+    const SID = (n: number) => `darwin-epoch-seconds-v1:${n}`;
+    const alive = (pid: number) => pid !== DEAD && pid !== 999_999;
+    // An abandoned lock (dead holder) whose reclaim guard was left behind.
+    const setup = (name: string, guardRecord: Record<string, unknown> | string | null) => {
+        const lock = join(dir, `${name}.lock`);
+        mkdirSync(lock);
+        const bytes = JSON.stringify({ pid: 999_999, nonce: 'abandoned', acquiredAt: 1 });
+        writeFileSync(join(lock, 'owner.json'), bytes);
+        mkdirSync(`${lock}.reclaim`);
+        if (guardRecord !== null) writeFileSync(join(`${lock}.reclaim`, 'owner.json'),
+            typeof guardRecord === 'string' ? guardRecord : JSON.stringify({ acquiredAt: 1, ...guardRecord }));
+        return { lock, bytes };
+    };
+    const opts = { isPidAlive: alive, processStartId: (pid: number) => (pid === process.pid ? SID(1) : SID(50)) };
+
+    it('recovers a guard whose reclaimer pid is dead, preserving unrelated bytes', () => {
+        const { lock } = setup('dead', { pid: DEAD, nonce: 'n1', startId: SID(5) });
+        const protectedFile = join(dir, 'journal.bin'); writeFileSync(protectedFile, 'JOURNAL-BYTES');
+        expect(acquireOwnedLock(lock, opts).ok).toBe(true);
+        expect(readFileSync(protectedFile, 'utf8')).toBe('JOURNAL-BYTES');
+        expect(existsSync(`${lock}.reclaim`)).toBe(false);
+    });
+
+    it('recovers when the reclaimer pid was reused (start identity mismatch)', () => {
+        const { lock } = setup('reused', { pid: 4321, nonce: 'n2', startId: SID(5) });
+        expect(acquireOwnedLock(lock, opts).ok).toBe(true); // probe(4321) = SID(50) != SID(5)
+    });
+
+    it('keeps blocking while the reclaimer is alive with matching identity', () => {
+        const { lock } = setup('live', { pid: 4321, nonce: 'n3', startId: SID(50) });
+        const r = acquireOwnedLock(lock, opts);
+        expect(r).toMatchObject({ ok: false, busy: true });
+        expect(!r.ok && r.reason).toContain('write_lock_reclaim_in_progress');
+        expect(existsSync(join(`${lock}.reclaim`, 'owner.json'))).toBe(true);
+    });
+
+    it('never recovers by age alone: legacy, garbled or unidentified markers fail closed', () => {
+        for (const [i, rec] of ([null, '{not json', { pid: 'x' }, { pid: 4321, nonce: 'n' }] as const).entries()) {
+            const { lock } = setup(`unk${i}`, rec as never);
+            // Live pid without start identity is not proof of death; ancient mtime is irrelevant.
+            const old = new Date(1000);
+            utimesSync(`${lock}.reclaim`, old, old);
+            expect(acquireOwnedLock(lock, { ...opts, now: () => Date.now() + 10 * 3600_000 })).toMatchObject({ ok: false, busy: true });
+            expect(existsSync(`${lock}.reclaim`)).toBe(true);
+        }
+    });
+
+    it('two concurrent recoverers: exactly one wins the guard, replay is safe', () => {
+        const { lock } = setup('race', { pid: DEAD, nonce: 'n4', startId: SID(5) });
+        // Second recoverer observes the same stale marker, but the first completes between its read and its claim.
+        let interleaved = false;
+        const racing = {
+            ...opts,
+            isPidAlive: (pid: number) => {
+                if (!interleaved && pid === DEAD) { interleaved = true; acquireOwnedLock(lock, opts); }
+                return alive(pid);
+            },
+        };
+        const second = acquireOwnedLock(lock, racing);
+        expect(interleaved).toBe(true);
+        // The first recoverer took the lock (and holds it); the loser must not steal it.
+        expect(second).toMatchObject({ ok: false, busy: true });
+        expect(existsSync(join(lock, 'owner.json'))).toBe(true);
+        expect(readFileSync(join(lock, 'owner.json'), 'utf8')).not.toContain('abandoned');
+        // Replay: nothing left to recover, still no guard residue.
+        expect(acquireOwnedLock(lock, opts)).toMatchObject({ ok: false, busy: true });
+        expect(existsSync(`${lock}.reclaim`)).toBe(false);
+    });
 });
