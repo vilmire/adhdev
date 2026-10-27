@@ -9,6 +9,70 @@ export interface PersistedRuntimeState {
   updatedAt: number;
 }
 
+/** Persisted-form marker: `meta.cliArgs` stored as a window into `launchCommand.args`. */
+export interface PersistedCliArgsRef {
+  offset: number;
+  length: number;
+}
+
+/**
+ * Tail kept of a non-live (stopped/failed/terminated) session's scrollback on
+ * disk. Live sessions keep the whole ring buffer (their snapshot is the
+ * recovery payload); a dead session's output is display-only history.
+ */
+export const DEAD_SESSION_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
+function findSubsequence(haystack: string[], needle: string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) return -1;
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (haystack[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+/**
+ * Launch arguments live in the record twice: `launchCommand.args` (full spawn
+ * argv) and `meta.cliArgs` (the caller's requested args, which the spawn argv
+ * contains). On disk, keep the argv only and store `meta.cliArgs` as a window
+ * (`meta.cliArgsRef`). When the window cannot be derived, cliArgs stays inline.
+ */
+export function compactRecordForPersist(record: SessionHostRecord): SessionHostRecord {
+  const cliArgs = record.meta?.cliArgs;
+  const argv = record.launchCommand?.args;
+  if (!Array.isArray(cliArgs) || cliArgs.length === 0 || !Array.isArray(argv)) return record;
+  if (!cliArgs.every((a) => typeof a === 'string')) return record;
+  const offset = findSubsequence(argv, cliArgs as string[]);
+  if (offset < 0) return record;
+  const { cliArgs: _drop, ...meta } = record.meta;
+  return { ...record, meta: { ...meta, cliArgsRef: { offset, length: cliArgs.length } satisfies PersistedCliArgsRef } };
+}
+
+/** Inverse of compactRecordForPersist; records in the old inline format pass through unchanged. */
+export function expandPersistedRecord(record: SessionHostRecord): SessionHostRecord {
+  const ref = record.meta?.cliArgsRef as PersistedCliArgsRef | undefined;
+  if (!ref || typeof ref !== 'object') return record;
+  const { cliArgsRef: _ref, ...meta } = record.meta;
+  const argv = record.launchCommand?.args;
+  const valid = Array.isArray(argv) && Number.isInteger(ref.offset) && Number.isInteger(ref.length)
+    && ref.offset >= 0 && ref.length >= 0 && ref.offset + ref.length <= argv.length;
+  if (Array.isArray(meta.cliArgs) || !valid) return { ...record, meta };
+  return { ...record, meta: { ...meta, cliArgs: argv.slice(ref.offset, ref.offset + ref.length) } };
+}
+
+/** Bound what a dead session keeps on disk; live and freshly orphan-recovered records keep everything. */
+export function pruneSnapshotForPersist(record: SessionHostRecord, snapshot: SessionBufferSnapshot): SessionBufferSnapshot {
+  const dead = !!record.termination || record.lifecycle === 'stopped' || record.lifecycle === 'failed';
+  if (!dead || record.meta?.runtimeRecoveryState === 'orphan_snapshot') return snapshot;
+  const text = typeof snapshot?.text === 'string' ? snapshot.text : '';
+  if (text.length <= DEAD_SESSION_SNAPSHOT_MAX_CHARS) return snapshot;
+  let tail = text.slice(text.length - DEAD_SESSION_SNAPSHOT_MAX_CHARS);
+  // Do not start on a lone low surrogate.
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return { ...snapshot, text: tail, truncated: true };
+}
+
 export interface PersistedTombstone {
   sessionId: string;
   termination: SessionTermination;
@@ -59,7 +123,7 @@ export class SessionHostStorage {
       try {
         const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as PersistedRuntimeState;
         if (parsed?.record?.sessionId) {
-          states.push(parsed);
+          states.push({ ...parsed, record: expandPersistedRecord(parsed.record) });
         }
       } catch {
         // Ignore malformed snapshots; host should still boot.
@@ -72,11 +136,11 @@ export class SessionHostStorage {
     fs.mkdirSync(this.runtimesDir, { recursive: true });
     const filePath = path.join(this.runtimesDir, `${record.sessionId}.json`);
     const payload: PersistedRuntimeState = {
-      record,
-      snapshot,
+      record: compactRecordForPersist(record),
+      snapshot: pruneSnapshotForPersist(record, snapshot),
       updatedAt: Date.now(),
     };
-    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+    fs.writeFileSync(filePath, JSON.stringify(payload), 'utf8');
   }
 
   remove(sessionId: string): void {
