@@ -78,6 +78,7 @@ import {
   ensureNodePtySpawnHelperPermissions,
   resolveSessionHostCols,
   resolveSessionHostRows,
+  niceLaunch,
   spawnCliChild
 } from "@adhdev/session-host-core";
 var terminalMirrorFactory;
@@ -297,14 +298,19 @@ var PtySessionRuntime = class {
         cwd = os.homedir();
       }
     }
-    const spawnRuntime = () => pty.spawn(command, args, {
+    const spawnRuntime = (file, argv) => () => pty.spawn(file, argv, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
       cwd,
       env
     });
-    this.ptyProcess = this.payload.category === "cli" || this.payload.category === "acp" ? spawnCliChild(spawnRuntime, env) : spawnRuntime();
+    if (this.payload.category === "cli" || this.payload.category === "acp") {
+      const launch = niceLaunch(command, args, env);
+      this.ptyProcess = spawnCliChild(spawnRuntime(launch.command, launch.args), env, void 0, { preApplied: launch.preApplied });
+    } else {
+      this.ptyProcess = spawnRuntime(command, args)();
+    }
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,

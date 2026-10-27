@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { hiddenSpawn } from './process/hidden-spawn.js';
 
@@ -15,6 +16,36 @@ function setDarwinBackground(pid: number, onFailure: (error: unknown) => void): 
   task.once('exit', (code, signal) => {
     if (code !== 0) onFailure(new Error(`taskpolicy exited with ${signal ?? code}`));
   });
+}
+
+const POSIX_NICE_BINARY = '/usr/bin/nice';
+
+export interface NiceLaunch {
+  readonly command: string;
+  readonly args: string[];
+  /** True when the child will START at the lowered priority (spawnCliChild must not lower it again). */
+  readonly preApplied: boolean;
+}
+
+/**
+ * Launch through `nice -n <increment>` on macOS/Linux so the child runs at the
+ * lowered priority from its first instruction. `nice` execs the target in
+ * place: same pid, and every descendant inherits the niceness. This closes the
+ * spawn→setPriority race where a child forked before the post-spawn call and
+ * its early descendants escaped at NI=0. Windows (no nice) and shell-string
+ * launches keep the post-spawn path.
+ */
+export function niceLaunch(
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  niceAvailable: () => boolean = () => fs.existsSync(POSIX_NICE_BINARY),
+): NiceLaunch {
+  if (env[CLI_CHILD_NICE_ENV] === '0' || (platform !== 'darwin' && platform !== 'linux') || !command || !niceAvailable()) {
+    return { command, args: [...args], preApplied: false };
+  }
+  return { command: POSIX_NICE_BINARY, args: ['-n', String(CLI_CHILD_NICE_INCREMENT), command, ...args], preApplied: true };
 }
 
 interface PriorityDependencies {
@@ -36,6 +67,7 @@ export function createCliChildPriorityPolicy(deps: PriorityDependencies = {
     spawnChild: () => T,
     env: NodeJS.ProcessEnv = process.env,
     logInfo: (message: string) => void = console.info,
+    opts: { preApplied?: boolean } = {},
   ): T {
     const child = spawnChild();
     const pid = child.pid;
@@ -48,15 +80,19 @@ export function createCliChildPriorityPolicy(deps: PriorityDependencies = {
         logInfo(`[cli-child-priority] Could not apply CLI child scheduling (pid ${pid}); continuing: ${detail}`);
       }
     };
-    try {
-      const priority = deps.platform === 'win32'
-        ? os.constants.priority.PRIORITY_BELOW_NORMAL
-        : Math.min(19, deps.getPriority(pid) + CLI_CHILD_NICE_INCREMENT);
-      deps.setPriority(pid, priority);
-    } catch (error) {
-      // EACCES/EPERM (policy/permissions) and ESRCH (already exited), as well
-      // as unexpected OS errors, are best effort. Never fail a CLI launch.
-      onFailure(error);
+    // Launched through niceLaunch: already lowered from birth; lowering again
+    // would stack a second increment.
+    if (!opts.preApplied) {
+      try {
+        const priority = deps.platform === 'win32'
+          ? os.constants.priority.PRIORITY_BELOW_NORMAL
+          : Math.min(19, deps.getPriority(pid) + CLI_CHILD_NICE_INCREMENT);
+        deps.setPriority(pid, priority);
+      } catch (error) {
+        // EACCES/EPERM (policy/permissions) and ESRCH (already exited), as well
+        // as unexpected OS errors, are best effort. Never fail a CLI launch.
+        onFailure(error);
+      }
     }
     if (deps.platform === 'darwin' && env[CLI_CHILD_SCHEDULING_ENV] === 'darwin-bg') {
       try { deps.setDarwinBackground?.(pid, onFailure); } catch (error) { onFailure(error); }

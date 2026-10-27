@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import { createCliChildPriorityPolicy, CLI_CHILD_NICE_ENV, CLI_CHILD_SCHEDULING_ENV } from '../../../session-host-core/src/cli-child-priority.js';
+import { createCliChildPriorityPolicy, niceLaunch, CLI_CHILD_NICE_ENV, CLI_CHILD_SCHEDULING_ENV } from '../../../session-host-core/src/cli-child-priority.js';
 
 function fixture(platform: NodeJS.Platform = 'linux', current = 0) {
   const getPriority = vi.fn(() => current);
@@ -99,5 +99,28 @@ describe('CLI child priority policy', () => {
     expect(policy(() => f.child, env, f.logInfo)).toBe(f.child);
     await Promise.resolve();
     expect(f.logInfo).toHaveBeenCalledOnce();
+  });
+});
+
+describe('niceLaunch (fork-race closure)', () => {
+  it.each(['linux', 'darwin'] as const)('wraps the command in nice -n 10 on %s, args kept verbatim', (platform) => {
+    const launch = niceLaunch('codex', ['--flag', 'a b', "it's"], {}, platform, () => true);
+    expect(launch).toEqual({ command: '/usr/bin/nice', args: ['-n', '10', 'codex', '--flag', 'a b', "it's"], preApplied: true });
+  });
+
+  it('leaves win32 untouched', () => {
+    expect(niceLaunch('codex', ['x'], {}, 'win32', () => true)).toEqual({ command: 'codex', args: ['x'], preApplied: false });
+  });
+
+  it('falls back to the post-spawn path when nice is missing or escape hatch is set', () => {
+    expect(niceLaunch('codex', ['x'], {}, 'linux', () => false).preApplied).toBe(false);
+    expect(niceLaunch('codex', ['x'], { [CLI_CHILD_NICE_ENV]: '0' }, 'linux', () => true)).toEqual({ command: 'codex', args: ['x'], preApplied: false });
+  });
+
+  it('does not lower a second time when the child was pre-applied', () => {
+    const f = fixture('linux');
+    f.policy(() => f.child, {}, f.logInfo, { preApplied: true });
+    expect(f.getPriority).not.toHaveBeenCalled();
+    expect(f.setPriority).not.toHaveBeenCalled();
   });
 });

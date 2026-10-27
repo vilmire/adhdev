@@ -65,7 +65,7 @@ import {
     type SpawnSyncReturns,
 } from 'node:child_process';
 import { promisify } from 'node:util';
-import { hiddenSpawnProcess, spawnCliChild } from '@adhdev/session-host-core';
+import { hiddenSpawnProcess, niceLaunch, spawnCliChild } from '@adhdev/session-host-core';
 import { LOG } from '../logging/logger.js';
 
 /** `spawn` with the win32 console window hidden by default. */
@@ -83,8 +83,12 @@ export function hiddenSpawnCli(
     args: readonly string[] = [],
     options: SpawnOptions = {},
 ): ChildProcess {
-    return spawnCliChild(() => hiddenSpawn(command, args, options), options.env ?? process.env,
-        (message) => LOG.info('CliPriority', message));
+    // A shell-string launch must not be re-wrapped; it keeps the post-spawn path.
+    const launch = options.shell
+        ? { command, args: [...args], preApplied: false }
+        : niceLaunch(command, args, options.env ?? process.env);
+    return spawnCliChild(() => hiddenSpawn(launch.command, launch.args, options), options.env ?? process.env,
+        (message) => LOG.info('CliPriority', message), { preApplied: launch.preApplied });
 }
 
 /**
