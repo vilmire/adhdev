@@ -2869,6 +2869,8 @@ var require_dist = __commonJS({
       DEFAULT_SESSION_HOST_COLS: () => DEFAULT_SESSION_HOST_COLS,
       DEFAULT_SESSION_HOST_ROWS: () => DEFAULT_SESSION_HOST_ROWS,
       DEFAULT_SESSION_RING_BUFFER_MAX_BYTES: () => DEFAULT_SESSION_RING_BUFFER_MAX_BYTES,
+      OPERATOR_RECOVERY_TARGET: () => OPERATOR_RECOVERY_TARGET,
+      RecoveryOwnerAdmission: () => RecoveryOwnerAdmission,
       SESSION_HOST_SUPPORTED_REQUEST_TYPES: () => SESSION_HOST_SUPPORTED_REQUEST_TYPES,
       SessionHostClient: () => SessionHostClient,
       SessionHostRegistry: () => SessionHostRegistry,
@@ -2898,6 +2900,7 @@ var require_dist = __commonJS({
       isTerminalRecord: () => isTerminalRecord,
       partitionSessionHostDiagnosticsSessions: () => partitionSessionHostDiagnosticsSessions2,
       partitionSessionHostRecords: () => partitionSessionHostRecords2,
+      recoveryTargetBytes: () => recoveryTargetBytes,
       replayLaunchEnv: () => replayLaunchEnv,
       resolveAttachableRuntimeRecord: () => resolveAttachableRuntimeRecord,
       resolveInstanceConfigDir: () => resolveInstanceConfigDir,
@@ -2911,7 +2914,85 @@ var require_dist = __commonJS({
       writeEnvelope: () => writeEnvelope
     });
     module2.exports = __toCommonJS2(index_exports2);
+    var import_node_crypto5 = require("crypto");
+    var import_node_perf_hooks = require("perf_hooks");
+    var OPERATOR_RECOVERY_TARGET = Object.freeze({
+      association: "operator_asserted",
+      taskId: "a1cdf3c0-f029-4d17-a8e9-db64e0a55501",
+      meshId: "mesh_271444af883843e9b36c67155b87b22f",
+      attemptId: "mesh_queue:mesh_271444af883843e9b36c67155b87b22f:a1cdf3c0-f029-4d17-a8e9-db64e0a55501:0",
+      generation: 0,
+      dispatchNonce: 1,
+      deliveryId: "dlv-7e259b34-b049-47ee-a466-2ca9c12bcff4",
+      ownerDaemonId: "daemon_mach_4462a75330c548be9c2e74dd9f7f6ffb",
+      nodeId: "node_d82de0cef9b042b6948986609e32142f",
+      workerDaemonId: "daemon_mach_6733c865d60f432dbeb119a6875ee303",
+      sessionId: "de321185-4ebc-40aa-8c6e-b4919e87fae3",
+      providerSessionId: "60806c79-7d77-4614-9fa6-e628533478ba",
+      namespace: "6a2ef3162182"
+    });
+    var recoveryTargetBytes = JSON.stringify(OPERATOR_RECOVERY_TARGET);
+    var RecoveryOwnerAdmission = class {
+      constructor(enrollment, clock = () => import_node_perf_hooks.performance.now()) {
+        this.clock = clock;
+        this.enrollment = Object.freeze({ ...enrollment });
+        if (!enrollment.enrollmentId || !enrollment.coordinatorBootId || !enrollment.authEpoch || typeof enrollment.verifyCurrent !== "function") throw new Error("recovery_owner_enrollment_required");
+        this.key = (0, import_node_crypto5.createPublicKey)(enrollment.publicKey);
+        if (this.key.asymmetricKeyType !== "ed25519") throw new Error("recovery_owner_key_type");
+      }
+      key;
+      enrollment;
+      pending = /* @__PURE__ */ new Map();
+      grants = /* @__PURE__ */ new WeakMap();
+      lastNow = -Infinity;
+      now() {
+        const n = this.clock();
+        if (!Number.isFinite(n) || n < this.lastNow || this.enrollment.verifyCurrent() !== true) {
+          this.pending.clear();
+          this.lastNow = Infinity;
+          throw new Error("recovery_owner_revoked");
+        }
+        this.lastNow = n;
+        return n;
+      }
+      challenge() {
+        const now = this.now();
+        for (const [message2, deadline] of this.pending) if (deadline <= now) this.pending.delete(message2);
+        if (this.pending.size >= 16) throw new Error("recovery_owner_challenge_limit");
+        const message = JSON.stringify([
+          "operator_recovery_v1",
+          recoveryTargetBytes,
+          this.enrollment.enrollmentId,
+          this.enrollment.coordinatorBootId,
+          this.enrollment.authEpoch,
+          (0, import_node_crypto5.randomBytes)(32).toString("hex")
+        ]);
+        this.pending.set(message, now + 3e4);
+        return Object.freeze({ message });
+      }
+      authorize(message, signature) {
+        const now = this.now();
+        const deadline = this.pending.get(message);
+        this.pending.delete(message);
+        if (deadline === void 0 || now >= deadline || !/^[a-f0-9]{128}$/.test(signature) || !(0, import_node_crypto5.verify)(null, Buffer.from(message), this.key, Buffer.from(signature, "hex"))) {
+          throw new Error("recovery_owner_signature_rejected");
+        }
+        const grant = Object.freeze({ purpose: "operator_recovery_v1" });
+        this.grants.set(grant, deadline);
+        return grant;
+      }
+      assertGrant(grant) {
+        const now = this.now();
+        const deadline = typeof grant === "object" && grant !== null ? this.grants.get(grant) : void 0;
+        if (deadline === void 0 || now >= deadline) throw new Error("recovery_owner_grant_rejected");
+      }
+      consume(grant) {
+        this.assertGrant(grant);
+        this.grants.delete(grant);
+      }
+    };
     var SESSION_HOST_SUPPORTED_REQUEST_TYPES = [
+      "get_operator_recovery_coverage_v1",
       "get_upgrade_lease",
       "acquire_upgrade_lease",
       "release_upgrade_lease",

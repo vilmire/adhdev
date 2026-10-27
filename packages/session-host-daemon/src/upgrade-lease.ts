@@ -112,6 +112,21 @@ export class HostUpgradeLease {
     this.assertHealthy();
     if (this.state.held) throw new Error('native_host_idle_lease_held');
   }
+  /** Explicit negative capability from the pinned native helper. Older helpers
+   * may not implement the probe: timeout/error remains UNKNOWN to the caller. */
+  recoveryCoverage(): { protocol: 1; verdict: 'UNKNOWN'; reason: string } {
+    this.assertHealthy();
+    if (digest(fs.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error('native_host_helper_pin_mismatch');
+    const raw = String(execFileSync(this.binding.helperPath, ['--recovery-coverage-v1'], {
+      stdio: 'pipe', timeout: 1000, maxBuffer: 1024, windowsHide: true,
+    }));
+    const value = JSON.parse(raw);
+    this.assertHealthy();
+    if (value.protocol !== 1 || value.verdict !== 'UNKNOWN' || value.reason !== 'historical_native_attribution_unavailable') {
+      throw new Error('native_host_recovery_coverage_unsupported');
+    }
+    return { protocol: 1, verdict: 'UNKNOWN', reason: value.reason };
+  }
   proof() {
     this.assertHealthy();
     return { bootId: this.bootId, pid: process.pid, endpoint: this.endpoint, epoch: this.state.epoch, held: this.state.held, owner: this.state.owner };

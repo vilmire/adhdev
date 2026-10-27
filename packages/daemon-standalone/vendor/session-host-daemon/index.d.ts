@@ -71,6 +71,7 @@ declare class SessionHostServer extends EventEmitter {
     readonly registry: SessionHostRegistry;
     private runtimes;
     private readonly storage;
+    private readonly recoveryFence;
     private readonly upgradeLease;
     private readonly instanceConfigDir;
     private readonly pidFilePath;

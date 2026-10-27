@@ -355,6 +355,7 @@ export interface HostUpgradeLeasePayload {
 }
 
 export type SessionHostRequest =
+  | { type: 'get_operator_recovery_coverage_v1'; payload: { nonce: string } }
   | { type: 'get_upgrade_lease'; payload?: {} }
   | { type: 'acquire_upgrade_lease'; payload: HostUpgradeLeasePayload }
   | { type: 'release_upgrade_lease'; payload: HostUpgradeLeasePayload }
@@ -386,6 +387,7 @@ export type SessionHostRequest =
 export type SessionHostRequestType = SessionHostRequest['type'];
 
 export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestType[] = [
+  'get_operator_recovery_coverage_v1',
   'get_upgrade_lease',
   'acquire_upgrade_lease',
   'release_upgrade_lease',

@@ -31,6 +31,8 @@ import type {
 import { PtySessionRuntime } from './runtime.js';
 import { HostUpgradeLease, type HostUpgradeBinding } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
+import { OperatorRecoveryFence } from './operator-recovery-fence.js';
+import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
 import type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 
 export {
@@ -90,6 +92,7 @@ export class SessionHostServer extends EventEmitter {
   readonly registry = new SessionHostRegistry();
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
+  private readonly recoveryFence: OperatorRecoveryFence;
   private readonly upgradeLease: HostUpgradeLease | null;
   private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
@@ -145,6 +148,8 @@ export class SessionHostServer extends EventEmitter {
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
     });
+    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir ||
+      path.join(resolveInstanceConfigDir(process.env), 'session-host', options.appName || 'adhdev'));
   }
 
   private isPidAlive(pid: number): boolean {
@@ -456,7 +461,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse> {
-    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
+    const readOnly = ['get_operator_recovery_coverage_v1', 'get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -465,6 +470,15 @@ export class SessionHostServer extends EventEmitter {
         counted = true;
       }
       switch (request.type) {
+        case 'get_operator_recovery_coverage_v1': {
+          if (!/^[a-f0-9]{64}$/.test(request.payload?.nonce)) throw new Error('operator_recovery_nonce_required');
+          let coverage: { protocol: 1; verdict: 'UNKNOWN'; reason: string } = {
+            protocol: 1, verdict: 'UNKNOWN', reason: 'native_guardian_coverage_missing',
+          };
+          try { if (this.upgradeLease) coverage = this.upgradeLease.recoveryCoverage(); }
+          catch { /* Unsupported, wedged or unverified native helper never proves absence. */ }
+          return { success: true, result: { ...coverage, nonce: request.payload.nonce } };
+        }
         case 'get_upgrade_lease':
           if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
           return { success: true, result: this.upgradeLease.proof() };
@@ -1192,25 +1206,31 @@ export class SessionHostServer extends EventEmitter {
     payload: CreateSessionPayload,
     startEventType: 'session_started' | 'session_resumed',
   ): SessionHostRecord {
-    const runtime = new PtySessionRuntime({
-      sessionId: record.sessionId,
-      payload,
-      onData: (data) => {
-        const { seq } = this.registry.appendOutput(record.sessionId, data);
-        this.schedulePersist(record.sessionId);
-        this.emitEvent({ type: 'session_output', sessionId: record.sessionId, seq, data });
-      },
-      onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal),
-    });
+    // The shared synchronous spawn boundary also covers delayed restart/resume
+    // after an await. Never infer closure from a prior failed ensureReady.
+    this.recoveryFence.assertLaunchAllowed(payload);
+    const leaveLaunch = this.recoveryFence.enterLaunch(payload);
+    try {
+      const runtime = new PtySessionRuntime({
+        sessionId: record.sessionId,
+        payload,
+        onData: (data) => {
+          const { seq } = this.registry.appendOutput(record.sessionId, data);
+          this.schedulePersist(record.sessionId);
+          this.emitEvent({ type: 'session_output', sessionId: record.sessionId, seq, data });
+        },
+        onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal),
+      });
 
-    this.registry.setLifecycle(record.sessionId, 'starting');
-    const pid = runtime.start();
-    this.runtimes.set(record.sessionId, runtime);
-    const startedRecord = this.registry.markStarted(record.sessionId, pid);
-    this.persistNow(record.sessionId);
-    this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
-    this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
-    return startedRecord;
+      this.registry.setLifecycle(record.sessionId, 'starting');
+      const pid = runtime.start();
+      this.runtimes.set(record.sessionId, runtime);
+      const startedRecord = this.registry.markStarted(record.sessionId, pid);
+      this.persistNow(record.sessionId);
+      this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
+      this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
+      return startedRecord;
+    } finally { leaveLaunch(); }
   }
 
   /**

@@ -8,6 +8,12 @@
 int main(int argc, char **argv) {
   if (argc != 2) return 64;
   if (!strcmp(argv[1], "--attest")) { puts("adhdev-host-guardian/1"); return 0; }
+  /* flock proves current exclusion only. In particular it has no retained
+     process-birth, descendant or transcript-handle attribution for old boots. */
+  if (!strcmp(argv[1], "--recovery-coverage-v1")) {
+    puts("{\"protocol\":1,\"verdict\":\"UNKNOWN\",\"reason\":\"historical_native_attribution_unavailable\"}");
+    return 0;
+  }
   int fd = open(argv[1], O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
   struct stat st;
   if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||
