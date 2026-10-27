@@ -292,7 +292,7 @@ test('M1: stopSessionHost refuses to kill a live unrelated process when a stale 
 
   const unrelatedChild = childProcessModule.spawn(
     process.execPath,
-    ['-e', 'setInterval(() => {}, 10000)', '--prompt', 'mention session-host-daemon in prompt'],
+    ['-e', 'setInterval(() => {}, 10000)', '--', '--prompt', 'mention session-host-daemon in prompt'],
     { stdio: 'ignore', windowsHide: true },
   )
   t.after(() => {
