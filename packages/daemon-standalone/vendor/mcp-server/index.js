@@ -53069,7 +53069,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     var init_types3 = __esm2({
-      "../../vendor/seqscribe/dist/types.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/types.js"() {
         "use strict";
       }
     });
@@ -53078,7 +53078,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var SeqscribeError;
     var init_errors = __esm2({
-      "../../vendor/seqscribe/dist/errors.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/errors.js"() {
         "use strict";
         SeqscribeError = class extends Error {
           code;
@@ -53095,7 +53095,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var DEFAULT_CONSTANTS;
     var init_constants = __esm2({
-      "../../vendor/seqscribe/dist/constants.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/constants.js"() {
         "use strict";
         DEFAULT_CONSTANTS = {
           MAX_ENTRY_BYTES: 65536,
@@ -53692,7 +53692,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var canonicalizeLib;
     var utf8;
     var init_encoding = __esm2({
-      "../../vendor/seqscribe/dist/encoding.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/encoding.js"() {
         "use strict";
         import_canonicalize = __toESM2(require_canonicalize(), 1);
         init_sha256();
@@ -53751,7 +53751,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var HLC_C_LIMIT;
     var init_hlc = __esm2({
-      "../../vendor/seqscribe/dist/hlc.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/hlc.js"() {
         "use strict";
         init_errors();
         HLC_C_LIMIT = 2 ** 32;
@@ -53855,7 +53855,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var RESERVED_NAME;
     var MAX_NUMERIC_FIELD;
     var init_codec = __esm2({
-      "../../vendor/seqscribe/dist/codec.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/codec.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -53941,7 +53941,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var OVERRIDE_GLOB_RE;
     var TopicRegistry;
     var init_topics = __esm2({
-      "../../vendor/seqscribe/dist/topics.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/topics.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -54059,7 +54059,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var EXPORT_BATCH;
     var init_export = __esm2({
-      "../../vendor/seqscribe/dist/export.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/export.js"() {
         "use strict";
         init_codec();
         init_errors();
@@ -54068,7 +54068,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var BeaconHub;
     var init_beacon = __esm2({
-      "../../vendor/seqscribe/dist/beacon.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/beacon.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -54378,7 +54378,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var PRE_OPEN_CAP;
     var textDec;
     var init_ws = __esm2({
-      "../../vendor/seqscribe/dist/ws.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/ws.js"() {
         "use strict";
         PRE_OPEN_CAP = 1024;
         textDec = new globalThis.TextDecoder();
@@ -54444,7 +54444,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       };
     }
     var init_adapters = __esm2({
-      "../../vendor/seqscribe/dist/adapters.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/adapters.js"() {
         "use strict";
       }
     });
@@ -54709,7 +54709,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var g;
     var defaultTimers;
     var init_host = __esm2({
-      "../../vendor/seqscribe/dist/host.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/host.js"() {
         "use strict";
         init_hmac();
         init_sha256();
@@ -54729,7 +54729,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var BACKOFF_MAX_MS;
     var ConsumerHub;
     var init_consume = __esm2({
-      "../../vendor/seqscribe/dist/consume.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/consume.js"() {
         "use strict";
         init_errors();
         BATCH = 64;
@@ -54968,7 +54968,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var DirectiveHub;
     var init_directives = __esm2({
-      "../../vendor/seqscribe/dist/directives.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/directives.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -55100,7 +55100,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var FinalityHub;
     var init_finality = __esm2({
-      "../../vendor/seqscribe/dist/finality.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/finality.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -55304,7 +55304,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var RetentionStats;
     var AckRecorder;
     var init_retention = __esm2({
-      "../../vendor/seqscribe/dist/retention.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/retention.js"() {
         "use strict";
         ACKED_PRUNE_DEFAULT_MAX_ROWS = 1e3;
         ACKED_PRUNE_MAX_ROWS_CAP = 1e4;
@@ -55451,7 +55451,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var textDec2;
     var SubHub;
     var init_subs = __esm2({
-      "../../vendor/seqscribe/dist/subs.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/subs.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -56177,7 +56177,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var HLC_META_KEY;
     var LogCore;
     var init_log = __esm2({
-      "../../vendor/seqscribe/dist/log.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/log.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -57384,7 +57384,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     var ArchiveHub;
     var init_archive = __esm2({
-      "../../vendor/seqscribe/dist/archive.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/archive.js"() {
         "use strict";
         ArchiveHub = class {
           deps;
@@ -57452,7 +57452,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var DEDUPE_CAP;
     var RegisterHub;
     var init_register = __esm2({
-      "../../vendor/seqscribe/dist/register.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/register.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -58188,7 +58188,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var textDec3;
     var SnapshotHub;
     var init_snapshot2 = __esm2({
-      "../../vendor/seqscribe/dist/snapshot.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/snapshot.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -58414,7 +58414,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var DDL;
     var Store;
     var init_store2 = __esm2({
-      "../../vendor/seqscribe/dist/store.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/store.js"() {
         "use strict";
         init_errors();
         DDL = `
@@ -59373,7 +59373,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var ALL_TYPES;
     var MAX_PROBE_SEQS;
     var init_messages = __esm2({
-      "../../vendor/seqscribe/dist/messages.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/messages.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -59408,7 +59408,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var PROTO_MAX;
     var Session;
     var init_session = __esm2({
-      "../../vendor/seqscribe/dist/session.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/session.js"() {
         "use strict";
         init_errors();
         init_messages();
@@ -59835,7 +59835,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var SYNC_HOTSPOT_TOP_N;
     var SyncEngine;
     var init_sync = __esm2({
-      "../../vendor/seqscribe/dist/sync.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/sync.js"() {
         "use strict";
         init_codec();
         init_encoding();
@@ -60751,7 +60751,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var IDENT_RE;
     var ViewHub;
     var init_views = __esm2({
-      "../../vendor/seqscribe/dist/views.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/views.js"() {
         "use strict";
         init_encoding();
         init_errors();
@@ -61616,7 +61616,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var g2;
     var defaultTimers2;
     var init_node = __esm2({
-      "../../vendor/seqscribe/dist/node.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/node.js"() {
         "use strict";
         init_beacon();
         init_codec();
@@ -61645,7 +61645,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     var init_dist2 = __esm2({
-      "../../vendor/seqscribe/dist/index.js"() {
+      "../../../../../../oss/vendor/seqscribe/dist/index.js"() {
         "use strict";
         init_types3();
         init_errors();
@@ -100741,11 +100741,8 @@ ${result.stderr}`, result.code);
       if (observed2.kind === "gone") return true;
       if (!abandoned(observed2, alive, now(), options, startOf)) return false;
       const guard2 = `${lock}.reclaim`;
-      try {
-        (0, import_node_fs14.mkdirSync)(guard2, { mode: 448 });
-      } catch {
-        return false;
-      }
+      const guardOwner = takeReclaimGuard(guard2, alive, startOf, options.processStartId ?? processStartId);
+      if (!guardOwner) return false;
       try {
         const recheck = readOwner(lock);
         if (recheck.kind === "gone") return true;
@@ -100761,10 +100758,73 @@ ${result.stderr}`, result.code);
           return false;
         }
       } finally {
+        releaseReclaimGuard(guard2, guardOwner);
+      }
+    }
+    function releaseReclaimGuard(guard2, owner) {
+      const current4 = readOwner(guard2);
+      if (current4.kind === "owner" && current4.owner.nonce !== owner.nonce) return;
+      try {
+        (0, import_node_fs14.unlinkSync)((0, import_node_path12.join)(guard2, OWNER_FILE));
+      } catch {
+      }
+      try {
+        (0, import_node_fs14.rmdirSync)(guard2);
+      } catch {
+      }
+    }
+    function takeReclaimGuard(guard2, alive, startOf, probe) {
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          (0, import_node_fs14.rmdirSync)(guard2);
+          (0, import_node_fs14.mkdirSync)(guard2, { mode: 448 });
+        } catch (error) {
+          if (error.code !== "EEXIST" || attempt > 0 || !recoverDeadGuard(guard2, alive, probe)) return void 0;
+          continue;
+        }
+        const startId = startOf(process.pid);
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto27.randomBytes)(16).toString("hex"), acquiredAt: Date.now(), ...startId ? { startId } : {} };
+        try {
+          (0, import_node_fs14.writeFileSync)((0, import_node_path12.join)(guard2, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
+        } catch {
+          try {
+            (0, import_node_fs14.rmdirSync)(guard2);
+          } catch {
+          }
+          return void 0;
+        }
+        return owner;
+      }
+      return void 0;
+    }
+    function recoverDeadGuard(guard2, alive, probe) {
+      const observed2 = readOwner(guard2);
+      if (observed2.kind !== "owner") return false;
+      const dead = !alive(observed2.owner.pid) || pidReused(observed2.owner, probe);
+      if (!dead) return false;
+      const claimed = (0, import_node_path12.join)(guard2, `${OWNER_FILE}.reaped-${(0, import_node_crypto27.randomBytes)(8).toString("hex")}`);
+      try {
+        (0, import_node_fs14.renameSync)((0, import_node_path12.join)(guard2, OWNER_FILE), claimed);
+      } catch {
+        return false;
+      }
+      let claimedNonce;
+      try {
+        claimedNonce = JSON.parse((0, import_node_fs14.readFileSync)(claimed, "utf8")).nonce;
+      } catch {
+      }
+      if (claimedNonce !== observed2.owner.nonce) {
+        try {
+          (0, import_node_fs14.renameSync)(claimed, (0, import_node_path12.join)(guard2, OWNER_FILE));
         } catch {
         }
+        return false;
+      }
+      try {
+        (0, import_node_fs14.unlinkSync)(claimed);
+        (0, import_node_fs14.rmdirSync)(guard2);
+        return true;
+      } catch {
+        return false;
       }
     }
     function acquireOwnedLock(lock, options = {}) {
@@ -100777,7 +100837,9 @@ ${result.stderr}`, result.code);
           reclaimGuard = (0, import_node_fs14.statSync)(`${lock}.reclaim`).isDirectory();
         } catch {
         }
-        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
+        const guardOwner = reclaimGuard ? readOwner(`${lock}.reclaim`) : void 0;
+        const detail = guardOwner?.kind === "owner" ? ` (reclaimer pid ${guardOwner.owner.pid} not proven dead)` : "";
+        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim${detail}` : `write_lock_held: ${lock}` };
       };
       for (let attempt = 0; attempt < 3; attempt++) {
         try {

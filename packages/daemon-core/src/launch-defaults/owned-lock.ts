@@ -18,8 +18,17 @@
  * ownerless and old) is removed, never a lock a live writer took in between.
  * The guard's own window is synchronous and tiny; if a guard is ever left
  * behind, acquisition refuses with a reason naming that path.
+ *
+ * The guard carries its own `owner.json` ({pid, nonce, startId}). An orphaned
+ * guard (reclaimer crashed) is removed only with positive proof the reclaimer
+ * is dead: its pid is gone, or the live pid's start identity differs from the
+ * recorded one (pid reuse). Never by age. Removal is compare-and-swap: the
+ * marker's owner file is atomically renamed away, the claimed copy must carry
+ * the observed nonce, and only the single winning renamer removes the guard.
+ * Legacy/garbled/ownerless guards and live reclaimers stay blocking (fail
+ * closed). The protected lock directory and its bytes are never touched here.
  */
-import { mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -137,7 +146,8 @@ function reclaim(lock: string, alive: (pid: number) => boolean, now: () => numbe
     if (observed.kind === 'gone') return true;
     if (!abandoned(observed, alive, now(), options, startOf)) return false;
     const guard = `${lock}.reclaim`;
-    try { mkdirSync(guard, { mode: 0o700 }); } catch { return false; }
+    const guardOwner = takeReclaimGuard(guard, alive, startOf, options.processStartId ?? processStartId);
+    if (!guardOwner) return false;
     try {
         const recheck = readOwner(lock);
         if (recheck.kind === 'gone') return true;
@@ -145,8 +155,54 @@ function reclaim(lock: string, alive: (pid: number) => boolean, now: () => numbe
         try { unlinkSync(join(lock, OWNER_FILE)); } catch { /* ownerless or torn record */ }
         try { rmdirSync(lock); return true; } catch { return false; }
     } finally {
-        try { rmdirSync(guard); } catch { /* left for operator recovery; acquisition names it */ }
+        releaseReclaimGuard(guard, guardOwner);
     }
+}
+
+function releaseReclaimGuard(guard: string, owner: LockOwner): void {
+    // Only remove a guard that is still ours.
+    const current = readOwner(guard);
+    if (current.kind === 'owner' && current.owner.nonce !== owner.nonce) return;
+    try { unlinkSync(join(guard, OWNER_FILE)); } catch { /* already gone */ }
+    try { rmdirSync(guard); } catch { /* left for operator recovery; acquisition names it */ }
+}
+
+/** Create the reclaim guard with an owner record, recovering a provably dead one once. */
+function takeReclaimGuard(guard: string, alive: (pid: number) => boolean,
+    startOf: (pid: number) => string | undefined, probe: (pid: number) => string | undefined): LockOwner | undefined {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try { mkdirSync(guard, { mode: 0o700 }); }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt > 0 || !recoverDeadGuard(guard, alive, probe)) return undefined;
+            continue;
+        }
+        const startId = startOf(process.pid);
+        const owner: LockOwner = { pid: process.pid, nonce: randomBytes(16).toString('hex'), acquiredAt: Date.now(), ...(startId ? { startId } : {}) };
+        try { writeFileSync(join(guard, OWNER_FILE), JSON.stringify(owner), { flag: 'wx', mode: 0o600 }); }
+        catch { try { rmdirSync(guard); } catch { /* ownerless guard stays blocking */ } return undefined; }
+        return owner;
+    }
+    return undefined;
+}
+
+/** True only when the guard's recorded reclaimer is provably dead and this caller won the CAS. */
+function recoverDeadGuard(guard: string, alive: (pid: number) => boolean,
+    probe: (pid: number) => string | undefined): boolean {
+    const observed = readOwner(guard);
+    if (observed.kind !== 'owner') return false; // legacy, torn or unknown marker: fail closed
+    // Peer start identity is probed here only (failure path, never the hot path).
+    const dead = !alive(observed.owner.pid) || pidReused(observed.owner, probe);
+    if (!dead) return false;
+    const claimed = join(guard, `${OWNER_FILE}.reaped-${randomBytes(8).toString('hex')}`);
+    try { renameSync(join(guard, OWNER_FILE), claimed); } catch { return false; } // lost the race or already gone
+    let claimedNonce: string | undefined;
+    try { claimedNonce = (JSON.parse(readFileSync(claimed, 'utf8')) as Partial<LockOwner>).nonce; } catch { /* unreadable */ }
+    if (claimedNonce !== observed.owner.nonce) {
+        // We claimed a different (newer) marker than the one we proved dead: put it back.
+        try { renameSync(claimed, join(guard, OWNER_FILE)); } catch { /* stays blocking */ }
+        return false;
+    }
+    try { unlinkSync(claimed); rmdirSync(guard); return true; } catch { return false; }
 }
 
 export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): OwnedLockResult {
@@ -157,8 +213,10 @@ export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): 
     const held = (): OwnedLockResult => {
         let reclaimGuard = false;
         try { reclaimGuard = statSync(`${lock}.reclaim`).isDirectory(); } catch { /* none */ }
+        const guardOwner = reclaimGuard ? readOwner(`${lock}.reclaim`) : undefined;
+        const detail = guardOwner?.kind === 'owner' ? ` (reclaimer pid ${guardOwner.owner.pid} not proven dead)` : '';
         return { ok: false, busy: true, reason: reclaimGuard
-            ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
+            ? `write_lock_reclaim_in_progress: ${lock}.reclaim${detail}` : `write_lock_held: ${lock}` };
     };
     for (let attempt = 0; attempt < 3; attempt++) {
         try { mkdirSync(lock, { mode: 0o700 }); }
