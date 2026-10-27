@@ -18,6 +18,9 @@
  * member — see mesh-shared node-facts.ts). The rule mirrors mesh-route-preview's
  * `providerReportedDisabled` and classifyAbsentQuotaReason:
  *   - the member REPORTED `enabled: false` → refuse (its own verdict);
+ *   - the member REPORTED the CLI `installed: false` in its cached detection
+ *     (`nodeFacts.providerInventory`) → refuse, so selection falls through to the
+ *     node's next slot instead of re-electing a launch the member must refuse;
  *   - anything else (enabled, absent field, older daemon, provider outside the
  *     reported set) → usable here. Absence is "the node did not tell us", never
  *     "disabled". The forwarded launch_cli then runs on the member, which applies
@@ -35,6 +38,26 @@ import { setLocalNodeProviderFallback } from './mesh-node-slots.js';
 function reportedProviderEnabled(node: any, providerType: string): boolean | undefined {
     const enabled = node?.nodeFacts?.providerEnablement?.[providerType]?.enabled;
     return typeof enabled === 'boolean' ? enabled : undefined;
+}
+
+function reportedProviderInstalled(node: any, providerType: string): boolean | undefined {
+    const installed = node?.nodeFacts?.providerInventory?.providers?.[providerType]?.installed;
+    return typeof installed === 'boolean' ? installed : undefined;
+}
+
+/**
+ * The member's own cached CLI detection verdict (`nodeFacts.providerInventory`), or
+ * undefined when it reported none. PROVIDER-FALLTHROUGH: a slot whose CLI the member
+ * itself reports NOT installed was still elected here, the forwarded launch_cli failed
+ * on the member, and the next tick re-elected the same slot after the cooldown — so the
+ * node's next configured slot was never tried. Refusing on the member's explicit
+ * `installed: false` lets resolveUsableProvider fall through to that next slot.
+ */
+export function remoteReportedProviderInstalled(node: any, providerType: string, nodes?: any[]): boolean | undefined {
+    const own = reportedProviderInstalled(node, providerType);
+    if (own !== undefined) return own;
+    const source = cloneSourceNodeFor(node, { nodes });
+    return source !== undefined ? reportedProviderInstalled(source, providerType) : undefined;
 }
 
 /** The member's own reported enablement verdict, or undefined when it reported none. */
@@ -56,7 +79,8 @@ export async function slotProviderUnusableReason(
     nodes?: any[],
 ): Promise<string | null> {
     if (!isLocalAutoLaunchNode(node)) {
-        return remoteReportedProviderEnabled(node, providerType, nodes) === false ? 'disabled on node' : null;
+        if (remoteReportedProviderEnabled(node, providerType, nodes) === false) return 'disabled on node';
+        return remoteReportedProviderInstalled(node, providerType, nodes) === false ? 'not installed on node' : null;
     }
     const providerLoader = components.providerLoader!;
     if (typeof providerLoader.isMachineProviderEnabled === 'function' && !providerLoader.isMachineProviderEnabled(providerType)) {

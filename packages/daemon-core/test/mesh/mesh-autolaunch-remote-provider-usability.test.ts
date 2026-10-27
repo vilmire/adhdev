@@ -119,6 +119,49 @@ describe('resolveUsableProvider — provider usability is judged on the spawning
         expect(res.reason).toBe('provider_priority_unusable: claude-cli: disabled on node');
     });
 
+    it('a remote node whose member reports the slot CLI not installed falls through to its next slot', async () => {
+        const { components } = hostComponents();
+        const twoSlots = [
+            { provider: 'claude-cli', difficulty: ['easy', 'medium', 'difficult'], maxParallel: 1 },
+            { provider: 'codex-cli', difficulty: ['easy', 'medium', 'difficult'], maxParallel: 1 },
+        ];
+        const node = {
+            id: 'node_remote', daemonId: REMOTE_DAEMON, policy: { slots: twoSlots },
+            nodeFacts: {
+                schemaVersion: 1, reportedAt: Date.now(),
+                providerEnablement: { 'claude-cli': { enabled: true, quotaEnabled: true }, 'codex-cli': { enabled: true, quotaEnabled: true } },
+                providerInventory: { observedAt: Date.now(), providers: { 'claude-cli': { installed: false }, 'codex-cli': { installed: true } } },
+            },
+        };
+        const res = await resolve(components, node);
+        expect(res.reason).toBeUndefined();
+        expect(res.providerType).toBe('codex-cli');
+        expect(res.preScoreExclusions).toEqual(expect.arrayContaining([expect.objectContaining({ providerType: 'claude-cli', reason: 'not installed on node' })]));
+        expect(detectCliMocks.calls).toEqual([]);
+    });
+
+    it('a remote node whose only slot CLI is reported not installed is refused with that reason', async () => {
+        const { components } = hostComponents();
+        const node = {
+            id: 'node_remote', daemonId: REMOTE_DAEMON, policy: { slots },
+            nodeFacts: { schemaVersion: 1, reportedAt: Date.now(), providerInventory: { observedAt: Date.now(), providers: { 'claude-cli': { installed: false } } } },
+        };
+        const res = await resolve(components, node);
+        expect(res.providerType).toBeUndefined();
+        expect(res.reason).toBe('provider_priority_unusable: claude-cli: not installed on node');
+    });
+
+    it('a remote clone with no bundle reads its source node inventory', async () => {
+        const { components } = hostComponents();
+        const source = {
+            id: 'node_remote', daemonId: REMOTE_DAEMON, policy: { slots },
+            nodeFacts: { schemaVersion: 1, reportedAt: Date.now(), providerInventory: { observedAt: Date.now(), providers: { 'claude-cli': { installed: false } } } },
+        };
+        const clone = { id: 'node_remote_wt', daemonId: REMOTE_DAEMON, clonedFromNodeId: 'node_remote', policy: { slots } };
+        const res = await resolve(components, clone, [source, clone]);
+        expect(res.reason).toBe('provider_priority_unusable: claude-cli: not installed on node');
+    });
+
     it('a LOCAL node still uses the local enablement check', async () => {
         const { components } = hostComponents();
         detectCliMocks.detected.add('claude-cli');
