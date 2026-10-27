@@ -85,17 +85,44 @@ test('standalone command invalidation rides the router command_executed event, n
   // from owner authentication (`'standalone'` when the request authenticates as
   // the owner, `'ipc'` otherwise), so a hard-coded literal here would silently
   // promote unauthenticated callers to owner-sourced commands.
-  assert.match(text, /private async executeCommand\(type: string, args: any, source: 'standalone' \| 'ipc'\)/)
-  assert.match(text, /return this\.host\.execute\(type, args, source\)/)
-  assert.doesNotMatch(text, /this\.host\.execute\(type, args, '(standalone|ipc)'\)/)
-  // Both entries that mint the source derive it from owner authentication.
-  assert.match(text, /this\.handleWsConnection\(ws, this\.http\.isOwnerRequestAuthenticated\(req, req\.url \|\| '\/'\) \? 'standalone' : 'ipc'\)/)
-  // Every owner-reachable HTTP command entry must derive its source from
-  // authentication. Asserted by count, not by "at least one match", so a single
-  // site regressing to a literal cannot hide behind its siblings.
+  // (Since the owner-auth refactor — 79a8bb99f "trusted owner ingress" and the
+  // follow-ups that added `opts` — executeCommand also takes an options bag and
+  // owner authority additionally requires `ownerVerified === true`.)
+  assert.match(text, /private async executeCommand\(\s*type: string,\s*args: any,\s*source: 'standalone' \| 'ipc',\s*opts\?: \{/)
+  assert.match(text, /return this\.host\.execute\(type, args, source, \{/)
+  assert.doesNotMatch(text, /this\.host\.execute\(type, args, '(standalone|ipc)'/)
+  // A 'standalone' source alone is not owner authority: the trusted ingress proof
+  // is only minted when BOTH the source is 'standalone' AND the caller verified.
+  assert.match(text, /const isOwner = source === 'standalone' && opts\?\.ownerVerified === true/)
+  assert.match(text, /const ownerProof = isOwner\s*\?\s*\(opts\?\.ownerProof \?\? issueTrustedOwnerIngressProof\(\{[\s\S]*?\}\)\)\s*:\s*null/)
+  // WS upgrade: the connection source is derived from a captured owner-auth guard
+  // (null for unauthenticated / MCP-credentialed / internal-scope callers).
+  assert.match(text, /const ownerGuard = this\.http\.captureOwnerAuthGuard\(req, req\.url \|\| '\/'\);/)
+  assert.match(text, /this\.handleWsConnection\(\s*ws,\s*ownerGuard \? 'standalone' : 'ipc',\s*ownerGuard \?\? undefined,/)
+  // WS per-message: authority is re-evaluated LIVE on every command (logout /
+  // password change / token removal revokes an open socket), only a
+  // 'standalone' connection can hold the captured guard, and the effective
+  // source is minted from the live result, never from the upgrade-time source.
+  assert.match(text, /const ownerGuard = source === 'standalone'\s*&& typeof isOwnerAuthorized === 'function'\s*&& isOwnerAuthorized\(\)\s*\? isOwnerAuthorized\s*:\s*captureReadGuard\?\.\(type\) \?\? undefined/)
+  assert.match(text, /const liveOwnerAuthorized = Boolean\(ownerGuard && ownerGuard\(\)\)/)
+  assert.match(text, /const effectiveSource: 'standalone' \| 'ipc' = liveOwnerAuthorized \? 'standalone' : 'ipc'/)
+  assert.match(text, /ownerVerified: liveOwnerAuthorized,\s*verifyCurrentOwner: liveOwnerAuthorized \? ownerGuard : undefined/)
   const http = httpSource()
-  const httpOwnerEntries = http.match(/this\.deps\.executeCommand\([^;]*?this\.isOwnerRequestAuthenticated\(req, url\) \? 'standalone' : 'ipc'\)/g) || []
-  assert.equal(httpOwnerEntries.length, 2, `expected both owner-reachable HTTP command entries to derive source from owner auth, saw ${httpOwnerEntries.length}`)
+  // Owner authority never extends to MCP-credentialed or internal-scope callers.
+  assert.match(http, /isOwnerRequestAuthenticated\(req: IncomingMessage, rawUrl: string\): boolean \{\s*return this\.hasAnyAuth\(\)\s*&& !this\.hasMcpCredentialHeader\(req\)\s*&& !this\.resolveInternalAuthScope\(req\)\s*&& this\.isRequestAuthenticated\(req, rawUrl\);/)
+  // Owner-reachable HTTP entries that mint a source from auth directly (provider
+  // REST + interactive prompt API). Asserted by count, not "at least one", so a
+  // single site regressing to a literal cannot hide behind its siblings.
+  const httpDirectOwnerEntries = http.match(/this\.isOwnerRequestAuthenticated\(req, url\) \? 'standalone' : 'ipc'/g) || []
+  assert.equal(httpDirectOwnerEntries.length, 2, `expected both direct-auth HTTP entries to derive source from owner auth, saw ${httpDirectOwnerEntries.length}`)
+  assert.match(http, /await this\.deps\.executeCommand\(cmdType, body, this\.isOwnerRequestAuthenticated\(req, url\) \? 'standalone' : 'ipc'\)/)
+  assert.match(http, /commandSource: this\.isOwnerRequestAuthenticated\(req, url\) \? 'standalone' : 'ipc'/)
+  // /api/v1/command: guard is null for MCP-header / internal-scope callers, the
+  // owner flag is the LIVE guard result, and the source derives from it.
+  assert.match(http, /const ownerGuard = internalScope === null && !hasMcpHeader\s*\?\s*\(this\.captureOwnerAuthGuard\(req, url\) \?\? this\.captureUnauthenticatedArtifactReadGuard\(req, type\)\)\s*:\s*null/)
+  assert.match(http, /const isOwner = Boolean\(ownerGuard && ownerGuard\(\)\)/)
+  const cmdEntries = http.match(/this\.deps\.executeCommand\(\s*type,\s*commandPayload,\s*isOwner \? 'standalone' : 'ipc',\s*\{[^}]*?verifyCurrentOwner: ownerGuard \?\? undefined/g) || []
+  assert.equal(cmdEntries.length, 1, `expected the /api/v1/command entry to derive source from the live owner guard, saw ${cmdEntries.length}`)
   // No owner-reachable entry may stamp 'standalone' directly. The lone literal
   // 'ipc' call (apply_mesh_host_join) is the unauthenticated mesh-join path and
   // is deliberately the LEAST privileged source, so it is exempt.
