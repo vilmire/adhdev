@@ -140,3 +140,58 @@ export function buildRecoveredRecord(persisted: PersistedRuntimeState): Recovere
   };
   return { recoveredRecord, wasLiveRuntime, hadRecoveryInterest };
 }
+
+/** Shared lifecycle wait bookkeeping; no process control or ownership decisions. */
+export class RuntimeExitWaiters {
+  private waiters = new Map<string, Array<(exitCode: number | null) => void>>();
+  wait(sessionId: string, timeoutMs: number, hasRuntime: boolean, lifecycle?: string): Promise<number | null> {
+    if (!hasRuntime) {
+      return Promise.resolve(lifecycle === 'failed' ? 1 : 0);
+    }
+    return new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const waiters = this.waiters.get(sessionId) || [];
+        this.waiters.set(sessionId, waiters.filter((waiter) => waiter !== onExit));
+        reject(new Error(`Timed out waiting for runtime ${sessionId} to exit`));
+      }, timeoutMs);
+      const onExit = (exitCode: number | null) => {
+        clearTimeout(timeout);
+        resolve(exitCode);
+      };
+      const waiters = this.waiters.get(sessionId) || [];
+      waiters.push(onExit);
+      this.waiters.set(sessionId, waiters);
+    });
+  }
+
+  resolve(sessionId: string, exitCode: number | null): void {
+    const waiters = this.waiters.get(sessionId);
+    if (!waiters?.length) return;
+    this.waiters.delete(sessionId);
+    for (const waiter of waiters) {
+      try {
+        waiter(exitCode);
+      } catch {
+        // noop
+      }
+    }
+  }
+
+}
+
+export function restorePersistedRuntimeRecords(storage: import('./storage.js').SessionHostStorage, registry: import('@adhdev/session-host-core').SessionHostRegistry, warn: (message: string) => void): void {
+    const states = storage.loadAll();
+    let skippedAutoResumeSessions = 0;
+    for (const persisted of states) {
+      const { recoveredRecord, wasLiveRuntime, hadRecoveryInterest } = buildRecoveredRecord(persisted);
+      registry.restoreSession(recoveredRecord, persisted.snapshot);
+      storage.save(recoveredRecord, persisted.snapshot);
+      if (wasLiveRuntime && hadRecoveryInterest) {
+        skippedAutoResumeSessions += 1;
+      }
+    }
+
+    if (skippedAutoResumeSessions > 0) {
+      warn( `session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
+    }
+  }

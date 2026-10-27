@@ -18,7 +18,7 @@ function fixture() {
         return admission.authorize(c.message, sign(null, Buffer.from(c.message), pair.privateKey).toString('hex'));
     };
     // Disposable state and explicitly FAKE physical proof; no real host or socket.
-    let assignment: RecoveryCurrentAssignment = { ...target, state: 'stopping', queueStatus: 'working',
+    let assignment: RecoveryCurrentAssignment = { ...target, state: 'stopping', queueStatus: 'assigned',
         queueNodeId: target.nodeId, queueSessionId: target.sessionId,
         ownerRevision: 'owner-rev-1', queueRevision: 'queue-rev-1' };
     const ledger = new OperatorRecoveryAnchors({ db, owner: admission, coordinatorBootId: 'coordinator-boot',

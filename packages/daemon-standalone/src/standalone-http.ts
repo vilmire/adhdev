@@ -970,6 +970,9 @@ export class StandaloneHttpApi {
             ? issueTrustedOwnerIngressProof({
                 source: 'standalone',
                 ownerVerified: true,
+                nondelegatedLocalOwner: Boolean(this.passwordConfig && this.getRequestSessionId(req)
+                  && this.authSessions.has(this.getRequestSessionId(req)!)
+                  && !this.getRequestTokens(req, url).bearerToken && !this.getRequestTokens(req, url).queryToken),
                 verifyCurrent: ownerGuard,
               })
             : null;

@@ -11,7 +11,7 @@ test('compiled native guardian explicitly reports missing historical attribution
   execFileSync('/usr/bin/cc', ['-Wall', '-Wextra', '-Werror', resolve('native/instance-lock.c'), '-o', helper], { windowsHide: true });
   const value = JSON.parse(String(execFileSync(helper, ['--recovery-coverage-v1'], { windowsHide: true })));
   assert.deepEqual(value, { protocol: 1, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable' });
-  assert.equal(String(execFileSync(helper, ['--attest'], { windowsHide: true })).trim(), 'adhdev-host-guardian/1');
+  assert.equal(String(execFileSync(helper, ['--attest'], { windowsHide: true })).trim(), 'adhdev-host-guardian/2');
 });
 
 test('protocol-1 coverage does not execute an unadvertised option on legacy helpers', { skip: process.platform !== 'darwin' }, async () => {
@@ -21,4 +21,19 @@ test('protocol-1 coverage does not execute an unadvertised option on legacy help
   lease.healthy = true;
   lease.child = { exitCode: null, signalCode: null };
   assert.deepEqual(lease.recoveryCoverage(), { protocol: 1, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable' });
+});
+
+test('protocol-2 adapter parses bounded native observations and keeps historical coverage UNKNOWN', { skip: process.platform !== 'darwin' }, async () => {
+  const { writeFileSync, readFileSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const { HostUpgradeLease } = await import('../src/upgrade-lease.js');
+  const root = mkdtempSync(join(tmpdir(), 'recovery-native-parser-'));
+  const helper = join(root, 'fixture-helper');
+  // This fixture emits synthetic counters; it does NOT enumerate author-host
+  // processes or claim a positive physical proof.
+  writeFileSync(helper, '#!/bin/sh\nprintf \'%s\\n\' \'{"protocol":2,"verdict":"UNKNOWN","reason":"historical_native_attribution_unavailable","nativeBootSeconds":1,"processCount":2,"descriptorCount":3,"unreadable":1}\'\n', { mode: 0o700 });
+  const pin = createHash('sha256').update(readFileSync(helper)).digest('hex');
+  const lease = new HostUpgradeLease({ helperPath: helper, helperSha256: pin, helperProtocol: 2, stateDir: root }, 'fixture-endpoint') as any;
+  lease.healthy = true; lease.child = { exitCode: null, signalCode: null };
+  assert.deepEqual(lease.recoveryCoverage(), { protocol: 2, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable', processCount: 2, descriptorCount: 3, unreadable: 1 });
 });

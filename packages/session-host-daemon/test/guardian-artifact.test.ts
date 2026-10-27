@@ -21,7 +21,7 @@ function fixture(){
 }
 test('package helper attestation, exact payload pins and real guardian launch', {skip:!mac},async()=>{
  const f=fixture(); const b=resolveGuardianArtifact(f.pins); const lease=new HostUpgradeLease(b,'synthetic-endpoint'); await lease.start();
- try {assert.equal(lease.proof().held,false);assert.equal(String(execFileSync(b.helperPath,['--attest'])).trim(),'adhdev-host-guardian/1');}finally{await lease.close();}
+ try {assert.equal(lease.proof().held,false);assert.equal(String(execFileSync(b.helperPath,['--attest'])).trim(),'adhdev-host-guardian/2');}finally{await lease.close();}
 
  const cache=path.join(f.dir,'cache');fs.mkdirSync(cache); const globalConfig=path.join(f.dir,'global.npmrc');fs.writeFileSync(globalConfig,'');
  const result=JSON.parse(String(execFileSync('npm',['pack','--json','--offline','--ignore-scripts','--userconfig','/dev/null','--cache',cache,'--pack-destination',f.dir],{cwd:f.dir,env:{...process.env,NPM_CONFIG_GLOBALCONFIG:globalConfig},stdio:'pipe'})))[0];

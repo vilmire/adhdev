@@ -177,6 +177,7 @@ export class StandaloneMeshLink {
   bootConfig(): StandaloneMeshBootConfig {
     return {
       dispatchMeshCommand: (daemonId, command, args) => this.dispatchCommand(daemonId, command, args),
+      captureRecoveryPeer: (daemonId, binding, fenceDigest) => this.transport.captureRecoveryPeer(daemonId, binding, fenceDigest),
       getMeshPeerConnectionStatus: (daemonId) => this.transport.getPeerConnectionStatus(daemonId),
       // The host pairing card's address candidates (get_mesh_host_pairing).
       getMeshListenAddress: () => this.listenAddress,

@@ -17,6 +17,22 @@ export const OPERATOR_RECOVERY_TARGET = Object.freeze({
   namespace: '6a2ef3162182',
 });
 export const recoveryTargetBytes = JSON.stringify(OPERATOR_RECOVERY_TARGET);
+/** Shared final admission guard for saved IDs, new aliases and provider argv.
+ * This is a permanent exact-target denial, independent of journal availability. */
+export function assertRecoveryLaunchIdentity(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const identities = new Set(['sessionId', 'runtimeId', 'runtimeSessionId', 'providerSessionId',
+    'presetSessionKey', 'resumeSessionId', 'key']);
+  const nested = new Set(['options', 'meta', 'settings', 'settingsOverride', 'restartBinding', 'sessionBinding', 'launchCommand']);
+  for (const [key, field] of Object.entries(value)) {
+    if (identities.has(key) || ['args', 'cliArgs', 'cliArgsWithBrain'].includes(key)) {
+      const bytes = JSON.stringify(field)?.toLowerCase();
+      if (bytes?.includes(OPERATOR_RECOVERY_TARGET.sessionId) || bytes?.includes(OPERATOR_RECOVERY_TARGET.providerSessionId)) {
+        throw new Error('operator_recovery_fenced');
+      }
+    } else if (nested.has(key)) assertRecoveryLaunchIdentity(field);
+  }
+}
 export interface RecoveryOwnerGrant { readonly purpose: 'operator_recovery_v1' }
 export interface RecoveryOwnerChallenge { readonly message: string }
 export interface RecoveryOwnerEnrollment {

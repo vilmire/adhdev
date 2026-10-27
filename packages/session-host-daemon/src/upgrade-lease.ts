@@ -7,7 +7,7 @@ export interface HostUpgradeBinding {
   /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
   helperPath: string;
   helperSha256: string;
-  helperProtocol?: 1;
+  helperProtocol?: 1 | 2;
   helperFileIdentity?: string;
   stateDir: string;
 }
@@ -52,7 +52,7 @@ export class HostUpgradeLease {
         digest(fs.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
       throw new Error('native_host_helper_pin_mismatch');
     }
-    if (this.binding.helperProtocol === 1 && String(execFileSync(this.binding.helperPath, ['--attest'], { stdio: 'pipe', windowsHide: true })).trim() !== 'adhdev-host-guardian/1') throw new Error('native_host_helper_protocol_mismatch');
+    if (this.binding.helperProtocol && String(execFileSync(this.binding.helperPath, ['--attest'], { stdio: 'pipe', windowsHide: true })).trim() !== `adhdev-host-guardian/${this.binding.helperProtocol}`) throw new Error('native_host_helper_protocol_mismatch');
     if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error('native_host_helper_file_identity_changed');
     const lockPath = path.join(this.binding.stateDir, 'instance.lock');
     const priorLock = fs.existsSync(lockPath);
@@ -112,12 +112,20 @@ export class HostUpgradeLease {
     this.assertHealthy();
     if (this.state.held) throw new Error('native_host_idle_lease_held');
   }
-  /** Protocol 1 has no negotiated physical-census capability. Do not probe an
-   * unknown option: older helpers interpret it as a lock filename and create
-   * it. The negative contract is local and needs no native process or write. */
-  recoveryCoverage(): { protocol: 1; verdict: 'UNKNOWN'; reason: string } {
+  /** Protocol 1 never receives an unadvertised flag (it is a lock filename).
+   * Protocol 2 observation is pinned, bounded and always historically UNKNOWN. */
+  recoveryCoverage(): { protocol: 1 | 2; verdict: 'UNKNOWN'; reason: string; processCount?: number; descriptorCount?: number; unreadable?: number } {
     this.assertHealthy();
-    return { protocol: 1, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable' };
+    if (this.binding.helperProtocol !== 2) return { protocol: 1, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable' };
+    if (digest(fs.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error('native_host_helper_pin_mismatch');
+    const value = JSON.parse(String(execFileSync(this.binding.helperPath, ['--recovery-native-census-v2'], {
+      stdio: 'pipe', timeout: 1000, maxBuffer: 2048, windowsHide: true,
+    })));
+    this.assertHealthy();
+    if (value.protocol !== 2 || value.verdict !== 'UNKNOWN' || value.reason !== 'historical_native_attribution_unavailable' ||
+        ![value.nativeBootSeconds, value.processCount, value.descriptorCount, value.unreadable].every(n => Number.isSafeInteger(n) && n >= 0)) throw new Error('native_host_recovery_observation_untrusted');
+    return { protocol: 2, verdict: 'UNKNOWN', reason: value.reason,
+      processCount: value.processCount, descriptorCount: value.descriptorCount, unreadable: value.unreadable };
   }
   proof() {
     this.assertHealthy();

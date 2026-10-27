@@ -1,3 +1,4 @@
+import { assertRecoveryLaunchIdentity } from '@adhdev/session-host-core';
 import type { HostedBindingOwner } from '../session-host/binding-owner.js';
 import { stopExactMeshWriter } from './mesh-writer-stop.js';
 import { detectCLI } from '../detection/cli-detector.js';
@@ -178,6 +179,7 @@ export class DaemonCliManager {
     private hostedRestoreQueue: Promise<unknown> = Promise.resolve();
     private hostedFullRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
     private hostedPartialRestoreCount = 0;
+    private hostedRestoreEpoch = 0;
     readonly adapters = new Map<string, CliAdapter>();
     readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
@@ -290,6 +292,7 @@ export class DaemonCliManager {
         removeSpawnArgs?: string[],
         resolvedTrustPlan?: ResolvedTrustPlan | null,
     ): CliAdapter {
+        assertRecoveryLaunchIdentity({ runtimeId, providerSessionId, cliArgs });
  // cliType normalize (Resolve alias)
         const normalizedType = this.providerLoader.resolveAlias(cliType);
 
@@ -404,6 +407,7 @@ export class DaemonCliManager {
             }) => void;
         },
     ): Promise<void> {
+        assertRecoveryLaunchIdentity({ key, cliArgs, options });
         return withMaintenanceAdmission(async () => {
         // Capture scalar constructor identity before asynchronous observation checks.
         options = options ? { ...options } : undefined;
@@ -606,8 +610,21 @@ export class DaemonCliManager {
         this.adapters.clear();
         this.roleRestartInputs.clear();
     }
+    operatorRecoveryReadiness() {
+        let adapterCensus: 'absent' | 'live' | 'unknown' = 'absent';
+        for (const [runtimeId, adapter] of this.adapters) {
+            try {
+                const meta = adapter.getRuntimeMetadata?.();
+                assertRecoveryLaunchIdentity({ runtimeId, meta });
+                if (!meta) adapterCensus = 'unknown';
+            } catch { adapterCensus = 'live'; break; }
+        }
+        return { hostedRestoreState: this.hostedRestoreState, hostedFullRestoreState: this.hostedFullRestoreState,
+            hostedPartialRestoreCount: this.hostedPartialRestoreCount, epoch: this.hostedRestoreEpoch, adapterCensus };
+    }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
+        this.hostedRestoreEpoch++;
         const full = records === undefined;
         if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
         if (full || (this.hostedRestoreState === 'pending' && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount)) {
@@ -623,6 +640,7 @@ export class DaemonCliManager {
             if (full) this.hostedFullRestoreState = 'failed';
             throw error;
         }).finally(() => {
+            this.hostedRestoreEpoch++;
             if (full) this.hostedFullRestoreOperation = undefined;
             else this.hostedPartialRestoreCount--;
             this.hostedRestoreState = this.hostedPartialRestoreCount || this.hostedFullRestoreState === 'pending'

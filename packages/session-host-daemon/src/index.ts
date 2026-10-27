@@ -144,7 +144,17 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
     upgradeBinding = resolveGuardianArtifact(pins);
   }
   const endpoint = getSessionHostEndpoint();
+  let recoveryBootstrap: { publicKey: string; workerDaemonId: string } | undefined;
+  if (process.env.ADHDEV_RECOVERY_BOOT_FD === '3') {
+    delete process.env.ADHDEV_RECOVERY_BOOT_FD;
+    const bytes = fs.readFileSync(3, 'utf8'); fs.closeSync(3);
+    if (bytes.length > 4096) throw new Error('recovery_host_bootstrap_invalid');
+    recoveryBootstrap = JSON.parse(bytes);
+    if (!recoveryBootstrap?.publicKey || !recoveryBootstrap.workerDaemonId) throw new Error('recovery_host_bootstrap_invalid');
+  }
   const server = new SessionHostServer({
+    recoveryOwnerPublicKey: recoveryBootstrap?.publicKey,
+    workerDaemonId: recoveryBootstrap?.workerDaemonId,
     appName: SESSION_HOST_APP_NAME,
     upgradeBinding,
     endpoint,

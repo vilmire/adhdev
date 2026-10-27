@@ -1032,6 +1032,7 @@ export {
   readMeshDirectDispatchFlag,
   withMeshDirectDispatch,
   issueTrustedOwnerIngressProof,
+  isNondelegatedLocalOwnerIngress,
   isValidTrustedOwnerIngressProof,
   attachTrustedOwnerIngressProof,
   readTrustedOwnerIngressProof,
@@ -1119,3 +1120,5 @@ export type {
   RunningWorkContinuationCheck,
   SetNewWorkHoldOptions,
 } from './maintenance/new-work-hold.js';
+
+export type { RecoveryPeerPort } from './mesh/turn-ledger/operator-recovery.js';

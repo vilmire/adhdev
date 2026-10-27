@@ -1,13 +1,14 @@
 #!/usr/bin/env node
+import * as _adhdev_session_host_core from '@adhdev/session-host-core';
+import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHostResponse } from '@adhdev/session-host-core';
 import { EventEmitter } from 'events';
 import * as net from 'net';
-import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHostResponse } from '@adhdev/session-host-core';
 
 interface HostUpgradeBinding {
     /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
     helperPath: string;
     helperSha256: string;
-    helperProtocol?: 1;
+    helperProtocol?: 1 | 2;
     helperFileIdentity?: string;
     stateDir: string;
 }
@@ -39,6 +40,10 @@ declare function readVerifiedReplacementProvenance(options: {
 }): SessionHostReplacementProvenance | undefined;
 
 interface SessionHostServerOptions {
+    /** Boot-pipe key only; no request/config-file enrollment. */
+    recoveryOwnerPublicKey?: string;
+    /** Actual parent identity, supplied by trusted boot wiring, never query args. */
+    workerDaemonId?: string;
     endpoint?: SessionHostEndpoint;
     /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
     upgradeBinding?: HostUpgradeBinding;
@@ -82,6 +87,10 @@ declare class SessionHostServer extends EventEmitter {
     private startupFence;
     private readonly hasReplacementContext;
     private restorePending;
+    private fullRestoreState;
+    private partialRestoreCount;
+    private readonly workerDaemonId;
+    private readonly recoveryControl;
     private mutatingRequests;
     private endpointInode;
     private ipcServer;
@@ -106,6 +115,7 @@ declare class SessionHostServer extends EventEmitter {
     stop(): Promise<void>;
     private runStop;
     handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse>;
+    collectRecoveryCensus(nonce: string, fenceDigest: string): _adhdev_session_host_core.RecoveryPhysicalProof;
     private requireRuntime;
     private getAttachedClient;
     /** Count and announce one accepted input BEFORE it reaches the PTY, so a

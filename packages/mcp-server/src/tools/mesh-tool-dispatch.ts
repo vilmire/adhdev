@@ -134,6 +134,11 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
  * names the replacement (validate-tool-args.ts), never a silent forward.
  */
 export const MESH_ALIAS_DISPATCH: Readonly<Record<string, MeshToolHandler>> = {
+    // Explicit refusal surface: internal worker/coordinator MCP credentials
+    // cannot enroll a signer or convert an artifact capability into owner.
+    operator_recovery: async () => JSON.stringify({ success: false,
+        code: 'recovery_nondelegated_local_owner_required',
+        error: 'Use the authenticated owner command channel for exact operator recovery.' }),
     mesh_refine_config_schema: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'schema' }),
     mesh_validate_refine_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'validate' }),
     mesh_suggest_refine_config: (ctx, a) => meshConfig(ctx, { ...a, kind: 'refine', mode: 'suggest' }),

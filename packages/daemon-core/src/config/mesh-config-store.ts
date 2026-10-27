@@ -73,7 +73,7 @@ function acquireMeshConfigLock(): (() => void) | null {
             if (error?.code !== 'EEXIST') return null;
             try {
                 const stat = statSync(lockPath);
-                if (Date.now() - stat.mtimeMs > MESH_CONFIG_LOCK_STALE_MS) {
+                if (Date.now() - stat.mtimeMs > MESH_CONFIG_LOCK_STALE_MS && !existsSync(join(lockPath, 'operator-recovery-owner'))) {
                     // Abandoned by a crashed writer; break it.
                     rmSync(lockPath, { recursive: true, force: true });
                     continue;
@@ -97,7 +97,10 @@ function acquireMeshConfigLock(): (() => void) | null {
 export function withMeshConfigWriteLock<T>(fn: () => T): T {
     if (meshConfigLockHeldInProcess) return fn();
     const release = acquireMeshConfigLock();
-    if (!release) return fn();
+    if (!release) {
+        if (existsSync(join(`${getMeshConfigPath()}.lock`, 'operator-recovery-owner'))) throw new MeshConfigStrictLockError('store_busy');
+        return fn();
+    }
     meshConfigLockHeldInProcess = true;
     try {
         return fn();
@@ -143,6 +146,24 @@ export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
             try { rmdirSync(lock); } catch { /* refuse the next write */ }
         }
     }
+}
+
+let recoveryOwnershipDepth = 0;
+export function inRecoveryMeshOwnershipFence(): boolean { return recoveryOwnershipDepth > 0; }
+/** Recovery never uses the legacy unlocked fallback. Its marker also forbids
+ * participating ordinary writers from stale-stealing or bypassing this lock.
+ * A crash leaves a refusal marker; no automatic repair is authorized here. */
+export function withRecoveryMeshOwnershipFence<T>(operation: () => T): T {
+    if (recoveryOwnershipDepth) return operation();
+    if (meshConfigLockHeldInProcess) throw new MeshConfigStrictLockError('store_busy');
+    return withStrictMeshConfigWriteLock(() => {
+        const marker = join(`${getMeshConfigPath()}.lock`, 'operator-recovery-owner');
+        const fd = openSync(marker, 'wx', 0o600);
+        try { writeFileSync(fd, String(process.pid)); fsyncSync(fd); } finally { closeSync(fd); }
+        recoveryOwnershipDepth++;
+        try { return operation(); }
+        finally { recoveryOwnershipDepth--; unlinkSync(marker); }
+    });
 }
 
 /** Durable replace for strict transactions; unrelated saveMeshConfig callers

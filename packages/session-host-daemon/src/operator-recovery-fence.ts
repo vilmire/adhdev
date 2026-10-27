@@ -3,14 +3,11 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
   OPERATOR_RECOVERY_TARGET as target, recoveryTargetBytes,
+  assertRecoveryLaunchIdentity,
   type CreateSessionPayload, type RecoveryHostBinding, type RecoveryOwnerAdmission,
 } from '@adhdev/session-host-core';
 
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
-const containsTarget = (payload: unknown) => {
-  const text = JSON.stringify(payload);
-  return text.includes(target.sessionId) || text.includes(target.providerSessionId);
-};
 interface FenceRecord { protocol: 1; target: string; installedHostBootId: string; namespace: string }
 
 /** Permanent denial. No release API. The compiled dual UUID denial survives
@@ -25,7 +22,7 @@ export class OperatorRecoveryFence {
     this.file = path.join(root, 'operator-recovery-v1.json');
   }
   assertLaunchAllowed(payload: CreateSessionPayload): void {
-    if (containsTarget(payload)) throw new Error('operator_recovery_fenced');
+    assertRecoveryLaunchIdentity(payload);
     // Target denial is unconditional, even on hosts not yet enrolled. Corrupt
     // recovery state must not silently be interpreted as an absent fence.
     if (this.observedDigest) this.witness();

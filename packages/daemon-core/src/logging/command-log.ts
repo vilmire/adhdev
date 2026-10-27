@@ -43,7 +43,7 @@ export interface CommandLogEntry {
 
 // ─── Sensitive field masking ─────────────────
 const SENSITIVE_KEYS = new Set([
-    'token', 'bind', 'password', 'secret', 'apiKey', 'api_key',
+    'nonce', 'signature', 'token', 'bind', 'password', 'secret', 'apiKey', 'api_key',
     'connectionToken', 'content', 'message', 'text',
 ]);
 

@@ -1,3 +1,4 @@
+import { assertRecoveryLaunchIdentity } from '@adhdev/session-host-core';
 import { diagnoseCoordinatorRestoreConflict, isCoordinatorRestoreConflict, planCoordinatorRestores, repairCoordinatorBinding, verifyCoordinatorRecoveryInventory, type CoordinatorRestorePlan } from './coordinator-identity-restore.js';
 import { sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 import { assistantRestoreCandidate } from '../assistant/assistant-identity.js';
@@ -53,6 +54,11 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     }
     signal?.throwIfAborted();
     if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.providerSessionId===r.providerSessionId && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
+    for (const r of sessions) {
+        // An original provider UUID may be persisted under a fresh runtime UUID.
+        // Refuse the complete restore rather than quietly registering a revival.
+        assertRecoveryLaunchIdentity({ runtimeId: r.runtimeId, providerSessionId: r.providerSessionId, cliArgs: r.cliArgs });
+    }
     const owner = host.deps.getHostedBindingOwner?.();
     const registry = getAssistantRegistry();
     // Full verified inventory must reconcile a dead binding before candidate selection.

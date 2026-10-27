@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { bridgeReceiptTransaction } from '../worker-bridge-transaction.js';
 import type { Database } from 'better-sqlite3';
 import {
     OPERATOR_RECOVERY_TARGET as target, recoveryTargetBytes,
@@ -34,9 +35,9 @@ interface Pending {
 }
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 
-/** One-use anchor admission. It does NOT settle a writer or emit turn state.
- * The ledger must consume its private anchor through its single reducer path;
- * writerStopReceipt is deliberately neither accepted nor produced here. */
+/** One-use admission with an in-transaction ledger adapter. This module never
+ * emits turn state itself; production wires the separate failure reducer and
+ * independent witness. It neither accepts nor produces writerStopReceipt. */
 export class OperatorRecoveryAnchors {
     private readonly pending = new Map<string, Pending>();
     private readonly anchors = new WeakSet<object>();
@@ -50,6 +51,11 @@ export class OperatorRecoveryAnchors {
         readCurrentAssignment: () => RecoveryCurrentAssignment;
         /** Independent durable witness; absence is a refusal, not TOFU. */
         assertAntiRollback: () => void;
+        /** Independent irreversible witness is burned before the SQL commit. */
+        withOwnershipFence?: <T>(apply: () => T) => T;
+        burnWitness?: (nonceHash: string, proofHash: string) => void;
+        /** Existing ledger reducer + task/queue effects on THIS transaction. */
+        settleInTransaction?: (anchor: RecoveryAnchor) => void;
         clock?: () => number;
     }) {
         if (!deps.coordinatorBootId) throw new Error('recovery_coordinator_boot_required');
@@ -76,7 +82,7 @@ export class OperatorRecoveryAnchors {
             'dispatchNonce', 'sessionId', 'nodeId', 'deliveryId'] as const) {
             if (c[key] !== target[key]) throw new Error('recovery_current_assignment_mismatch');
         }
-        if (c.state !== 'stopping' || !['assigned', 'working'].includes(c.queueStatus) ||
+        if (c.state !== 'stopping' || c.queueStatus !== 'assigned' ||
             c.queueNodeId !== target.nodeId || c.queueSessionId !== target.sessionId ||
             !c.ownerRevision || !c.queueRevision) throw new Error('recovery_current_assignment_mismatch');
         return JSON.stringify(c);
@@ -102,14 +108,14 @@ export class OperatorRecoveryAnchors {
         const p: Pending = { deadline: this.now() + 30_000, current: '', grant, peer,
             binding: JSON.stringify(peer.binding), connectionEpoch: peer.connectionEpoch, fenceDigest: peer.fenceDigest };
         this.assertPeer(p);
-        this.deps.db.transaction(() => {
+        (this.deps.withOwnershipFence ?? ((f: () => void) => f()))(() => this.deps.db.transaction(() => {
             p.current = this.current();
             if (this.deps.db.prepare('SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?').get(recoveryTargetBytes)) {
                 throw new Error('recovery_already_consumed');
             }
             this.deps.db.prepare('INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)')
                 .run(nonceHash, recoveryTargetBytes, this.deps.coordinatorBootId, p.current, 'issued');
-        }).immediate();
+        }).immediate());
         this.pending.set(nonceHash, p);
         try {
             // Only this authenticated port receives the private fresh nonce.
@@ -120,7 +126,8 @@ export class OperatorRecoveryAnchors {
                     timer = setTimeout(() => reject(new Error('recovery_physical_query_timeout')), 30_000);
                 })]);
             } finally { if (timer) clearTimeout(timer); }
-            return this.deps.db.transaction(() => {
+            const fenced = this.deps.withOwnershipFence ?? (<T>(f: () => T) => f());
+            return fenced(() => bridgeReceiptTransaction(this.deps.db, () => {
                 this.deps.owner.assertGrant(grant);
                 this.assertPeer(p);
                 if (this.now() >= p.deadline || this.pending.get(nonceHash) !== p || this.current() !== p.current) {
@@ -145,15 +152,17 @@ export class OperatorRecoveryAnchors {
                     namespace: proof.namespace, hostBootId: proof.hostBootId,
                     workerDaemonId: proof.workerDaemonId, endpoint: proof.endpoint,
                 };
+                this.deps.burnWitness?.(nonceHash, hash(JSON.stringify(accepted)));
                 this.deps.db.prepare('INSERT INTO operator_recovery_anchors_v1 VALUES (?,?,?,?,?)')
                     .run(recoveryTargetBytes, nonceHash, 'operator_asserted', JSON.stringify(accepted), p.current);
                 this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='consumed' WHERE nonce_hash=?").run(nonceHash);
-                this.deps.owner.consume(grant);
                 const anchor = Object.freeze({ association: 'operator_asserted' as const,
                     target, proof: Object.freeze(accepted) });
+                this.deps.settleInTransaction?.(anchor);
+                this.deps.owner.consume(grant);
                 this.anchors.add(anchor);
                 return anchor;
-            }).immediate();
+            }));
         } finally {
             this.pending.delete(nonceHash);
             this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE nonce_hash=? AND state='issued'")

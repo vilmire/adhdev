@@ -244,6 +244,7 @@ export interface TrustedOwnerIngressProof {
 }
 
 export interface TrustedOwnerIngressProofInput {
+    readonly nondelegatedLocalOwner?: boolean
     readonly source: 'p2p' | 'standalone'
     readonly ownerVerified?: boolean
     readonly peerId?: string
@@ -253,6 +254,7 @@ export interface TrustedOwnerIngressProofInput {
 }
 
 interface StoredOwnerIngressProof {
+    readonly nondelegatedLocalOwner?: boolean
     readonly source: 'p2p' | 'standalone'
     readonly peerId?: string
     readonly channelGeneration?: number
@@ -321,6 +323,7 @@ export function issueTrustedOwnerIngressProof(input: TrustedOwnerIngressProofInp
     if (input.source === 'p2p' && !peerId) return null
     if (input.source === 'standalone' && input.ownerVerified !== true) return null
     const stored: StoredOwnerIngressProof = {
+        nondelegatedLocalOwner: input.nondelegatedLocalOwner === true && typeof input.verifyCurrent === 'function',
         source: input.source,
         ...(peerId ? { peerId } : {}),
         ...(typeof input.channelGeneration === 'number' ? { channelGeneration: input.channelGeneration } : {}),
@@ -492,6 +495,14 @@ export function isTrustedOwnerIngress(
     if (!isPlainRecord(args)) return false
     const stored = trustedOwnerIngressArgs.get(args)
     return isStoredProofCurrentlyValid(stored, expectedSource)
+}
+
+/** Separate owner-password-session capability. Token/config/IPC/MCP owner
+ * labels never acquire this bit. Retained only by existing private maps. */
+export function isNondelegatedLocalOwnerIngress(args: unknown): boolean {
+    if (!isPlainRecord(args)) return false
+    const stored = trustedOwnerIngressArgs.get(args)
+    return stored?.nondelegatedLocalOwner === true && isStoredProofCurrentlyValid(stored)
 }
 
 export function applyRouterCommandIngressProvenance(

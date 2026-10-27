@@ -68,6 +68,34 @@ export class SessionHostStorage {
     return states.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
 
+  /** Exhaustive recovery inventory: ordinary boot's tolerant reader is not
+   * evidence. Unknown names, symlinks and malformed records veto completeness. */
+  recoveryInventory(): { complete: boolean; states: PersistedRuntimeState[] } {
+    try {
+      if (!fs.existsSync(this.runtimesDir)) return { complete: true, states: [] };
+      const dir = fs.lstatSync(this.runtimesDir);
+      if (!dir.isDirectory() || dir.isSymbolicLink()) return { complete: false, states: [] };
+      const states: PersistedRuntimeState[] = [];
+      for (const entry of fs.readdirSync(this.runtimesDir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) return { complete: false, states: [] };
+        const full = path.join(this.runtimesDir, entry.name);
+        const fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        let parsed: PersistedRuntimeState;
+        try {
+          const stat = fs.fstatSync(fd);
+          if (!stat.isFile() || stat.nlink !== 1) return { complete: false, states: [] };
+          parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
+        } finally { fs.closeSync(fd); }
+        if (typeof parsed?.record?.sessionId !== 'string' || !parsed.record.sessionId ||
+            `${parsed.record.sessionId}.json` !== entry.name || !parsed.record.launchCommand ||
+            !Array.isArray(parsed.record.launchCommand.args) || !parsed.record.meta ||
+            typeof parsed.updatedAt !== 'number' || !parsed.snapshot) return { complete: false, states: [] };
+        states.push(parsed);
+      }
+      return { complete: true, states };
+    } catch { return { complete: false, states: [] }; }
+  }
+
   save(record: SessionHostRecord, snapshot: SessionBufferSnapshot): void {
     fs.mkdirSync(this.runtimesDir, { recursive: true });
     const filePath = path.join(this.runtimesDir, `${record.sessionId}.json`);

@@ -1,3 +1,4 @@
+import { withRecoveryMeshOwnershipFence } from '../../config/mesh-config-store.js';
 import { pinnedMeshNodeIdMatches } from '../mesh-pinned-node-identity.js';
 import { isDeepStrictEqual } from 'node:util';
 // ---------------------------------------------------------------------------
@@ -43,6 +44,10 @@ import { backgroundWorkBaselineMs, evaluateTurnEndBackgroundWork } from './backg
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import { expireHolds, reduce, type ReduceResult } from './reducer.js';
 import { TurnStore, deliveryClaimId, type TurnEventRow } from './store.js';
+import { OperatorRecoveryAnchors, type RecoveryPeerPort, type RecoveryAnchor } from './operator-recovery.js';
+import { readRecoveryCurrentAssignment } from './operator-recovery-store.js';
+import type { RecoveryWitness } from './operator-recovery-witness.js';
+import { OPERATOR_RECOVERY_TARGET as recoveryTarget, type RecoveryOwnerAdmission } from '@adhdev/session-host-core';
 import {
     applyHostEffects,
     buildForwardedEvidenceEntry,
@@ -96,6 +101,7 @@ export interface TurnLedgerDeps {
 }
 
 export interface ObserveOptions {
+    operatorRecoveryAnchor?: RecoveryAnchor;
     /** Local audit of the authenticated host stop receipt; never wire evidence. */
     writerStopReceipt?: Record<string, unknown>;
     /** Worker side: the attempt's owner, when it is not this daemon (from the instance's attemptRef/dispatch). */
@@ -161,6 +167,8 @@ export interface MeshEventNotice {
 }
 
 export interface TurnLedger {
+    recoverOperatorAssertedLegacy(input: { owner: RecoveryOwnerAdmission; grant: unknown; peer: RecoveryPeerPort;
+        witness: RecoveryWitness; coordinatorBootId: string }): Promise<RecoveryAnchor>;
     readonly store: TurnStore;
     /** Read-only metadata of the actual publisher promise. */
     maintenanceInventory(): {flushing:boolean;flushAgain:boolean};
@@ -220,6 +228,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     // This capability exists only around a validated reply from the locally
     // configured stop port. Received topics and operator evidence cannot mint it.
     const confirmedStops = new Set<string>();
+    const confirmedRecoveries = new Map<string, RecoveryAnchor>();
     const store = deps.store ?? new TurnStore(deps.db);
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
     const now = deps.now ?? (() => Date.now());
@@ -288,6 +297,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 ...(meshId ? { meshId } : {}),
                 evidence,
                 ...(opts.writerStopReceipt ? { writerStopReceipt: opts.writerStopReceipt } : {}),
+                ...(confirmedRecoveries.get(evidence.eventId) ? { operatorRecoveryAnchor: confirmedRecoveries.get(evidence.eventId) } : {}),
                 ...(result.notes.length > 0 ? { notes: result.notes } : {}),
                 ...(opts.envelope ? { local: { envelope: opts.envelope } } : {}),
                 ...(publish ? { entry: publish.entry } : {}),
@@ -387,7 +397,8 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 }
             }
         }
-        let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId) });
+        let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId),
+            operatorRecoveryConfirmed: confirmedRecoveries.has(evidence.eventId) });
         if (triggerBackgroundWorkProbe && attempt) {
             result = {
                 ...result,
@@ -698,6 +709,33 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     }
 
     return {
+        async recoverOperatorAssertedLegacy(input) {
+            if (deps.selfDaemonId !== recoveryTarget.ownerDaemonId) throw new Error('recovery_wrong_coordinator');
+            const recovery = new OperatorRecoveryAnchors({ db: deps.db, owner: input.owner,
+                coordinatorBootId: input.coordinatorBootId,
+                readCurrentAssignment: () => readRecoveryCurrentAssignment(deps.db, deps.selfDaemonId),
+                assertAntiRollback: () => input.witness.assertAvailable(),
+                withOwnershipFence: withRecoveryMeshOwnershipFence,
+                burnWitness: (nonceHash, proofHash) => input.witness.burn(nonceHash, proofHash),
+                settleInTransaction: anchor => {
+                    const eventId = `operator_recovery:${anchor.proof.nonce}`;
+                    confirmedRecoveries.set(eventId, anchor);
+                    try {
+                        // observe resolves the current attempt while already in
+                        // the outer immediate transaction. Its post-commit ports
+                        // are deferred by bridgeReceiptTransaction until COMMIT.
+                        const result = observe({ eventId, kind: 'operator_status', source: 'scheduler', at: now(),
+                            observedBy: deps.selfDaemonId, sessionId: recoveryTarget.sessionId,
+                            attemptRef: { attemptId: recoveryTarget.attemptId, generation: recoveryTarget.generation },
+                            status: 'failed', reason: 'operator_update' });
+                        if (result.rule !== 'operator_recovery_settled' || result.attempt?.state !== 'failed') {
+                            throw new Error('recovery_reducer_refused');
+                        }
+                    } finally { confirmedRecoveries.delete(eventId); }
+                },
+            });
+            return recovery.recover(input.grant, input.peer);
+        },
         maintenanceInventory:()=>({flushing:flushing!==null,flushAgain}),
         store,
         selfDaemonId: deps.selfDaemonId,
