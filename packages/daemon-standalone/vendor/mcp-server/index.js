@@ -37226,6 +37226,7 @@ try {
       return {
         version: SNAPSHOT_VERSION,
         capturedAt,
+        ...record7.accountLineage !== void 0 ? { accountLineage: quotaAccountLineage(record7.accountLineage) } : {},
         fiveHour,
         sevenDay,
         ...typeof record7.cliVersion === "string" ? { cliVersion: record7.cliVersion } : {},
@@ -37251,6 +37252,7 @@ try {
       "src/quota/statusline/snapshot.ts"() {
         "use strict";
         init_coerce();
+        init_account_lineage();
         SNAPSHOT_VERSION = 1;
         MIN_WRITE_INTERVAL_MS = 15e3;
         MAX_WRITE_INTERVAL_MS = 3e4;
@@ -37306,6 +37308,7 @@ try {
 // Remove with: __ADHDEV_BINARY_NAME__ quota claude:uninstall
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -37348,6 +37351,20 @@ function parseWindow(raw) {
     return { usedPercent, resetsAt: toResetMs(raw.resets_at) };
 }
 
+// Keep this digest contract in sync with statuslineProducerLineage in snapshot.ts.
+// ONLY the owning CLI's inherited identity can bind this process-local reading.
+// Reading today's config here would relabel an old CLI's in-memory quota.
+function producerLineage() {
+    const account = process.env.CLAUDE_CODE_ACCOUNT_UUID?.trim();
+    const org = process.env.CLAUDE_CODE_ORGANIZATION_UUID?.trim();
+    if (!account || !org) return { version: 1, kind: 'unknown' };
+    const key = createHash('sha256').update(JSON.stringify([
+        'adhdev-quota-account-v1', 'claude-cli', 'claude-code:statusline-rate-limits',
+        'claude-code:oauthAccount', JSON.stringify([account, org]),
+    ])).digest('hex');
+    return { version: 1, kind: 'account', key };
+}
+
 function windowsEqual(a, b) {
     if (a === null || b === null) return a === b;
     return a.usedPercent === b.usedPercent && a.resetsAt === b.resetsAt;
@@ -37376,8 +37393,9 @@ function capture(payload) {
     if (fiveHour === null && sevenDay === null) return;
 
     const now = Date.now();
+    const accountLineage = producerLineage();
     const previous = readPrevious();
-    if (previous !== null) {
+    if (previous !== null && JSON.stringify(previous.accountLineage) === JSON.stringify(accountLineage)) {
         const age = now - previous.capturedAt;
         if (age >= 0 && age < MIN_WRITE_INTERVAL_MS) return;
         if (age >= 0 && age < MAX_WRITE_INTERVAL_MS) {
@@ -37391,6 +37409,7 @@ function capture(payload) {
     const snapshot = {
         version: SNAPSHOT_VERSION,
         capturedAt: now,
+        accountLineage,
         fiveHour,
         sevenDay,
     };
@@ -37811,7 +37830,10 @@ child.on('exit', () => process.exit(0));
     async function fetchClaudeQuota(overrides = {}) {
       const before = readClaudeQuotaAccountLineage(overrides);
       const quota = await readClaudeSnapshotQuota(overrides);
-      return settleAccountQuota(quota, before, readClaudeQuotaAccountLineage(overrides));
+      const after = readClaudeQuotaAccountLineage(overrides);
+      if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
+      const producer = quotaAccountLineage(quota.metadata?.accountLineage);
+      return sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after) ? quota : unconfirmedQuotaReading(quota, producer);
     }
     function claudeAccountStatePath(env2) {
       const override = env2.CLAUDE_CONFIG_DIR?.trim();
@@ -37896,7 +37918,7 @@ child.on('exit', () => process.exit(0));
           // on them until each window's own resetsAt (owner decision
           // 2026-08-24). Without the mark, routing discarded the retained
           // measurement wholesale.
-          metadata: { source: SOURCE, failureKind: "no-data", lastGoodWindows: true }
+          metadata: { source: SOURCE, failureKind: "no-data", lastGoodWindows: true, accountLineage: snapshot.accountLineage }
         };
       }
       return {
@@ -37906,7 +37928,7 @@ child.on('exit', () => process.exit(0));
         updatedAt: snapshot.capturedAt,
         error: null,
         status: "ok",
-        metadata: { source: SOURCE }
+        metadata: { source: SOURCE, accountLineage: snapshot.accountLineage }
       };
     }
     function statuslineSetupFailure(env2) {
@@ -39872,7 +39894,15 @@ child.on('exit', () => process.exit(0));
       const requested = providers && providers.length > 0 ? providers.map((p) => String(p).trim()).filter(Boolean) : REFRESHERS.map(({ provider }) => provider);
       const entries2 = [];
       const probe = [];
-      for (const name of requested) {
+      const aliases = {
+        claude: "claude-cli",
+        codex: "codex-cli",
+        grok: "grok-cli",
+        cursor: "cursor-cli",
+        antigravity: "antigravity-cli",
+        agy: "antigravity-cli"
+      };
+      for (const name of new Set(requested.map((name2) => Object.hasOwn(aliases, name2) ? aliases[name2] : name2))) {
         const refresher = REFRESHERS.find(({ provider: provider2 }) => provider2 === name);
         if (!refresher) {
           entries2.push({

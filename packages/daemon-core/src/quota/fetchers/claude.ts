@@ -51,6 +51,9 @@ import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import {
     accountLineageFromStableIdentity,
     settleAccountQuota,
+    quotaAccountLineage,
+    sameQuotaAccount,
+    unconfirmedQuotaReading,
     UNKNOWN_ACCOUNT_LINEAGE,
     type QuotaAccountLineage,
 } from '../account-lineage.js';
@@ -85,11 +88,16 @@ function toWindow(
  * 'unavailable' (nothing to read yet, an ordinary state) or 'error'.
  */
 export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
-    // The snapshot carries no identity; the account Claude Code is signed in
-    // to must read the same before and after collection to stamp lineage.
+    // Current account continuity alone says nothing about the snapshot producer:
+    // another long-lived CLI may still be publishing the previous account's quota.
     const before = readClaudeQuotaAccountLineage(overrides);
     const quota = await readClaudeSnapshotQuota(overrides);
-    return settleAccountQuota(quota, before, readClaudeQuotaAccountLineage(overrides));
+    const after = readClaudeQuotaAccountLineage(overrides);
+    // Preserve actionable setup/parse failures (which contain no measurement).
+    if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
+    const producer = quotaAccountLineage(quota.metadata?.accountLineage);
+    return sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)
+        ? quota : unconfirmedQuotaReading(quota, producer);
 }
 
 /**
@@ -206,7 +214,7 @@ async function readClaudeSnapshotQuota(overrides: QuotaFetchDeps): Promise<Provi
             // on them until each window's own resetsAt (owner decision
             // 2026-08-24). Without the mark, routing discarded the retained
             // measurement wholesale.
-            metadata: { source: SOURCE, failureKind: 'no-data', lastGoodWindows: true },
+            metadata: { source: SOURCE, failureKind: 'no-data', lastGoodWindows: true, accountLineage: snapshot.accountLineage },
         };
     }
 
@@ -217,7 +225,7 @@ async function readClaudeSnapshotQuota(overrides: QuotaFetchDeps): Promise<Provi
         updatedAt: snapshot.capturedAt,
         error: null,
         status: 'ok',
-        metadata: { source: SOURCE },
+        metadata: { source: SOURCE, accountLineage: snapshot.accountLineage },
     };
 }
 
