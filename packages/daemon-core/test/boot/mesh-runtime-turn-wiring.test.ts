@@ -27,6 +27,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
+import * as turnConsumer from '../../src/seqscribe/mesh-turn-consumer.js';
 import { wireTurnLedger } from '../../src/boot/stages/mesh-runtime.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { getActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js';
@@ -75,6 +76,27 @@ function fakeComponents(settingsBySession: Record<string, Record<string, unknown
 const baseEvidence = { at: 1_000, source: 'fsm_edge', observedBy: 'daemon_wiring' } as const;
 
 describe('wireTurnLedger — S7 wiring', () => {
+    it('checks cheap local coordinator availability before undelivered SQL, and resumes when one appears', async () => {
+        const { components } = fakeComponents({});
+        const getByCategory = vi.fn(() => [] as unknown[]);
+        components.instanceManager.getByCategory = getByCategory;
+        components.seqscribe = { node: {} };
+        vi.spyOn(turnConsumer, 'armMeshTurnConsumer').mockReturnValue({
+            meshIds: () => ['m1'], ensureKnownMeshes: () => 1, dispose: () => {}, counters: () => ({}),
+        } as unknown as turnConsumer.MeshTurnConsumer);
+        const wired = wireTurnLedger(components, { runMigration: false });
+        const hasUndelivered = vi.spyOn(wired.notices, 'hasUndelivered').mockReturnValue(false);
+        try {
+            await wired.republished;
+            expect(await wired.deliverBacklog()).toBe(0);
+            expect(getByCategory).toHaveBeenCalled();
+            expect(hasUndelivered).not.toHaveBeenCalled();
+            getByCategory.mockReturnValue([{ getState: () => ({ instanceId: 'coordinator', status: 'idle', settings: { meshCoordinatorFor: 'm1' } }) }]);
+            expect(await wired.deliverBacklog()).toBe(0);
+            expect(hasUndelivered).toHaveBeenCalledExactlyOnceWith('m1');
+        } finally { wired.dispose(); }
+    });
+
     it('review d75636d6 F4 / R11 quarantine-to-recovery: transcript-only unconfirmed submit quarantines without immediate reclaim or re-paste, and the ledger recovers both mesh_queue (requeue under nonce+1) and mesh_direct (coordinator notify) after H2 -> H2r hard writer-stop', async () => {
         const { components, portCalls } = fakeComponents({});
         const firstWrittenAt = Date.now() - 35_590;

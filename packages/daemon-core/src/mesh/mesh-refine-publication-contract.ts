@@ -2,6 +2,7 @@ import type { RefineContext, RefineStageOutcome } from './mesh-refine-gates.js';
 import type { PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
 import { gitChildEnv } from '../git/git-locale.js';
 import { devNull } from 'node:os';
+import { validateRetirementProof } from '../git/normal-retirement-proof.mjs';
 
 /** Requests without approval fields retain the intentional legacy merge workflow. */
 export interface RefinePublicationOptions {
@@ -70,13 +71,31 @@ export async function checkRefinePublicationContract(ctx: RefineContext): Promis
     // intentionally precede combined generation and final integration gates.
     // Keep this independent of owner SHA authority and remote advertisements.
     const phase = await execFileAsync('git', ['--no-replace-objects', 'ls-tree', '-z', branchHead, '--',
-        'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json'],
+        'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json', '.adhdev-source-candidate.json'],
     { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
     if (phase.stdout.trim()) return { kind: 'terminal', result: {
         success: false, code: 'source_not_publishable', convergenceStatus: 'blocked_review', merged: false, pushed: false,
         error: 'Source-only checkpoint: complete the frozen combined batch and required normal gates before exact-SHA review and publication.',
         refineStages: ctx.refineStages,
     } };
+    const retired = await execFileAsync('git', ['--no-replace-objects', 'log', '-1', '--format=%H', '--diff-filter=D',
+        branchHead, `^${baseHead}`, '--', 'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json', '.adhdev-source-candidate.json'],
+    { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+    const batch = retired.stdout.trim() ? await execFileAsync('git', ['--no-replace-objects', 'ls-tree', branchHead, '--',
+        'scripts/refine-batch-ready.json', 'scripts/lib/refine-batch-ready.json'],
+    { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() }) : undefined;
+    if (retired.stdout.trim() && !batch?.stdout.trim()) {
+        try {
+            const root = await execFileAsync('git', ['ls-tree', branchHead, '--', 'oss'],
+                { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+            validateRetirementProof(repoRoot, root.stdout.trim() ? 'root' : 'oss', { ref: branchHead });
+        } catch (error) {
+            return { kind: 'terminal', result: {
+                success: false, code: 'source_not_publishable', convergenceStatus: 'blocked_review', merged: false, pushed: false,
+                error: String(error), refineStages: ctx.refineStages,
+            } };
+        }
+    }
     const mode = args?.mergeMode;
     const target = args?.approvedTargetShas?.[nodeId];
     const preserve = hasRefineApprovalContract(args);

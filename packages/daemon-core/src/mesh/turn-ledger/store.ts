@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Database as DatabaseHandle, Statement } from 'better-sqlite3';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { ConsumeProfile, HoldReason, LivenessResult, SummaryRef, TurnScope } from '@adhdev/mesh-shared';
 import type { HoldOnExpire, TurnAttempt, TurnAttemptData, TurnHold, TurnState } from './types.js';
 
@@ -225,8 +226,22 @@ export function parseDeliveryClaimId(eventId: string): { meshId: string | null; 
     return { meshId: parts[0], writer: parts.slice(1, -1).join(':'), seq };
 }
 
+/** Only benign, locally generated probe observations have no transport or
+ * completion references. Keep all failures, transitions and imported evidence. */
+function livenessSampleKey(row: TurnEventInsert): string | null {
+    const evidence = row.payload.evidence as Record<string, unknown> | undefined;
+    if (row.kind !== 'liveness' || row.source !== 'coordinator_probe' || row.verdict !== 'applied'
+        || !['R32', 'R32u'].includes(row.rule ?? '') || row.fromState !== row.toState
+        || row.publishState !== 'none' || row.srcWriter != null || row.srcSeq != null
+        || Object.keys(row.payload).some((k) => !['meshId', 'evidence', 'notes', 'livenessSamples'].includes(k)) || !evidence || !['alive', 'unknown'].includes(String(evidence.result))) return null;
+    const { eventId: _id, at: _at, probeStartedAtMs: _started, ...semantic } = evidence;
+    return JSON.stringify([row.attemptId, row.generation, row.sessionId, row.observedBy,
+        row.rule, row.fromState, row.toState, semantic, row.payload.notes ?? null]);
+}
+
 export class TurnStore {
     private readonly stmts = new Map<string, Statement>();
+    private livenessRetentionCursor = 0;
 
     constructor(readonly db: DatabaseHandle) {}
 
@@ -488,16 +503,31 @@ export class TurnStore {
         return { armed: holds.length, resolved };
     }
 
+    /** Match observe's ownership comparator before limiting work. Foreign and
+     * orphan holds stay intact: only their owner may resolve or adopt them. */
+    private holdOwnerScope(ownerDaemonId?: string): { sql: string; ids: string[] } {
+        if (ownerDaemonId === undefined) return { sql: '', ids: [] };
+        const ids = (this.stmt('SELECT DISTINCT owner_daemon_id FROM turn_attempts WHERE terminal_outcome IS NULL')
+            .all() as Array<{ owner_daemon_id: string }>)
+            .map((r) => r.owner_daemon_id).filter((id) => daemonIdsEquivalent(id, ownerDaemonId));
+        return {
+            sql: ` AND attempt_id IN (SELECT attempt_id FROM turn_attempts WHERE terminal_outcome IS NULL
+                AND owner_daemon_id IN (${ids.map(() => '?').join(',') || 'NULL'}))`, ids,
+        };
+    }
+
     /** Active holds whose deadline passed, in deadline order (scheduler `expiredHolds()`). */
-    dueHolds(nowMs: number, limit = 500): TurnHold[] {
-        const rows = this.stmt(`SELECT * FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL AND until_ms <= ? ORDER BY until_ms, hold_id LIMIT ?`)
-            .all(nowMs, limit) as HoldRowRaw[];
+    dueHolds(nowMs: number, limit = 500, ownerDaemonId?: string): TurnHold[] {
+        const scope = this.holdOwnerScope(ownerDaemonId);
+        const rows = this.stmt(`SELECT * FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL AND until_ms <= ?${scope.sql} ORDER BY until_ms, hold_id LIMIT ?`)
+            .all(nowMs, ...scope.ids, limit) as HoldRowRaw[];
         return rows.map(holdFromRow);
     }
 
     /** Earliest active deadline, for the scheduler's single setTimeout (C4). */
-    nextHoldDeadline(): number | null {
-        const row = this.stmt(`SELECT MIN(until_ms) AS next FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL`).get() as { next: number | null } | undefined;
+    nextHoldDeadline(ownerDaemonId?: string, afterMs?: number): number | null {
+        const scope = this.holdOwnerScope(ownerDaemonId);
+        const row = this.stmt(`SELECT MIN(until_ms) AS next FROM turn_holds WHERE status = 'active' AND until_ms IS NOT NULL${scope.sql}${afterMs === undefined ? '' : ' AND until_ms > ?'}`).get(...scope.ids, ...(afterMs === undefined ? [] : [afterMs])) as { next: number | null } | undefined;
         return row?.next ?? null;
     }
 
@@ -531,6 +561,82 @@ export class TurnStore {
             row.publishState, row.atMs, row.recordedAt,
         );
         return info.changes > 0;
+    }
+
+    /** Reduce every fresh observation, but store a consecutive semantic run
+     * once. The original evidence stays immutable; the aggregate retains its
+     * latest sample and count. Freshness lives on the attempt, never this row. */
+    recordEvidence(row: TurnEventInsert): boolean {
+        const key = livenessSampleKey(row);
+        if (key && row.attemptId) {
+            const raw = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                ORDER BY recorded_at DESC, rowid DESC LIMIT 1`).get(row.attemptId) as EventRowRaw | undefined;
+            const previous = raw ? eventFromRow(raw) : null;
+            if (previous && livenessSampleKey(previous) === key) {
+                const aggregate = previous.payload.livenessSamples as { count?: number; latest?: Record<string, unknown> } | undefined;
+                const latest = aggregate?.latest ?? previous.payload.evidence as Record<string, unknown>;
+                // A repeated local sample must not replay its effects.
+                if (latest.eventId === row.eventId || Number(latest.at) >= row.atMs) return false;
+                this.stmt('UPDATE turn_events SET payload_json = ? WHERE event_id = ?').run(JSON.stringify({
+                    ...previous.payload,
+                    livenessSamples: { count: (aggregate?.count ?? 1) + 1, latest: row.payload.evidence },
+                }), previous.eventId);
+                return true;
+            }
+        }
+        return this.insertEvent(row);
+    }
+
+    /** Hourly, bounded retention of legacy redundant samples only. Terminal
+     * attempts must be locally owned and older than the window. First and last
+     * samples of every semantic run survive, as do imported/published rows and
+     * any sample with derived event evidence. No attempts or holds are removed. */
+    pruneTerminalLivenessSamples(olderThanMs: number, nowMs: number, ownerDaemonId: string): number {
+        return this.db.transaction(() => {
+            // Advance a bounded rowid scan so preserved audit rows cannot starve
+            // later attempts. Neighbours are read outside the page boundary.
+            const rows = this.stmt(`SELECT e.*, e.rowid AS scan_id FROM turn_events e JOIN turn_attempts a ON a.attempt_id = e.attempt_id
+                WHERE a.terminal_outcome IS NOT NULL AND a.terminal_at < ? AND e.kind = 'liveness' AND e.rowid > ?
+                ORDER BY e.rowid LIMIT 500`).all(nowMs - olderThanMs, this.livenessRetentionCursor) as Array<EventRowRaw & { scan_id: number }>;
+            this.livenessRetentionCursor = rows.length === 500 ? rows[rows.length - 1].scan_id : 0;
+            let removed = 0;
+            for (const raw of rows) {
+                const row = eventFromRow(raw);
+                const key = livenessSampleKey(row);
+                if (!key) continue;
+                const previous = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                    AND (recorded_at < ? OR (recorded_at = ? AND rowid < ?))
+                    ORDER BY recorded_at DESC, rowid DESC LIMIT 1`).get(row.attemptId, row.recordedAt, row.recordedAt, raw.scan_id) as EventRowRaw | undefined;
+                const next = this.stmt(`SELECT * FROM turn_events WHERE attempt_id = ?
+                    AND (recorded_at > ? OR (recorded_at = ? AND rowid > ?))
+                    ORDER BY recorded_at, rowid LIMIT 1`).get(row.attemptId, row.recordedAt, row.recordedAt, raw.scan_id) as EventRowRaw | undefined;
+                if (!previous || !next || key !== livenessSampleKey(eventFromRow(previous))
+                    || key !== livenessSampleKey(eventFromRow(next))) continue;
+                const owner = this.getAttempt(row.attemptId!)?.ownerDaemonId;
+                if (!daemonIdsEquivalent(owner, ownerDaemonId) || !daemonIdsEquivalent(row.observedBy, ownerDaemonId)
+                    || row.recordedAt >= nowMs - olderThanMs) continue;
+                // R32/R32u local samples are never published or indexed. Be
+                // conservative about internal JSON pointers and derived effect ids,
+                // including resolved holds and terminal attempt provenance.
+                const pointer = JSON.stringify(row.eventId);
+                const referenced = this.stmt(`SELECT 1 FROM turn_events WHERE event_id != ?
+                    AND (substr(event_id, 1, length(?) + 1) = ? || '#' OR instr(payload_json, ?) > 0)
+                    UNION ALL SELECT 1 FROM turn_holds WHERE instr(data_json, ?) > 0
+                    UNION ALL SELECT 1 FROM turn_attempts WHERE instr(data_json, ?) > 0 LIMIT 1`)
+                    .get(row.eventId, row.eventId, row.eventId, pointer, pointer, pointer);
+                if (!referenced) {
+                    const prior = eventFromRow(previous);
+                    const samples = prior.payload.livenessSamples as { count?: number } | undefined;
+                    const removedSamples = row.payload.livenessSamples as { count?: number; latest?: unknown } | undefined;
+                    this.stmt('UPDATE turn_events SET payload_json = ? WHERE event_id = ?').run(JSON.stringify({
+                        ...prior.payload,
+                        livenessSamples: { count: (samples?.count ?? 1) + (removedSamples?.count ?? 1), latest: removedSamples?.latest ?? row.payload.evidence },
+                    }), prior.eventId);
+                    removed += this.stmt('DELETE FROM turn_events WHERE event_id = ?').run(row.eventId).changes;
+                }
+            }
+            return removed;
+        })();
     }
 
     listEvents(attemptId: string): TurnEventRow[] {
