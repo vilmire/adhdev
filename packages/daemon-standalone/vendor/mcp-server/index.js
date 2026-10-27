@@ -117608,8 +117608,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         } catch {
         }
         try {
-          const queueEntries = meshStore.getQueue?.(meshId) ?? [];
-          if (Array.isArray(queueEntries) && queueEntries.some(
+          const queueHeads = meshStore.getQueueHeads?.(meshId) ?? [];
+          if (Array.isArray(queueHeads) && queueHeads.some(
             (entry) => sessionIdsEquivalent(trimString3(entry?.assignedSessionId), sessionId)
           )) {
             return true;
@@ -118871,7 +118871,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           }
         };
       }
-      if (!ownerTrusted && (mode === "list" || mode === "fetch") && effectiveMeshId) {
+      const requireMeshMembership = args?.requireMeshMembership === true && (mode === "list" || mode === "fetch");
+      if (requireMeshMembership && !effectiveMeshId) {
+        return {
+          ok: false,
+          result: {
+            success: false,
+            code: "artifact_session_mismatch",
+            error: `Session "${effectiveSessionId}" mesh membership cannot be verified without a meshId (artifact_session_mismatch)`
+          }
+        };
+      }
+      if ((!ownerTrusted || requireMeshMembership) && (mode === "list" || mode === "fetch") && effectiveMeshId) {
         let meshStore = null;
         try {
           meshStore = getMeshRuntimeStore(ctx);
@@ -215335,22 +215346,12 @@ async function callCoordinatorArtifactList(ctx, args = {}) {
       2
     );
   }
-  if (requestedSessionId && !authorizedSessions.has(requestedSessionId)) {
-    return JSON.stringify(
-      {
-        success: false,
-        code: "artifact_session_mismatch",
-        error: `Session "${requestedSessionId}" is outside the coordinator's authorized session/project scope (artifact_session_mismatch)`
-      },
-      null,
-      2
-    );
-  }
+  const requiresDaemonMembership = Boolean(requestedSessionId && !authorizedSessions.has(requestedSessionId));
   let resolvedSessionId = requestedSessionId || coordSessionId;
   if (!resolvedSessionId) {
     resolvedSessionId = [...authorizedSessions][0];
   }
-  if (!resolvedSessionId || !authorizedSessions.has(resolvedSessionId)) {
+  if (!resolvedSessionId || !requiresDaemonMembership && !authorizedSessions.has(resolvedSessionId)) {
     return JSON.stringify(
       {
         success: false,
@@ -215367,7 +215368,8 @@ async function callCoordinatorArtifactList(ctx, args = {}) {
     ...coordSessionId ? { callerSessionId: coordSessionId } : {},
     meshId,
     ...requestedMissionId ? { missionId: requestedMissionId } : {},
-    ...limit !== void 0 ? { limit } : {}
+    ...limit !== void 0 ? { limit } : {},
+    ...requiresDaemonMembership ? { requireMeshMembership: true } : {}
   });
   return JSON.stringify(result, null, 2);
 }

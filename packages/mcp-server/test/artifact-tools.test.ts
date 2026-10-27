@@ -210,9 +210,13 @@ test('worker artifact_register rejects missing path, disallowed kind, and propag
   assert.equal(calls.length, 1);
 });
 
-test('coordinator artifact_list resolves authorized session/mesh scope and rejects foreign session_id', async () => {
+test('coordinator artifact_list resolves authorized session/mesh scope, defers off-roster sessions to daemon membership', async () => {
   const { transport, calls } = createRecordingTransport((verb: string, payload: Record<string, unknown>) => {
     if (verb === 'tool_call_record') return { rateLimited: false };
+    // Daemon-side membership: only sessions with history in mesh_alpha pass.
+    if (payload.requireMeshMembership === true && payload.sessionId !== 'sess_worker_stopped') {
+      return { success: false, code: 'artifact_session_mismatch', error: 'not an authorized member of mesh' };
+    }
     return {
       success: true,
       sessionId: payload.sessionId,
@@ -266,11 +270,26 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
     limit: 20,
   });
 
-  // 3) Foreign session outside coordinatorSessionId and mesh nodes is denied before reaching transport
+  // 3) A session outside the live roster is not trusted locally: it is forwarded with
+  //    requireMeshMembership so the daemon decides from the mesh's durable history, and a
+  //    foreign session is refused there (mission b295ce35 U6).
   const foreignOut = JSON.parse(await callCoordinatorArtifactList(ctx, { session_id: 'sess_foreign_other_project' }));
   assert.equal(foreignOut.success, false);
   assert.equal(foreignOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  const listCalls3 = calls.filter((c) => c.verb === 'artifact_list');
+  assert.equal(listCalls3.length, 3);
+  assert.deepEqual(listCalls3[2].payload, {
+    sessionId: 'sess_foreign_other_project',
+    callerSessionId: 'sess_coord_main',
+    meshId: 'mesh_alpha',
+    requireMeshMembership: true,
+  });
+
+  // 3b) A STOPPED worker of this mesh (no longer on any live node) is listable.
+  const stoppedOut = JSON.parse(await callCoordinatorArtifactList(ctx, { session_id: 'sess_worker_stopped' }));
+  assert.equal(stoppedOut.success, true);
+  assert.equal(stoppedOut.sessionId, 'sess_worker_stopped');
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 
   // 4) Empty coordinator/mesh session scope must fail closed before reaching transport
   const emptyCtx: MeshContext = {
@@ -280,12 +299,12 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
   const emptyScopeOut = JSON.parse(await callCoordinatorArtifactList(emptyCtx, { session_id: 'victim' }));
   assert.equal(emptyScopeOut.success, false);
   assert.equal(emptyScopeOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 
   const missingMeshOut = JSON.parse(await callCoordinatorArtifactList({ transport, coordinatorSessionId: 'sess_coord_main' } as any, {}));
   assert.equal(missingMeshOut.success, false);
   assert.equal(missingMeshOut.code, 'artifact_session_mismatch');
-  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 });
 
 test('standard mode artifact_register and artifact_list use transport.command and strip forged fields', async () => {

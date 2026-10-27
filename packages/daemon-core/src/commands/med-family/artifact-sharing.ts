@@ -292,10 +292,12 @@ export async function isSessionAuthorizedForMesh(
             // Continue.
         }
         try {
-            const queueEntries: any[] = meshStore.getQueue?.(meshId) ?? [];
+            // Every queue row of the mesh, terminal ones included, so a worker whose
+            // session has since stopped still counts as a member of the mesh it ran in.
+            const queueHeads: any[] = meshStore.getQueueHeads?.(meshId) ?? [];
             if (
-                Array.isArray(queueEntries) &&
-                queueEntries.some((entry) =>
+                Array.isArray(queueHeads) &&
+                queueHeads.some((entry) =>
                     sessionIdsEquivalent(trimString(entry?.assignedSessionId), sessionId),
                 )
             ) {

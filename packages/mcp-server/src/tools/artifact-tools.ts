@@ -294,24 +294,18 @@ export async function callCoordinatorArtifactList(
         );
     }
 
-    if (requestedSessionId && !authorizedSessions.has(requestedSessionId)) {
-        return JSON.stringify(
-            {
-                success: false,
-                code: 'artifact_session_mismatch',
-                error: `Session "${requestedSessionId}" is outside the coordinator's authorized session/project scope (artifact_session_mismatch)`,
-            },
-            null,
-            2,
-        );
-    }
+    // The live roster only names sessions that are running now. A worker session that
+    // already STOPPED is still part of this mesh's history, which only the daemon holds
+    // (queue rows, stored artifacts), so such a session is forwarded with
+    // `requireMeshMembership` and the daemon refuses it unless it belongs to `meshId`.
+    const requiresDaemonMembership = Boolean(requestedSessionId && !authorizedSessions.has(requestedSessionId));
 
     let resolvedSessionId = requestedSessionId || coordSessionId;
     if (!resolvedSessionId) {
         resolvedSessionId = [...authorizedSessions][0];
     }
 
-    if (!resolvedSessionId || !authorizedSessions.has(resolvedSessionId)) {
+    if (!resolvedSessionId || (!requiresDaemonMembership && !authorizedSessions.has(resolvedSessionId))) {
         return JSON.stringify(
             {
                 success: false,
@@ -334,6 +328,7 @@ export async function callCoordinatorArtifactList(
         meshId,
         ...(requestedMissionId ? { missionId: requestedMissionId } : {}),
         ...(limit !== undefined ? { limit } : {}),
+        ...(requiresDaemonMembership ? { requireMeshMembership: true } : {}),
     });
     return JSON.stringify(result, null, 2);
 }

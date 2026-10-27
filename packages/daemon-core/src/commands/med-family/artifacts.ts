@@ -688,7 +688,21 @@ async function resolveCallerAuthority(
         };
     }
 
-    if (!ownerTrusted && (mode === 'list' || mode === 'fetch') && effectiveMeshId) {
+    // `requireMeshMembership` lets a caller that cannot see the full mesh history
+    // (the coordinator MCP server only knows live nodes) delegate the membership
+    // decision here, fail-closed even on owner-trusted ingress.
+    const requireMeshMembership = args?.requireMeshMembership === true && (mode === 'list' || mode === 'fetch');
+    if (requireMeshMembership && !effectiveMeshId) {
+        return {
+            ok: false,
+            result: {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: `Session "${effectiveSessionId}" mesh membership cannot be verified without a meshId (artifact_session_mismatch)`,
+            },
+        };
+    }
+    if ((!ownerTrusted || requireMeshMembership) && (mode === 'list' || mode === 'fetch') && effectiveMeshId) {
         let meshStore: any = null;
         try { meshStore = getMeshRuntimeStore(ctx); } catch { meshStore = null; }
         const authorizedInMesh = await isSessionAuthorizedForMesh(ctx, meshStore, effectiveMeshId, effectiveSessionId);
