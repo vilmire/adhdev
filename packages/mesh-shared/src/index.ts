@@ -48,3 +48,4 @@ export * from './launch-defaults'
 
 export * from './role-launch';
 export * from './task-source-phase';
+export * from './relay-reprobe'

@@ -23755,9 +23755,13 @@ var require_dist3 = __commonJS({
       QUOTA_SUPPORTED_PROVIDERS: () => QUOTA_SUPPORTED_PROVIDERS,
       RECENT_SESSION_BUCKETS: () => RECENT_SESSION_BUCKETS,
       RECLAIMING_SEND_REFUSALS: () => RECLAIMING_SEND_REFUSALS,
+      RELAY_REPROBE_BASE_DELAY_MS: () => RELAY_REPROBE_BASE_DELAY_MS,
+      RELAY_REPROBE_JITTER_RATIO: () => RELAY_REPROBE_JITTER_RATIO,
+      RELAY_REPROBE_MAX_DELAY_MS: () => RELAY_REPROBE_MAX_DELAY_MS2,
       RELEASE_CHANNELS: () => RELEASE_CHANNELS,
       REMOVED_MESH_TOOLS: () => REMOVED_MESH_TOOLS2,
       RETIRED_MESH_TOOLS: () => RETIRED_MESH_TOOLS2,
+      RelayReprobeScheduler: () => RelayReprobeScheduler,
       SEND_POLICY_MODES: () => SEND_POLICY_MODES2,
       SEND_REFUSAL_REASONS: () => SEND_REFUSAL_REASONS2,
       SERVER_STATUS_EVENT_NAMES: () => SERVER_STATUS_EVENT_NAMES2,
@@ -23807,6 +23811,7 @@ var require_dist3 = __commonJS({
       classifySessionStatus: () => classifySessionStatus,
       compareDashboardWireVersion: () => compareDashboardWireVersion,
       compareSemver: () => compareSemver,
+      computeRelayReprobeDelay: () => computeRelayReprobeDelay,
       daemonIdsEquivalent: () => daemonIdsEquivalent4,
       decodeActiveWorkQueryRequest: () => decodeActiveWorkQueryRequest,
       decodeActiveWorkQueryResponse: () => decodeActiveWorkQueryResponse2,
@@ -26647,6 +26652,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (["sessionId", "generation", "threadId", "turnId", "itemId"].some((key5) => typeof b[key5] !== "string" || !b[key5].trim())) return false;
       return b.transport === "codex_async" ? b.requestId === void 0 : typeof b.requestId === "string" && !!b.requestId.trim() || typeof b.requestId === "number" && Number.isFinite(b.requestId);
     }
+    function computeRelayReprobeDelay(failures, random, timing = {}) {
+      const base = timing.baseDelayMs ?? RELAY_REPROBE_BASE_DELAY_MS;
+      const max = timing.maxDelayMs ?? RELAY_REPROBE_MAX_DELAY_MS2;
+      const jitter = timing.jitterRatio ?? RELAY_REPROBE_JITTER_RATIO;
+      const grown = Math.min(max, base * 2 ** Math.max(0, failures));
+      const factor = 1 + jitter * (Math.min(1, Math.max(0, random())) * 2 - 1);
+      return Math.round(grown * factor);
+    }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
     var QUOTA_RETRY_INFLIGHT_GRACE_MS;
@@ -26854,6 +26867,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MAX_OWNED_PATHS;
     var DAEMON_METADATA_DOC_SPEC;
     var MESH_STATUS_DOC_SPEC;
+    var RELAY_REPROBE_BASE_DELAY_MS;
+    var RELAY_REPROBE_MAX_DELAY_MS2;
+    var RELAY_REPROBE_JITTER_RATIO;
+    var RelayReprobeScheduler;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
         "use strict";
@@ -27918,6 +27935,76 @@ ${renderWorkerProtocolFooter2(input)}`;
             "meshProtocolMetrics"
           ],
           stableRow: (collection, row2) => collection === "nodes" ? stableMeshNodeRow(row2) : row2
+        };
+        RELAY_REPROBE_BASE_DELAY_MS = 6e4;
+        RELAY_REPROBE_MAX_DELAY_MS2 = 5 * 6e4;
+        RELAY_REPROBE_JITTER_RATIO = 0.2;
+        RelayReprobeScheduler = class {
+          constructor(options) {
+            this.options = options;
+          }
+          handle = null;
+          running = false;
+          inFlight = false;
+          failureCount = 0;
+          generation = 0;
+          get isRunning() {
+            return this.running;
+          }
+          get failures() {
+            return this.failureCount;
+          }
+          get probing() {
+            return this.inFlight;
+          }
+          /** Begin probing (idempotent). Call when a connection is selected as relay. */
+          start() {
+            if (this.running) return;
+            this.running = true;
+            this.failureCount = 0;
+            this.generation++;
+            this.schedule();
+          }
+          /** Stop for good (direct path found, connection closed, auth epoch changed). */
+          stop() {
+            this.running = false;
+            this.generation++;
+            if (this.handle !== null) {
+              this.options.clearTimer(this.handle);
+              this.handle = null;
+            }
+          }
+          schedule() {
+            if (!this.running) return;
+            const generation = this.generation;
+            const delay3 = computeRelayReprobeDelay(this.failureCount, this.options.random, this.options);
+            this.handle = this.options.setTimer(() => {
+              this.handle = null;
+              void this.tick(generation);
+            }, delay3);
+          }
+          async tick(generation) {
+            if (!this.running || generation !== this.generation) return;
+            if (this.inFlight || !this.options.shouldProbe()) {
+              this.schedule();
+              return;
+            }
+            this.inFlight = true;
+            let outcome;
+            try {
+              outcome = await this.options.probe();
+            } catch {
+              outcome = "failed";
+            }
+            this.inFlight = false;
+            if (!this.running || generation !== this.generation) return;
+            if (outcome === "direct") {
+              this.stop();
+              return;
+            }
+            if (outcome !== "skipped") this.failureCount++;
+            this.schedule();
+          }
         };
       }
     });
@@ -213141,6 +213228,7 @@ function findOwnershipConflicts(candidate, inFlight) {
   }
   return conflicts;
 }
+var RELAY_REPROBE_MAX_DELAY_MS = 5 * 6e4;
 
 // src/transports/ipc.ts
 var import_daemon_core = __toESM(require_dist3());

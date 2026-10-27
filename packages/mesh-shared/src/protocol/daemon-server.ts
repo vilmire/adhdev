@@ -263,8 +263,8 @@ export const DAEMON_P2P_SIGNAL_TYPES = ['p2p_offer', 'p2p_ice'] as const
 export type DaemonP2PSignalType = typeof DAEMON_P2P_SIGNAL_TYPES[number]
 export const isDaemonP2PSignalType = makeTypeGuard(DAEMON_P2P_SIGNAL_TYPES)
 
-export type P2POfferWirePayload = { sdp: string; type: string; peerId: string; attemptId?: number; attemptEpoch?: string }
-export type P2PIceWirePayload = { candidate: string; mid: string; peerId: string; attemptId?: number; attemptEpoch?: string }
+export type P2POfferWirePayload = { sdp: string; type: string; peerId: string; attemptId?: number; attemptEpoch?: string; probe?: boolean }
+export type P2PIceWirePayload = { candidate: string; mid: string; peerId: string; attemptId?: number; attemptEpoch?: string; probe?: boolean }
 
 /**
  * A dashboard-originated signal as relayed to the daemon. `peerId` is stamped
@@ -280,6 +280,8 @@ export type RelayedP2PSignalWirePayload = {
     attemptEpoch?: string
     /** p2p_ready only: the dashboard's stale-connect backoff index (see DashboardP2PReadyWirePayload). */
     backoffStep?: number
+    /** Make-before-break relay->direct re-probe of an existing peer (see DashboardP2PReadyWirePayload). */
+    probe?: boolean
     sharePermission?: string
     shareTargetSessionId?: string
     sdp?: string

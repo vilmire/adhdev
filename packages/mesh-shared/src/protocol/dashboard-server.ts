@@ -154,6 +154,7 @@ export type DashboardP2POfferWirePayload = {
     peerId?: string
     attemptId?: number
     attemptEpoch?: string
+    probe?: boolean
     sdp: string
     type: string
 }
@@ -163,6 +164,7 @@ export type DashboardP2PIceWirePayload = {
     peerId?: string
     attemptId?: number
     attemptEpoch?: string
+    probe?: boolean
     candidate: string
     mid?: string
     sdpMid?: string | null
@@ -239,13 +241,15 @@ export type DashboardP2PSignalType = typeof DASHBOARD_P2P_SIGNAL_TYPES[number]
 export const isDashboardP2PSignalType = makeTypeGuard(DASHBOARD_P2P_SIGNAL_TYPES)
 
 /** `backoffStep`: the dashboard's stale-connect backoff index (0 = 15s, 1 = 30s, 2 = 60s), so the daemon holds the connecting slot for the same window. */
-export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number; attemptEpoch?: string; backoffStep?: number }
-export type DashboardP2PAnswerWirePayload = { daemonId: string; peerId: string; sdp: string; type: string; attemptId?: number; attemptEpoch?: string }
+/** `probe`: identifier-only flag — this signal belongs to a make-before-break relay->direct re-probe of the SAME logical peer (never a new peer for the connection cap). */
+export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number; attemptEpoch?: string; backoffStep?: number; probe?: boolean }
+export type DashboardP2PAnswerWirePayload = { daemonId: string; peerId: string; sdp: string; type: string; attemptId?: number; attemptEpoch?: string; probe?: boolean }
 export type DashboardP2PLocalIceWirePayload = {
     daemonId: string
     peerId: string
     attemptId?: number
     attemptEpoch?: string
+    probe?: boolean
     candidate: string
     sdpMid: string | null
     sdpMLineIndex: number | null
