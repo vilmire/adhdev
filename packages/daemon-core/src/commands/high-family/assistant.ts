@@ -1076,7 +1076,10 @@ export async function localArtifactRead(
         ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
         : MAX_ARTIFACT_MCP_PAGE_BYTES;
     const self = ports.selfDaemonId();
-    if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
+    if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self))) {
+        if (!ctx?.deps?.dispatchMeshCommand) {
+            return { ok: false, code: 'artifact_origin_unreachable', error: `Artifact '${artifactId}' resides on origin daemon '${record.originDaemonId}' and no P2P mesh transport is available.` };
+        }
         try {
             const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
                 artifactId, meshId, mode: 'read', offset: rawOffset, limit: rawLimit, asChunks: true,

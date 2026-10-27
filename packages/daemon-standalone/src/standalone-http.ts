@@ -963,15 +963,12 @@ export class StandaloneHttpApi {
               res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
               return;
             }
-            const workerScope = resolveLiveArtifactWorkerScope(credential, commandPayload) ?? {
-              ...(typeof commandPayload.sessionId === 'string' && commandPayload.sessionId.trim()
-                ? { sessionId: commandPayload.sessionId.trim() }
-                : {}),
-              ...(typeof commandPayload.meshId === 'string' && commandPayload.meshId.trim()
-                ? { meshId: commandPayload.meshId.trim() }
-                : {}),
-              isCoordinator: false as const,
-            };
+            const workerScope = resolveLiveArtifactWorkerScope(credential, commandPayload);
+            if (!workerScope) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Worker credential does not resolve to a live artifact scope.' }));
+              return;
+            }
             attachAuthenticatedMcpCommand(
               commandPayload,
               type,

@@ -41920,10 +41920,10 @@ ${error.message || ""}`;
       if (grantedAt === null) return null;
       const revokedAt = typeof rec5.revokedAt === "number" && Number.isFinite(rec5.revokedAt) && rec5.revokedAt > 0 ? rec5.revokedAt : void 0;
       const rawOps = Array.isArray(rec5.allowedOps) ? rec5.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS2;
+      const allowArtifactRead = rec5.allowArtifactRead === true;
       const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
       if (allowedOps.length === 0) return null;
       const allowCoordinatorLaunch = rec5.allowCoordinatorLaunch !== false;
-      const allowArtifactRead = rec5.allowArtifactRead !== false;
       if (allowArtifactRead && allowedOps.includes("read")) {
         if (!allowedOps.includes("artifact_list")) allowedOps.push("artifact_list");
         if (!allowedOps.includes("artifact_read")) allowedOps.push("artifact_read");
@@ -116432,6 +116432,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             if (typeof missionId !== "string" || !missionId.trim()) {
               return [];
             }
+            const meshFilter = typeof options?.meshId === "string" && options.meshId.trim() ? options.meshId.trim() : "";
+            const meshClause = meshFilter ? " AND mesh_id = ?" : "";
+            const meshParams = meshFilter ? [meshFilter] : [];
             const rawLimit = options?.limit;
             const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MISSION) : MAX_ARTIFACTS_PER_MISSION;
             if (options?.artifactIds !== void 0) {
@@ -116442,14 +116445,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const placeholders = ids.map(() => "?").join(", ");
               const rows2 = this.db.prepare(
                 newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                     WHERE mission_id = ? AND artifact_id IN (${placeholders})`)
-              ).all(missionId.trim(), ...ids, limit);
+                     WHERE mission_id = ?${meshClause} AND artifact_id IN (${placeholders})`)
+              ).all(missionId.trim(), ...meshParams, ...ids, limit);
               return rows2.map(rowToArtifactRecord);
             }
             const rows = this.db.prepare(
               newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE mission_id = ?`)
-            ).all(missionId.trim(), limit);
+                 WHERE mission_id = ?${meshClause}`)
+            ).all(missionId.trim(), ...meshParams, limit);
             return rows.map(rowToArtifactRecord);
           }
           /**
@@ -117867,7 +117870,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       if (authority.isCoordinator && authority.meshId) {
         const meshStore = getMeshRuntimeStore(ctx);
-        const inMesh = record7.meshId && record7.meshId === authority.meshId || await isSessionAuthorizedForMesh(ctx, meshStore, authority.meshId, record7.sessionId);
+        const inMesh = record7.meshId ? record7.meshId === authority.meshId : await isSessionAuthorizedForMesh(ctx, meshStore, authority.meshId, record7.sessionId);
         if (!inMesh) {
           return {
             ok: false,
@@ -118190,7 +118193,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               };
             }
             const queuePayload = queueEntry.payload ?? {};
-            const missionId = trimString3(queueEntry.missionId) || trimString3(queuePayload.missionId) || (rawArtifact ? trimString3(rawArtifact.missionId) : "") || null;
+            const missionId = trimString3(queueEntry.missionId) || trimString3(queuePayload.missionId) || null;
             const store2 = getArtifactStore(ctx);
             if (resolveScopeOnly) {
               const rawInputIds = Array.isArray(queueEntry.inputArtifactIds) ? queueEntry.inputArtifactIds : Array.isArray(queuePayload.inputArtifactIds) ? queuePayload.inputArtifactIds : [];
@@ -118313,6 +118316,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const store2 = getArtifactStore(ctx);
             const record7 = store2.get(artifactId);
             if (!record7) {
+              return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
+            }
+            const ownDaemonId = trimString3(ctx.deps?.statusInstanceId);
+            const recordOrigin = trimString3(record7.originDaemonId);
+            if (!ownDaemonId || recordOrigin && !daemonIdsEquivalent4(recordOrigin, ownDaemonId)) {
               return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
             const reqMeshId = trimString3(args?.meshId);
@@ -119033,7 +119041,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const selfDaemonId = trimString4(ctx.deps?.statusInstanceId);
         const effectiveOriginDaemonId = trimString4(record7.originDaemonId) || (!localRecord && authority.isRemoteWorker ? trimString4(authority.hostDaemonId) : "");
         const isRemoteOrigin = Boolean(
-          !localRecord && authority.isRemoteWorker && effectiveOriginDaemonId || effectiveOriginDaemonId && selfDaemonId && !daemonIdsEquivalent4(effectiveOriginDaemonId, selfDaemonId)
+          !localRecord && authority.isRemoteWorker && effectiveOriginDaemonId || effectiveOriginDaemonId && (!selfDaemonId || !daemonIdsEquivalent4(effectiveOriginDaemonId, selfDaemonId))
         );
         if (isRemoteOrigin) {
           return fetchArtifactFromOriginDaemon(
@@ -129617,7 +129625,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const rawOffset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
       const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
       const self = ports.selfDaemonId();
-      if (record7.originDaemonId && (!self || !daemonIdsEquivalent4(record7.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
+      if (record7.originDaemonId && (!self || !daemonIdsEquivalent4(record7.originDaemonId, self))) {
+        if (!ctx?.deps?.dispatchMeshCommand) {
+          return { ok: false, code: "artifact_origin_unreachable", error: `Artifact '${artifactId}' resides on origin daemon '${record7.originDaemonId}' and no P2P mesh transport is available.` };
+        }
         try {
           const p2pRaw = await ctx.deps.dispatchMeshCommand(record7.originDaemonId, "artifact_fetch_origin", {
             artifactId,
@@ -133106,7 +133117,7 @@ ${defangRelayBody(text4)}`;
           })
         };
       }
-      if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead === false) {
+      if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead !== true) {
         return {
           ok: false,
           result: fail5("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
@@ -133707,7 +133718,7 @@ ${defangRelayBody(text4)}`;
               const lastSessionId = ports.lastCoordinatorSessionId(m.id);
               const acl = normalizeAssistantRemoteAccessBinding(m.assistantRemoteAccess, m.id);
               const allowCoordinatorLaunch = acl ? acl.allowCoordinatorLaunch !== false : true;
-              const allowArtifactRead = acl ? acl.allowArtifactRead !== false : true;
+              const allowArtifactRead = acl ? acl.allowArtifactRead === true : false;
               return {
                 hostDaemonId,
                 meshId: m.id,
@@ -133811,7 +133822,7 @@ ${defangRelayBody(text4)}`;
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
-                    const allowArtifactRead = typeof args.allowArtifactRead === "boolean" ? args.allowArtifactRead : existing?.allowArtifactRead ?? true;
+                    const allowArtifactRead = typeof args.allowArtifactRead === "boolean" ? args.allowArtifactRead : existing?.allowArtifactRead ?? false;
                     const binding = {
                       hostDaemonId,
                       meshId,
@@ -133845,7 +133856,7 @@ ${defangRelayBody(text4)}`;
                     status: "revoked",
                     allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS2],
                     allowCoordinatorLaunch: existing?.allowCoordinatorLaunch ?? true,
-                    allowArtifactRead: existing?.allowArtifactRead ?? true,
+                    allowArtifactRead: existing?.allowArtifactRead ?? false,
                     grantedAt: existing?.grantedAt ?? now,
                     revokedAt: now
                   };

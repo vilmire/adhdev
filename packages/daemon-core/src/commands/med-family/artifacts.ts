@@ -1048,7 +1048,7 @@ async function executeArtifactFetchOrRead(
             (!localRecord && authority.isRemoteWorker ? trimString(authority.hostDaemonId) : '');
         const isRemoteOrigin = Boolean(
             (!localRecord && authority.isRemoteWorker && effectiveOriginDaemonId) ||
-                (effectiveOriginDaemonId && selfDaemonId && !daemonIdsEquivalent(effectiveOriginDaemonId, selfDaemonId)),
+                (effectiveOriginDaemonId && (!selfDaemonId || !daemonIdsEquivalent(effectiveOriginDaemonId, selfDaemonId))),
         );
 
         if (isRemoteOrigin) {

@@ -616,9 +616,11 @@ export async function authorizeCrossSessionArtifactAccess(
     }
     if (authority.isCoordinator && authority.meshId) {
         const meshStore = getMeshRuntimeStore(ctx);
-        const inMesh =
-            (record.meshId && record.meshId === authority.meshId) ||
-            (await isSessionAuthorizedForMesh(ctx, meshStore, authority.meshId, record.sessionId));
+        // A record bound to a mesh must match authority's mesh exactly; the session-based
+        // fallback applies only to records that carry no mesh binding at all.
+        const inMesh = record.meshId
+            ? record.meshId === authority.meshId
+            : await isSessionAuthorizedForMesh(ctx, meshStore, authority.meshId, record.sessionId);
         if (!inMesh) {
             return {
                 ok: false,
@@ -996,7 +998,6 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
         const missionId =
             trimString(queueEntry.missionId) ||
             trimString(queuePayload.missionId) ||
-            (rawArtifact ? trimString(rawArtifact.missionId) : '') ||
             null;
 
         const store = getArtifactStore(ctx);
@@ -1135,6 +1136,13 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
         const store = getArtifactStore(ctx);
         const record = store.get(artifactId);
         if (!record) {
+            return { success: false, code: 'artifact_not_found', error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
+        }
+        // A forwarded (metadata-only) record carries a peer-supplied workspaceRoot/relPath.
+        // This daemon may only serve bytes for records that originate on THIS daemon.
+        const ownDaemonId = trimString(ctx.deps?.statusInstanceId);
+        const recordOrigin = trimString(record.originDaemonId);
+        if (!ownDaemonId || (recordOrigin && !daemonIdsEquivalent(recordOrigin, ownDaemonId))) {
             return { success: false, code: 'artifact_not_found', error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
         }
         const reqMeshId = trimString(args?.meshId);

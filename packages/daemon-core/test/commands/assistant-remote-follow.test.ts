@@ -3822,7 +3822,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         }
     });
 
-    it('OD-5: follower can list and read host mesh artifacts by default (read-only, wrapped in <untrusted_artifact_content>) and owner set_policy allowArtifactRead toggle disables/enables it', async () => {
+    it('OD-5: follower with an explicit artifact opt-in can list and read host mesh artifacts (read-only, wrapped in <untrusted_artifact_content>) and owner set_policy allowArtifactRead toggle disables/enables it', async () => {
         const artifactWorkspace = mkdtempSync(join(tmpdir(), 'adhdev-od5-art-'));
         try {
             writeFileSync(join(artifactWorkspace, 'design.md'), '# Shared Design\nHello follower!\n');
@@ -3842,11 +3842,11 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 });
             });
 
-            // 1. Grant follower access on Host A (default allowArtifactRead should be true)
+            // 1. Grant follower access on Host A with explicit allowArtifactRead:true opt-in
             const grantRes: any = await withHostEnv(() =>
                 createRouter(HOST_A).execute(
                     ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
-                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1, allowArtifactRead: true },
                     'p2p',
                     { ownerVerified: true },
                 ),

@@ -310,7 +310,7 @@ function verifyFollowerAcl(
             }),
         };
     }
-    if ((op === 'artifact_list' || op === 'artifact_read') && acl.allowArtifactRead === false) {
+    if ((op === 'artifact_list' || op === 'artifact_read') && acl.allowArtifactRead !== true) {
         return {
             ok: false,
             result: fail('artifact_read_disabled', `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
@@ -897,7 +897,7 @@ const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyC
             const lastSessionId = ports.lastCoordinatorSessionId(m.id);
             const acl = normalizeAssistantRemoteAccessBinding(m.assistantRemoteAccess, m.id);
             const allowCoordinatorLaunch = acl ? acl.allowCoordinatorLaunch !== false : true;
-            const allowArtifactRead = acl ? acl.allowArtifactRead !== false : true;
+            const allowArtifactRead = acl ? acl.allowArtifactRead === true : false;
             return {
                 hostDaemonId, meshId: m.id, name: m.name,
                 sanitizedRepoIdentity: sanitizeRemoteRepoIdentity(m.repoRemoteUrl || m.repoIdentity),
@@ -1005,7 +1005,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                         }
                         const nextGrantRevision = baseGrantRevision + 1;
                         const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean' ? args.allowCoordinatorLaunch : (existing?.allowCoordinatorLaunch ?? true);
-                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean' ? args.allowArtifactRead : (existing?.allowArtifactRead ?? true);
+                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean' ? args.allowArtifactRead : (existing?.allowArtifactRead ?? false);
                         const binding: AssistantRemoteAccessBinding = {
                             hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId,
                             bindingRevision, grantRevision: nextGrantRevision, status: 'active',
@@ -1029,7 +1029,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                         bindingRevision: revokedBindingRevision, grantRevision: nextGrantRevision, status: 'revoked',
                         allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
                         allowCoordinatorLaunch: existing?.allowCoordinatorLaunch ?? true,
-                        allowArtifactRead: existing?.allowArtifactRead ?? true,
+                        allowArtifactRead: existing?.allowArtifactRead ?? false,
                         grantedAt: existing?.grantedAt ?? now, revokedAt: now,
                     };
                     mesh.assistantRemoteAccess = tombstone;

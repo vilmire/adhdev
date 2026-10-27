@@ -988,11 +988,14 @@ export class ArtifactStore {
      */
     listByMission(
         missionId: string,
-        options?: { artifactIds?: readonly string[]; limit?: number },
+        options?: { artifactIds?: readonly string[]; limit?: number; meshId?: string },
     ): ArtifactRecord[] {
         if (typeof missionId !== 'string' || !missionId.trim()) {
             return [];
         }
+        const meshFilter = typeof options?.meshId === 'string' && options.meshId.trim() ? options.meshId.trim() : '';
+        const meshClause = meshFilter ? ' AND mesh_id = ?' : '';
+        const meshParams: string[] = meshFilter ? [meshFilter] : [];
         const rawLimit = options?.limit;
         const limit =
             typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
@@ -1007,17 +1010,17 @@ export class ArtifactStore {
             const rows = this.db
                 .prepare<SessionArtifactDbRow>(
                     newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                     WHERE mission_id = ? AND artifact_id IN (${placeholders})`),
+                     WHERE mission_id = ?${meshClause} AND artifact_id IN (${placeholders})`),
                 )
-                .all(missionId.trim(), ...ids, limit);
+                .all(missionId.trim(), ...meshParams, ...ids, limit);
             return rows.map(rowToArtifactRecord);
         }
         const rows = this.db
             .prepare<SessionArtifactDbRow>(
                 newestWindowSql(`SELECT rowid AS window_rowid, * FROM session_artifacts
-                 WHERE mission_id = ?`),
+                 WHERE mission_id = ?${meshClause}`),
             )
-            .all(missionId.trim(), limit);
+            .all(missionId.trim(), ...meshParams, limit);
         return rows.map(rowToArtifactRecord);
     }
 

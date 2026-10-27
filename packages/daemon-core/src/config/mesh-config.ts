@@ -74,10 +74,11 @@ export function normalizeAssistantRemoteAccessBinding(
         ? rec.revokedAt
         : undefined;
     const rawOps = Array.isArray(rec.allowedOps) ? rec.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS;
+    // Artifact reading is explicit opt-in: a missing field (pre-existing grant) never grants it (the flag is enforced in the ACL check; ops are only auto-added when true).
+    const allowArtifactRead = rec.allowArtifactRead === true;
     const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
     if (allowedOps.length === 0) return null;
     const allowCoordinatorLaunch = rec.allowCoordinatorLaunch !== false;
-    const allowArtifactRead = rec.allowArtifactRead !== false;
     if (allowArtifactRead && allowedOps.includes('read')) {
         if (!allowedOps.includes('artifact_list')) allowedOps.push('artifact_list');
         if (!allowedOps.includes('artifact_read')) allowedOps.push('artifact_read');
