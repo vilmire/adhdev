@@ -168,11 +168,17 @@ describe('cloud IPC worker credential', () => {
         expect(readAuthenticatedMcpScope(viaHost(asA), 'artifact_read')).toMatchObject({ sessionId: 'w-A', meshId: 'm1' });
     });
 
-    it('live worker credential is refused for non-worker verbs', () => {
+    it('worker credential on a non-worker verb is ignored: live and dead are indistinguishable', () => {
         const bind = mintWorkerSessionBind({ meshId: 'm1', sessionId: 'w-1' }).bind;
         for (const verb of ['assistant_artifact_list', 'launch_cli', 'mesh_status', 'artifact_fetch']) {
-            const r = attachIpcMcpAuthority({ bind }, verb, env({ workerCredential: bind }));
-            expect(r).toMatchObject({ ok: false, code: 'worker_scope_forbidden' });
+            const live = { bind };
+            const dead = { bind: 'wsb_guess' };
+            const rLive = attachIpcMcpAuthority(live, verb, env({ workerCredential: bind }));
+            const rDead = attachIpcMcpAuthority(dead, verb, env({ workerCredential: 'wsb_guess' }));
+            expect(rLive).toEqual({ ok: true });
+            expect(rDead).toEqual(rLive);
+            expect(readAuthenticatedMcpCommand(viaHost(live), verb)).toEqual(readAuthenticatedMcpCommand(viaHost(dead), verb));
+            expect(readAuthenticatedMcpCommand(viaHost(live), verb)).toEqual({ present: false, valid: false });
         }
         expect(attachIpcMcpAuthority({ bind }, 'worker_progress_update', env({ workerCredential: bind }))).toEqual({ ok: true });
     });

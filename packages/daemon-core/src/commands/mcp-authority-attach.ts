@@ -105,7 +105,8 @@ export function readIpcMcpAuthEnvelope(payload: unknown): IpcMcpAuthEnvelope | n
 
 export type IpcMcpAttachResult =
     | { ok: true }
-    | { ok: false; code: 'worker_scope_forbidden'; error: string };
+    /** Reserved: no current path refuses outright (refusals are denied capabilities). */
+    | { ok: false; code: string; error: string };
 
 /**
  * Attach MCP authority to `args` (the object later handed to `host.execute`)
@@ -130,15 +131,15 @@ export function attachIpcMcpAuthority(
         return { ok: true };
     }
     const credential = workerCredential as string;
+    // Outside the worker toolset a worker credential is meaningless: ignore it for
+    // EVERY verb, live or dead, so a guessed credential cannot probe liveness by
+    // the response (the command simply runs as an ordinary `ipc` command).
+    if (!isWorkerMcpDaemonVerb(command)) return { ok: true };
     let live = false;
     try { live = isLiveWorkerMcpCredential(credential); } catch { /* fail closed */ }
     if (!live) {
         attachAuthenticatedMcpCommand(args, command, () => false, null);
         return { ok: true };
-    }
-    // A live worker credential admits only the worker toolset's verbs (same as standalone).
-    if (!isWorkerMcpDaemonVerb(command)) {
-        return { ok: false, code: 'worker_scope_forbidden', error: `Command ${command} is not available to a worker MCP credential.` };
     }
     if (WORKER_ARTIFACT_COMMANDS.has(command)) {
         const attached = attachWorkerArtifactMcpAuthority(args, command, credential, { extraLive: isConnectionLive });
@@ -147,4 +148,13 @@ export function attachIpcMcpAuthority(
         }
     }
     return { ok: true };
+}
+
+/**
+ * True when a WebSocket upgrade comes from a browser page (any `Origin` header).
+ * Native local clients (mcp-server, CLI, `ws`) send none; local IPC refuses
+ * browser origins so a web page cannot reach the loopback command socket.
+ */
+export function isBrowserOriginUpgrade(headers: { origin?: string | string[] | undefined }): boolean {
+    return headers.origin !== undefined;
 }

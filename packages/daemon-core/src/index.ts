@@ -1072,6 +1072,7 @@ export {
   attachWorkerArtifactMcpAuthority,
   attachIpcMcpAuthority,
   readIpcMcpAuthEnvelope,
+  isBrowserOriginUpgrade,
   type IpcMcpAuthEnvelope,
   type IpcMcpAttachResult,
   type WorkerArtifactAttachResult,

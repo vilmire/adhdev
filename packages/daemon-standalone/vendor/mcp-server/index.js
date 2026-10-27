@@ -141804,6 +141804,7 @@ ${tail}` : ""
       invalidateCachedCliInventory: () => invalidateCachedCliInventory,
       isActivityChatMessage: () => isActivityChatMessage,
       isAlwaysOnTraceCategory: () => isAlwaysOnTraceCategory,
+      isBrowserOriginUpgrade: () => isBrowserOriginUpgrade,
       isBuiltinChatMessageKind: () => isBuiltinChatMessageKind,
       isCdpConnected: () => isCdpConnected,
       isCliInventoryDegraded: () => isCliInventoryDegraded,
@@ -206384,6 +206385,88 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return this.inFlight;
       }
     };
+    init_mcp_command_ingress();
+    init_standalone_mcp_auth();
+    var MAX_CREDENTIAL_LENGTH = 512;
+    var WORKER_ARTIFACT_COMMANDS = /* @__PURE__ */ new Set(["artifact_register", "artifact_list", "artifact_read"]);
+    function attachSessionMcpAuthority(args, command, credential, extraLive) {
+      const boundScope = verifyMcpSessionCredential(credential);
+      attachAuthenticatedMcpCommand(
+        args,
+        command,
+        () => (extraLive ? extraLive() === true : true) && verifyMcpSessionCredential(credential) !== null,
+        boundScope
+      );
+    }
+    function attachWorkerArtifactMcpAuthority(args, command, credential, opts = {}) {
+      const verify3 = opts.verify ?? matchesLiveArtifactWorkerCredential;
+      let matches = false;
+      try {
+        matches = verify3(credential, args) === true;
+      } catch {
+      }
+      if (!matches) return { ok: false, reason: "credential_mismatch" };
+      const workerScope = (opts.resolveScope ?? resolveLiveArtifactWorkerScope)(credential, args);
+      if (!workerScope) return { ok: false, reason: "no_live_scope" };
+      attachAuthenticatedMcpCommand(
+        args,
+        command,
+        () => (opts.extraLive ? opts.extraLive() === true : true) && verify3(credential, args) === true,
+        workerScope
+      );
+      return { ok: true };
+    }
+    function readIpcMcpAuthEnvelope(payload) {
+      if (!payload || typeof payload !== "object") return null;
+      const raw = payload.mcpAuth;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const pick = (value) => {
+        if (typeof value !== "string") return void 0;
+        const v = value.trim();
+        return v && v.length <= MAX_CREDENTIAL_LENGTH ? v : void 0;
+      };
+      const e = raw;
+      const sessionCredential = pick(e.sessionCredential);
+      const workerCredential = pick(e.workerCredential);
+      if (!sessionCredential && !workerCredential) return null;
+      return {
+        ...sessionCredential ? { sessionCredential } : {},
+        ...workerCredential ? { workerCredential } : {}
+      };
+    }
+    function attachIpcMcpAuthority(args, command, envelope, isConnectionLive = () => true) {
+      if (!envelope) return { ok: true };
+      const { sessionCredential, workerCredential } = envelope;
+      if (sessionCredential && workerCredential) {
+        attachAuthenticatedMcpCommand(args, command, () => false, null);
+        return { ok: true };
+      }
+      if (sessionCredential) {
+        attachSessionMcpAuthority(args, command, sessionCredential, isConnectionLive);
+        return { ok: true };
+      }
+      const credential = workerCredential;
+      if (!isWorkerMcpDaemonVerb(command)) return { ok: true };
+      let live = false;
+      try {
+        live = isLiveWorkerMcpCredential(credential);
+      } catch {
+      }
+      if (!live) {
+        attachAuthenticatedMcpCommand(args, command, () => false, null);
+        return { ok: true };
+      }
+      if (WORKER_ARTIFACT_COMMANDS.has(command)) {
+        const attached = attachWorkerArtifactMcpAuthority(args, command, credential, { extraLive: isConnectionLive });
+        if (!attached.ok) {
+          attachAuthenticatedMcpCommand(args, command, () => false, null);
+        }
+      }
+      return { ok: true };
+    }
+    function isBrowserOriginUpgrade(headers) {
+      return headers.origin !== void 0;
+    }
     function buildIpcStatusHttpResponse(method, url, payload) {
       if (method && method.toUpperCase() !== "GET") {
         return { statusCode: 405, body: { ok: false, error: "method not allowed" } };
@@ -206422,6 +206505,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       wss = new import_ws4.WebSocketServer({ noServer: true, maxPayload: IPC_MAX_PAYLOAD_BYTES });
       wss.on("connection", (ws) => handleConnection(ws));
       httpServer.on("upgrade", (req, socket, head) => {
+        if (isBrowserOriginUpgrade(req.headers)) {
+          socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+          socket.destroy();
+          return;
+        }
         const wsUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
         if (wsUrl.pathname !== DAEMON_WS_PATH) {
           socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -206503,7 +206591,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return;
         }
         try {
-          const result = await opts.handleCommand({ command, args, requestId, ws });
+          const result = await opts.handleCommand({ command, args, requestId, ws, mcpAuth: readIpcMcpAuthEnvelope(payload) });
           const responseBody = JSON.stringify({
             type: "ext:command_result",
             payload: {
@@ -211527,87 +211615,6 @@ ${notice.notice}${supersededHint}`;
     }
     init_command_args();
     init_mcp_command_ingress();
-    init_mcp_command_ingress();
-    init_standalone_mcp_auth();
-    var MAX_CREDENTIAL_LENGTH = 512;
-    var WORKER_ARTIFACT_COMMANDS = /* @__PURE__ */ new Set(["artifact_register", "artifact_list", "artifact_read"]);
-    function attachSessionMcpAuthority(args, command, credential, extraLive) {
-      const boundScope = verifyMcpSessionCredential(credential);
-      attachAuthenticatedMcpCommand(
-        args,
-        command,
-        () => (extraLive ? extraLive() === true : true) && verifyMcpSessionCredential(credential) !== null,
-        boundScope
-      );
-    }
-    function attachWorkerArtifactMcpAuthority(args, command, credential, opts = {}) {
-      const verify3 = opts.verify ?? matchesLiveArtifactWorkerCredential;
-      let matches = false;
-      try {
-        matches = verify3(credential, args) === true;
-      } catch {
-      }
-      if (!matches) return { ok: false, reason: "credential_mismatch" };
-      const workerScope = (opts.resolveScope ?? resolveLiveArtifactWorkerScope)(credential, args);
-      if (!workerScope) return { ok: false, reason: "no_live_scope" };
-      attachAuthenticatedMcpCommand(
-        args,
-        command,
-        () => (opts.extraLive ? opts.extraLive() === true : true) && verify3(credential, args) === true,
-        workerScope
-      );
-      return { ok: true };
-    }
-    function readIpcMcpAuthEnvelope(payload) {
-      if (!payload || typeof payload !== "object") return null;
-      const raw = payload.mcpAuth;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-      const pick = (value) => {
-        if (typeof value !== "string") return void 0;
-        const v = value.trim();
-        return v && v.length <= MAX_CREDENTIAL_LENGTH ? v : void 0;
-      };
-      const e = raw;
-      const sessionCredential = pick(e.sessionCredential);
-      const workerCredential = pick(e.workerCredential);
-      if (!sessionCredential && !workerCredential) return null;
-      return {
-        ...sessionCredential ? { sessionCredential } : {},
-        ...workerCredential ? { workerCredential } : {}
-      };
-    }
-    function attachIpcMcpAuthority(args, command, envelope, isConnectionLive = () => true) {
-      if (!envelope) return { ok: true };
-      const { sessionCredential, workerCredential } = envelope;
-      if (sessionCredential && workerCredential) {
-        attachAuthenticatedMcpCommand(args, command, () => false, null);
-        return { ok: true };
-      }
-      if (sessionCredential) {
-        attachSessionMcpAuthority(args, command, sessionCredential, isConnectionLive);
-        return { ok: true };
-      }
-      const credential = workerCredential;
-      let live = false;
-      try {
-        live = isLiveWorkerMcpCredential(credential);
-      } catch {
-      }
-      if (!live) {
-        attachAuthenticatedMcpCommand(args, command, () => false, null);
-        return { ok: true };
-      }
-      if (!isWorkerMcpDaemonVerb(command)) {
-        return { ok: false, code: "worker_scope_forbidden", error: `Command ${command} is not available to a worker MCP credential.` };
-      }
-      if (WORKER_ARTIFACT_COMMANDS.has(command)) {
-        const attached = attachWorkerArtifactMcpAuthority(args, command, credential, { extraLive: isConnectionLive });
-        if (!attached.ok) {
-          attachAuthenticatedMcpCommand(args, command, () => false, null);
-        }
-      }
-      return { ok: true };
-    }
     init_assistant_human_input();
     init_cooperative_gate();
     function endsPeerAuthorization(reason) {

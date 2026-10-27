@@ -22,6 +22,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { LOG, getLogLevel } from '../logging/logger.js';
 import { DAEMON_WS_PATH, IPC_MAX_PAYLOAD_BYTES } from '../ipc-protocol.js';
 import { IpcConnectionLoadGuard } from './ipc-load-guards.js';
+import { isBrowserOriginUpgrade, readIpcMcpAuthEnvelope, type IpcMcpAuthEnvelope } from '../commands/mcp-authority-attach.js';
 
 /** Parameters passed to `handleCommand` for each incoming ext:command frame. */
 export interface IpcCommandContext {
@@ -33,6 +34,8 @@ export interface IpcCommandContext {
     requestId: string;
     /** The connected WebSocket — only needed if the caller wants to send extra events. */
     ws: WebSocket;
+    /** Sanitized `mcpAuth` envelope of the frame (unverified; see attachIpcMcpAuthority). */
+    mcpAuth: IpcMcpAuthEnvelope | null;
 }
 
 /** Result reported back to the client. `result` is optional context for success. */
@@ -157,6 +160,11 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
     wss.on('connection', (ws) => handleConnection(ws));
 
     httpServer.on('upgrade', (req: IncomingMessage, socket, head) => {
+        if (isBrowserOriginUpgrade(req.headers)) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+        }
         const wsUrl = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
         if (wsUrl.pathname !== DAEMON_WS_PATH) {
             socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
@@ -256,7 +264,7 @@ export async function startLocalIpcServer(opts: LocalIpcServerOptions): Promise<
         }
 
         try {
-            const result = await opts.handleCommand({ command, args, requestId, ws });
+            const result = await opts.handleCommand({ command, args, requestId, ws, mcpAuth: readIpcMcpAuthEnvelope(payload) });
             const responseBody = JSON.stringify({
                 type: 'ext:command_result',
                 payload: {
