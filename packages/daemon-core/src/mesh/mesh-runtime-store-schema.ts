@@ -207,6 +207,10 @@ export function ensureSessionArtifactsSchema(db: MeshRuntimeStore['db']): void {
             artifact_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
             task_id TEXT,
+            mesh_id TEXT,
+            mission_id TEXT,
+            producer_role TEXT,
+            origin_daemon_id TEXT,
             workspace_root TEXT NOT NULL,
             rel_path TEXT NOT NULL,
             kind TEXT NOT NULL,
@@ -224,6 +228,23 @@ export function ensureSessionArtifactsSchema(db: MeshRuntimeStore['db']): void {
 
         CREATE INDEX IF NOT EXISTS idx_session_artifacts_session
             ON session_artifacts(session_id, created_at);
+    `);
+    const cols = new Set(
+        (db.prepare('PRAGMA table_info(session_artifacts)').all() as Array<{ name: string }>).map(
+            (r) => r.name,
+        ),
+    );
+    for (const col of ['mesh_id', 'mission_id', 'producer_role', 'origin_daemon_id'] as const) {
+        if (!cols.has(col)) {
+            db.exec(`ALTER TABLE session_artifacts ADD COLUMN ${col} TEXT`);
+        }
+    }
+    db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_session_artifacts_mesh
+            ON session_artifacts(mesh_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_session_artifacts_mission
+            ON session_artifacts(mission_id, created_at);
     `);
 }
 

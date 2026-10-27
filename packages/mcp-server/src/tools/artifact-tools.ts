@@ -101,7 +101,7 @@ export const STANDARD_ARTIFACT_REGISTER_TOOL: Tool = {
 export const ARTIFACT_LIST_TOOL: Tool = {
     name: 'artifact_list',
     description:
-        'List artifacts registered for a session (returns artifact metadata and ChatAttachmentMeta entries; never raw file bytes).',
+        'List artifacts registered for a session, mission, or mesh (returns artifact metadata and ChatAttachmentMeta entries; never raw file bytes).',
     inputSchema: {
         type: 'object',
         properties: {
@@ -110,12 +110,72 @@ export const ARTIFACT_LIST_TOOL: Tool = {
                 description:
                     'Optional session ID to list artifacts for. In coordinator mode, defaults to the coordinator session or an authorized session within the mesh.',
             },
+            mission_id: {
+                type: 'string',
+                description: 'Optional mission ID filter.',
+            },
             limit: {
                 type: 'number',
                 description: 'Optional maximum number of artifacts to return (1..50).',
             },
         },
         required: [],
+        additionalProperties: false,
+    },
+};
+
+/**
+ * Worker-mode `artifact_list` tool schema.
+ *
+ * Never accepts `session_id` / `task_id` — worker identity comes from the launch
+ * credential, and daemon-side OD-4 filtering returns the worker's own session
+ * artifacts plus same-mission `inputArtifactIds` artifacts.
+ */
+export const WORKER_ARTIFACT_LIST_TOOL: Tool & { description: string } = {
+    name: 'artifact_list',
+    description:
+        'List artifacts visible to this worker (its own session artifacts, plus same-mission artifacts the coordinator named in input_artifact_ids; metadata only, never raw file bytes).',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            mission_id: {
+                type: 'string',
+                description: 'Optional mission ID filter (must match this worker task mission).',
+            },
+            limit: {
+                type: 'number',
+                description: 'Optional maximum number of artifacts to return (1..50).',
+            },
+        },
+        required: [],
+        additionalProperties: false,
+    },
+};
+
+/**
+ * Shared `artifact_read` tool schema (worker, coordinator, and standard mode).
+ */
+export const ARTIFACT_READ_TOOL: Tool & { description: string } = {
+    name: 'artifact_read',
+    description:
+        'Read an artifact by artifact_id with 256 KiB paging (OD-7). Text/markdown/diff/json content is wrapped in <untrusted_artifact_content> tags.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            artifact_id: {
+                type: 'string',
+                description: 'Artifact ID (art_*) to read.',
+            },
+            offset: {
+                type: 'number',
+                description: 'Optional byte offset for paging (default 0).',
+            },
+            limit: {
+                type: 'number',
+                description: 'Optional maximum bytes to read in this page (default/max 262144 = 256 KiB).',
+            },
+        },
+        required: ['artifact_id'],
         additionalProperties: false,
     },
 };
@@ -212,11 +272,12 @@ export async function callWorkerArtifactRegister(
  */
 export async function callCoordinatorArtifactList(
     ctx: MeshContext,
-    args: { session_id?: string; limit?: number } = {},
+    args: { session_id?: string; mission_id?: string; limit?: number } = {},
 ): Promise<string> {
     await recordMeshCoordinatorToolCall(ctx, 'artifact_list');
 
     const requestedSessionId = trimString(args.session_id);
+    const requestedMissionId = trimString(args.mission_id);
     const coordSessionId = trimString(ctx.coordinatorSessionId);
     const meshId = trimString(ctx.mesh?.id);
     const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
@@ -269,10 +330,236 @@ export async function callCoordinatorArtifactList(
 
     const result = await ctx.transport.command('artifact_list', {
         sessionId: resolvedSessionId,
-        ...(coordSessionId && resolvedSessionId === coordSessionId
-            ? { callerSessionId: coordSessionId }
-            : {}),
+        ...(coordSessionId ? { callerSessionId: coordSessionId } : {}),
         meshId,
+        ...(requestedMissionId ? { missionId: requestedMissionId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Coordinator-mode handler for `artifact_register`.
+ */
+export async function callCoordinatorArtifactRegister(
+    ctx: MeshContext,
+    args: Record<string, unknown> = {},
+): Promise<string> {
+    await recordMeshCoordinatorToolCall(ctx, 'artifact_register');
+
+    const path = trimString(args.path);
+    if (!path) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'invalid_arguments',
+                error: 'artifact_register requires a non-empty workspace-relative "path"',
+            },
+            null,
+            2,
+        );
+    }
+
+    const kind = trimString(args.kind);
+    if (kind && !ARTIFACT_KIND_SET.has(kind)) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'unsupported_artifact_kind',
+                error: `Unsupported artifact kind "${kind}". Allowed kinds: ${ALLOWED_ARTIFACT_KINDS.join(', ')}`,
+            },
+            null,
+            2,
+        );
+    }
+
+    const coordSessionId = trimString(ctx.coordinatorSessionId);
+    const meshId = trimString(ctx.mesh?.id);
+    const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
+    const resolvedSessionId = coordSessionId || [...authorizedSessions][0] || '';
+
+    if (!meshId || !resolvedSessionId) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: 'Coordinator has no authorized session/project scope for artifact_register (artifact_session_mismatch)',
+            },
+            null,
+            2,
+        );
+    }
+
+    const title = typeof args.title === 'string' && args.title.trim().length > 0 ? args.title : undefined;
+    const missionId = trimString(args.mission_id) || trimString(args.missionId);
+
+    const result = await ctx.transport.command('artifact_register', {
+        path,
+        ...(title !== undefined ? { title } : {}),
+        ...(kind ? { kind } : {}),
+        sessionId: resolvedSessionId,
+        callerSessionId: resolvedSessionId,
+        meshId,
+        ...(missionId ? { missionId } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Coordinator-mode handler for `artifact_read`.
+ */
+export async function callCoordinatorArtifactRead(
+    ctx: MeshContext,
+    args: { artifact_id?: string; offset?: number; limit?: number } = {},
+): Promise<string> {
+    await recordMeshCoordinatorToolCall(ctx, 'artifact_read');
+
+    const artifactId = trimString(args.artifact_id);
+    if (!artifactId) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'invalid_arguments',
+                error: 'artifact_read requires a non-empty "artifact_id"',
+            },
+            null,
+            2,
+        );
+    }
+
+    const coordSessionId = trimString(ctx.coordinatorSessionId);
+    const meshId = trimString(ctx.mesh?.id);
+    const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
+    const resolvedSessionId = coordSessionId || [...authorizedSessions][0] || '';
+
+    if (!meshId || !resolvedSessionId) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: 'Coordinator has no authorized session/project scope for artifact_read (artifact_session_mismatch)',
+            },
+            null,
+            2,
+        );
+    }
+
+    const offset =
+        typeof args.offset === 'number' && Number.isFinite(args.offset) && args.offset >= 0
+            ? Math.trunc(args.offset)
+            : undefined;
+    const limit =
+        typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+            ? Math.trunc(args.limit)
+            : undefined;
+
+    const result = await ctx.transport.command('artifact_read', {
+        artifactId,
+        callerSessionId: resolvedSessionId,
+        meshId,
+        ...(offset !== undefined ? { offset } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Worker-mode handler for `artifact_list`.
+ */
+export async function callWorkerArtifactList(
+    transport: CommandTransport,
+    credentials: WorkerCredentials,
+    args: Record<string, unknown> = {},
+): Promise<string> {
+    const missionId = trimString(args.mission_id);
+    const limit =
+        typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+            ? Math.trunc(args.limit)
+            : undefined;
+
+    const result = await transport.command('artifact_list', {
+        ...(missionId ? { missionId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(credentials.token ? { token: credentials.token } : {}),
+        ...(credentials.bind ? { bind: credentials.bind } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Worker-mode handler for `artifact_read`.
+ */
+export async function callWorkerArtifactRead(
+    transport: CommandTransport,
+    credentials: WorkerCredentials,
+    args: Record<string, unknown> = {},
+): Promise<string> {
+    const artifactId = trimString(args.artifact_id);
+    if (!artifactId) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'invalid_arguments',
+                error: 'artifact_read requires a non-empty "artifact_id"',
+            },
+            null,
+            2,
+        );
+    }
+
+    const offset =
+        typeof args.offset === 'number' && Number.isFinite(args.offset) && args.offset >= 0
+            ? Math.trunc(args.offset)
+            : undefined;
+    const limit =
+        typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+            ? Math.trunc(args.limit)
+            : undefined;
+
+    const result = await transport.command('artifact_read', {
+        artifactId,
+        ...(offset !== undefined ? { offset } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(credentials.token ? { token: credentials.token } : {}),
+        ...(credentials.bind ? { bind: credentials.bind } : {}),
+    });
+    return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Standard-mode handler for `artifact_read`.
+ */
+export async function callStandardArtifactRead(
+    transport: CommandTransport,
+    args: Record<string, unknown> = {},
+): Promise<string> {
+    const artifactId = trimString(args.artifact_id);
+    if (!artifactId) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'invalid_arguments',
+                error: 'artifact_read requires a non-empty "artifact_id"',
+            },
+            null,
+            2,
+        );
+    }
+
+    const sessionId = trimString(args.session_id);
+    const offset =
+        typeof args.offset === 'number' && Number.isFinite(args.offset) && args.offset >= 0
+            ? Math.trunc(args.offset)
+            : undefined;
+    const limit =
+        typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0
+            ? Math.trunc(args.limit)
+            : undefined;
+
+    const result = await transport.command('artifact_read', {
+        artifactId,
+        ...(sessionId ? { sessionId } : {}),
+        ...(offset !== undefined ? { offset } : {}),
         ...(limit !== undefined ? { limit } : {}),
     });
     return JSON.stringify(result, null, 2);

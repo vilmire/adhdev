@@ -155,7 +155,7 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
             if (workspace !== args.workspace) throw new AttachFailure('PATH_CONFLICT', 'registration', 'Attachment must use its verified managed checkout.');
             const old = authorizeHost(ctx, args, remote.identity);
             await verifyCheckout(workspace, remote.identity);
-            if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, 'pairing')) return fail('REGISTRATION_FAILED', 'registration', 'Checkout is preserved; restore writable daemon configuration before retrying.', 'HOST_RECORD_WRITE_FAILED');
+            if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, 'pairing', undefined, { pairingVerified: true })) return fail('REGISTRATION_FAILED', 'registration', 'Checkout is preserved; restore writable daemon configuration before retrying.', 'HOST_RECORD_WRITE_FAILED');
             const resources = await pythonResourcePreflight();
             return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? 'ready' : 'resource_preflight' };
         } catch (e) { return refusal(e); }

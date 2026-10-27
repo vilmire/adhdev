@@ -117,6 +117,12 @@ export interface MeshWorkQueueEntry {
     /** M1/M3: mission this task belongs to (joins mesh_missions). */
     missionId?: string;
     /**
+     * OD-4 (artifact sharing): explicit list of artifact ids produced in the same
+     * mission that the worker executing this task is authorized to read via
+     * `artifact_read` / `artifact_list`. Rides in payload JSON (no column).
+     */
+    inputArtifactIds?: string[];
+    /**
      * Model axis: model override for the session that executes this
      * task. When the task auto-launches a session, this is passed to launch_cli as
      * `initialModel` (ACP → setConfigOption; CLI → modelLaunchArgs template). Absent on
@@ -377,6 +383,9 @@ export interface MeshEnqueueTaskOptions {
     maxRetries?: number;
     /** M1/M3: mission this task belongs to. */
     missionId?: string;
+    /** OD-4 (artifact sharing): same-mission artifact ids this task's worker may read. */
+    inputArtifactIds?: string[];
+    input_artifact_ids?: string[];
     /** Model override forwarded to the executing session's launch (initialModel). */
     model?: string;
     /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */

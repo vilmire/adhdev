@@ -22,6 +22,7 @@ import {
     type SurvivingCoordinatorDescriptor,
 } from '../commands/antigravity-coordinator-rules.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
+import { ensureMcpSessionCredential, revokeMcpSessionCredential } from '../commands/mcp-command-ingress.js';
 
 export interface CoordinatorRegistryEntry {
     hostOwner?: HostedBindingOwner;
@@ -62,8 +63,28 @@ export interface CoordinatorRegistryEntry {
     mcpConfigPath?: string;
 }
 
-const _registry = new Map<string, CoordinatorRegistryEntry>();
-const _pendingFailedCleanupBySessionId = new Map<string, CoordinatorRegistryEntry>();
+const COORD_REGISTRY_KEY = Symbol.for('adhdev.daemon-core.meshCoordinatorRegistry');
+const sharedCoordRegistry = globalThis as Record<
+    symbol,
+    {
+        registry: Map<string, CoordinatorRegistryEntry>;
+        pendingFailedCleanupBySessionId: Map<string, CoordinatorRegistryEntry>;
+    } | undefined
+>;
+if (!sharedCoordRegistry[COORD_REGISTRY_KEY]) {
+    Object.defineProperty(sharedCoordRegistry, COORD_REGISTRY_KEY, {
+        value: {
+            registry: new Map<string, CoordinatorRegistryEntry>(),
+            pendingFailedCleanupBySessionId: new Map<string, CoordinatorRegistryEntry>(),
+        },
+        enumerable: false,
+        configurable: false,
+        writable: false,
+    });
+}
+const _registry = sharedCoordRegistry[COORD_REGISTRY_KEY]!.registry;
+const _pendingFailedCleanupBySessionId =
+    sharedCoordRegistry[COORD_REGISTRY_KEY]!.pendingFailedCleanupBySessionId;
 
 function getRegistryPath(): string {
     return join(getDaemonDataDir(), 'mesh-coordinators.json');
@@ -95,6 +116,11 @@ export function loadMeshCoordinatorRegistry(options: { strict?: boolean } = {}):
             if (typeof entry?.sessionId === 'string' && typeof entry?.meshId === 'string') {
                 const typedEntry = entry as CoordinatorRegistryEntry;
                 _registry.set(typedEntry.sessionId, typedEntry);
+                ensureMcpSessionCredential({
+                    sessionId: typedEntry.sessionId,
+                    meshId: typedEntry.meshId,
+                    isCoordinator: true,
+                });
                 const targetPath = resolveEntryContextFilePath(typedEntry);
                 const sep = typedEntry.injection?.contextFile?.separators;
                 if (targetPath && isValidRecordedSeparators(sep)) {
@@ -159,6 +185,11 @@ export function registerMeshCoordinator(entry: CoordinatorRegistryEntry): void {
         }
     }
     _registry.set(entry.sessionId, entry);
+    ensureMcpSessionCredential({
+        sessionId: entry.sessionId,
+        meshId: entry.meshId,
+        isCoordinator: true,
+    });
     saveRegistry();
     if (targetPath && entry.workspace) {
         markAntigravityCoordinatorRegistered({
@@ -267,6 +298,7 @@ function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): bo
  *     leading/trailing blank line so we don't leave dangling separators.
  */
 export function unregisterMeshCoordinator(sessionId: string): void {
+    revokeMcpSessionCredential(sessionId);
     const entry = _registry.get(sessionId);
     if (_registry.delete(sessionId)) {
         saveRegistry();
@@ -333,6 +365,7 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>, o
         if (!entry.hostOwner) { entry.hostOwner = owner; migrated = true; }
         if (liveSessionIds.has(entry.sessionId)) continue;
         _registry.delete(entry.sessionId);
+        revokeMcpSessionCredential(entry.sessionId);
         pruned.push(entry);
     }
     if (pruned.length > 0 || migrated) {

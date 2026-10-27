@@ -43,6 +43,7 @@ export const MESH_LOCAL_RECORD_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;   // 30 
 export const MESH_TOOL_CALL_LOG_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;  // 14 days
 export const MESH_TERMINAL_QUEUE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const MESH_TOPIC_INDEX_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;     // 30 days
+export const MESH_SESSION_ARTIFACTS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (OD-7)
 
 /**
  * Periodic retention sweep for the mesh-runtime.db tables that previously had no
@@ -69,6 +70,7 @@ export function pruneMeshRuntimeRetention(): {
         const { queue: terminalQueue, taskOutputs } = store.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS);
         const topicIndex = meshTopicIndexFor(store.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
         const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
+        store.db.prepare('DELETE FROM session_artifacts WHERE updated_at < ?').run(Date.now() - MESH_SESSION_ARTIFACTS_RETENTION_MS);
         if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts > 0) {
             LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue (+${taskOutputs} task-output) / ${topicIndex} topic-index / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
         }

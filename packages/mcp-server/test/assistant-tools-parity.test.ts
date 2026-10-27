@@ -53,6 +53,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   project_note: { project: 'adhdev', action: 'record', text: 'oss commits in English' },
   launch_defaults: {},
   launch_defaults_set: { action: 'set', role: 'assistant', expectedRevision: 1, provider: 'claude-cli' },
+  artifact_list: { project: 'adhdev' },
+  artifact_read: { project: 'adhdev', artifact_id: 'art_0123456789abcdef' },
 };
 
 function fakeTransport(reply: (type: string, args: Record<string, unknown>) => any = () => ({ success: true })) {
@@ -86,10 +88,11 @@ test('write annotations match ASSISTANT_WRITE_TOOLS exactly; every other assista
   assert.deepEqual(writes, [...ASSISTANT_WRITE_TOOLS].sort());
 });
 
-test('assistant shares only driver discovery with mesh and worker tools', () => {
+test('assistant shares only driver discovery and read-only artifact tools with mesh and worker tools', () => {
   const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS]);
-  assert.deepEqual(ASSISTANT_TOOLS.filter(name => others.has(name)).sort(), ['driver_describe', 'driver_list']);
+  assert.deepEqual(ASSISTANT_TOOLS.filter(name => others.has(name)).sort(), ['artifact_list', 'artifact_read', 'driver_describe', 'driver_list']);
   assert.equal(ASSISTANT_TOOLS.some(name => (name as string) === 'driver_invoke'), false);
+  assert.equal(ASSISTANT_TOOLS.some(name => (name as string) === 'artifact_register'), false);
 });
 
 // ─── Startup assertion ─────────────────────────────────────────────────────

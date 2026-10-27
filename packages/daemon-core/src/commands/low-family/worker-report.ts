@@ -776,3 +776,13 @@ export const workerReportSpecs = defineCommandSpecs('low', workerReportHandlers,
     [WORKER_REPORT_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
     [WORKER_PROGRESS_FORWARD_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
 }, { meshSender: 'authenticated_peer' });
+
+Object.defineProperty(workerReportHandlers, 'artifact_index_forwarded', {
+    value: async (ctx: LowFamilyContext, args: any) => {
+        const { handleArtifactIndexForwarded } = await import('../med-family/artifacts.js');
+        return handleArtifactIndexForwarded(ctx as any, args);
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+});

@@ -42,6 +42,8 @@ import {
 } from './cli-session-binding.js';
 import type { DaemonCliManager } from './cli-manager.js';
 import { IDENTITY } from '../track-identity.js';
+import { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '../standalone-mcp-auth.js';
+import { ensureMcpSessionCredential } from './mcp-command-ingress.js';
 
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
 export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'roleRestartInputs' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
@@ -308,6 +310,21 @@ async function startCliPtySession(
 
  // If InstanceManager exists, manage as CliProviderInstance unified
     const instanceManager = host.deps.getInstanceManager();
+    const coordinatorMeshId =
+        typeof launchSettings?.meshCoordinatorFor === 'string' && launchSettings.meshCoordinatorFor.trim()
+            ? launchSettings.meshCoordinatorFor.trim()
+            : undefined;
+    const isWorkerLaunch = Boolean(launchSettings?.launchedByCoordinator);
+    const mcpSessionCredential = !isWorkerLaunch
+        ? ensureMcpSessionCredential({
+              sessionId: key,
+              ...(coordinatorMeshId ? { meshId: coordinatorMeshId } : {}),
+              isCoordinator: Boolean(coordinatorMeshId),
+          })
+        : undefined;
+    const effectiveExtraEnv = mcpSessionCredential
+        ? { ...(options?.extraEnv || {}), [ADHDEV_MCP_SESSION_CREDENTIAL_ENV]: mcpSessionCredential }
+        : options?.extraEnv;
     if (launchSettings.codexTransport === 'app-server' && (!instanceManager || normalizedType !== 'codex-cli' || sessionBinding.launchMode !== 'new')) {
         throw new Error('Codex app-server transport requires a new managed Codex session; existing sessions cannot be migrated');
     }
@@ -328,7 +345,7 @@ async function startCliPtySession(
             {
                 providerSessionId: sessionBinding.providerSessionId,
                 launchMode: sessionBinding.launchMode,
-                extraEnv: options?.extraEnv,
+                extraEnv: effectiveExtraEnv,
                 resolvedTrustPlan: options?.resolvedTrustPlan,
                 // PERMISSION-MODE-DUPLICATE: the mode's launchArgs are already in
                 // resolvedCliArgs; the spec's own base args still need stripping.
@@ -360,7 +377,7 @@ async function startCliPtySession(
             key,
             sessionBinding.providerSessionId,
             false,
-            options?.extraEnv,
+            effectiveExtraEnv,
             autoApproveLaunch.removeArgs,
             options?.resolvedTrustPlan,
         );

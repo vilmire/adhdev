@@ -32,6 +32,37 @@ export const MAX_PREVIEW_TEXT_CHARS = 600;
 /** Maximum number of distinct artifacts allowed per session. */
 export const MAX_ARTIFACTS_PER_SESSION = 50;
 
+/** Maximum number of distinct artifacts allowed per mission (OD-7 / brief d6a3c57e). */
+export const MAX_ARTIFACTS_PER_MISSION = 200;
+
+/** Maximum number of distinct artifacts allowed per mesh (OD-7 / brief d6a3c57e). */
+export const MAX_ARTIFACTS_PER_MESH = 500;
+
+/** Maximum page size for MCP / assistant / follower artifact reads (256 KiB, OD-7). */
+export const MAX_ARTIFACT_MCP_PAGE_BYTES = 256 * 1024;
+
+/** Maximum base64-encoded UTF-8 byte budget for a given raw byte limit (`ceil(rawBytes / 3) * 4`). */
+export function maxBase64EncodedBytes(rawBytes: number): number {
+    return Math.ceil(Math.max(0, rawBytes) / 3) * 4;
+}
+
+/** Metadata retention horizon for session_artifacts (30 days, OD-7). */
+export const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export type ArtifactProducerRole = 'worker' | 'coordinator' | 'assistant' | 'user' | 'session';
+
+export const UNTRUSTED_ARTIFACT_OPEN_TAG = '<untrusted_artifact_content>';
+export const UNTRUSTED_ARTIFACT_CLOSE_TAG = '</untrusted_artifact_content>';
+
+/** Wrap untrusted artifact content in `<untrusted_artifact_content>` tags, defanging inner opening/closing tags. */
+export function wrapUntrustedArtifactContent(content: string): string {
+    const safeBody = String(content ?? '').replace(
+        /<\s*(\/?)\s*untrusted_artifact_content\b[^>]*>/gi,
+        (_match, slash) => (slash ? '<\\/untrusted_artifact_content>' : '<\\untrusted_artifact_content>'),
+    );
+    return `${UNTRUSTED_ARTIFACT_OPEN_TAG}\n${safeBody}\n${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
+}
+
 /** Allowed MIME types per ArtifactKind. SVG and HTML are intentionally excluded. */
 export const MIME_BY_KIND: Readonly<Record<ArtifactKind, readonly string[]>> = Object.freeze({
     markdown: Object.freeze(['text/markdown', 'text/plain']),
@@ -67,6 +98,10 @@ export interface ArtifactRecord {
     artifactId: string;
     sessionId: string;
     taskId: string | null;
+    meshId?: string | null;
+    missionId?: string | null;
+    producerRole?: ArtifactProducerRole | string | null;
+    originDaemonId?: string | null;
     workspaceRoot: string;
     relPath: string;
     kind: ArtifactKind;
@@ -99,9 +134,15 @@ export type ArtifactErrorCode =
     | 'not_a_regular_file'
     | 'artifact_too_large'
     | 'unsupported_mime_or_kind'
+    | 'secret_file_refused'
     | 'session_artifact_limit_reached'
+    | 'mission_artifact_limit_exceeded'
+    | 'mission_artifact_limit_reached'
+    | 'mesh_artifact_limit_exceeded'
+    | 'mesh_artifact_limit_reached'
     | 'artifact_not_found'
-    | 'artifact_session_mismatch';
+    | 'artifact_session_mismatch'
+    | 'artifact_access_denied';
 
 export class ArtifactGuardError extends Error {
     readonly code: ArtifactErrorCode;
@@ -132,4 +173,66 @@ export function toChatAttachmentMeta(record: ArtifactRecord): ChatAttachmentMeta
         meta.previewText = record.previewText;
     }
     return meta;
+}
+
+export const ORIGIN_FETCH_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * Validate and reassemble base64 chunks from an origin daemon, bounding both
+ * chunk count and total decoded bytes BEFORE allocating or calling Buffer.concat.
+ */
+export function reassembleBase64ArtifactChunks(
+    chunks: readonly unknown[],
+    maxBytes: number,
+): { ok: true; content: string } | { ok: false; code: 'artifact_too_large'; error: string } {
+    const maxChunks = Math.max(1, Math.ceil(maxBytes / ORIGIN_FETCH_CHUNK_BYTES));
+    if (chunks.length > maxChunks) {
+        return {
+            ok: false,
+            code: 'artifact_too_large',
+            error: `Artifact chunk count (${chunks.length}) exceeds maximum (${maxChunks}) for ${maxBytes} byte limit (artifact_too_large)`,
+        };
+    }
+    let estimatedBytes = 0;
+    const normalized: string[] = [];
+    for (const raw of chunks) {
+        if (typeof raw !== 'string') {
+            return {
+                ok: false,
+                code: 'artifact_too_large',
+                error: 'Invalid base64 chunk in artifact origin response (artifact_too_large)',
+            };
+        }
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) continue;
+        const pad = trimmed.endsWith('==') ? 2 : trimmed.endsWith('=') ? 1 : 0;
+        const decodedEst = Math.max(0, Math.floor((trimmed.length * 3) / 4) - pad);
+        if (decodedEst > ORIGIN_FETCH_CHUNK_BYTES || estimatedBytes + decodedEst > maxBytes) {
+            return {
+                ok: false,
+                code: 'artifact_too_large',
+                error: `Reassembled artifact chunks exceed ${maxBytes} bytes limit (artifact_too_large)`,
+            };
+        }
+        estimatedBytes += decodedEst;
+        normalized.push(trimmed);
+    }
+    if (normalized.length === 0) {
+        return { ok: true, content: '' };
+    }
+    const decodedBuffers: Buffer[] = [];
+    let actualTotal = 0;
+    for (const b64 of normalized) {
+        const buf = Buffer.from(b64, 'base64');
+        actualTotal += buf.byteLength;
+        if (actualTotal > maxBytes) {
+            return {
+                ok: false,
+                code: 'artifact_too_large',
+                error: `Reassembled artifact chunks exceed ${maxBytes} bytes limit (artifact_too_large)`,
+            };
+        }
+        decodedBuffers.push(buf);
+    }
+    return { ok: true, content: Buffer.concat(decodedBuffers, actualTotal).toString('utf8') };
 }

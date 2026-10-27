@@ -37,3 +37,22 @@ export function matchesLiveArtifactWorkerCredential(
         && sessionIdsEquivalent(value.sessionId, principal.sessionId!)
     ));
 }
+
+/** Resolve the verified session/mesh scope for a live worker artifact MCP request. */
+export function resolveLiveArtifactWorkerScope(
+    credential: string,
+    args: Record<string, unknown>,
+): { sessionId: string; meshId?: string; isCoordinator: false } | null {
+    if (!matchesLiveArtifactWorkerCredential(credential, args)) return null;
+    const headerBind = verifyWorkerSessionBind(credential);
+    const headerToken = headerBind ? null : verifyWorkerTaskToken(credential);
+    const principal = headerBind ?? headerToken;
+    if (!principal?.sessionId) return null;
+    return {
+        sessionId: principal.sessionId,
+        ...(typeof principal.meshId === 'string' && principal.meshId.trim()
+            ? { meshId: principal.meshId.trim() }
+            : {}),
+        isCoordinator: false,
+    };
+}

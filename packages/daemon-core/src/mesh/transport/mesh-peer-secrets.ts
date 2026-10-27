@@ -35,6 +35,11 @@ import { dirname, join } from 'path';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
+import {
+    clearAuthenticatedPeerOriginGrantPublicKey,
+    recordAuthenticatedPeerOriginGrantPublicKey,
+} from '../mesh-host-memory.js';
+import { isValidOriginGrantPublicKey } from '../origin-grant-keypair.js';
 
 /** Credentials file name under the config dir. NOT meshes.json — see header. */
 export const MESH_PEER_SECRETS_FILE = 'mesh-peer-secrets.json';
@@ -54,6 +59,8 @@ export interface PeerSecretRecord {
     secret: string;
     /** Member side only: `host:port` (or URL) the member dials to reach the host. */
     hostAddress?: string;
+    /** Peer's Ed25519 public key (SPKI DER base64url) for verifying cross-origin artifact fetch grants. */
+    originGrantPublicKey?: string;
     /** ISO timestamp of when the record was first stored locally. */
     createdAt: string;
 }
@@ -115,6 +122,7 @@ function isValidRecord(value: unknown): value is PeerSecretRecord {
     if (rec.role !== 'host' && rec.role !== 'member') return false;
     if (typeof rec.secret !== 'string' || rec.secret.length === 0) return false;
     if (rec.hostAddress !== undefined && typeof rec.hostAddress !== 'string') return false;
+    if (rec.originGrantPublicKey !== undefined && typeof rec.originGrantPublicKey !== 'string') return false;
     if (typeof rec.createdAt !== 'string' || rec.createdAt.trim() === '') return false;
     return true;
 }
@@ -129,6 +137,9 @@ function normalizeRecord(rec: PeerSecretRecord): PeerSecretRecord {
     };
     if (rec.hostAddress !== undefined && rec.hostAddress.trim() !== '') {
         out.hostAddress = rec.hostAddress.trim();
+    }
+    if (rec.originGrantPublicKey !== undefined && rec.originGrantPublicKey.trim() !== '') {
+        out.originGrantPublicKey = rec.originGrantPublicKey.trim();
     }
     return out;
 }
@@ -259,6 +270,14 @@ export function putPeerSecret(record: PeerSecretRecord, opts: PeerSecretStoreOpt
     const others = readRecords(path)
         .filter((rec) => !(rec.meshId === normalized.meshId && daemonIdsEquivalent(rec.peerDaemonId, normalized.peerDaemonId)));
     writeRecords(path, [...others, normalized]);
+    if (!opts.filePath && normalized.originGrantPublicKey && isValidOriginGrantPublicKey(normalized.originGrantPublicKey)) {
+        recordAuthenticatedPeerOriginGrantPublicKey(
+            normalized.meshId,
+            normalized.peerDaemonId,
+            normalized.originGrantPublicKey,
+            { env: opts.env, syncPeerSecrets: false },
+        );
+    }
     emit({
         kind: 'put',
         meshId: normalized.meshId,
@@ -283,6 +302,9 @@ export function removePeerSecret(
     if (!removed) return false;
     const kept = all.filter((rec) => !(rec.meshId === mesh && daemonIdsEquivalent(rec.peerDaemonId, canonical)));
     writeRecords(path, kept);
+    if (!opts.filePath) {
+        clearAuthenticatedPeerOriginGrantPublicKey(mesh, canonical, { env: opts.env });
+    }
     emit({ kind: 'remove', meshId: mesh, peerDaemonId: canonical, role: removed.role, filePath: path });
     return true;
 }

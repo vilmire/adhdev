@@ -44,6 +44,8 @@ export const WORKER_TOOLS = [
     'driver_describe',
     'driver_invoke',
     'artifact_register',
+    'artifact_list',
+    'artifact_read',
     // Contract versioning (Cut A): exact pinned-unit reads (E2), the explicit
     // read claim (C1) and the authoritative head/notice pull.
     'contract_read',

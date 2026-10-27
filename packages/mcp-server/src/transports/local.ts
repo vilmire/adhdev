@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs';
 
 import {
   ADHDEV_INTERNAL_AUTH_HEADER,
+  ADHDEV_MCP_SESSION_CREDENTIAL_ENV,
+  ADHDEV_MCP_SESSION_CREDENTIAL_HEADER,
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   DEFAULT_STANDALONE_PORT,
 } from '@adhdev/daemon-core';
@@ -43,6 +45,8 @@ interface LocalTransportOptions {
   authFile?: string;
   /** Worker scope: the worker's own session bind (or per-task token). */
   workerCredential?: string;
+  /** Session-bound credential for coordinator/assistant/CLI MCP servers. */
+  sessionCredential?: string;
 }
 
 /**
@@ -74,6 +78,7 @@ export class LocalTransport {
   private authHeader: string | null;
   private readonly authFile: string | null;
   private readonly workerCredential: string | null;
+  private readonly sessionCredential: string | null;
   /** Why the last ping() failed — `auth` when the daemon refused the credential. */
   lastPingFailure: { kind: 'auth' | 'unreachable'; message: string } | null = null;
 
@@ -82,6 +87,10 @@ export class LocalTransport {
     this.authHeader = opts.password ? `Bearer ${opts.password}` : null;
     this.authFile = opts.authFile?.trim() || null;
     this.workerCredential = opts.workerCredential?.trim() || null;
+    this.sessionCredential =
+      opts.sessionCredential?.trim() ||
+      process.env[ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() ||
+      null;
   }
 
   private readInternalToken(): string | null {
@@ -101,6 +110,8 @@ export class LocalTransport {
     const internalToken = this.readInternalToken();
     if (internalToken) h[ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
     if (this.workerCredential) h[ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
+    const sessionCred = this.sessionCredential || process.env[ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() || null;
+    if (sessionCred) h[ADHDEV_MCP_SESSION_CREDENTIAL_HEADER] = sessionCred;
     return h;
   }
 

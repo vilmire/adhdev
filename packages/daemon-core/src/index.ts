@@ -423,13 +423,19 @@ export {
 export {
   ADHDEV_INTERNAL_AUTH_HEADER,
   ADHDEV_WORKER_CREDENTIAL_HEADER,
+  ADHDEV_MCP_SESSION_CREDENTIAL_HEADER,
+  ADHDEV_MCP_SESSION_CREDENTIAL_ENV,
   ADHDEV_DAEMON_AUTH_FILE_ENV,
   ADHDEV_DAEMON_AUTH_FILE_FLAG,
   ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
   WORKER_MCP_DAEMON_VERBS,
   isWorkerMcpDaemonVerb,
 } from './standalone-mcp-auth.js';
-export { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential } from './standalone-mcp-auth-verify.js';
+export {
+  isLiveWorkerMcpCredential,
+  matchesLiveArtifactWorkerCredential,
+  resolveLiveArtifactWorkerScope,
+} from './standalone-mcp-auth-verify.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';
@@ -1048,7 +1054,19 @@ export type {
   TrustedOwnerIngressProofInput,
   RouterCommandIngressMetadata,
 } from './commands/command-args.js';
-export { attachAuthenticatedMcpCommand, preserveAuthenticatedMcpCommand } from './commands/mcp-command-ingress.js';
+export {
+  attachAuthenticatedMcpCommand,
+  preserveAuthenticatedMcpCommand,
+  readAuthenticatedMcpCommand,
+  readAuthenticatedMcpScope,
+  mintMcpSessionCredential,
+  ensureMcpSessionCredential,
+  getMcpSessionCredentialForSession,
+  verifyMcpSessionCredential,
+  revokeMcpSessionCredential,
+  __resetMcpSessionCredentialsForTest,
+  type AuthenticatedMcpScope,
+} from './commands/mcp-command-ingress.js';
 // Assistant input attribution for PTY input that skips the router (cloud P2P
 // `pty_input` frame): the host reports the transport's own source.
 export { reportSessionTerminalInput } from './assistant/assistant-human-input.js';

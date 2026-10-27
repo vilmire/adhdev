@@ -20,6 +20,7 @@ const STANDARD_TOOLS = [
   'screenshot',
   'artifact_register',
   'artifact_list',
+  'artifact_read',
 ];
 
 export function buildMcpHelpText(): string {

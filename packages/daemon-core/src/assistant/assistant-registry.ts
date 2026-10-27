@@ -36,6 +36,7 @@ import { getConfigDir } from '../config/config.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { resolveMemoryBudgets, type MemoryBudgets } from './memory/memory-store.js';
 import { writeFileAtomic600 } from './store-guards.js';
+import { ensureMcpSessionCredential, revokeMcpSessionCredential } from '../commands/mcp-command-ingress.js';
 
 export const ASSISTANT_REGISTRY_FILE = 'assistant.json';
 
@@ -246,6 +247,7 @@ export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemot
         bindingRevision: r.bindingRevision,
         grantRevision: r.grantRevision,
         ...(typeof r.allowCoordinatorLaunch === 'boolean' ? { allowCoordinatorLaunch: r.allowCoordinatorLaunch } : {}),
+        ...(typeof r.allowArtifactRead === 'boolean' ? { allowArtifactRead: r.allowArtifactRead } : {}),
         state: r.state,
         followedAt,
         updatedAt,
@@ -434,6 +436,10 @@ export class AssistantRegistry {
         if (!sameSession) next.lastTurnState = { state: 'idle', at, sessionId: input.sessionId };
         if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
         else delete next.mcpConfigPath;
+        if (!sameSession && prev?.sessionId) {
+            revokeMcpSessionCredential(prev.sessionId);
+        }
+        ensureMcpSessionCredential({ sessionId: input.sessionId, isCoordinator: false });
         const entry = this.write(next);
         return { entry, previous: sameSession ? null : prev?.lastTurnState ?? null };
     }
@@ -514,6 +520,7 @@ export class AssistantRegistry {
         if (cause === 'daemon_shutdown') return false;
         const prev = this.read();
         if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
+        revokeMcpSessionCredential(sessionId);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
         delete next.hostOwner;
@@ -533,6 +540,7 @@ export class AssistantRegistry {
             resolveHostedBindingOwner(prev.sessionId, prev.hostOwner, owner, liveRuntimeIds, dirname(this.path)), owner)) return null;
         if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
         const cleared = prev.sessionId;
+        revokeMcpSessionCredential(cleared);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
         delete next.hostOwner;

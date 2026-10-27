@@ -73,7 +73,7 @@ import {
 import { compactTranscriptTail, coordinatorState, followerStatusView } from '../../assistant/project-views.js';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantRemoteOp } from '../../assistant/assistant-remote-host.js';
 import type { AssistantProjectPorts, CoordinatorLiveness } from '../../assistant/assistant-project-ports.js';
-import { coordinatorPorts, localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
+import { coordinatorPorts, localArtifactList, localArtifactRead, localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
 import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assistant-store.js';
 import { normalizeAssistantRemoteAccessBinding } from '../../config/mesh-config.js';
 import {
@@ -192,19 +192,10 @@ async function poll(ports: AssistantProjectPorts, meshId: string, args: Record<s
     }
     const turns = ports.coordinatorTurns(sessionId, REMOTE_POLL_MAX_COMMITS);
     if (args.cursorOnly === true) {
-        // Follow baseline initialization: return high-water cursor and session identity
-        // without reading transcript history or emitting prior commits.
         return {
-            success: true,
-            coordinator: coordinatorState(views),
-            coordinatorSessionId: sessionId,
-            open: turns.open,
-            modal: !!live?.modalParked,
-            commits: [],
-            cursor: turns.committed[0]?.attemptId ?? null,
-            cursorFound: true,
-            work,
-            statusLine,
+            success: true, coordinator: coordinatorState(views), coordinatorSessionId: sessionId,
+            open: turns.open, modal: !!live?.modalParked, commits: [],
+            cursor: turns.committed[0]?.attemptId ?? null, cursorFound: true, work, statusLine,
         };
     }
     const after = str(args.afterAttemptId);
@@ -213,17 +204,11 @@ async function poll(ports: AssistantProjectPorts, meshId: string, args: Record<s
     const now = Date.now();
     const commits = fresh.slice().reverse().map((c) => ({ attemptId: c.attemptId, outcome: c.outcome, ageMs: Math.max(0, now - c.at) }));
     return {
-        success: true,
-        coordinator: coordinatorState(views),
-        coordinatorSessionId: sessionId,
-        open: turns.open,
-        modal: !!live?.modalParked,
-        commits,
-        cursor: turns.committed[0]?.attemptId ?? null,
-        cursorFound: idx >= 0,
+        success: true, coordinator: coordinatorState(views), coordinatorSessionId: sessionId,
+        open: turns.open, modal: !!live?.modalParked, commits,
+        cursor: turns.committed[0]?.attemptId ?? null, cursorFound: idx >= 0,
         ...(commits.length ? { body: await coordinatorTail(ports, sessionId) } : {}),
-        work,
-        statusLine,
+        work, statusLine,
     };
 }
 
@@ -240,7 +225,6 @@ async function note(meshId: string, args: Record<string, unknown>): Promise<Comm
         }
         return { success: true, ...out };
     }
-    // Only the origins that APPLY reach the host (staging stays with the caller).
     const origin = str(args.origin);
     if (origin !== 'human' && origin !== 'owner') return fail('invalid_args', 'origin must be human or owner');
     const refusal = noteTextRefusal(op.text);
@@ -256,9 +240,7 @@ function isSenderOnWorkerRoster(mesh: LocalMeshEntry, selfDaemonId: string, send
 }
 
 function hasExplicitFollowerClaim(args: Record<string, unknown>): boolean {
-    return record(args.followerAccess) !== undefined
-        || typeof args.bindingRevision === 'number'
-        || typeof args.grantRevision === 'number';
+    return record(args.followerAccess) !== undefined || typeof args.bindingRevision === 'number' || typeof args.grantRevision === 'number';
 }
 
 function readHostMeshStrict(
@@ -294,17 +276,11 @@ function verifyFollowerAcl(
         if (!strictRead.ok) return strictRead;
         mesh = strictRead.mesh;
     }
-    if (!mesh) {
-        return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
-    }
-    if (!ports.isHostedHere(mesh)) {
-        return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
-    }
+    if (!mesh) return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
+    if (!ports.isHostedHere(mesh)) return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
     const self = ports.selfDaemonId();
     const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-    if (!acl) {
-        return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
-    }
+    if (!acl) return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
     if (self && !daemonIdsEquivalent(acl.hostDaemonId, self)) {
         return { ok: false, result: fail('remote_access_denied', `Host daemon identity mismatch for mesh ${meshId}.`) };
     }
@@ -312,8 +288,7 @@ function verifyFollowerAcl(
         return {
             ok: false,
             result: fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                grantRevision: acl.grantRevision,
-                bindingRevision: acl.bindingRevision,
+                grantRevision: acl.grantRevision, bindingRevision: acl.bindingRevision,
             }),
         };
     }
@@ -322,62 +297,46 @@ function verifyFollowerAcl(
     }
     const followerClaim = record(args.followerAccess);
     const claimedSlot = str(followerClaim?.accountSlot) || str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-    if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) {
-        return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${claimedSlot}'.`) };
-    }
+    if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${claimedSlot}'.`) };
     const claimedBindingRev = typeof args.bindingRevision === 'number'
-        ? args.bindingRevision
-        : typeof followerClaim?.bindingRevision === 'number'
-            ? (followerClaim.bindingRevision as number)
-            : null;
+        ? args.bindingRevision : typeof followerClaim?.bindingRevision === 'number' ? (followerClaim.bindingRevision as number) : null;
     const claimedGrantRev = typeof args.grantRevision === 'number'
-        ? args.grantRevision
-        : typeof followerClaim?.grantRevision === 'number'
-            ? (followerClaim.grantRevision as number)
-            : null;
+        ? args.grantRevision : typeof followerClaim?.grantRevision === 'number' ? (followerClaim.grantRevision as number) : null;
     if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
             ok: false,
             result: fail('remote_access_denied', `Follower revision mismatch for mesh ${meshId}.`, {
-                actualBindingRevision: acl.bindingRevision,
-                actualGrantRevision: acl.grantRevision,
+                actualBindingRevision: acl.bindingRevision, actualGrantRevision: acl.grantRevision,
+            }),
+        };
+    }
+    if ((op === 'artifact_list' || op === 'artifact_read') && acl.allowArtifactRead === false) {
+        return {
+            ok: false,
+            result: fail('artifact_read_disabled', `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+                bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision,
             }),
         };
     }
     if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
-        return {
-            ok: false,
-            result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`),
-        };
+        return { ok: false, result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`) };
     }
     return { ok: true, acl };
 }
 
 const MISSING_OR_DEAD_SESSION_REASONS = new Set([
-    'session_exited',
-    'no_target',
-    'not_running',
-    'session_not_found',
-    'instance_not_found',
-    'runtime_missing',
-    'runtime_dead',
-    'coordinator_missing',
+    'session_exited', 'no_target', 'not_running', 'session_not_found',
+    'instance_not_found', 'runtime_missing', 'runtime_dead', 'coordinator_missing',
 ]);
 
 function isMissingOrDeadCoordinatorRuntime(sent: Record<string, unknown>): boolean {
     const code = str(sent.reason) || str(sent.code);
-    if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) {
-        return true;
-    }
+    if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) return true;
     const err = str(sent.error).toLowerCase();
-    return err.includes('cli instance not found')
-        || err.includes('no live session')
-        || err.includes('session has ended')
-        || err.includes('session not found')
-        || err.includes('instance not found')
-        || err.includes('not running')
-        || err.includes('process exited')
-        || err.includes('runtime not found for session')
+    return err.includes('cli instance not found') || err.includes('no live session')
+        || err.includes('session has ended') || err.includes('session not found')
+        || err.includes('instance not found') || err.includes('not running')
+        || err.includes('process exited') || err.includes('runtime not found for session')
         || err.includes('unknown session');
 }
 
@@ -387,23 +346,15 @@ export async function classifyCoordinatorRuntimeLivenessForFollower(
 ): Promise<CoordinatorLiveness> {
     if (isConfirmedTerminalCoordinator(target)) return 'dead';
     const targetRec = target as unknown as Record<string, unknown>;
-    if (targetRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(targetRec.runtime)) {
-        return 'dead';
-    }
+    if (targetRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(targetRec.runtime)) return 'dead';
     const liveStates = ports.liveSessionStates?.() ?? [];
     for (const s of liveStates) {
         if (!s || typeof s !== 'object') continue;
         const sRec = s as Record<string, unknown>;
-        const sid = typeof sRec.instanceId === 'string'
-            ? sRec.instanceId
-            : typeof sRec.sessionId === 'string'
-                ? sRec.sessionId
-                : '';
+        const sid = typeof sRec.instanceId === 'string' ? sRec.instanceId : typeof sRec.sessionId === 'string' ? sRec.sessionId : '';
         if (sid !== target.sessionId) continue;
         if (isConfirmedTerminalCoordinator(s)) return 'dead';
-        if (sRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(sRec.runtime)) {
-            return 'dead';
-        }
+        if (sRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(sRec.runtime)) return 'dead';
     }
     if (typeof ports.isCoordinatorLive === 'function') {
         try {
@@ -418,12 +369,6 @@ export async function classifyCoordinatorRuntimeLivenessForFollower(
     return 'live';
 }
 
-/**
- * Validate a remote follower's wake authority against the host's authoritative
- * grant/ACL record (`mesh.assistantRemoteAccess`). Never requires or consults a
- * host-local `assistant.json` receipt (`verifyOwnerBinding` on the host checks
- * the host's own local assistant, not the remote follower deputy).
- */
 function verifyRemoteFollowerBindingForWake(
     ports: AssistantProjectPorts,
     mesh: LocalMeshEntry | undefined,
@@ -431,14 +376,9 @@ function verifyRemoteFollowerBindingForWake(
     sender: string,
     args: Record<string, unknown>,
 ): { ok: true; acl: AssistantRemoteAccessBinding } | { ok: false; result: CommandRouterResult } {
-    if (!mesh || !ports.isHostedHere(mesh)) {
-        return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
-    }
-    const rawAcl = mesh.assistantRemoteAccess;
-    const acl = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
-    if (!acl) {
-        return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
-    }
+    if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
+    const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
+    if (!acl) return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
     const self = ports.selfDaemonId();
     if (!self || !daemonIdsEquivalent(acl.hostDaemonId, self)) {
         return { ok: false, result: fail('remote_access_denied', `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
@@ -447,27 +387,20 @@ function verifyRemoteFollowerBindingForWake(
         return {
             ok: false,
             result: fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                grantRevision: acl.grantRevision,
-                bindingRevision: acl.bindingRevision,
+                grantRevision: acl.grantRevision, bindingRevision: acl.bindingRevision,
             }),
         };
     }
-    if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) {
-        return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
-    }
+    if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
     const canonSender = canonicalDaemonId(sender);
     if (!canonSender || daemonIdsEquivalent(canonSender, self) || !daemonIdsEquivalent(acl.activeDaemonId, canonSender)) {
         return { ok: false, result: fail('remote_access_denied', `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
     }
     const followerClaim = record(args.followerAccess);
     const localBindingErr = str(followerClaim?.localBindingError);
-    if (localBindingErr) {
-        return { ok: false, result: fail(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
-    }
+    if (localBindingErr) return { ok: false, result: fail(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
     const claimedSlot = str(followerClaim?.accountSlot) || str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-    if (claimedSlot !== acl.accountSlot) {
-        return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${claimedSlot}'.`) };
-    }
+    if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${claimedSlot}'.`) };
     const claimedActiveDaemonId = str(followerClaim?.activeDaemonId);
     if (claimedActiveDaemonId && !daemonIdsEquivalent(claimedActiveDaemonId, acl.activeDaemonId)) {
         return { ok: false, result: fail('remote_access_denied', `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
@@ -477,21 +410,14 @@ function verifyRemoteFollowerBindingForWake(
         return { ok: false, result: fail('remote_access_denied', `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
     }
     const claimedBindingRev = typeof args.bindingRevision === 'number'
-        ? args.bindingRevision
-        : typeof followerClaim?.bindingRevision === 'number'
-            ? (followerClaim.bindingRevision as number)
-            : null;
+        ? args.bindingRevision : typeof followerClaim?.bindingRevision === 'number' ? (followerClaim.bindingRevision as number) : null;
     const claimedGrantRev = typeof args.grantRevision === 'number'
-        ? args.grantRevision
-        : typeof followerClaim?.grantRevision === 'number'
-            ? (followerClaim.grantRevision as number)
-            : null;
+        ? args.grantRevision : typeof followerClaim?.grantRevision === 'number' ? (followerClaim.grantRevision as number) : null;
     if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
             ok: false,
             result: fail('remote_access_denied', `Follower revision mismatch for mesh ${meshId}.`, {
-                actualBindingRevision: acl.bindingRevision,
-                actualGrantRevision: acl.grantRevision,
+                actualBindingRevision: acl.bindingRevision, actualGrantRevision: acl.grantRevision,
             }),
         };
     }
@@ -515,7 +441,6 @@ async function followerProjectSend(
     const canonSender = canonicalDaemonId(sender) ?? sender;
     const deadSessionIds = new Set<string>();
 
-    // Step 1: Validate initial ACL, check idempotency receipt, and inspect current coordinator candidates under a short mutex.
     const admitted = await withMeshRemoteAccessMutex(meshId, async () => {
         const freshRead = readHostMeshStrict(ports, meshId);
         if (!freshRead.ok) return freshRead;
@@ -535,10 +460,6 @@ async function followerProjectSend(
     let launched = false;
     let pickedCoordinatorLiveness: CoordinatorLiveness = 'live';
 
-    // Verify picked coordinator runtime liveness against real session-host runtime evidence before trusting it.
-    // Only confirmed 'dead' evidence may trigger the cold-wake fallback; 'unknown' keeps the existing coordinator.
-    // Note: a stalled session-host probe is bounded by SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS (1.5s), adding at most
-    // ~1.5s latency to the send while running outside withMeshRemoteAccessMutex so owner control calls never block.
     if (live) {
         pickedCoordinatorLiveness = await classifyCoordinatorRuntimeLivenessForFollower(ports, live);
         if (pickedCoordinatorLiveness === 'dead') {
@@ -548,15 +469,11 @@ async function followerProjectSend(
     }
 
     if (prior) {
-        if (prior.bodyHash !== bodyHash) {
-            return fail('idempotency_body_mismatch', 'Retry with the same clientId carried a different message body.');
-        }
+        if (prior.bodyHash !== bodyHash) return fail('idempotency_body_mismatch', 'Retry with the same clientId carried a different message body.');
         if (!live || prior.coordinatorSessionId !== live.sessionId) {
-            return fail(
-                'coordinator_replaced',
-                'The coordinator session changed since the original send; refusing to replay to a replacement session.',
-                { originalCoordinatorSessionId: prior.coordinatorSessionId, currentCoordinatorSessionId: live?.sessionId ?? null },
-            );
+            return fail('coordinator_replaced', 'The coordinator session changed since the original send; refusing to replay to a replacement session.', {
+                originalCoordinatorSessionId: prior.coordinatorSessionId, currentCoordinatorSessionId: live?.sessionId ?? null,
+            });
         }
         return withMeshRemoteAccessMutex(meshId, async () => {
             const latestRead = readHostMeshStrict(ports, meshId);
@@ -566,23 +483,16 @@ async function followerProjectSend(
             return {
                 success: true,
                 result: {
-                    status: 'duplicate',
-                    launched: false,
-                    coordinatorSessionId: live!.sessionId,
+                    status: 'duplicate', launched: false, coordinatorSessionId: live!.sessionId,
                     ...(prior.receiptUnverified ? { receiptUnverified: true, deliveryNote: prior.deliveryNote } : {}),
-                    messageId: prior.messageId,
-                    cursor: prior.cursor,
+                    messageId: prior.messageId, cursor: prior.cursor,
                 },
             };
         });
     }
 
     const auditCtx = (atMs: number = Date.now(), reservation?: FollowerWakeReservation | null): WakeAuditContext => ({
-        acl,
-        meshId,
-        clientId,
-        senderDaemonId: canonSender,
-        now: atMs,
+        acl, meshId, clientId, senderDaemonId: canonSender, now: atMs,
         ...(reservation?.wakeId ? { wakeId: reservation.wakeId } : {}),
         ...(reservation ? { wakeAtMs: reservation.atMs } : {}),
     });
@@ -594,8 +504,6 @@ async function followerProjectSend(
         let reservation: FollowerWakeReservation | null = null;
         let preLaunchDeniedResult: CommandRouterResult | null = null;
 
-        // Hold the per-mesh mutex ONLY for pre-launch validation and atomic quota reservation.
-        // Release before ensureCoordinator so owner revoke/set_policy is not blocked.
         const preLaunch = await withMeshRemoteAccessMutex(meshId, async () => {
             const preNow = Date.now();
             const meshRead = readHostMeshStrict(ports, meshId);
@@ -607,7 +515,6 @@ async function followerProjectSend(
                 return { ok: false as const, result: wakeCheck.result };
             }
             acl = wakeCheck.acl;
-
             const bindingCheck = verifyRemoteFollowerBindingForWake(ports, diskOrPortMesh, meshId, sender, args);
             if (!bindingCheck.ok) {
                 const reason = str((bindingCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
@@ -615,22 +522,15 @@ async function followerProjectSend(
                 return { ok: false as const, result: bindingCheck.result };
             }
             acl = bindingCheck.acl;
-
             if (acl.allowCoordinatorLaunch === false) {
                 recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: 'none', verdict: 'rejected', rule: 'pre_launch_denied', status: 'denied', stage: 'pre_launch', reason: 'wake_disabled' });
                 return {
                     ok: false as const,
-                    result: fail(
-                        'wake_disabled',
-                        'No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.',
-                        { bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision },
-                    ),
+                    result: fail('wake_disabled', 'No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.', {
+                        bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision,
+                    }),
                 };
             }
-
-            // If another concurrent send for (meshId, sender) already holds an in-flight launch reservation,
-            // let this request wait on ensureCoordinator to reuse the newly launched coordinator if it stays live,
-            // and re-check/reserve quota inside beforeLaunch if the earlier launch failed or exited immediately.
             if (!hasInFlightFollowerWakeReservation(meshId, sender)) {
                 const reserved = reserveFollowerWakeSlot(meshId, sender, preNow);
                 if (!reserved.ok) {
@@ -639,9 +539,7 @@ async function followerProjectSend(
                         ok: false as const,
                         result: fail(
                             'wake_rate_limited',
-                            reserved.reason === 'cooldown'
-                                ? 'Remote follower coordinator wake is in its 60s cooldown window.'
-                                : 'Remote follower coordinator wake rate limit (2 per 15m) exceeded.',
+                            reserved.reason === 'cooldown' ? 'Remote follower coordinator wake is in its 60s cooldown window.' : 'Remote follower coordinator wake rate limit (2 per 15m) exceeded.',
                             { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs },
                         ),
                     };
@@ -652,7 +550,6 @@ async function followerProjectSend(
         });
         if (!preLaunch.ok) return preLaunch;
 
-        // Launch with host defaults only OUTSIDE the per-mesh remote access mutex so owner revoke/set_policy can commit concurrently.
         let coord: Awaited<ReturnType<typeof ensureCoordinator>>;
         try {
             coord = await ensureCoordinator(meshId, {
@@ -664,50 +561,37 @@ async function followerProjectSend(
                         const latestMesh = meshRead.ok ? meshRead.mesh : undefined;
                         const wakeCheck = meshRead.ok ? verifyFollowerAcl(ports, latestMesh, meshId, sender, 'send', args) : meshRead;
                         if (!wakeCheck.ok) {
-                            if (reservation && !reservation.settled) {
-                                settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                            }
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                             const reason = str((wakeCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
                             recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: 'none', verdict: 'rejected', rule: 'pre_launch_denied', status: 'denied', stage: 'pre_launch', reason });
                             preLaunchDeniedResult = wakeCheck.result;
                             return { success: false, code: reason, error: str((wakeCheck.result as Record<string, unknown>).error) || reason };
                         }
                         acl = wakeCheck.acl;
-
                         const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
                         if (!bindingCheck.ok) {
-                            if (reservation && !reservation.settled) {
-                                settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                            }
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                             const reason = str((bindingCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
                             recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: 'none', verdict: 'rejected', rule: 'pre_launch_denied', status: 'denied', stage: 'pre_launch', reason });
                             preLaunchDeniedResult = bindingCheck.result;
                             return { success: false, code: reason, error: str((bindingCheck.result as Record<string, unknown>).error) || reason };
                         }
                         acl = bindingCheck.acl;
-
                         if (acl.allowCoordinatorLaunch === false) {
-                            if (reservation && !reservation.settled) {
-                                settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                            }
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                             recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: 'none', verdict: 'rejected', rule: 'pre_launch_denied', status: 'denied', stage: 'pre_launch', reason: 'wake_disabled' });
-                            preLaunchDeniedResult = fail(
-                                'wake_disabled',
-                                'No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.',
-                                { bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision },
-                            );
+                            preLaunchDeniedResult = fail('wake_disabled', 'No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.', {
+                                bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision,
+                            });
                             return { success: false, code: 'wake_disabled', error: 'wake_disabled' };
                         }
-
                         if (!reservation || reservation.settled) {
                             const reserved = reserveFollowerWakeSlot(meshId, sender, checkNow);
                             if (!reserved.ok) {
                                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: 'none', verdict: 'rejected', rule: 'pre_launch_denied', status: 'denied', stage: 'pre_launch', reason: 'wake_rate_limited' });
                                 preLaunchDeniedResult = fail(
                                     'wake_rate_limited',
-                                    reserved.reason === 'cooldown'
-                                        ? 'Remote follower coordinator wake is in its 60s cooldown window.'
-                                        : 'Remote follower coordinator wake rate limit (2 per 15m) exceeded.',
+                                    reserved.reason === 'cooldown' ? 'Remote follower coordinator wake is in its 60s cooldown window.' : 'Remote follower coordinator wake rate limit (2 per 15m) exceeded.',
                                     { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs },
                                 );
                                 return { success: false, code: 'wake_rate_limited', error: 'wake_rate_limited', reason: reserved.reason, retryAfterMs: reserved.retryAfterMs };
@@ -719,23 +603,17 @@ async function followerProjectSend(
                 launch: async (input) => {
                     try {
                         const out = await ports.execute('launch_mesh_coordinator', {
-                            meshId: input.meshId,
-                            extraSystemPrompt: '',
-                            managedByAssistant: true,
+                            meshId: input.meshId, extraSystemPrompt: '', managedByAssistant: true,
                         });
                         const settledAt = Date.now();
                         await withMeshRemoteAccessMutex(meshId, () => {
-                            if (reservation && !reservation.settled) {
-                                settleFollowerWakeReservation(reservation, settledAt, { charge: true });
-                            }
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, settledAt, { charge: true });
                         });
                         return out;
                     } catch (err) {
                         const settledAt = Date.now();
                         await withMeshRemoteAccessMutex(meshId, () => {
-                            if (reservation && !reservation.settled) {
-                                settleFollowerWakeReservation(reservation, settledAt, { charge: true });
-                            }
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, settledAt, { charge: true });
                         });
                         throw err;
                     }
@@ -745,27 +623,17 @@ async function followerProjectSend(
         } catch (err) {
             const failAt = Date.now();
             await withMeshRemoteAccessMutex(meshId, () => {
-                if (reservation && !reservation.settled) {
-                    settleFollowerWakeReservation(reservation, failAt, { charge: false });
-                }
+                if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, failAt, { charge: false });
             });
             throw err;
         }
         const postLaunchNow = Date.now();
 
         return withMeshRemoteAccessMutex(meshId, async () => {
-            // Settle any remaining reservation: when an existing coordinator was reused (coord.ok && !coord.launched),
-            // settle without charging; when a cold launch ran or failed, keep it charged and stamp cooldown at completion.
             if (reservation && !reservation.settled) {
-                settleFollowerWakeReservation(reservation, postLaunchNow, {
-                    charge: !coord.ok || coord.launched,
-                });
+                settleFollowerWakeReservation(reservation, postLaunchNow, { charge: !coord.ok || coord.launched });
             }
-
-            if (preLaunchDeniedResult) {
-                return { ok: false as const, result: preLaunchDeniedResult };
-            }
-
+            if (preLaunchDeniedResult) return { ok: false as const, result: preLaunchDeniedResult };
             if (!coord.ok) {
                 const failReason = str(coord.code) || 'launch_failed';
                 recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: 'none', verdict: 'rejected', rule: 'launch_failed', status: 'failed', stage: 'launch', reason: failReason });
@@ -774,8 +642,6 @@ async function followerProjectSend(
                     result: fail('launch_failed', coord.error || 'Failed to launch coordinator on host.', { ...coord.detail, launchCode: coord.code }),
                 };
             }
-
-            // Audit the cold launch itself immediately so a launched coordinator never survives without an audit row.
             if (coord.launched) {
                 recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'recorded', rule: 'cold_wake_launched', status: 'launched', stage: 'launch' });
             }
@@ -790,7 +656,6 @@ async function followerProjectSend(
                 return { ok: false as const, result: postWakeCheck.result };
             }
             acl = postWakeCheck.acl;
-
             const postBindingCheck = verifyRemoteFollowerBindingForWake(ports, postWakeMesh, meshId, sender, args);
             if (!postBindingCheck.ok) {
                 const reason = str((postBindingCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
@@ -798,7 +663,6 @@ async function followerProjectSend(
                 return { ok: false as const, result: postBindingCheck.result };
             }
             acl = postBindingCheck.acl;
-
             if (acl.allowCoordinatorLaunch === false) {
                 recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason: 'wake_disabled' });
                 return {
@@ -806,10 +670,8 @@ async function followerProjectSend(
                     result: fail('wake_disabled', 'Remote follower coordinator wake was disabled on the host during coordinator launch.'),
                 };
             }
-
             return {
-                ok: true as const,
-                launched: coord.launched,
+                ok: true as const, launched: coord.launched,
                 live: { sessionId: coord.sessionId, idle: true, modalParked: false, managedByAssistant: coord.managedByAssistant },
                 acl,
             };
@@ -818,33 +680,26 @@ async function followerProjectSend(
 
     if (live) {
         if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-            return fail(
-                'coordinator_replaced',
-                'The live coordinator session on the host does not match expectedCoordinatorSessionId.',
-                { expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId },
-            );
+            return fail('coordinator_replaced', 'The live coordinator session on the host does not match expectedCoordinatorSessionId.', {
+                expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId,
+            });
         }
     } else {
         const woken = await wakeFollowerCoordinator();
         if (!woken.ok) return woken.result;
-        live = woken.live;
-        launched = woken.launched;
-        acl = woken.acl;
+        live = woken.live; launched = woken.launched; acl = woken.acl;
         if (!launched) {
             pickedCoordinatorLiveness = await classifyCoordinatorRuntimeLivenessForFollower(ports, live);
             if (pickedCoordinatorLiveness === 'dead') {
                 deadSessionIds.add(live.sessionId);
                 const rewoken = await wakeFollowerCoordinator();
                 if (!rewoken.ok) return rewoken.result;
-                live = rewoken.live;
-                launched = rewoken.launched;
-                acl = rewoken.acl;
+                live = rewoken.live; launched = rewoken.launched; acl = rewoken.acl;
             }
         }
     }
 
     const attemptSendToCoordinator = async (target: AssistantCoordinatorView, isLaunched: boolean) => {
-        // Re-validate the grant/binding revision under a short mutex right before send_chat.
         const preSend = await withMeshRemoteAccessMutex(meshId, async () => {
             const checkNow = Date.now();
             const meshRead = readHostMeshStrict(ports, meshId);
@@ -869,10 +724,7 @@ async function followerProjectSend(
                 acl = bindingCheck.acl;
                 if (acl.allowCoordinatorLaunch === false) {
                     recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason: 'wake_disabled' });
-                    return {
-                        ok: false as const,
-                        result: fail('wake_disabled', 'Remote follower coordinator wake was disabled on the host during coordinator launch.'),
-                    };
+                    return { ok: false as const, result: fail('wake_disabled', 'Remote follower coordinator wake was disabled on the host during coordinator launch.') };
                 }
             }
 
@@ -881,18 +733,10 @@ async function followerProjectSend(
             return { ok: true as const, cursor, messageId };
         });
         if (!preSend.ok) return preSend;
-
         const { cursor, messageId } = preSend;
-        const deliveredText = isLaunched
-            ? frameFollowerWakeRelayText(text)
-            : text;
-
+        const deliveredText = isLaunched ? frameFollowerWakeRelayText(text) : text;
         const sent = await ports.execute('send_chat', {
-            targetSessionId: target.sessionId,
-            text: deliveredText,
-            origin: 'assistant',
-            policy: { mode: 'queue' },
-            messageId,
+            targetSessionId: target.sessionId, text: deliveredText, origin: 'assistant', policy: { mode: 'queue' }, messageId,
         });
         return { ok: true as const, sent, cursor, messageId };
     };
@@ -900,51 +744,35 @@ async function followerProjectSend(
     let sendAttempt = await attemptSendToCoordinator(live, launched);
     if (!sendAttempt.ok) return sendAttempt.result;
 
-    // If send_chat to the picked coordinator failed because the runtime is confirmed missing or dead,
-    // treat the coordinator as absent and go through the wake path once.
-    // When liveness was 'unknown' (probe error/timeout), refuse transiently instead of launching a second coordinator.
     if (!sendAttempt.sent.success && !launched && pickedCoordinatorLiveness !== 'unknown' && isMissingOrDeadCoordinatorRuntime(sendAttempt.sent)) {
         deadSessionIds.add(live.sessionId);
         const woken = await wakeFollowerCoordinator();
         if (!woken.ok) return woken.result;
-        live = woken.live;
-        launched = woken.launched;
-        acl = woken.acl;
+        live = woken.live; launched = woken.launched; acl = woken.acl;
         sendAttempt = await attemptSendToCoordinator(live, launched);
         if (!sendAttempt.ok) return sendAttempt.result;
     }
 
     const { sent, cursor, messageId } = sendAttempt;
     if (!sent.success) {
-        return fail(
-            str(sent.reason) || str(sent.code) || 'send_failed',
-            str(sent.error) || 'send_failed',
-            { launched, coordinatorSessionId: live.sessionId, messageId },
-        );
+        return fail(str(sent.reason) || str(sent.code) || 'send_failed', str(sent.error) || 'send_failed', {
+            launched, coordinatorSessionId: live.sessionId, messageId,
+        });
     }
     const status = sent.deduplicated === true ? 'duplicate' : sent.queued === true ? 'queued' : 'accepted';
     const receiptAt = Date.now();
     await withMeshRemoteAccessMutex(meshId, () => {
         recordFollowerSendReceipt(idempotencyKey, {
-            coordinatorSessionId: live!.sessionId,
-            bodyHash,
-            messageId,
-            cursor,
-            recordedAt: receiptAt,
+            coordinatorSessionId: live!.sessionId, bodyHash, messageId, cursor, recordedAt: receiptAt,
             ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str(sent.deliveryNote) } : {}),
         }, receiptAt);
     });
     return {
         success: true,
         result: {
-            status,
-            ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {}),
-            launched,
-            coordinatorSessionId: live.sessionId,
-            messageId,
-            cursor,
-            bindingRevision: acl.bindingRevision,
-            grantRevision: acl.grantRevision,
+            status, ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {}),
+            launched, coordinatorSessionId: live.sessionId, messageId, cursor,
+            bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision,
         },
     };
 }
@@ -956,6 +784,7 @@ async function run(
     args: Record<string, unknown>,
     isFollower: boolean,
     sender: string,
+    ctx?: HighFamilyContext,
 ): Promise<CommandRouterResult> {
     const meshRead = readHostMeshStrict(ports, meshId);
     if (!meshRead.ok) return meshRead.result;
@@ -988,6 +817,12 @@ async function run(
         case 'report': {
             if (typeof args.attemptId !== 'string' || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== 'string' || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail('invalid_args');
             return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
+        }
+        case 'artifact_list':
+            return { success: true, result: localArtifactList(meshId, args) };
+        case 'artifact_read': {
+            const read = await localArtifactRead(ports, meshId, args, ctx);
+            return read.ok ? { success: true, result: read.result } : fail(read.code, read.error);
         }
         case 'inventory':
             if (isFollower) return fail('remote_op_forbidden', 'inventory is not permitted for remote followers');
@@ -1034,7 +869,7 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
             const who = sender && self && daemonIdsEquivalent(sender, self) ? 'self' : sender.slice(0, 24) || 'unknown';
             LOG.info('Assistant', `remote ${op} (${isFollower ? 'follower' : 'roster'}) for mesh ${meshId} from ${who}`);
         }
-        return await run(ports, op, meshId, args, isFollower, sender);
+        return await run(ports, op, meshId, args, isFollower, sender, ctx);
     } catch (e) {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
@@ -1048,16 +883,12 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
  * notes, or secrets.
  */
 const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
-    if (!isTrustedOwnerIngress(rawArgs)) {
-        return fail('owner_ingress_required', 'Remote project catalog requires verified owner ingress.');
-    }
+    if (!isTrustedOwnerIngress(rawArgs)) return fail('owner_ingress_required', 'Remote project catalog requires verified owner ingress.');
     try {
         const ports = await projectPortsFor(ctx);
         const rawSelf = ports.selfDaemonId();
         const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
-        if (!hostDaemonId) {
-            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
-        }
+        if (!hostDaemonId) return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
         const now = Date.now();
         const hostedMeshes = ports.listMeshes().filter((m) => ports.isHostedHere(m));
         const projects: RemoteProjectCatalogItem[] = hostedMeshes.map((m) => {
@@ -1066,31 +897,22 @@ const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyC
             const lastSessionId = ports.lastCoordinatorSessionId(m.id);
             const acl = normalizeAssistantRemoteAccessBinding(m.assistantRemoteAccess, m.id);
             const allowCoordinatorLaunch = acl ? acl.allowCoordinatorLaunch !== false : true;
+            const allowArtifactRead = acl ? acl.allowArtifactRead !== false : true;
             return {
-                hostDaemonId,
-                meshId: m.id,
-                name: m.name,
+                hostDaemonId, meshId: m.id, name: m.name,
                 sanitizedRepoIdentity: sanitizeRemoteRepoIdentity(m.repoRemoteUrl || m.repoIdentity),
                 coordinatorState: coordinatorState(views),
-                allowCoordinatorLaunch,
+                allowCoordinatorLaunch, allowArtifactRead,
                 capabilities: {
-                    status: true,
-                    read: true,
-                    poll: true,
-                    report: true,
-                    send: true,
+                    status: true, read: true, poll: true, report: true, send: true,
+                    artifact_list: allowArtifactRead, artifact_read: allowArtifactRead,
                     coordinatorPresent: Boolean(live?.sessionId || lastSessionId),
-                    allowCoordinatorLaunch,
+                    allowCoordinatorLaunch, allowArtifactRead,
                 },
                 observedAt: now,
             };
         });
-        return {
-            success: true,
-            hostDaemonId,
-            projects,
-            observedAt: now,
-        };
+        return { success: true, hostDaemonId, projects, observedAt: now };
     } catch (e) {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
@@ -1103,9 +925,7 @@ const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyC
  * `'personal'` assistant slot and one active deputy daemon on a locally hosted mesh.
  */
 const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
-    if (!isTrustedOwnerIngress(rawArgs)) {
-        return fail('owner_ingress_required', 'Remote project access changes require verified owner ingress.');
-    }
+    if (!isTrustedOwnerIngress(rawArgs)) return fail('owner_ingress_required', 'Remote project access changes require verified owner ingress.');
     const args: Record<string, unknown> = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
     const action = str(args.action) || 'get';
     const meshId = str(args.meshId);
@@ -1118,9 +938,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
         const ports = await projectPortsFor(ctx);
         const rawSelf = ports.selfDaemonId();
         const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
-        if (!hostDaemonId) {
-            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
-        }
+        if (!hostDaemonId) return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
 
         if (action === 'get') {
             const mesh = ports.listMeshes().find((m) => m.id === meshId);
@@ -1129,11 +947,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
             if (mesh.assistantRemoteAccess !== undefined && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
                 return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
             }
-            return {
-                success: true,
-                action: 'get',
-                access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId),
-            };
+            return { success: true, action: 'get', access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
         }
 
         return await withMeshRemoteAccessMutex(meshId, () => {
@@ -1154,74 +968,49 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                     const now = Date.now();
 
                     if (action === 'set_policy') {
-                        if (typeof args.allowCoordinatorLaunch !== 'boolean') {
-                            return fail('invalid_args', 'allowCoordinatorLaunch boolean is required');
-                        }
-                        if (rawAcl !== undefined && !existing) {
-                            return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                        }
-                        if (!existing) {
-                            return fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
-                        }
+                        const hasLaunchToggle = typeof args.allowCoordinatorLaunch === 'boolean';
+                        const hasArtifactToggle = typeof args.allowArtifactRead === 'boolean';
+                        if (!hasLaunchToggle && !hasArtifactToggle) return fail('invalid_args', 'allowCoordinatorLaunch or allowArtifactRead boolean is required');
+                        if (rawAcl !== undefined && !existing) return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                        if (!existing) return fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                         if (existing.status !== 'active') {
                             return fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                                grantRevision: existing.grantRevision,
-                                bindingRevision: existing.bindingRevision,
+                                grantRevision: existing.grantRevision, bindingRevision: existing.bindingRevision,
                             });
                         }
                         const updated: AssistantRemoteAccessBinding = {
                             ...existing,
-                            allowCoordinatorLaunch: args.allowCoordinatorLaunch,
+                            ...(hasLaunchToggle ? { allowCoordinatorLaunch: args.allowCoordinatorLaunch as boolean } : {}),
+                            ...(hasArtifactToggle ? { allowArtifactRead: args.allowArtifactRead as boolean } : {}),
                         };
                         mesh.assistantRemoteAccess = updated;
                         mesh.updatedAt = new Date(now).toISOString();
                         const saved = saveMeshConfigDurable(config);
                         if (!saved.ok) return fail('persistence_failed', saved.reason);
-                        LOG.info('Assistant', `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(args.allowCoordinatorLaunch)}, grantRev=${updated.grantRevision})`);
+                        LOG.info('Assistant', `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(updated.allowCoordinatorLaunch)}, allowArtifactRead=${String(updated.allowArtifactRead)}, grantRev=${updated.grantRevision})`);
                         return { success: true, action: 'set_policy', access: updated };
                     }
 
                     if (action === 'grant') {
                         const rawActiveDaemonId = str(args.activeDaemonId);
                         const activeDaemonId = canonicalDaemonId(rawActiveDaemonId);
-                        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) {
-                            return fail('invalid_active_daemon_id', 'activeDaemonId is required and must be a canonical daemon id.');
-                        }
-                        if (hostDaemonId && daemonIdsEquivalent(activeDaemonId, hostDaemonId)) {
-                            return fail('grant_self_not_allowed', 'Cannot grant remote follower access to the host daemon itself.');
-                        }
+                        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) return fail('invalid_active_daemon_id', 'activeDaemonId is required and must be a canonical daemon id.');
+                        if (hostDaemonId && daemonIdsEquivalent(activeDaemonId, hostDaemonId)) return fail('grant_self_not_allowed', 'Cannot grant remote follower access to the host daemon itself.');
                         const slot = str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                        if (slot !== ASSISTANT_ACCOUNT_SLOT) {
-                            return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
-                        }
-                        const bindingRevision = typeof args.bindingRevision === 'number' && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1
-                            ? args.bindingRevision
-                            : null;
-                        if (bindingRevision === null) {
-                            return fail('invalid_args', 'bindingRevision must be a positive integer');
-                        }
+                        if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                        const bindingRevision = typeof args.bindingRevision === 'number' && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
+                        if (bindingRevision === null) return fail('invalid_args', 'bindingRevision must be a positive integer');
                         if (existing && daemonIdsEquivalent(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                            return fail(
-                                'binding_revision_stale',
-                                'Requested bindingRevision is older than the host ACL bindingRevision.',
-                                { actualBindingRevision: existing.bindingRevision },
-                            );
+                            return fail('binding_revision_stale', 'Requested bindingRevision is older than the host ACL bindingRevision.', { actualBindingRevision: existing.bindingRevision });
                         }
                         const nextGrantRevision = baseGrantRevision + 1;
-                        const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean'
-                            ? args.allowCoordinatorLaunch
-                            : (existing?.allowCoordinatorLaunch ?? true);
+                        const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean' ? args.allowCoordinatorLaunch : (existing?.allowCoordinatorLaunch ?? true);
+                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean' ? args.allowArtifactRead : (existing?.allowArtifactRead ?? true);
                         const binding: AssistantRemoteAccessBinding = {
-                            hostDaemonId,
-                            meshId,
-                            accountSlot: ASSISTANT_ACCOUNT_SLOT,
-                            activeDaemonId,
-                            bindingRevision,
-                            grantRevision: nextGrantRevision,
-                            status: 'active',
+                            hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId,
+                            bindingRevision, grantRevision: nextGrantRevision, status: 'active',
                             allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
-                            allowCoordinatorLaunch,
-                            grantedAt: now,
+                            allowCoordinatorLaunch, allowArtifactRead, grantedAt: now,
                         };
                         mesh.assistantRemoteAccess = binding;
                         mesh.updatedAt = new Date(now).toISOString();
@@ -1233,21 +1022,15 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
 
                     // action === 'revoke'
                     const nextGrantRevision = baseGrantRevision + 1;
-                    const revokedActiveDaemonId = existing?.activeDaemonId
-                        ?? (canonicalDaemonId(str(args.activeDaemonId)) ?? (str(args.activeDaemonId) || 'revoked'));
+                    const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId(str(args.activeDaemonId)) ?? (str(args.activeDaemonId) || 'revoked'));
                     const revokedBindingRevision = existing?.bindingRevision ?? 1;
                     const tombstone: AssistantRemoteAccessBinding = {
-                        hostDaemonId,
-                        meshId,
-                        accountSlot: ASSISTANT_ACCOUNT_SLOT,
-                        activeDaemonId: revokedActiveDaemonId,
-                        bindingRevision: revokedBindingRevision,
-                        grantRevision: nextGrantRevision,
-                        status: 'revoked',
+                        hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId: revokedActiveDaemonId,
+                        bindingRevision: revokedBindingRevision, grantRevision: nextGrantRevision, status: 'revoked',
                         allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
                         allowCoordinatorLaunch: existing?.allowCoordinatorLaunch ?? true,
-                        grantedAt: existing?.grantedAt ?? now,
-                        revokedAt: now,
+                        allowArtifactRead: existing?.allowArtifactRead ?? true,
+                        grantedAt: existing?.grantedAt ?? now, revokedAt: now,
                     };
                     mesh.assistantRemoteAccess = tombstone;
                     mesh.updatedAt = new Date(now).toISOString();
@@ -1257,9 +1040,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                     return { success: true, action: 'revoke', access: tombstone };
                 });
             } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) {
-                    return fail(err.code, err.message);
-                }
+                if (err instanceof MeshConfigStrictLockError) return fail(err.code, err.message);
                 throw err;
             }
         });

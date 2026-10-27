@@ -11,6 +11,7 @@ import type { CommandResult, CommandHelpers } from './handler.js';
 import type { ProviderModule } from '../providers/contracts.js';
 import { LOG, getRecentLogs } from '../logging/logger.js';
 import { getRecentDebugTrace } from '../logging/debug-trace.js';
+import { isCredentialKey, redactCredentialString } from '../logging/credential-redactor.js';
 import {
     getCurrentManagerKey,
     getCurrentProviderType,
@@ -36,23 +37,13 @@ const DEFAULT_DEBUG_SANITIZE_OPTIONS: Required<DebugSanitizeOptions> = {
     maxStringLength: 16_000,
 };
 
-const SECRET_KEY_PATTERN = /(?:token|secret|password|passwd|authorization|cookie|api[_-]?key|access[_-]?key|refresh[_-]?token|client[_-]?secret|private[_-]?key)/i;
-
 function truncateDebugString(value: string, maxLength: number): string {
     if (value.length <= maxLength) return value;
     return `${value.slice(0, maxLength)}…[truncated ${value.length - maxLength} chars]`;
 }
 
 function redactDebugSecrets(value: string): string {
-    return value
-        .replace(/(Authorization\s*:\s*Bearer\s+)[^\s'"`]+/gi, '$1[REDACTED:bearer]')
-        .replace(/(Bearer\s+)[A-Za-z0-9._~+\/-]{16,}=*/gi, '$1[REDACTED:bearer]')
-        .replace(/\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}\b/g, '[REDACTED:github-token]')
-        .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[REDACTED:api-key]')
-        .replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}\b/g, '[REDACTED:slack-token]')
-        .replace(/\b(?:adk|adm)_[A-Za-z0-9_-]{16,}\b/g, '[REDACTED:adhdev-token]')
-        .replace(/((?:api[_-]?key|token|secret|password|passwd|client[_-]?secret)\s*[:=]\s*)[^\s,'"`}&]+/gi, '$1[REDACTED:secret]')
-        .replace(/([?&](?:api[_-]?key|token|secret|password|client_secret)=)[^&#\s]+/gi, '$1[REDACTED:secret]');
+    return redactCredentialString(value);
 }
 
 export function sanitizeDebugBundleValue(
@@ -66,11 +57,12 @@ export function sanitizeDebugBundleValue(
     if (typeof value === 'number' || typeof value === 'boolean') return value;
     if (typeof value === 'bigint') return String(value);
     if (typeof value === 'string') {
-        if (SECRET_KEY_PATTERN.test(keyHint) && value.trim()) return '[REDACTED:secret-field]';
+        if (isCredentialKey(keyHint) && value.trim()) return '[REDACTED:secret-field]';
         return truncateDebugString(redactDebugSecrets(value), normalizedOptions.maxStringLength);
     }
     if (typeof value === 'function') return `[Function ${value.name || 'anonymous'}]`;
     if (typeof value !== 'object') return String(value);
+    if (isCredentialKey(keyHint) && !Array.isArray(value)) return '[REDACTED:secret-field]';
     if (depth >= normalizedOptions.maxDepth) return '[MaxDepth]';
 
     if (Array.isArray(value)) {
