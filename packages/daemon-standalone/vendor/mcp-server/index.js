@@ -116486,6 +116486,55 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_artifact_store();
       }
     });
+    function getRuntimeByDepsMap() {
+      const g3 = globalThis;
+      let map2 = g3[ARTIFACT_RUNTIME_BY_DEPS_KEY];
+      if (!map2) {
+        map2 = /* @__PURE__ */ new WeakMap();
+        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
+          value: map2,
+          writable: false,
+          enumerable: false,
+          configurable: false
+        });
+      }
+      return map2;
+    }
+    function setArtifactCommandRuntimeForDeps(deps, runtime2) {
+      if (!runtime2) {
+        runtimeByDeps.delete(deps);
+        return;
+      }
+      runtimeByDeps.set(deps, runtime2);
+    }
+    function getMeshRuntimeStore(ctx) {
+      const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : void 0;
+      return injected ?? MeshRuntimeStore.getInstance();
+    }
+    function getArtifactStore(ctx) {
+      if (ctx.deps) {
+        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
+        if (existing) return existing;
+      }
+      const meshStore = getMeshRuntimeStore(ctx);
+      const store2 = new ArtifactStore(meshStore.db);
+      if (ctx.deps) {
+        const prev = runtimeByDeps.get(ctx.deps) ?? {};
+        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store2 });
+      }
+      return store2;
+    }
+    var ARTIFACT_RUNTIME_BY_DEPS_KEY;
+    var runtimeByDeps;
+    var init_artifact_runtime = __esm2({
+      "src/commands/med-family/artifact-runtime.ts"() {
+        "use strict";
+        init_artifacts();
+        init_mesh_runtime_store();
+        ARTIFACT_RUNTIME_BY_DEPS_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.artifactCommandRuntimeByDeps");
+        runtimeByDeps = getRuntimeByDepsMap();
+      }
+    });
     function setInMemoryNonce(nonce, entry) {
       const prev = consumedOriginGrantNonces.get(nonce);
       if (prev) {
@@ -118004,7 +118053,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_cli_provider_mesh_assignment();
         init_coordinator_registry();
         init_assistant_registry();
-        init_artifacts2();
+        init_artifact_runtime();
         init_artifact_origin_grant();
         handleArtifactIndexForwarded = async (ctx, args) => {
           const senderDaemonId = readMeshSender(args);
@@ -118343,44 +118392,6 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       rejectUntrustedArtifactIngress: () => rejectUntrustedArtifactIngress,
       setArtifactCommandRuntimeForDeps: () => setArtifactCommandRuntimeForDeps
     });
-    function getRuntimeByDepsMap() {
-      const g3 = globalThis;
-      let map2 = g3[ARTIFACT_RUNTIME_BY_DEPS_KEY];
-      if (!map2) {
-        map2 = /* @__PURE__ */ new WeakMap();
-        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
-          value: map2,
-          writable: false,
-          enumerable: false,
-          configurable: false
-        });
-      }
-      return map2;
-    }
-    function setArtifactCommandRuntimeForDeps(deps, runtime2) {
-      if (!runtime2) {
-        runtimeByDeps.delete(deps);
-        return;
-      }
-      runtimeByDeps.set(deps, runtime2);
-    }
-    function getMeshRuntimeStore(ctx) {
-      const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : void 0;
-      return injected ?? MeshRuntimeStore.getInstance();
-    }
-    function getArtifactStore(ctx) {
-      if (ctx.deps) {
-        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
-        if (existing) return existing;
-      }
-      const meshStore = getMeshRuntimeStore(ctx);
-      const store2 = new ArtifactStore(meshStore.db);
-      if (ctx.deps) {
-        const prev = runtimeByDeps.get(ctx.deps) ?? {};
-        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store2 });
-      }
-      return store2;
-    }
     function trimString4(value) {
       return typeof value === "string" ? value.trim() : "";
     }
@@ -119021,8 +119032,6 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return ingress.ok ? null : ingress.result;
     }
     var fs85;
-    var ARTIFACT_RUNTIME_BY_DEPS_KEY;
-    var runtimeByDeps;
     var registrationStateByStore;
     var nextArtifactRegistrationSeq;
     var handleArtifactRegister;
@@ -119042,15 +119051,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_command_registry();
         init_mesh_relay_result();
         init_artifacts();
-        init_mesh_runtime_store();
         init_worker_mcp_isolation();
         init_worker_report();
         init_coordinator_registry();
         init_assistant_registry();
         init_transcript_publisher();
         init_artifact_sharing();
-        ARTIFACT_RUNTIME_BY_DEPS_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.artifactCommandRuntimeByDeps");
-        runtimeByDeps = getRuntimeByDepsMap();
+        init_artifact_runtime();
+        init_artifact_runtime();
         registrationStateByStore = /* @__PURE__ */ new WeakMap();
         nextArtifactRegistrationSeq = 0;
         handleArtifactRegister = async (ctx, args) => {

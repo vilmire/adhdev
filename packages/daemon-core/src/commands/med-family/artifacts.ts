@@ -34,17 +34,15 @@ import {
 } from '../mcp-command-ingress.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
-import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
-import type { MedFamilyContext, MedFamilyHandler } from './types.js';
+import type { CommandRouterResult } from '../router.js';
+import type { MedFamilyHandler } from './types.js';
 import {
-    ArtifactStore,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
     type ArtifactKind,
     type ArtifactProducerRole,
     type ArtifactRecord,
 } from '../../artifacts/index.js';
-import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import {
     verifyWorkerSessionBind,
     verifyWorkerTaskToken,
@@ -68,66 +66,17 @@ import {
     resolveRemoteWorkerTaskScopeFromHost,
     verifyLocalWorkerQueueAndLedgerFence,
 } from './artifact-sharing.js';
+import { getArtifactStore, getMeshRuntimeStore, type ArtifactCommandContext } from './artifact-runtime.js';
 
 export { handleArtifactFetchOrigin, handleArtifactIndexForwarded };
 
-export type ArtifactCommandContext = Pick<
-    MedFamilyContext,
-    'deps' | 'getMeshForCommand' | 'getCachedInlineMesh'
->;
-
-export interface ArtifactCommandRuntime {
-    readonly artifactStore?: ArtifactStore;
-    readonly meshRuntimeStore?: MeshRuntimeStore;
-}
-
-const ARTIFACT_RUNTIME_BY_DEPS_KEY = Symbol.for('adhdev.daemon-core.artifactCommandRuntimeByDeps');
-function getRuntimeByDepsMap(): WeakMap<CommandRouterDeps, ArtifactCommandRuntime> {
-    const g = globalThis as Record<symbol, WeakMap<CommandRouterDeps, ArtifactCommandRuntime> | undefined>;
-    let map = g[ARTIFACT_RUNTIME_BY_DEPS_KEY];
-    if (!map) {
-        map = new WeakMap<CommandRouterDeps, ArtifactCommandRuntime>();
-        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
-            value: map,
-            writable: false,
-            enumerable: false,
-            configurable: false,
-        });
-    }
-    return map;
-}
-const runtimeByDeps = getRuntimeByDepsMap();
-
-/** Optional test/embedding injection hook for custom store instances per router deps. */
-export function setArtifactCommandRuntimeForDeps(
-    deps: CommandRouterDeps,
-    runtime: ArtifactCommandRuntime | null,
-): void {
-    if (!runtime) {
-        runtimeByDeps.delete(deps);
-        return;
-    }
-    runtimeByDeps.set(deps, runtime);
-}
-
-export function getMeshRuntimeStore(ctx: ArtifactCommandContext): MeshRuntimeStore {
-    const injected = ctx.deps ? runtimeByDeps.get(ctx.deps)?.meshRuntimeStore : undefined;
-    return injected ?? MeshRuntimeStore.getInstance();
-}
-
-export function getArtifactStore(ctx: ArtifactCommandContext): ArtifactStore {
-    if (ctx.deps) {
-        const existing = runtimeByDeps.get(ctx.deps)?.artifactStore;
-        if (existing) return existing;
-    }
-    const meshStore = getMeshRuntimeStore(ctx);
-    const store = new ArtifactStore(meshStore.db);
-    if (ctx.deps) {
-        const prev = runtimeByDeps.get(ctx.deps) ?? {};
-        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store });
-    }
-    return store;
-}
+export {
+    getArtifactStore,
+    getMeshRuntimeStore,
+    setArtifactCommandRuntimeForDeps,
+    type ArtifactCommandContext,
+    type ArtifactCommandRuntime,
+} from './artifact-runtime.js';
 
 function trimString(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';

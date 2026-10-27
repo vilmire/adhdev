@@ -32,12 +32,8 @@ import {
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
-import {
-    getArtifactStore,
-    getMeshRuntimeStore,
-    type ArtifactCommandContext,
-    type ResolvedSessionAuthority,
-} from './artifacts.js';
+import { getArtifactStore, getMeshRuntimeStore, type ArtifactCommandContext } from './artifact-runtime.js';
+import type { ResolvedSessionAuthority } from './artifacts.js';
 import {
     __resetOriginGrantStateForTest,
     authorizeWorkerOriginFetch,
