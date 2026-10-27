@@ -647,6 +647,44 @@ var HostUpgradeLease = class {
 var fs4 = __toESM(require("fs"));
 var path3 = __toESM(require("path"));
 var import_session_host_core2 = require("@adhdev/session-host-core");
+var DEAD_SESSION_SNAPSHOT_MAX_CHARS = 64 * 1024;
+function findSubsequence(haystack, needle) {
+  if (needle.length === 0 || needle.length > haystack.length) return -1;
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (haystack[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+function compactRecordForPersist(record) {
+  const cliArgs = record.meta?.cliArgs;
+  const argv = record.launchCommand?.args;
+  if (!Array.isArray(cliArgs) || cliArgs.length === 0 || !Array.isArray(argv)) return record;
+  if (!cliArgs.every((a) => typeof a === "string")) return record;
+  const offset = findSubsequence(argv, cliArgs);
+  if (offset < 0) return record;
+  const { cliArgs: _drop, ...meta } = record.meta;
+  return { ...record, meta: { ...meta, cliArgsRef: { offset, length: cliArgs.length } } };
+}
+function expandPersistedRecord(record) {
+  const ref = record.meta?.cliArgsRef;
+  if (!ref || typeof ref !== "object") return record;
+  const { cliArgsRef: _ref, ...meta } = record.meta;
+  const argv = record.launchCommand?.args;
+  const valid = Array.isArray(argv) && Number.isInteger(ref.offset) && Number.isInteger(ref.length) && ref.offset >= 0 && ref.length >= 0 && ref.offset + ref.length <= argv.length;
+  if (Array.isArray(meta.cliArgs) || !valid) return { ...record, meta };
+  return { ...record, meta: { ...meta, cliArgs: argv.slice(ref.offset, ref.offset + ref.length) } };
+}
+function pruneSnapshotForPersist(record, snapshot) {
+  const dead = !!record.termination || record.lifecycle === "stopped" || record.lifecycle === "failed";
+  if (!dead || record.meta?.runtimeRecoveryState === "orphan_snapshot") return snapshot;
+  const text = typeof snapshot?.text === "string" ? snapshot.text : "";
+  if (text.length <= DEAD_SESSION_SNAPSHOT_MAX_CHARS) return snapshot;
+  let tail = text.slice(text.length - DEAD_SESSION_SNAPSHOT_MAX_CHARS);
+  const first = tail.charCodeAt(0);
+  if (first >= 56320 && first <= 57343) tail = tail.slice(1);
+  return { ...snapshot, text: tail, truncated: true };
+}
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
@@ -675,7 +713,7 @@ var SessionHostStorage = class {
       try {
         const parsed = JSON.parse(fs4.readFileSync(fullPath, "utf8"));
         if (parsed?.record?.sessionId) {
-          states.push(parsed);
+          states.push({ ...parsed, record: expandPersistedRecord(parsed.record) });
         }
       } catch {
       }
@@ -686,11 +724,11 @@ var SessionHostStorage = class {
     fs4.mkdirSync(this.runtimesDir, { recursive: true });
     const filePath = path3.join(this.runtimesDir, `${record.sessionId}.json`);
     const payload = {
-      record,
-      snapshot,
+      record: compactRecordForPersist(record),
+      snapshot: pruneSnapshotForPersist(record, snapshot),
       updatedAt: Date.now()
     };
-    fs4.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+    fs4.writeFileSync(filePath, JSON.stringify(payload), "utf8");
   }
   remove(sessionId) {
     const filePath = path3.join(this.runtimesDir, `${sessionId}.json`);
