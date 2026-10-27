@@ -50,6 +50,7 @@ const WRAPPER_TEMPLATE = String.raw`#!/usr/bin/env node
 // Remove with: __ADHDEV_BINARY_NAME__ quota claude:uninstall
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -92,6 +93,20 @@ function parseWindow(raw) {
     return { usedPercent, resetsAt: toResetMs(raw.resets_at) };
 }
 
+// Keep this digest contract in sync with statuslineProducerLineage in snapshot.ts.
+// ONLY the owning CLI's inherited identity can bind this process-local reading.
+// Reading today's config here would relabel an old CLI's in-memory quota.
+function producerLineage() {
+    const account = process.env.CLAUDE_CODE_ACCOUNT_UUID?.trim();
+    const org = process.env.CLAUDE_CODE_ORGANIZATION_UUID?.trim();
+    if (!account || !org) return { version: 1, kind: 'unknown' };
+    const key = createHash('sha256').update(JSON.stringify([
+        'adhdev-quota-account-v1', 'claude-cli', 'claude-code:statusline-rate-limits',
+        'claude-code:oauthAccount', JSON.stringify([account, org]),
+    ])).digest('hex');
+    return { version: 1, kind: 'account', key };
+}
+
 function windowsEqual(a, b) {
     if (a === null || b === null) return a === b;
     return a.usedPercent === b.usedPercent && a.resetsAt === b.resetsAt;
@@ -120,8 +135,9 @@ function capture(payload) {
     if (fiveHour === null && sevenDay === null) return;
 
     const now = Date.now();
+    const accountLineage = producerLineage();
     const previous = readPrevious();
-    if (previous !== null) {
+    if (previous !== null && JSON.stringify(previous.accountLineage) === JSON.stringify(accountLineage)) {
         const age = now - previous.capturedAt;
         if (age >= 0 && age < MIN_WRITE_INTERVAL_MS) return;
         if (age >= 0 && age < MAX_WRITE_INTERVAL_MS) {
@@ -135,6 +151,7 @@ function capture(payload) {
     const snapshot = {
         version: SNAPSHOT_VERSION,
         capturedAt: now,
+        accountLineage,
         fiveHour,
         sevenDay,
     };

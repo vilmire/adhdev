@@ -13,7 +13,7 @@ import * as path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SNAPSHOT_VERSION } from '../../src/quota/statusline/snapshot';
+import { statuslineProducerLineage, SNAPSHOT_VERSION } from '../../src/quota/statusline/snapshot';
 import { renderWrapperScript } from '../../src/quota/statusline/wrapper-source';
 
 const STATUSLINE_INPUT = {
@@ -50,6 +50,7 @@ function runWrapper(
         minWriteIntervalMs?: number;
         maxWriteIntervalMs?: number;
         additionalSnapshotPaths?: string[];
+        producerEnv?: NodeJS.ProcessEnv;
     } = {},
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
     fs.writeFileSync(
@@ -66,7 +67,13 @@ function runWrapper(
     );
 
     return new Promise((resolve) => {
-        const child = spawn(process.execPath, [wrapperFile], { stdio: ['pipe', 'pipe', 'pipe'] });
+        const child = spawn(process.execPath, [wrapperFile], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, HOME: tempRoot, USERPROFILE: tempRoot,
+                ADHDEV_CONFIG_DIR: tempRoot, CLAUDE_CONFIG_DIR: tempRoot,
+                CLAUDE_CODE_ACCOUNT_UUID: '', CLAUDE_CODE_ORGANIZATION_UUID: '',
+                ...options.producerEnv },
+        });
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', (chunk) => (stdout += chunk.toString('utf-8')));
@@ -325,5 +332,48 @@ describe('statusline wrapper multi-track fan-out', () => {
         );
 
         expect(JSON.parse(fs.readFileSync(sibling, 'utf-8'))).toEqual(firstSibling);
+    });
+});
+
+describe('statusline producer lineage', () => {
+    const sourceA = { CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-a', CLAUDE_CODE_ORGANIZATION_UUID: 'fixture-org' };
+    const sourceB = { ...sourceA, CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-b' };
+
+    it('hashes the inherited producer identity consistently without persisting raw identity', async () => {
+        const sibling = path.join(tempRoot, 'sibling', 'quota.json');
+        await runWrapper(null, STATUSLINE_INPUT, { producerEnv: sourceA, additionalSnapshotPaths: [sibling] });
+        expect(readSnapshot().accountLineage).toEqual(statuslineProducerLineage(sourceA));
+        expect(JSON.parse(fs.readFileSync(sibling, 'utf8'))).toEqual(readSnapshot());
+        const raw = fs.readFileSync(snapshotFile, 'utf8');
+        for (const text of ['fixture-account-a', 'fixture-org', STATUSLINE_INPUT.session_id, STATUSLINE_INPUT.cwd]) {
+            expect(raw).not.toContain(text);
+        }
+    });
+
+    it('captures each producer transition immediately, including an old A writer after switching to B', async () => {
+        // An old CLI retains its inherited A environment after disk config switches.
+        fs.writeFileSync(path.join(tempRoot, '.claude.json'), JSON.stringify({
+            oauthAccount: { accountUuid: 'fixture-account-b', organizationUuid: 'fixture-org' },
+        }));
+        const sibling = path.join(tempRoot, 'sibling', 'quota.json');
+        for (const producerEnv of [sourceA, sourceB, sourceA, {}]) {
+            await runWrapper(null, STATUSLINE_INPUT, { producerEnv, additionalSnapshotPaths: [sibling] });
+            expect(readSnapshot().accountLineage).toEqual(statuslineProducerLineage(producerEnv));
+            expect(JSON.parse(fs.readFileSync(sibling, 'utf8'))).toEqual(readSnapshot());
+        }
+    });
+
+    it('cannot acquire identity from current disk config or extra stdin fields', async () => {
+        fs.writeFileSync(path.join(tempRoot, '.claude.json'), JSON.stringify({
+            oauthAccount: { accountUuid: 'fixture-account-b', organizationUuid: 'fixture-org' },
+        }));
+        await runWrapper(null, { ...STATUSLINE_INPUT, accountLineage: statuslineProducerLineage(sourceB),
+            oauthAccount: { accountUuid: 'fixture-account-b', organizationUuid: 'fixture-org' } });
+        expect(readSnapshot().accountLineage).toEqual({ version: 1, kind: 'unknown' });
+    });
+
+    it('requires both inherited account and organization', async () => {
+        await runWrapper(null, STATUSLINE_INPUT, { producerEnv: { CLAUDE_CODE_ACCOUNT_UUID: 'fixture-account-a' } });
+        expect(readSnapshot().accountLineage).toEqual({ version: 1, kind: 'unknown' });
     });
 });
