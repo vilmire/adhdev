@@ -97,13 +97,14 @@ export function assistantPrivateHomeDir(configDir: string, cliType: string): str
  * `materializePrivateHome`) before writing `configWrite` and launching with
  * `env`.
  *
- * ★`settings.json` (antigravity) is a COPY, re-taken from the real home on every
- * launch — same as a worker. Trade-off: settings the person changes inside the
- * assistant's agy (theme, model default, a trust answer) do not flow back to
- * their real `~/.gemini/antigravity-cli/settings.json`, and are overwritten by
- * the real file at the next assistant launch. A symlink would make the
- * assistant's trust grant for `<configDir>/assistant` (and anything else it
- * writes) land in the person's own settings, which is the leak the copy exists
+ * ★`settings.json` (antigravity) is a managed COPY (mesh/managed-home-copy.ts):
+ * refreshed from the real home while the private copy is untouched, KEPT when
+ * the assistant's agy modified it (a persisted permission / trust answer
+ * survives relaunch), and removed with its source only if still unmodified.
+ * Nothing flows back to the person's real `~/.gemini/antigravity-cli/settings.json`.
+ * A symlink would make the assistant's trust grant for `<configDir>/assistant`
+ * (and anything else it writes) land in the person's own settings, which is the
+ * leak the copy exists
  * to avoid. Auth (keychain / oauth token) and transcripts are links, so login
  * refreshes and the daemon's transcript reader are unaffected.
  */
