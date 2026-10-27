@@ -657,6 +657,53 @@ var HostUpgradeLease = class {
 import * as fs4 from "fs";
 import * as path3 from "path";
 import { resolveInstanceConfigDir, assertTestStorageIsolated, classifyTermination } from "@adhdev/session-host-core";
+var object = (v) => v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
+var shape = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
+var nonempty = (v) => typeof v === "string" && v.trim().length > 0;
+var string = (v) => typeof v === "string";
+var finite = (v) => typeof v === "number" && Number.isFinite(v);
+var count = (v) => Number.isSafeInteger(v) && v >= 0;
+var positive = (v) => count(v) && v > 0;
+var optional = (v, key, check) => !Object.hasOwn(v, key) || check(v[key]);
+var lifecycle = (v) => ["starting", "running", "stopping", "stopped", "failed", "interrupted"].includes(v);
+function validTermination(v) {
+  if (!shape(v, ["exitCode", "signal", "reason", "lifecycle", "terminatedAt", "osPid", "previousLifecycle", "lastOutputAt", "requestedStop"]) || !(v.exitCode === null || Number.isInteger(v.exitCode)) || !(v.signal === null || count(v.signal)) || !finite(v.terminatedAt) || !optional(v, "osPid", positive) || !optional(v, "previousLifecycle", lifecycle) || !optional(v, "lastOutputAt", finite) || !optional(v, "requestedStop", (x) => ["stop", "delete", "restart", "prune"].includes(x))) return false;
+  const classified = classifyTermination(v);
+  return classified.reason === v.reason && classified.lifecycle === v.lifecycle;
+}
+function validRuntimeState(v) {
+  if (!shape(v, ["record", "snapshot", "updatedAt"]) || !finite(v.updatedAt)) return false;
+  const r = v.record, s = v.snapshot;
+  if (!shape(r, [
+    "sessionId",
+    "runtimeKey",
+    "displayName",
+    "workspaceLabel",
+    "transport",
+    "providerType",
+    "category",
+    "workspace",
+    "launchCommand",
+    "osPid",
+    "createdAt",
+    "startedAt",
+    "lastActivityAt",
+    "lifecycle",
+    "surfaceKind",
+    "writeOwner",
+    "attachedClients",
+    "buffer",
+    "meta",
+    "termination",
+    "inputSeq",
+    "inputEpoch"
+  ]) || !["sessionId", "runtimeKey", "providerType", "workspace"].every((k) => nonempty(r[k])) || !string(r.displayName) || !string(r.workspaceLabel) || r.transport !== "pty" || !["cli", "acp", "shell"].includes(r.category) || !lifecycle(r.lifecycle) || !finite(r.createdAt) || !finite(r.lastActivityAt) || !object(r.meta) || !optional(r, "startedAt", finite) || !optional(r, "osPid", positive) || !optional(r, "surfaceKind", (x) => ["live_runtime", "recovery_snapshot", "inactive_record"].includes(x)) || !optional(r, "inputSeq", count) || !optional(r, "inputEpoch", nonempty) || !optional(r, "termination", validTermination)) return false;
+  const c = r.launchCommand, b = r.buffer, w = r.writeOwner;
+  if (!shape(c, ["command", "args", "env", "envMode"]) || !nonempty(c.command) || !Array.isArray(c.args) || !c.args.every(string) || !optional(c, "env", (x) => object(x) && Object.values(x).every(string)) || !optional(c, "envMode", (x) => x === "launch_overrides") || !shape(b, ["scrollbackBytes", "snapshotSeq"]) || !count(b.scrollbackBytes) || !count(b.snapshotSeq)) return false;
+  if (w !== null && (!shape(w, ["clientId", "ownerType", "acquiredAt"]) || !nonempty(w.clientId) || !["agent", "user"].includes(w.ownerType) || !finite(w.acquiredAt))) return false;
+  if (!Array.isArray(r.attachedClients) || !r.attachedClients.every((a) => shape(a, ["clientId", "type", "readOnly", "attachedAt", "lastSeenAt"]) && nonempty(a.clientId) && ["daemon", "web", "local-terminal"].includes(a.type) && typeof a.readOnly === "boolean" && finite(a.attachedAt) && finite(a.lastSeenAt))) return false;
+  return shape(s, ["seq", "text", "truncated", "cols", "rows"]) && count(s.seq) && string(s.text) && typeof s.truncated === "boolean" && optional(s, "cols", positive) && optional(s, "rows", positive);
+}
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
@@ -699,16 +746,7 @@ var SessionHostStorage = class {
     try {
       const states = this.readRecoveryDirectory(this.runtimesDir);
       const tombstones = this.readRecoveryDirectory(this.tombstonesDir);
-      for (const parsed of states) {
-        if (!parsed?.record?.launchCommand || !Array.isArray(parsed.record.launchCommand.args) || !parsed.record.meta || !Number.isFinite(parsed.updatedAt) || !parsed.snapshot) return incomplete();
-      }
-      for (const parsed of tombstones) {
-        const t = parsed?.termination;
-        const nullableInteger = (n) => n === null || Number.isInteger(n);
-        if (!Number.isFinite(parsed.updatedAt) || !t || !Number.isFinite(t.terminatedAt) || !nullableInteger(t.exitCode) || !nullableInteger(t.signal) || t.signal !== null && t.signal < 0 || !["exit", "signal", "failed", "unknown"].includes(t.reason) || !["stopped", "failed"].includes(t.lifecycle) || t.osPid !== void 0 && (!Number.isInteger(t.osPid) || t.osPid <= 0)) return incomplete();
-        const classified = classifyTermination(t);
-        if (classified.reason !== t.reason || classified.lifecycle !== t.lifecycle || t.lastOutputAt !== void 0 && !Number.isFinite(t.lastOutputAt) || t.previousLifecycle !== void 0 && !["starting", "running", "stopping", "stopped", "failed", "interrupted"].includes(t.previousLifecycle) || t.requestedStop !== void 0 && !["stop", "delete", "restart", "prune"].includes(t.requestedStop)) return incomplete();
-      }
+      if (!states.every(validRuntimeState) || !tombstones.every((parsed) => shape(parsed, ["sessionId", "termination", "updatedAt"]) && nonempty(parsed.sessionId) && finite(parsed.updatedAt) && validTermination(parsed.termination))) return incomplete();
       return { complete: true, states, tombstones };
     } catch {
       return incomplete();
@@ -1464,9 +1502,9 @@ function buildRecoveredRecord(persisted) {
 }
 var RuntimeExitWaiters = class {
   waiters = /* @__PURE__ */ new Map();
-  wait(sessionId, timeoutMs, hasRuntime, lifecycle) {
+  wait(sessionId, timeoutMs, hasRuntime, lifecycle2) {
     if (!hasRuntime) {
-      return Promise.resolve(lifecycle === "failed" ? 1 : 0);
+      return Promise.resolve(lifecycle2 === "failed" ? 1 : 0);
     }
     return new Promise((resolve4, reject) => {
       const timeout = setTimeout(() => {
@@ -2373,12 +2411,12 @@ var SessionHostServer = class extends EventEmitter {
       );
     }, 250);
   }
-  recordRuntimeTransition(sessionId, action, lifecycle, detail, success = true, error) {
+  recordRuntimeTransition(sessionId, action, lifecycle2, detail, success = true, error) {
     const transition = {
       timestamp: Date.now(),
       sessionId,
       action,
-      lifecycle,
+      lifecycle: lifecycle2,
       detail,
       success,
       error
