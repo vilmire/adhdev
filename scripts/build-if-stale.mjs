@@ -82,8 +82,10 @@
 // next run fails naming it. Remove that file ONLY after confirming that no
 // build-if-stale run AND no npm / tsup / esbuild build for that package is
 // still running (an orphaned build process can still be writing its dist;
-// the owner's absence alone is not proof). There is deliberately no automatic
-// recovery: nothing here breaks a claim by time or probes pids.
+// the owner's absence alone is not proof). Automatic recovery is limited to a
+// claim that records its writer ({v:1,pid,startId,nonce}) AND whose writer is
+// positively dead (pid gone, or pid alive with a different start identity).
+// Age is never proof; legacy/garbled/identity-unknown claims fail closed as before.
 //
 // ADHDEV_BUILD_IF_STALE=0 forces every build (and is itself excluded from the key).
 //
@@ -92,7 +94,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -372,18 +374,103 @@ function claimPathFor(pkgDir) {
   return `${stampPathFor(pkgDir)}.building`;
 }
 
-/** O_EXCL claim with a random owner token; null when someone else holds it. */
-export function claimPackage(pkgDir) {
+/**
+ * Numeric OS start identity of `pid` (undefined = cannot be established).
+ * Mirrors daemon-core's launch-defaults/owned-lock.ts processStartId (formats
+ * are version-tagged and compatible). Duplicated deliberately: this script
+ * BUILDS daemon-core, so it cannot import it. Unavailable probe = uncertainty.
+ */
+export function processStartId(pid) {
+  try {
+    if (process.platform === 'linux') {
+      const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const ticks = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+      if (/^[a-f0-9-]{36}$/.test(boot) && /^\d+$/.test(ticks ?? '')) return `linux-start-ticks-v1:${boot}:${ticks}`;
+    } else if (process.platform === 'darwin') {
+      const out = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8', timeout: 2000, windowsHide: true,
+        env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const m = /^\w{3} (\w{3})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(out);
+      if (!m) return undefined;
+      const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(m[1]);
+      const ms = Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
+      if (month >= 0 && Number.isFinite(ms) && ms > 0) return `darwin-epoch-seconds-v1:${ms / 1000}`;
+    }
+  } catch { /* uncertainty, never proof */ }
+  return undefined;
+}
+
+function defaultIsPidAlive(pid) {
+  if (pid === process.pid) return true;
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code !== 'ESRCH'; }
+}
+
+/** Parse a claim file. Only the v1 JSON record {v,pid,nonce[,startId]} has an identity; anything else is null. */
+function parseClaim(text) {
+  try {
+    const value = JSON.parse(text);
+    if (value && value.v === 1 && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.nonce === 'string' && value.nonce) {
+      return { pid: value.pid, nonce: value.nonce, startId: typeof value.startId === 'string' && value.startId ? value.startId : undefined };
+    }
+  } catch { /* legacy / garbled */ }
+  return null;
+}
+
+/**
+ * Positive proof the claim's writer is dead, else null. Age is never evidence.
+ * Proof = (a) record's pid no longer exists, or (b) pid exists but its start
+ * identity is known on both sides and differs (pid reuse). Legacy, garbled or
+ * identity-unknown claims are NOT proven: fail closed, current behaviour.
+ */
+function deadWriterProof(claim, probes) {
+  if (!claim) return null;
+  if (!probes.isPidAlive(claim.pid)) return `writer pid ${claim.pid} is gone`;
+  const now = claim.startId ? probes.processStartId(claim.pid) : undefined;
+  if (claim.startId && now && now !== claim.startId) return `pid ${claim.pid} was reused (start identity changed)`;
+  return null;
+}
+
+/** O_EXCL claim holding {v,pid,startId,nonce}; returns the nonce, or null when someone else holds it. */
+export function claimPackage(pkgDir, options = {}) {
   mkdirSync(STAMP_DIR, { recursive: true });
-  const token = randomUUID();
+  const nonce = randomUUID();
+  const record = { v: 1, pid: process.pid, nonce };
+  const startId = (options.processStartId ?? processStartId)(process.pid);
+  if (startId) record.startId = startId;
   let fd;
   try { fd = openSync(claimPathFor(pkgDir), 'wx'); } catch (error) { if (error?.code === 'EEXIST') return null; throw error; }
-  try { writeSync(fd, token); } finally { closeSync(fd); }
-  return token;
+  try { writeSync(fd, JSON.stringify(record)); } finally { closeSync(fd); }
+  return nonce;
+}
+
+/**
+ * Discard a leftover claim ONLY with positive proof its writer is dead.
+ * Returns the proof string when discarded, else null (claim left untouched).
+ * The file is first renamed to a unique name (atomic, so two contenders cannot
+ * both discard) and re-verified; a mismatch means it was replaced, so it is
+ * put back if the slot is free.
+ */
+export function discardDeadClaim(pkgDir, options = {}) {
+  const probes = { isPidAlive: options.isPidAlive ?? defaultIsPidAlive, processStartId: options.processStartId ?? processStartId };
+  const file = claimPathFor(pkgDir);
+  let text;
+  try { text = readFileSync(file, 'utf8'); } catch { return null; }
+  const proof = deadWriterProof(parseClaim(text), probes);
+  if (!proof) return null;
+  const aside = `${file}.dead-${process.pid}-${randomUUID()}`;
+  try { renameSync(file, aside); } catch { return null; }
+  let moved = null;
+  try { moved = readFileSync(aside, 'utf8'); } catch { /* fall through */ }
+  if (moved === text) { rmSync(aside, { force: true }); return proof; }
+  try { linkSync(aside, file); } catch { /* slot taken: the other claim stays */ }
+  rmSync(aside, { force: true });
+  return null;
 }
 
 function ownsClaim(pkgDir, token) {
-  try { return readFileSync(claimPathFor(pkgDir), 'utf8') === token; } catch { return false; }
+  try { return parseClaim(readFileSync(claimPathFor(pkgDir), 'utf8'))?.nonce === token; } catch { return false; }
 }
 
 function releaseClaim(pkgDir, token) {
@@ -423,7 +510,8 @@ function publishStamp(pkgDir, stamp) {
  * failed build (that package's stamp is removed first when we own the claim,
  * so a failure never leaves a stale "fresh" stamp).
  */
-export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, npm = process.platform === 'win32' ? 'npm.cmd' : 'npm', log = console.log } = {}) {
+export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, npm = process.platform === 'win32' ? 'npm.cmd' : 'npm', log = console.log, isPidAlive, processStartId: startIdProbe } = {}) {
+  const opts = { isPidAlive, processStartId: startIdProbe };
   // Validate EVERY selector before any claim or spawn (round-4 P1).
   if (!Array.isArray(specs)) throw new Error('build-if-stale: specs must be an array of workspace directories');
   const targets = specs.map((spec) => ({ spec, ...resolveWorkspaceSelector(spec, cwd) }));
@@ -440,7 +528,14 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
       results.push({ spec, built: false });
       continue;
     }
-    const token = claimPackage(pkgDir);
+    let token = claimPackage(pkgDir, opts);
+    if (!token) {
+      const proof = discardDeadClaim(pkgDir, opts);
+      if (proof) {
+        log(`[build-if-stale] discarded leftover claim for ${spec}: ${proof}`);
+        token = claimPackage(pkgDir, opts);
+      }
+    }
     if (!token) {
       // FAIL CLOSED (round-3 P1): building into an output another run has
       // claimed would let that owner digest — and stamp — OUR bytes under ITS
