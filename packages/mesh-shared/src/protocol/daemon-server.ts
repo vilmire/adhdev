@@ -278,6 +278,8 @@ export type RelayedP2PSignalWirePayload = {
     daemonId?: string
     attemptId?: number
     attemptEpoch?: string
+    /** p2p_ready only: the dashboard's stale-connect backoff index (see DashboardP2PReadyWirePayload). */
+    backoffStep?: number
     sharePermission?: string
     shareTargetSessionId?: string
     sdp?: string

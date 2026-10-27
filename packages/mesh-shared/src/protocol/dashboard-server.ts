@@ -238,7 +238,8 @@ export const DASHBOARD_P2P_SIGNAL_TYPES = ['p2p_ready', 'p2p_answer', 'p2p_ice']
 export type DashboardP2PSignalType = typeof DASHBOARD_P2P_SIGNAL_TYPES[number]
 export const isDashboardP2PSignalType = makeTypeGuard(DASHBOARD_P2P_SIGNAL_TYPES)
 
-export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number; attemptEpoch?: string }
+/** `backoffStep`: the dashboard's stale-connect backoff index (0 = 15s, 1 = 30s, 2 = 60s), so the daemon holds the connecting slot for the same window. */
+export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number; attemptEpoch?: string; backoffStep?: number }
 export type DashboardP2PAnswerWirePayload = { daemonId: string; peerId: string; sdp: string; type: string; attemptId?: number; attemptEpoch?: string }
 export type DashboardP2PLocalIceWirePayload = {
     daemonId: string
