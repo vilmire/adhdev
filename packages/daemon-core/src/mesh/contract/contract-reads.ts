@@ -96,8 +96,10 @@ export function contractRead(ctx: ContractCtx, worker: WorkerPrincipal, input: {
         readFault?.();
         insert('served');
         const slice = body.subarray(start, end);
-        let text: string | null = null;
-        try { text = slice.includes(0) ? null : new TextDecoder('utf-8', { fatal: true }).decode(slice); } catch { text = null; }
+        // Valid UTF-8 round-trips byte-identically; anything else (incl. a range that
+        // splits a multibyte character) is served as base64, never lossily decoded.
+        const decoded = slice.toString('utf8');
+        const text: string | null = !slice.includes(0) && Buffer.from(decoded, 'utf8').equals(slice) ? decoded : null;
         const isText = text !== null;
         return {
             readId,

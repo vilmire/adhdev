@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ALL_MESH_TOOLS, MESH_NOTIFY_WORKER_TOOL } from '../src/tools/mesh-tools.js';
+import { MESH_CONTRACT_TOOL } from '../src/tools/mesh-contract-tool.js';
 import { ALL_WORKER_TOOLS } from '../src/tools/worker-tools.js';
 import { ALL_ASSISTANT_TOOLS } from '../src/tools/assistant-tools.js';
 import {
@@ -78,8 +79,9 @@ test('every published mesh tool carries all four behavior hints', () => {
 });
 
 test('every published worker tool carries all four behavior hints', () => {
-  // G1a-6 adds the three driver tools + Task C adds artifact_register to the three worker report/context tools.
-  assert.equal(ALL_WORKER_TOOLS.length, 7);
+  // G1a-6 adds the three driver tools + Task C adds artifact_register to the three worker report/context tools;
+  // contract versioning Cut A adds contract_read / contract_observe / contract_current.
+  assert.equal(ALL_WORKER_TOOLS.length, 10);
   for (const tool of ALL_WORKER_TOOLS) {
     const annotations = (tool as any).annotations;
     assert.ok(annotations, `${tool.name} has no annotations`);
@@ -99,6 +101,11 @@ test('the flag-gated mesh_notify_worker tool is classified', () => {
   // Published only when the worker-MCP flag is on, so it is absent from
   // ALL_MESH_TOOLS and would escape the registry sweep above.
   assert.deepEqual(findUnannotatedTools([MESH_NOTIFY_WORKER_TOOL]), []);
+});
+
+test('the capability-gated mesh_contract tool is classified', () => {
+  // Published only when ADHDEV_CONTRACT_CAPABILITY is set, so absent from ALL_MESH_TOOLS.
+  assert.deepEqual(findUnannotatedTools([MESH_CONTRACT_TOOL]), []);
 });
 
 test('an unclassified tool throws rather than publishing with no hints', () => {
@@ -224,6 +231,8 @@ test('no classification exists for a tool that is not published anywhere', () =>
     ...ALL_ASSISTANT_TOOLS.map(t => t.name),
     ...STANDARD_MODE_TOOLS.map(t => t.name),
     MESH_NOTIFY_WORKER_TOOL.name,
+    // Published only to a coordinator holding a contract capability (server.ts).
+    MESH_CONTRACT_TOOL.name,
   ]);
   const orphans = Object.keys(TOOL_ANNOTATIONS).filter(name => !published.has(name));
   assert.deepEqual(orphans, [], 'TOOL_ANNOTATIONS has entries for tools nothing publishes');

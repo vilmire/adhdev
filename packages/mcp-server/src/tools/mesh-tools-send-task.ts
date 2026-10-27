@@ -151,6 +151,20 @@ async function parseSendTaskRequest(ctx: MeshContext, args: MeshSendTaskArgs): P
             missionId,
         });
     }
+    // CONTRACT-VERSIONING (Cut A): a strict-bound mission's tasks must be admitted with
+    // exact pins + a binding BEFORE native submission, which only the queue claim path
+    // does. A direct send would deliver an unpinned task, so it is refused up front.
+    if (missionId) {
+        const scope = await ctx.transport.command('contract_mission_scope', { meshId: ctx.mesh.id, missionId }).catch(() => null) as { strict?: boolean } | null;
+        if (scope?.strict === true) {
+            return JSON.stringify({
+                success: false,
+                code: 'contract_strict_requires_queue',
+                error: `mission '${missionId}' is bound to a strict contract namespace — its tasks must be pinned at admission. Use mesh_enqueue_task with this mission_id instead of mesh_send_task.`,
+                missionId,
+            });
+        }
+    }
     // DIFFICULTY-REQUIRED: like `message` above, the schema's `required` is nominal —
     // the dispatcher forwards raw args without runtime validation. Reject at the tool
     // boundary so the caller gets a teaching error naming the field and its allowed

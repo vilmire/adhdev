@@ -9,7 +9,10 @@
     "driver_list",
     "driver_describe",
     "driver_invoke",
-    "artifact_register"
+    "artifact_register",
+    "contract_read",
+    "contract_observe",
+    "contract_current"
   ],
   "coordinator": [
     "mesh_status",

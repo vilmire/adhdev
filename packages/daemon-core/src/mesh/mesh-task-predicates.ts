@@ -82,6 +82,24 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
  * prerequisites. The semantics here (all deps completed) are the invariant —
  * do not fork them.
  */
+/**
+ * Version-eligibility gate on a COMPLETED prerequisite (contract versioning,
+ * Cut A): execution status says the prerequisite finished; this says its exact
+ * result may be used for a dependency. Registered by mesh/contract-runtime.ts;
+ * absent ⇒ every completed prerequisite is usable (pre-feature behaviour).
+ */
+type DependencyEligibilityGate = (meshId: string | undefined, depTaskId: string) => boolean;
+let dependencyEligibilityGate: DependencyEligibilityGate | null = null;
+
+export function registerDependencyEligibilityGate(gate: DependencyEligibilityGate | null): void {
+    dependencyEligibilityGate = gate;
+}
+
+function dependencyUsable(meshId: string | undefined, depTaskId: string): boolean {
+    if (!dependencyEligibilityGate) return true;
+    try { return dependencyEligibilityGate(meshId, depTaskId); } catch { return false; }
+}
+
 export function taskDependenciesSatisfied(
     entry: Pick<MeshWorkQueueEntry, 'dependsOn'> & Partial<Pick<MeshWorkQueueEntry, 'id' | 'phase'>>,
     statusById: Map<string, MeshTaskStatus | string>,
@@ -89,7 +107,8 @@ export function taskDependenciesSatisfied(
 ): boolean {
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
     if (graph && sourceDependencyViolation({ ...entry, id: entry.id ?? '' }, graph)) return false;
-    return deps.every(depId => statusById.get(depId) === 'completed');
+    const meshId = (entry as { meshId?: string }).meshId;
+    return deps.every(depId => statusById.get(depId) === 'completed' && dependencyUsable(meshId, depId));
 }
 
 /**
@@ -105,7 +124,9 @@ export function describeTaskDependencyState(
     depMetaById?: ReadonlyMap<string, Pick<MeshWorkQueueEntry, 'cancelReason' | 'status'>>,
 ): { waitingOn: string[]; dependenciesSatisfied: boolean; dependencyFailures: MeshDependencyFailure[] } {
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
-    const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed');
+    const meshId = (entry as { meshId?: string }).meshId;
+    // A completed prerequisite held by contract eligibility is still waited on (AC10: blocked, not ready).
+    const waitingOn = deps.filter(depId => statusById.get(depId) !== 'completed' || !dependencyUsable(meshId, depId));
     return {
         waitingOn,
         dependenciesSatisfied: taskDependenciesSatisfied(entry, statusById),

@@ -37,6 +37,7 @@
  * names their replacement, instead of the generic unknown-key text.
  */
 
+import { MESH_CONTRACT_TOOL } from './mesh-contract-tool.js';
 import { MESH_SESSION_CLEANUP_MODES, retiredMeshToolError } from '@adhdev/mesh-shared';
 
 import { ALL_MESH_TOOLS } from './mesh-tool-schemas.js';
@@ -666,6 +667,9 @@ const MESH_ALIAS_TOOL: Record<string, { schema: ToolSchemaLike; injected: readon
     // call when the flag is off, so a harmless, always-present entry is simpler
     // than threading the flag through this file too.
     mesh_notify_worker: { schema: MESH_NOTIFY_WORKER_TOOL, injected: [] },
+    // Contract versioning (Cut A): published only with a contract capability (server.ts);
+    // registered unconditionally for argument validation, same reasoning as above.
+    mesh_contract: { schema: MESH_CONTRACT_TOOL, injected: [] },
 };
 
 function resolveMeshTool(name: string): { schema: ToolSchemaLike; injected: readonly string[] } | undefined {

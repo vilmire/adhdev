@@ -118,6 +118,13 @@ export interface ADHDevConfig {
      */
     quotaShowAccountEmailSetByUser?: boolean;
 
+    /**
+     * Contract versioning (Cut A) budget overrides. Absent → the owner packet's
+     * PROVISIONAL values (mesh/contract/contract-types.ts DEFAULT_CONTRACT_BUDGETS),
+     * which are unmeasured until the pilot confirms them (O9).
+     */
+    contractVersioning?: { budgets?: Partial<Record<string, number>> };
+
  // Selected IDE (primary)
     selectedIde: string | null;
 
@@ -399,6 +406,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
         ...(Array.isArray(parsed.allowedRemoteProjectHosts) ? { allowedRemoteProjectHosts: asStringArray(parsed.allowedRemoteProjectHosts) } : {}),
         quotaShowAccountEmail: resolveQuotaShowAccountEmail(parsed),
         ...(parsed.quotaShowAccountEmailSetByUser === true ? { quotaShowAccountEmailSetByUser: true } : {}),
+        ...(isPlainObject(parsed.contractVersioning) ? { contractVersioning: parsed.contractVersioning as ADHDevConfig['contractVersioning'] } : {}),
         selectedIde: asNullableString(parsed.selectedIde),
         configuredIdes: asStringArray(parsed.configuredIdes),
         installedExtensions: asStringArray(parsed.installedExtensions),

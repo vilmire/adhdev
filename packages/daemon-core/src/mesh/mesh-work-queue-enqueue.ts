@@ -24,6 +24,7 @@ import { normalizeMeshTaskPriority, resolveNotBefore, MESH_TASK_BATCH_MAX_TASKS 
 import { getDifficultyBrains } from '../config/mesh-config-routing.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { normalizeMeshCapabilityTags } from './mesh-node-capability-tags.js';
+import { contractRequiredTagsForNewTask } from './contract-runtime.js';
 
 function normalizeDependsOn(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
@@ -180,9 +181,15 @@ export function enqueueTask(
         }
         assertNoDependencyCycle(meshId, id, dependsOn);
         const callerTags = normalizeMeshCapabilityTags(opts?.requiredTags);
-        // Routing is governed solely by the caller's required_tags (hard filter
-        // through nodeSatisfiesRequiredTags) — no role/taskMode auto-routing.
-        const resolvedRequiredTags = callerTags;
+        // Routing is governed by the caller's required_tags (hard filter through
+        // nodeSatisfiesRequiredTags) — no role/taskMode auto-routing. The only
+        // addition is the contract-versioning barrier: a NEW task of a strict-bound
+        // mission (or depending on a strict task) also requires the strict-protocol
+        // tags, which only a capable binary advertises (contract-runtime.ts). The
+        // scope row is written inside this same queue transaction.
+        const missionIdForScope = typeof opts?.missionId === 'string' && opts.missionId.trim() ? opts.missionId.trim() : undefined;
+        const contractTags = contractRequiredTagsForNewTask(meshId, id, missionIdForScope, dependsOn);
+        const resolvedRequiredTags = contractTags.length ? normalizeMeshCapabilityTags([...callerTags, ...contractTags]) : callerTags;
         const entry: MeshWorkQueueEntry = {
             id,
             meshId,
@@ -393,6 +400,11 @@ export function recordDirectDispatchTask(
             // Already materialised (e.g. retry of the same dispatch) — leave it untouched.
             return null;
         }
+        // Contract versioning: a direct dispatch into a strict-bound mission carried no
+        // admission pins, so its scope is still stamped — fail-closed: the result is held
+        // (no binding ⇒ missing evidence) instead of silently compat-open. mesh_send_task
+        // refuses such missions up front; this is the daemon-side backstop.
+        contractRequiredTagsForNewTask(meshId, taskId, missionId || undefined, []);
         const entry: MeshWorkQueueEntry = {
             id: taskId,
             meshId,

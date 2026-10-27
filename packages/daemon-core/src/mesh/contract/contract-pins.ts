@@ -21,6 +21,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { ContractRefusal, CONTRACT_PROTOCOL_VERSION, type ContractHeadVector } from './contract-types.js';
 import { assertIssued, inTxn, newId, type ContractCtx, type ContractPrincipal } from './contract-context.js';
 import { computePinSetDigest, type PinEntry } from './contract-identity.js';
@@ -241,7 +242,7 @@ export function admitDispatch(ctx: ContractCtx, input: AdmitDispatchInput): Disp
                 : raw?.status === 'paused_transfer' ? 'authority_paused' : 'unavailable');
         }
         if (scope.mode === 'strict') {
-            if (input.recipient.daemonId && input.recipient.daemonId !== auth.authorityDaemonId) throw new ContractRefusal('strict_participant_unsupported');
+            if (input.recipient.daemonId && !daemonIdsEquivalent(input.recipient.daemonId, auth.authorityDaemonId)) throw new ContractRefusal('strict_participant_unsupported');
             if (!input.recipientSupportsContractTools) throw new ContractRefusal('strict_participant_unsupported');
         }
         const pinSet = freezePinSet(ctx, scope);

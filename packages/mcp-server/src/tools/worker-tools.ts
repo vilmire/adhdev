@@ -196,12 +196,111 @@ export const PEER_CONTEXT_PULL_TOOL = {
   },
 };
 
+// ─── Contract versioning (Cut A) ────────────────────────────────────────
+//
+// A task pinned to exact contract units carries a trusted pin block naming its
+// binding. These tools are the worker side of that contract. Honest evidence:
+// contract_read records which exact bytes the daemon SERVED (not that you
+// understood them); contract_observe is YOUR explicit statement that you read
+// the named units — it is a claim, not a proof, and it is refused unless every
+// byte of each unit was served to you on the same binding.
+
+export const CONTRACT_READ_TOOL = {
+  name: 'contract_read',
+  description:
+    'Read one exact contract unit pinned to your task (see the ADHDEV-CONTRACT-PINS block in your task). '
+    + 'Pass the binding id from that block and a unit id. Large units are served in byte ranges — call again with '
+    + 'range_start set to the previous range_end until full_coverage is true. The daemon records exactly which bytes '
+    + 'it served to you; it does not record that you understood them.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      binding_id: { type: 'string', description: 'The `binding=` value from your task\'s contract pin block.' },
+      unit_id: { type: 'string', description: 'One of the `units=` values from the pin block.' },
+      range_start: { type: 'integer', description: 'First byte to read (default 0).' },
+      range_end: { type: 'integer', description: 'One past the last byte to read (default: as much as one read allows).' },
+    },
+    required: ['binding_id', 'unit_id'],
+  },
+};
+
+export const CONTRACT_OBSERVE_TOOL = {
+  name: 'contract_observe',
+  description:
+    'State explicitly that you read the named contract units in full. Only accepted for units whose every byte '
+    + 'was served to you by contract_read on the same binding. This records YOUR claim — call it only when it is true.',
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      binding_id: { type: 'string', description: 'The `binding=` value from your task\'s contract pin block.' },
+      units: {
+        type: 'array',
+        description: 'Units you read: each with the unit_id and the unit_digest contract_read returned.',
+        items: {
+          type: 'object',
+          properties: { unit_id: { type: 'string' }, unit_digest: { type: 'string' } },
+          required: ['unit_id', 'unit_digest'],
+        },
+      },
+    },
+    required: ['binding_id', 'units'],
+  },
+};
+
+export const CONTRACT_CURRENT_TOOL = {
+  name: 'contract_current',
+  description:
+    'Show your task\'s contract binding (pinned units), the authoritative current contract head, and any pending '
+    + 'contract change notices. Call it when told a contract notice is pending, or before relying on pinned units '
+    + 'after a long pause. If the binding id differs from your pin block, your binding was amended: read the units again.',
+  inputSchema: { type: 'object' as const, properties: {} },
+};
+
+function contractRefusal(tool: string, result: any): WorkerToolResult {
+  return { text: `${tool} refused (${result?.code || result?.error || 'unknown_error'}).`, isError: true };
+}
+
+export async function contractReadTool(transport: CommandTransport, credentials: WorkerCredentials, args: Record<string, any>): Promise<WorkerToolResult> {
+  const result: any = await transport.command('worker_contract_read', {
+    ...credentials,
+    bindingId: typeof args?.binding_id === 'string' ? args.binding_id.trim() : '',
+    unitId: typeof args?.unit_id === 'string' ? args.unit_id.trim() : '',
+    ...(Number.isSafeInteger(args?.range_start) ? { rangeStart: args.range_start } : {}),
+    ...(Number.isSafeInteger(args?.range_end) ? { rangeEnd: args.range_end } : {}),
+  });
+  if (result?.success !== true) return contractRefusal('contract_read', result);
+  const head = `unit ${result.unitId} (revision ${result.revisionId}) digest ${result.unitDigest} bytes ${result.rangeStart}-${result.rangeEnd} of ${result.unitLength}`
+    + ` encoding ${result.encoding} full_coverage=${result.fullCoverage === true}`;
+  return { text: `${head}\n----- BEGIN CONTRACT UNIT BYTES -----\n${result.content}\n----- END CONTRACT UNIT BYTES -----` };
+}
+
+export async function contractObserveTool(transport: CommandTransport, credentials: WorkerCredentials, args: Record<string, any>): Promise<WorkerToolResult> {
+  const units = Array.isArray(args?.units)
+    ? args.units.map((u: any) => ({ unitId: String(u?.unit_id ?? ''), unitDigest: String(u?.unit_digest ?? '') }))
+    : [];
+  const result: any = await transport.command('worker_contract_observe', {
+    ...credentials,
+    bindingId: typeof args?.binding_id === 'string' ? args.binding_id.trim() : '',
+    units,
+  });
+  if (result?.success !== true) return contractRefusal('contract_observe', result);
+  return { text: `Recorded your read claim ${result.claimId} for ${units.length} unit(s). This is your statement, not a proof of understanding.` };
+}
+
+export async function contractCurrentTool(transport: CommandTransport, credentials: WorkerCredentials): Promise<WorkerToolResult> {
+  const result: any = await transport.command('worker_contract_current', { ...credentials });
+  if (result?.success !== true) return contractRefusal('contract_current', result);
+  if (result.scoped !== true) return { text: 'This task is not pinned to any contract.' };
+  const { success: _s, ...view } = result;
+  return { text: JSON.stringify(view) };
+}
+
 /**
  * The published worker toolset, each definition carrying its MCP behavior hints
  * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
  * new worker tool cannot be added here without stating what it does.
  */
-export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL]);
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL, CONTRACT_READ_TOOL, CONTRACT_OBSERVE_TOOL, CONTRACT_CURRENT_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
 interface WorkerModeTool {

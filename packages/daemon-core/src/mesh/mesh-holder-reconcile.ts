@@ -6,6 +6,7 @@ import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 import { getMeshWithCache } from './mesh-queue-mesh-view.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { bridgeReceiptTransaction } from './worker-bridge-transaction.js';
+import { contractRebindHolder } from './contract-runtime.js';
 import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
 import type { DeliverTaskContext } from './mesh-queue-dispatch.js';
 import type { TurnEvidence } from '@adhdev/mesh-shared';
@@ -76,6 +77,8 @@ export async function reconcileDuplicateHolder(ctx: DeliverTaskContext, holderSe
             if (result.rule !== 'R25' || result.verdict !== 'applied') throw new Error('holder_ledger_CAS_refused');
             q.assignedSessionId = holderSessionId;
             store.updateQueueEntry(q);
+            // RN-03: re-link the holder's own matching binding, or mint it a fresh one (fresh read + claim); never relabel.
+            contractRebindHolder({ meshId: ctx.meshId, taskId: ctx.task.id, attemptId: ref.attemptId, generation: ref.generation, losingSessionId: ctx.sessionId, holderSessionId });
             db.prepare("UPDATE mesh_holder_reconciles SET phase = 'bound' WHERE operation_id = ?").run(operationId);
         });
         rebound = true;

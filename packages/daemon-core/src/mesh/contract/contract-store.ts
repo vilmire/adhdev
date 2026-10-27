@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
+import { canonicalDaemonId } from '@adhdev/mesh-shared';
 import { resolveContractBudgets, type ContractBudgets, type ContractRuntime } from './contract-types.js';
 import type { ContractAuthorityFencePort, ContractCtx } from './contract-context.js';
 import { ensureContractSchema } from './contract-schema.js';
@@ -71,7 +72,8 @@ export function createContractCtx(opts: {
         db: opts.db,
         rt: opts.rt ?? SYSTEM_CONTRACT_RUNTIME,
         budgets: resolveContractBudgets(opts.budgets ?? null),
-        localDaemonId: opts.localDaemonId,
+        // Stored and compared in canonical form (CANON-IDENTITY): SQL filters use equality.
+        localDaemonId: canonicalDaemonId(opts.localDaemonId) || opts.localDaemonId,
         sourceReader: opts.sourceReader ?? new GitContractSourceReader(),
         fence: opts.fence,
     };

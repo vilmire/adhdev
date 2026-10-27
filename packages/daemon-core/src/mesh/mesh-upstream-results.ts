@@ -27,6 +27,7 @@
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { renderUntrustedEvidenceEnvelopes, type MeshUntrustedEvidenceBlock } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
+import { contractTaskEligibility } from './contract-runtime.js';
 
 /** Per-predecessor summary cap (characters, before envelope framing). */
 export const UPSTREAM_RESULT_MAX_CHARS = 600;
@@ -43,7 +44,12 @@ interface PredecessorResult {
     atMs: number;
     summary?: string;
     outputVersion?: number;
+    /** Contract versioning: the result is not usable for context — hold metadata only, never its prose. */
+    contractHeld?: string;
 }
+
+/** Hold line for a strict predecessor whose exact result is not currently usable (no stale prose). */
+export const UPSTREAM_RESULT_CONTRACT_HELD = '(held by contract versioning — its result is not revalidated against the current contract head; obtain a revalidated or fresh result)';
 
 interface UpstreamResultsTask {
     id: string;
@@ -80,7 +86,11 @@ function loadPredecessor(meshId: string, taskId: string): PredecessorResult {
             const at = Number.isFinite(completedAt) ? completedAt : Date.parse(output.createdAt);
             if (Number.isFinite(at)) atMs = at;
             const summary = typeof envelope.final_summary === 'string' ? envelope.final_summary.trim() : '';
-            if (output.status === 'completed' && summary) return { taskId, atMs, summary, outputVersion: output.version };
+            if (output.status === 'completed' && summary) {
+                const contract = contractTaskEligibility(meshId, taskId, 'context');
+                if (!contract.usable) return { taskId, atMs, contractHeld: contract.state };
+                return { taskId, atMs, summary, outputVersion: output.version };
+            }
         }
     } catch { /* unreadable output ⇒ "(no report)" */ }
     return { taskId, atMs };
@@ -125,7 +135,7 @@ function render(taskId: string, items: readonly PredecessorResult[], omitted: nu
     let blockIndex = 0;
     items.forEach((item, i) => {
         if (segmentKinds[i] === 'block') segments.push(renderedBlocks[blockIndex++]);
-        else segments.push(`- Upstream task ${item.taskId}: ${UPSTREAM_RESULT_NO_REPORT}`);
+        else segments.push(`- Upstream task ${item.taskId}: ${item.contractHeld ? `${UPSTREAM_RESULT_CONTRACT_HELD} [${item.contractHeld}]` : UPSTREAM_RESULT_NO_REPORT}`);
     });
     const omissionLine = omitted > 0
         ? `\n\n_${omitted} older upstream result(s) omitted to fit the ${UPSTREAM_RESULTS_MAX_BYTES}-byte budget — the nearest predecessors are shown._`

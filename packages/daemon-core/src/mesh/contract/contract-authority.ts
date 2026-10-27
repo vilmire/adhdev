@@ -24,6 +24,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import {
     CONTRACT_CAPABILITY_PREFIX,
     CONTRACT_GRANT_OPS,
@@ -116,7 +117,7 @@ export function assertAuthorityWritable(ctx: ContractCtx, namespaceId: string): 
     if (!auth) throw new ContractRefusal('not_enrolled');
     if (auth.status === 'requires_owner_recovery') throw new ContractRefusal('authority_requires_recovery');
     if (auth.status === 'paused_transfer') throw new ContractRefusal('authority_paused');
-    if (auth.status !== 'active' || auth.authorityDaemonId !== ctx.localDaemonId) throw new ContractRefusal('not_authorized');
+    if (auth.status !== 'active' || !daemonIdsEquivalent(auth.authorityDaemonId, ctx.localDaemonId)) throw new ContractRefusal('not_authorized');
     return auth;
 }
 
@@ -124,7 +125,7 @@ export function assertAuthorityWritable(ctx: ContractCtx, namespaceId: string): 
 export function authorityReadable(ctx: ContractCtx, namespaceId: string): ContractAuthorityRow | null {
     if (readContractStoreProtocolVersion(ctx.db) > CONTRACT_PROTOCOL_VERSION) return null;
     const auth = getAuthority(ctx, namespaceId);
-    if (!auth || auth.status !== 'active' || auth.authorityDaemonId !== ctx.localDaemonId) return null;
+    if (!auth || auth.status !== 'active' || !daemonIdsEquivalent(auth.authorityDaemonId, ctx.localDaemonId)) return null;
     return auth;
 }
 
@@ -253,6 +254,7 @@ export function transferAuthority(ctx: ContractCtx, owner: OwnerPrincipal, input
     const auth = getAuthority(ctx, input.namespaceId);
     if (!auth) throw new ContractRefusal('not_enrolled');
     if (typeof input.newDaemonId !== 'string' || !input.newDaemonId.trim()) throw new ContractRefusal('invalid_input');
+    const newDaemonId = canonicalDaemonId(input.newDaemonId.trim()) || input.newDaemonId.trim();
     const now = ctx.rt.nowMs();
     if (!input.oldWriterFenced) {
         ctx.db.prepare(`UPDATE contract_authorities SET status = 'paused_transfer', updated_at = ? WHERE namespace_id = ?`).run(now, input.namespaceId);
@@ -260,12 +262,12 @@ export function transferAuthority(ctx: ContractCtx, owner: OwnerPrincipal, input
     }
     const epoch = Math.max(auth.authorityEpoch, ctx.fence.read(input.namespaceId) ?? 0) + 1;
     inTxn(ctx, () => {
-        const status = input.newDaemonId === ctx.localDaemonId ? 'active' : 'transferred_away';
+        const status = daemonIdsEquivalent(newDaemonId, ctx.localDaemonId) ? 'active' : 'transferred_away';
         ctx.db.prepare(`UPDATE contract_authorities SET authority_epoch = ?, authority_daemon_id = ?, status = ?, updated_at = ? WHERE namespace_id = ?`)
-            .run(epoch, input.newDaemonId, status, now, input.namespaceId);
+            .run(epoch, newDaemonId, status, now, input.namespaceId);
         ctx.db.prepare('UPDATE contract_heads SET authority_epoch = ?, updated_at = ? WHERE namespace_id = ?').run(epoch, now, input.namespaceId);
         ctx.db.prepare(`UPDATE contract_grants SET revoked_at = ?, revoke_reason = 'authority_transfer' WHERE namespace_id = ? AND revoked_at IS NULL`).run(now, input.namespaceId);
-        writeEpoch(ctx, input.namespaceId, epoch, input.newDaemonId, 'transfer');
+        writeEpoch(ctx, input.namespaceId, epoch, newDaemonId, 'transfer');
     });
     ctx.fence.write(input.namespaceId, epoch);
     return getAuthority(ctx, input.namespaceId)!;
@@ -343,7 +345,7 @@ function grantUsable(ctx: ContractCtx, g: GrantDbRow, auth: ContractAuthorityRow
         if (!inOverlap) return new ContractRefusal('capability_revoked');
     }
     if (g.expires_at <= now) return new ContractRefusal('capability_expired');
-    if (g.authority_daemon_id !== auth.authorityDaemonId || g.authority_epoch !== auth.authorityEpoch
+    if (!daemonIdsEquivalent(g.authority_daemon_id, auth.authorityDaemonId) || g.authority_epoch !== auth.authorityEpoch
         || g.process_incarnation !== auth.processIncarnation) return new ContractRefusal('capability_revoked');
     return null;
 }

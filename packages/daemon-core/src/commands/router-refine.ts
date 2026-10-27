@@ -126,6 +126,10 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const basePreflight = await refineBasePreflightStage(self, ctx);
             if (basePreflight.kind === 'terminal') return basePreflight.result;
 
+            // CONTRACT-VERSIONING (b): provisional admission of strict results on this branch.
+            const contractAdmission = refineContractAdmissionStage(ctx);
+            if (contractAdmission.kind === 'terminal') return contractAdmission.result;
+
             // ★BRANCH-WORKTREE-DIRTY (docs/design/2026-10-07-mesh-workspace-policy.md B2):
             // refine merges COMMITS but validates the WORKING TREE. Uncommitted work in the
             // branch worktree would pass validation, miss the merge, and be deleted by the
@@ -175,7 +179,8 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
             const beforeMerge = refineWorktreeVanishedOutcome(ctx, 'merge');
             if (beforeMerge) return beforeMerge.result;
 
-            const merge = await refineMergeAndFinalizeStage(self, ctx);
+            // CONTRACT-VERSIONING (b) / RN-02: final-use recheck + scoped guard around the base mutation.
+            const merge = await withContractLandingGuard(ctx, () => refineMergeAndFinalizeStage(self, ctx));
             return (merge as { kind: 'terminal'; result: CommandRouterResult }).result;
             } finally {
                 if (self.refineBaseLeases.get(leaseKey) === leaseHolder) self.refineBaseLeases.delete(leaseKey);
@@ -326,6 +331,7 @@ import {
 } from './router-refine-preflight-stages.js';
 import { refineResolveRefsStage, refineSyncBaseStage, didRefineRebaseBranch } from './router-refine-sync-stages.js';
 import { refineMergeAndFinalizeStage } from './router-refine-merge.js';
+import { refineContractAdmissionStage, withContractLandingGuard } from './router-refine-contract-stage.js';
 
 /**
  * `skipped_chain_abort` is NOT a classifier output — `classifyBatchNodeConvergence`
