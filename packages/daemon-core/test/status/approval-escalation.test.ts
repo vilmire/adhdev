@@ -10,7 +10,9 @@ import { createStatusEventEmitter } from '../../src/status/status-event.js';
 import {
     createApprovalEscalationGate,
     currentApprovalEpisodeKey,
+    escalationDeliveryRetryDelayMs,
     isCoordinatorFirstSession,
+    ESCALATION_DELIVERY_RETRY_MAX_MS,
     OWNER_APPROVAL_ESCALATION_MS,
     OWNER_APPROVAL_SESSION_COOLDOWN_MS,
 } from '../../src/status/approval-escalation.js';
@@ -437,9 +439,10 @@ describe('coordinator-first owner escalation', () => {
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS + 35_000);
         expect(delivered).toHaveLength(0);
 
-        // Unblock delivery after 95s: the live IDE approval must still be escalated to the owner, never dropped
+        // Unblock delivery after 95s: the live IDE approval must still be escalated to the owner, never dropped.
+        // Failed deliveries back off (5s doubling, capped), so it lands within one retry window.
         canDeliver = true;
-        vi.advanceTimersByTime(5_000);
+        vi.advanceTimersByTime(ESCALATION_DELIVERY_RETRY_MAX_MS);
         expect(delivered).toHaveLength(1);
         expect(delivered[0]).toMatchObject({
             targetSessionId: 'ide-w1',
@@ -518,5 +521,29 @@ describe('episode identity helpers', () => {
         expect(currentApprovalEpisodeKey({ status: 'generating', activeChat: { providerApproval: approval('modal:x') } })).toBeNull();
         expect(isCoordinatorFirstSession({ launchedByCoordinator: true, meshNodeFor: 'm' })).toBe(true);
         expect(isCoordinatorFirstSession({ meshNodeFor: 'm' })).toBe(false);
+    });
+});
+
+describe('owner escalation delivery retries (rc34 d49f221d C9)', () => {
+    it('backs off a rejected delivery up to the ceiling while still never dropping the live approval', () => {
+        expect([1, 2, 3, 4, 5, 6, 50].map(escalationDeliveryRetryDelayMs)).toEqual([5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000]);
+        let attempts = 0;
+        const ideState: any = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: { id: 'ide-chat-1', status: 'waiting_approval', activeModal: { message: 'Allow?', buttons: ['Allow', 'Deny'] } },
+        };
+        const gate = createApprovalEscalationGate({ readState: () => ideState, escalate: () => { attempts++; return false; } });
+        expect(gate.hold({
+            event: 'agent:waiting_approval', targetSessionId: 'ide-w1', providerType: 'antigravity',
+            modalMessage: 'Allow?', modalButtons: ['Allow', 'Deny'], modalKey: EP_1, approvalEvidence: 'live', timestamp: 1,
+        })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS + 10 * 60_000);
+        // 5s fixed retries would be ~120 attempts in 10 minutes; backoff keeps it small but non-zero and still running.
+        expect(attempts).toBeGreaterThan(5);
+        expect(attempts).toBeLessThan(20);
+        const before = attempts;
+        vi.advanceTimersByTime(ESCALATION_DELIVERY_RETRY_MAX_MS);
+        expect(attempts).toBe(before + 1);
     });
 });

@@ -29,7 +29,7 @@ import {
 } from '@adhdev/mesh-shared';
 import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
-import { withMeshConfigWriteLock, loadMeshConfigEntry, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
+import { withMeshConfigWriteLock, loadMeshConfigEntry, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity, peekMeshNodes } from './mesh-config-store.js';
 import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
 
@@ -123,6 +123,11 @@ export function listMeshesReadOnly(): LocalMeshEntry[] {
 
 export function getMesh(meshId: string): LocalMeshEntry | undefined {
     return loadMeshConfigEntry(meshId);
+}
+
+/** Read-only node list of one mesh from the cached snapshot (no clone) — see peekMeshNodes. */
+export function getMeshNodesReadonly(meshId: string): readonly unknown[] | undefined {
+    return peekMeshNodes(meshId);
 }
 
 export function getMeshByRepo(repoIdentity: string): LocalMeshEntry | undefined {

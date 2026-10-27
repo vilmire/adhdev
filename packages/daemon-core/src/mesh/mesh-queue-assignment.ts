@@ -463,7 +463,10 @@ export function stampLocalClaimedSession(components: DaemonComponents, p: { mesh
             meshNodeFor: p.meshId,
             meshNodeId: p.nodeId,
             launchedByCoordinator: true,
-            spawnedSessionVisibility: 'hidden',
+            // Same source as a fresh auto-launch (mesh-queue-autolaunch.ts): a mesh whose
+            // policy shows worker sessions must not have them hidden just because an
+            // existing session claimed the task.
+            spawnedSessionVisibility: resolveMeshPolicy(p.mesh?.policy).spawnedSessionVisibility || 'hidden',
             ...delegatedWorkerAutoApproveSettingsForNode(
                 p.mesh,
                 p.node,

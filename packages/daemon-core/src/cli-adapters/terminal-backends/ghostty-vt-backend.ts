@@ -155,6 +155,12 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
      * in isolation would miss the mode change and leave altScreenActive stale.
      */
     private modeScanCarry = '';
+    /**
+     * formatPlainText walks the whole buffer including scrollback. getText,
+     * getTextWithScrollback and getCursorPosition each need it and are polled
+     * together, so the formatted rows are reused until the next write/resize.
+     */
+    private formatted: string[] | null = null;
 
     constructor(options: TerminalViewportBackendOptions) {
         const binding = loadGhosttyVtBinding();
@@ -169,12 +175,14 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     resize(rows: number, cols: number): void {
         this.rows = Math.max(1, rows | 0);
         this.terminal.resize(Math.max(1, cols | 0), this.rows);
+        this.formatted = null;
     }
 
     write(data: string): void {
         if (!data || this.disposed) return;
         this.trackAltScreenMode(data);
         this.terminal.write(data);
+        this.formatted = null;
     }
 
     /**
@@ -204,7 +212,13 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         this.modeScanCarry = haystack.slice(Math.max(lastMatchEnd, haystack.length - ALT_SCREEN_SEQ_MAX_PREFIX));
     }
 
-    private formatLines(): string[] {
+    /** Shared, read-only rows; callers must slice rather than mutate. */
+    private formatLines(): readonly string[] {
+        if (!this.formatted) this.formatted = this.formatLinesUncached();
+        return this.formatted;
+    }
+
+    private formatLinesUncached(): string[] {
         // ghostty's `trim:true` collapses CUF-advanced cells — many TUIs including
         // Claude Code render spaces via cursor-forward rather than literal spaces,
         // which would break downstream regex matching. Keep per-row padding and
@@ -216,7 +230,7 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
         return raw.split('\n').map((row) => row.replace(/\s+$/, ''));
     }
 
-    private static trimBlankEnds(lines: string[]): string {
+    private static trimBlankEnds(lines: readonly string[]): string {
         let first = 0;
         let last = lines.length;
         while (first < last && !lines[first]) first += 1;
@@ -254,7 +268,7 @@ export class GhosttyVtTerminalBackend implements TerminalViewportBackend {
     }
 
     /** Pads `lines` with trailing blanks so the result is exactly `rows` tall. */
-    private static padToRows(lines: string[], rows: number): string {
+    private static padToRows(lines: readonly string[], rows: number): string {
         const padded = lines.slice(0, rows);
         while (padded.length < rows) padded.push('');
         return padded.join('\n');
