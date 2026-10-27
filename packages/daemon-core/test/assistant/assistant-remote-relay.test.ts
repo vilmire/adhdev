@@ -150,6 +150,8 @@ function harness() {
         inputLog: new AssistantInputLog(),
         store,
         clock,
+        // Full-push behavior under test; the notice pull is covered by relay-nudge.test.ts.
+        maxNudgeAttempts: 0,
     });
     relay.start();
     let answer: (args: { afterAttemptId?: string }) => RemoteCallOutcome = () => ({ ok: true, result: { success: true, commits: [] } as any });

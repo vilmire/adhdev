@@ -94,6 +94,8 @@ function harness(existingStore?: InMemoryAssistantRelayStore): Harness {
         store,
         onRelayDelivered: (meshes) => delivered.push([...meshes]),
         clock,
+        // Full-push behavior under test; the notice pull is covered by relay-nudge.test.ts.
+        maxNudgeAttempts: 0,
     });
     relay.start();
     return { relay, clock, store, log, submits, emit: (e) => handler(e), state, delivered };
@@ -467,7 +469,7 @@ describe('delivery into the assistant', () => {
         const relay = new AssistantRelay({
             subscribe: () => () => {}, coordinatorMeshOf: () => null, projectSlug: () => 'blog', readCoordinatorTail: async () => 'tail', rehydrateAttemptReport: async () => 'original native body',
             meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => ASSISTANT, isAssistantReady: () => true,
-            submit: async (_s, i) => { submits.push(i.text); return { kind: 'delivered' }; }, inputLog: h.log, store, clock: h.clock,
+            submit: async (_s, i) => { submits.push(i.text); return { kind: 'delivered' }; }, inputLog: h.log, store, clock: h.clock, maxNudgeAttempts: 0,
         });
         relay.start();
         relay.tick();

@@ -74,6 +74,8 @@ function harness(opts: { registry?: AssistantRegistry; log?: AssistantInputLog }
         store: new InMemoryAssistantRelayStore(),
         onReviewDelivered: (sid, id, at) => review!.onDelivered(sid, id, at),
         clock,
+        // Full-push behavior under test; the notice pull is covered by relay-nudge.test.ts.
+        maxNudgeAttempts: 0,
     });
     relay.start();
     review = new AssistantReviewScheduler({

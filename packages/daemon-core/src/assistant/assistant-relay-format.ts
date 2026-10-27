@@ -52,6 +52,16 @@ export const RELAY_BACKLOG_FOLD_AFTER_MS = 24 * 60 * 60_000;
 export const RESTART_NOTE_MAX_AGE_MS = 6 * 60 * 60_000;
 /** One delivered input combines ready items up to this many code points. */
 export const RELAY_DELIVERY_MAX_CHARS = 12_000;
+/**
+ * A PTY assistant is first told that relays are ready (one short line) and
+ * pulls them as `assistantEvents` from its next `projects`/`project_status`
+ * call. Unpulled, the nudge repeats on a doubling backoff; after the last
+ * attempt's backoff the relay is pushed in full as before.
+ */
+export const RELAY_NUDGE_MAX_CHARS = 160;
+export const RELAY_NUDGE_BACKOFF_MS = 15_000;
+export const RELAY_NUDGE_BACKOFF_MAX_MS = 60_000;
+export const RELAY_NUDGE_MAX_ATTEMPTS = 3;
 
 export const RELAY_CLOSE = '[/relay]';
 export const RELAY_MESSAGE_ID_PREFIX = 'relay:';
@@ -62,6 +72,22 @@ const cps = (s: string) => Array.from(s).length;
 export function safeSlug(slug: string): string {
     const s = String(slug ?? '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
     return s || 'project';
+}
+
+/** The one-line `[ADHDev notice]`: a count and project slugs, never relay text. */
+export function buildRelayNudge(input: { count: number; projects?: readonly string[] }): string {
+    const n = Math.max(1, Math.floor(input.count || 1));
+    const slugs = [...new Set((input.projects ?? []).map(safeSlug))];
+    const prefix = `[ADHDev notice] ${n} ${n === 1 ? 'update' : 'updates'} ready`;
+    const suffix = '. Call projects or project_status to pull assistantEvents.';
+    if (slugs.length) {
+        const joined = slugs.join(', ');
+        const whole = `${prefix} (${joined})${suffix}`;
+        if (cps(whole) <= RELAY_NUDGE_MAX_CHARS) return whole;
+        const budget = RELAY_NUDGE_MAX_CHARS - cps(prefix) - cps(suffix) - 4;
+        if (budget > 1) return `${prefix} (${Array.from(joined).slice(0, budget).join('').trimEnd()}…)${suffix}`;
+    }
+    return `${prefix}${suffix}`;
 }
 
 /**

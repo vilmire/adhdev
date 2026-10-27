@@ -38,7 +38,7 @@ function rig() {
     const relay = new AssistantRelay({ subscribe: fn => { event = fn; return () => {}; }, coordinatorMeshOf: () => 'mesh', projectSlug: () => 'synthetic',
         rehydrateAttemptReport: (_m, _s, id) => recoverAttemptReport(db, ledger.getAttempt(id), 'mesh', 'coord', execute).then(r => { reports.push(r); return r; }),
         meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => 'assistant', isAssistantReady: () => true,
-        submit: async (_sid, input) => { submits.push(input.text); return { kind: 'delivered' }; }, inputLog: new AssistantInputLog(), store });
+        submit: async (_sid, input) => { submits.push(input.text); return { kind: 'delivered' }; }, inputLog: new AssistantInputLog(), store, maxNudgeAttempts: 0 });
     relay.start(); relay.openThread('mesh');
     const opened = ledger.observe({ eventId: 'native-start', at: T + 44, source: 'fsm_edge', sessionId: 'coord', observedBy: 'host', kind: 'turn_started', retro: false });
     const id = opened.attempt!.attemptId;

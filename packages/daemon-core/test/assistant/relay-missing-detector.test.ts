@@ -64,6 +64,8 @@ function makeRelay(opts: { audit: () => Promise<readonly AuditedCoordinatorReply
         inputLog: new AssistantInputLog(),
         store: new InMemoryAssistantRelayStore(),
         clock,
+        // Full-push behavior under test; the notice pull is covered by relay-nudge.test.ts.
+        maxNudgeAttempts: 0,
     });
     relay.start();
     relay.openThread('mesh');
