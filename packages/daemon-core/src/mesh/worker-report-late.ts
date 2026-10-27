@@ -10,7 +10,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { WorkerCompletionReport } from './worker-report-validation.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
-import { WORKER_REPORT_EVENT_KIND, checkReportAgainstTaskMode, REPORTED_SUMMARY_STORE, summaryKey, recordHandoffNote, type WorkerReportResult } from './worker-report.js';
+import { WORKER_REPORT_EVENT_KIND, checkReportAgainstTaskMode, REPORTED_SUMMARY_STORE, summaryKey, recordOrHoldHandoffNote, type WorkerReportResult } from './worker-report.js';
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 
@@ -249,7 +249,8 @@ export function acceptLateWorkerCompletionReport(
     let handoffNoteRecorded = false;
     let handoffNoteError: string | null = null;
     if (report.handoffNotes && !duplicate) {
-        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        // RN-01: a strict task's late guidance is held until its result is assessed usable.
+        const noteResult = recordOrHoldHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
         handoffNoteRecorded = noteResult.recorded;
         handoffNoteError = noteResult.error;
     } else if (report.handoffNotes) {

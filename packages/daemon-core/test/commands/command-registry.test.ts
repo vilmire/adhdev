@@ -260,6 +260,11 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'new_work_hold_release',
     'new_work_hold_status',
     'new_work_hold',
+    // NOT a legacy-table migration: contract versioning Cut A (low-family/contract-commands.ts).
+    // Worker commands resolve the wsb_/wtk_ credential; contract_owner needs verified owner
+    // ingress; contract_coordinator needs a daemon-minted csb_ capability. None accepts `mesh`.
+    'worker_contract_read', 'worker_contract_observe', 'worker_contract_current',
+    'contract_owner', 'contract_coordinator', 'contract_mission_scope',
 ];
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */

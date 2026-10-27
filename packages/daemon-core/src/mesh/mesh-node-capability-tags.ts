@@ -10,6 +10,27 @@
 
 import { normalizeNodeCapabilitySlots } from '@adhdev/mesh-shared';
 
+/**
+ * Extra tag providers registered by optional subsystems (contract versioning
+ * advertises its strict-protocol tags here). Kept as a registry so this module
+ * stays a pure, dependency-free predicate file.
+ */
+type MeshNodeCapabilityTagProvider = (node: unknown) => readonly string[];
+const extraTagProviders = new Set<MeshNodeCapabilityTagProvider>();
+
+export function registerMeshNodeCapabilityTagProvider(provider: MeshNodeCapabilityTagProvider): () => void {
+    extraTagProviders.add(provider);
+    return () => { extraTagProviders.delete(provider); };
+}
+
+function extraCapabilityTags(node: unknown): string[] {
+    const out: string[] = [];
+    for (const provider of extraTagProviders) {
+        try { out.push(...provider(node)); } catch { /* a provider never breaks tag derivation */ }
+    }
+    return out;
+}
+
 export function normalizeMeshCapabilityTags(value: unknown): string[] {
     if (!Array.isArray(value)) return [];
     const seen = new Set<string>();
@@ -122,6 +143,7 @@ export function buildMeshNodeCapabilityTags(
         // mesh_enqueue_task with required_tags: ["worktree=<branch>"] routes
         // only to the matching worktree node.
         ...(node?.isLocalWorktree === true && worktreeBranch ? [`worktree=${worktreeBranch}`] : []),
+        ...extraCapabilityTags(node),
     ]);
 }
 

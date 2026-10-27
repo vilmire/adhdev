@@ -43,6 +43,8 @@ import { formatTurnLedgerMigrationV2Line } from '../../mesh/turn-ledger/migrate-
 import { formatTurnLedgerMigrationV3Line } from '../../mesh/turn-ledger/migrate-v3.js';
 import { createMeshRuntimeTurnLedger, revokeCutSessionWorkerBind } from '../../mesh/turn-ledger/runtime-ledger.js';
 import { resumePendingHolderReconciles } from '../../mesh/mesh-holder-reconcile.js';
+import { contractBoot, subscribeContractGrantRevocation } from '../../mesh/contract-runtime.js';
+import { probeRefineLanding } from '../../commands/router-refine-contract-stage.js';
 import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttempts, reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
@@ -871,6 +873,7 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
         // (restoring what it shadowed) — see resolveWorkerMcpPlacement.
         subscribeWorkerMcpSharedConfigCleanup(bus),
         subscribeWorkerBindRevocation(bus),
+        subscribeContractGrantRevocation(bus),
     ];
 
     // The turn ledger + notice path (C-W3), BEFORE forwarding so the first
@@ -881,6 +884,10 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
     // Normal stopping holds own the bounded destructive retry budget.
     void turn.ledger.resumeStoppingWriters();
     void resumePendingHolderReconciles(components);
+    // CONTRACT-VERSIONING: new process incarnation rotates volatile grants; a use guard
+    // left active by the previous process becomes UNKNOWN and is settled only by
+    // checking the actual target branch (RN-02).
+    contractBoot(probeRefineLanding);
     components.turnProbePort = turn.probePort;
     components.meshTurn = turn;
     // The command plane (built in S5, before these components existed) gets the

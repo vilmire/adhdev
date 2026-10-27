@@ -82,6 +82,10 @@ export const WORKER_MCP_DAEMON_VERBS: readonly string[] = Object.freeze([
     'worker_progress_update',
     'worker_peer_context_pull',
     'worker_drain_mailbox',
+    // Contract versioning (Cut A): resolved through the same worker credential.
+    'worker_contract_read',
+    'worker_contract_observe',
+    'worker_contract_current',
     'git_status',
     'git_diff_summary',
     'git_diff_file',

@@ -50,6 +50,13 @@ const RULES: RedactionRule[] = [
         pattern: /\b(ad[kmp]_)([A-Za-z0-9]{6,})/g,
         replace: (_m, prefix: string, token: string) => `${prefix}${maskKeepTail(prefix + token)}`,
     },
+    // Daemon-minted bearer capabilities: coordinator contract capability (csb_),
+    // worker task token (wtk_) and worker session bind (wsb_) — base64url bodies.
+    {
+        name: 'daemon_bearer_capability',
+        pattern: /\b(csb_|wtk_|wsb_)([A-Za-z0-9_-]{16,})/g,
+        replace: (_m, prefix: string) => `${prefix}${MASK}`,
+    },
     // JWT: three base64url segments separated by dots, header starts with eyJ.
     {
         name: 'jwt',

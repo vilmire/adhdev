@@ -38,6 +38,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { contractHandoffVisible } from './contract-runtime.js';
 import { WORKER_HANDOFF_EVENT_KIND } from './worker-report.js';
 import { type WorkerHandoffNotes } from './worker-report-validation.js';
 
@@ -68,6 +69,10 @@ interface StoredHandoffNote {
  * a peer machine).
  */
 function loadNoteText(meshId: string, taskId: string): StoredHandoffNote | null {
+    // CONTRACT-VERSIONING (selector side): a strict task's note is invisible to every
+    // active projection (enclosure, peer_context) unless its exact result is CURRENTLY
+    // usable for `handoff` — a later head change hides an earlier-published note.
+    if (!contractHandoffVisible(meshId, taskId)) return null;
     let row: ReturnType<MeshRuntimeStore['getHandoffNoteText']>;
     try {
         row = MeshRuntimeStore.getInstance().getHandoffNoteText(meshId, taskId);

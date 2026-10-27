@@ -44,6 +44,11 @@ export const WORKER_TOOLS = [
     'driver_describe',
     'driver_invoke',
     'artifact_register',
+    // Contract versioning (Cut A): exact pinned-unit reads (E2), the explicit
+    // read claim (C1) and the authoritative head/notice pull.
+    'contract_read',
+    'contract_observe',
+    'contract_current',
 ] as const
 
 export type WorkerTool = typeof WORKER_TOOLS[number]

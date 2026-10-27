@@ -211,6 +211,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_launch_session: DISPATCH,
   // Delivers a memo to a worker's next tool call — one more memo per call.
   mesh_notify_worker: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  // Contract versioning (Cut A): proposes/accepts/binds — additive records, never destructive.
+  mesh_contract: WRITE_LOCAL_ACCUMULATING,
 
   // ── Mesh: live session control ───────────────────────────────────────
   // Also covers the exact-button form (button/button_index + approval_target):
@@ -302,6 +304,11 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Pulls context from peer workers — a read that crosses to other sessions.
   peer_context_pull: READ_REMOTE,
+  // Contract versioning (Cut A): a read RECORDS a served-byte receipt and an
+  // observe RECORDS a claim (each call adds a row), so neither is read-only.
+  contract_read: WRITE_LOCAL_ACCUMULATING,
+  contract_observe: WRITE_LOCAL_ACCUMULATING,
+  contract_current: WRITE_LOCAL_SAFE,
 
   // ── Assistant mode (docs/design/2026-10-07-assistant-layer.md §4.4) ──
   // ★Read-only vs write is pinned to ASSISTANT_WRITE_TOOLS (@adhdev/mesh-shared)

@@ -63,6 +63,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 // ordering dependency the staged boot no longer has. Both are only called at
 // report time, so the worker-handoff-notes ↔ worker-report cycle is safe.
 import { storeHandoffNote } from './worker-handoff-notes.js';
+import { contractAfterAcceptedCompletion, contractHoldHandoffNote, type HeldHandoffNote } from './contract-runtime.js';
 import { commitTaskTerminal } from './mesh-task-terminal.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
@@ -919,7 +920,7 @@ export function acceptWorkerCompletionReportForIdentity(
     let handoffNoteRecorded = false;
     let handoffNoteError: string | null = null;
     if (report.handoffNotes) {
-        const noteResult = recordHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
+        const noteResult = recordOrHoldHandoffNote(identity, report.handoffNotes, nowMs, nowIso);
         handoffNoteRecorded = noteResult.recorded;
         handoffNoteError = noteResult.error;
     }
@@ -1001,6 +1002,20 @@ export function acceptWorkerCompletionReportForIdentity(
         }
     }
 
+    // CONTRACT-VERSIONING RN-01: a strict result is joined to its exact E1/E2/C1
+    // evidence and assessed NOW; a held handoff note reaches the active projection
+    // only if that assessment says it is usable (never stale instruction prose).
+    try {
+        const contract = contractAfterAcceptedCompletion({
+            meshId: identity.meshId, taskId: identity.taskId,
+            ...(evidenceAttemptId ? { attemptId: evidenceAttemptId } : {}),
+            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+        });
+        if (contract?.publishHandoff) publishHeldHandoffNote(contract.publishHandoff, nowMs);
+    } catch (e: any) {
+        LOG.warn('WorkerReport', `Contract assessment after report for task ${identity.taskId} failed (result stays held): ${e?.message || e}`);
+    }
+
     // H1 (path ownership): compare the worker's reported touchedFiles against the
     // task's declared owned_paths (if any). Best-effort and purely additive — a
     // lookup/parse failure here must never turn an otherwise-accepted completion
@@ -1060,6 +1075,44 @@ export function acceptWorkerCompletionReportForIdentity(
         ...(handoffNoteError ? { handoffNoteError } : {}),
         ...(ownedPathsMismatch ? { ownedPathsMismatch } : {}),
     };
+}
+
+/**
+ * RN-01: a STRICT task's note is held privately (contract_held_handoffs) and
+ * published only after its completion assessment; every other note records as
+ * before. `recorded` stays honest: a held note IS stored, just not yet active.
+ */
+export function recordOrHoldHandoffNote(
+    identity: WorkerTokenExchangeResult,
+    notes: WorkerHandoffNotes,
+    nowMs: number,
+    nowIso: string,
+): { recorded: boolean; error: string | null; held?: true } {
+    try {
+        if (contractHoldHandoffNote({
+            meshId: identity.meshId, taskId: identity.taskId,
+            ...(identity.attemptId ? { attemptId: identity.attemptId } : {}),
+            ...(identity.sessionId ? { sessionId: identity.sessionId } : {}),
+            ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+            notesJson: JSON.stringify(notes), nowMs,
+        })) return { recorded: true, error: null, held: true };
+    } catch (e: any) {
+        return { recorded: false, error: `handoff note could not be held for contract assessment: ${e?.message || e}` };
+    }
+    return recordHandoffNote(identity, notes, nowMs, nowIso);
+}
+
+/** Publish a held strict note once its result became usable (completion or later revalidation). */
+export function publishHeldHandoffNote(held: HeldHandoffNote, nowMs: number): void {
+    let notes: WorkerHandoffNotes;
+    try { notes = JSON.parse(held.notesJson) as WorkerHandoffNotes; } catch { return; }
+    const result = recordHandoffNote({
+        meshId: held.meshId, taskId: held.taskId, token: '',
+        ...(held.attemptId ? { attemptId: held.attemptId } : {}),
+        sessionId: held.sessionId ?? '',
+        ...(held.nodeId ? { nodeId: held.nodeId } : {}),
+    }, notes, nowMs, new Date(nowMs).toISOString());
+    if (!result.recorded) LOG.warn('WorkerReport', `Held handoff note for task ${held.taskId} could not be published: ${result.error}`);
 }
 
 export function recordHandoffNote(

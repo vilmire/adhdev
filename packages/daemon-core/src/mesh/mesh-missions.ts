@@ -21,6 +21,7 @@ import { computeMeshMissionStatsBatch, type MeshMissionStats } from './mesh-task
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { normalizeMissionBrief, type MissionBrief } from '@adhdev/mesh-shared';
+import { contractMissionHeldTaskIds } from './contract-runtime.js';
 
 /**
  * Max chars of mission goal text written into a ledger entry payload. Mission
@@ -179,6 +180,19 @@ export function upsertMeshMission(meshId: string, input: {
             throw new Error(
                 `mission_not_found: no mission with id '${requestedId}' on this mesh. `
                 + `Omit mission_id to create a new mission, or use mesh_mission_list to get a valid full id.`,
+            );
+        }
+    }
+    // CONTRACT-VERSIONING (e): strict mission satisfaction is a version-eligibility
+    // decision, not a terminal count. Closing as `completed` is refused while any
+    // strict completed result is held/needs revalidation; `abandoned` stays open.
+    if (requestedId && input.status === 'completed') {
+        const completedIds = store.getQueueFacts(meshId).filter(t => t.missionId === requestedId && t.status === 'completed').map(t => t.id);
+        const held = contractMissionHeldTaskIds(meshId, requestedId, completedIds);
+        if (held.length) {
+            throw new Error(
+                `mission_contract_results_held: ${held.length} strict result(s) are not usable under the current contract head `
+                + `(${held.slice(0, 8).join(', ')}). Revalidate or replace them before closing as completed, or close as abandoned.`,
             );
         }
     }
@@ -427,6 +441,12 @@ export function maybeEmitMissionCloseCandidate(meshId: string, missionId: string
 
         // Idempotency: already nudged for this terminal edge → no-op (no per-tick spam).
         if (alreadyEmitted) return false;
+
+        // CONTRACT-VERSIONING (e): all-terminal is a FACT; strict satisfaction is not
+        // implied by it. While strict results are held, no close candidate is nudged —
+        // the hint returns once they are revalidated (next task mutation re-checks).
+        const completedIds = store.getQueueFacts(meshId).filter(t => t.missionId === missionId && t.status === 'completed').map(t => t.id);
+        if (contractMissionHeldTaskIds(meshId, missionId, completedIds).length > 0) return false;
 
         const emittedAt = new Date().toISOString();
         emitMissionCloseCandidateEvent(meshId, mission, aggregate, emittedAt);
