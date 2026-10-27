@@ -91518,7 +91518,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
       ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
       ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
-      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV3,
       ADHDEV_MCP_SESSION_CREDENTIAL_HEADER: () => ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2,
       ADHDEV_WORKER_CREDENTIAL_HEADER: () => ADHDEV_WORKER_CREDENTIAL_HEADER2,
       WORKER_MCP_DAEMON_VERBS: () => WORKER_MCP_DAEMON_VERBS,
@@ -91530,7 +91530,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     var ADHDEV_INTERNAL_AUTH_HEADER2;
     var ADHDEV_WORKER_CREDENTIAL_HEADER2;
     var ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2;
-    var ADHDEV_MCP_SESSION_CREDENTIAL_ENV2;
+    var ADHDEV_MCP_SESSION_CREDENTIAL_ENV3;
     var ADHDEV_DAEMON_AUTH_FILE_ENV2;
     var ADHDEV_DAEMON_AUTH_FILE_FLAG2;
     var ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV;
@@ -91542,7 +91542,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         ADHDEV_INTERNAL_AUTH_HEADER2 = "x-adhdev-internal-auth";
         ADHDEV_WORKER_CREDENTIAL_HEADER2 = "x-adhdev-worker-credential";
         ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2 = "x-adhdev-mcp-session-credential";
-        ADHDEV_MCP_SESSION_CREDENTIAL_ENV2 = "ADHDEV_MCP_SESSION_CREDENTIAL";
+        ADHDEV_MCP_SESSION_CREDENTIAL_ENV3 = "ADHDEV_MCP_SESSION_CREDENTIAL";
         ADHDEV_DAEMON_AUTH_FILE_ENV2 = "ADHDEV_DAEMON_AUTH_FILE";
         ADHDEV_DAEMON_AUTH_FILE_FLAG2 = "--daemon-auth-file";
         ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV = "ADHDEV_COORDINATOR_MCP_AUTH_FILE";
@@ -141238,7 +141238,7 @@ ${tail}` : ""
       ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
       ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
       ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
-      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV3,
       ADHDEV_MCP_SESSION_CREDENTIAL_HEADER: () => ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2,
       ADHDEV_WORKER_CREDENTIAL_HEADER: () => ADHDEV_WORKER_CREDENTIAL_HEADER2,
       ALWAYS_ON_TRACE_CATEGORIES: () => ALWAYS_ON_TRACE_CATEGORIES,
@@ -141523,7 +141523,10 @@ ${tail}` : ""
       assertWorkerBridgeLifecycleAdmission: () => assertWorkerBridgeLifecycleAdmission,
       assessQuotaFreshness: () => assessQuotaFreshness2,
       attachAuthenticatedMcpCommand: () => attachAuthenticatedMcpCommand,
+      attachIpcMcpAuthority: () => attachIpcMcpAuthority,
+      attachSessionMcpAuthority: () => attachSessionMcpAuthority,
       attachTrustedOwnerIngressProof: () => attachTrustedOwnerIngressProof,
+      attachWorkerArtifactMcpAuthority: () => attachWorkerArtifactMcpAuthority,
       baseTopicDefinitions: () => baseTopicDefinitions,
       beginLifecycleSource: () => beginLifecycleSource,
       bindMeshNoticeRuntime: () => bindMeshNoticeRuntime,
@@ -142016,6 +142019,7 @@ ${tail}` : ""
       readDirtyWriteGate: () => readDirtyWriteGate2,
       readDiskSpace: () => readDiskSpace,
       readFleetTaskActivity: () => readFleetTaskActivity,
+      readIpcMcpAuthEnvelope: () => readIpcMcpAuthEnvelope,
       readLatestCodexRateLimits: () => readLatestCodexRateLimits,
       readLaunchProvenanceArgs: () => readLaunchProvenanceArgs,
       readLocalRecordSlice: () => readLocalRecordSlice,
@@ -198116,7 +198120,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         ...coordinatorMeshId ? { meshId: coordinatorMeshId } : {},
         isCoordinator: Boolean(coordinatorMeshId)
       }) : void 0;
-      const effectiveExtraEnv = mcpSessionCredential ? { ...options?.extraEnv || {}, [ADHDEV_MCP_SESSION_CREDENTIAL_ENV2]: mcpSessionCredential } : options?.extraEnv;
+      const effectiveExtraEnv = mcpSessionCredential ? { ...options?.extraEnv || {}, [ADHDEV_MCP_SESSION_CREDENTIAL_ENV3]: mcpSessionCredential } : options?.extraEnv;
       if (launchSettings.codexTransport === "app-server" && (!instanceManager || normalizedType !== "codex-cli" || sessionBinding.launchMode !== "new")) {
         throw new Error("Codex app-server transport requires a new managed Codex session; existing sessions cannot be migrated");
       }
@@ -211523,6 +211527,87 @@ ${notice.notice}${supersededHint}`;
     }
     init_command_args();
     init_mcp_command_ingress();
+    init_mcp_command_ingress();
+    init_standalone_mcp_auth();
+    var MAX_CREDENTIAL_LENGTH = 512;
+    var WORKER_ARTIFACT_COMMANDS = /* @__PURE__ */ new Set(["artifact_register", "artifact_list", "artifact_read"]);
+    function attachSessionMcpAuthority(args, command, credential, extraLive) {
+      const boundScope = verifyMcpSessionCredential(credential);
+      attachAuthenticatedMcpCommand(
+        args,
+        command,
+        () => (extraLive ? extraLive() === true : true) && verifyMcpSessionCredential(credential) !== null,
+        boundScope
+      );
+    }
+    function attachWorkerArtifactMcpAuthority(args, command, credential, opts = {}) {
+      const verify3 = opts.verify ?? matchesLiveArtifactWorkerCredential;
+      let matches = false;
+      try {
+        matches = verify3(credential, args) === true;
+      } catch {
+      }
+      if (!matches) return { ok: false, reason: "credential_mismatch" };
+      const workerScope = resolveLiveArtifactWorkerScope(credential, args);
+      if (!workerScope) return { ok: false, reason: "no_live_scope" };
+      attachAuthenticatedMcpCommand(
+        args,
+        command,
+        () => (opts.extraLive ? opts.extraLive() === true : true) && verify3(credential, args) === true,
+        workerScope
+      );
+      return { ok: true };
+    }
+    function readIpcMcpAuthEnvelope(payload) {
+      if (!payload || typeof payload !== "object") return null;
+      const raw = payload.mcpAuth;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const pick = (value) => {
+        if (typeof value !== "string") return void 0;
+        const v = value.trim();
+        return v && v.length <= MAX_CREDENTIAL_LENGTH ? v : void 0;
+      };
+      const e = raw;
+      const sessionCredential = pick(e.sessionCredential);
+      const workerCredential = pick(e.workerCredential);
+      if (!sessionCredential && !workerCredential) return null;
+      return {
+        ...sessionCredential ? { sessionCredential } : {},
+        ...workerCredential ? { workerCredential } : {}
+      };
+    }
+    function attachIpcMcpAuthority(args, command, envelope, isConnectionLive = () => true) {
+      if (!envelope) return { ok: true };
+      const { sessionCredential, workerCredential } = envelope;
+      if (sessionCredential && workerCredential) {
+        attachAuthenticatedMcpCommand(args, command, () => false, null);
+        return { ok: true };
+      }
+      if (sessionCredential) {
+        attachSessionMcpAuthority(args, command, sessionCredential, isConnectionLive);
+        return { ok: true };
+      }
+      const credential = workerCredential;
+      let live = false;
+      try {
+        live = isLiveWorkerMcpCredential(credential);
+      } catch {
+      }
+      if (!live) {
+        attachAuthenticatedMcpCommand(args, command, () => false, null);
+        return { ok: true };
+      }
+      if (!isWorkerMcpDaemonVerb(command)) {
+        return { ok: false, code: "worker_scope_forbidden", error: `Command ${command} is not available to a worker MCP credential.` };
+      }
+      if (WORKER_ARTIFACT_COMMANDS.has(command)) {
+        const attached = attachWorkerArtifactMcpAuthority(args, command, credential, { extraLive: isConnectionLive });
+        if (!attached.ok) {
+          attachAuthenticatedMcpCommand(args, command, () => false, null);
+        }
+      }
+      return { ok: true };
+    }
     init_assistant_human_input();
     init_cooperative_gate();
     function endsPeerAuthorization(reason) {
@@ -213269,9 +213354,9 @@ function getOrCreateConnection(WebSocketCtor, url) {
   const drainQueue = () => {
     conn.ready = true;
     const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
-    for (const { type: type2, args, requestId } of queued) {
+    for (const { type: type2, args, requestId, mcpAuth } of queued) {
       if (!conn.pending.has(requestId)) continue;
-      conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId } }));
+      conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} } }));
     }
   };
   let tornDown = false;
@@ -213350,9 +213435,19 @@ function getOrCreateConnection(WebSocketCtor, url) {
 var IpcTransport = class {
   port;
   path;
+  sessionCredential;
+  workerCredential;
   constructor(opts = {}) {
     this.port = opts.port ?? DEFAULT_IPC_PORT;
     this.path = opts.path || DEFAULT_IPC_PATH;
+    this.sessionCredential = opts.sessionCredential?.trim() || null;
+    this.workerCredential = opts.workerCredential?.trim() || null;
+  }
+  /** A worker presents only its worker credential; everyone else only the session credential. */
+  mcpAuth() {
+    if (this.workerCredential) return { workerCredential: this.workerCredential };
+    const session = this.sessionCredential || process.env[import_daemon_core.ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() || "";
+    return session ? { sessionCredential: session } : void 0;
   }
   /** Remote-node relay capability (transports/mode.ts) — a prototype getter so a
    *  prototype-built test double carries it too. */
@@ -213449,10 +213544,11 @@ var IpcTransport = class {
       }, timeoutMs);
       conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type2, sentAt });
       conn.lastUsedAt = Date.now();
+      const mcpAuth = this.mcpAuth();
       if (conn.ready) {
-        conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId } }));
+        conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} } }));
       } else {
-        conn.commandQueue.push({ type: type2, args, requestId });
+        conn.commandQueue.push({ type: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} });
       }
     });
   }
@@ -226667,7 +226763,7 @@ function workerTransportCredential() {
   return credentials.bind || credentials.token || void 0;
 }
 async function startMcpServer(opts) {
-  const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port }) : new LocalTransport(opts.worker ? { port: opts.port, password: opts.password, workerCredential: workerTransportCredential() } : { port: opts.port, password: opts.password, authFile: opts.daemonAuthFile });
+  const transport = opts.mode === "ipc" ? new IpcTransport({ port: opts.port, ...opts.worker ? { workerCredential: workerTransportCredential() } : {} }) : new LocalTransport(opts.worker ? { port: opts.port, password: opts.password, workerCredential: workerTransportCredential() } : { port: opts.port, password: opts.password, authFile: opts.daemonAuthFile });
   const alive = await transport.ping();
   if (!alive) {
     if (transport instanceof LocalTransport && transport.lastPingFailure?.kind === "auth") {

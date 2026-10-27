@@ -1067,6 +1067,15 @@ export {
   __resetMcpSessionCredentialsForTest,
   type AuthenticatedMcpScope,
 } from './commands/mcp-command-ingress.js';
+export {
+  attachSessionMcpAuthority,
+  attachWorkerArtifactMcpAuthority,
+  attachIpcMcpAuthority,
+  readIpcMcpAuthEnvelope,
+  type IpcMcpAuthEnvelope,
+  type IpcMcpAttachResult,
+  type WorkerArtifactAttachResult,
+} from './commands/mcp-authority-attach.js';
 // Assistant input attribution for PTY input that skips the router (cloud P2P
 // `pty_input` frame): the host reports the transport's own source.
 export { reportSessionTerminalInput } from './assistant/assistant-human-input.js';

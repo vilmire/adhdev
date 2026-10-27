@@ -151,7 +151,7 @@ function workerTransportCredential(): string | undefined {
 export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void> {
   const transport: CommandTransport =
     opts.mode === 'ipc'
-      ? new IpcTransport({ port: opts.port })
+      ? new IpcTransport({ port: opts.port, ...(opts.worker ? { workerCredential: workerTransportCredential() } : {}) })
       : new LocalTransport(opts.worker
         ? { port: opts.port, password: opts.password, workerCredential: workerTransportCredential() }
         : { port: opts.port, password: opts.password, authFile: opts.daemonAuthFile });

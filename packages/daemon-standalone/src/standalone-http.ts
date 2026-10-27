@@ -19,12 +19,11 @@ import {
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   MESH_JOIN_HTTP_PATH,
   attachTrustedOwnerIngressProof,
-  attachAuthenticatedMcpCommand,
+  attachSessionMcpAuthority,
+  attachWorkerArtifactMcpAuthority,
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
   matchesLiveArtifactWorkerCredential,
-  resolveLiveArtifactWorkerScope,
-  verifyMcpSessionCredential,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
   type TrustedOwnerIngressProof,
@@ -956,27 +955,21 @@ export class StandaloneHttpApi {
           ) {
             const credential = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER) ?? '';
             const verify = this.deps.verifyArtifactWorkerCredential ?? matchesLiveArtifactWorkerCredential;
-            let matches = false;
-            try { matches = verify(credential, commandPayload) === true; } catch { /* fail closed */ }
-            if (!matches) {
+            const attached = attachWorkerArtifactMcpAuthority(commandPayload, type, credential, {
+              verify,
+              extraLive: () => this.resolveInternalAuthScope(req) === 'worker',
+            });
+            if (!attached.ok) {
               res.writeHead(403, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
+              res.end(JSON.stringify({
+                success: false,
+                code: 'worker_scope_forbidden',
+                error: attached.reason === 'credential_mismatch'
+                  ? 'Artifact arguments must retain the authenticated worker credential and principal.'
+                  : 'Worker credential does not resolve to a live artifact scope.',
+              }));
               return;
             }
-            const workerScope = resolveLiveArtifactWorkerScope(credential, commandPayload);
-            if (!workerScope) {
-              res.writeHead(403, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Worker credential does not resolve to a live artifact scope.' }));
-              return;
-            }
-            attachAuthenticatedMcpCommand(
-              commandPayload,
-              type,
-              () =>
-                this.resolveInternalAuthScope(req) === 'worker'
-                && verify(credential, commandPayload) === true,
-              workerScope,
-            );
           }
           const ownerGuard = internalScope === null && !hasMcpHeader
             ? (this.captureOwnerAuthGuard(req, url) ?? this.captureUnauthenticatedArtifactReadGuard(req, type))
@@ -1005,16 +998,14 @@ export class StandaloneHttpApi {
               (typeof commandPayload.mcpSessionCredential === 'string'
                 ? commandPayload.mcpSessionCredential.trim()
                 : '');
-            const boundScope = verifyMcpSessionCredential(sessionCredential);
-            attachAuthenticatedMcpCommand(
+            attachSessionMcpAuthority(
               commandPayload,
               type,
+              sessionCredential,
               () =>
                 token !== null && this.internalAuthToken === token
                 && this.authEpoch === epoch
-                && this.resolveInternalAuthScope(req) === 'coordinator'
-                && verifyMcpSessionCredential(sessionCredential) !== null,
-              boundScope,
+                && this.resolveInternalAuthScope(req) === 'coordinator',
             );
           }
           const ownerVerified = isOwner

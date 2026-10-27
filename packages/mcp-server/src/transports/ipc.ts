@@ -10,7 +10,7 @@
  * per request.
  */
 
-import { IDENTITY } from '@adhdev/daemon-core';
+import { IDENTITY, ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '@adhdev/daemon-core';
 
 // Track-scoped default (19222 stable / 19223 preview). A hardcoded 19222 here
 // made a PREVIEW coordinator silently drive the STABLE daemon whenever the
@@ -268,13 +268,23 @@ const POOL_MAX_AGE_IDLE_GRACE_MS = 30_000; // do not tear down an aged socket in
 interface PooledConnection {
   ws: WebSocket;
   ready: boolean;
-  commandQueue: Array<{ type: string; args: Record<string, unknown>; requestId: string }>;
+  commandQueue: Array<{ type: string; args: Record<string, unknown>; requestId: string; mcpAuth?: IpcMcpAuth }>;
   pending: Map<string, PendingRequest>;
   lastUsedAt: number;
   createdAt: number;
 }
 
 const connectionPool = new Map<string, PooledConnection>();
+
+/**
+ * MCP authority envelope carried NEXT TO `args` on an `ext:command` frame (never
+ * inside it). The daemon verifies it with the same primitives its standalone
+ * HTTP gate uses; absent/unknown credentials leave the command unprivileged.
+ */
+interface IpcMcpAuth {
+  sessionCredential?: string;
+  workerCredential?: string;
+}
 
 function buildRequestId(): string {
   return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -327,9 +337,9 @@ function getOrCreateConnection(
   const drainQueue = () => {
     conn.ready = true;
     const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
-    for (const { type, args, requestId } of queued) {
+    for (const { type, args, requestId, mcpAuth } of queued) {
       if (!conn.pending.has(requestId)) continue;
-      conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId } }));
+      conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) } }));
     }
   };
 
@@ -426,15 +436,30 @@ function getOrCreateConnection(
 interface IpcTransportOptions {
   port?: number;
   path?: string;
+  /** Session-bound MCP credential (defaults to the launch env `ADHDEV_MCP_SESSION_CREDENTIAL`). */
+  sessionCredential?: string;
+  /** Worker session bind / task token (worker MCP servers only). */
+  workerCredential?: string;
 }
 
 export class IpcTransport {
   private port: number;
   private path: string;
+  private readonly sessionCredential: string | null;
+  private readonly workerCredential: string | null;
 
   constructor(opts: IpcTransportOptions = {}) {
     this.port = opts.port ?? DEFAULT_IPC_PORT;
     this.path = opts.path || DEFAULT_IPC_PATH;
+    this.sessionCredential = opts.sessionCredential?.trim() || null;
+    this.workerCredential = opts.workerCredential?.trim() || null;
+  }
+
+  /** A worker presents only its worker credential; everyone else only the session credential. */
+  private mcpAuth(): IpcMcpAuth | undefined {
+    if (this.workerCredential) return { workerCredential: this.workerCredential };
+    const session = this.sessionCredential || process.env[ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() || '';
+    return session ? { sessionCredential: session } : undefined;
   }
 
   /** Remote-node relay capability (transports/mode.ts) — a prototype getter so a
@@ -566,10 +591,11 @@ export class IpcTransport {
       conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type, sentAt });
       conn.lastUsedAt = Date.now();
 
+      const mcpAuth = this.mcpAuth();
       if (conn.ready) {
-        conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId } }));
+        conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) } }));
       } else {
-        conn.commandQueue.push({ type, args, requestId });
+        conn.commandQueue.push({ type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) });
       }
     });
   }
