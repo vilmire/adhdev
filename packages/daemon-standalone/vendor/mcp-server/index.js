@@ -2896,6 +2896,7 @@ var require_dist = __commonJS({
       getWorkspaceLabel: () => getWorkspaceLabel,
       hiddenSpawnProcess: () => hiddenSpawn,
       isDefaultInstanceConfigDir: () => isDefaultInstanceConfigDir,
+      isRecoveryEndpoint: () => isRecoveryEndpoint,
       isSessionHostLiveRuntime: () => isSessionHostLiveRuntime2,
       isSessionHostRecoverySnapshot: () => isSessionHostRecoverySnapshot2,
       isTerminalRecord: () => isTerminalRecord,
@@ -2916,6 +2917,7 @@ var require_dist = __commonJS({
     });
     module2.exports = __toCommonJS2(index_exports2);
     var import_node_crypto5 = require("crypto");
+    var import_node_path = require("path");
     var import_node_perf_hooks = require("perf_hooks");
     var OPERATOR_RECOVERY_TARGET = Object.freeze({
       association: "operator_asserted",
@@ -2954,6 +2956,9 @@ var require_dist = __commonJS({
         } else if (nested.has(key)) assertRecoveryLaunchIdentity(field);
       }
     }
+    function isRecoveryEndpoint(endpoint) {
+      return (0, import_node_path.isAbsolute)(endpoint) && (0, import_node_path.basename)(endpoint) === `adhdev-preview-session-host-${OPERATOR_RECOVERY_TARGET.namespace}.sock`;
+    }
     var RecoveryOwnerAdmission = class {
       constructor(enrollment, clock = () => import_node_perf_hooks.performance.now()) {
         this.clock = clock;
@@ -2977,36 +2982,49 @@ var require_dist = __commonJS({
         this.lastNow = n;
         return n;
       }
-      challenge() {
+      challenge(operation = "anchor_recover") {
+        if (!["anchor_recover", "fence_install", "witness_enroll"].includes(operation)) throw new Error("recovery_owner_operation_rejected");
         const now = this.now();
-        for (const [message2, deadline] of this.pending) if (deadline <= now) this.pending.delete(message2);
+        for (const [message2, entry] of this.pending) if (entry.deadline <= now) this.pending.delete(message2);
         if (this.pending.size >= 16) throw new Error("recovery_owner_challenge_limit");
         const message = JSON.stringify([
           "operator_recovery_v1",
+          operation,
           recoveryTargetBytes,
           this.enrollment.enrollmentId,
           this.enrollment.coordinatorBootId,
           this.enrollment.authEpoch,
           (0, import_node_crypto5.randomBytes)(32).toString("hex")
         ]);
-        this.pending.set(message, now + 3e4);
+        this.pending.set(message, { deadline: now + 3e4, operation });
         return Object.freeze({ message });
       }
       authorize(message, signature) {
         const now = this.now();
-        const deadline = this.pending.get(message);
+        const entry = this.pending.get(message);
         this.pending.delete(message);
-        if (deadline === void 0 || now >= deadline || !/^[a-f0-9]{128}$/.test(signature) || !(0, import_node_crypto5.verify)(null, Buffer.from(message), this.key, Buffer.from(signature, "hex"))) {
+        if (!entry || now >= entry.deadline || !/^[a-f0-9]{128}$/.test(signature) || !(0, import_node_crypto5.verify)(null, Buffer.from(message), this.key, Buffer.from(signature, "hex"))) {
           throw new Error("recovery_owner_signature_rejected");
         }
-        const grant = Object.freeze({ purpose: "operator_recovery_v1" });
-        this.grants.set(grant, deadline);
+        const grant = Object.freeze({ purpose: "operator_recovery_v1", operation: entry.operation });
+        this.grants.set(grant, entry);
         return grant;
       }
       assertGrant(grant) {
         const now = this.now();
-        const deadline = typeof grant === "object" && grant !== null ? this.grants.get(grant) : void 0;
-        if (deadline === void 0 || now >= deadline) throw new Error("recovery_owner_grant_rejected");
+        const entry = typeof grant === "object" && grant !== null ? this.grants.get(grant) : void 0;
+        if (!entry || now >= entry.deadline) throw new Error("recovery_owner_grant_rejected");
+      }
+      /** Burn synchronously before any work or await. The private continuation
+       * rechecks the ORIGINAL deadline and revocation; it cannot mint a new grant. */
+      reserve(grant, operation) {
+        this.assertGrant(grant);
+        const entry = this.grants.get(grant);
+        this.grants.delete(grant);
+        if (entry.operation !== operation) throw new Error("recovery_owner_operation_rejected");
+        return () => {
+          if (this.now() >= entry.deadline) throw new Error("recovery_owner_grant_rejected");
+        };
       }
       consume(grant) {
         this.assertGrant(grant);
@@ -127474,6 +127492,7 @@ ${tail}` : ""
             CREATE TABLE IF NOT EXISTS operator_recovery_anchors_v1 (
             target TEXT PRIMARY KEY, nonce_hash TEXT NOT NULL UNIQUE, association TEXT NOT NULL,
             proof TEXT NOT NULL, assignment TEXT NOT NULL);`);
+            this.revoke();
           }
           pending = /* @__PURE__ */ new Map();
           anchors = /* @__PURE__ */ new WeakSet();
@@ -127504,18 +127523,21 @@ ${tail}` : ""
             ]) {
               if (c[key5] !== import_session_host_core27.OPERATOR_RECOVERY_TARGET[key5]) throw new Error("recovery_current_assignment_mismatch");
             }
-            if (c.state !== "stopping" || c.queueStatus !== "assigned" || c.queueNodeId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
-            return JSON.stringify(c);
+            if (!c.writerStopRequestId?.trim() || c.writerStopConfirmed !== false || c.writerStopTerminalPresent !== false || c.reportPresent !== false || c.reclaimCount !== 0 || !c.holdsRevision || c.state !== "stopping" || c.queueStatus !== "assigned" || c.queueNodeId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
+            return JSON.stringify(Object.fromEntries(Object.entries(c).sort(([a], [b]) => a.localeCompare(b))));
           }
           assertPeer(p) {
-            if (p.peer.peerId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || p.peer.binding.namespace !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !p.peer.binding.endpoint.endsWith(`adhdev-preview-session-host-${import_session_host_core27.OPERATOR_RECOVERY_TARGET.namespace}.sock`) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
+            if (p.peer.peerId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || p.peer.binding.namespace !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !(0, import_session_host_core27.isRecoveryEndpoint)(p.peer.binding.endpoint) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
           }
           revoke() {
             this.pending.clear();
-            this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
+            try {
+              this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
+            } catch {
+            }
           }
           async recover(grant, peer) {
-            this.deps.owner.assertGrant(grant);
+            const assertOwner = this.deps.owner.reserve(grant, "anchor_recover");
             const nonce = (0, import_node_crypto53.randomBytes)(32).toString("hex");
             const nonceHash = hash3(nonce);
             const p = {
@@ -127528,8 +127550,10 @@ ${tail}` : ""
               fenceDigest: peer.fenceDigest
             };
             this.assertPeer(p);
+            this.pending.clear();
             (this.deps.withOwnershipFence ?? ((f) => f()))(() => this.deps.db.transaction(() => {
               p.current = this.current();
+              this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
               if (this.deps.db.prepare("SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?").get(import_session_host_core27.recoveryTargetBytes)) {
                 throw new Error("recovery_already_consumed");
               }
@@ -127548,7 +127572,7 @@ ${tail}` : ""
               }
               const fenced = this.deps.withOwnershipFence ?? ((f) => f());
               return fenced(() => bridgeReceiptTransaction(this.deps.db, () => {
-                this.deps.owner.assertGrant(grant);
+                assertOwner();
                 this.assertPeer(p);
                 if (this.now() >= p.deadline || this.pending.get(nonceHash) !== p || this.current() !== p.current) {
                   throw new Error("recovery_expired_revoked_or_reassigned");
@@ -127580,13 +127604,16 @@ ${tail}` : ""
                   proof: Object.freeze(accepted)
                 });
                 this.deps.settleInTransaction?.(anchor);
-                this.deps.owner.consume(grant);
+                assertOwner();
                 this.anchors.add(anchor);
                 return anchor;
               }));
             } finally {
               this.pending.delete(nonceHash);
-              this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE nonce_hash=? AND state='issued'").run(nonceHash);
+              try {
+                this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE nonce_hash=? AND state='issued'").run(nonceHash);
+              } catch {
+              }
             }
           }
           /** Object identity only; serialized audit rows cannot become authority. */
@@ -127620,6 +127647,10 @@ ${tail}` : ""
         ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId);
       const q = db2.prepare("SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?").get(import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId);
       if (!a || !q || a.owner_daemon_id !== selfDaemonId || a.terminal_outcome !== null) throw new Error("recovery_current_assignment_missing");
+      const data = JSON.parse(a.data_json);
+      const stop = data?.writerStop;
+      if (a.state !== "stopping" || a.reclaim_count !== 0 || !stop || typeof stop.requestId !== "string" || !stop.requestId.trim() || stop.confirmed === true || stop.terminal !== void 0 || data.report !== void 0) throw new Error("recovery_stopping_state_unsafe");
+      const holds = db2.prepare("SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id").all(a.attempt_id);
       const payload = JSON.parse(q.payload);
       if (payload.id !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q.assigned_node_id || payload.assignedSessionId !== q.assigned_session_id || payload.status !== q.status) throw new Error("recovery_queue_payload_mismatch");
       const hash4 = (s2) => (0, import_node_crypto54.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
@@ -127637,6 +127668,12 @@ ${tail}` : ""
         queueStatus: q.status,
         queueNodeId: q.assigned_node_id,
         queueSessionId: q.assigned_session_id,
+        writerStopRequestId: stop.requestId,
+        writerStopConfirmed: stop.confirmed === true,
+        writerStopTerminalPresent: stop.terminal !== void 0,
+        reportPresent: data.report !== void 0,
+        reclaimCount: a.reclaim_count,
+        holdsRevision: hash4(holds),
         ownerRevision: hash4([a.owner_daemon_id, a.attempt_id, a.updated_at, a.data_json, currentMesh.meshHost, ownerFileIdentity]),
         queueRevision: hash4(q)
       };
@@ -135766,7 +135803,7 @@ ${tail}` : ""
       burned = false;
       static enroll(root, owner, grant) {
         (0, import_session_host_core9.assertTestStorageIsolated)(root);
-        owner.assertGrant(grant);
+        owner.reserve(grant, "witness_enroll")();
         fs31.mkdirSync(root, { mode: 448 });
         const bytes = JSON.stringify({ protocol: 1, target: import_session_host_core9.recoveryTargetBytes, random: (0, import_node_crypto15.randomBytes)(32).toString("hex") });
         const file = path40.join(root, "enrollment.json");
@@ -135956,9 +135993,8 @@ CONSUMED:${nonceHash}`);
           });
           const state2 = { owner, key: pair.privateKey, boot };
           const witnessRoot = path41.join(getConfigDir2(), "operator-recovery-witness-v1");
-          const grant = mint(state2, owner.challenge().message);
-          const witness = fs322.existsSync(witnessRoot) ? new RecoveryWitness(witnessRoot) : RecoveryWitness.enroll(witnessRoot, owner, grant);
-          owner.consume(grant);
+          const grant = mint(state2, owner.challenge("witness_enroll").message);
+          const witness = fs322.existsSync(witnessRoot) ? (owner.reserve(grant, "witness_enroll")(), new RecoveryWitness(witnessRoot)) : RecoveryWitness.enroll(witnessRoot, owner, grant);
           witness.assertAvailable();
           const message = owner.challenge().message;
           enrollments.set(ctx.deps, { ...state2, witness, message });

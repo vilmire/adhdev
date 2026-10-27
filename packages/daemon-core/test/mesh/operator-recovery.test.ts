@@ -20,7 +20,8 @@ function fixture() {
     // Disposable state and explicitly FAKE physical proof; no real host or socket.
     let assignment: RecoveryCurrentAssignment = { ...target, state: 'stopping', queueStatus: 'assigned',
         queueNodeId: target.nodeId, queueSessionId: target.sessionId,
-        ownerRevision: 'owner-rev-1', queueRevision: 'queue-rev-1' };
+        writerStopRequestId: 'stop-1', writerStopConfirmed: false, writerStopTerminalPresent: false, reportPresent: false,
+        reclaimCount: 0, holdsRevision: 'hold-rev-1', ownerRevision: 'owner-rev-1', queueRevision: 'queue-rev-1' };
     const ledger = new OperatorRecoveryAnchors({ db, owner: admission, coordinatorBootId: 'coordinator-boot',
         readCurrentAssignment: () => { expect(db.inTransaction).toBe(true); return assignment; },
         assertAntiRollback: () => { if (!witness) throw Error('witness_missing'); }, clock: () => now });
@@ -74,7 +75,8 @@ describe('exact operator recovery admission and consumption', () => {
     for (const [key, value] of Object.entries({ ownerDaemonId: 'other', taskId: 'other', attemptId: 'other',
         generation: 1, dispatchNonce: 2, sessionId: 'other', nodeId: 'other', deliveryId: 'other', meshId: 'other',
         queueNodeId: 'other', queueSessionId: 'other', state: 'generating', queueStatus: 'completed',
-        queueRevision: 'reassigned', ownerRevision: 'owner-transferred' })) {
+        queueRevision: 'reassigned', ownerRevision: 'owner-transferred', holdsRevision: 'hold-change',
+        writerStopRequestId: 'changed-stop', writerStopConfirmed: true, writerStopTerminalPresent: true, reportPresent: true, reclaimCount: 1 })) {
         it(`rechecks ${key} in the consumption transaction after observation`, async () => {
             const f = fixture();
             try {
@@ -128,4 +130,40 @@ describe('exact operator recovery admission and consumption', () => {
             expect(f.db.prepare('SELECT COUNT(*) AS n FROM operator_recovery_anchors_v1').get()).toEqual({ n: 1 });
         } finally { f.db.close(); }
     });
+});
+
+describe('checkpoint71c6ed40 one-use and refusal fidelity', () => {
+    it('burns one grant at invocation even for refused concurrent queries', async () => {
+        const f = fixture(); const g = f.grant(); let calls = 0;
+        f.peer.requestPhysicalProof = async nonce => { calls++; return { ...f.peer.binding, protocol: 1,
+            verdict: 'UNKNOWN', reason: 'fixture unknown', nonce, fenceDigest: f.peer.fenceDigest,
+            sessionId: target.sessionId, providerSessionId: target.providerSessionId }; };
+        try {
+            await Promise.allSettled([f.ledger.recover(g, f.peer), f.ledger.recover(g, f.peer)]);
+            expect(calls).toBe(1); await expect(f.ledger.recover(g, f.peer)).rejects.toThrow('grant_rejected');
+        } finally { f.db.close(); }
+    });
+    it('preserves primary refusal when persistence becomes unavailable', async () => {
+        const f = fixture(); f.peer.requestPhysicalProof = async () => { f.db.close(); throw Error('primary_observation_failure'); };
+        await expect(f.ledger.recover(f.grant(), f.peer)).rejects.toThrow('primary_observation_failure');
+        expect(() => f.ledger.revoke()).not.toThrow();
+    });
+    it('revokes persisted prior-instance challenges', () => {
+        const f = fixture();
+        f.db.prepare('INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)').run('old', 'target', 'oldboot', 'oldassignment', 'issued');
+        new OperatorRecoveryAnchors({ db: f.db, owner: f.admission, coordinatorBootId: 'freshboot',
+            readCurrentAssignment: () => { throw Error('unused'); }, assertAntiRollback: () => {} });
+        expect(f.db.prepare('SELECT state FROM operator_recovery_challenges_v1').get()).toEqual({ state: 'revoked' }); f.db.close();
+    });
+});
+
+it('operation-scoped reservation burns on wrong scope and keeps original expiry/revocation', () => {
+    const f = fixture();
+    try {
+        const wrong = f.grant(); expect(() => f.admission.reserve(wrong, 'fence_install')).toThrow('operation_rejected');
+        expect(() => f.admission.reserve(wrong, 'anchor_recover')).toThrow('grant_rejected');
+        const g = f.grant(); const continuation = f.admission.reserve(g, 'anchor_recover'); continuation();
+        expect(() => f.admission.reserve(g, 'anchor_recover')).toThrow('grant_rejected');
+        f.setNow(30100); expect(continuation).toThrow('grant_rejected');
+    } finally { f.db.close(); }
 });

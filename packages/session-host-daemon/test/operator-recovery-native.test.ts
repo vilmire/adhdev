@@ -37,3 +37,11 @@ test('protocol-2 adapter parses bounded native observations and keeps historical
   lease.healthy = true; lease.child = { exitCode: null, signalCode: null };
   assert.deepEqual(lease.recoveryCoverage(), { protocol: 2, verdict: 'UNKNOWN', reason: 'historical_native_attribution_unavailable', processCount: 2, descriptorCount: 3, unreadable: 1 });
 });
+
+test('native unknown option fails without creating a lock', { skip: process.platform !== 'darwin' }, async () => {
+  const { existsSync } = await import('node:fs');
+  const root = mkdtempSync(join(tmpdir(), 'recovery-unknown-option-')); const helper = join(root, 'guardian');
+  execFileSync('/usr/bin/cc', ['-Wall', '-Wextra', '-Werror', resolve('native/instance-lock.c'), '-o', helper], { windowsHide: true });
+  assert.throws(() => execFileSync(helper, ['--misspelled-recovery'], { cwd: root, timeout: 300, windowsHide: true }), (e: any) => e.status === 64);
+  assert.equal(existsSync(join(root, '--misspelled-recovery')), false);
+});

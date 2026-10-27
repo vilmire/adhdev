@@ -1,5 +1,5 @@
 import {
-  OPERATOR_RECOVERY_TARGET as target, resolveSessionHostIpcKey,
+  OPERATOR_RECOVERY_TARGET as target, resolveSessionHostIpcKey, isRecoveryEndpoint,
   type RecoveryHostBinding, type RecoveryPhysicalProof,
 } from '@adhdev/session-host-core';
 
@@ -47,7 +47,7 @@ export function evaluateRecoveryCensus(s: RecoveryCensusSnapshot): RecoveryPhysi
   if (s.binding.namespace !== target.namespace ||
       resolveSessionHostIpcKey(s.instanceConfigDir) !== target.namespace ||
       s.binding.workerDaemonId !== target.workerDaemonId || !s.binding.hostBootId ||
-      !s.binding.endpoint.endsWith(`adhdev-preview-session-host-${target.namespace}.sock`)) {
+      !isRecoveryEndpoint(s.binding.endpoint)) {
     return reply('UNKNOWN', 'native_instance_binding_unproved');
   }
   if (!/^[a-f0-9]{64}$/.test(s.nonce) || !/^[a-f0-9]{64}$/.test(s.fenceDigest)) return reply('UNKNOWN', 'challenge_or_fence_unproved');

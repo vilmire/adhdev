@@ -792,13 +792,19 @@ import { createHash as createHash3 } from "crypto";
 import {
   OPERATOR_RECOVERY_TARGET as target,
   recoveryTargetBytes,
-  assertRecoveryLaunchIdentity
+  assertRecoveryLaunchIdentity,
+  isRecoveryEndpoint
 } from "@adhdev/session-host-core";
 var digest2 = (s) => createHash3("sha256").update(s).digest("hex");
 var OperatorRecoveryFence = class {
   constructor(root) {
     this.root = root;
     this.file = path4.join(root, "operator-recovery-v1.json");
+    try {
+      this.readRecord();
+    } catch (e) {
+      if (e.code !== "ENOENT") this.poisoned = true;
+    }
   }
   file;
   observedDigest = null;
@@ -806,7 +812,6 @@ var OperatorRecoveryFence = class {
   poisoned = false;
   assertLaunchAllowed(payload) {
     assertRecoveryLaunchIdentity(payload);
-    if (this.observedDigest) this.witness();
   }
   enterLaunch(payload) {
     this.assertLaunchAllowed(payload);
@@ -820,10 +825,10 @@ var OperatorRecoveryFence = class {
     };
   }
   install(owner, grant, binding, assertNativeExclusion, targetRuntimePresent) {
-    owner.assertGrant(grant);
+    const assertOwner = owner.reserve(grant, "fence_install");
     assertNativeExclusion();
     if (this.inFlight !== 0 || targetRuntimePresent()) throw new Error("operator_recovery_launch_in_flight");
-    if (binding.namespace !== target.namespace || binding.workerDaemonId !== target.workerDaemonId || !binding.hostBootId || !binding.endpoint.endsWith(`adhdev-preview-session-host-${target.namespace}.sock`)) {
+    if (binding.namespace !== target.namespace || binding.workerDaemonId !== target.workerDaemonId || !binding.hostBootId || !isRecoveryEndpoint(binding.endpoint)) {
       throw new Error("operator_recovery_host_binding");
     }
     const state = {
@@ -836,7 +841,7 @@ var OperatorRecoveryFence = class {
     fs5.mkdirSync(this.root, { recursive: true, mode: 448 });
     const directory = fs5.lstatSync(this.root);
     if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || directory.mode & 63) throw new Error("operator_recovery_storage_untrusted");
-    owner.consume(grant);
+    assertOwner();
     try {
       const fd = fs5.openSync(this.file, "wx", 384);
       try {
@@ -858,15 +863,28 @@ var OperatorRecoveryFence = class {
       throw error;
     }
   }
+  readRecord() {
+    const root = fs5.lstatSync(this.root);
+    if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== process.getuid?.() || root.mode & 63) throw new Error("operator_recovery_storage_untrusted");
+    const fd = fs5.openSync(this.file, fs5.constants.O_RDONLY | fs5.constants.O_NOFOLLOW);
+    try {
+      const stat2 = fs5.fstatSync(fd);
+      if (stat2.size > 4096 || !stat2.isFile() || stat2.nlink !== 1 || stat2.uid !== process.getuid?.() || stat2.mode & 63) {
+        throw new Error("operator_recovery_storage_untrusted");
+      }
+      const bytes = fs5.readFileSync(fd, "utf8");
+      const state = JSON.parse(bytes);
+      if (state.protocol !== 1 || state.target !== recoveryTargetBytes || state.namespace !== target.namespace || (typeof state.installedHostBootId !== "string" || !state.installedHostBootId)) throw new Error("operator_recovery_fence_rollback");
+      return { hash: digest2(bytes), state };
+    } finally {
+      fs5.closeSync(fd);
+    }
+  }
   witness(expectedDigest) {
     if (this.poisoned || this.inFlight) throw new Error("operator_recovery_fence_unknown");
-    const stat2 = fs5.lstatSync(this.file);
-    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("operator_recovery_storage_untrusted");
-    const bytes = fs5.readFileSync(this.file, "utf8");
-    const hash = digest2(bytes);
-    const state = JSON.parse(bytes);
+    const { hash, state } = this.readRecord();
     const pinned = expectedDigest ?? this.observedDigest;
-    if (!pinned || hash !== pinned || state.protocol !== 1 || state.target !== recoveryTargetBytes || state.namespace !== target.namespace || !state.installedHostBootId) throw new Error("operator_recovery_fence_rollback");
+    if (!pinned || hash !== pinned || state.protocol !== 1 || state.target !== recoveryTargetBytes || state.namespace !== target.namespace || (typeof state.installedHostBootId !== "string" || !state.installedHostBootId)) throw new Error("operator_recovery_fence_rollback");
     this.observedDigest = hash;
     return { digest: hash, installedHostBootId: state.installedHostBootId };
   }
@@ -885,7 +903,8 @@ import {
 // src/operator-recovery-census.ts
 import {
   OPERATOR_RECOVERY_TARGET as target2,
-  resolveSessionHostIpcKey
+  resolveSessionHostIpcKey,
+  isRecoveryEndpoint as isRecoveryEndpoint2
 } from "@adhdev/session-host-core";
 function readLegacyGuardianCoverage() {
   return null;
@@ -901,7 +920,7 @@ function evaluateRecoveryCensus(s) {
     sessionId: target2.sessionId,
     providerSessionId: target2.providerSessionId
   });
-  if (s.binding.namespace !== target2.namespace || resolveSessionHostIpcKey(s.instanceConfigDir) !== target2.namespace || s.binding.workerDaemonId !== target2.workerDaemonId || !s.binding.hostBootId || !s.binding.endpoint.endsWith(`adhdev-preview-session-host-${target2.namespace}.sock`)) {
+  if (s.binding.namespace !== target2.namespace || resolveSessionHostIpcKey(s.instanceConfigDir) !== target2.namespace || s.binding.workerDaemonId !== target2.workerDaemonId || !s.binding.hostBootId || !isRecoveryEndpoint2(s.binding.endpoint)) {
     return reply("UNKNOWN", "native_instance_binding_unproved");
   }
   if (!/^[a-f0-9]{64}$/.test(s.nonce) || !/^[a-f0-9]{64}$/.test(s.fenceDigest)) return reply("UNKNOWN", "challenge_or_fence_unproved");
@@ -940,7 +959,7 @@ var OperatorRecoveryControl = class {
     switch (request.type) {
       case "prepare_operator_recovery_fence_v1":
         if (!this.owner) throw new Error("operator_recovery_native_owner_unavailable");
-        return { success: true, result: this.owner.challenge() };
+        return { success: true, result: this.owner.challenge("fence_install") };
       case "install_operator_recovery_fence_v1": {
         if (!this.owner) throw new Error("operator_recovery_native_owner_unavailable");
         const grant = this.owner.authorize(request.payload.message, request.payload.signature);
@@ -1862,6 +1881,7 @@ var SessionHostServer = class extends EventEmitter {
           if (!this.upgradeLease) throw new Error("native_host_upgrade_binding_unavailable");
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case "create_session": {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -1930,6 +1950,7 @@ var SessionHostServer = class extends EventEmitter {
           return { success: true, result: record };
         }
         case "update_session_meta": {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.updateSessionMeta(
             request.payload.sessionId,
             request.payload.meta || {},
@@ -2362,18 +2383,23 @@ var SessionHostServer = class extends EventEmitter {
     if (!existing) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
-    if (this.runtimes.has(sessionId)) {
-      this.stopRequests.set(sessionId, "restart");
-      this.registry.setLifecycle(sessionId, "stopping");
-      this.persistNow(sessionId);
-      this.recordRuntimeTransition(sessionId, "restart_requested", "stopping", void 0, true);
-      this.requireRuntime(sessionId).stop();
-      await this.waitForRuntimeExit(sessionId);
+    const leaveLaunch = this.recoveryFence.enterLaunch(buildPayloadFromRecord(existing));
+    try {
+      if (this.runtimes.has(sessionId)) {
+        this.stopRequests.set(sessionId, "restart");
+        this.registry.setLifecycle(sessionId, "stopping");
+        this.persistNow(sessionId);
+        this.recordRuntimeTransition(sessionId, "restart_requested", "stopping", void 0, true);
+        this.requireRuntime(sessionId).stop();
+        await this.waitForRuntimeExit(sessionId);
+      }
+      const latest = this.registry.getSession(sessionId) || existing;
+      const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), "session_resumed");
+      this.recordRuntimeTransition(sessionId, "restart_completed", restarted.lifecycle, void 0, true);
+      return restarted;
+    } finally {
+      leaveLaunch();
     }
-    const latest = this.registry.getSession(sessionId) || existing;
-    const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), "session_resumed");
-    this.recordRuntimeTransition(sessionId, "restart_completed", restarted.lifecycle, void 0, true);
-    return restarted;
   }
   async pruneDuplicateSessions(payload) {
     const providerFilter = typeof payload?.providerType === "string" ? payload.providerType.trim() : "";
@@ -2441,7 +2467,6 @@ var SessionHostServer = class extends EventEmitter {
     this.stopRequests.delete(record.sessionId);
   }
   startRuntime(record, payload, startEventType) {
-    this.recoveryFence.assertLaunchAllowed(payload);
     const leaveLaunch = this.recoveryFence.enterLaunch(payload);
     try {
       const runtime = new PtySessionRuntime({

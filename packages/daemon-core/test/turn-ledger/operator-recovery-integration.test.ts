@@ -34,9 +34,9 @@ function fixture() {
     const pair = generateKeyPairSync('ed25519');
     const owner = new RecoveryOwnerAdmission({ publicKey: pair.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
         enrollmentId: 'fixture-owner-channel', coordinatorBootId: 'fixture-boot', authEpoch: '1', verifyCurrent: () => true });
-    const grant = () => { const c = owner.challenge(); return owner.authorize(c.message, sign(null, Buffer.from(c.message), pair.privateKey).toString('hex')); };
+    const grant = (operation: 'anchor_recover' | 'witness_enroll' = 'anchor_recover') => { const c = owner.challenge(operation); return owner.authorize(c.message, sign(null, Buffer.from(c.message), pair.privateKey).toString('hex')); };
     const witnessRoot = join(process.env.ADHDEV_CONFIG_DIR!, 'independent-witness');
-    const witness = RecoveryWitness.enroll(witnessRoot, owner, grant());
+    const witness = RecoveryWitness.enroll(witnessRoot, owner, grant('witness_enroll'));
     const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: t.ownerDaemonId, publisher: null, now: () => 1100 });
     const peer: RecoveryPeerPort = { peerId: t.workerDaemonId, connectionEpoch: 'fixture-channel',
         binding: { namespace: t.namespace, workerDaemonId: t.workerDaemonId, hostBootId: 'fixture-host-boot',
@@ -136,6 +136,32 @@ describe.skipIf(process.platform === 'win32')('real runtime ledger operator reco
         expect(withRecoveryMeshOwnershipFence(() => f.db.transaction(() => readRecoveryCurrentAssignment(f.db, t.ownerDaemonId)).immediate()).deliveryId).toBe(t.deliveryId);
         const newer = makeAttempt('accepted', { ...t, attemptId: t.attemptId + '-retry', attemptNo: 1, sessionId: 'new-session', messageId: 'new-delivery' });
         f.ledger.store.upsertAttempt(newer, 1200);
-        expect(withRecoveryMeshOwnershipFence(() => f.db.transaction(() => readRecoveryCurrentAssignment(f.db, t.ownerDaemonId)).immediate()).attemptId).toBe(newer.attemptId);
+        expect(() => withRecoveryMeshOwnershipFence(() => f.db.transaction(() => readRecoveryCurrentAssignment(f.db, t.ownerDaemonId)).immediate())).toThrow('stopping_state_unsafe');
     });
+});
+
+for (const mode of ['missing-stop', 'confirmed', 'terminal', 'late-report', 'reclaimed']) {
+    it(`refuses unsafe actual stopping SQL state: ${mode}`, async () => {
+        const f = fixture();
+        const row = f.db.prepare('SELECT data_json FROM turn_attempts WHERE attempt_id=?').get(t.attemptId) as any;
+        const data = JSON.parse(row.data_json);
+        if (mode === 'missing-stop') delete data.writerStop.requestId;
+        if (mode === 'confirmed') data.writerStop.confirmed = true;
+        if (mode === 'terminal') data.writerStop.terminal = { outcome: 'completed' };
+        if (mode === 'late-report') data.report = { outcome: 'completed' };
+        f.db.prepare('UPDATE turn_attempts SET data_json=?,reclaim_count=? WHERE attempt_id=?')
+            .run(JSON.stringify(data), mode === 'reclaimed' ? 1 : 0, t.attemptId);
+        await expect(f.recover()).rejects.toThrow();
+        expect(f.ledger.getAttempt(t.attemptId)?.state).toBe('stopping'); f.witness.assertAvailable();
+    });
+}
+it('detects an actual hold mutation during observation', async () => {
+    const f = fixture(); const original = f.peer.requestPhysicalProof;
+    f.peer.requestPhysicalProof = async n => {
+        const proof = await original(n);
+        f.db.prepare("INSERT INTO turn_holds (hold_id,attempt_id,generation,reason,on_expire,created_at) VALUES (?,?,0,'liveness','probe',100)").run('newhold', t.attemptId);
+        return proof;
+    };
+    await expect(f.recover()).rejects.toThrow('expired_revoked_or_reassigned');
+    expect(f.ledger.getAttempt(t.attemptId)?.state).toBe('stopping'); f.witness.assertAvailable();
 });

@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { bridgeReceiptTransaction } from '../worker-bridge-transaction.js';
 import type { Database } from 'better-sqlite3';
 import {
-    OPERATOR_RECOVERY_TARGET as target, recoveryTargetBytes,
+    OPERATOR_RECOVERY_TARGET as target, recoveryTargetBytes, isRecoveryEndpoint,
     type RecoveryHostBinding, type RecoveryOwnerAdmission, type RecoveryPhysicalProof,
 } from '@adhdev/session-host-core';
 
@@ -14,6 +14,8 @@ export interface RecoveryCurrentAssignment {
     queueStatus: string; queueNodeId: string; queueSessionId: string;
     /** Opaque exact revision of the current mesh owner and queue assignment. */
     ownerRevision: string; queueRevision: string;
+    writerStopRequestId: string; writerStopConfirmed: boolean; writerStopTerminalPresent: boolean;
+    reportPresent: boolean; reclaimCount: number; holdsRevision: string;
 }
 export interface RecoveryPeerPort {
     /** Captured from authenticated transport, never from response payload. */
@@ -65,6 +67,7 @@ export class OperatorRecoveryAnchors {
             CREATE TABLE IF NOT EXISTS operator_recovery_anchors_v1 (
             target TEXT PRIMARY KEY, nonce_hash TEXT NOT NULL UNIQUE, association TEXT NOT NULL,
             proof TEXT NOT NULL, assignment TEXT NOT NULL);`);
+        this.revoke();
     }
     private now(): number {
         const n = (this.deps.clock ?? (() => performance.now()))();
@@ -82,10 +85,11 @@ export class OperatorRecoveryAnchors {
             'dispatchNonce', 'sessionId', 'nodeId', 'deliveryId'] as const) {
             if (c[key] !== target[key]) throw new Error('recovery_current_assignment_mismatch');
         }
-        if (c.state !== 'stopping' || c.queueStatus !== 'assigned' ||
+        if (!c.writerStopRequestId?.trim() || c.writerStopConfirmed !== false || c.writerStopTerminalPresent !== false ||
+            c.reportPresent !== false || c.reclaimCount !== 0 || !c.holdsRevision || c.state !== 'stopping' || c.queueStatus !== 'assigned' ||
             c.queueNodeId !== target.nodeId || c.queueSessionId !== target.sessionId ||
             !c.ownerRevision || !c.queueRevision) throw new Error('recovery_current_assignment_mismatch');
-        return JSON.stringify(c);
+        return JSON.stringify(Object.fromEntries(Object.entries(c).sort(([a], [b]) => a.localeCompare(b))));
     }
     private assertPeer(p: Pending): void {
         if (p.peer.peerId !== target.workerDaemonId || !p.connectionEpoch ||
@@ -93,23 +97,26 @@ export class OperatorRecoveryAnchors {
             JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest ||
             p.peer.binding.workerDaemonId !== target.workerDaemonId ||
             p.peer.binding.namespace !== target.namespace || !p.peer.binding.hostBootId ||
-            !p.peer.binding.endpoint.endsWith(`adhdev-preview-session-host-${target.namespace}.sock`) ||
+            !isRecoveryEndpoint(p.peer.binding.endpoint) ||
             !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error('recovery_authenticated_peer_changed');
     }
     revoke(): void {
         // Private nonces are forgotten even if persistence is unavailable.
         this.pending.clear();
-        this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
+        try { this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run(); }
+        catch { /* Private pending state is already revoked. Persistence cannot authorize replay. */ }
     }
     async recover(grant: unknown, peer: RecoveryPeerPort): Promise<RecoveryAnchor> {
-        this.deps.owner.assertGrant(grant);
+        const assertOwner = this.deps.owner.reserve(grant, 'anchor_recover');
         const nonce = randomBytes(32).toString('hex');
         const nonceHash = hash(nonce);
         const p: Pending = { deadline: this.now() + 30_000, current: '', grant, peer,
             binding: JSON.stringify(peer.binding), connectionEpoch: peer.connectionEpoch, fenceDigest: peer.fenceDigest };
         this.assertPeer(p);
+        this.pending.clear(); // A fresh exact-target operation supersedes older private challenges.
         (this.deps.withOwnershipFence ?? ((f: () => void) => f()))(() => this.deps.db.transaction(() => {
             p.current = this.current();
+            this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
             if (this.deps.db.prepare('SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?').get(recoveryTargetBytes)) {
                 throw new Error('recovery_already_consumed');
             }
@@ -128,7 +135,7 @@ export class OperatorRecoveryAnchors {
             } finally { if (timer) clearTimeout(timer); }
             const fenced = this.deps.withOwnershipFence ?? (<T>(f: () => T) => f());
             return fenced(() => bridgeReceiptTransaction(this.deps.db, () => {
-                this.deps.owner.assertGrant(grant);
+                assertOwner();
                 this.assertPeer(p);
                 if (this.now() >= p.deadline || this.pending.get(nonceHash) !== p || this.current() !== p.current) {
                     throw new Error('recovery_expired_revoked_or_reassigned');
@@ -159,14 +166,14 @@ export class OperatorRecoveryAnchors {
                 const anchor = Object.freeze({ association: 'operator_asserted' as const,
                     target, proof: Object.freeze(accepted) });
                 this.deps.settleInTransaction?.(anchor);
-                this.deps.owner.consume(grant);
+                assertOwner();
                 this.anchors.add(anchor);
                 return anchor;
             }));
         } finally {
             this.pending.delete(nonceHash);
-            this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE nonce_hash=? AND state='issued'")
-                .run(nonceHash);
+            try { this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE nonce_hash=? AND state='issued'")
+                .run(nonceHash); } catch { /* Never mask the primary refusal. No private pending nonce remains. */ }
         }
     }
     /** Object identity only; serialized audit rows cannot become authority. */

@@ -87,9 +87,10 @@ export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any):
                 verifyCurrent: () => ownerGenerations.get(ctx.deps) === boot && isNondelegatedLocalOwnerIngress(args) });
             const state = { owner, key: pair.privateKey, boot };
             const witnessRoot = path.join(getConfigDir(), 'operator-recovery-witness-v1');
-            const grant = mint(state, owner.challenge().message);
-            const witness = fs.existsSync(witnessRoot) ? new RecoveryWitness(witnessRoot) : RecoveryWitness.enroll(witnessRoot, owner, grant);
-            owner.consume(grant);
+            const grant = mint(state, owner.challenge('witness_enroll').message);
+            const witness = fs.existsSync(witnessRoot)
+                ? (owner.reserve(grant, 'witness_enroll')(), new RecoveryWitness(witnessRoot))
+                : RecoveryWitness.enroll(witnessRoot, owner, grant);
             witness.assertAvailable();
             const message = owner.challenge().message;
             enrollments.set(ctx.deps, { ...state, witness, message });

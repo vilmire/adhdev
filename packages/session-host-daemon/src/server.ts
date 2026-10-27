@@ -508,6 +508,7 @@ export class SessionHostServer extends EventEmitter {
           if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case 'create_session': {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -576,6 +577,7 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: record };
         }
         case 'update_session_meta': {
+          this.recoveryFence.assertLaunchAllowed(request.payload as CreateSessionPayload);
           const record = this.registry.updateSessionMeta(
             request.payload.sessionId,
             request.payload.meta || {},
@@ -1088,19 +1090,22 @@ export class SessionHostServer extends EventEmitter {
       throw new Error(`Unknown session: ${sessionId}`);
     }
 
-    if (this.runtimes.has(sessionId)) {
-      this.stopRequests.set(sessionId, 'restart');
-      this.registry.setLifecycle(sessionId, 'stopping');
-      this.persistNow(sessionId);
-      this.recordRuntimeTransition(sessionId, 'restart_requested', 'stopping', undefined, true);
-      this.requireRuntime(sessionId).stop();
-      await this.waitForRuntimeExit(sessionId);
-    }
+    const leaveLaunch = this.recoveryFence.enterLaunch(buildPayloadFromRecord(existing));
+    try {
+      if (this.runtimes.has(sessionId)) {
+        this.stopRequests.set(sessionId, 'restart');
+        this.registry.setLifecycle(sessionId, 'stopping');
+        this.persistNow(sessionId);
+        this.recordRuntimeTransition(sessionId, 'restart_requested', 'stopping', undefined, true);
+        this.requireRuntime(sessionId).stop();
+        await this.waitForRuntimeExit(sessionId);
+      }
 
-    const latest = this.registry.getSession(sessionId) || existing;
-    const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), 'session_resumed');
-    this.recordRuntimeTransition(sessionId, 'restart_completed', restarted.lifecycle, undefined, true);
-    return restarted;
+      const latest = this.registry.getSession(sessionId) || existing;
+      const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), 'session_resumed');
+      this.recordRuntimeTransition(sessionId, 'restart_completed', restarted.lifecycle, undefined, true);
+      return restarted;
+    } finally { leaveLaunch(); }
   }
 
   private async pruneDuplicateSessions(payload?: {
@@ -1190,7 +1195,6 @@ export class SessionHostServer extends EventEmitter {
   ): SessionHostRecord {
     // The shared synchronous spawn boundary also covers delayed restart/resume
     // after an await. Never infer closure from a prior failed ensureReady.
-    this.recoveryFence.assertLaunchAllowed(payload);
     const leaveLaunch = this.recoveryFence.enterLaunch(payload);
     try {
       const runtime = new PtySessionRuntime({

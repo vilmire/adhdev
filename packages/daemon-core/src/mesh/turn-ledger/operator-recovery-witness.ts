@@ -21,7 +21,7 @@ export class RecoveryWitness {
     }
     static enroll(root: string, owner: RecoveryOwnerAdmission, grant: unknown): RecoveryWitness {
         assertTestStorageIsolated(root);
-        owner.assertGrant(grant);
+        owner.reserve(grant, 'witness_enroll')();
         // The directory itself is the never-reused enrollment marker. A partial
         // initialization must be inspected, not automatically re-created.
         fs.mkdirSync(root, { mode: 0o700 });

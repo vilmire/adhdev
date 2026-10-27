@@ -1,4 +1,5 @@
 import { createPublicKey, randomBytes, verify, type KeyObject } from 'node:crypto';
+import { isAbsolute, basename } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 /** This association is owner asserted, never a historical native receipt. */
@@ -33,7 +34,11 @@ export function assertRecoveryLaunchIdentity(value: unknown): void {
     } else if (nested.has(key)) assertRecoveryLaunchIdentity(field);
   }
 }
-export interface RecoveryOwnerGrant { readonly purpose: 'operator_recovery_v1' }
+export type RecoveryOwnerOperation = 'anchor_recover' | 'fence_install' | 'witness_enroll';
+export interface RecoveryOwnerGrant { readonly purpose: 'operator_recovery_v1'; readonly operation: RecoveryOwnerOperation }
+export function isRecoveryEndpoint(endpoint: string): boolean {
+  return isAbsolute(endpoint) && basename(endpoint) === `adhdev-preview-session-host-${OPERATOR_RECOVERY_TARGET.namespace}.sock`;
+}
 export interface RecoveryOwnerChallenge { readonly message: string }
 export interface RecoveryOwnerEnrollment {
   /** Trusted boot dependency, provisioned outside delegated worker authority.
@@ -50,8 +55,8 @@ export interface RecoveryOwnerEnrollment {
 export class RecoveryOwnerAdmission {
   private readonly key: KeyObject;
   private readonly enrollment: Readonly<RecoveryOwnerEnrollment>;
-  private readonly pending = new Map<string, number>();
-  private readonly grants = new WeakMap<object, number>();
+  private readonly pending = new Map<string, { deadline: number; operation: RecoveryOwnerOperation }>();
+  private readonly grants = new WeakMap<object, { deadline: number; operation: RecoveryOwnerOperation }>();
   private lastNow = -Infinity;
   constructor(enrollment: RecoveryOwnerEnrollment, private readonly clock = () => performance.now()) {
     this.enrollment = Object.freeze({ ...enrollment });
@@ -70,32 +75,44 @@ export class RecoveryOwnerAdmission {
     this.lastNow = n;
     return n;
   }
-  challenge(): RecoveryOwnerChallenge {
+  challenge(operation: RecoveryOwnerOperation = 'anchor_recover'): RecoveryOwnerChallenge {
+    if (!['anchor_recover', 'fence_install', 'witness_enroll'].includes(operation)) throw new Error('recovery_owner_operation_rejected');
     const now = this.now();
-    for (const [message, deadline] of this.pending) if (deadline <= now) this.pending.delete(message);
+    for (const [message, entry] of this.pending) if (entry.deadline <= now) this.pending.delete(message);
     if (this.pending.size >= 16) throw new Error('recovery_owner_challenge_limit');
-    const message = JSON.stringify(['operator_recovery_v1', recoveryTargetBytes,
+    const message = JSON.stringify(['operator_recovery_v1', operation, recoveryTargetBytes,
       this.enrollment.enrollmentId, this.enrollment.coordinatorBootId, this.enrollment.authEpoch,
       randomBytes(32).toString('hex')]);
-    this.pending.set(message, now + 30_000);
+    this.pending.set(message, { deadline: now + 30_000, operation });
     return Object.freeze({ message });
   }
   authorize(message: string, signature: string): RecoveryOwnerGrant {
     const now = this.now();
-    const deadline = this.pending.get(message);
+    const entry = this.pending.get(message);
     this.pending.delete(message); // Every verification attempt burns the challenge.
-    if (deadline === undefined || now >= deadline || !/^[a-f0-9]{128}$/.test(signature) ||
+    if (!entry || now >= entry.deadline || !/^[a-f0-9]{128}$/.test(signature) ||
         !verify(null, Buffer.from(message), this.key, Buffer.from(signature, 'hex'))) {
       throw new Error('recovery_owner_signature_rejected');
     }
-    const grant = Object.freeze({ purpose: 'operator_recovery_v1' as const });
-    this.grants.set(grant, deadline);
+    const grant = Object.freeze({ purpose: 'operator_recovery_v1' as const, operation: entry.operation });
+    this.grants.set(grant, entry);
     return grant;
   }
   assertGrant(grant: unknown): asserts grant is RecoveryOwnerGrant {
     const now = this.now();
-    const deadline = typeof grant === 'object' && grant !== null ? this.grants.get(grant) : undefined;
-    if (deadline === undefined || now >= deadline) throw new Error('recovery_owner_grant_rejected');
+    const entry = typeof grant === 'object' && grant !== null ? this.grants.get(grant) : undefined;
+    if (!entry || now >= entry.deadline) throw new Error('recovery_owner_grant_rejected');
+  }
+  /** Burn synchronously before any work or await. The private continuation
+   * rechecks the ORIGINAL deadline and revocation; it cannot mint a new grant. */
+  reserve(grant: unknown, operation: RecoveryOwnerOperation): () => void {
+    this.assertGrant(grant);
+    const entry = this.grants.get(grant as object)!;
+    this.grants.delete(grant as object);
+    if (entry.operation !== operation) throw new Error('recovery_owner_operation_rejected');
+    return () => {
+      if (this.now() >= entry.deadline) throw new Error('recovery_owner_grant_rejected');
+    };
   }
   consume(grant: unknown): void {
     this.assertGrant(grant);

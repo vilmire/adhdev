@@ -81,6 +81,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (!strcmp(argv[1], "--recovery-native-census-v2")) return recovery_census();
+  if (argv[1][0] == '-') return 64;
   int fd = open(argv[1], O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
   struct stat st;
   if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid() ||

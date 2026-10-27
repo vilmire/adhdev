@@ -25,7 +25,7 @@ export class OperatorRecoveryControl {
     switch (request.type) {
         case 'prepare_operator_recovery_fence_v1':
           if (!this.owner) throw new Error('operator_recovery_native_owner_unavailable');
-          return { success: true, result: this.owner.challenge() };
+          return { success: true, result: this.owner.challenge('fence_install') };
         case 'install_operator_recovery_fence_v1': {
           if (!this.owner) throw new Error('operator_recovery_native_owner_unavailable');
           const grant = this.owner.authorize(request.payload.message, request.payload.signature);

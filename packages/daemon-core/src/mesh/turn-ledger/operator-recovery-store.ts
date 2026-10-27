@@ -30,6 +30,12 @@ export function readRecoveryCurrentAssignment(db: Database, selfDaemonId: string
         ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(target.meshId, target.taskId) as Record<string, any> | undefined;
     const q = db.prepare('SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?').get(target.taskId, target.meshId) as Record<string, any> | undefined;
     if (!a || !q || a.owner_daemon_id !== selfDaemonId || a.terminal_outcome !== null) throw new Error('recovery_current_assignment_missing');
+    const data = JSON.parse(a.data_json);
+    const stop = data?.writerStop;
+    if (a.state !== 'stopping' || a.reclaim_count !== 0 || !stop ||
+        typeof stop.requestId !== 'string' || !stop.requestId.trim() || stop.confirmed === true ||
+        stop.terminal !== undefined || data.report !== undefined) throw new Error('recovery_stopping_state_unsafe');
+    const holds = db.prepare('SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id').all(a.attempt_id);
     const payload = JSON.parse(q.payload);
     if (payload.id !== target.taskId || payload.dispatchNonce !== target.dispatchNonce ||
         payload.assignedNodeId !== q.assigned_node_id || payload.assignedSessionId !== q.assigned_session_id ||
@@ -39,6 +45,9 @@ export function readRecoveryCurrentAssignment(db: Database, selfDaemonId: string
         attemptId: a.attempt_id, generation: a.generation, dispatchNonce: a.dispatch_nonce,
         sessionId: a.session_id, nodeId: a.node_id, deliveryId: a.message_id, state: a.state,
         queueStatus: q.status, queueNodeId: q.assigned_node_id, queueSessionId: q.assigned_session_id,
+        writerStopRequestId: stop.requestId, writerStopConfirmed: stop.confirmed === true,
+        writerStopTerminalPresent: stop.terminal !== undefined, reportPresent: data.report !== undefined,
+        reclaimCount: a.reclaim_count, holdsRevision: hash(holds),
         ownerRevision: hash([a.owner_daemon_id, a.attempt_id, a.updated_at, a.data_json, currentMesh.meshHost, ownerFileIdentity]),
         queueRevision: hash(q) };
 }

@@ -12,7 +12,7 @@ function fixture() {
   const keys = generateKeyPairSync('ed25519');
   const owner = new RecoveryOwnerAdmission({ publicKey: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     enrollmentId: 'fixture-private-owner', coordinatorBootId: 'fixture-coordinator-boot', authEpoch: '1', verifyCurrent: () => true });
-  const grant = () => { const c = owner.challenge(); return owner.authorize(c.message, sign(null, Buffer.from(c.message), keys.privateKey).toString('hex')); };
+  const grant = () => { const c = owner.challenge('fence_install'); return owner.authorize(c.message, sign(null, Buffer.from(c.message), keys.privateKey).toString('hex')); };
   const binding = { namespace: target.namespace, workerDaemonId: target.workerDaemonId, hostBootId: 'fixture-host-boot',
     endpoint: `/fixture/adhdev-preview-session-host-${target.namespace}.sock` };
   return { root, owner, grant, binding, fence: new OperatorRecoveryFence(root) };
@@ -81,4 +81,34 @@ test('read-only native coverage request fails closed without guardian and never 
   assert.deepEqual(fs.readdirSync(f.root), before);
   assert.equal(host.registry.listSessions().length, 0);
   assert.equal((await host.handleRequest({ type: 'get_operator_recovery_coverage_v1', payload: { nonce: '' } })).success, false);
+});
+
+test('witness uncertainty does not block unrelated concurrent launches', () => {
+  const f = fixture(); f.fence.install(f.owner, f.grant(), f.binding, () => {}, () => false);
+  const leave = f.fence.enterLaunch(launch('unrelated-one'));
+  assert.doesNotThrow(() => f.fence.assertLaunchAllowed(launch('unrelated-two')));
+  leave();
+  assert.throws(() => f.fence.install(f.owner, f.grant(), f.binding, () => {}, () => false));
+  assert.doesNotThrow(() => f.fence.assertLaunchAllowed(launch('unrelated-three')));
+  assert.throws(() => f.fence.witness());
+});
+for (const endpoint of ['adhdev-preview-session-host-6a2ef3162182.sock', '/tmp/other-adhdev-preview-session-host-6a2ef3162182.sock']) {
+  test(`refuses noncanonical endpoint ${endpoint}`, () => {
+    const f = fixture(); assert.throws(() => f.fence.install(f.owner, f.grant(), { ...f.binding, endpoint }, () => {}, () => false));
+  });
+}
+
+test('failed pre-write installation burns its scoped grant', () => {
+  const f = fixture(); const g = f.grant(); const leave = f.fence.enterLaunch(launch('pending-unrelated'));
+  assert.throws(() => f.fence.install(f.owner, g, f.binding, () => {}, () => false), /launch_in_flight/);
+  leave(); assert.throws(() => f.fence.install(f.owner, g, f.binding, () => {}, () => false), /grant_rejected/);
+});
+test('restart detects corrupt journal and cannot accept a later repaired file as proof', () => {
+  const f = fixture(); const digest = f.fence.install(f.owner, f.grant(), f.binding, () => {}, () => false);
+  const file = join(f.root, 'operator-recovery-v1.json'); const original = fs.readFileSync(file);
+  fs.writeFileSync(file, '{}'); const restarted = new OperatorRecoveryFence(f.root);
+  fs.writeFileSync(file, original); // Fixture repair must not erase observed corruption.
+  assert.throws(() => restarted.witness(digest), /fence_unknown/);
+  assert.doesNotThrow(() => restarted.assertLaunchAllowed(launch('unrelated')));
+  assert.throws(() => restarted.assertLaunchAllowed(launch(target.providerSessionId.toUpperCase())), /recovery_fenced/);
 });
