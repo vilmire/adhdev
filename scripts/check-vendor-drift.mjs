@@ -17,6 +17,7 @@
 // That is not a source drift — a real source change always shows up in the emitted
 // .js — so comparing .map files only produces cross-machine false positives.
 
+import { vendorDriftTarget } from './vendor-drift-target.mjs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +37,7 @@ const VENDOR_PATHS = [
 ];
 const isWin = process.platform === 'win32';
 const npm = isWin ? 'npm.cmd' : 'npm';
+const comparisonTree = vendorDriftTarget(root, process.argv.slice(2));
 
 // This gate rebuilds in order to REPRODUCE the committed bytes, so it is bound by
 // the same layout requirement as the code that produced them: the seqscribe dep
@@ -78,7 +80,7 @@ for (const vendorPath of VENDOR_PATHS) {
     // Exclude *.map: sourcemaps are a non-reproducible debug artifact (see note above).
     execFileSync(
       'git',
-      ['diff', '--exit-code', '--ignore-cr-at-eol', 'HEAD', '--', vendorPath, `:(exclude,glob)${vendorPath}/**/*.map`],
+      ['diff', '--exit-code', '--ignore-cr-at-eol', comparisonTree, '--', vendorPath, `:(exclude,glob)${vendorPath}/**/*.map`],
       { stdio: 'inherit', cwd: root },
     );
   } catch {

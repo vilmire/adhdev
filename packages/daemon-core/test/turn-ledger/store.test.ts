@@ -78,4 +78,83 @@ describe('turn-ledger schema + store', () => {
         expect(store.getAttempt('p1')).toBeNull();
         expect(store.getAttempt('m1a')).not.toBeNull();
     });
+    it('retains audit boundaries and referenced/imported evidence when pruning terminal liveness duplicates', () => {
+        const db = memDb();
+        const store = new TurnStore(db);
+        for (const id of ['old', 'open', 'foreign', 'recent', 'imported', 'published']) {
+            store.upsertAttempt(makeAttempt(id === 'open' ? 'generating' : 'completed', {
+                attemptId: id, sessionId: id, taskId: id, ownerDaemonId: id === 'foreign' ? 'foreign' : 'dc',
+                terminal: id === 'open' ? null : { outcome: 'completed', reason: 'turn_end', source: 'fsm_edge', strength: 'genuine', at: id === 'recent' ? 999 : 1 },
+            }), 1);
+            for (let n = 0; n < 5; n++) {
+                const eventId = `${id}:${n}`;
+                store.insertEvent({ eventId, dedupeKey: eventId, srcWriter: id === 'imported' ? 'peer' : null, attemptId: id, generation: 1, sessionId: id, kind: 'liveness',
+                    source: 'coordinator_probe', observedBy: 'dc', verdict: 'applied', rule: 'R32', fromState: 'generating', toState: 'generating',
+                    payload: { evidence: { eventId, at: n, probeStartedAtMs: n, result: 'alive' } },
+                    publishState: id === 'published' ? 'published' : 'none', atMs: n, recordedAt: n });
+            }
+        }
+        store.insertEvent({ eventId: 'old:2#notice', attemptId: 'old', sessionId: 'old', kind: 'notify', source: 'scheduler',
+            verdict: 'applied', payload: {}, publishState: 'none', atMs: 100, recordedAt: 100 });
+        expect(store.pruneTerminalLivenessSamples(100, 1_000, 'dc')).toBe(2);
+        expect(store.listEvents('old').map((e) => e.eventId)).toEqual(expect.arrayContaining(['old:0', 'old:2', 'old:4', 'old:2#notice']));
+        for (const id of ['open', 'foreign', 'recent', 'imported', 'published']) expect(store.listEvents(id)).toHaveLength(5);
+        expect(store.getAttempt('old')).not.toBeNull();
+        db.close();
+    });
+
+    it('keeps JSON-referenced samples and progresses past a page of protected foreign rows', () => {
+        const db = memDb();
+        const store = new TurnStore(db);
+        const add = (id: string, ownerDaemonId: string, count: number) => {
+            store.upsertAttempt(makeAttempt('completed', { attemptId: id, sessionId: id, taskId: id,
+                ownerDaemonId, terminal: { outcome: 'completed', reason: 'turn_end', source: 'fsm_edge', strength: 'genuine', at: 1 } }), 1);
+            for (let n = 0; n < count; n++) {
+                const eventId = `${id}:${n}`;
+                store.insertEvent({ eventId, dedupeKey: eventId, attemptId: id, generation: 1, sessionId: id, kind: 'liveness',
+                    source: 'coordinator_probe', observedBy: 'dc', verdict: 'applied', rule: 'R32', fromState: 'generating', toState: 'generating',
+                    payload: { evidence: { eventId, at: n, result: 'alive' } }, publishState: 'none', atMs: n, recordedAt: n });
+            }
+        };
+        add('foreign-page', 'peer', 500);
+        add('local', 'dc', 6);
+        store.syncHolds('local', [makeHold('live_pending', { attemptId: 'local', data: { evidenceId: 'local:1' } })], 1);
+        const attempt = store.getAttempt('local')!;
+        attempt.data.report = { generation: 1, outcome: 'completed', eventId: 'local:2', at: 1 };
+        store.upsertAttempt(attempt, 1);
+        store.insertEvent({ eventId: 'json-reference', attemptId: 'local', sessionId: 'local', kind: 'notify', source: 'scheduler',
+            verdict: 'applied', payload: { evidenceId: 'local:3' }, publishState: 'none', atMs: 100, recordedAt: 100 });
+        expect(store.pruneTerminalLivenessSamples(100, 1000, 'dc')).toBe(0);
+        expect(store.pruneTerminalLivenessSamples(100, 1000, 'dc')).toBe(1);
+        for (const id of ['local:0', 'local:1', 'local:2', 'local:3', 'local:5']) expect(store.hasEvent(id)).toBe(true);
+        expect(store.hasEvent('local:4')).toBe(false);
+        expect(store.getEvent('local:3')!.payload.livenessSamples).toMatchObject({ count: 2, latest: { eventId: 'local:4' } });
+        expect(store.listEvents('foreign-page')).toHaveLength(500);
+        db.close();
+    });
+
+    it('dedupes only consecutive benign local samples, preserving failures, transport and provenance', () => {
+        const db = memDb();
+        const store = new TurnStore(db);
+        const sample = (n: number) => ({ eventId: `probe:${n}`, dedupeKey: `probe:${n}`, attemptId: 'a1', generation: 1, sessionId: 's1', kind: 'liveness',
+            source: 'coordinator_probe', verdict: 'applied' as const, rule: 'R32', fromState: 'generating', toState: 'generating',
+            payload: { evidence: { eventId: `probe:${n}`, at: n, result: 'alive' } } as Record<string, unknown>,
+            publishState: 'none' as const, atMs: n, recordedAt: n });
+        expect(store.recordEvidence(sample(1))).toBe(true);
+        expect(store.recordEvidence(sample(2))).toBe(true);
+        expect(store.recordEvidence(sample(2))).toBe(false);
+        expect(store.listEvents('a1')).toHaveLength(1);
+        store.insertEvent({ ...sample(3), kind: 'transcript_activity' });
+        store.recordEvidence(sample(4));
+        expect(store.hasEvent('probe:4')).toBe(true);
+        store.recordEvidence({ ...sample(5), rule: 'R31a' });
+        store.recordEvidence({ ...sample(6), srcWriter: 'peer', srcSeq: 1 });
+        store.recordEvidence({ ...sample(7), payload: { ...sample(7).payload, writerStopReceipt: { evidenceId: 'receipt' } } });
+        store.recordEvidence(sample(8));
+        expect(store.listEvents('a1')).toHaveLength(7);
+        expect(store.getEvent('probe:1')!.payload.evidence).toEqual(sample(1).payload.evidence);
+        expect(store.getEvent('probe:1')!.payload.livenessSamples).toMatchObject({ count: 2, latest: { eventId: 'probe:2' } });
+        db.close();
+    });
+
 });
