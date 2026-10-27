@@ -98,10 +98,27 @@ const C_LOCALE_OVERRIDES = {
 } as const;
 
 /**
+ * NON-INTERACTIVE GIT ADMISSION: git spawned by the daemon or inside a delegated
+ * worker session must never wait on a human. No one is at the daemon's stdin, and a
+ * worker's PTY is read by an agent, not a person — a credential prompt there stalls
+ * the turn until a watchdog fires, and a Git Credential Manager dialog on win32 opens
+ * an invisible window on a headless member. Both variables only refuse to PROMPT;
+ * stored credentials, credential helpers, GIT_ASKPASS and ssh keys/agents are
+ * untouched, so authenticated fetch/push that works without a prompt still works and
+ * one that would have prompted fails fast with git's own error instead of hanging.
+ */
+export const NON_INTERACTIVE_GIT_ENV = {
+    // git itself: never fall back to a terminal username/password prompt.
+    GIT_TERMINAL_PROMPT: '0',
+    // Git Credential Manager (win32/macOS default helper): never open its UI.
+    GCM_INTERACTIVE: 'never',
+} as const;
+
+/**
  * Build the environment for a git child process: the caller's environment with
  * every repo-location variable stripped (so `-C`/`cwd` actually decides which
- * repository is acted on) and the locale pinned to C (so git's messages stay in
- * English for the stderr matchers).
+ * repository is acted on), the locale pinned to C (so git's messages stay in
+ * English for the stderr matchers) and prompting disabled (NON_INTERACTIVE_GIT_ENV).
  *
  * Pass the result as `env` to execFile/spawn. Callers that already build their
  * own env should pass it as `base` so their vars are preserved.
@@ -113,7 +130,7 @@ const C_LOCALE_OVERRIDES = {
  * inherited ambiently, it is always a bug.
  */
 export function gitChildEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...base, ...C_LOCALE_OVERRIDES };
+    const env: NodeJS.ProcessEnv = { ...base, ...C_LOCALE_OVERRIDES, ...NON_INTERACTIVE_GIT_ENV };
     for (const key of REPO_LOCATION_VARS) {
         delete env[key];
     }
