@@ -91635,6 +91635,18 @@ ${cleanBody}`;
           if (args.writerStop && daemonId && daemonIdsEquivalent4(daemonId, components.statusInstanceId ?? getMachineId())) {
             return await components.cliManager.stopCli(stopArgs);
           }
+          if (args.writerStop) {
+            const localOwner = resolveHostedBindingOwner(
+              sessionId,
+              void 0,
+              components.cliManager?.deps?.getHostedBindingOwner?.(),
+              /* @__PURE__ */ new Set()
+            );
+            if (localOwner && daemonId) {
+              return { success: false, code: "writer_checkpoint_pending", reason: "worker_host_conflict" };
+            }
+            if (localOwner) return await components.cliManager.stopCli(stopArgs);
+          }
           if (daemonId && components.dispatchMeshCommand) {
             if (args.writerStop) {
               const capability = unwrapMeshRelayResult(await components.dispatchMeshCommand(daemonId, "agent_command", {
@@ -91654,6 +91666,7 @@ ${cleanBody}`;
         } catch (e) {
           LOG.warn("MeshQueue", `stopStaleMeshWorker error for ${sessionId}: ${e?.message || e}`);
         }
+        if (args.writerStop) return { success: false, code: "writer_checkpoint_pending", reason: "worker_host_unresolved" };
       });
     }
     function isHollowCompletion(metadataEvent) {
@@ -92084,6 +92097,7 @@ ${cleanBody}`;
         "use strict";
         init_mesh_relay_result();
         init_mesh_writer_stop_journal();
+        init_binding_owner();
         init_config();
         init_mesh_config();
         init_logger();
