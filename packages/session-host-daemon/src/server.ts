@@ -513,6 +513,9 @@ export class SessionHostServer extends EventEmitter {
           const record = request.type === 'attach_session_if_incarnation'
             ? this.registry.attachClientIfIncarnation(request.payload)
             : this.registry.attachClient(request.payload);
+          // Keep guarded comparison, registry grant and socket subscription in
+          // the same synchronous turn, before handleIncomingRequest awaits us.
+          if (request.type === 'attach_session_if_incarnation' && sourceSocket) this.subscribeSocketToSession(sourceSocket, record.sessionId);
           this.schedulePersist(record.sessionId);
           const client = record.attachedClients.find(item => item.clientId === request.payload.clientId);
           if (client) {
@@ -808,9 +811,6 @@ export class SessionHostServer extends EventEmitter {
     }
     const startedAt = Date.now();
     const response = await this.handleRequest(envelope.request, socket);
-    if (sessionId && envelope.request.type === 'attach_session_if_incarnation' && response.success) {
-      this.subscribeSocketToSession(socket, sessionId);
-    }
     if (sessionId && envelope.request.type === 'create_session' && response.success) {
       // sessionId may have been auto-generated — subscribe to whatever was actually created
       const createdId = (response.result as { sessionId?: string } | undefined)?.sessionId;

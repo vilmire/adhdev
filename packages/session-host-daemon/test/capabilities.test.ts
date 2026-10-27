@@ -39,10 +39,13 @@ test('advertises guarded attach and rejects a stale pin before granting a socket
   assert.deepEqual(server.registry.getSession('retained'), before);
   // A successful guarded attach subscribes only after the atomic comparison.
   server.schedulePersist = () => {};
-  await server.handleIncomingRequest(socket, { kind: 'request', requestId: 'valid-pin', request: {
+  const accepted = server.handleIncomingRequest(socket, { kind: 'request', requestId: 'valid-pin', request: {
     type: 'attach_session_if_incarnation', payload: { sessionId: 'retained', clientId: 'replacement-writer', clientType: 'daemon',
       expectedIncarnation: { sessionId: 'retained', runtimeKey: initial.runtimeKey, startedAt: 456 } },
   } });
+  // Subscription is synchronous with validation, before the response await.
+  assert.equal(server.socketSessions.get(socket)?.has('retained'), true);
+  await accepted;
   assert.equal(replies[1].response.success, true);
   assert.equal(server.socketSessions.get(socket)?.has('retained'), true);
   assert.equal(server.registry.getSession('retained').writeOwner.clientId, 'replacement-writer');
