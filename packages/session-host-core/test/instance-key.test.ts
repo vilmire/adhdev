@@ -57,12 +57,12 @@ test('non-default instances: stable 12-hex key, suffixed endpoints, disjoint bet
   // Deterministic: same dir → same key across calls.
   assert.equal(resolveSessionHostIpcKey(path.join(home, '.adhdev-preview'), home), previewKey)
 
-  const previewEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: previewKey, platform: 'linux' })
-  const customEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: customKey, platform: 'linux' })
-  const defaultEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: '', platform: 'linux' })
+  const previewEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: previewKey, platform: 'linux', tmpDir: '/tmp' })
+  const customEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: customKey, platform: 'linux', tmpDir: '/tmp' })
+  const defaultEndpoint = getDefaultSessionHostEndpoint('adhdev-preview', { ipcKey: '', platform: 'linux', tmpDir: '/tmp' })
   assert.equal(
     previewEndpoint.path,
-    path.join(os.tmpdir(), `adhdev-preview-session-host-${previewKey}.sock`),
+    path.join('/tmp', `adhdev-preview-session-host-${previewKey}.sock`),
   )
   assert.notEqual(previewEndpoint.path, customEndpoint.path)
   assert.notEqual(previewEndpoint.path, defaultEndpoint.path)

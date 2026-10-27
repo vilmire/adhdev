@@ -3612,6 +3612,7 @@ var require_dist = __commonJS({
     var os22 = __toESM2(require("os"));
     var path22 = __toESM2(require("path"));
     var net = __toESM2(require("net"));
+    var import_crypto = require("crypto");
     var import_string_decoder = require("string_decoder");
     function validateSessionHostEndpoint(endpoint, platform2 = process.platform) {
       if (endpoint.kind !== "unix") return;
@@ -3634,10 +3635,17 @@ var require_dist = __commonJS({
           path: `\\\\.\\pipe\\${appName}-session-host${suffix}`
         };
       }
-      return {
+      const endpoint = {
         kind: "unix",
-        path: path22.join(os22.tmpdir(), `${appName}-session-host${suffix}.sock`)
+        path: path22.join(options.tmpDir ?? os22.tmpdir(), `${appName}-session-host${suffix}.sock`)
       };
+      const limit = platform2 === "linux" ? 108 : 104;
+      if (Buffer.byteLength(endpoint.path, "utf8") + 1 <= limit) return endpoint;
+      const identity = JSON.stringify([endpoint.path, appName, rawKey, process.getuid?.() ?? null]);
+      const digest = (0, import_crypto.createHash)("sha256").update(identity, "utf8").digest("hex");
+      const shortened = { kind: "unix", path: `/tmp/adhdev-sh-${digest}.sock` };
+      validateSessionHostEndpoint(shortened, platform2);
+      return shortened;
     }
     function serializeEnvelope(envelope) {
       return `${JSON.stringify(envelope)}
