@@ -1,3 +1,4 @@
+import { reattachMeshSourceParent } from './mesh-source-parent.js';
 /**
  * RF-ROUTER MED family — mesh CRUD + node CRUD commands.
  *
@@ -673,12 +674,14 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
 // records first, then node lifecycle (mesh-node-lifecycle.ts), then clone +
 // bootstrap retry (mesh-node-clone.ts).
 export const meshCrudHandlers: Record<string, MedFamilyHandler> = {
+    reattach_mesh_source_parent: reattachMeshSourceParent,
     ...meshRecordHandlers,
     ...meshNodeLifecycleHandlers,
     ...meshNodeCloneHandlers,
 };
 
 export const meshCrudSpecs = defineCommandSpecs('med', meshCrudHandlers, {
+    reattach_mesh_source_parent: { invalidates: ['daemon.metadata'] },
     add_mesh_node: { invalidates: ['daemon.metadata'] },
     update_mesh_node: { invalidates: ['daemon.metadata'] },
     // DASHBOARD-GHOST-LINGER: deleted sessions linger as ghost rows until the next

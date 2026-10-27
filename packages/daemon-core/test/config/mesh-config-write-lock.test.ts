@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 // P4b — meshes.json write serialization.
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'url';
 // atomic tmp+rename save. These tests pin both, using only fixture dirs.
 
 const testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID().slice(0, 8)}`);
-const testConfigDir = join(testTmpDir, '.adhdev');
+const testConfigDir = join(testTmpDir, 'isolated-config');
 
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
@@ -30,6 +30,7 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
+import { withStrictMeshConfigWriteLock } from '../../src/config/mesh-config-store.js';
 import { addNode, listMeshes, getMesh } from '../../src/config/mesh-config.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -117,12 +118,14 @@ describe('mesh-config — cross-process write lock', () => {
             const child = spawn(process.execPath, [tsx, CHILD_SCRIPT], {
                 env: {
                     ...process.env,
+                    HOME: testTmpDir,
                     ADHDEV_CONFIG_DIR: testConfigDir,
                     CHILD_MESH_ID: id,
                     CHILD_TAG: `w${idx}`,
                     CHILD_COUNT: '6',
                 },
                 stdio: ['ignore', 'pipe', 'pipe'],
+                windowsHide: true,
             });
             let output = '';
             child.stdout.on('data', d => { output += d; });
@@ -146,31 +149,36 @@ describe('mesh-config — cross-process write lock', () => {
         expect(existsSync(lockPath())).toBe(false);
     }, 60_000);
 
-    it('a stale lock abandoned by a crashed writer is broken, not wedged', () => {
-        writeRawMeshConfig({ meshes: [baseMesh('mesh_stale')] });
+    it.each([0, 20_000])('refuses an unproven lock aged %sms without writing or removing it', age => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_held')] });
         mkdirSync(lockPath());
-        // 20s old — past the 15s stale threshold.
-        const old = new Date(Date.now() - 20_000);
-        utimesSync(lockPath(), old, old);
-
-        const started = Date.now();
-        const node = addNode('mesh_stale', { workspace: '/tmp/stale-lock-node' });
-        expect(node).toBeDefined();
-        expect(Date.now() - started).toBeLessThan(5_000);
-        expect(existsSync(lockPath())).toBe(false);
-        expect(getMesh('mesh_stale')!.nodes.map(n => n.workspace)).toContain('/tmp/stale-lock-node');
+        const timestamp = new Date(Date.now() - age);
+        utimesSync(lockPath(), timestamp, timestamp);
+        const before = readFileSync(configPath(), 'utf8');
+        expect(() => addNode('mesh_held', { workspace: '/tmp/held-lock-node' })).toThrow('meshes.json write lock is held');
+        expect(readFileSync(configPath(), 'utf8')).toBe(before);
+        expect(existsSync(lockPath())).toBe(true);
     });
 
-    it('a lock held by a live peer delays but never wedges the write (best-effort timeout)', () => {
-        writeRawMeshConfig({ meshes: [baseMesh('mesh_held')] });
-        mkdirSync(lockPath()); // fresh mtime — looks like a live peer mid-write
-
-        const node = addNode('mesh_held', { workspace: '/tmp/held-lock-node' });
-        expect(node).toBeDefined();
-        expect(getMesh('mesh_held')!.nodes.map(n => n.workspace)).toContain('/tmp/held-lock-node');
-
-        rmSync(lockPath(), { recursive: true, force: true });
-    }, 15_000);
+    it.each([0, 20_000])('legacy writer cannot bypass a strict owner, including a lock aged %sms', age => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_strict')] });
+        const before = readFileSync(configPath(), 'utf8');
+        withStrictMeshConfigWriteLock(() => {
+            const timestamp = new Date(Date.now() - age);
+            utimesSync(lockPath(), timestamp, timestamp);
+            const result = spawnSync(process.execPath, [resolveTsxCli(), CHILD_SCRIPT], {
+                env: { ...process.env, HOME: testTmpDir, ADHDEV_CONFIG_DIR: testConfigDir,
+                    CHILD_MESH_ID: 'mesh_strict', CHILD_TAG: 'blocked', CHILD_COUNT: '1' },
+                encoding: 'utf8', windowsHide: true, timeout: 10_000,
+            });
+            expect(result.status, result.stderr).not.toBe(0);
+            expect(result.stderr).toContain('meshes.json write lock is held');
+            expect(readFileSync(configPath(), 'utf8')).toBe(before);
+            expect(existsSync(lockPath())).toBe(true);
+        });
+        expect(existsSync(lockPath())).toBe(false);
+        expect(addNode('mesh_strict', { workspace: '/tmp/after-release' })).toBeDefined();
+    });
 
     it('reads stay correct while a peer holds the lock (listMeshes never blocks on it)', () => {
         writeRawMeshConfig({ meshes: [baseMesh('mesh_read', [{ id: 'node_r', workspace: '/tmp/r' }])] });

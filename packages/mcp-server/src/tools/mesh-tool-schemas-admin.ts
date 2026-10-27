@@ -386,3 +386,18 @@ export const MESH_ATTACH_REMOTE_TOOL = {
         required: ['targetDaemonId'],
     },
 };
+
+export const MESH_REATTACH_SOURCE_PARENT_TOOL = {
+    name: 'mesh_reattach_source_parent',
+    description: 'Owner-authorized in-place repair of an existing worktree node with a missing explicit source parent. Dry-run by default; inspect it before write=true. Requires expected_old_parent_id CAS. The owning Mesh Host validates canonical Git common-dir/main checkout, repository identity and daemon ownership, refuses active claims/Refinery and persists without changing node/queue/history/policies/worktree. Does not retry bootstrap or relax Refinery approvals. Existing different parents are refused.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Existing worktree node ID.' },
+            parent_node_id: { type: 'string', description: 'Existing base node ID in the same mesh and owning daemon.' },
+            expected_old_parent_id: { type: 'string', description: 'Exact currently stored missing parent ID; required CAS, also on retries.' },
+            write: { type: 'boolean', description: 'Apply the validated repair. Default false (dry-run).' },
+        },
+        required: ['node_id', 'parent_node_id', 'expected_old_parent_id'],
+    },
+};
