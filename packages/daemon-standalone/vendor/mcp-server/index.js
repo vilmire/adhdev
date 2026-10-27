@@ -133822,7 +133822,7 @@ ${defangRelayBody(text4)}`;
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
-                    const allowArtifactRead = typeof args.allowArtifactRead === "boolean" ? args.allowArtifactRead : existing?.allowArtifactRead ?? false;
+                    const allowArtifactRead = typeof args.allowArtifactRead === "boolean" ? args.allowArtifactRead : existing?.status === "active" ? existing.allowArtifactRead === true : false;
                     const binding = {
                       hostDaemonId,
                       meshId,

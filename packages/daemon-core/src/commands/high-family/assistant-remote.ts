@@ -1005,7 +1005,11 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                         }
                         const nextGrantRevision = baseGrantRevision + 1;
                         const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean' ? args.allowCoordinatorLaunch : (existing?.allowCoordinatorLaunch ?? true);
-                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean' ? args.allowArtifactRead : (existing?.allowArtifactRead ?? false);
+                        // Artifact read is explicit opt-in: an explicit boolean always wins, and an omitted
+                        // field NEVER inherits from a revoked tombstone (only from a live grant).
+                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean'
+                            ? args.allowArtifactRead
+                            : (existing?.status === 'active' ? (existing.allowArtifactRead === true) : false);
                         const binding: AssistantRemoteAccessBinding = {
                             hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId,
                             bindingRevision, grantRevision: nextGrantRevision, status: 'active',

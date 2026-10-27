@@ -1049,6 +1049,34 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         expect(hostATry).toMatchObject({ success: false, code: 'remote_project_unfollowed' });
     });
 
+    it('3b. re-grant after revoke: explicit allowArtifactRead:false overrides, and an omitted field never inherits a revoked tombstone', async () => {
+        await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+            const run = (args: Record<string, unknown>): Promise<any> => router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1, ...args },
+                'p2p',
+                { ownerVerified: true },
+            );
+            const g1 = await run({ action: 'grant', allowArtifactRead: true });
+            expect(g1.access.allowArtifactRead).toBe(true);
+            const rev = await run({ action: 'revoke' });
+            expect(rev.access).toMatchObject({ status: 'revoked', allowArtifactRead: true });
+            // omitted field after revoke: no inheritance from the tombstone
+            const g2 = await run({ action: 'grant' });
+            expect(g2.access).toMatchObject({ status: 'active', allowArtifactRead: false });
+            // explicit false overrides a live permissive grant
+            await run({ action: 'set_policy', allowArtifactRead: true });
+            await run({ action: 'revoke' });
+            const g3 = await run({ action: 'grant', allowArtifactRead: false });
+            expect(g3.access.allowArtifactRead).toBe(false);
+            // explicit false on re-grant over a live permissive grant
+            await run({ action: 'set_policy', allowArtifactRead: true });
+            const g4 = await run({ action: 'grant', allowArtifactRead: false });
+            expect(g4.access.allowArtifactRead).toBe(false);
+        });
+    });
+
     it('9. poller restores durable high-water cursor without replaying pre-follow history, emits gap notice on coordinator replacement, and suppresses pending relay on revoke', async () => {
         const clock = new FakeClock();
         const store = new InMemoryAssistantRelayStore();

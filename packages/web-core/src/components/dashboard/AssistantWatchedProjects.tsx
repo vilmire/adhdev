@@ -283,6 +283,8 @@ export default function AssistantWatchedProjects({
                 setBusy(null)
                 return
             }
+            // Tombstone: the host keeps no live artifact-read authority after revoke.
+            applyAccessToCatalog(target, { allowArtifactRead: false })
             await sendCommand(daemonId, ASSISTANT_REMOTE_FOLLOW_COMMAND, {
                 action: 'mark_revoked',
                 key,
@@ -297,6 +299,18 @@ export default function AssistantWatchedProjects({
         }
         setBusy(null)
         await refresh()
+    }
+
+    /** Apply the host's authoritative ACL booleans (from a grant/set_policy/revoke response) to the catalog snapshot. */
+    const applyAccessToCatalog = (
+        target: { hostDaemonId: string; meshId: string },
+        flags: { allowCoordinatorLaunch?: boolean; allowArtifactRead?: boolean },
+    ) => {
+        setCatalogProjects(prev => prev.map(p => (
+            p.meshId === target.meshId && daemonIdsEquivalent(p.hostDaemonId, target.hostDaemonId)
+                ? { ...p, ...flags, capabilities: { ...p.capabilities, ...flags } }
+                : p
+        )))
     }
 
     const updatePolicy = async (
@@ -323,18 +337,15 @@ export default function AssistantWatchedProjects({
                 setBusy(null)
                 return
             }
-            setCatalogProjects(prev => prev.map(p => (
-                p.meshId === target.meshId && daemonIdsEquivalent(p.hostDaemonId, target.hostDaemonId)
-                    ? {
-                        ...p,
-                        ...patch,
-                        capabilities: {
-                            ...p.capabilities,
-                            ...patch,
-                        },
-                    }
-                    : p
-            )))
+            // The response's access record is authoritative; fall back to the requested patch only for
+            // fields the host did not echo.
+            const access = out?.access as { allowCoordinatorLaunch?: unknown; allowArtifactRead?: unknown } | undefined
+            applyAccessToCatalog(target, {
+                ...(typeof (access?.allowCoordinatorLaunch ?? patch.allowCoordinatorLaunch) === 'boolean'
+                    ? { allowCoordinatorLaunch: (access?.allowCoordinatorLaunch ?? patch.allowCoordinatorLaunch) as boolean } : {}),
+                ...(typeof (access?.allowArtifactRead ?? patch.allowArtifactRead) === 'boolean'
+                    ? { allowArtifactRead: (access?.allowArtifactRead ?? patch.allowArtifactRead) as boolean } : {}),
+            })
         } catch (err) {
             setActionError(err instanceof Error ? err.message : String(err))
         }
@@ -372,7 +383,8 @@ export default function AssistantWatchedProjects({
                 meshId: project.meshId,
                 activeDaemonId: daemonId,
                 bindingRevision,
-                ...(grantArtifactRead[key] === true ? { allowArtifactRead: true } : {}),
+                // Always an explicit boolean: never let the host inherit a stale/tombstoned value.
+                allowArtifactRead: grantArtifactRead[key] === true,
             }))
             if (isOwnerAuthRefusal(grantOut)) {
                 setOwnerRequired(true)
@@ -385,6 +397,11 @@ export default function AssistantWatchedProjects({
                 return
             }
             const grantRevision = Number(grantOut.access.grantRevision)
+            // Reflect the host's authoritative ACL (not the pre-grant catalog snapshot).
+            if (typeof grantOut.access.allowArtifactRead === 'boolean') {
+                applyAccessToCatalog(project, { allowArtifactRead: grantOut.access.allowArtifactRead })
+            }
+            setGrantArtifactRead(prev => ({ ...prev, [key]: false }))
 
             // 3. Follow on local assistant (initializes high-water cursor via cursorOnly poll; sends no message)
             const followOut = unwrapStagedAnswer(await sendCommand(daemonId, ASSISTANT_REMOTE_FOLLOW_COMMAND, {

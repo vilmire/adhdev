@@ -59,6 +59,7 @@ describe('AssistantWatchedProjects', () => {
 
         let threads: any[] = []
         let followedRemoteProjects: any[] = []
+        let failNextPolicy = false
         let failNextFollow = false
 
         const send = vi.fn(async (targetId: string, command: string, args: any) => {
@@ -100,6 +101,7 @@ describe('AssistantWatchedProjects', () => {
                         bindingRevision: args.bindingRevision,
                         grantRevision: 1,
                         status: 'active',
+                        allowArtifactRead: args.allowArtifactRead,
                     },
                 }
             }
@@ -149,6 +151,7 @@ describe('AssistantWatchedProjects', () => {
                 return { success: true, action: 'revoke', access: { status: 'revoked', grantRevision: 2 } }
             }
             if (targetId === HOST_A && command === 'assistant_remote_project_access' && args.action === 'set_policy') {
+                if (failNextPolicy) { failNextPolicy = false; return { success: false, error: 'policy_boom' } }
                 return {
                     success: true,
                     action: 'set_policy',
@@ -211,6 +214,10 @@ describe('AssistantWatchedProjects', () => {
         expect(partialBanner).not.toBeNull()
         expect(partialBanner?.textContent).toContain('Host access was granted')
         expect(send).toHaveBeenCalledWith(HOST_A, 'assistant_remote_project_access', expect.objectContaining({ action: 'grant', allowArtifactRead: true }))
+        // grant calls always carry an explicit boolean
+        const grantCalls = send.mock.calls.filter(c => c[1] === 'assistant_remote_project_access' && (c[2] as any).action === 'grant')
+        expect(grantCalls.length).toBeGreaterThan(0)
+        expect(grantCalls.every(c => typeof (c[2] as any).allowArtifactRead === 'boolean')).toBe(true)
 
         // 2. Retry follow succeeds
         failNextFollow = false
@@ -248,6 +255,19 @@ describe('AssistantWatchedProjects', () => {
             allowArtifactRead: true,
         })
         expect(artifactToggle.checked).toBe(true)
+        // on -> off reflects the host's authoritative response
+        await act(async () => { artifactToggle.click() })
+        await flush()
+        expect(send).toHaveBeenLastCalledWith(HOST_A, 'assistant_remote_project_access', {
+            action: 'set_policy', meshId: MESH_ALPHA, allowArtifactRead: false,
+        })
+        expect(artifactToggle.checked).toBe(false)
+        // failed set_policy reverts (checkbox keeps the last authoritative value)
+        failNextPolicy = true
+        await act(async () => { artifactToggle.click() })
+        await flush()
+        expect(artifactToggle.checked).toBe(false)
+        expect(container.textContent).toContain('policy_boom')
 
         // 3. 'Stop following' is local-only (calls assistant_remote_follow unfollow, NEVER revokes host)
         send.mockClear()
