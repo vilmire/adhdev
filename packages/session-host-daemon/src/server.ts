@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'node:path';
+import { assertOrphanUnixSocket } from './socket-probe.js';
 import {
   SessionHostRegistry,
   classifyTermination,
@@ -241,7 +242,7 @@ export class SessionHostServer extends EventEmitter {
       try {
         const raw = fs.readFileSync(this.pidFilePath, 'utf8').trim();
         if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
-          throw new Error('session_host_prior_owner_pidfile_corrupt');
+          return 'corrupt'; // identifies no owner; handled like 'missing'
         }
         return raw;
       } catch (error) {
@@ -250,12 +251,13 @@ export class SessionHostServer extends EventEmitter {
       }
     };
     const initialPid = readPid();
-    const initialBirth = initialPid === 'missing' ? null : this.readProcessBirth(Number(initialPid));
+    const hasPid = (value: string): boolean => value !== 'missing' && value !== 'corrupt';
+    const initialBirth = hasPid(initialPid) ? this.readProcessBirth(Number(initialPid)) : null;
     const assertGeneration = (expectedEndpoint: string): void => {
       this.assertNoAutomaticReplacementContext();
       const currentPid = readPid();
-      const birth = initialPid === 'missing' ? null : this.readProcessBirth(Number(initialPid));
-      const alive = initialPid !== 'missing' && this.isPidAlive(Number(initialPid));
+      const [birth, alive] = hasPid(initialPid)
+        ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
       if (currentPid !== initialPid || birth !== initialBirth || alive
           || (this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity)
           || fs.realpathSync(path.dirname(this.endpoint.path)) !== endpointParent
@@ -264,13 +266,17 @@ export class SessionHostServer extends EventEmitter {
       }
       this.assertNoAutomaticReplacementContext();
     };
-    if (initialPid !== 'missing' && this.isPidAlive(Number(initialPid))) {
+    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid))) {
       throw new Error('session_host_live_owner_replacement_unauthorized');
     }
     if (initialEndpoint !== 'missing') {
       if (this.upgradeLease) throw new Error('native_host_endpoint_owner_unproved');
-      // No PID plus an existing endpoint is UNKNOWN, even when lsof returns [].
-      if (initialPid === 'missing') throw new Error('session_host_prior_owner_socket_unverified');
+      // No usable PID + existing endpoint is UNKNOWN unless it is a real socket node AND
+      // connect yields ECONNREFUSED; a connect that succeeds or hangs means a live/wedged host.
+      if (!hasPid(initialPid)) {
+        await assertOrphanUnixSocket(this.endpoint.path);
+        assertGeneration(initialEndpoint);
+      }
       for (let check = 0; check < 2; check++) {
         const owners = this.readSocketOwnerPids();
         if (owners === null) throw new Error('session_host_prior_owner_socket_unverified');

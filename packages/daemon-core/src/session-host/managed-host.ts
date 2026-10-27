@@ -118,6 +118,11 @@ export interface ManagedSessionHostOptions {
     getProcessBirth?: (pid: number) => string | null;
     /** Optional unix socket owner PID probe override (`lsof -t`). */
     getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+    /**
+     * Optional unix socket connect probe override. 'refused' (ECONNREFUSED) and
+     * 'absent' (ENOENT) are the only results that prove no listener exists.
+     */
+    probeSocketConnect?: (endpointPath: string) => 'refused' | 'absent' | 'connected' | 'timeout' | 'error';
 }
 
 export interface ManagedSessionHost {
@@ -315,6 +320,51 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
     }
 
+    /**
+     * Synchronous connect probe, run in a short-lived child node (the callers
+     * are synchronous and node has no sync socket API). Anything but a clean
+     * ECONNREFUSED/ENOENT — success, hang, spawn failure, odd output — is
+     * reported as non-proof.
+     */
+    function probeSocketConnect(endpointPath: string): 'refused' | 'absent' | 'connected' | 'timeout' | 'error' {
+        if (options.probeSocketConnect) return options.probeSocketConnect(endpointPath);
+        const script = "const s=require('net').connect(process.argv[1]);const f=(r)=>{process.stdout.write(r);process.exit(0)};"
+            + "s.once('connect',()=>f('connected'));"
+            + "s.once('error',(e)=>f(e&&e.code==='ECONNREFUSED'?'refused':e&&e.code==='ENOENT'?'absent':'error'));"
+            + "setTimeout(()=>f('timeout'),1500)";
+        try {
+            const out = String(
+                hiddenExecFileSync(process.execPath, ['-e', script, endpointPath], {
+                    encoding: 'utf8',
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                    timeout: 4_000,
+                    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+                }),
+            ).trim();
+            return out === 'refused' || out === 'absent' || out === 'connected' || out === 'timeout' ? out : 'error';
+        } catch {
+            return 'error';
+        }
+    }
+
+    /**
+     * No usable PID (missing/corrupt pidfile) but an endpoint file remains.
+     * Reclaimable only with positive proof of absence: a real socket node, no
+     * process holding it (lsof returns an empty list, not null), and connect
+     * yields ECONNREFUSED. Hangs, accepted connections and unknowns stay refused.
+     */
+    function isOrphanUnixSocket(endpointPath: string): boolean {
+        if (process.platform === 'win32') return false;
+        try {
+            if (!fs.lstatSync(endpointPath).isSocket()) return false;
+        } catch {
+            return false;
+        }
+        const owners = getSocketOwnerPids(endpointPath);
+        if (owners === null || owners.length !== 0) return false;
+        return probeSocketConnect(endpointPath) === 'refused';
+    }
+
     function getExistingHostIdentity(): string {
         const pid = getPid();
         if (pid === null) return 'unknown';
@@ -330,14 +380,12 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     function inspectExistingHostState(): 'alive' | 'dead' | 'unknown' {
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
-        if (pidState.status === 'corrupt') {
-            return 'unknown';
-        }
-        if (pidState.status === 'missing') {
-            if (fs.existsSync(endpoint.path)) {
-                return 'unknown';
+        if (pidState.status === 'corrupt' || pidState.status === 'missing') {
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                return isOrphanUnixSocket(endpoint.path) ? 'dead' : 'unknown';
             }
-            return 'dead';
+            if (pidState.status === 'corrupt') return 'unknown';
+            return fs.existsSync(endpoint.path) ? 'unknown' : 'dead';
         }
         const existingPid = pidState.pid;
         if (existingPid === process.pid) return 'unknown';
