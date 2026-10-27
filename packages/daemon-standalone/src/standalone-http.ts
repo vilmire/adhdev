@@ -24,6 +24,7 @@ import {
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
   matchesLiveArtifactWorkerCredential,
+  resolveLiveArtifactWorkerScope,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
   type TrustedOwnerIngressProof,
@@ -97,6 +98,8 @@ export interface StandaloneHttpDeps {
   verifyWorkerCredential?(credential: string): boolean;
   /** Same real verifier across source/bundled embedding boundaries. */
   verifyArtifactWorkerCredential?(credential: string, args: Record<string, unknown>): boolean;
+  /** Scope twin of `verifyArtifactWorkerCredential`: must read the same bind/token registries. */
+  resolveArtifactWorkerScope?(credential: string, args: Record<string, unknown>): ReturnType<typeof resolveLiveArtifactWorkerScope>;
   /** Optional hook notified when owner auth epoch changes (logout, password change/clear). */
   onAuthEpochChanged?(): void;
   /** Additional Host header values explicitly permitted alongside local interfaces/hostnames. */
@@ -957,6 +960,7 @@ export class StandaloneHttpApi {
             const verify = this.deps.verifyArtifactWorkerCredential ?? matchesLiveArtifactWorkerCredential;
             const attached = attachWorkerArtifactMcpAuthority(commandPayload, type, credential, {
               verify,
+              resolveScope: this.deps.resolveArtifactWorkerScope,
               extraLive: () => this.resolveInternalAuthScope(req) === 'worker',
             });
             if (!attached.ok) {

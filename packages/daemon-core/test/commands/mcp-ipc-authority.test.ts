@@ -151,6 +151,23 @@ describe('cloud IPC worker credential', () => {
         expect(readAuthenticatedMcpCommand(viaHost(mixed), 'artifact_register').valid).toBe(false);
     });
 
+    it('worker credential for session A with payload sessionId B is refused', () => {
+        const bindA = mintWorkerSessionBind({ meshId: 'm1', sessionId: 'w-A' }).bind;
+        mintWorkerSessionBind({ meshId: 'm1', sessionId: 'w-B' });
+        for (const verb of ['artifact_register', 'artifact_list', 'artifact_read']) {
+            const asB = { bind: bindA, sessionId: 'w-B', artifactId: 'art_0123456789abcdef' };
+            attachIpcMcpAuthority(asB, verb, env({ workerCredential: bindA }));
+            expect(readAuthenticatedMcpCommand(viaHost(asB), verb).valid).toBe(false);
+            expect(readAuthenticatedMcpScope(viaHost(asB), verb)).toBeNull();
+            const wrongMesh = { bind: bindA, meshId: 'm2', artifactId: 'art_0123456789abcdef' };
+            attachIpcMcpAuthority(wrongMesh, verb, env({ workerCredential: bindA }));
+            expect(readAuthenticatedMcpCommand(viaHost(wrongMesh), verb).valid).toBe(false);
+        }
+        const asA = { bind: bindA, sessionId: 'w-A', meshId: 'm1', artifactId: 'art_0123456789abcdef' };
+        attachIpcMcpAuthority(asA, 'artifact_read', env({ workerCredential: bindA }));
+        expect(readAuthenticatedMcpScope(viaHost(asA), 'artifact_read')).toMatchObject({ sessionId: 'w-A', meshId: 'm1' });
+    });
+
     it('live worker credential is refused for non-worker verbs', () => {
         const bind = mintWorkerSessionBind({ meshId: 'm1', sessionId: 'w-1' }).bind;
         for (const verb of ['assistant_artifact_list', 'launch_cli', 'mesh_status', 'artifact_fetch']) {

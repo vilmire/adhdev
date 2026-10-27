@@ -276,7 +276,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     const { MeshRuntimeStore } = await import('../../daemon-core/src/mesh/mesh-runtime-store.js');
     const { SessionRegistry } = await import('../../daemon-core/src/sessions/registry.js');
     const { mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest } = await import('../../daemon-core/src/mesh/worker-mcp-isolation.js');
-    const { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential } = await import('../../daemon-core/src/standalone-mcp-auth-verify.js');
+    const { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential, resolveLiveArtifactWorkerScope } = await import('../../daemon-core/src/standalone-mcp-auth-verify.js');
     const { seedMeshAttempt } = await import('../../daemon-core/test/helpers/turn-attempt-seed.js');
     const { registerMeshCoordinator, unregisterMeshCoordinator } = await import('../../daemon-core/src/mesh/coordinator-registry.js');
     const { configureTranscriptProjection, __resetTranscriptProjectionForTests } = await import('../../daemon-core/src/seqscribe/transcript-publisher.js');
@@ -436,6 +436,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       createSessionHostClient: async () => ({}) as any,
       verifyWorkerCredential: isLiveWorkerMcpCredential,
       verifyArtifactWorkerCredential: matchesLiveArtifactWorkerCredential,
+      resolveArtifactWorkerScope: resolveLiveArtifactWorkerScope,
     });
     http.configureAuth(DASHBOARD_TOKEN);
     http.passwordConfig = authMod.createPasswordRecord('fixture-password');

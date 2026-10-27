@@ -57,6 +57,8 @@ export function attachWorkerArtifactMcpAuthority(
     credential: string,
     opts: {
         verify?: (credential: string, args: Record<string, unknown>) => boolean;
+        /** Must resolve against the same registries as `verify` (embedding boundaries). */
+        resolveScope?: typeof resolveLiveArtifactWorkerScope;
         extraLive?: () => boolean;
     } = {},
 ): WorkerArtifactAttachResult {
@@ -64,7 +66,7 @@ export function attachWorkerArtifactMcpAuthority(
     let matches = false;
     try { matches = verify(credential, args) === true; } catch { /* fail closed */ }
     if (!matches) return { ok: false, reason: 'credential_mismatch' };
-    const workerScope = resolveLiveArtifactWorkerScope(credential, args);
+    const workerScope = (opts.resolveScope ?? resolveLiveArtifactWorkerScope)(credential, args);
     if (!workerScope) return { ok: false, reason: 'no_live_scope' };
     attachAuthenticatedMcpCommand(
         args,

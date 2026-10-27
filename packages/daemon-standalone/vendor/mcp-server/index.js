@@ -211548,7 +211548,7 @@ ${notice.notice}${supersededHint}`;
       } catch {
       }
       if (!matches) return { ok: false, reason: "credential_mismatch" };
-      const workerScope = resolveLiveArtifactWorkerScope(credential, args);
+      const workerScope = (opts.resolveScope ?? resolveLiveArtifactWorkerScope)(credential, args);
       if (!workerScope) return { ok: false, reason: "no_live_scope" };
       attachAuthenticatedMcpCommand(
         args,
