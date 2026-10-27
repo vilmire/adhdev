@@ -607,23 +607,12 @@ var HostUpgradeLease = class {
     this.assertHealthy();
     if (this.state.held) throw new Error("native_host_idle_lease_held");
   }
-  /** Explicit negative capability from the pinned native helper. Older helpers
-   * may not implement the probe: timeout/error remains UNKNOWN to the caller. */
+  /** Protocol 1 has no negotiated physical-census capability. Do not probe an
+   * unknown option: older helpers interpret it as a lock filename and create
+   * it. The negative contract is local and needs no native process or write. */
   recoveryCoverage() {
     this.assertHealthy();
-    if (digest(fs3.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error("native_host_helper_pin_mismatch");
-    const raw = String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--recovery-coverage-v1"], {
-      stdio: "pipe",
-      timeout: 1e3,
-      maxBuffer: 1024,
-      windowsHide: true
-    }));
-    const value = JSON.parse(raw);
-    this.assertHealthy();
-    if (value.protocol !== 1 || value.verdict !== "UNKNOWN" || value.reason !== "historical_native_attribution_unavailable") {
-      throw new Error("native_host_recovery_coverage_unsupported");
-    }
-    return { protocol: 1, verdict: "UNKNOWN", reason: value.reason };
+    return { protocol: 1, verdict: "UNKNOWN", reason: "historical_native_attribution_unavailable" };
   }
   proof() {
     this.assertHealthy();
