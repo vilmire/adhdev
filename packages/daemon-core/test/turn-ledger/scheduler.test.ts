@@ -7,6 +7,7 @@ import {
     startTurnScheduler,
     type TurnSchedulerProbe,
 } from '../../src/mesh/turn-ledger/scheduler.js';
+import { makeAttempt, makeHold } from './fixtures.js';
 import type { TurnProbeRead } from '../../src/mesh/turn-ledger/probe.js';
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
 import {
@@ -242,6 +243,7 @@ describe('invariants', () => {
 describe('plain-attempt prune (C10-4)', () => {
     it('prunes terminal plain attempts older than 7 d, at most once per hour', async () => {
         const r = rig();
+        const pruneLiveness = vi.spyOn(r.ledger.store, 'pruneTerminalLivenessSamples');
         // A plain turn: unbound turn_started opens it (R0a), a genuine end commits it.
         r.ledger.observe(evd('turn_started', { retro: false }, { attemptRef: undefined, sessionId: 'dash-1' }));
         const plain = r.ledger.openAttemptForSession('dash-1')!;
@@ -252,10 +254,13 @@ describe('plain-attempt prune (C10-4)', () => {
         const WEEK = 7 * 24 * 60 * 60_000;
         r.advance(WEEK - 10 * 60_000);
         expect((await r.scheduler.tick()).pruned).toBe(0); // first pass: not old enough yet
+        expect(pruneLiveness).toHaveBeenCalledTimes(1);
         r.advance(20 * 60_000); // now 7 d + 10 min old — but only 20 min since the last pass
         expect((await r.scheduler.tick()).pruned).toBe(0);
+        expect(pruneLiveness).toHaveBeenCalledTimes(1);
         r.advance(PLAIN_ATTEMPT_PRUNE_INTERVAL_MS);
         expect((await r.scheduler.tick()).pruned).toBe(1);
+        expect(pruneLiveness).toHaveBeenCalledTimes(2);
         expect(r.ledger.getAttempt(plain.attemptId)).toBeNull();
     });
 });
@@ -371,6 +376,111 @@ describe('startTurnScheduler — nextHoldDeadline shortens the sleep', () => {
     });
 });
 
+describe('semantic liveness audit dedupe', () => {
+    it('bounds unchanged observations while refreshing attempt freshness and preserving changes', async () => {
+        let presence: TurnProbeRead['presence'] = 'present';
+        const r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read: async () => ({ presence, status: 'generating' }) } } });
+        toGenerating(r);
+        for (let i = 0; i < 20; i++) {
+            r.advance(P.tickMs);
+            r.scheduler.requestProbe('a1');
+            await r.scheduler.tick();
+        }
+        let rows = r.ledger.store.listEvents('a1').filter((e) => e.kind === 'liveness');
+        expect(rows).toHaveLength(1);
+        expect(rows[0].payload.livenessSamples).toMatchObject({ count: 20 });
+        expect(r.ledger.getAttempt('a1')!.data.livenessObservation?.at).toBe(r.now);
+        const first = rows[0].payload.evidence;
+        presence = 'unknown';
+        for (let i = 0; i < 20; i++) {
+            r.advance(P.tickMs);
+            r.scheduler.requestProbe('a1');
+            await r.scheduler.tick();
+        }
+        rows = r.ledger.store.listEvents('a1').filter((e) => e.kind === 'liveness');
+        expect(rows).toHaveLength(2);
+        expect(rows[1].payload.livenessSamples).toMatchObject({ count: 20 });
+        expect(r.ledger.getAttempt('a1')!.data.livenessObservation?.at).toBe(r.now);
+        expect(rows[0].payload.evidence).toEqual(first);
+        expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('unknown');
+        presence = 'present';
+        r.advance(P.tickMs);
+        r.scheduler.requestProbe('a1');
+        await r.scheduler.tick();
+        expect(r.ledger.store.listEvents('a1').filter((e) => e.kind === 'liveness')).toHaveLength(3);
+        r.scheduler.stop();
+        r.db.close();
+    });
+});
+
+describe('scheduler owner and overdue deadline safety', () => {
+    it('foreign and orphan expiries cannot starve local deadlines or cause immediate ticks', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(T0);
+        const db = memDb();
+        const ledger = ledgerOn(db, { now: () => Date.now(), selfDaemonId: 'daemon_mach_local' });
+        // More than the sweep limit: eligibility must be applied BEFORE LIMIT.
+        for (let i = 0; i < 501; i++) {
+            const id = `foreign-${i}`;
+            ledger.store.upsertAttempt(makeAttempt('generating', { attemptId: id, sessionId: id, taskId: id, ownerDaemonId: 'daemon_mach_foreign' }), T0);
+            ledger.store.syncHolds(id, [makeHold('liveness', { holdId: id, attemptId: id, until: T0 - 1 })], T0);
+        }
+        ledger.store.syncHolds('orphan', [makeHold('liveness', { holdId: 'orphan', attemptId: 'orphan', until: T0 - 2 })], T0);
+        ledger.store.upsertAttempt(makeAttempt('generating', { ownerDaemonId: 'mach_local' }), T0);
+        ledger.store.syncHolds('a1', [makeHold('liveness', { until: T0 + 100 })], T0);
+        expect(ledger.nextHoldDeadline()).toBe(T0 + 100);
+        expect(ledger.expiredHoldEvidence(T0)).toEqual([]);
+        const sweep = vi.spyOn(ledger, 'sweepExpiredHolds');
+        const scheduler = startTurnScheduler({ ledger, intervalMs: 1_000 });
+        try {
+            await vi.advanceTimersByTimeAsync(101);
+            expect(sweep).toHaveBeenCalledTimes(2); // boot + local deadline
+            expect(ledger.store.activeHolds('a1')[0].until).toBeGreaterThan(T0 + 100);
+            await vi.advanceTimersByTimeAsync(899);
+            expect(sweep).toHaveBeenCalledTimes(3);
+            expect(ledger.store.activeHolds('foreign-0')[0].until).toBe(T0 - 1);
+            expect(ledger.store.activeHolds('orphan')[0].until).toBe(T0 - 2);
+            expect(db.prepare("SELECT count(*) AS n FROM turn_events WHERE verdict = 'forwarded'").get()).toEqual({ n: 0 });
+        } finally { scheduler.stop(); db.close(); }
+    });
+
+    it('an overdue local hold cannot hide a future eligible deadline after an unsuccessful sweep', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(T0);
+        const db = memDb();
+        const ledger = ledgerOn(db, { now: () => Date.now() });
+        ledger.store.upsertAttempt(makeAttempt('generating'), T0);
+        ledger.store.syncHolds('a1', [makeHold('liveness', { until: T0 - 1 }), makeHold('hard_ceiling', { until: T0 + 100 })], T0);
+        const sweep = vi.spyOn(ledger, 'sweepExpiredHolds').mockReturnValue([]);
+        const scheduler = startTurnScheduler({ ledger, intervalMs: 1_000 });
+        try {
+            await vi.advanceTimersByTimeAsync(101);
+            expect(sweep).toHaveBeenCalledTimes(2);
+            await vi.advanceTimersByTimeAsync(899);
+            expect(sweep).toHaveBeenCalledTimes(3);
+        } finally { scheduler.stop(); db.close(); }
+    });
+
+    it.each([T0 - 1, Number.NaN, Number.NEGATIVE_INFINITY])('bounds uncollectable deadline %s while preserving explicit wakeups', async (deadline) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(T0);
+        const db = memDb();
+        const ledger = ledgerOn(db, { now: () => Date.now() });
+        vi.spyOn(ledger, 'nextHoldDeadline').mockReturnValue(deadline);
+        const sweep = vi.spyOn(ledger, 'sweepExpiredHolds');
+        const scheduler = startTurnScheduler({ ledger, intervalMs: 1_000 });
+        try {
+            await vi.advanceTimersByTimeAsync(100);
+            expect(sweep).toHaveBeenCalledTimes(1);
+            scheduler.requestProbe('missing');
+            await vi.advanceTimersByTimeAsync(1);
+            expect(sweep).toHaveBeenCalledTimes(2);
+            await vi.advanceTimersByTimeAsync(899);
+            expect(sweep).toHaveBeenCalledTimes(3);
+        } finally { scheduler.stop(); db.close(); }
+    });
+});
+
 describe('weak expiry requires a fresh completed probe', () => {
     it('a reader that never returns is bounded and supplies an inconclusive observation', async () => {
         vi.useFakeTimers();
@@ -446,6 +556,42 @@ describe('weak expiry requires a fresh completed probe', () => {
 // genuine at the first idle; with the report gate the attempt stays open through
 // the false idle and commits ONCE, on the report.
 describe('report gate — the rc.40 false-idle sequence commits once, on the report', () => {
+    it.each(['report', 'hard_ceiling'] as const)('direct missing-report expiry releases its hold once and preserves %s authority', async (resolution) => {
+        const r = rig();
+        toGenerating(r, 'mesh_direct');
+        r.ledger.observe(evd('turn_end', { strength: 'weak' }));
+        r.advance(weakConfirmMs(P) + 1);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'finalizing', terminal: null });
+        expect(r.ledger.store.activeHolds('a1').some(h => h.reason === 'weak_candidate')).toBe(false);
+        const candidates = () => rowsOf(r.db, 'notify', 'a1').filter(row =>
+            (JSON.parse(String(row.payload_json)) as { notify?: string }).notify === 'candidate');
+        expect(candidates()).toHaveLength(1);
+        const expiries = rowsOf(r.db, 'hold_expired', 'a1').length;
+        for (let i = 0; i < 3; i++) {
+            r.advance(1);
+            await r.scheduler.tick();
+        }
+        expect(rowsOf(r.db, 'hold_expired', 'a1')).toHaveLength(expiries);
+        expect(candidates()).toHaveLength(1);
+        expect(r.host.calls.filter(c => c.startsWith('terminal:'))).toEqual([]);
+        expect(r.ledger.nextHoldDeadline(r.now)!).toBeGreaterThan(r.now);
+        if (resolution === 'report') {
+            r.ledger.observe(evd('worker_report', { outcome: 'completed', hasHandoffNotes: false },
+                { source: 'worker_tool', at: r.now }));
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+        } else {
+            r.advance(P.hardCeilingMs);
+            await r.scheduler.tick();
+            expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', terminal: null });
+            await confirmFixtureWriterQuiescence(r.ledger);
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
+        }
+        expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
+        expect(candidates()).toHaveLength(1);
+    });
+
     it('idle (report expected) → tick → busy → report → idle: one tool_report commit, one completion notice', async () => {
         const r = rig();
         toGenerating(r, 'mesh_direct');

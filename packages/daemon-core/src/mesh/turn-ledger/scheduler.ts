@@ -150,7 +150,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     const selfDaemonId = deps.selfDaemonId ?? ledger.selfDaemonId;
     const log = deps.log ?? NOOP_LOG;
     const now = deps.now ?? (() => Date.now());
-    const tickMs = deps.intervalMs ?? policy.tickMs;
+    const tickMs = Math.max(1, deps.intervalMs ?? policy.tickMs);
     const forced = new Set<string>();
     const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
     const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
@@ -418,9 +418,11 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
             lastPruneAt = pruneAt;
             try {
                 report.pruned = store.pruneTerminalPlainAttempts(PLAIN_ATTEMPT_RETENTION_MS, pruneAt).attempts;
+                const samples = store.pruneTerminalLivenessSamples(PLAIN_ATTEMPT_RETENTION_MS, pruneAt, selfDaemonId);
+                if (samples > 0) log.info(`turn-scheduler: pruned ${samples} redundant terminal liveness sample(s) older than 7 d`);
                 if (report.pruned > 0) log.info(`turn-scheduler: pruned ${report.pruned} terminal plain attempt(s) older than 7 d`);
             } catch (error) {
-                log.warn(`turn-scheduler: plain-attempt prune failed: ${describe(error)}`);
+                log.warn(`turn-scheduler: retention failed: ${describe(error)}`);
             }
         }
         return report;
@@ -478,7 +480,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
  */
 export function startTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler {
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
-    const tickMs = deps.intervalMs ?? policy.tickMs;
+    const tickMs = Math.max(1, deps.intervalMs ?? policy.tickMs);
     const now = deps.now ?? (() => Date.now());
     const log = deps.log ?? NOOP_LOG;
     const scheduler = createTurnScheduler(deps);
@@ -492,9 +494,13 @@ export function startTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler {
         if (stopped) return;
         if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null; }
         let next: number | null = null;
-        try { next = deps.ledger.nextHoldDeadline(); } catch { next = null; }
-        if (next === null) return;
-        const delay = Math.max(0, next - now());
+        const armedAt = now();
+        try { next = deps.ledger.nextHoldDeadline(armedAt); } catch { next = null; }
+        // A past/uncollectable deadline (or a failed sweep) must wait for the
+        // bounded interval. Future local deadlines still get their exact timer;
+        // explicit probe wakes remain independent of this retry bound.
+        if (next === null || !Number.isFinite(next) || next <= armedAt) return;
+        const delay = next - armedAt;
         // The interval covers anything a full tick away; only a shorter wait needs its own timer.
         if (delay >= tickMs) return;
         deadlineTimer = setTimeout(() => { deadlineTimer = null; run(); }, delay);

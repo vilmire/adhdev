@@ -45,7 +45,7 @@ import {
 import { computeProviderTreeDigest } from './tree-digest.js';
 import type { ActivationRef, ProviderChannelStore } from './store.js';
 import { extractTarballGz } from '../extract-tarball.js';
-import { resolveTransportCandidates } from './pinned-transport.js';
+import { buildPinnedArchiveUrl, parseGitHubArchiveUrl, resolveTransportCandidates } from './pinned-transport.js';
 import { readProviderManifest, type ActivationBlock, type ActivationGate } from './auto-update-gate.js';
 
 export interface ChannelSyncError {
@@ -268,6 +268,7 @@ export class ProviderChannelRuntime {
         category: raw.category,
         bundleDigest: typeof raw.bundleDigest === 'string' ? raw.bundleDigest : null,
         digestAlgorithm: typeof raw.digestAlgorithm === 'string' ? raw.digestAlgorithm : null,
+        ...(raw.sourceCommit != null ? { sourceCommit: raw.sourceCommit } : {}),
       });
     }
     return entries;
@@ -350,105 +351,114 @@ export class ProviderChannelRuntime {
       return report;
     }
 
-    // 4. Transport: resolve the PINNED candidate list, then download + extract
-    //    into store staging. Failure → abort before activating anything (LKG).
-    //
-    //    The configured URL may be a moving ref (the vendor default is
-    //    `…/archive/refs/heads/main.tar.gz`), while the digests being verified
-    //    against were frozen at publish time. Resolving candidates converts
-    //    that moving ref into concrete commit-pinned URLs, newest first, so a
-    //    push to `main` that was never published no longer invalidates the
-    //    published rows — see pinned-transport.ts. Self-hosted/unrecognized
-    //    URLs resolve to exactly `[url]`, i.e. the previous behavior.
-    const candidates = await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
-
-    for (let attempt = 0; attempt < candidates.length; attempt += 1) {
-      const transportUrl = candidates[attempt];
-      const isLastCandidate = attempt === candidates.length - 1;
-      const attemptErrors: ChannelSyncError[] = [];
-      const attemptActivated: ActivationRef[] = [];
-      const attemptBlocked = new Set<string>();
-
-      const stagingRoot = this.store.createStagingDir('sync');
-      let retryWithOlderCommit = false;
-      try {
-        const tarPath = path.join(stagingRoot, 'providers.tar.gz');
-        const extractDir = path.join(stagingRoot, 'repo');
-        fs.mkdirSync(extractDir, { recursive: true });
-        try {
-          await this.downloadFile(transportUrl, tarPath);
-          await this.extractTarball(tarPath, extractDir);
-        } catch (e: any) {
-          report.errors.push({ code: 'TRANSPORT_FAILED', message: `provider tarball transport failed: ${e?.message || e}` });
-          report.status = 'error';
-          this.log(`sync aborted (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
-          return report;
-        }
-
-        const repoRoot = findTarballRepoRoot(extractDir);
-        if (!repoRoot) {
-          report.errors.push({ code: 'TRANSPORT_FAILED', message: 'provider tarball has an unexpected structure (no repo root dir)' });
-          report.status = 'error';
-          return report;
-        }
-
-        // 5. Per entry: locate → stage → verify digest → activate. Per-entry
-        //    failures never affect other entries and never touch the previous
-        //    activation.
-        for (const entry of pending) {
-          const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
-          if (outcome && 'blocked' in outcome) {
-            report.blocked.push(outcome.blocked);
-            attemptBlocked.add(entry.providerType);
-          } else if (outcome) {
-            attemptErrors.push(outcome);
-          } else {
-            const pointer = this.store.getPointer(channel, entry.providerType);
-            if (pointer) attemptActivated.push(pointer.active);
-          }
-        }
-
-        // A DIGEST_MISMATCH here means this commit's tree is not the tree the
-        // registry published. That is precisely the "someone pushed to main
-        // without republishing" case, and an OLDER commit may still reproduce
-        // the published digest — so retry rather than fail. Any other error
-        // class (artifact missing, store corrupt) is not commit-dependent and
-        // is reported as-is. Entries that DID verify at this commit are
-        // already activated and stay activated; the retry only re-attempts
-        // what is still pending.
-        const mismatches = attemptErrors.filter((e) => e.code === 'DIGEST_MISMATCH');
-        retryWithOlderCommit = mismatches.length > 0
-          && mismatches.length === attemptErrors.length
-          && !isLastCandidate;
-        if (retryWithOlderCommit) {
-          this.log(
-            `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? 'y' : 'ies'}`
-            + ' — the published rows were not built from this commit; trying the previous commit',
-          );
-        }
-      } finally {
-        this.store.removeStagingDir(stagingRoot);
-      }
-
-      if (retryWithOlderCommit) {
-        // Drop the types that verified at this commit from the retry set, so
-        // an older commit is only asked about what is still unresolved.
-        const resolved = new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
-        report.activated.push(...attemptActivated);
-        for (let i = pending.length - 1; i >= 0; i -= 1) {
-          if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
-        }
+    // Published commits bypass GitHub discovery entirely. Keep separate groups:
+    // channel entries may have been published from different repository commits.
+    const groups = new Map<string, ActivatableEntry[]>();
+    const archive = parseGitHubArchiveUrl(this.providerTarballUrl);
+    for (const entry of pending) {
+      if (entry.sourceCommit !== undefined &&
+        (typeof entry.sourceCommit !== 'string' || !/^[0-9a-f]{40}$/.test(entry.sourceCommit))) {
+        report.errors.push({ code: 'CHANNEL_METADATA_UNAVAILABLE', providerType: entry.providerType,
+          message: `invalid sourceCommit for "${entry.providerType}"` });
         continue;
       }
+      const key = entry.sourceCommit ?? '';
+      groups.set(key, [...(groups.get(key) ?? []), entry]);
+    }
+    sourceGroups: for (const [sourceCommit, pending] of groups) {
+      // Custom mirrors retain their configured transport; all trees still verify.
+      const candidates = sourceCommit
+        ? [archive ? buildPinnedArchiveUrl(archive, sourceCommit) : this.providerTarballUrl]
+        : await resolveTransportCandidates(this.providerTarballUrl, this.fetchTransportMetaJson);
 
-      // Terminal attempt: either everything resolved, a non-mismatch error
-      // occurred, or this was the last candidate commit — in which case its
-      // DIGEST_MISMATCH errors are the final, reported answer (the digest
-      // contract stays fail-closed; exhausting history never activates
-      // anything unverified).
-      report.activated.push(...attemptActivated);
-      report.errors.push(...attemptErrors);
-      break;
+      for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+        const transportUrl = candidates[attempt];
+        const isLastCandidate = attempt === candidates.length - 1;
+        const attemptErrors: ChannelSyncError[] = [];
+        const attemptActivated: ActivationRef[] = [];
+        const attemptBlocked = new Set<string>();
+
+        const stagingRoot = this.store.createStagingDir('sync');
+        let retryWithOlderCommit = false;
+        try {
+          const tarPath = path.join(stagingRoot, 'providers.tar.gz');
+          const extractDir = path.join(stagingRoot, 'repo');
+          fs.mkdirSync(extractDir, { recursive: true });
+          try {
+            await this.downloadFile(transportUrl, tarPath);
+            await this.extractTarball(tarPath, extractDir);
+          } catch (e: any) {
+            report.errors.push({ code: 'TRANSPORT_FAILED', message: `provider tarball transport failed: ${e?.message || e}` });
+            report.status = 'error';
+            this.log(`source group failed (TRANSPORT_FAILED): ${e?.message || e} [${pathEnvDiagnostic()}]`);
+            continue sourceGroups;
+          }
+
+          const repoRoot = findTarballRepoRoot(extractDir);
+          if (!repoRoot) {
+            report.errors.push({ code: 'TRANSPORT_FAILED', message: 'provider tarball has an unexpected structure (no repo root dir)' });
+            report.status = 'error';
+            continue sourceGroups;
+          }
+
+          // 5. Per entry: locate → stage → verify digest → activate. Per-entry
+          //    failures never affect other entries and never touch the previous
+          //    activation.
+          for (const entry of pending) {
+            const outcome = await this.tryActivateOne(channel, entry, repoRoot, gate);
+            if (outcome && 'blocked' in outcome) {
+              report.blocked.push(outcome.blocked);
+              attemptBlocked.add(entry.providerType);
+            } else if (outcome) {
+              attemptErrors.push(outcome);
+            } else {
+              const pointer = this.store.getPointer(channel, entry.providerType);
+              if (pointer) attemptActivated.push(pointer.active);
+            }
+          }
+
+          // A DIGEST_MISMATCH here means this commit's tree is not the tree the
+          // registry published. That is precisely the "someone pushed to main
+          // without republishing" case, and an OLDER commit may still reproduce
+          // the published digest — so retry rather than fail. Any other error
+          // class (artifact missing, store corrupt) is not commit-dependent and
+          // is reported as-is. Entries that DID verify at this commit are
+          // already activated and stay activated; the retry only re-attempts
+          // what is still pending.
+          const mismatches = attemptErrors.filter((e) => e.code === 'DIGEST_MISMATCH');
+          retryWithOlderCommit = mismatches.length > 0
+            && mismatches.length === attemptErrors.length
+            && !isLastCandidate;
+          if (retryWithOlderCommit) {
+            this.log(
+              `digest mismatch at ${transportUrl} for ${mismatches.length} entr${mismatches.length === 1 ? 'y' : 'ies'}`
+              + ' — the published rows were not built from this commit; trying the previous commit',
+            );
+          }
+        } finally {
+          this.store.removeStagingDir(stagingRoot);
+        }
+
+        if (retryWithOlderCommit) {
+          // Drop the types that verified at this commit from the retry set, so
+          // an older commit is only asked about what is still unresolved.
+          const resolved = new Set([...attemptActivated.map((a) => a.providerType), ...attemptBlocked]);
+          report.activated.push(...attemptActivated);
+          for (let i = pending.length - 1; i >= 0; i -= 1) {
+            if (resolved.has(pending[i].providerType)) pending.splice(i, 1);
+          }
+          continue;
+        }
+
+        // Terminal attempt: either everything resolved, a non-mismatch error
+        // occurred, or this was the last candidate commit — in which case its
+        // DIGEST_MISMATCH errors are the final, reported answer (the digest
+        // contract stays fail-closed; exhausting history never activates
+        // anything unverified).
+        report.activated.push(...attemptActivated);
+        report.errors.push(...attemptErrors);
+        break;
+      }
     }
 
     // 6. N=2 retention + crash-orphan cleanup.

@@ -25,6 +25,7 @@
 //   - `diff --git a/<path> b/<path>` lines are scanned: file NAMES leak too.
 
 import { spawn, execFileSync } from 'node:child_process';
+import { retirementMarkers, requiresRetirementProof, validateRetirementProof } from './normal-retirement-proof.mjs';
 import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { devNull } from 'node:os';
@@ -585,7 +586,7 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
     // Source-only checkpoints intentionally carry stale generated outputs. No
     // remote advertisement, approved SHA list or private/public classification
     // can turn a source tip into a publishable candidate.
-    const phaseMarkers = await runGit(cwd, ['ls-tree', '-z', e.localSha, '--', 'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json']);
+    const phaseMarkers = await runGit(cwd, ['ls-tree', '-z', e.localSha, '--', 'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json', '.adhdev-source-candidate.json']);
     if (phaseMarkers.trim()) add([{ kind: 'source_phase', sha: e.localSha, file: '(source phase)', line: 1, detail: 'source_not_publishable: combined generation and final gates required' }]);
     for (const l of scanRef(e.remoteRef || '')) add([{ kind: 'path', sha: e.localSha, file: '(destination ref)', line: l.line, detail: l.name || l.match }]);
     if (e.localRef?.startsWith('refs/tags/')) {
@@ -593,7 +594,21 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
     }
     if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef));
     if (integrationBase !== undefined && !ZERO.test(integrationBase)) await runGit(cwd, ['merge-base', '--is-ancestor', integrationBase, e.localSha]);
-    const shas = (await newCommits(cwd, remoteName, e.localSha, integrationBase ?? e.remoteSha, proven)).filter((s) => !seen.has(s));
+    const pending = await newCommits(cwd, remoteName, e.localSha, integrationBase ?? e.remoteSha, proven);
+    const shas = pending.filter((s) => !seen.has(s));
+    // The temporary fence follows a marker deletion still being published.
+    // Already-public history does not impose a private cloud build on ordinary
+    // OSS clones. Explicit integration ranges keep their full pending fence.
+    let retired = false;
+    if (!phaseMarkers.trim() && pending.length && requiresRetirementProof(cwd, e.localSha)) {
+      for (let start = 0; start < pending.length && !retired; start += 128) {
+        retired = !!(await runGit(cwd, ['log', '--no-walk', '--format=%H', '--diff-filter=D', ...pending.slice(start, start + 128), '--', ...retirementMarkers])).trim();
+      }
+    }
+    if (retired) {
+      try { validateRetirementProof(cwd, 'oss', { ref: e.localSha }); }
+      catch (error) { add([{ kind: 'source_phase', sha: e.localSha, file: '(normal retirement)', line: 1, detail: error.message }]); }
+    }
     shas.forEach((s) => seen.add(s));
     add(await identityViolations(cwd, shas));
     add(await messageViolations(cwd, shas, scan));

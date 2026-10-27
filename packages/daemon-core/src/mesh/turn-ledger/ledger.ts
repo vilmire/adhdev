@@ -190,7 +190,8 @@ export interface TurnLedger {
     expiredHoldEvidence(nowMs?: number): TurnEvidenceOf<'hold_expired'>[];
     /** Convenience for the scheduler tick: observe every due hold. */
     sweepExpiredHolds(nowMs?: number): ObserveResult[];
-    nextHoldDeadline(): number | null;
+    /** Earliest eligible deadline; afterMs skips overdue retries without hiding future wakeups. */
+    nextHoldDeadline(afterMs?: number): number | null;
     /** Publish every `pending` row (single-flight). Boot + scheduler tick call it (`republishPending`). */
     flushPublish(): Promise<PublishReport>;
     republishPending(): Promise<PublishReport>;
@@ -438,7 +439,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             store.upsertAttempt(next, nowMs);
             store.syncHolds(next.attemptId, result.holds, nowMs);
         }
-        const inserted = store.insertEvent(evidenceRow(evidence, {
+        const inserted = store.recordEvidence(evidenceRow(evidence, {
             verdict: result.verdict,
             ...(result.rule ? { rule: result.rule } : {}),
             ...(result.rejection ? { rejection: result.rejection } : {}),
@@ -722,17 +723,17 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         getAttempt: (attemptId) => store.getAttempt(attemptId),
         openAttemptForSession: (sessionId) => store.findOpenAttemptForSession(sessionId),
         sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId),
-        expiredHoldEvidence: (nowMs = now()) => expireHolds(store.dueHolds(nowMs), nowMs, {
+        expiredHoldEvidence: (nowMs = now()) => expireHolds(store.dueHolds(nowMs, 500, deps.selfDaemonId), nowMs, {
             observedBy: deps.selfDaemonId,
             sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId),
         }),
         sweepExpiredHolds(nowMs = now()) {
-            return expireHolds(store.dueHolds(nowMs), nowMs, {
+            return expireHolds(store.dueHolds(nowMs, 500, deps.selfDaemonId), nowMs, {
                 observedBy: deps.selfDaemonId,
                 sessionIdFor: (attemptId) => store.sessionIdForAttempt(attemptId),
             }).map((evidence) => observe(evidence));
         },
-        nextHoldDeadline: () => store.nextHoldDeadline(),
+        nextHoldDeadline: (afterMs) => store.nextHoldDeadline(deps.selfDaemonId, afterMs),
         flushPublish,
         republishPending: flushPublish,
         pendingPublishCount: (olderThanMs) => store.countPendingPublish(olderThanMs),

@@ -167,6 +167,8 @@ export function resolveProviderAutoUpdate(configured: boolean | undefined, env: 
 export interface ChannelEntry {
   providerType: string;
   providerVersion: string;
+  /** Immutable provider repository commit; absent on legacy registry rows. */
+  sourceCommit?: string;
   category: string;
   /** 'sha256:<64 lowercase hex>' or null for legacy-unverified rows. */
   bundleDigest: string | null;
