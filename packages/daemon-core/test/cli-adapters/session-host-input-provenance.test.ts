@@ -20,6 +20,7 @@ vi.mock('@adhdev/session-host-core', async (importOriginal) => {
     return {
         ...actual,
         SessionHostClient: class {
+            isConnected() { return true; }
             async connect() { /* modelled socket */ }
             async close() { /* modelled socket */ }
             onDisconnect(fn: any) { h.disconnect = fn; return () => { h.disconnect = null; }; }
@@ -55,7 +56,7 @@ async function setup() {
     h.server = server;
     server.emitEvent = (e: any) => { for (const fn of h.listeners) fn(e); };
     const record = server.registry.createSession({ sessionId: 'r7-test', providerType: 'test', category: 'cli', workspace: os.tmpdir(), launchCommand: { command: '/bin/true', args: [] }, clientId: 'daemon', clientType: 'daemon' });
-    server.registry.restoreSession({ ...record, lifecycle: 'running' });
+    server.registry.restoreSession({ ...record, startedAt: 123, lifecycle: 'running' });
     const writes: string[] = [];
     server.runtimes.set('r7-test', { write: (s: string) => writes.push(s) });
     const transport = new SessionHostPtyTransportFactory({ clientId: 'daemon', runtimeId: 'r7-test', providerType: 'test', workspace: os.tmpdir(), attachExisting: true })
@@ -259,7 +260,7 @@ it('R8-3: disconnect invalidates complete provenance before a reconnect record a
         expect(before?.complete).toBe(true);
         h.disconnect?.();
         expect(transport.inputProvenance?.()?.complete).toBe(false);
-        for (let i = 0; i < 30 && (transport as any).reconnecting; i++) await Promise.resolve();
+        await (transport as any).recovery;
         // Re-established after the reconnect, but never as the same key.
         const after = transport.inputProvenance?.();
         expect(after?.complete).toBe(true);
@@ -582,7 +583,7 @@ it('R8-2 end-to-end: never deletes an equal-label foreign chip after a counter r
         // The restored counter caught up to the previous value, but seq 1 was FOREIGN in the new lifetime.
         expect(server.registry.getSession('r7-test').inputSeq).toBe(1);
         h.disconnect?.();
-        for (let i = 0; i < 30 && (transport as any).reconnecting; i++) await Promise.resolve();
+        await (transport as any).recovery;
         expect((transport as any).reconnecting).toBe(false);
         server.emitEvent = savedEmit;
         // The reviewer's probe recorded stale trust here (equal to before); now it never matches.

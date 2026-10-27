@@ -7,6 +7,7 @@ import type {
   ReleaseWritePayload,
   SessionAttachedClient,
   SessionHostRecord,
+  SessionHostRequest,
   SessionTermination,
 } from './types.js';
 import { SessionRingBuffer } from './buffer.js';
@@ -154,6 +155,20 @@ export class SessionHostRegistry {
   getSession(sessionId: string): SessionHostRecord | null {
     const state = this.sessions.get(sessionId);
     return state ? this.cloneRecord(state.record) : null;
+  }
+
+  attachClientIfIncarnation(payload: Extract<SessionHostRequest, { type: 'attach_session_if_incarnation' }>['payload']): SessionHostRecord {
+    const record = this.requireSession(payload.sessionId).record;
+    const expected = payload.expectedIncarnation;
+    if (!expected || expected.sessionId !== record.sessionId
+      || typeof expected.runtimeKey !== 'string' || !expected.runtimeKey
+      || !Number.isFinite(expected.startedAt) || expected.startedAt <= 0
+      || expected.runtimeKey !== record.runtimeKey || expected.startedAt !== record.startedAt) {
+      throw new Error(`Runtime not found for session: ${payload.sessionId} (incarnation changed)`);
+    }
+    // No await between comparison and mutation; a failed pin cannot evict an
+    // existing daemon, clear its owner, or grant this client an attachment.
+    return this.attachClient(payload);
   }
 
   attachClient(payload: AttachSessionPayload): SessionHostRecord {

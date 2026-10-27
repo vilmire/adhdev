@@ -371,6 +371,7 @@ export type SessionHostRequest =
   | { type: 'release_upgrade_lease'; payload: HostUpgradeLeasePayload }
   | { type: 'create_session'; payload: CreateSessionPayload }
   | { type: 'attach_session'; payload: AttachSessionPayload }
+  | { type: 'attach_session_if_incarnation'; payload: AttachSessionPayload & { expectedIncarnation: { sessionId: string; runtimeKey: string; startedAt: number } } }
   | { type: 'detach_session'; payload: DetachSessionPayload }
   | { type: 'send_input'; payload: SendInputPayload }
   | { type: 'send_input_if_seq'; payload: SendInputIfSeqPayload }
@@ -403,6 +404,8 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'release_upgrade_lease',
   'create_session',
   'attach_session',
+  // Distinct request kind: old hosts must refuse instead of ignoring a pin.
+  'attach_session_if_incarnation',
   'detach_session',
   'send_input',
   'send_input_if_seq',
