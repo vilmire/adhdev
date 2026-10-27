@@ -1,4 +1,6 @@
 import { RelayDeliveryPolicy, unavailableReportNotice } from './relay-delivery-policy.js';
+import { RelayNudgeGate } from './relay-nudge.js';
+import { realClock, type AssistantPulledEvent, type Batch, type Item, type Part, type RelayClock, type RenderedReportPage } from './assistant-relay-types.js';
 import { RelayGapTracker, receiptKey, gapGroup, buildReadableReplyGap } from './relay-gap-tracker.js';
 import { reportBodyId, type ReportContinuation } from './report-continuation.js';
 import { createHash } from 'node:crypto';
@@ -44,6 +46,7 @@ import {
     shouldAddRestartNote,
     type RestartContext,
 } from './assistant-relay-format.js';
+export type { AssistantPulledEvent, RelayClock } from './assistant-relay-types.js';
 
 export const ASSISTANT_RELAY_BUS_KINDS = ['turn', 'modal', 'prompt', 'terminated', 'registered', 'status'] as const;
 export type AssistantRelayBusEvent = EventOf<typeof ASSISTANT_RELAY_BUS_KINDS[number]>;
@@ -72,22 +75,6 @@ export interface RemoteProjectSnapshot {
     /** The host's content-free `[Mesh]` line. */
     statusLine: string | null;
 }
-
-export interface RelayClock {
-    now(): number;
-    setTimeout(fn: () => void, ms: number): unknown;
-    clearTimeout(handle: unknown): void;
-}
-
-const realClock: RelayClock = {
-    now: () => Date.now(),
-    setTimeout: (fn, ms) => {
-        const t = setTimeout(fn, ms);
-        (t as { unref?: () => void }).unref?.();
-        return t;
-    },
-    clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-};
 
 export interface AssistantRelayPorts {
     /** e.g. `bus.on(ASSISTANT_RELAY_BUS_KINDS, h, { name: 'assistant.relay' })`. */
@@ -138,38 +125,10 @@ export interface AssistantRelayPorts {
     /** Native submit confirmation only; MCP pulls need their own receipt acknowledgement. */
     onInputsSubmitted?(sessionId: string, messageIds: readonly string[], at: number): void;
     clock?: RelayClock;
+    /** Short notices before a full relay push (relay-nudge.ts); 0 pushes at once. */
+    maxNudgeAttempts?: number;
+    nudgeBackoffMs?: number;
 }
-
-interface Batch {
-    coordinatorSessionId: string;
-    attemptIds: string[];
-    outcome: TurnOutcome;
-    firstCommitAt: number;
-    lastCommitAt: number;
-    quietTimer: unknown;
-    maxTimer: unknown;
-}
-
-interface RenderedReportPage {
-    attemptId: string; reportId: string; offset: number; totalPoints: number;
-    coverage?: RenderedAttemptCoverage;
-    autoStopped?: boolean;
-}
-/** `gap`: replies of a queued notice this part announces. `surfaced`: attempts the assistant is told about by notice/cursor instead of a body. */
-type Part = { text: string; source: AssistantInputSource; messageId: string; meshId?: string; reports?: RenderedReportPage[];
-    gap?: { item: Item & { kind: 'line' }; replies: AuditedCoordinatorReply[] }; surfaced?: string[] };
-
-/** One entry of `assistant_pending_relays` → `assistantEvents` (MCP-only assistant). */
-export interface AssistantPulledEvent {
-    source: AssistantInputSource;
-    messageId: string;
-    text: string;
-    meshId?: string;
-}
-
-type Item =
-    | { kind: 'relay'; meshId: string; coordinatorSessionId: string; attemptIds: string[]; outcome: TurnOutcome; committedAt: number; idle: boolean }
-    | { kind: 'line'; source: AssistantInputSource; text: string; messageId: string; meshId?: string; forSessionId?: string; gapReplies?: AuditedCoordinatorReply[] };
 
 /**
  * A followed project with no request and no report for this long stops being
@@ -191,6 +150,7 @@ export class AssistantRelay {
     /** Durable read and notification acknowledgements, scoped to the recipient. */
     private readonly gaps: RelayGapTracker;
     private readonly deliveryPolicy: RelayDeliveryPolicy;
+    private readonly nudge: RelayNudgeGate;
     /** sessionId -> whether the episode's signal already carried the question (structured prompt or approval modal). */
     private readonly modalOpen = new Map<string, { level: 'bare' | 'detailed'; sources: Set<'modal' | 'prompt'> }>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
@@ -227,6 +187,7 @@ export class AssistantRelay {
         this.clock = ports.clock ?? realClock;
         this.gaps = new RelayGapTracker(ports.store, () => this.clock.now());
         this.deliveryPolicy = new RelayDeliveryPolicy(ports.store, () => this.clock.now());
+        this.nudge = new RelayNudgeGate(this.clock, () => this.kick(), ports.maxNudgeAttempts, ports.nudgeBackoffMs);
     }
 
     /** Subscribe and load undelivered rows from the store as backlog. */
@@ -267,6 +228,7 @@ export class AssistantRelay {
         this.renderedCoverage.clear();
         this.flaggedReplies.clear();
         this.auditing = false;
+        this.nudge.reset();
     }
 
     /** `project_send` accepted: open/refresh the project's thread. */
@@ -303,6 +265,7 @@ export class AssistantRelay {
                 this.ports.store.markDelivered(allSuppressedIds, this.clock.now(), []);
             }
             this.queue = this.queue.filter((i) => i.meshId !== meshId);
+            if (!this.queue.some((i) => i.kind === 'relay')) this.nudge.reset();
         }
         return wasOpen;
     }
@@ -987,7 +950,9 @@ export class AssistantRelay {
         if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
         const lifecycle = this.lifecycle;
         const { taken, parts } = await this.takeParts(this.clock.now(), sid);
-        if (lifecycle !== this.lifecycle) return;
+        // Stopped, or a concurrent pull already claimed these items.
+        const canceled = () => lifecycle !== this.lifecycle || !taken.every((i) => this.queue.includes(i));
+        if (canceled()) return;
         if (!parts.length) {
             this.queue = this.queue.filter((i) => !taken.includes(i));
             return;
@@ -999,6 +964,12 @@ export class AssistantRelay {
         // The counter rides only with an actionable reply notice, never with an unavailable-report notice.
         const gap = !parts.some(p => p.messageId.startsWith('gap:') && !p.surfaced) ? '' : this.newGapLine(sid, missed);
         const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
+        if (taken.some((i) => i.kind === 'relay') || (text.includes('\n') && parts.some((p) => p.source === 'relay'))) {
+            const projects = parts.flatMap((p) => p.meshId ? [this.ports.projectSlug(p.meshId) ?? p.meshId] : []);
+            const decision = await this.nudge.decide({ count: parts.length + (gap ? 1 : 0), projects },
+                (notice, attempt) => this.ports.submit(sid, { text: notice, messageId: `nudge:${messageId}:${attempt}`, policy: { mode: 'queue' } }), canceled);
+            if (decision !== 'push' || canceled()) return;
+        }
         const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
         if (outcome.kind === 'refused') return;
         const submitted = outcome.kind === 'delivered' || (outcome.kind === 'duplicate' && !!this.ports.isParked && !await this.ports.isParked(sid, messageId));
@@ -1011,7 +982,19 @@ export class AssistantRelay {
      * PTY delivery) and mark it delivered; `sessionId` gets the input-log entries.
      */
     async pullPending(sessionId: string | null): Promise<AssistantPulledEvent[]> {
-        await this.idle();
+        while (this.flushing || this.resolvingHuman) await this.idle();
+        // Hold the delivery slot so a ready edge cannot push what this pull claims.
+        const pull = this.pullOnce(sessionId);
+        const slot: Promise<void> = pull.then(() => {}, () => {}).finally(() => {
+            if (this.flushing !== slot) return;
+            this.flushing = null;
+            if (this.dirty) this.kick();
+        });
+        this.flushing = slot;
+        return pull;
+    }
+
+    private async pullOnce(sessionId: string | null): Promise<AssistantPulledEvent[]> {
         const lifecycle = this.lifecycle;
         const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
         if (lifecycle !== this.lifecycle) return [];
@@ -1019,6 +1002,7 @@ export class AssistantRelay {
         // The counter rides only with an actionable reply notice, never with an unavailable-report notice.
         const gap = !parts.some(p => p.messageId.startsWith('gap:') && !p.surfaced) ? '' : this.newGapLine(sessionId, missed);
         if (gap && parts.length) parts.push({ text: gap, source: 'relay', messageId: `gap:${this.clock.now()}:${++this.seq}` });
+        if (parts.length) this.nudge.reset();
         this.commitTaken(taken, parts, sessionId);
         if (gap && parts.length) this.rememberGaps(sessionId, missed);
         return parts.map((p) => ({ source: p.source, messageId: p.messageId, text: p.text, ...(p.meshId ? { meshId: p.meshId } : {}) }));

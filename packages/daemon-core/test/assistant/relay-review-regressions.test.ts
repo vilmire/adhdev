@@ -36,7 +36,7 @@ function harness(report: any = null, assistant: string | null = null) {
         meshWork: () => ({ assigned: 1, pending: 0, activeMissions: 1 }), hasAssistant: () => true,
         assistantSessionId: () => assistant, isAssistantReady: () => state.ready,
         submit: async (_sid, input) => { submits.push(input.text); return state.refuse ? { kind: 'refused', reason: 'session_busy' } as any : { kind: 'delivered' }; },
-        inputLog: new AssistantInputLog(), store,
+        inputLog: new AssistantInputLog(), store, maxNudgeAttempts: 0,
     };
     const relay = new AssistantRelay(ports); relay.start(); relay.openThread('mesh');
     return { relay, captures, audit, readable, context, state, store, submits,
