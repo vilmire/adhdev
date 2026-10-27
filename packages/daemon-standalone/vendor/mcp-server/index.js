@@ -103375,6 +103375,12 @@ ${result.stderr}`, result.code);
       } else {
         return null;
       }
+      const originSessionId = boundedString(raw.originSessionId, CHAT_META_LABEL_MAX);
+      const taskId = boundedString(raw.taskId, CHAT_META_LABEL_MAX);
+      const meshId = boundedString(raw.meshId, CHAT_META_LABEL_MAX);
+      const missionId = boundedString(raw.missionId, CHAT_META_LABEL_MAX);
+      const originDaemonId = boundedString(raw.originDaemonId, CHAT_META_LABEL_MAX);
+      const producerRole = typeof raw.producerRole === "string" && ARTIFACT_PRODUCER_ROLES_WIRE.includes(raw.producerRole) ? raw.producerRole : void 0;
       return {
         artifactId,
         kind,
@@ -103385,7 +103391,13 @@ ${result.stderr}`, result.code);
         sha256: sha2563,
         ...previewText !== void 0 ? { previewText } : {},
         createdAt,
-        updatedAt
+        updatedAt,
+        ...originSessionId ? { originSessionId } : {},
+        ...taskId ? { taskId } : {},
+        ...meshId ? { meshId } : {},
+        ...missionId ? { missionId } : {},
+        ...originDaemonId ? { originDaemonId } : {},
+        ...producerRole ? { producerRole } : {}
       };
     }
     function encodeChatMessageHead(candidate, stamp2) {
@@ -103661,6 +103673,7 @@ ${result.stderr}`, result.code);
     var COVERAGE_MODES;
     var ARTIFACT_KINDS_WIRE;
     var ARTIFACT_PREVIEW_WIRE_MAX;
+    var ARTIFACT_PRODUCER_ROLES_WIRE;
     var init_transcript_keyed_codec = __esm2({
       "src/seqscribe/transcript-keyed-codec.ts"() {
         "use strict";
@@ -103685,6 +103698,7 @@ ${result.stderr}`, result.code);
         COVERAGE_MODES = ["full", "tail", "window", "current-turn"];
         ARTIFACT_KINDS_WIRE = ["markdown", "image", "diff", "json", "text"];
         ARTIFACT_PREVIEW_WIRE_MAX = 600;
+        ARTIFACT_PRODUCER_ROLES_WIRE = ["worker", "coordinator", "assistant", "user", "session"];
       }
     });
     function sha1(text4) {
@@ -114909,6 +114923,9 @@ ${detail.join("\n")}` : stripped;
 ${safeBody}
 ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     }
+    function isArtifactProducerRole(value) {
+      return typeof value === "string" && ARTIFACT_PRODUCER_ROLES.includes(value);
+    }
     function toChatAttachmentMeta(record7) {
       const normalizedRel = record7.relPath.replace(/\\/g, "/");
       const filename = path92.posix.basename(normalizedRel) || normalizedRel;
@@ -114926,6 +114943,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (record7.previewText !== null) {
         meta2.previewText = record7.previewText;
       }
+      if (record7.sessionId) meta2.originSessionId = record7.sessionId;
+      if (record7.taskId) meta2.taskId = record7.taskId;
+      if (record7.meshId) meta2.meshId = record7.meshId;
+      if (record7.missionId) meta2.missionId = record7.missionId;
+      if (record7.originDaemonId) meta2.originDaemonId = record7.originDaemonId;
+      if (isArtifactProducerRole(record7.producerRole)) meta2.producerRole = record7.producerRole;
       return meta2;
     }
     function reassembleBase64ArtifactChunks(chunks, maxBytes) {
@@ -114993,6 +115016,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var UNTRUSTED_ARTIFACT_CLOSE_TAG;
     var MIME_BY_KIND;
     var ARTIFACT_EXTENSION_MAP;
+    var ARTIFACT_PRODUCER_ROLES;
     var ArtifactGuardError;
     var ORIGIN_FETCH_CHUNK_BYTES;
     var init_types5 = __esm2({
@@ -115036,6 +115060,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           ".txt": Object.freeze({ kind: "text", mime: "text/plain" }),
           ".log": Object.freeze({ kind: "text", mime: "text/plain" })
         });
+        ARTIFACT_PRODUCER_ROLES = Object.freeze([
+          "worker",
+          "coordinator",
+          "assistant",
+          "user",
+          "session"
+        ]);
         ArtifactGuardError = class extends Error {
           code;
           constructor(code, message) {

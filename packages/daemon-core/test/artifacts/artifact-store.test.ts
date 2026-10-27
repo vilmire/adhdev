@@ -150,6 +150,8 @@ describe('Task A — Artifact Store & File Guard', () => {
                 previewText: mdContent,
                 createdAt: 1700000001000,
                 updatedAt: 1700000001000,
+                originSessionId: 'sess-1',
+                taskId: 'task-101',
             });
 
             const mdFetched = store.fetchArtifactContent(mdRes.record.artifactId);

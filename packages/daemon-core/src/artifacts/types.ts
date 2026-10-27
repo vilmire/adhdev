@@ -126,6 +126,30 @@ export interface ChatAttachmentMeta {
     previewText?: string;
     createdAt: number;
     updatedAt: number;
+    /**
+     * Provenance (identifiers only). A bubble can render outside the session that
+     * produced the artifact (a coordinator/assistant card, a follower view), so the
+     * viewer needs the producing session to verify a fetch response and the
+     * mesh/task scope to route it.
+     */
+    originSessionId?: string;
+    taskId?: string;
+    meshId?: string;
+    missionId?: string;
+    originDaemonId?: string;
+    producerRole?: ArtifactProducerRole;
+}
+
+export const ARTIFACT_PRODUCER_ROLES: readonly ArtifactProducerRole[] = Object.freeze([
+    'worker',
+    'coordinator',
+    'assistant',
+    'user',
+    'session',
+]);
+
+export function isArtifactProducerRole(value: unknown): value is ArtifactProducerRole {
+    return typeof value === 'string' && (ARTIFACT_PRODUCER_ROLES as readonly string[]).includes(value);
 }
 
 export type ArtifactErrorCode =
@@ -172,6 +196,12 @@ export function toChatAttachmentMeta(record: ArtifactRecord): ChatAttachmentMeta
     if (record.previewText !== null) {
         meta.previewText = record.previewText;
     }
+    if (record.sessionId) meta.originSessionId = record.sessionId;
+    if (record.taskId) meta.taskId = record.taskId;
+    if (record.meshId) meta.meshId = record.meshId;
+    if (record.missionId) meta.missionId = record.missionId;
+    if (record.originDaemonId) meta.originDaemonId = record.originDaemonId;
+    if (isArtifactProducerRole(record.producerRole)) meta.producerRole = record.producerRole;
     return meta;
 }
 
