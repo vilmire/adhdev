@@ -84,7 +84,7 @@ describe('renderTurnNotify — golden parity with buildMeshSystemMessage', () =>
         expect(text).toBe(legacy);
     });
 
-    it('completion, weak/candidate — byte-identical', () => {
+    it('completion candidate retains its evidence and adds the report recovery step', () => {
         const legacy = buildMeshSystemMessage({
             event: 'agent:generating_completed',
             nodeLabel: NODE_LABEL,
@@ -96,7 +96,7 @@ describe('renderTurnNotify — golden parity with buildMeshSystemMessage', () =>
             { summary: REF(1) },
             resolverFor({ 1: 'partial result' }),
         );
-        expect(text).toBe(legacy);
+        expect(text).toBe(legacy + ' Have the worker inspect any refusal and submit a corrected report_completion for this attempt. Retain quarantined reports for review; task success remains unconfirmed.');
         expect(kind).toBe('candidate');
     });
 

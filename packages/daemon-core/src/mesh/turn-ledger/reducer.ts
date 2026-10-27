@@ -291,6 +291,7 @@ function correctionPending(ctx: GuardCtx): boolean {
 }
 function endTimer(ctx: GuardCtx): boolean {
     return holdIs(ctx, 'weak_candidate', 'await_report')
+        && ctx.attempt?.scope !== 'mesh_direct'
         && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
 }
 function freshAlive(ctx: GuardCtx): boolean { return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === 'alive'; }
@@ -377,11 +378,14 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_liveness: (ctx) => holdIs(ctx, 'liveness'),
     hold_hard_ceiling: (ctx) => holdIs(ctx, 'hard_ceiling'),
     hold_suspension_before_consumed: (ctx) => holdIs(ctx, 'suspension_before_consumed'),
-    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && !correctionPending(ctx) && freshAlive(ctx),
+    hold_direct_report_missing: (ctx) => ctx.attempt?.scope === 'mesh_direct'
+        && holdIs(ctx, 'weak_candidate', 'await_report') && !correctionPending(ctx) && !reportedThisGeneration(ctx),
+    hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && ctx.attempt?.scope !== 'mesh_direct'
+        && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
-    hold_await_report: (ctx) => holdIs(ctx, 'await_report')
+    hold_await_report: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
         && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
-    hold_native_probe_report_only: (ctx) => holdIs(ctx, 'await_report')
+    hold_native_probe_report_only: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
         && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx)
         && !reportedThisGeneration(ctx),
     hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx)

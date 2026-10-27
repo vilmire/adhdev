@@ -71,6 +71,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { CANCEL_REASONS, type CancelReason, type TurnEvidence } from '@adhdev/mesh-shared';
 import {
     decodeMeshIndexQueryRequest,
@@ -233,7 +234,25 @@ const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
     const ledger = getActiveTurnLedger();
     if (!ledger) return unavailable('no active turn ledger (boot wiring pending — see file header)');
     try {
-        const result = ledger.observe(req.evidence);
+        let result = ledger.observe(req.evidence);
+        // A lost direct-open acknowledgement retries the same dispatch id. The
+        // ledger dedupes without returning an attempt: recover ONLY its stored
+        // creation evidence, never a newly assigned session/task/generation.
+        if (!result.attempt && result.verdict === 'duplicate' && req.evidence.kind === 'dispatch_accepted'
+            && req.evidence.scope === 'mesh_direct') {
+            const original = ledger.store.getEvent(req.evidence.eventId);
+            const evidence = original?.payload.evidence as TurnEvidence | undefined;
+            const attempt = original?.attemptId ? ledger.getAttempt(original.attemptId) : null;
+            if (original?.verdict === 'applied' && evidence?.kind === 'dispatch_accepted'
+                && isDeepStrictEqual({ ...req.evidence, at: evidence.at }, evidence)
+                && attempt && !attempt.terminal && attempt.generation === original.generation
+                && attempt.sessionId === evidence.sessionId && attempt.ownerDaemonId === ledger.selfDaemonId
+                && attempt.scope === 'mesh_direct' && attempt.meshId === (evidence.meshId ?? null)
+                && attempt.taskId === (evidence.taskId ?? null) && attempt.nodeId === (evidence.nodeId ?? null)
+                && attempt.messageId === evidence.messageId) {
+                result = { ...result, attempt };
+            }
+        }
         if (!result.attempt) {
             const busy = openAttemptConflict(ledger, req.evidence, result);
             if (busy) return busy;

@@ -49876,7 +49876,16 @@ ${rendered.join("\n\n")}`,
             { e: "release", reasons: "expired_hold" },
             { e: "reevaluate" }
           ] },
-          // Weak completion requires a fresh probe; missing probe results have a separate bounded timeout.
+          // A direct worker's idle/liveness observation cannot certify task success.
+          // Keep the exact attempt open for a genuine report; release this timer so a
+          // retry does not spin or extend the hard ceiling. Existing liveness and
+          // hard-ceiling holds still bound a worker that cannot recover its report.
+          { id: "R13d", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_direct_report_missing", to: "same", verdict: "applied", effects: [
+            { e: "release", reasons: "expired_hold" },
+            { e: "record", note: "direct_completion_report_missing" },
+            { e: "notify", notify: "candidate", when: "candidate_once" }
+          ] },
+          // Queue/plain fallback still requires a fresh probe; missing probes have a bounded timeout.
           { id: "R13a", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_weak_candidate", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
           ] },
@@ -50025,7 +50034,7 @@ ${rendered.join("\n\n")}`,
       return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
     }
     function endTimer(ctx) {
-      return holdIs(ctx, "weak_candidate", "await_report") && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
+      return holdIs(ctx, "weak_candidate", "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
     }
     function freshAlive(ctx) {
       return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === "alive";
@@ -50755,10 +50764,11 @@ ${rendered.join("\n\n")}`,
           hold_liveness: (ctx) => holdIs(ctx, "liveness"),
           hold_hard_ceiling: (ctx) => holdIs(ctx, "hard_ceiling"),
           hold_suspension_before_consumed: (ctx) => holdIs(ctx, "suspension_before_consumed"),
-          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && !correctionPending(ctx) && freshAlive(ctx),
+          hold_direct_report_missing: (ctx) => ctx.attempt?.scope === "mesh_direct" && holdIs(ctx, "weak_candidate", "await_report") && !correctionPending(ctx) && !reportedThisGeneration(ctx),
+          hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && ctx.attempt?.scope !== "mesh_direct" && !correctionPending(ctx) && freshAlive(ctx),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
-          hold_await_report: (ctx) => holdIs(ctx, "await_report") && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
-          hold_native_probe_report_only: (ctx) => holdIs(ctx, "await_report") && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx) && !reportedThisGeneration(ctx),
+          hold_await_report: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
+          hold_native_probe_report_only: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx) && !reportedThisGeneration(ctx),
           hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
           hold_end_unconfirmed_exhausted: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS && freshEndProbe(ctx),
           hold_end_probe_missing: (ctx) => endTimer(ctx) && !freshEndProbe(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS,
@@ -51216,7 +51226,8 @@ ${summary}`;
     function renderTurnNotify(input) {
       const missing = [];
       const renderer = RENDERERS[input.notify];
-      const rendered = renderer(input, missing);
+      const recovery2 = input.notify === "candidate" ? " Have the worker inspect any refusal and submit a corrected report_completion for this attempt. Retain quarantined reports for review; task success remains unconfirmed." : "";
+      const rendered = renderer(input, missing) + recovery2;
       const text4 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
       return { text: text4, kind: input.notify, contentRefsMissing: missing };
     }
@@ -108731,6 +108742,7 @@ ${detail.join("\n")}` : stripped;
       ]));
     }
     var import_crypto30;
+    var import_node_util8;
     var indexSlot;
     var turnObserve2;
     var meshRecordHandler;
@@ -108751,6 +108763,7 @@ ${detail.join("\n")}` : stripped;
       "src/commands/low-family/turn-ledger-ipc.ts"() {
         "use strict";
         import_crypto30 = require("crypto");
+        import_node_util8 = require("util");
         init_dist();
         init_dist();
         init_router_internal_args();
@@ -108771,7 +108784,15 @@ ${detail.join("\n")}` : stripped;
           const ledger = getActiveTurnLedger();
           if (!ledger) return unavailable("no active turn ledger (boot wiring pending \u2014 see file header)");
           try {
-            const result = ledger.observe(req.evidence);
+            let result = ledger.observe(req.evidence);
+            if (!result.attempt && result.verdict === "duplicate" && req.evidence.kind === "dispatch_accepted" && req.evidence.scope === "mesh_direct") {
+              const original = ledger.store.getEvent(req.evidence.eventId);
+              const evidence = original?.payload.evidence;
+              const attempt = original?.attemptId ? ledger.getAttempt(original.attemptId) : null;
+              if (original?.verdict === "applied" && evidence?.kind === "dispatch_accepted" && (0, import_node_util8.isDeepStrictEqual)({ ...req.evidence, at: evidence.at }, evidence) && attempt && !attempt.terminal && attempt.generation === original.generation && attempt.sessionId === evidence.sessionId && attempt.ownerDaemonId === ledger.selfDaemonId && attempt.scope === "mesh_direct" && attempt.meshId === (evidence.meshId ?? null) && attempt.taskId === (evidence.taskId ?? null) && attempt.nodeId === (evidence.nodeId ?? null) && attempt.messageId === evidence.messageId) {
+                result = { ...result, attempt };
+              }
+            }
             if (!result.attempt) {
               const busy2 = openAttemptConflict(ledger, req.evidence, result);
               if (busy2) return busy2;
@@ -117540,7 +117561,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       return { ready: false, code: "GITPYTHON_UNAVAILABLE", action: "Configure Python and GitPython on the selected machine, then rerun the readiness check. No packages were installed." };
     }
     var import_node_child_process19;
-    var import_node_util10;
+    var import_node_util11;
     var import_node_crypto36;
     var import_promises11;
     var import_node_path24;
@@ -117559,12 +117580,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       "src/assistant/remote-project-checkout.ts"() {
         "use strict";
         import_node_child_process19 = require("child_process");
-        import_node_util10 = require("util");
+        import_node_util11 = require("util");
         import_node_crypto36 = require("crypto");
         import_promises11 = require("fs/promises");
         import_node_path24 = require("path");
         init_config();
-        exec5 = (0, import_node_util10.promisify)(import_node_child_process19.execFile);
+        exec5 = (0, import_node_util11.promisify)(import_node_child_process19.execFile);
         REMOTE_GIT_TIMEOUT_MS = 12e4;
         REMOTE_GIT_CLONE_TIMEOUT_MS = 18 * 6e4;
         REMOTE_GIT_CLONE_WATCHDOG_MS = 12e4;
@@ -124205,7 +124226,7 @@ ${defangRelayBody(text4)}`;
     }
     var import_node_child_process21;
     var import_node_fs26;
-    var import_node_util11;
+    var import_node_util12;
     var execFileAsync5;
     var GIT2;
     var MAX_CHANGED_FILES2;
@@ -124214,10 +124235,10 @@ ${defangRelayBody(text4)}`;
         "use strict";
         import_node_child_process21 = require("child_process");
         import_node_fs26 = require("fs");
-        import_node_util11 = require("util");
+        import_node_util12 = require("util");
         init_resolve_executable();
         init_logger();
-        execFileAsync5 = (0, import_node_util11.promisify)(import_node_child_process21.execFile);
+        execFileAsync5 = (0, import_node_util12.promisify)(import_node_child_process21.execFile);
         GIT2 = process.platform === "win32" ? resolveWin32Executable("git") : "git";
         MAX_CHANGED_FILES2 = 500;
       }
@@ -127581,7 +127602,7 @@ ${tail}` : ""
       function settleWriterStop(request, receipt) {
         const r = receipt;
         const current4 = store2.getAttempt(request.attemptId);
-        if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== "string" || !r.incarnation || current4?.state !== "stopping" || current4.generation !== request.generation || current4.sessionId !== request.sessionId || current4.data.writerStop?.requestId !== request.stopRequestId || current4.meshId !== request.meshId || current4.taskId !== request.taskId || !pinnedMeshNodeIdMatches(current4.nodeId, request.nodeId) || current4.providerType !== request.providerType || current4.dispatchNonce !== request.dispatchNonce || !(0, import_node_util12.isDeepStrictEqual)(
+        if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== "string" || !r.incarnation || current4?.state !== "stopping" || current4.generation !== request.generation || current4.sessionId !== request.sessionId || current4.data.writerStop?.requestId !== request.stopRequestId || current4.meshId !== request.meshId || current4.taskId !== request.taskId || !pinnedMeshNodeIdMatches(current4.nodeId, request.nodeId) || current4.providerType !== request.providerType || current4.dispatchNonce !== request.dispatchNonce || !(0, import_node_util13.isDeepStrictEqual)(
           [r.stopRequestId, r.attemptId, r.generation, r.sessionId, r.meshId, r.taskId, r.nodeId, r.dispatchNonce, r.providerType, r.ownerDaemonId],
           [request.stopRequestId, request.attemptId, request.generation, request.sessionId, request.meshId, request.taskId, request.nodeId, request.dispatchNonce, request.providerType, request.ownerDaemonId]
         )) return;
@@ -127662,6 +127683,7 @@ ${tail}` : ""
         else if (rule === "R15p") log.info(`turn-ledger: transcript of ${who} reads finished but the worker has not ended its turn \u2014 awaiting the worker report (await_report hold ${Math.round(policy.awaitReportMs / 1e3)}s)`);
         else if (rule === "R12r") log.info(`turn-ledger: false idle: worker resumed \u2014 ${who} back to generating (falseIdleCount=${attempt.data.falseIdleCount ?? 0})`);
         else if (rule === "R17c") log.info(`turn-ledger: invalid report for ${who} has a fixed correction deadline ${attempt.data.reportCorrection?.until ?? "?"}`);
+        else if (rule === "R13d") log.info(`turn-ledger: direct worker ${who} has no accepted report \u2014 incomplete; recover report_completion for this attempt`);
         else if (rule === "R13c") log.info(`turn-ledger: correction deadline of ${who} expired \u2014 failed, no report recovery accepted`);
         else if (rule === "R13z") log.info(`turn-ledger: probe deadline of ${who} expired without a fresh observation \u2014 failed inconclusive, not completed`);
         else if (rule === "R13u") log.info(`turn-ledger: weak/await_report window of ${who} expired with liveness ${attempt.lastLiveness ?? "?"} \u2014 re-probing instead of committing (deferral ${attempt.data.unconfirmedEndDeferral?.count ?? 0})`);
@@ -128040,7 +128062,7 @@ ${tail}` : ""
         counters: () => ({ ...counters4 })
       };
     }
-    var import_node_util12;
+    var import_node_util13;
     var import_crypto43;
     var REPORT_GATE_RULES;
     var DEFAULT_LOG;
@@ -128050,7 +128072,7 @@ ${tail}` : ""
       "src/mesh/turn-ledger/ledger.ts"() {
         "use strict";
         init_mesh_pinned_node_identity();
-        import_node_util12 = require("util");
+        import_node_util13 = require("util");
         init_worker_bridge_transaction();
         import_crypto43 = require("crypto");
         init_dist();
@@ -128060,7 +128082,7 @@ ${tail}` : ""
         init_reducer();
         init_store();
         init_effects();
-        REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13u", "R13x", "R13z", "R13c", "R17c", "R17g", "R9t", "R13t"]);
+        REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13d", "R13u", "R13x", "R13z", "R13c", "R17c", "R17g", "R9t", "R13t"]);
         DEFAULT_LOG = { info: () => {
         }, warn: () => {
         }, error: () => {
@@ -160501,7 +160523,9 @@ ${output}` : "";
           }
           const apply = () => {
             const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
-            if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId)) return { success: false, error: "stale_report" };
+            if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId || !daemonIdsEquivalent4(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
+              return { success: false, error: "stale_report" };
+            }
             return toReportResponse(acceptWorkerCompletionReport2(credential, report, { isSelfDaemon, reportedAtMs }));
           };
           if (prepared) {
@@ -162083,7 +162107,7 @@ ${output}` : "";
     var import_node_fs19 = require("fs");
     var import_node_path17 = require("path");
     var import_node_child_process15 = require("child_process");
-    var import_node_util8 = require("util");
+    var import_node_util9 = require("util");
     init_git_locale();
     init_dist();
     init_worktree_bootstrap_config();
@@ -162327,7 +162351,7 @@ ${output}` : "";
           { timeoutMs: 12e4 }
         );
         const hookInstaller = (0, import_node_path17.join)(worktreePath, "scripts/setup-hooks.mjs");
-        if ((0, import_node_fs19.existsSync)(hookInstaller)) await (0, import_node_util8.promisify)(import_node_child_process15.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
+        if ((0, import_node_fs19.existsSync)(hookInstaller)) await (0, import_node_util9.promisify)(import_node_child_process15.execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 3e4, windowsHide: true });
         submodulesInitialized = true;
         if (gitUserName && gitUserEmail) {
           console.log("gitUserName is", gitUserName);
@@ -163496,7 +163520,7 @@ ${output}` : "";
     init_mesh_init();
     init_cli_detector();
     var import_node_child_process18 = require("child_process");
-    var import_node_util9 = require("util");
+    var import_node_util10 = require("util");
     var import_path37 = require("path");
     init_dist();
     init_git_locale();
@@ -163504,7 +163528,7 @@ ${output}` : "";
     init_mesh_refine_gates();
     init_refine_config();
     init_worktree_bootstrap_config();
-    var execFileAsync4 = (0, import_node_util9.promisify)(import_node_child_process18.execFile);
+    var execFileAsync4 = (0, import_node_util10.promisify)(import_node_child_process18.execFile);
     var runGit3 = async (cwd, args) => {
       const { stdout } = await execFileAsync4(GIT, args, {
         cwd,

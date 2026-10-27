@@ -593,7 +593,11 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             }
             const apply = () => {
                 const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
-                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId)) return { success: false, error: 'stale_report' };
+                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId
+                    || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId
+                    || !daemonIdsEquivalent(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
+                    return { success: false, error: 'stale_report' };
+                }
                 return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs }));
             };
             if (prepared) {
