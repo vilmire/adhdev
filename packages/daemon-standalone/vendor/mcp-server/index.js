@@ -33998,16 +33998,16 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         const startedAt = Date.now();
         state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
-        const spawn11 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
+        const spawn12 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-          const result = await execFileAsync7(spawn11.file, spawn11.args, {
+          const result = await execFileAsync7(spawn12.file, spawn12.args, {
             cwd,
             encoding: "utf8",
             timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS2,
             maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
             env: { ...process.env, CI: process.env.CI || "1", ...command.env || {} },
             windowsHide: true,
-            ...spawn11.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           state2.commandsRun?.push({
             command: command.command,
@@ -111718,7 +111718,7 @@ ${asText(streams.stderr)}
       return commandsToRun;
     }
     async function execRefineCommand(execFileFn, candidate, cwd, resolvedCommand, control) {
-      const spawn11 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+      const spawn12 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
       const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
       const execOptions = {
         cwd,
@@ -111727,7 +111727,7 @@ ${asText(streams.stderr)}
         timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...control?.env || {}, ...candidate.env || {} },
-        ...spawn11.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+        ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       };
       return new Promise((resolve59, reject) => {
         let timer;
@@ -111750,7 +111750,7 @@ ${asText(streams.stderr)}
             }, idleTimeoutMs);
           }
         };
-        const child = (control?.scheduled ? spawnRefineGateChild : execFileFn)(spawn11.file, spawn11.args, execOptions, async (error, stdout, stderr) => {
+        const child = (control?.scheduled ? spawnRefineGateChild : execFileFn)(spawn12.file, spawn12.args, execOptions, async (error, stdout, stderr) => {
           if (timer) clearTimeout(timer);
           const cleanup = groupCleanup ? await groupCleanup : void 0;
           if (error || idleTimedOut) {
@@ -142701,7 +142701,7 @@ ${marker2}`,
         return false;
       }
     }
-    var import_child_process13 = require("child_process");
+    var import_child_process14 = require("child_process");
     var net = __toESM2(require("net"));
     var os322 = __toESM2(require("os"));
     var path80 = __toESM2(require("path"));
@@ -143321,9 +143321,9 @@ ${marker2}`,
       const typedProvider = provider;
       const controls = Array.isArray(provider.controls) ? provider.controls : [];
       if (category === "cli") {
-        const spawn11 = provider.spawn;
-        const command = spawn11 && typeof spawn11 === "object" ? spawn11.command : void 0;
-        if (!spawn11 || typeof spawn11 !== "object") {
+        const spawn12 = provider.spawn;
+        const command = spawn12 && typeof spawn12 === "object" ? spawn12.command : void 0;
+        if (!spawn12 || typeof spawn12 !== "object") {
           errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
         } else if (typeof command !== "string" || !command.trim()) {
           errors.push("spawn.command is required");
@@ -151529,6 +151529,56 @@ ${output}` : "";
       };
     }
     init_config();
+    var import_child_process13 = require("child_process");
+    var PS_LINE_PREFIX_BYTES = 4096;
+    var PS_TIMEOUT_MS = 3e3;
+    function findRunningMacAppPids(appPaths, spawnImpl = import_child_process13.spawn) {
+      if (!appPaths.some((p) => normalizeMacAppPath(p))) return Promise.resolve([]);
+      return new Promise((resolve59, reject) => {
+        const child = spawnImpl("ps", ["axww", "-o", "pid=,args="], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+        const pids = [];
+        const take = (completed) => {
+          pids.push(...findMacAppProcessPids(completed, appPaths));
+        };
+        let line = "";
+        let truncated = false;
+        let settled = false;
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (error) return reject(error);
+          if (line) take(line);
+          resolve59(pids);
+        };
+        const timer = setTimeout(() => {
+          child.kill();
+          finish(new Error(`ps timed out after ${PS_TIMEOUT_MS}ms`));
+        }, PS_TIMEOUT_MS);
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+          let start = 0;
+          for (; ; ) {
+            const nl = chunk.indexOf("\n", start);
+            const piece = chunk.slice(start, nl < 0 ? chunk.length : nl);
+            if (!truncated) {
+              line += piece;
+              if (line.length > PS_LINE_PREFIX_BYTES) {
+                line = line.slice(0, PS_LINE_PREFIX_BYTES);
+                truncated = true;
+              }
+            }
+            if (nl < 0) break;
+            if (line) take(line);
+            line = "";
+            truncated = false;
+            start = nl + 1;
+          }
+        });
+        child.on("error", (error) => finish(error));
+        child.on("close", (code) => finish(code === 0 ? null : new Error(`ps exited with code ${code}`)));
+      });
+    }
     function normalizeMacAppPath(appPath) {
       const trimmed2 = String(appPath || "").trim();
       if (!trimmed2) return null;
@@ -151559,9 +151609,10 @@ ${output}` : "";
       }
       return pids;
     }
+    init_logger();
     async function execQuiet(command, options = {}) {
       return new Promise((resolve59) => {
-        (0, import_child_process13.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
+        (0, import_child_process14.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
           if (error) return resolve59("");
           resolve59(stdout.toString());
         });
@@ -151614,13 +151665,9 @@ ${output}` : "";
       const appPaths = getIdePathCandidates(ideId);
       if (appPaths.length === 0) return [];
       try {
-        const output = await execQuiet("ps axww -o pid=,args=", {
-          encoding: "utf-8",
-          timeout: 3e3,
-          stdio: ["pipe", "pipe", "pipe"]
-        });
-        return findMacAppProcessPids(output, appPaths);
-      } catch {
+        return await findRunningMacAppPids(appPaths);
+      } catch (error) {
+        LOG.warn("Launch", `process listing failed \u2014 running ${ideId} processes cannot be detected: ${error?.message || error}`);
         return [];
       }
     }
@@ -151966,10 +152013,10 @@ ${output}` : "";
       const canUseAppLauncher = !!appName;
       const useAppLauncher = preferredMethod === "app" ? canUseAppLauncher : preferredMethod === "cli" ? false : !canUseCli && canUseAppLauncher;
       if (!useAppLauncher && ide.cliCommand) {
-        (0, import_child_process13.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        (0, import_child_process14.spawn)(ide.cliCommand, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
       } else if (appName) {
         const openArgs = ["-a", appName, "--args", ...args];
-        (0, import_child_process13.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
+        (0, import_child_process14.spawn)("open", openArgs, { detached: true, stdio: "ignore" }).unref();
       } else {
         throw new Error(`No app identifier or CLI for ${ide.displayName}`);
       }
@@ -151995,7 +152042,7 @@ ${output}` : "";
       const args = ["--remote-debugging-port=" + port];
       if (newWindow) args.push("--new-window");
       if (workspace) args.push(workspace);
-      (0, import_child_process13.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      (0, import_child_process14.spawn)(cli, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
     function getAvailableIdeIds() {
       return getProviderLoader().getAvailableIdeTypes();
@@ -164732,7 +164779,7 @@ ${output}` : "";
     }
     var import_path39 = require("path");
     var fs88 = __toESM2(require("fs"));
-    var import_child_process14 = require("child_process");
+    var import_child_process15 = require("child_process");
     init_logger();
     init_config();
     init_mesh_host_ownership();
@@ -164821,7 +164868,7 @@ ${output}` : "";
     }
     function isGitTrackedFile(workspace, filePath2) {
       try {
-        (0, import_child_process14.execFileSync)("git", ["ls-files", "--error-unmatch", "--", filePath2], { cwd: workspace, stdio: "ignore", timeout: 5e3, windowsHide: true });
+        (0, import_child_process15.execFileSync)("git", ["ls-files", "--error-unmatch", "--", filePath2], { cwd: workspace, stdio: "ignore", timeout: 5e3, windowsHide: true });
         return true;
       } catch {
         return false;
@@ -195063,16 +195110,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn11 = provider.spawn;
-        if (!spawn11) {
+        const spawn12 = provider.spawn;
+        if (!spawn12) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const child = spawnFn(spawn11.command, [...spawn11.args || []], {
-            shell: spawn11.shell ?? false,
+          const child = spawnFn(spawn12.command, [...spawn12.args || []], {
+            shell: spawn12.shell ?? false,
             windowsHide: true,
             timeout: 5e3,
             stdio: ["pipe", "pipe", "pipe"]
@@ -195105,7 +195152,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: true,
-            command: `${spawn11.command} ${(spawn11.args || []).join(" ")}`,
+            command: `${spawn12.command} ${(spawn12.args || []).join(" ")}`,
             elapsed,
             stdout: stdout.trim(),
             stderr: stderr.trim(),
@@ -195115,7 +195162,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: false,
-            command: `${spawn11.command} ${(spawn11.args || []).join(" ")}`,
+            command: `${spawn12.command} ${(spawn12.args || []).join(" ")}`,
             elapsed,
             error: e.message
           });
@@ -196981,7 +197028,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     init_cooperative_gate();
-    var import_child_process15 = require("child_process");
+    var import_child_process16 = require("child_process");
     init_hidden_spawn();
     var fs116 = __toESM2(require("fs"));
     var os47 = __toESM2(require("os"));
@@ -197287,7 +197334,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           stdio = ["ignore", logFd, logFd];
         }
         assertStart();
-        const child = (0, import_child_process15.spawn)(nodeExecutable, [entry, "serve", sessionHostInstanceArg(instance().configDir)], {
+        const child = (0, import_child_process16.spawn)(nodeExecutable, [entry, "serve", sessionHostInstanceArg(instance().configDir)], {
           detached: true,
           stdio,
           windowsHide: true,
@@ -197524,8 +197571,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     init_hidden_spawn();
     var import_util2 = require("util");
-    var import_child_process16 = require("child_process");
-    var execAsync3 = (0, import_util2.promisify)(import_child_process16.exec);
+    var import_child_process17 = require("child_process");
+    var execAsync3 = (0, import_util2.promisify)(import_child_process17.exec);
     async function isExtensionInstalled(ide, marketplaceId) {
       if (!ide.cliCommand) return false;
       try {

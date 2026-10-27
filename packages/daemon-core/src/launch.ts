@@ -35,7 +35,8 @@ import { ProviderLoader } from './providers/provider-loader.js';
 import { providerLoaderConfigOptions } from './providers/provider-loader-config.js';
 import { loadConfig } from './config/config.js';
 import type { ProviderModule } from './providers/contracts.js';
-import { findMacAppProcessPids } from './launch/macos-app-process.js';
+import { findRunningMacAppPids } from './launch/macos-app-process.js';
+import { LOG } from './logging/logger.js';
 
 // ─── Provider-based dynamic IDE infrastructure ────────────────
 // Reads cdpPorts, processNames from provider.js — only create provider.js to add new IDE
@@ -99,13 +100,9 @@ async function getMacAppProcessPids(ideId: string): Promise<number[]> {
     const appPaths = getIdePathCandidates(ideId);
     if (appPaths.length === 0) return [];
     try {
-        const output = await execQuiet('ps axww -o pid=,args=', {
-            encoding: 'utf-8',
-            timeout: 3000,
-            stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        return findMacAppProcessPids(output, appPaths);
-    } catch {
+        return await findRunningMacAppPids(appPaths);
+    } catch (error: any) {
+        LOG.warn('Launch', `process listing failed — running ${ideId} processes cannot be detected: ${error?.message || error}`);
         return [];
     }
 }

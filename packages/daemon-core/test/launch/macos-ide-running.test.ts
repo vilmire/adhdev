@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 
 const mocks = vi.hoisted(() => ({
   execSync: vi.fn(),
@@ -54,6 +56,28 @@ vi.mock('../../src/providers/provider-loader.js', () => ({
 
 import { isIdeRunning, killIdeProcess, launchWithCdp } from '../../src/launch'
 
+/** The process listing is streamed from a spawned `ps`; serve it from the same execSync table. */
+function spawnFromExecTable(command: string, args: string[] = []) {
+  if (command !== 'ps') return { unref: vi.fn() }
+  const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; kill: () => boolean }
+  child.stdout = new PassThrough()
+  child.kill = () => true
+  setImmediate(() => {
+    let output: string
+    try {
+      output = String(mocks.execSync(`ps ${args.join(' ')}`) ?? '')
+    } catch {
+      child.stdout.end()
+      child.emit('close', 1)
+      return
+    }
+    child.stdout.once('end', () => child.emit('close', 0))
+    child.stdout.end(output)
+    child.stdout.resume()
+  })
+  return child
+}
+
 describe('macOS app bundle process fallback', () => {
   beforeEach(() => {
     mocks.execSync.mockReset()
@@ -68,6 +92,7 @@ describe('macOS app bundle process fallback', () => {
       return {} as any
     })
     mocks.spawn.mockClear()
+    mocks.spawn.mockImplementation(spawnFromExecTable as any)
     mocks.spawnSync.mockReset()
     mocks.detectIDEs.mockReset()
     mocks.createServer.mockReset()
