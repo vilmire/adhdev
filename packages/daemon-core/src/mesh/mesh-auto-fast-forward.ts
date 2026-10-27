@@ -121,6 +121,15 @@ function releaseAutoFastForwardLease(workspace: string): void {
     if (key) autoFastForwardWorkspaceLease.delete(key);
 }
 
+/**
+ * The same workspace mutation lease, for another in-process mutator of a node's
+ * workspace (dispatch-readiness preparation, mesh-dispatch-readiness.ts). Holding it
+ * defers queue claims on that workspace exactly like an auto ff, and an auto ff never
+ * runs while it is held. false = already held (conflict) — the caller does no work.
+ */
+export function tryAcquireWorkspaceMutationLease(workspace: string): boolean { return acquireAutoFastForwardLease(workspace); }
+export function releaseWorkspaceMutationLease(workspace: string): void { releaseAutoFastForwardLease(workspace); }
+
 /** Whether the assignment path currently holds an ff lease on this node's workspace —
  *  used to skip a task claim while an auto ff is mutating the same workspace. */
 export function isWorkspaceAutoFastForwardInFlight(workspace: string | undefined): boolean {

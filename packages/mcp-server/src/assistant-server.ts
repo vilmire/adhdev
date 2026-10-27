@@ -28,6 +28,7 @@ import {
   type AssistantModeTool,
 } from './tools/assistant-tools.js';
 import { enumValueError, missingRequiredToolArgsError, unknownToolArgsError } from './tools/validate-tool-args.js';
+import { exitWhenParentGone } from './transports/parent-lifetime.js';
 
 type AssistantToolResponse = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
 
@@ -95,6 +96,7 @@ export async function startAssistantServer(opts: {
   ));
 
   await server.connect(new StdioServerTransport());
+  exitWhenParentGone({ label: 'assistant', shutdown: () => server.close() });
   await refresh.refresh();
   const timer = setInterval(() => { void refresh.refresh().catch(() => {}); }, 3_000);
   timer.unref();

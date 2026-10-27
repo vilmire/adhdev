@@ -134,6 +134,9 @@ export interface ISpecDriver {
     observeSubmitUnconfirmed?(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number, opts?: { messageId?: string; expectedText?: string }) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void;
     /** SUBMIT-UNCONFIRMED-RECLAIM: what the engine knows about that send (see SubmitState). */
     submitState?(messageId: string): SubmitState;
+    /** DISPATCH-ACK PRODUCER: serialized input-acceptance watermark for one exact dispatch
+     *  (dispatch-acceptance-log.ts). Optional (test doubles); null = never written here. */
+    dispatchAcknowledgement?(messageId: string, nonce?: number): import('../../boot/stages/mesh-runtime.js').DispatchAcknowledgementWatermark | null;
     sendMessageWithDisposition?(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition;
     /**
      * Wiring-unification D2 — the FIFO is keyed by `OutboundMessage.messageId`

@@ -7,6 +7,7 @@ import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
 import type { MeshCoordinatorDelegatedWorkerIsolation } from '../providers/mesh-coordinator-contracts.js';
 import type { PreLaunchTrust } from '../providers/spec/fsm-types.js';
 import { LOG } from '../logging/logger.js';
+import { NON_INTERACTIVE_GIT_ENV } from '../git/git-locale.js';
 import { readMeshConfigFromDisk } from '../config/mesh-config-store.js';
 import type { LocalMeshConfig } from '../repo-mesh-types.js';
 import {
@@ -544,6 +545,13 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
     }
 
     for (const key of envUnsets) env[key] = '';
+
+    // NON-INTERACTIVE GIT ADMISSION: a delegated worker's git (the agent's own
+    // commits, fetches and pushes) must fail fast instead of prompting into a PTY
+    // only an agent reads. Applied after the unset sweep and unconditionally — the
+    // worker contract, not a provider preference. Credentials are not touched
+    // (see NON_INTERACTIVE_GIT_ENV).
+    Object.assign(env, NON_INTERACTIVE_GIT_ENV);
 
     // Inline worker MCP config (opencode's `OPENCODE_CONFIG_CONTENT`, chosen
     // only when a workspace layer would shadow the private one — see

@@ -769,7 +769,14 @@ export async function confirmLocalConsumption(
         if (!observed) return 'unknown';
         const at = observed.newestAgentActivityAt;
         if (typeof at === 'number' && Number.isFinite(at) && at >= sinceMs) return 'consumed';
-        return hasAuthoritativeNonConsumptionProof(payload, ms, observed, providerType, sinceMs, opts)
+        // DISPATCH-ACK PRODUCER: the local send engine's serialized acceptance watermark for
+        // this exact messageId (providers/spec/dispatch-acceptance-log.ts). A watermark the
+        // read already carries wins. Dormant while every capability above is false.
+        const watermark = opts?.messageId && payload.dispatchAcknowledgement === undefined
+            ? (adapter as { dispatchAcknowledgement?: (id: string) => DispatchAcknowledgementWatermark | null } | undefined)?.dispatchAcknowledgement?.(opts.messageId)
+            : null;
+        const proofPayload = watermark ? { ...payload, dispatchAcknowledgement: watermark } : payload;
+        return hasAuthoritativeNonConsumptionProof(proofPayload, ms, observed, providerType, sinceMs, opts)
             ? 'not_consumed'
             : 'unknown';
     } catch {

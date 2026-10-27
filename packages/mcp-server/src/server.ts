@@ -64,6 +64,7 @@ import {
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
 import type { WorkerTool } from '@adhdev/mesh-shared';
 import { startAssistantServer } from './assistant-server.js';
+import { exitWhenParentGone } from './transports/parent-lifetime.js';
 
 /**
  * Version reported in the MCP `initialize` response (`serverInfo.version`).
@@ -221,10 +222,11 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // and preserved marker make an absent exporter UNKNOWN, never drained.
     const maintenanceExporter=await startMaintenanceInventoryExporter(transport,delivery).catch(()=>null);
     delivery.kick();
-    server.onclose = () => {
-      // Best-effort final attempt; anything still undelivered stays on disk for a successor.
-      void delivery.flush().finally(() => {maintenanceExporter?.stop();delivery.dispose();});
-    };
+    // Best-effort final attempt; anything still undelivered stays on disk for a successor.
+    // Memoized: both onclose and the parent-lifetime shutdown reach it.
+    let finalFlush: Promise<void> | undefined;
+    const flushOnce = () => (finalFlush ??= delivery.flush().then(() => undefined, () => undefined).finally(() => {maintenanceExporter?.stop();delivery.dispose();}));
+    server.onclose = () => { void flushOnce(); };
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: workerTools }));
 
@@ -311,6 +313,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     const stdioTransport = new StdioServerTransport();
     await server.connect(stdioTransport);
+    exitWhenParentGone({ label: 'worker', shutdown: async () => { await server.close().catch(() => {}); await flushOnce(); } });
     process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} WORKER mode — ${workerTools.length} tools.\n`);
     return;
   }
@@ -486,6 +489,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     const stdioTransport = new StdioServerTransport();
     await server.connect(stdioTransport);
+    exitWhenParentGone({ label: 'mesh', shutdown: () => server.close() });
     process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} mesh mode — mesh: ${mesh.name} (${mesh.repoIdentity})\n`);
     return;
   }
@@ -667,5 +671,6 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
   const stdioTransport = new StdioServerTransport();
   await server.connect(stdioTransport);
+  exitWhenParentGone({ label: opts.mode, shutdown: () => server.close() });
   process.stderr.write(`[adhdev-mcp] Server running in ${opts.mode} mode.\n`);
 }

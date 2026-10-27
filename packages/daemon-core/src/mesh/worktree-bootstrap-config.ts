@@ -28,6 +28,13 @@ export interface RepoMeshWorktreeBootstrapConfig {
     required?: boolean;
     commands?: RepoMeshRefineValidationCommandConfig[];
     staleInputs?: string[];
+    /**
+     * DISPATCH-READINESS: workspace-relative files this bootstrap is expected to
+     * produce (e.g. a package's dist entry point). A worktree node missing any of them
+     * is re-bootstrapped under the workspace lease BEFORE a task is claimed onto it
+     * (mesh-dispatch-readiness.ts). Absent → no readiness preparation.
+     */
+    readyOutputs?: string[];
 }
 
 export interface WorktreeBootstrapState extends MeshAsyncJobLifecycle {
@@ -427,6 +434,7 @@ export const MESH_WORKTREE_BOOTSTRAP_CONFIG_SCHEMA = {
         runOnClone: { type: 'boolean', default: true },
         required: { type: 'boolean', default: true },
         staleInputs: { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1 } },
+        readyOutputs: { type: 'array', maxItems: 32, items: { type: 'string', minLength: 1 } },
         commands: {
             type: 'array',
             minItems: 1,
@@ -459,6 +467,12 @@ function truncateOutput(value: unknown): string {
     return `${text.slice(0, OUTPUT_SUMMARY_CHARS)}\n[truncated ${text.length - OUTPUT_SUMMARY_CHARS} chars]`;
 }
 
+function isWorkspaceRelativePath(value: unknown): boolean {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    const path = value.trim();
+    return !path.startsWith('/') && !/^[A-Za-z]:/.test(path) && !path.split(/[\\/]/).includes('..');
+}
+
 export function validateMeshWorktreeBootstrapConfig(config: unknown, source = 'inline'): {
     valid: boolean;
     errors: string[];
@@ -475,6 +489,9 @@ export function validateMeshWorktreeBootstrapConfig(config: unknown, source = 'i
     if (config.required !== undefined && typeof config.required !== 'boolean') errors.push('required must be a boolean when provided');
     if (config.staleInputs !== undefined && (!Array.isArray(config.staleInputs) || !config.staleInputs.every(input => typeof input === 'string' && input.trim()))) {
         errors.push('staleInputs must be an array of non-empty strings when provided');
+    }
+    if (config.readyOutputs !== undefined && (!Array.isArray(config.readyOutputs) || config.readyOutputs.length > 32 || !config.readyOutputs.every(isWorkspaceRelativePath))) {
+        errors.push('readyOutputs must be an array (max 32) of workspace-relative paths when provided');
     }
     if (config.commands !== undefined && !Array.isArray(config.commands)) errors.push('commands must be an array');
     if (Array.isArray(config.commands)) {

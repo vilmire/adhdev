@@ -24,7 +24,7 @@ import { handleMeshForwardEvent, notifyMeshCoordinator } from '../../mesh/mesh-e
 import { noteRecentlyClonedNode } from '../../mesh/mesh-clone-grace.js';
 import { nodeLimitFailureFromError } from '../../mesh/mesh-node-limit-advice.js';
 import { isMeshNodeLimitError } from '../../config/mesh-node-limit.js';
-import { getMachineId } from '../../config/config.js';
+import { getMachineId, getMachineNickname } from '../../config/config.js';
 import { readMeshNodeMachineId, readMeshNodeDaemonId } from '../router.js';
 import type { CommandRouterResult } from '../router.js';
 import type { GitRepoIdentity } from '../../git/git-types.js';
@@ -268,6 +268,41 @@ async function forwardCloneToSourceDaemon(
     return forwarded as CommandRouterResult;
 }
 
+/**
+ * NODE-TAGS-CLONE-HOST: the platform/arch/nickname of the daemon that HOSTS the new
+ * worktree. registerClonedWorktreeNode always runs on that daemon (a remote clone is
+ * forwarded to the source node's daemon first), so its own process.platform/arch and
+ * config.machineNickname are the node's truth from the moment it exists — without the
+ * stamp, a coordinator computing os=/arch= tags fell through to ITS OWN platform until
+ * the first git_status probe arrived.
+ */
+function readCloneHostTags(): { reportedPlatform: string; reportedArch: string; machineNickname?: string } {
+    let machineNickname: string | undefined;
+    try {
+        const nickname = getMachineNickname();
+        if (typeof nickname === 'string' && nickname.trim()) machineNickname = nickname.trim();
+    } catch { /* no readable config — the first git_status report fills it */ }
+    return {
+        reportedPlatform: process.platform,
+        reportedArch: process.arch,
+        ...(machineNickname ? { machineNickname } : {}),
+    };
+}
+
+/**
+ * The source node's operator overrides minus platform/arch: those describe the SOURCE
+ * machine, and an override beats the clone's own reportedPlatform/reportedArch in
+ * capability-tag derivation, so inheriting them would pin the clone to the wrong OS.
+ */
+function cloneUserOverrides(sourceOverrides: unknown): Record<string, unknown> {
+    const overrides: Record<string, unknown> = sourceOverrides && typeof sourceOverrides === 'object'
+        ? { ...(sourceOverrides as Record<string, unknown>) }
+        : {};
+    delete overrides.platform;
+    delete overrides.arch;
+    return overrides;
+}
+
 type CreatedWorktree = Awaited<ReturnType<typeof import('../../git/git-worktree.js')['createWorktree']>>;
 
 /**
@@ -296,16 +331,18 @@ async function registerClonedWorktreeNode(
     const { migrateProviderRolesToSlots } = await import('../../config/mesh-config-store.js');
     const clonedPolicy: Record<string, unknown> = { ...(sourceNode.policy || {}) };
     migrateProviderRolesToSlots(clonedPolicy);
+    const hostTags = readCloneHostTags();
     const fields = {
         workspace: result.worktreePath,
         repoRoot: result.worktreePath,
         daemonId: identity.daemonId,
         machineId: identity.machineId,
-        userOverrides: { ...(sourceNode.userOverrides || {}) },
+        userOverrides: cloneUserOverrides(sourceNode.userOverrides),
         isLocalWorktree: true,
         worktreeBranch: result.branch,
         clonedFromNodeId: sourceNodeId,
         policy: clonedPolicy as any,
+        ...hostTags,
     };
     if (meshRecord.inline) {
         const crypto = await import('crypto');
@@ -321,10 +358,11 @@ async function registerClonedWorktreeNode(
             isLocalWorktree: true,
             worktreeBranch: fields.worktreeBranch,
             clonedFromNodeId: sourceNodeId,
+            ...hostTags,
         };
         ctx.updateInlineMeshNode(meshId, meshRecord.mesh, node);
         try {
-            addNode(meshId, { id: node.id, ...fields, userOverrides: { ...(sourceNode.userOverrides || {}) } });
+            addNode(meshId, { id: node.id, ...fields, userOverrides: { ...fields.userOverrides } });
         } catch { /* no config-file twin for this mesh (pure inline/cloud mesh) — inline cache remains source of truth */ }
         return node;
     }

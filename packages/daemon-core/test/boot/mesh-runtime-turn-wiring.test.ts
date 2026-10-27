@@ -201,6 +201,20 @@ describe('wireTurnLedger — S7 wiring', () => {
         expect(await confirmLocalConsumption(components, 's1', since)).toBe('unknown');
     });
 
+    it('DISPATCH-ACK PRODUCER: an adapter watermark claiming unaccepted is attached for this messageId but proves nothing while capabilities are false', async () => {
+        const { components } = fakeComponents({});
+        const since = Date.now() - 10_000;
+        const dispatchAcknowledgement = vi.fn((id: string) => ({ messageId: id, watermarkSeq: since + 5_000, unacceptedConfirmed: true }));
+        components.cliManager.adapters = new Map([['s1', { cliType: 'claude-cli', dispatchAcknowledgement }]]);
+        components.commandHandler = { handle: vi.fn(async () => ({
+            success: true, status: 'idle', transcriptAuthority: 'provider', coverage: 'full', providerSessionId: 'cc-1',
+            messageSource: { selected: 'native-history', providerType: 'claude-cli', identityStatus: 'safe', nativeSource: 'provider-native', nativeHistoryCoverage: 'full', coverage: { safeMapping: true }, staleness: { freshEnough: true } },
+            messages: [{ role: 'user', content: 'old', timestamp: since - 60_000 }, { role: 'assistant', content: 'done', timestamp: since - 50_000 }],
+        })) };
+        expect(await confirmLocalConsumption(components, 's1', since, { messageId: 'task:t9:n0' })).toBe('unknown');
+        expect(dispatchAcknowledgement).toHaveBeenCalledWith('task:t9:n0');
+    });
+
     describe('R10 / R11 per-provider consumption capability matrix (all 7 CLI providers)', () => {
         const ALL_PROVIDERS = ['codex-cli', 'claude-cli', 'antigravity-cli', 'grok-cli', 'cursor-cli', 'kimi', 'opencode'] as const;
 

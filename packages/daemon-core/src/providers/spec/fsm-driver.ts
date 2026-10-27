@@ -316,6 +316,7 @@ export class FsmDriver implements ISpecDriver {
     /** SUBMIT-UNCONFIRMED-RECLAIM: see ISpecDriver.observeSubmitUnconfirmed / submitState. */
     observeSubmitUnconfirmed(messageId: string, observer: (verdict: 'unconfirmed', info: { firstWrittenAt: number }) => boolean | void, confirmConsumption?: (sinceMs: number) => Promise<'consumed' | 'not_consumed' | 'unknown'>): void { this.sends.observeSubmitUnconfirmed(messageId, observer, confirmConsumption); }
     submitState(messageId: string): SubmitState { return this.sends.submitState(messageId); }
+    dispatchAcknowledgement(messageId: string, nonce?: number) { return this.sends.dispatchAcknowledgement(messageId, nonce); }
     sendMessageWithDisposition(text: string, bracketedPaste?: boolean, messageId?: string): SendDisposition { return this.sends.handleSendMessage(text, bracketedPaste, messageId); }
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
     sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome { return this.sends.sendMessageDuringGeneration(text, bracketedPaste, messageId); }

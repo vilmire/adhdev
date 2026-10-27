@@ -78,6 +78,7 @@ const UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
 /** A CLI's collapsed-paste chip in the composer (Claude Code / Codex). */
 export const PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
 import type { SendDisposition } from './submit-policy.js';
+import type { DispatchAcknowledgementWatermark } from '../../boot/stages/mesh-runtime.js';
 import { SubmitVerdictMachine, UNCONFIRMED_VERDICT_GAP_MS, PASTE_GATE_MAX_WAIT_MS, type ConsumptionProbe, type CurrentSend, type SubmitState, type SubmitVerdictObserver } from './submit-verdict.js';
 export type { SubmitState, SubmitVerdict, SubmitVerdictInfo, SubmitVerdictObserver } from './submit-verdict.js';
 
@@ -383,6 +384,8 @@ export class SendSubmitEngine {
     observeSubmitUnconfirmed(messageId: string, observer: SubmitVerdictObserver, confirmConsumption?: ConsumptionProbe): void { this.verdicts.observe(messageId, observer, confirmConsumption); }
     /** SUBMIT-UNCONFIRMED-RECLAIM: see SubmitState. */
     submitState(messageId: string): SubmitState { return this.verdicts.submitState(messageId, this.sendInFlight || this.hasInFlightSubmit()); }
+    /** DISPATCH-ACK PRODUCER: see dispatch-acceptance-log.ts. */
+    dispatchAcknowledgement(messageId: string, nonce?: number): DispatchAcknowledgementWatermark | null { return this.verdicts.dispatchAcknowledgement(messageId, nonce); }
     /** Any input into this PTY that is not the engine's own revokes composer ownership. */
     noteForeignInput(): void { this.verdicts.noteForeignInput(); }
 
