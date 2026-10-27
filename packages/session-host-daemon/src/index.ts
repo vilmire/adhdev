@@ -151,6 +151,8 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
     storageRootDir: getSessionHostStorageRoot(),
     instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
+    // Only process death releases the lock: the pidfile/socket vanish before exit.
+    holdInstanceLockUntilExit: true,
   });
   await server.start();
   writeSessionHostPid(SESSION_HOST_APP_NAME);

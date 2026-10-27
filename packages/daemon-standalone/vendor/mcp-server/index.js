@@ -197027,6 +197027,34 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return null;
         }
       }
+      function probeSocketConnect(endpointPath) {
+        if (options.probeSocketConnect) return options.probeSocketConnect(endpointPath);
+        const script = "const s=require('net').connect(process.argv[1]);const f=(r)=>{process.stdout.write(r);process.exit(0)};s.once('connect',()=>f('connected'));s.once('error',(e)=>f(e&&e.code==='ECONNREFUSED'?'refused':e&&e.code==='ENOENT'?'absent':'error'));setTimeout(()=>f('timeout'),1500)";
+        try {
+          const out = String(
+            hiddenExecFileSync(process.execPath, ["-e", script, endpointPath], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "ignore"],
+              timeout: 4e3,
+              env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }
+            })
+          ).trim();
+          return out === "refused" || out === "absent" || out === "connected" || out === "timeout" ? out : "error";
+        } catch {
+          return "error";
+        }
+      }
+      function isOrphanUnixSocket(endpointPath) {
+        if (process.platform === "win32") return false;
+        try {
+          if (!fs116.lstatSync(endpointPath).isSocket()) return false;
+        } catch {
+          return false;
+        }
+        const owners = getSocketOwnerPids(endpointPath);
+        if (owners === null || owners.length !== 0) return false;
+        return probeSocketConnect(endpointPath) === "refused";
+      }
       function getExistingHostIdentity() {
         const pid = getPid();
         if (pid === null) return "unknown";
@@ -197044,14 +197072,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       function inspectExistingHostState() {
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
-        if (pidState.status === "corrupt") {
-          return "unknown";
-        }
-        if (pidState.status === "missing") {
-          if (fs116.existsSync(endpoint.path)) {
-            return "unknown";
+        if (pidState.status === "corrupt" || pidState.status === "missing") {
+          if (endpoint.kind === "unix" && fs116.existsSync(endpoint.path)) {
+            return isOrphanUnixSocket(endpoint.path) ? "dead" : "unknown";
           }
-          return "dead";
+          if (pidState.status === "corrupt") return "unknown";
+          return fs116.existsSync(endpoint.path) ? "unknown" : "dead";
         }
         const existingPid = pidState.pid;
         if (existingPid === process.pid) return "unknown";
