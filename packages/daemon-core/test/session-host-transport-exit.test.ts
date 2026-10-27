@@ -19,6 +19,8 @@ function driveExit(event: Extract<SessionHostEvent, { type: 'session_exit' }>): 
     runtimeId: RUNTIME_ID,
     providerType: 'codex-cli',
     workspace: '/tmp/ws',
+    // Event propagation needs no IPC. Never dial the user's default host.
+    ensureReady: () => new Promise<void>(() => {}),
   });
   const transport = factory.spawn('/bin/sh', ['-lc', 'true'], {
     cwd: '/tmp/ws',

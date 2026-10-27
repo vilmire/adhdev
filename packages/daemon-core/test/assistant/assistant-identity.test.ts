@@ -19,7 +19,7 @@ function seed(id: string, assistant = true, snapshot = '{}') {
 function host(sessions: any[], extra = {}) {
     const endpoint = getDefaultSessionHostEndpoint('foreign', { ipcKey: resolveSessionHostIpcKey(dir) });
     return vi.spyOn(SessionHostClient.prototype, 'request').mockResolvedValue({ success: true, result: {
-        endpoint: endpoint.path, hostStartedAt: 1, hostEntryPath: '/opt/adhdev/session-host-daemon/dist/index.js', sessions, ...extra,
+        endpoint: endpoint.path, hostStartedAt: 1, hostEntryPath: '/opt/adhdev/session-host-daemon/dist/index.js', liveSessionIds: sessions.map(s => s.sessionId), hasOtherAssistantCandidates: false, ...extra,
     } });
 }
 const scan = (options: Partial<Parameters<typeof persistedAssistantRuntimeIds>[1]> = {}) =>
@@ -31,6 +31,7 @@ it('checks provenance before probing, and verifies a namespace only once for mul
     const request = host([one, two]);
     expect(await scan()).toEqual(new Set(['one', 'two']));
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ type: 'get_session_census', payload: { sessionIds: ['one', 'two'] } }, { timeoutMs: 2000 });
 });
 
 it('does not probe a namespace containing only ordinary sessions', async () => {
@@ -87,4 +88,37 @@ it('ignores unrelated test and other-track namespaces, reporting exact conflict 
     const evidence = vi.fn();
     expect(await scan({ currentNamespace: 'adhdev-preview', onConflictEvidence: evidence })).toEqual(new Set(['uncertain']));
     expect(evidence).toHaveBeenCalledWith(expect.objectContaining({ namespace: 'foreign', sessionId: 'uncertain', reason: expect.stringContaining('unverifiable') }));
+});
+
+it('a legacy host that ignores activeOnly cannot trigger a bulk fallback or authorize a duplicate', async () => {
+    seed('legacy-live');
+    const request = vi.spyOn(SessionHostClient.prototype, 'request').mockResolvedValue({ success: false, error: 'Unknown request type: get_session_census' });
+    const unverified = vi.fn();
+    expect(await scan({ onUnverified: unverified })).toEqual(new Set(['legacy-live']));
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][0].type).toBe('get_session_census');
+    expect(unverified).toHaveBeenCalledWith('foreign');
+});
+
+it('defers an oversized candidate inventory without probing or losing duplicate protection', async () => {
+    for (let i = 0; i < 129; i++) seed(`candidate-${i}`);
+    const request = host([]);
+    const unverified = vi.fn();
+    expect((await scan({ onUnverified: unverified })).size).toBe(129);
+    expect(request).not.toHaveBeenCalled();
+    expect(unverified).toHaveBeenCalledWith('foreign');
+});
+
+it('rejects an unrequested identity rather than dismissing the persisted writer', async () => {
+    seed('known');
+    host([], { liveSessionIds: ['unrelated'] });
+    expect(await scan()).toEqual(new Set(['known']));
+});
+
+it('retains duplicate protection when a new role-marked writer appears after the disk scan', async () => {
+    seed('old-binding');
+    host([], { hasOtherAssistantCandidates: true });
+    const unverified = vi.fn();
+    expect(await scan({ onUnverified: unverified })).toEqual(new Set(['old-binding']));
+    expect(unverified).toHaveBeenCalledWith('foreign');
 });

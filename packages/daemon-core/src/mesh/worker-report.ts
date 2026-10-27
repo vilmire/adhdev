@@ -71,6 +71,7 @@ import { observeAcceptedWorkerReport } from './turn-ledger/worker-report-evidenc
 import { exchangeWorkerSessionBind, hashWorkerSessionBind, verifyWorkerTaskToken, workerSessionBindStatus, WORKER_BIND_CANARY_PREFIX, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
 import type { WorkerHandoffNotes, WorkerCompletionReport } from './worker-report-validation.js';
 import { resolveLateWorkerIdentity, acceptLateWorkerCompletionReport } from './worker-report-late.js';
+import type { PreparedWorkerDelivery } from './worker-bridge-prepared.js';
 
 // ─── Report shapes ──────────────────────────────────────────────────────
 
@@ -559,7 +560,7 @@ export function checkReportAgainstTaskMode(
 export function acceptWorkerCompletionReport(
     credential: { token?: unknown; bind?: unknown },
     report: WorkerCompletionReport,
-    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown } = {},
+    opts: { nowMs?: number; isSelfDaemon?: (daemonId: string) => boolean; reportedAtMs?: unknown; preparedIdentity?: PreparedWorkerDelivery } = {},
 ): WorkerReportResult {
     const nowMs = opts.nowMs ?? Date.now();
     const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs);
@@ -570,15 +571,37 @@ export function acceptWorkerCompletionReport(
             detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 60_000)} min ago`,
         };
     }
+    // A saved preparation authorizes only its exact identity. Resolve the
+    // credential as usual, but fence the identity actually consumed before
+    // either acceptance body can write evidence or terminalize a task.
+    const matchesPrepared = (identity: WorkerTokenExchangeResult): boolean => {
+        const expected = opts.preparedIdentity;
+        if (!expected) return true;
+        if (identity.meshId !== expected.meshId || identity.taskId !== expected.taskId
+            || identity.attemptId !== expected.attemptId || identity.sessionId !== expected.sessionId
+            // eslint-disable-next-line no-restricted-syntax -- The identity actually resolved from the credential must match the saved preparation's exact nodeId, including on late delivery.
+            || identity.nodeId !== expected.nodeId) return false;
+        const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(expected.attemptId);
+        return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId
+            // eslint-disable-next-line no-restricted-syntax -- The current stored attempt must retain the prepared nodeId exactly; canonical equivalence cannot authorize a changed claim.
+            && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId
+            && attempt.generation === expected.generation
+            && daemonIdsEquivalent(attempt.ownerDaemonId, expected.ownerDaemonId)
+            && opts.isSelfDaemon?.(attempt.ownerDaemonId) === true;
+    };
     const live = resolveWorkerIdentity(credential);
     // Durable delivery: a report written before the session was handed its CURRENT task
     // belongs to the attempt that was live when it was written — never to the current one.
     const liveIsNewer = !!live && reportedAt !== undefined && workerIdentityPostdates(live, reportedAt);
-    if (live && !liveIsNewer) return acceptWorkerCompletionReportForIdentity(live, report, { ...opts, nowMs });
+    if (live && !liveIsNewer) {
+        if (!matchesPrepared(live)) return { accepted: false, refusal: 'stale_report', detail: 'The consumed worker identity no longer matches the saved preparation.' };
+        return acceptWorkerCompletionReportForIdentity(live, report, { nowMs });
+    }
     // F7b: the task went terminal before the report arrived (a completion flush
     // that beat a pending MCP call). A recently-terminal attempt still takes it.
     const late = resolveLateWorkerIdentity(credential, nowMs, opts.isSelfDaemon, reportedAt);
-    if (late) return acceptLateWorkerCompletionReport(late, report, nowMs);
+    if (late && matchesPrepared(late)) return acceptLateWorkerCompletionReport(late, report, nowMs);
+    if (opts.preparedIdentity) return { accepted: false, refusal: 'stale_report', detail: 'The consumed worker identity no longer matches the saved preparation.' };
     if (liveIsNewer) {
         return {
             accepted: false,

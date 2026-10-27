@@ -65,7 +65,7 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
-    | 'hold_native_probe_report_only'
+    | 'hold_native_probe_report_only' | 'hold_direct_report_missing'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
     | 'finished_after_report' | 'hold_await_end';
 
@@ -137,7 +137,8 @@ const weakCandidate: readonly EffectTemplate[] = [
 /**
  * The report-awaiting idle candidate (R9r, R15p): the structured report, not
  * the idle signal, commits the attempt — R17 on the report, R12r cancels it
- * when the worker goes busy again, R13r commits weak on expiry.
+ * when the worker goes busy again. Direct dispatch stays incomplete on expiry
+ * (R13d); the existing queue fallback uses R13r.
  */
 const awaitReport: readonly EffectTemplate[] = [
     { e: 'act', act: 'await_report' },
@@ -519,7 +520,16 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'reevaluate' },
     ] },
-    // Weak completion requires a fresh probe; missing probe results have a separate bounded timeout.
+    // A direct worker's idle/liveness observation cannot certify task success.
+    // Keep the exact attempt open for a genuine report; release this timer so a
+    // retry does not spin or extend the hard ceiling. Existing liveness and
+    // hard-ceiling holds still bound a worker that cannot recover its report.
+    { id: 'R13d', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_direct_report_missing', to: 'same', verdict: 'applied', effects: [
+        { e: 'release', reasons: 'expired_hold' },
+        { e: 'record', note: 'direct_completion_report_missing' },
+        { e: 'notify', notify: 'candidate', when: 'candidate_once' },
+    ] },
+    // Queue/plain fallback still requires a fresh probe; missing probes have a bounded timeout.
     { id: 'R13a', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_weak_candidate', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },
     ] },

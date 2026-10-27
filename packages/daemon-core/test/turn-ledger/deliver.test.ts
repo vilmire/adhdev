@@ -586,7 +586,8 @@ describe('backlog + MCP inbox', () => {
 describe('report gate — a hold-expiry commit renders the text of the end that opened the hold (R13r)', () => {
     it('await_report expires after a fresh session probe: the notice carries the idle end\'s local summary, committed weak', async () => {
         const f = fixture();
-        f.ledger.observe(dispatch());
+        // Weak hold-expiry completion belongs to the queue fallback; direct tasks require a report.
+        f.ledger.observe({ ...dispatch(), scope: 'mesh_queue' });
         f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
         f.ledger.observe(evd('turn_started', { retro: false }));
         const held = f.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }), { envelope: { finalSummary: SENTINEL, notice: { nodeLabel: "Node 'n1'" } } });

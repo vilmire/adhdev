@@ -237,72 +237,50 @@ test('stops signalling after the listener unsubscribes', async () => {
   }
 })
 
-test('request timeout destroys the wedged socket, rejects concurrent waiters, and reconnects on a fresh socket for the next request', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-timeout-reconnect-'))
-  const sockPath = path.join(dir, 'host.sock')
-  let connectionCount = 0
-  let dropRequestsOnCurrentSocket = true
-
-  const server = net.createServer((socket) => {
-    connectionCount += 1
-    const connId = connectionCount
-    socket.on('data', (chunk) => {
-      if (connId === 1 && dropRequestsOnCurrentSocket) {
-        // Simulate a wedged/split-brain socket (Recv-Q saturated or orphaned host):
-        // connection stays open at the TCP/UDS level, but never replies.
-        return
-      }
-      const lines = chunk.toString('utf8').split('\n').filter((line) => line.trim().length > 0)
-      for (const line of lines) {
-        const env = JSON.parse(line)
-        socket.write(
-          `${JSON.stringify({
-            kind: 'response',
-            requestId: env.requestId,
-            response: { success: true, result: [{ sessionId: `from-conn-${connId}` }] },
-          })}\n`,
-        )
+test('one RPC timeout preserves concurrent success, late replies, events and the live socket under backpressure', async () => {
+  let backpressured = false
+  const h = await makeHarness({ onData: socket => {
+    let buffer = ''
+    socket.on('data', chunk => {
+      buffer += chunk.toString()
+      let boundary: number
+      while ((boundary = buffer.indexOf('\n')) >= 0) {
+        const envelope = JSON.parse(buffer.slice(0, boundary))
+        buffer = buffer.slice(boundary + 1)
+        const slow = envelope.request.type === 'get_snapshot'
+        setTimeout(() => {
+          const response = { kind: 'response', requestId: envelope.requestId,
+            response: { success: true, result: slow ? { text: 'x'.repeat(4 * 1024 * 1024) } : 'concurrent success' } }
+          if (!socket.write(JSON.stringify(response) + '\n')) backpressured = true
+          if (slow) socket.write(JSON.stringify({ kind: 'event', event: { type: 'session_output', sessionId: 'live', data: 'still live' } }) + '\n')
+        }, slow ? 80 : 120)
       }
     })
-  })
-  await new Promise<void>((resolve) => server.listen(sockPath, resolve))
-
-  const client = new SessionHostClient({
-    endpoint: { kind: 'unix', path: sockPath },
-    requestTimeoutMs: 30,
-  } as any)
-  const disconnectSignals: SessionHostDisconnectInfo[] = []
-  client.onDisconnect((info) => disconnectSignals.push(info))
-  const realSetTimeout = globalThis.setTimeout
-  ;(globalThis as any).setTimeout = (fn: (...args: any[]) => void, ms?: number, ...args: any[]) => {
-    const adjustedMs = ms === 30_000 ? 45 : ms
-    return realSetTimeout(fn, adjustedMs, ...args)
-  }
-
+  } })
+  const disconnects: SessionHostDisconnectInfo[] = []
+  const events: unknown[] = []
+  h.client.onDisconnect(info => disconnects.push(info))
+  h.client.onEvent(event => events.push(event))
   try {
-    const firstReq = client.request({ type: 'list_sessions', payload: {} })
-    const concurrentReq = client.request({ type: 'get_host_diagnostics', payload: {} })
-
-    await assert.rejects(firstReq, /Session host request timed out after 30ms \(list_sessions\)/)
-    await assert.rejects(concurrentReq, /Session host request timed out after 30ms \(list_sessions\)/)
-    assert.equal(connectionCount, 1)
-    assert.equal(disconnectSignals.length, 1, 'timeout/disconnect must emit onDisconnect for established socket')
-
-    // Subsequent request must open a new UDS connection (connId === 2) instead of reusing wedged connId === 1
-    dropRequestsOnCurrentSocket = false
-    const recovery = await client.request<Array<{ sessionId: string }>>({
-      type: 'list_sessions',
-      payload: {},
+    await h.client.connect()
+    const peer = h.peer()
+    const slow = h.client.request({ type: 'get_snapshot', payload: { sessionId: 'live' } }, { timeoutMs: 25 })
+    const concurrent = h.client.request({ type: 'get_session', payload: { sessionId: 'live' } }, { timeoutMs: 1000 })
+    void concurrent.catch(() => {})
+    await assert.rejects(slow, error => {
+      assert.equal((error as any).code, 'SESSION_HOST_REQUEST_TIMEOUT')
+      assert.equal((error as any).requestType, 'get_snapshot')
+      return true
     })
-    assert.equal(recovery.success, true)
-    assert.deepEqual(recovery.result, [{ sessionId: 'from-conn-2' }])
-    assert.equal(connectionCount, 2)
-  } finally {
-    globalThis.setTimeout = realSetTimeout
-    await client.close().catch(() => {})
-    if (server.listening) await new Promise<void>((r) => server.close(() => r()))
-    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
-  }
+    assert.equal(h.client.isConnected(), true)
+    assert.equal((await concurrent).result, 'concurrent success')
+    assert.equal(backpressured, true)
+    assert.equal((await h.client.request({ type: 'get_session', payload: { sessionId: 'live' } })).result, 'concurrent success')
+    assert.equal(h.peer(), peer)
+    assert.deepEqual(disconnects, [])
+    assert.ok(events.some((e: any) => e.data === 'still live'))
+    assert.equal((h.client as any).requestWaiters.size, 0)
+  } finally { await h.cleanup() }
 })
 
 test('H1: client that attached to a session automatically replays attach_session on reconnect after disconnect', async () => {
@@ -496,4 +474,37 @@ test('an isolated probe stays out of the shared client registry', async () => {
     await probe.close()
     await h.cleanup()
   }
+})
+
+test('a short request budget cannot tear down a shared connect/attachment replay', async () => {
+  let connectionCount = 0
+  let attachCount = 0
+  const h = await makeHarness({ onData: socket => {
+    connectionCount++
+    let buffer = ''
+    socket.on('data', chunk => {
+      buffer += chunk.toString()
+      let boundary: number
+      while ((boundary = buffer.indexOf('\n')) >= 0) {
+        const env = JSON.parse(buffer.slice(0, boundary)); buffer = buffer.slice(boundary + 1)
+        const replay = env.request.type === 'attach_session' && ++attachCount > 1
+        setTimeout(() => socket.write(JSON.stringify({ kind: 'response', requestId: env.requestId,
+          response: { success: true, result: 'same host' } }) + '\n'), replay ? 100 : 0)
+      }
+    })
+  } })
+  try {
+    await h.client.request({ type: 'attach_session', payload: { sessionId: 'live', clientId: 'daemon', clientType: 'daemon' } })
+    h.client.disconnect()
+    const disconnects: unknown[] = []
+    h.client.onDisconnect(info => disconnects.push(info))
+    const short = h.client.request({ type: 'get_session', payload: { sessionId: 'live' } }, { timeoutMs: 20 })
+    const concurrent = h.client.request({ type: 'get_session', payload: { sessionId: 'live' } }, { timeoutMs: 1000 })
+    void concurrent.catch(() => {})
+    await assert.rejects(short, /connect timed out after 20ms/)
+    assert.equal((await concurrent).result, 'same host')
+    assert.equal(h.client.isConnected(), true)
+    assert.equal(connectionCount, 2)
+    assert.deepEqual(disconnects, [])
+  } finally { await h.cleanup() }
 })

@@ -615,7 +615,9 @@ const RENDERERS: Record<NotifyKind, (input: RenderTurnNotifyInput, missing: Summ
 export function renderTurnNotify(input: RenderTurnNotifyInput): RenderTurnNotifyResult {
     const missing: SummaryRef[] = [];
     const renderer = RENDERERS[input.notify];
-    const rendered = renderer(input, missing);
+    const recovery = input.notify === 'candidate'
+        ? ' Have the worker inspect any refusal and submit a corrected report_completion for this attempt. Retain quarantined reports for review; task success remains unconfirmed.' : '';
+    const rendered = renderer(input, missing) + recovery;
     const text = input.notify === 'approval_resolved' ? rendered : appendStatusLine(rendered, input.statusLine);
     return { text, kind: input.notify, contentRefsMissing: missing };
 }
