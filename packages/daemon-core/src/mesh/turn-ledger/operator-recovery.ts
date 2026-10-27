@@ -87,15 +87,16 @@ export class OperatorRecoveryAnchors {
         }
         if (!c.writerStopRequestId?.trim() || c.writerStopConfirmed !== false || c.writerStopTerminalPresent !== false ||
             c.reportPresent !== false || c.reclaimCount !== 0 || !c.holdsRevision || c.state !== 'stopping' || c.queueStatus !== 'assigned' ||
+            // eslint-disable-next-line no-restricted-syntax -- Recovery is pinned to this exact persisted queue node, with no reassociation or alias substitution.
             c.queueNodeId !== target.nodeId || c.queueSessionId !== target.sessionId ||
             !c.ownerRevision || !c.queueRevision) throw new Error('recovery_current_assignment_mismatch');
         return JSON.stringify(Object.fromEntries(Object.entries(c).sort(([a], [b]) => a.localeCompare(b))));
     }
     private assertPeer(p: Pending): void {
-        if (p.peer.peerId !== target.workerDaemonId || !p.connectionEpoch ||
+        if (p.peer.peerId !== target.workerDaemonId || !p.connectionEpoch || // canon-ok: captured cloud worker peer identity must match byte for byte
             p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() ||
             JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest ||
-            p.peer.binding.workerDaemonId !== target.workerDaemonId ||
+            p.peer.binding.workerDaemonId !== target.workerDaemonId || // canon-ok: worker identity is hashed into the durable signed fence binding
             p.peer.binding.namespace !== target.namespace || !p.peer.binding.hostBootId ||
             !isRecoveryEndpoint(p.peer.binding.endpoint) ||
             !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error('recovery_authenticated_peer_changed');
@@ -148,7 +149,7 @@ export class OperatorRecoveryAnchors {
                     proof.nonce !== nonce || proof.fenceDigest !== p.fenceDigest ||
                     proof.sessionId !== target.sessionId || proof.providerSessionId !== target.providerSessionId ||
                     proof.namespace !== peer.binding.namespace || proof.hostBootId !== peer.binding.hostBootId ||
-                    proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) {
+                    proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) { // canon-ok: census proof identity is hashed into the burn witness and SQL anchor
                     throw new Error('recovery_physical_proof_refused');
                 }
                 // Whitelist the content-free audit shape. Extra peer fields

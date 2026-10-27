@@ -47,7 +47,8 @@ export abstract class MeshRpcEndpoint {
    * TOFU, or rebinding is permitted for this private proof exchange. */
   protected boundRecoveryPeer(peer: Peer, binding: RecoveryHostBinding, fenceDigest: string,
       stillMapped: () => boolean): RecoveryPeerPort | null {
-    if (peer.daemonId !== recoveryTarget.workerDaemonId || peer.state !== 'connected' || !peer.dc.isOpen()) return null;
+    // eslint-disable-next-line no-restricted-syntax -- Captured transport map key must be the exact approved cloud instance; standalone is unauthorized.
+    if (peer.daemonId !== recoveryTarget.workerDaemonId || peer.state !== 'connected' || !peer.dc.isOpen()) return null; // canon-ok: captured peer map key is the exact cloud worker transport identity
     if (!Number.isSafeInteger(peer.authEpoch) || peer.authEpoch < 0 || !Number.isSafeInteger(peer.attempt) ||
         peer.attempt < 0 || typeof peer.createdAt !== 'string' || !peer.createdAt) return null;
     const epoch = JSON.stringify([peer.authEpoch, peer.attempt, peer.createdAt, peer.openedAt]);

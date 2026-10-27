@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -14,11 +14,11 @@ import { fileURLToPath } from 'url';
 // eager-migration persist in loadMeshConfig) silently dropped each other's
 // entries. Live evidence 2026-08-22: meshes.json updatedAt 15:50:06.303Z OLDER
 // than nodes stamped 15:50:13/15:50:31 — a stale copy was rewritten over them.
-// The fix: a cross-process mkdir lock spanning load→mutate→save, plus an
+// The fix: a persistent cross-process SQLite lock spanning load→mutate→save, plus an
 // atomic tmp+rename save. These tests pin both, using only fixture dirs.
 
-const testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID().slice(0, 8)}`);
-const testConfigDir = join(testTmpDir, '.adhdev');
+let testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID().slice(0, 8)}`);
+let testConfigDir = join(testTmpDir, '.adhdev');
 
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
@@ -80,6 +80,10 @@ function baseMesh(id: string, nodes: any[] = []): any {
  */
 const RACE_PADDING = 'x'.repeat(1024 * 1024);
 
+beforeEach(() => {
+    testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID()}`);
+    testConfigDir = join(testTmpDir, '.adhdev');
+});
 afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
@@ -142,35 +146,19 @@ describe('mesh-config — cross-process write lock', () => {
                 expect(allNodeIds).toContain(`node_w${w}_${i}`);
             }
         }
-        // The lock itself is always released.
+        // Release preserves the mutex inode for every subsequent process.
+        expect(existsSync(configPath()+'.write-lock.sqlite')).toBe(true);
         expect(existsSync(lockPath())).toBe(false);
     }, 60_000);
 
-    it('a stale lock abandoned by a crashed writer is broken, not wedged', () => {
-        writeRawMeshConfig({ meshes: [baseMesh('mesh_stale')] });
-        mkdirSync(lockPath());
-        // 20s old — past the 15s stale threshold.
-        const old = new Date(Date.now() - 20_000);
-        utimesSync(lockPath(), old, old);
-
-        const started = Date.now();
-        const node = addNode('mesh_stale', { workspace: '/tmp/stale-lock-node' });
-        expect(node).toBeDefined();
-        expect(Date.now() - started).toBeLessThan(5_000);
-        expect(existsSync(lockPath())).toBe(false);
-        expect(getMesh('mesh_stale')!.nodes.map(n => n.workspace)).toContain('/tmp/stale-lock-node');
-    });
-
-    it('a lock held by a live peer delays but never wedges the write (best-effort timeout)', () => {
+    it.each(['fresh','stale'])('refuses a %s legacy lock without deleting it or publishing', age => {
         writeRawMeshConfig({ meshes: [baseMesh('mesh_held')] });
-        mkdirSync(lockPath()); // fresh mtime — looks like a live peer mid-write
-
-        const node = addNode('mesh_held', { workspace: '/tmp/held-lock-node' });
-        expect(node).toBeDefined();
-        expect(getMesh('mesh_held')!.nodes.map(n => n.workspace)).toContain('/tmp/held-lock-node');
-
-        rmSync(lockPath(), { recursive: true, force: true });
-    }, 15_000);
+        mkdirSync(lockPath());
+        if (age === 'stale') utimesSync(lockPath(), new Date(0), new Date(0));
+        expect(() => addNode('mesh_held', { workspace: '/tmp/held-lock-node' })).toThrow('write lock is held');
+        expect(existsSync(lockPath())).toBe(true);
+        expect(getMesh('mesh_held')!.nodes).toEqual([]);
+    });
 
     it('reads stay correct while a peer holds the lock (listMeshes never blocks on it)', () => {
         writeRawMeshConfig({ meshes: [baseMesh('mesh_read', [{ id: 'node_r', workspace: '/tmp/r' }])] });

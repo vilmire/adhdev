@@ -71,3 +71,18 @@ it('refuses a mismatched explicit target before touching owner/queue dependencie
     const result = await operatorRecoveryCommand({ deps: new Proxy({}, { get() { throw Error('deps touched'); } }) } as any, args);
     expect(result.error).toBe('recovery_exact_target_required');
 });
+
+it('exact authenticated recovery ports reject bare and standalone cloud-worker/coordinator aliases', async () => {
+    const aliases = (id: string) => [id.slice('daemon_'.length), id.replace('daemon_','standalone_')];
+    for (const worker of aliases(t.workerDaemonId)) {
+        const args = ownerArgs(true) as Record<string, unknown>; args.action='fence';
+        const result = await operatorRecoveryCommand({deps:{statusInstanceId:worker}} as any,args);
+        expect(result.error).toBe('recovery_wrong_worker');
+        const census = {}; markVerifiedMeshSender(census,t.ownerDaemonId);
+        expect((await operatorRecoveryCensusCommand({deps:{statusInstanceId:worker}} as any,census)).error).toBe('recovery_exact_authenticated_coordinator_required');
+    }
+    for (const coordinator of aliases(t.ownerDaemonId)) {
+        const args = {}; markVerifiedMeshSender(args,coordinator);
+        expect((await operatorRecoveryCensusCommand({deps:{statusInstanceId:t.workerDaemonId}} as any,args)).error).toBe('recovery_exact_authenticated_coordinator_required');
+    }
+});

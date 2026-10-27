@@ -710,7 +710,7 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
 
     return {
         async recoverOperatorAssertedLegacy(input) {
-            if (deps.selfDaemonId !== recoveryTarget.ownerDaemonId) throw new Error('recovery_wrong_coordinator');
+            if (deps.selfDaemonId !== recoveryTarget.ownerDaemonId) throw new Error('recovery_wrong_coordinator'); // canon-ok: only the approved cloud coordinator ledger may perform settlement
             const recovery = new OperatorRecoveryAnchors({ db: deps.db, owner: input.owner,
                 coordinatorBootId: input.coordinatorBootId,
                 readCurrentAssignment: () => readRecoveryCurrentAssignment(deps.db, deps.selfDaemonId),

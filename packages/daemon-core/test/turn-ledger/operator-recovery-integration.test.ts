@@ -74,6 +74,17 @@ describe.skipIf(process.platform === 'win32')('real runtime ledger operator reco
         } finally { setActiveTurnLedger(null); }
     });
 
+    it('accepts bare config machine identity but rejects standalone and wrong-machine aliases on the actual owner reader', () => {
+        const f = fixture();
+        const owner = t.ownerDaemonId.slice('daemon_'.length);
+        for (const [id, accepted] of [[owner, true], [t.ownerDaemonId, true], ['standalone_'+owner, false], ['daemon_'+t.ownerDaemonId, false], [owner.toUpperCase(), false]] as const) {
+            writeFileSync(getMeshConfigPath(), JSON.stringify({meshes:[{id:t.meshId,meshHost:{role:'host',hostDaemonId:id}}]}));
+            const read = () => withRecoveryMeshOwnershipFence(() => f.db.transaction(() => readRecoveryCurrentAssignment(f.db,t.ownerDaemonId)).immediate());
+            if (accepted) expect(read().ownerDaemonId).toBe(t.ownerDaemonId);
+            else expect(read).toThrow('current_mesh_owner_mismatch');
+        }
+    });
+
     it('commits actual queue failure/output/reducer/audit/nonce together, without a stop confirmation', async () => {
         const f = fixture(); await f.recover();
         const a = f.ledger.getAttempt(t.attemptId)!;

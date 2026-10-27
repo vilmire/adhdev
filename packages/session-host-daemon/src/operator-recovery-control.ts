@@ -2,7 +2,7 @@ import { RecoveryOwnerAdmission, resolveSessionHostIpcKey, assertRecoveryLaunchI
   type SessionHostEndpoint, type SessionHostRegistry, type SessionHostRequest, type SessionHostResponse } from '@adhdev/session-host-core';
 import type { HostUpgradeLease } from './upgrade-lease.js';
 import type { OperatorRecoveryFence } from './operator-recovery-fence.js';
-import type { SessionHostStorage } from './storage.js';
+import type { PersistedTombstone, SessionHostStorage } from './storage.js';
 import { evaluateRecoveryCensus, readLegacyGuardianCoverage } from './operator-recovery-census.js';
 interface HostView {
   upgradeLease: HostUpgradeLease | null; instanceConfigDir: string | null; endpoint: SessionHostEndpoint;
@@ -87,6 +87,9 @@ export class OperatorRecoveryControl {
         else if (!['failed','stopped','interrupted'].includes(r.lifecycle)) uncertain = true;
       }
     }
+    const tombstoneState = observeRecoveryTombstones(inventory.tombstones, v.runtimes);
+    live ||= tombstoneState === 'live';
+    uncertain ||= tombstoneState === 'unknown';
     const namespace = v.instanceConfigDir ? resolveSessionHostIpcKey(v.instanceConfigDir) : '';
     return evaluateRecoveryCensus({
       binding: { namespace, endpoint: v.endpoint.path, hostBootId, workerDaemonId: v.workerDaemonId },
@@ -99,4 +102,19 @@ export class OperatorRecoveryControl {
     });
   }
 
+}
+
+/** A retained exit record never attests descendant/handle extinction. Either
+ * immutable UUID may appear as a session alias; uncertain diagnostics veto the
+ * local absence claim even before native guardian coverage is considered. */
+export function observeRecoveryTombstones(tombstones: readonly PersistedTombstone[], runtimes: ReadonlyMap<string, unknown>): 'live' | 'unknown' | 'absent' {
+  let uncertain = false;
+  for (const t of tombstones) {
+    try { assertRecoveryLaunchIdentity({ sessionId: t.sessionId }); }
+    catch {
+      if (runtimes.has(t.sessionId)) return 'live';
+      if (t.termination.reason === 'unknown') uncertain = true;
+    }
+  }
+  return uncertain ? 'unknown' : 'absent';
 }

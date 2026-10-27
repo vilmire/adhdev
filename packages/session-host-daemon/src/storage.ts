@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { resolveInstanceConfigDir, assertTestStorageIsolated } from '@adhdev/session-host-core';
+import { resolveInstanceConfigDir, assertTestStorageIsolated, classifyTermination } from '@adhdev/session-host-core';
 import type { SessionBufferSnapshot, SessionHostRecord, SessionTermination } from '@adhdev/session-host-core';
 
 export interface PersistedRuntimeState {
@@ -70,30 +70,62 @@ export class SessionHostStorage {
 
   /** Exhaustive recovery inventory: ordinary boot's tolerant reader is not
    * evidence. Unknown names, symlinks and malformed records veto completeness. */
-  recoveryInventory(): { complete: boolean; states: PersistedRuntimeState[] } {
+  recoveryInventory(): { complete: boolean; states: PersistedRuntimeState[]; tombstones: PersistedTombstone[] } {
+    const incomplete = () => ({ complete: false, states: [], tombstones: [] });
     try {
-      if (!fs.existsSync(this.runtimesDir)) return { complete: true, states: [] };
-      const dir = fs.lstatSync(this.runtimesDir);
-      if (!dir.isDirectory() || dir.isSymbolicLink()) return { complete: false, states: [] };
-      const states: PersistedRuntimeState[] = [];
-      for (const entry of fs.readdirSync(this.runtimesDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.json')) return { complete: false, states: [] };
-        const full = path.join(this.runtimesDir, entry.name);
-        const fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        let parsed: PersistedRuntimeState;
-        try {
-          const stat = fs.fstatSync(fd);
-          if (!stat.isFile() || stat.nlink !== 1) return { complete: false, states: [] };
-          parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
-        } finally { fs.closeSync(fd); }
-        if (typeof parsed?.record?.sessionId !== 'string' || !parsed.record.sessionId ||
-            `${parsed.record.sessionId}.json` !== entry.name || !parsed.record.launchCommand ||
-            !Array.isArray(parsed.record.launchCommand.args) || !parsed.record.meta ||
-            typeof parsed.updatedAt !== 'number' || !parsed.snapshot) return { complete: false, states: [] };
-        states.push(parsed);
+      const states = this.readRecoveryDirectory(this.runtimesDir) as PersistedRuntimeState[];
+      const tombstones = this.readRecoveryDirectory(this.tombstonesDir) as PersistedTombstone[];
+      for (const parsed of states) {
+        if (!parsed?.record?.launchCommand || !Array.isArray(parsed.record.launchCommand.args) ||
+            !parsed.record.meta || !Number.isFinite(parsed.updatedAt) || !parsed.snapshot) return incomplete();
       }
-      return { complete: true, states };
-    } catch { return { complete: false, states: [] }; }
+      for (const parsed of tombstones) {
+        const t = parsed?.termination;
+        const nullableInteger = (n: unknown) => n === null || Number.isInteger(n);
+        if (!Number.isFinite(parsed.updatedAt) || !t || !Number.isFinite(t.terminatedAt) ||
+            !nullableInteger(t.exitCode) || !nullableInteger(t.signal) || (t.signal !== null && t.signal < 0) ||
+            !['exit','signal','failed','unknown'].includes(t.reason) || !['stopped','failed'].includes(t.lifecycle) ||
+            (t.osPid !== undefined && (!Number.isInteger(t.osPid) || t.osPid <= 0))) return incomplete();
+        // Unknown observations remain unknown; a terminal label is not native
+        // descendant/handle proof. Refuse contradictory persisted diagnostics.
+        const classified = classifyTermination(t);
+        if (classified.reason !== t.reason || classified.lifecycle !== t.lifecycle ||
+            (t.lastOutputAt !== undefined && !Number.isFinite(t.lastOutputAt)) ||
+            (t.previousLifecycle !== undefined && !['starting','running','stopping','stopped','failed','interrupted'].includes(t.previousLifecycle)) ||
+            (t.requestedStop !== undefined && !['stop','delete','restart','prune'].includes(t.requestedStop))) return incomplete();
+      }
+      return { complete: true, states, tombstones };
+    } catch { return incomplete(); }
+  }
+
+  private readRecoveryDirectory(dirPath: string): unknown[] {
+    let dir: fs.Stats;
+    try { dir = fs.lstatSync(dirPath); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e; }
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new Error('recovery_directory_untrusted');
+    const result: unknown[] = [];
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[a-z0-9_-]+\.json$/.test(entry.name)) throw new Error('recovery_entry_untrusted');
+      const full = path.join(dirPath, entry.name);
+      const fd = fs.openSync(full, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        const before = fs.fstatSync(fd, { bigint: true });
+        if (!before.isFile() || before.nlink !== 1n) throw new Error('recovery_inode_untrusted');
+        const parsed = JSON.parse(fs.readFileSync(fd, 'utf8'));
+        const after = fs.fstatSync(fd, { bigint: true });
+        const current = fs.lstatSync(full, { bigint: true });
+        const identity = (s: typeof before) => [s.dev,s.ino,s.ctimeNs,s.mtimeNs,s.size].join(':');
+        if (identity(before) !== identity(after) || identity(after) !== identity(current) || current.isSymbolicLink()) throw new Error('recovery_entry_changed');
+        const id = dirPath === this.runtimesDir ? parsed?.record?.sessionId : parsed?.sessionId;
+        if (typeof id !== 'string' || !id || `${id}.json` !== entry.name) throw new Error('recovery_entry_name_mismatch');
+        result.push(parsed);
+      } finally { fs.closeSync(fd); }
+    }
+    const afterDir = fs.lstatSync(dirPath);
+    if (!afterDir.isDirectory() || afterDir.isSymbolicLink() ||
+        [dir.dev,dir.ino,dir.ctimeMs,dir.mtimeMs].join(':') !== [afterDir.dev,afterDir.ino,afterDir.ctimeMs,afterDir.mtimeMs].join(':')) throw new Error('recovery_directory_changed');
+    return result;
   }
 
   save(record: SessionHostRecord, snapshot: SessionBufferSnapshot): void {

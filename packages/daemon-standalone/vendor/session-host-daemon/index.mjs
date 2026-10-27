@@ -61,7 +61,7 @@ import * as net from "net";
 import * as path7 from "path";
 import {
   SessionHostRegistry,
-  classifyTermination,
+  classifyTermination as classifyTermination2,
   createLineParser,
   createResponseEnvelope,
   getDefaultSessionHostEndpoint,
@@ -656,7 +656,7 @@ var HostUpgradeLease = class {
 // src/storage.ts
 import * as fs4 from "fs";
 import * as path3 from "path";
-import { resolveInstanceConfigDir, assertTestStorageIsolated } from "@adhdev/session-host-core";
+import { resolveInstanceConfigDir, assertTestStorageIsolated, classifyTermination } from "@adhdev/session-host-core";
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
@@ -695,30 +695,58 @@ var SessionHostStorage = class {
   /** Exhaustive recovery inventory: ordinary boot's tolerant reader is not
    * evidence. Unknown names, symlinks and malformed records veto completeness. */
   recoveryInventory() {
+    const incomplete = () => ({ complete: false, states: [], tombstones: [] });
     try {
-      if (!fs4.existsSync(this.runtimesDir)) return { complete: true, states: [] };
-      const dir = fs4.lstatSync(this.runtimesDir);
-      if (!dir.isDirectory() || dir.isSymbolicLink()) return { complete: false, states: [] };
-      const states = [];
-      for (const entry of fs4.readdirSync(this.runtimesDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith(".json")) return { complete: false, states: [] };
-        const full = path3.join(this.runtimesDir, entry.name);
-        const fd = fs4.openSync(full, fs4.constants.O_RDONLY | fs4.constants.O_NOFOLLOW);
-        let parsed;
-        try {
-          const stat2 = fs4.fstatSync(fd);
-          if (!stat2.isFile() || stat2.nlink !== 1) return { complete: false, states: [] };
-          parsed = JSON.parse(fs4.readFileSync(fd, "utf8"));
-        } finally {
-          fs4.closeSync(fd);
-        }
-        if (typeof parsed?.record?.sessionId !== "string" || !parsed.record.sessionId || `${parsed.record.sessionId}.json` !== entry.name || !parsed.record.launchCommand || !Array.isArray(parsed.record.launchCommand.args) || !parsed.record.meta || typeof parsed.updatedAt !== "number" || !parsed.snapshot) return { complete: false, states: [] };
-        states.push(parsed);
+      const states = this.readRecoveryDirectory(this.runtimesDir);
+      const tombstones = this.readRecoveryDirectory(this.tombstonesDir);
+      for (const parsed of states) {
+        if (!parsed?.record?.launchCommand || !Array.isArray(parsed.record.launchCommand.args) || !parsed.record.meta || !Number.isFinite(parsed.updatedAt) || !parsed.snapshot) return incomplete();
       }
-      return { complete: true, states };
+      for (const parsed of tombstones) {
+        const t = parsed?.termination;
+        const nullableInteger = (n) => n === null || Number.isInteger(n);
+        if (!Number.isFinite(parsed.updatedAt) || !t || !Number.isFinite(t.terminatedAt) || !nullableInteger(t.exitCode) || !nullableInteger(t.signal) || t.signal !== null && t.signal < 0 || !["exit", "signal", "failed", "unknown"].includes(t.reason) || !["stopped", "failed"].includes(t.lifecycle) || t.osPid !== void 0 && (!Number.isInteger(t.osPid) || t.osPid <= 0)) return incomplete();
+        const classified = classifyTermination(t);
+        if (classified.reason !== t.reason || classified.lifecycle !== t.lifecycle || t.lastOutputAt !== void 0 && !Number.isFinite(t.lastOutputAt) || t.previousLifecycle !== void 0 && !["starting", "running", "stopping", "stopped", "failed", "interrupted"].includes(t.previousLifecycle) || t.requestedStop !== void 0 && !["stop", "delete", "restart", "prune"].includes(t.requestedStop)) return incomplete();
+      }
+      return { complete: true, states, tombstones };
     } catch {
-      return { complete: false, states: [] };
+      return incomplete();
     }
+  }
+  readRecoveryDirectory(dirPath) {
+    let dir;
+    try {
+      dir = fs4.lstatSync(dirPath);
+    } catch (e) {
+      if (e.code === "ENOENT") return [];
+      throw e;
+    }
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new Error("recovery_directory_untrusted");
+    const result = [];
+    const entries = fs4.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[a-z0-9_-]+\.json$/.test(entry.name)) throw new Error("recovery_entry_untrusted");
+      const full = path3.join(dirPath, entry.name);
+      const fd = fs4.openSync(full, fs4.constants.O_RDONLY | fs4.constants.O_NOFOLLOW);
+      try {
+        const before = fs4.fstatSync(fd, { bigint: true });
+        if (!before.isFile() || before.nlink !== 1n) throw new Error("recovery_inode_untrusted");
+        const parsed = JSON.parse(fs4.readFileSync(fd, "utf8"));
+        const after = fs4.fstatSync(fd, { bigint: true });
+        const current = fs4.lstatSync(full, { bigint: true });
+        const identity = (s) => [s.dev, s.ino, s.ctimeNs, s.mtimeNs, s.size].join(":");
+        if (identity(before) !== identity(after) || identity(after) !== identity(current) || current.isSymbolicLink()) throw new Error("recovery_entry_changed");
+        const id = dirPath === this.runtimesDir ? parsed?.record?.sessionId : parsed?.sessionId;
+        if (typeof id !== "string" || !id || `${id}.json` !== entry.name) throw new Error("recovery_entry_name_mismatch");
+        result.push(parsed);
+      } finally {
+        fs4.closeSync(fd);
+      }
+    }
+    const afterDir = fs4.lstatSync(dirPath);
+    if (!afterDir.isDirectory() || afterDir.isSymbolicLink() || [dir.dev, dir.ino, dir.ctimeMs, dir.mtimeMs].join(":") !== [afterDir.dev, afterDir.ino, afterDir.ctimeMs, afterDir.mtimeMs].join(":")) throw new Error("recovery_directory_changed");
+    return result;
   }
   save(record, snapshot) {
     fs4.mkdirSync(this.runtimesDir, { recursive: true });
@@ -1042,6 +1070,9 @@ var OperatorRecoveryControl = class {
         else if (!["failed", "stopped", "interrupted"].includes(r.lifecycle)) uncertain = true;
       }
     }
+    const tombstoneState = observeRecoveryTombstones(inventory.tombstones, v.runtimes);
+    live ||= tombstoneState === "live";
+    uncertain ||= tombstoneState === "unknown";
     const namespace = v.instanceConfigDir ? resolveSessionHostIpcKey2(v.instanceConfigDir) : "";
     return evaluateRecoveryCensus({
       binding: { namespace, endpoint: v.endpoint.path, hostBootId, workerDaemonId: v.workerDaemonId },
@@ -1058,6 +1089,18 @@ var OperatorRecoveryControl = class {
     });
   }
 };
+function observeRecoveryTombstones(tombstones, runtimes) {
+  let uncertain = false;
+  for (const t of tombstones) {
+    try {
+      assertRecoveryLaunchIdentity2({ sessionId: t.sessionId });
+    } catch {
+      if (runtimes.has(t.sessionId)) return "live";
+      if (t.termination.reason === "unknown") uncertain = true;
+    }
+  }
+  return uncertain ? "unknown" : "absent";
+}
 
 // src/prior-host-identity.ts
 import { createHash as createHash4 } from "crypto";
@@ -2498,7 +2541,7 @@ var SessionHostServer = class extends EventEmitter {
    */
   handleRuntimeExit(record, exitCode, signal) {
     const priorRecord = this.registry.getSession(record.sessionId);
-    const termination = classifyTermination({
+    const termination = classifyTermination2({
       exitCode,
       signal,
       osPid: priorRecord?.osPid,

@@ -61,7 +61,7 @@ export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any):
             return { success: true, result: { revoked: true } };
         }
         if (action === 'fence') {
-            if (ctx.deps.statusInstanceId !== target.workerDaemonId) throw new Error('recovery_wrong_worker');
+            if (ctx.deps.statusInstanceId !== target.workerDaemonId) throw new Error('recovery_wrong_worker'); // canon-ok: cloud worker instance required; standalone on the same machine has no fence authority
             const restore = restoreSnapshot(ctx);
             const fenceDigest = await installRecoveryHostFence(endpoint(), args);
             if (restoreSnapshot(ctx) !== restore) throw new Error('recovery_restore_changed');
@@ -76,7 +76,7 @@ export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any):
             } finally { client.disconnect(); }
         }
         const ledger = getActiveTurnLedger();
-        if (!ledger || ledger.selfDaemonId !== target.ownerDaemonId) throw new Error('recovery_wrong_coordinator');
+        if (!ledger || ledger.selfDaemonId !== target.ownerDaemonId) throw new Error('recovery_wrong_coordinator'); // canon-ok: ledger must belong to the approved cloud coordinator instance
         if (action === 'enroll') {
             if (enrollments.has(ctx.deps)) throw new Error('recovery_owner_already_enrolled_this_boot');
             const boot = randomUUID();
@@ -118,7 +118,7 @@ export async function operatorRecoveryCommand(ctx: LowFamilyContext, args: any):
 /** Inventory only, addressed to the exact original authenticated coordinator.
  * No learning, roster bootstrap, stop capability, or durable mutation. */
 export async function operatorRecoveryCensusCommand(ctx: LowFamilyContext, args: any) {
-    if (readMeshSender(args) !== target.ownerDaemonId || ctx.deps.statusInstanceId !== target.workerDaemonId) {
+    if (readMeshSender(args) !== target.ownerDaemonId || ctx.deps.statusInstanceId !== target.workerDaemonId) { // canon-ok: authenticated cloud coordinator peer and cloud worker instance, not machine aliases
         return { success: false, error: 'recovery_exact_authenticated_coordinator_required' };
     }
     const restore = restoreSnapshot(ctx);
