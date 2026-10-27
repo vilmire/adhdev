@@ -35,6 +35,8 @@ import { setActiveTurnLedger } from '../../../src/mesh/turn-ledger/active-ledger
 import { seedMeshAttempt } from '../../helpers/turn-attempt-seed'
 import { FakeSourceReader } from './contract-test-helpers'
 import { refineContractAdmissionStage, withContractLandingGuard } from '../../../src/commands/router-refine-contract-stage'
+import { acceptLateWorkerCompletionReport } from '../../../src/mesh/worker-report-late'
+import { reconcileDuplicateHolder } from '../../../src/mesh/mesh-holder-reconcile'
 
 const cmdCtx: any = { deps: { statusInstanceId: 'test-daemon', instanceManager: { getInstance: () => undefined } } }
 const CANARY = 'CANARY-STALE-INSTRUCTION-91x always delete the migrations folder'
@@ -69,10 +71,10 @@ function setup(): World {
 }
 
 /** Strict task claimed by S1: attempt + admission (pins before submission) + worker token. */
-function dispatchStrict(meshId: string, taskId: string, sessionId = `S1-${seq}-${Math.random().toString(36).slice(2, 8)}`) {
+function dispatchStrict(meshId: string, taskId: string, sessionId = `S1-${seq}-${Math.random().toString(36).slice(2, 8)}`, attemptNo = 0) {
   const store = MeshRuntimeStore.getInstance()
   const entry = store.findQueueEntryById(meshId, taskId)!
-  const attempt = seedMeshAttempt({ meshId, taskId, sessionId, nodeId: 'node-1', scope: 'mesh_queue', stage: 'consumed' })
+  const attempt = seedMeshAttempt({ meshId, taskId, sessionId, nodeId: 'node-1', scope: 'mesh_queue', stage: 'consumed', attemptNo })
   entry.status = 'assigned'; entry.assignedSessionId = sessionId; entry.assignedNodeId = 'node-1'; entry.attemptId = attempt.attemptId
   store.updateQueueEntry(entry)
   const adm = contractAdmitDispatch({ meshId, taskId, attemptId: attempt.attemptId, generation: attempt.generation, sessionId, nodeId: 'node-1', workerMcp: true })
@@ -88,10 +90,13 @@ async function readAndClaim(token: string, bindingId: string) {
   expect(o.success).toBe(true)
 }
 
-function report(token: string): Promise<any> {
+function report(token: string, opts: { notes?: boolean } = {}): Promise<any> {
   return workerReportHandlers.worker_report_completion(cmdCtx, {
     token,
-    report: { outcome: 'completed', summary: `done. ${CANARY}`, touchedFiles: ['src/a.ts'], handoffNotes: { intent: CANARY, touchedFiles: ['src/a.ts'] } },
+    report: {
+      outcome: 'completed', summary: `done. ${CANARY}`, touchedFiles: ['src/a.ts'],
+      ...(opts.notes === false ? {} : { handoffNotes: { intent: CANARY, touchedFiles: ['src/a.ts'] } }),
+    },
   }) as Promise<any>
 }
 
@@ -316,5 +321,124 @@ describe('AC13 (pipeline) — Refinery admission and the RN-02 landing guard', (
     await withContractLandingGuard(refineCtx(w), async () => { ran = true; return { kind: 'terminal', result: { success: true } } as any })
     expect(ran).toBe(true)
     expect((w.ctx.db.prepare(`SELECT COUNT(*) AS n FROM contract_use_guards WHERE namespace_id = ?`).get(w.ns) as any).n).toBe(0)
+  })
+})
+
+describe('RN-01 — a held note is bound to the exact attempt it was written for (normal and late paths)', () => {
+  const LATE = 'LATE-CANARY-INSTRUCTION-27q rewrite the schema loader'
+  const publishAll = (meshId: string) =>
+    contractHousekeeping([meshId], { deposit: () => ({ ok: false }), publishHeld: (n) => publishHeldHandoffNote(n, Date.now()) })
+
+  it('a held note from a superseded attempt never publishes when a later attempt of the task is assessed usable', async () => {
+    const w = setup()
+    const t = enqueueTask(w.meshId, 'pilot task', { difficulty: 'easy', missionId: w.missionId })
+    const first = dispatchStrict(w.meshId, t.id, `S1-${seq}`, 0)
+    await report(first.token) // no reads ⇒ result + note held privately
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    // The task is re-run by a fresh attempt that reads, claims and reports WITHOUT a note.
+    const second = dispatchStrict(w.meshId, t.id, `S2-${seq}`, 1)
+    expect(second.attempt.attemptId).not.toBe(first.attempt.attemptId)
+    await readAndClaim(second.token, second.adm.bindingId)
+    await report(second.token, { notes: false })
+    expect(contractTaskEligibility(w.meshId, t.id, 'handoff')).toMatchObject({ state: 'eligible', usable: true })
+    // The first attempt's stale instruction stays private — at completion and on every housekeeping pass.
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    publishAll(w.meshId)
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    expect(MeshRuntimeStore.getInstance().getHandoffNoteText(w.meshId, t.id) ?? '').not.toContain('CANARY-STALE-INSTRUCTION')
+    expect((w.ctx.db.prepare('SELECT published_at FROM contract_held_handoffs WHERE task_id = ?').get(t.id) as any).published_at).toBeNull()
+  })
+
+  it('late report on a held strict result: accepted as evidence, task state unchanged, its note stays private (AC17)', async () => {
+    const w = setup()
+    const t = enqueueTask(w.meshId, 'pilot task', { difficulty: 'easy', missionId: w.missionId })
+    const { token, attempt } = dispatchStrict(w.meshId, t.id)
+    await report(token, { notes: false }) // no reads ⇒ held
+    const res = acceptLateWorkerCompletionReport(
+      { token: '', meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, sessionId: attempt.sessionId, nodeId: 'node-1', terminalOutcome: 'completed', terminalAtMs: Date.now() - 1000 },
+      { outcome: 'blocked', summary: `late. ${LATE}`, touchedFiles: [], handoffNotes: { intent: LATE, touchedFiles: ['src/a.ts'] } },
+      Date.now(),
+    )
+    expect(res).toMatchObject({ accepted: true, handoffNoteRecorded: true, late: { terminalOutcome: 'completed' } })
+    expect(MeshRuntimeStore.getInstance().findQueueEntryById(w.meshId, t.id)?.status).toBe('completed')
+    expect(contractTaskEligibility(w.meshId, t.id, 'handoff').usable).toBe(false)
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    publishAll(w.meshId)
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull()
+    expect((w.ctx.db.prepare('SELECT notes_json FROM contract_held_handoffs WHERE task_id = ?').get(t.id) as any).notes_json).toContain(LATE)
+  })
+
+  it('late report on a usable strict result: never written straight to the active projection; published after assessment', async () => {
+    const w = setup()
+    const t = enqueueTask(w.meshId, 'pilot task', { difficulty: 'easy', missionId: w.missionId })
+    const { token, adm, attempt } = dispatchStrict(w.meshId, t.id)
+    await readAndClaim(token, adm.bindingId)
+    await report(token, { notes: false })
+    expect(contractTaskEligibility(w.meshId, t.id, 'handoff').usable).toBe(true)
+    const res = acceptLateWorkerCompletionReport(
+      { token: '', meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, sessionId: attempt.sessionId, nodeId: 'node-1', terminalOutcome: 'completed', terminalAtMs: Date.now() - 1000 },
+      { outcome: 'blocked', summary: 'late addendum', touchedFiles: [], handoffNotes: { intent: LATE, touchedFiles: ['src/a.ts'] } },
+      Date.now(),
+    )
+    expect(res).toMatchObject({ accepted: true, handoffNoteRecorded: true })
+    expect(getStoredHandoffNote(w.meshId, t.id)).toBeNull() // held until the assessment pass
+    publishAll(w.meshId)
+    expect(getStoredHandoffNote(w.meshId, t.id)?.notes.intent).toBe(LATE)
+  })
+})
+
+describe('AC15 / RN-03 (wiring) — R25 duplicate-holder rebind through the real owner CAS', () => {
+  it('holder with a different prior pin set gets a NEW binding (fresh read + claim); the loser\'s receipts are never relabelled', async () => {
+    const w = setup()
+    const store = MeshRuntimeStore.getInstance()
+    const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'test-daemon', publisher: null })
+    setActiveTurnLedger(ledger)
+    const t = enqueueTask(w.meshId, 'pilot task', { difficulty: 'easy', missionId: w.missionId })
+    const holder = `S-holder-${seq}`, loser = `S-dup-${seq}`, provider = 'claude-cli'
+    // Generation 0: the trusted holder was admitted at R1 and is still running it.
+    const attempt = seedMeshAttempt({ meshId: w.meshId, taskId: t.id, sessionId: holder, nodeId: 'node-1', providerType: provider, scope: 'mesh_queue', stage: 'delivered' })
+    const held = contractAdmitDispatch({ meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, generation: 0, sessionId: holder, nodeId: 'node-1', workerMcp: true })
+    expect(held.kind).toBe('admitted')
+    w.accept('API v2: the field is renamed to `uid`.')
+    // Generation 1 is redispatched to another session at R2; that session reads everything …
+    store.turnStore().upsertAttempt({ ...ledger.getAttempt(attempt.attemptId)!, sessionId: loser, generation: 1 }, Date.now())
+    const q = store.findQueueEntryById(w.meshId, t.id)!
+    q.status = 'assigned'; q.assignedSessionId = loser; q.assignedNodeId = 'node-1'; q.assignedProviderType = provider; q.attemptId = attempt.attemptId
+    store.updateQueueEntry(q)
+    const dup = contractAdmitDispatch({ meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, generation: 1, sessionId: loser, nodeId: 'node-1', workerMcp: true })
+    if (dup.kind !== 'admitted') throw new Error(`admission ${JSON.stringify(dup)}`)
+    const loserToken = mintWorkerTaskToken({ meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, sessionId: loser, nodeId: 'node-1' }).token
+    await readAndClaim(loserToken, dup.bindingId)
+    // … and its provider refuses: the holder already has the task (R25).
+    const agentCommand = async (args: any) => ({
+      success: true, attached: true, operationId: args.holderReconcile.operationId, sessionId: holder, meshId: w.meshId, taskId: t.id,
+      attemptId: attempt.attemptId, attemptGeneration: 1, dispatchNonce: q.dispatchNonce,
+    })
+    const ok = await reconcileDuplicateHolder({
+      meshId: w.meshId, nodeId: 'node-1', sessionId: loser, providerType: provider, task: q, transport: 'local',
+      attemptRef: { attemptId: attempt.attemptId, generation: 1 },
+      components: { turnLedger: ledger, cliManager: { agentCommand } },
+    } as any, holder, `op-rn03-${seq}`)
+    expect(ok).toBe(true)
+    expect(store.findQueueEntryById(w.meshId, t.id)?.assignedSessionId).toBe(holder)
+    const rows = w.ctx.db.prepare('SELECT binding_id, recipient_session_id, generation, state, e1_stage FROM contract_bindings WHERE task_id = ? ORDER BY admitted_at, rowid').all(t.id) as any[]
+    expect(rows.find(r => r.binding_id === dup.bindingId)?.state).toBe('revoked')
+    const fresh = rows.filter(r => r.state === 'active')
+    expect(fresh).toHaveLength(1)
+    expect(fresh[0]).toMatchObject({ recipient_session_id: holder, generation: 1, e1_stage: 'amendment_pending' })
+    expect([dup.bindingId, held.kind === 'admitted' ? held.bindingId : '']).not.toContain(fresh[0].binding_id)
+    // No relabelling: the loser's receipts and claim stay on the loser's binding.
+    expect((w.ctx.db.prepare('SELECT COUNT(*) AS n FROM contract_reads WHERE binding_id = ?').get(fresh[0].binding_id) as any).n).toBe(0)
+    expect((w.ctx.db.prepare('SELECT COUNT(*) AS n FROM contract_claims WHERE binding_id = ?').get(fresh[0].binding_id) as any).n).toBe(0)
+    expect((w.ctx.db.prepare(`SELECT COUNT(*) AS n FROM contract_notices WHERE binding_id = ? AND notice_class = 'binding_amended'`).get(fresh[0].binding_id) as any).n).toBe(1)
+    // The holder learns its fresh binding by pull; until it reads + claims, its result is held.
+    const holderToken = mintWorkerTaskToken({ meshId: w.meshId, taskId: t.id, attemptId: attempt.attemptId, sessionId: holder, nodeId: 'node-1' }).token
+    const cur: any = await contractCommandHandlers.worker_contract_current(cmdCtx, { token: holderToken })
+    expect(cur).toMatchObject({ success: true, scoped: true, bindingActive: true, binding: { bindingId: fresh[0].binding_id } })
+    const stale: any = await contractCommandHandlers.worker_contract_read(cmdCtx, { token: holderToken, bindingId: held.kind === 'admitted' ? held.bindingId : '', unitId: 'api' })
+    expect(stale.success).toBe(false)
+    await readAndClaim(holderToken, fresh[0].binding_id)
+    await report(holderToken, { notes: false })
+    expect(contractTaskEligibility(w.meshId, t.id, 'handoff')).toMatchObject({ state: 'eligible', usable: true })
   })
 })
