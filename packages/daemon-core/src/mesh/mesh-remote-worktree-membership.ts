@@ -53,6 +53,8 @@ export interface MemberWorktreeNodeRecord {
     daemonId: string;
     machineId?: string;
     machineNickname?: string;
+    reportedPlatform?: string;
+    reportedArch?: string;
     isLocalWorktree: true;
     worktreeBranch?: string;
     clonedFromNodeId?: string;
@@ -115,6 +117,10 @@ export function projectMemberWorktreeNode(raw: unknown): MemberWorktreeNodeRecor
     if (machineId) out.machineId = machineId;
     const machineNickname = readId(node.machineNickname);
     if (machineNickname) out.machineNickname = machineNickname;
+    const reportedPlatform = readId(node.reportedPlatform);
+    if (reportedPlatform) out.reportedPlatform = reportedPlatform;
+    const reportedArch = readId(node.reportedArch);
+    if (reportedArch) out.reportedArch = reportedArch;
     const worktreeBranch = readId(node.worktreeBranch);
     if (worktreeBranch) out.worktreeBranch = worktreeBranch;
     const clonedFromNodeId = readId(node.clonedFromNodeId);
@@ -277,6 +283,8 @@ export async function persistRemoteWorktreeNodeToConfig(meshId: string, rawNode:
             machineId: node.machineId,
             // The owning member's nickname — never this daemon's (see ownerIsRemote).
             machineNickname: node.machineNickname,
+            reportedPlatform: node.reportedPlatform,
+            reportedArch: node.reportedArch,
             ownerIsRemote: true,
             capabilities: node.capabilities,
             userOverrides: (node.userOverrides ?? {}) as any,

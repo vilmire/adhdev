@@ -256,6 +256,10 @@ export interface AddNodeOptions {
      *  the daemon that owns its workspace (self/base node or a local worktree
      *  clone), so the local config is the correct source. */
     machineNickname?: string;
+    /** Owning daemon's platform/arch (raw process.platform/process.arch), stamped at
+     *  creation so os=/arch= capability tags are right before the first probe. */
+    reportedPlatform?: string;
+    reportedArch?: string;
     /** The node is owned by ANOTHER daemon (a remote-cloned worktree registered on
      *  the coordinator): never fall back to this daemon's own nickname. */
     ownerIsRemote?: boolean;
@@ -309,6 +313,8 @@ function addNodeUnlocked(meshId: string, opts: AddNodeOptions): LocalMeshNodeEnt
         daemonId: opts.daemonId,
         machineId: opts.machineId,
         ...(machineNickname ? { machineNickname } : {}),
+        ...(opts.reportedPlatform?.trim() ? { reportedPlatform: opts.reportedPlatform.trim() } : {}),
+        ...(opts.reportedArch?.trim() ? { reportedArch: opts.reportedArch.trim() } : {}),
         capabilities: normalizeCapabilityTags(opts.capabilities),
         userOverrides: opts.userOverrides || {},
         policy: opts.policy || {},
