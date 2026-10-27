@@ -13,7 +13,7 @@ vi.mock('@adhdev/session-host-core', async importOriginal => {
         onDisconnect() { return () => {}; }
         async request(r: any) {
             host.requests.push(r);
-            if (r.type === 'list_sessions') return { success: true, result: [structuredClone(host.record)] };
+            if (r.type === 'get_session') return { success: true, result: structuredClone(host.record) };
             if (r.type === 'get_snapshot') return { success: true, result: { seq: 0, text: '', truncated: false } };
             if (r.type === 'update_session_meta') {
                 await host.waitMeta;
@@ -51,7 +51,7 @@ describe('fresh native assignment acknowledgement without a real host or process
         for (let i = 0; i < 10; i++) await Promise.resolve();
         expect(done).toBe(false);
         release(); expect(await check).toBe(true);
-        expect(host.requests.at(-1).type).toBe('list_sessions');
+        expect(host.requests.at(-1)).toEqual({ type: 'get_session', payload: { sessionId: 'writer' } });
     });
     it('a failed native metadata write grants no attach proof', async () => {
         const t = await transport(); host.rejectMeta = true;

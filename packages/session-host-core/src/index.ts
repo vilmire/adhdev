@@ -24,6 +24,7 @@ export type {
   SessionBufferSnapshot,
   SessionClientType,
   SessionHostDiagnostics,
+  SessionHostCensus,
   SessionHostDuplicateSessionGroup,
   SessionHostCategory,
   SessionHostSurfaceKind,

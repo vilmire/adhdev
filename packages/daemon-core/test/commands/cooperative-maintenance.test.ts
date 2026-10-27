@@ -181,6 +181,7 @@ it('hosted void stop owns admission until ACK; queued stale-epoch stop/resize/cl
     open(); const {SessionHostClient}=await import('@adhdev/session-host-core');
     const {SessionHostPtyTransportFactory}=await import('../../src/cli-adapters/session-host-transport.js');
     vi.spyOn(SessionHostClient.prototype,'connect').mockResolvedValue(undefined);
+    vi.spyOn(SessionHostClient.prototype,'isConnected').mockReturnValue(true);
     vi.spyOn(SessionHostClient.prototype,'onEvent').mockReturnValue(()=>{});
     vi.spyOn(SessionHostClient.prototype,'close').mockResolvedValue(undefined);
     let ack!:()=>void;
@@ -194,20 +195,25 @@ it('hosted void stop owns admission until ACK; queued stale-epoch stop/resize/cl
     const endpoint={kind:'unix' as const,path:path.join(root,'nonexistent-test-host.sock')};
     expect(fs.existsSync(endpoint.path)).toBe(false);
     const factory=new SessionHostPtyTransportFactory({endpoint,clientId:'synthetic',runtimeId:'runtime',providerType:'synthetic',workspace:root});
-    const transport=factory.spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24}) as any;
+    let transport=factory.spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24}) as any;
     await transport.ready; transport.kill();
     await vi.waitFor(()=>expect(ack).toBeTypeOf('function'));
     const closed={...state,epoch:1,phase:'held' as const,release:undefined};
     expect(()=>writeCooperativeMaintenance(root,closed)).toThrow('maintenance_operation_in_flight');
     ack(); await transport.operationChain;
+    // Stop is terminal after ACK; use a live attachment for the queued epoch checks.
+    transport=factory.spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24}) as any;
+    await transport.ready;
     let release!:()=>void; transport.operationChain=new Promise<void>(resolve=>{release=resolve;});
     request.mockClear(); transport.kill(); transport.resize(120,40); transport.clearBuffer();
     writeCooperativeMaintenance(root,closed); state=closed; open(); release(); await transport.operationChain;
     expect(request).not.toHaveBeenCalled();
     // Detach and metadata remain safe without producer admission, even held.
     state={...state,epoch:2,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);
-    transport.detach();transport.updateMeta({label:'metadata'});await transport.operationChain;
-    expect(request.mock.calls.map(c=>(c[0] as any).type)).toEqual(['release_write','detach_session','update_session_meta']);
+    transport.updateMeta({label:'metadata'});await transport.operationChain;
+    expect(request.mock.calls.map(c=>(c[0] as any).type)).toEqual(['update_session_meta']);
+    request.mockClear(); transport.detach(); await transport.closeClient();
+    expect(request.mock.calls.map(c=>(c[0] as any).type)).toEqual(['release_write','detach_session']);
 });
 
 it('resolved provider settings and actual local launch owner are checked after detection await', async () => {

@@ -25,7 +25,7 @@ export const MAX_RECENT_DIAGNOSTICS = 200;
  * Returns undefined rather than guessing when argv[1] is absent (e.g. an
  * embedded/test host), so callers see "unknown" instead of a wrong path.
  */
-function resolveHostEntryPath(): string | undefined {
+export function resolveHostEntryPath(): string | undefined {
   const entry = process.argv[1];
   if (typeof entry !== 'string' || !entry.trim()) return undefined;
   try {

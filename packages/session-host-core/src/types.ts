@@ -246,6 +246,17 @@ export interface UpdateSessionMetaPayload {
   replace?: boolean;
 }
 
+/** Bounded liveness check for identities whose provenance the caller already holds.
+ * No launch arguments, metadata, snapshots or diagnostic log bodies cross IPC. */
+export interface SessionHostCensus {
+  hostStartedAt: number;
+  endpoint: string;
+  hostEntryPath?: string;
+  liveSessionIds: string[];
+  /** A live role-marked writer outside the caller's persisted identities. */
+  hasOtherAssistantCandidates: boolean;
+}
+
 export interface GetHostDiagnosticsPayload {
   includeSessions?: boolean;
   limit?: number;
@@ -360,6 +371,7 @@ export type SessionHostRequest =
   | { type: 'release_upgrade_lease'; payload: HostUpgradeLeasePayload }
   | { type: 'create_session'; payload: CreateSessionPayload }
   | { type: 'attach_session'; payload: AttachSessionPayload }
+  | { type: 'attach_session_if_incarnation'; payload: AttachSessionPayload & { expectedIncarnation: { sessionId: string; runtimeKey: string; startedAt: number } } }
   | { type: 'detach_session'; payload: DetachSessionPayload }
   | { type: 'send_input'; payload: SendInputPayload }
   | { type: 'send_input_if_seq'; payload: SendInputIfSeqPayload }
@@ -380,6 +392,7 @@ export type SessionHostRequest =
   | { type: 'send_signal'; payload: SendSignalPayload }
   | { type: 'restart_session'; payload: RestartSessionPayload }
   | { type: 'prune_duplicate_sessions'; payload?: PruneDuplicateSessionsPayload }
+  | { type: 'get_session_census'; payload: { sessionIds: string[] } }
   | { type: 'get_session'; payload: { sessionId: string } }
   | { type: 'list_sessions'; payload?: { activeOnly?: boolean } };
 
@@ -391,6 +404,8 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'release_upgrade_lease',
   'create_session',
   'attach_session',
+  // Distinct request kind: old hosts must refuse instead of ignoring a pin.
+  'attach_session_if_incarnation',
   'detach_session',
   'send_input',
   'send_input_if_seq',
@@ -411,6 +426,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'send_signal',
   'restart_session',
   'prune_duplicate_sessions',
+  'get_session_census',
   'get_session',
   'list_sessions',
 ];
