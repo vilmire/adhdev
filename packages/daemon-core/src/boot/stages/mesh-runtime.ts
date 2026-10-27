@@ -423,7 +423,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         let delivered = 0;
         const meshIds = consumer?.meshIds() ?? [];
         for (const meshId of meshIds) {
-            if (!notices.hasUndelivered(meshId) || listLocalCoordinatorSessions(components, meshId).length === 0) continue;
+            if (listLocalCoordinatorSessions(components, meshId).length === 0 || !notices.hasUndelivered(meshId)) continue;
             try {
                 delivered += await deliverNoticeBacklog(deliverDeps, meshId, abort.signal);
             } catch (error) {
