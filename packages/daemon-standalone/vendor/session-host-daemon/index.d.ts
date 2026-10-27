@@ -3,15 +3,6 @@ import { EventEmitter } from 'events';
 import * as net from 'net';
 import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHostResponse } from '@adhdev/session-host-core';
 
-interface HostUpgradeBinding {
-    /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
-    helperPath: string;
-    helperSha256: string;
-    helperProtocol?: 1;
-    helperFileIdentity?: string;
-    stateDir: string;
-}
-
 declare function sessionHostInstanceArg(configDir: string): string;
 declare function isManagedSessionHostCommandLine(commandLine: string | null | undefined, configDir?: string): boolean;
 interface SessionHostReplacementProvenance {
@@ -37,6 +28,15 @@ declare function readVerifiedReplacementProvenance(options: {
     nowMs?: () => number;
     skipDynamicWrap?: boolean;
 }): SessionHostReplacementProvenance | undefined;
+
+interface HostUpgradeBinding {
+    /** Trusted packaged helper; supplied hash must come from an immutable artifact pin. */
+    helperPath: string;
+    helperSha256: string;
+    helperProtocol?: 1;
+    helperFileIdentity?: string;
+    stateDir: string;
+}
 
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
@@ -66,6 +66,7 @@ interface SessionHostServerOptions {
     /** Legacy option retained for source compatibility; automatic live eviction is unsupported. */
     evictGraceMs?: number;
 }
+
 declare class SessionHostServer extends EventEmitter {
     readonly endpoint: SessionHostEndpoint;
     readonly registry: SessionHostRegistry;
