@@ -8,6 +8,7 @@ import {
   ensureNodePtySpawnHelperPermissions,
   resolveSessionHostCols,
   resolveSessionHostRows,
+  niceLaunch,
   spawnCliChild,
 } from '@adhdev/session-host-core';
 
@@ -352,7 +353,7 @@ export class PtySessionRuntime {
       }
     }
 
-    const spawnRuntime = () => pty.spawn(command, args, {
+    const spawnRuntime = (file: string, argv: string[]) => () => pty.spawn(file, argv, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
@@ -361,9 +362,13 @@ export class PtySessionRuntime {
     });
     // User terminals share this host. Only agent workload categories acquire
     // the policy; a plain shell (or unknown category) keeps its priority.
-    this.ptyProcess = this.payload.category === 'cli' || this.payload.category === 'acp'
-      ? spawnCliChild(spawnRuntime, env)
-      : spawnRuntime();
+    // Agent workloads start lowered (niceLaunch) so no early fork escapes.
+    if (this.payload.category === 'cli' || this.payload.category === 'acp') {
+      const launch = niceLaunch(command, args, env);
+      this.ptyProcess = spawnCliChild(spawnRuntime(launch.command, launch.args), env, undefined, { preApplied: launch.preApplied });
+    } else {
+      this.ptyProcess = spawnRuntime(command, args)();
+    }
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,

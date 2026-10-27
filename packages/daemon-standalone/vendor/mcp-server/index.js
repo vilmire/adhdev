@@ -2896,6 +2896,7 @@ var require_dist = __commonJS({
       isSessionHostLiveRuntime: () => isSessionHostLiveRuntime2,
       isSessionHostRecoverySnapshot: () => isSessionHostRecoverySnapshot2,
       isTerminalRecord: () => isTerminalRecord,
+      niceLaunch: () => niceLaunch,
       partitionSessionHostDiagnosticsSessions: () => partitionSessionHostDiagnosticsSessions2,
       partitionSessionHostRecords: () => partitionSessionHostRecords2,
       replayLaunchEnv: () => replayLaunchEnv,
@@ -2971,6 +2972,7 @@ var require_dist = __commonJS({
       if (input.requestedStop) termination.requestedStop = input.requestedStop;
       return termination;
     }
+    var fs3 = __toESM2(require("fs"));
     var os4 = __toESM2(require("os"));
     var import_node_child_process2 = require("child_process");
     function hiddenSpawn(command, args = [], options = {}) {
@@ -2986,6 +2988,13 @@ var require_dist = __commonJS({
         if (code !== 0) onFailure(new Error(`taskpolicy exited with ${signal ?? code}`));
       });
     }
+    var POSIX_NICE_BINARY = "/usr/bin/nice";
+    function niceLaunch(command, args, env2 = process.env, platform2 = process.platform, niceAvailable = () => fs3.existsSync(POSIX_NICE_BINARY)) {
+      if (env2[CLI_CHILD_NICE_ENV] === "0" || platform2 !== "darwin" && platform2 !== "linux" || !command || !niceAvailable()) {
+        return { command, args: [...args], preApplied: false };
+      }
+      return { command: POSIX_NICE_BINARY, args: ["-n", String(CLI_CHILD_NICE_INCREMENT), command, ...args], preApplied: true };
+    }
     function createCliChildPriorityPolicy(deps = {
       platform: process.platform,
       getPriority: os4.getPriority,
@@ -2993,7 +3002,7 @@ var require_dist = __commonJS({
       setDarwinBackground
     }) {
       let failureLogged = false;
-      return function spawnCliChild2(spawnChild, env2 = process.env, logInfo = console.info) {
+      return function spawnCliChild2(spawnChild, env2 = process.env, logInfo = console.info, opts = {}) {
         const child = spawnChild();
         const pid = child.pid;
         if (env2[CLI_CHILD_NICE_ENV] === "0" || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return child;
@@ -3004,11 +3013,13 @@ var require_dist = __commonJS({
             logInfo(`[cli-child-priority] Could not apply CLI child scheduling (pid ${pid}); continuing: ${detail}`);
           }
         };
-        try {
-          const priority = deps.platform === "win32" ? os4.constants.priority.PRIORITY_BELOW_NORMAL : Math.min(19, deps.getPriority(pid) + CLI_CHILD_NICE_INCREMENT);
-          deps.setPriority(pid, priority);
-        } catch (error) {
-          onFailure(error);
+        if (!opts.preApplied) {
+          try {
+            const priority = deps.platform === "win32" ? os4.constants.priority.PRIORITY_BELOW_NORMAL : Math.min(19, deps.getPriority(pid) + CLI_CHILD_NICE_INCREMENT);
+            deps.setPriority(pid, priority);
+          } catch (error) {
+            onFailure(error);
+          }
         }
         if (deps.platform === "darwin" && env2[CLI_CHILD_SCHEDULING_ENV] === "darwin-bg") {
           try {
@@ -4070,7 +4081,7 @@ var require_dist = __commonJS({
       socket.write(serializeEnvelope(envelope));
     }
     var crypto2 = __toESM2(require("crypto"));
-    var fs3 = __toESM2(require("fs"));
+    var fs22 = __toESM2(require("fs"));
     var os32 = __toESM2(require("os"));
     var path32 = __toESM2(require("path"));
     var DEFAULT_CONFIG_DIR_NAME = ".adhdev";
@@ -4097,7 +4108,7 @@ var require_dist = __commonJS({
       const remainder = [];
       for (let depth = 0; depth < 256; depth++) {
         try {
-          const real = fs3.realpathSync.native(current);
+          const real = fs22.realpathSync.native(current);
           return remainder.length === 0 ? real : path32.join(real, ...remainder);
         } catch {
           const parent = path32.dirname(current);
@@ -4186,14 +4197,14 @@ var require_dist = __commonJS({
     function ensureNodePtySpawnHelperPermissions(logFn) {
       if (os42.platform() === "win32") return;
       try {
-        const fs22 = require("fs");
+        const fs32 = require("fs");
         const ptyDir = path4.resolve(path4.dirname(require.resolve("node-pty")), "..");
         const platformArch = `${os42.platform()}-${os42.arch()}`;
         const helper = path4.join(ptyDir, "prebuilds", platformArch, "spawn-helper");
-        if (fs22.existsSync(helper)) {
-          const stat = fs22.statSync(helper);
+        if (fs32.existsSync(helper)) {
+          const stat = fs32.statSync(helper);
           if (!(stat.mode & 73)) {
-            fs22.chmodSync(helper, stat.mode | 493);
+            fs32.chmodSync(helper, stat.mode | 493);
             logFn?.(`Fixed spawn-helper permissions: ${helper}`);
           }
         }
@@ -36160,10 +36171,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return (0, import_session_host_core2.hiddenSpawnProcess)(command, args, options);
     }
     function hiddenSpawnCli(command, args = [], options = {}) {
+      const launch = options.shell ? { command, args: [...args], preApplied: false } : (0, import_session_host_core2.niceLaunch)(command, args, options.env ?? process.env);
       return (0, import_session_host_core2.spawnCliChild)(
-        () => hiddenSpawn(command, args, options),
+        () => hiddenSpawn(launch.command, launch.args, options),
         options.env ?? process.env,
-        (message) => LOG.info("CliPriority", message)
+        (message) => LOG.info("CliPriority", message),
+        { preApplied: launch.preApplied }
       );
     }
     function hiddenSpawnSync(command, args = [], options = {}) {
@@ -127558,13 +127571,14 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core13.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
+            const launch = (0, import_session_host_core13.niceLaunch)(resolveWin32Executable(command), args, options.env);
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core13.spawnCliChild)(() => pty.spawn(launch.command, launch.args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
               cwd,
               env: options.env
-            }), options.env, (message) => LOG.info("CliPriority", message)));
+            }), options.env, (message) => LOG.info("CliPriority", message), { preApplied: launch.preApplied }));
             return new NodePtyRuntimeTransport(handle);
           }
         };

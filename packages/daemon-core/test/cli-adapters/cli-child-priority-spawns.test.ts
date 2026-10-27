@@ -73,3 +73,33 @@ it.each(['shell', undefined])('keeps hosted user/unknown category %s at normal p
   expect(mocks.priority).not.toHaveBeenCalled();
   expect(mocks.spawn).toHaveBeenCalledOnce();
 });
+
+it.skipIf(process.platform === 'win32')('starts the direct PTY CLI through nice so early forks inherit low priority', () => {
+  __setNodePtyLoaderForTests(() => ({ spawn: mocks.spawn }));
+  const env = { PATH: process.env.PATH! };
+  new NodePtyTransportFactory().spawn(process.execPath, ['--x'], { cwd: '.', env, cols: 80, rows: 24 });
+  expect((mocks.spawn.mock.calls[0] as unknown[])[0]).toBe('/usr/bin/nice');
+  expect((mocks.spawn.mock.calls[0] as unknown[])[1]).toEqual(['-n', '10', process.execPath, '--x']);
+  expect(mocks.priority.mock.calls[0][3]).toEqual({ preApplied: true });
+});
+
+it.skipIf(process.platform === 'win32')('starts the stdio CLI through nice and keeps windowsHide', () => {
+  const env = { PATH: process.env.PATH! };
+  hiddenSpawnCli('codex', ['app-server'], { env });
+  expect(mocks.spawn).toHaveBeenCalledWith('/usr/bin/nice', ['-n', '10', 'codex', 'app-server'], { windowsHide: true, env });
+});
+
+it.skipIf(process.platform === 'win32')('starts hosted cli agents through nice but not shells', () => {
+  const handle = { pid: 3210, onData: vi.fn(), onExit: vi.fn() };
+  mocks.spawn.mockReturnValue(handle);
+  const mk = (category: string) => new PtySessionRuntime({
+    sessionId: 'nice-' + category,
+    payload: { category, launchCommand: { command: process.execPath, args: [] }, workspace: process.cwd() } as any,
+    onData: vi.fn(), onExit: vi.fn(),
+  });
+  mk('cli').start();
+  expect((mocks.spawn.mock.calls[0] as unknown[])[0]).toBe('/usr/bin/nice');
+  mocks.spawn.mockClear();
+  mk('shell').start();
+  expect((mocks.spawn.mock.calls[0] as unknown[])[0]).not.toBe('/usr/bin/nice');
+});
