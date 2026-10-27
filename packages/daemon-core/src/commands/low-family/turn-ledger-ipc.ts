@@ -246,7 +246,7 @@ const turnObserve: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
             if (original?.verdict === 'applied' && evidence?.kind === 'dispatch_accepted'
                 && isDeepStrictEqual({ ...req.evidence, at: evidence.at }, evidence)
                 && attempt && !attempt.terminal && attempt.generation === original.generation
-                && attempt.sessionId === evidence.sessionId && attempt.ownerDaemonId === ledger.selfDaemonId
+                && attempt.sessionId === evidence.sessionId && attempt.ownerDaemonId === ledger.selfDaemonId // canon-ok: dispatch creation pins ownerDaemonId from this ledger's selfDaemonId; replay token re-minting requires that exact stored owner, not an equivalent machine alias.
                 && attempt.scope === 'mesh_direct' && attempt.meshId === (evidence.meshId ?? null)
                 // eslint-disable-next-line no-restricted-syntax -- Replay must match the exact nodeId stored in this attempt's creation evidence; aliases cannot authorize token re-minting.
                 && attempt.taskId === (evidence.taskId ?? null) && attempt.nodeId === (evidence.nodeId ?? null)
