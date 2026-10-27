@@ -1653,6 +1653,7 @@
         "coordinatorState": "コーディネーター: {{state}}",
         "removedProject": "削除されたプロジェクト",
         "allowCoordinatorLaunch": "停止中のコーディネーターの起動をアシスタントに許可",
+        "allowArtifactRead": "アシスタントにプロジェクトのアーティファクト読み取りを許可",
         "ownerRequired": "フォロー中のプロジェクトやリモートアクセスの管理は所有者のみ可能です。このダッシュボードにログイン（パスワードを設定）するか、クラウドダッシュボードを使ってください。"
     },
     "assistantExecution": {

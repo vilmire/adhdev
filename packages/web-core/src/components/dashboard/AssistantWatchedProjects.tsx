@@ -96,6 +96,8 @@ export default function AssistantWatchedProjects({
     const [catalogUnsupported, setCatalogUnsupported] = useState(false)
     const [catalogError, setCatalogError] = useState<string | null>(null)
     const [catalogProjects, setCatalogProjects] = useState<RemoteProjectCatalogItem[]>([])
+    // Pre-grant opt-in for artifact read, keyed by followed-project key (default off).
+    const [grantArtifactRead, setGrantArtifactRead] = useState<Record<string, boolean>>({})
     const rootRef = useRef<HTMLDivElement>(null)
     const seq = useRef(0)
     const catalogSeq = useRef(0)
@@ -297,7 +299,10 @@ export default function AssistantWatchedProjects({
         await refresh()
     }
 
-    const toggleCoordinatorLaunch = async (target: { key: string; hostDaemonId: string; meshId: string; allowCoordinatorLaunch: boolean }) => {
+    const updatePolicy = async (
+        target: { key: string; hostDaemonId: string; meshId: string },
+        patch: { allowCoordinatorLaunch?: boolean; allowArtifactRead?: boolean },
+    ) => {
         if (!daemonId) return
         setBusy(`policy:${target.key}`)
         setOwnerRequired(false)
@@ -306,7 +311,7 @@ export default function AssistantWatchedProjects({
             const out = unwrapStagedAnswer(await sendCommand(target.hostDaemonId, ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND, {
                 action: 'set_policy',
                 meshId: target.meshId,
-                allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+                ...patch,
             }))
             if (isOwnerAuthRefusal(out)) {
                 setOwnerRequired(true)
@@ -322,10 +327,10 @@ export default function AssistantWatchedProjects({
                 p.meshId === target.meshId && daemonIdsEquivalent(p.hostDaemonId, target.hostDaemonId)
                     ? {
                         ...p,
-                        allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+                        ...patch,
                         capabilities: {
                             ...p.capabilities,
-                            allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+                            ...patch,
                         },
                     }
                     : p
@@ -335,6 +340,12 @@ export default function AssistantWatchedProjects({
         }
         setBusy(null)
     }
+
+    const toggleCoordinatorLaunch = (target: { key: string; hostDaemonId: string; meshId: string; allowCoordinatorLaunch: boolean }) =>
+        updatePolicy(target, { allowCoordinatorLaunch: target.allowCoordinatorLaunch })
+
+    const toggleArtifactRead = (target: { key: string; hostDaemonId: string; meshId: string; allowArtifactRead: boolean }) =>
+        updatePolicy(target, { allowArtifactRead: target.allowArtifactRead })
 
     const allowAndFollow = async (project: RemoteProjectCatalogItem, hostLabel: string) => {
         if (!daemonId) return
@@ -361,6 +372,7 @@ export default function AssistantWatchedProjects({
                 meshId: project.meshId,
                 activeDaemonId: daemonId,
                 bindingRevision,
+                ...(grantArtifactRead[key] === true ? { allowArtifactRead: true } : {}),
             }))
             if (isOwnerAuthRefusal(grantOut)) {
                 setOwnerRequired(true)
@@ -606,6 +618,8 @@ export default function AssistantWatchedProjects({
                                                     const isUnfollowed = localEntry?.state === 'unfollowed'
                                                     const isRevoked = localEntry?.state === 'revoked'
                                                     const allowCoordinatorLaunch = project.allowCoordinatorLaunch ?? localEntry?.allowCoordinatorLaunch ?? true
+                                                    // Artifact read is explicit opt-in on the host: absent means off.
+                                                    const allowArtifactRead = project.allowArtifactRead ?? localEntry?.allowArtifactRead ?? false
                                                     return (
                                                         <li
                                                             key={key}
@@ -647,6 +661,36 @@ export default function AssistantWatchedProjects({
                                                                         }}
                                                                     />
                                                                     <span>{t('assistantWatched.allowCoordinatorLaunch')}</span>
+                                                                </label>
+                                                            )}
+                                                            {(isFollowed || isUnfollowed) && (
+                                                                <label className="flex items-center gap-1.5 text-[11px] leading-4 text-text-secondary">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        data-testid={`toggle-artifact-read-${project.meshId}`}
+                                                                        checked={allowArtifactRead}
+                                                                        disabled={busy === `policy:${key}`}
+                                                                        onChange={e => {
+                                                                            void toggleArtifactRead({
+                                                                                key,
+                                                                                hostDaemonId: project.hostDaemonId,
+                                                                                meshId: project.meshId,
+                                                                                allowArtifactRead: e.target.checked,
+                                                                            })
+                                                                        }}
+                                                                    />
+                                                                    <span>{t('assistantWatched.allowArtifactRead')}</span>
+                                                                </label>
+                                                            )}
+                                                            {!isFollowed && !isUnfollowed && (
+                                                                <label className="flex items-center gap-1.5 text-[11px] leading-4 text-text-secondary">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        data-testid={`grant-artifact-read-${project.meshId}`}
+                                                                        checked={grantArtifactRead[key] === true}
+                                                                        onChange={e => setGrantArtifactRead(prev => ({ ...prev, [key]: e.target.checked }))}
+                                                                    />
+                                                                    <span>{t('assistantWatched.allowArtifactRead')}</span>
                                                                 </label>
                                                             )}
                                                             <div className="mt-0.5 flex flex-wrap items-center gap-1.5">

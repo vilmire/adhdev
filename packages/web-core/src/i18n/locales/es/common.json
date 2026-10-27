@@ -1656,6 +1656,7 @@
         "coordinatorState": "coordinador: {{state}}",
         "removedProject": "Proyecto eliminado",
         "allowCoordinatorLaunch": "Permitir que el asistente despierte al coordinador inactivo",
+        "allowArtifactRead": "Permitir que el asistente lea los artefactos del proyecto",
         "ownerRequired": "Solo el propietario puede gestionar los proyectos seguidos o el acceso remoto. Inicia sesión en este panel (define una contraseña) o usa el panel en la nube."
     },
     "assistantExecution": {

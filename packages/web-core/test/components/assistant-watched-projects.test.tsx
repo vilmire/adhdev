@@ -161,6 +161,7 @@ describe('AssistantWatchedProjects', () => {
                         grantRevision: 1,
                         status: 'active',
                         allowCoordinatorLaunch: args.allowCoordinatorLaunch,
+                        allowArtifactRead: args.allowArtifactRead,
                     },
                 }
             }
@@ -197,6 +198,11 @@ describe('AssistantWatchedProjects', () => {
         expect(container.textContent).toContain('Minimal follower scope')
 
         // 1. Test partial success when host grant succeeds but local follow fails
+        // 0. Pre-grant artifact-read checkbox defaults OFF; ticking it sends allowArtifactRead:true on grant
+        const grantArtifact = container.querySelector<HTMLInputElement>(`[data-testid="grant-artifact-read-${MESH_ALPHA}"]`)!
+        expect(grantArtifact).not.toBeNull()
+        expect(grantArtifact.checked).toBe(false)
+        act(() => { grantArtifact.click() })
         failNextFollow = true
         const allowBtn = container.querySelector<HTMLButtonElement>(`[data-testid="allow-and-follow-${MESH_ALPHA}"]`)!
         await act(async () => { allowBtn.click() })
@@ -204,6 +210,7 @@ describe('AssistantWatchedProjects', () => {
         const partialBanner = container.querySelector('[data-testid="assistant-follow-partial-success"]')
         expect(partialBanner).not.toBeNull()
         expect(partialBanner?.textContent).toContain('Host access was granted')
+        expect(send).toHaveBeenCalledWith(HOST_A, 'assistant_remote_project_access', expect.objectContaining({ action: 'grant', allowArtifactRead: true }))
 
         // 2. Retry follow succeeds
         failNextFollow = false
@@ -227,6 +234,20 @@ describe('AssistantWatchedProjects', () => {
             allowCoordinatorLaunch: false,
         })
         expect(wakeToggle.checked).toBe(false)
+
+        // 2c. Artifact-read toggle: explicit opt-in (default OFF), set_policy carries only allowArtifactRead
+        const artifactToggle = container.querySelector<HTMLInputElement>(`[data-testid="toggle-artifact-read-${MESH_ALPHA}"]`)!
+        expect(artifactToggle).not.toBeNull()
+        expect(artifactToggle.checked).toBe(false)
+        send.mockClear()
+        await act(async () => { artifactToggle.click() })
+        await flush()
+        expect(send).toHaveBeenCalledWith(HOST_A, 'assistant_remote_project_access', {
+            action: 'set_policy',
+            meshId: MESH_ALPHA,
+            allowArtifactRead: true,
+        })
+        expect(artifactToggle.checked).toBe(true)
 
         // 3. 'Stop following' is local-only (calls assistant_remote_follow unfollow, NEVER revokes host)
         send.mockClear()

@@ -1653,6 +1653,7 @@
         "coordinatorState": "协调器：{{state}}",
         "removedProject": "已删除的项目",
         "allowCoordinatorLaunch": "允许助手唤醒离线的协调器",
+        "allowArtifactRead": "允许助手读取项目工件",
         "ownerRequired": "只有所有者可以管理关注的项目或远程访问。请登录此仪表板（设置仪表板密码）或使用云端仪表板。"
     },
     "assistantExecution": {
