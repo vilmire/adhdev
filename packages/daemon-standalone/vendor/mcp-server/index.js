@@ -24065,6 +24065,7 @@ var require_dist3 = __commonJS({
       isAssistantTool: () => isAssistantTool2,
       isBlockedStatus: () => isBlockedStatus,
       isBusyStatus: () => isBusyStatus,
+      isCarryOverMissionRecord: () => isCarryOverMissionRecord,
       isCarryOverMissionTitle: () => isCarryOverMissionTitle,
       isChunkType: () => isChunkType,
       isCommitStrength: () => isCommitStrength2,
@@ -26736,6 +26737,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       json2 = JSON.stringify(shrunk);
       if (json2.length <= MISSION_LIMITS2.eventPayloadBytes) return json2;
       return JSON.stringify({ payloadTruncated: true, keys: Object.keys(payload).slice(0, 20) });
+    }
+    function isCarryOverMissionRecord(m) {
+      return !!m && (m.isCarryOver === true || isCarryOverMissionTitle(m.title));
     }
     function isCarryOverMissionTitle(title) {
       return typeof title === "string" && title.trim() === CARRY_OVER_MISSION_TITLE;
@@ -45537,6 +45541,13 @@ ${error.message || ""}`;
               args.push(...opts.states);
             }
             const rows = this.db.prepare(`SELECT * FROM mesh_mission_items WHERE ${where.join(" AND ")} ORDER BY created_at ASC, rowid ASC`).all(...args);
+            return rows.map(rowToItem);
+          }
+          /** Items of the mesh carrying any ref (newest first, bounded) — the exact-link lookup for Refinery attribution. */
+          listItemsWithRefs(meshId, limit = 2e3) {
+            const rows = this.db.prepare(
+              "SELECT * FROM mesh_mission_items WHERE mesh_id = ? AND refs_json IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT ?"
+            ).all(meshId, limit);
             return rows.map(rowToItem);
           }
           /** All open items of the mesh (any mission) of one kind — the future decision-inbox projection reads this. */
@@ -72795,7 +72806,7 @@ ${body}`;
             items.appendEvent(meshId, id4, "goal_changed", actor, { previousGoal: prevGoal, goal: result.goal ?? "" });
           }
         }
-        if (opts?.bump !== false) items.bumpVersion(meshId, id4);
+        if (existing && opts?.bump !== false) items.bumpVersion(meshId, id4);
         const refreshed = store3.getMission(meshId, id4);
         if (refreshed) return { ...result, updatedAt: refreshed.updatedAt, version: refreshed.version, summary: refreshed.summary, outcome: refreshed.outcome, outcomeReason: refreshed.outcomeReason, isCarryOver: refreshed.isCarryOver };
       } catch (e) {
@@ -73113,9 +73124,6 @@ ${body}`;
     function store() {
       return MeshRuntimeStore.getInstance();
     }
-    function isCarryOverMission(record7) {
-      return record7?.isCarryOver === true;
-    }
     function ensureCarryOverMission(meshId) {
       const items = store().missionItems();
       const existing = items.findCarryOverMissionId(meshId);
@@ -73410,7 +73418,7 @@ ${body}`;
           wrote = true;
         }
         void wrote;
-        result.version = items.bumpVersion(meshId, missionId);
+        result.version = created ? items.getStructured(meshId, missionId)?.version ?? 1 : items.bumpVersion(meshId, missionId);
         const record7 = getMeshMission(meshId, missionId);
         return { record: record7, result };
       });
@@ -73506,32 +73514,48 @@ ${body}`;
     }
     function attachRefineMergeEvidence(meshId, nodeId, result) {
       try {
-        if (!result || !nodeId || result.merged !== true) return null;
+        if (!result || result.merged !== true) return null;
         const s2 = store();
-        const candidates = s2.getQueueEntries(meshId, ["completed"]).filter((t) => t.missionId && t.assignedNodeId === nodeId).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-        const task = candidates[0];
-        if (!task?.missionId || !s2.getMission(meshId, task.missionId)) return null;
+        const branchName = typeof result.branch === "string" ? result.branch : "";
+        const mergedSha = typeof result.mergedSha === "string" ? result.mergedSha.toLowerCase() : "";
+        if (!branchName && !mergedSha) return null;
+        const linked = /* @__PURE__ */ new Set();
+        let linkedTaskId;
+        for (const it of s2.missionItems().listItemsWithRefs(meshId)) {
+          if (it.kind === "evidence" && it.createdBy === "daemon:refinery") continue;
+          for (const r of it.refs) {
+            const v = r.value.toLowerCase();
+            const hit = r.kind === "branch" && branchName !== "" && r.value === branchName || r.kind === "commit" && mergedSha !== "" && v.length >= 7 && (mergedSha.startsWith(v) || v.startsWith(mergedSha));
+            if (hit && s2.getMission(meshId, it.missionId)) {
+              linked.add(it.missionId);
+              linkedTaskId = linkedTaskId ?? it.refs.find((x) => x.kind === "task")?.value;
+            }
+          }
+        }
+        if (linked.size !== 1) return null;
+        const missionId = [...linked][0];
+        const task = { id: linkedTaskId, missionId };
         const branch = typeof result.branch === "string" ? result.branch : "";
         const into = typeof result.into === "string" ? result.into : "";
         const sha8 = typeof result.mergedSha === "string" ? result.mergedSha : "";
         const refs = [];
         if (sha8) refs.push({ kind: "commit", value: sha8, ...into ? { note: `merged into ${into}` } : {} });
         if (branch) refs.push({ kind: "branch", value: branch });
-        refs.push({ kind: "task", value: task.id });
+        if (task.id) refs.push({ kind: "task", value: task.id });
         const n = normalizeMissionItemInput({
           kind: "evidence",
           text: `Refinery merged ${branch || "branch"}${into ? ` into ${into}` : ""}${sha8 ? ` (${sha8.slice(0, 12)})` : ""}${result.pushed === true ? ", pushed" : ""}`,
           refs,
-          dedupe_key: `refine-merge:${nodeId}:${sha8 || branch}`
+          dedupe_key: `refine-merge:${nodeId ?? ""}:${sha8 || branch}`
         });
         if ("error" in n) return null;
         let itemId;
         s2.transaction(() => {
-          const r = addNormalizedItem(meshId, task.missionId, n.item, "daemon:refinery", "daemon");
+          const r = addNormalizedItem(meshId, missionId, n.item, "daemon:refinery", "daemon");
           itemId = r.id;
-          if (!r.deduped) s2.missionItems().bumpVersion(meshId, task.missionId);
+          if (!r.deduped) s2.missionItems().bumpVersion(meshId, missionId);
         });
-        return { missionId: task.missionId, itemId };
+        return { missionId, itemId };
       } catch (e) {
         LOG.warn("MeshMissions", `refine merge \u2192 mission evidence failed: ${e?.message || e}`);
         return null;
@@ -73539,6 +73563,7 @@ ${body}`;
     }
     var import_crypto15;
     var CLOSED;
+    var isCarryOverMission;
     var init_mesh_mission_structured = __esm2({
       "src/mesh/mesh-mission-structured.ts"() {
         "use strict";
@@ -73549,6 +73574,7 @@ ${body}`;
         init_mesh_mission_items_store();
         init_mesh_missions();
         CLOSED = /* @__PURE__ */ new Set(["completed", "abandoned"]);
+        isCarryOverMission = isCarryOverMissionRecord;
       }
     });
     var worker_handoff_notes_exports = {};
@@ -73868,6 +73894,7 @@ ${block2.text}`,
       } else if (report.handoffNotes) {
         handoffNoteRecorded = true;
       }
+      if (!duplicate) applyWorkerReportToMission(identity4.meshId, identity4.taskId, report);
       if (!duplicate) {
         const sink2 = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
         if (sink2) {
@@ -73915,6 +73942,7 @@ ${block2.text}`,
     var init_worker_report_late = __esm2({
       "src/mesh/worker-report-late.ts"() {
         "use strict";
+        init_mesh_mission_structured();
         init_mesh_session_lifetime();
         init_worker_mcp_isolation();
         init_mesh_runtime_store();
@@ -92892,7 +92920,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       try {
         if (!coordinator) return false;
         if (policy?.idleActiveMissionReminder === false) return false;
-        const activeMissions = getMeshMissions(meshId, ["active"]).filter((m) => !m.isCarryOver);
+        const activeMissions = getMeshMissions(meshId, ["active"]).filter((m) => !isCarryOverMissionRecord(m));
         if (activeMissions.length === 0) return false;
         const ledgerEntries = sharedLedgerSnapshot?.entries ?? readActiveWorkRecords(meshId, [
           "task_dispatched",
@@ -92961,6 +92989,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         "use strict";
         init_logger();
         init_mesh_runtime_store();
+        init_dist();
         init_mesh_missions();
         init_mesh_work_queue();
         init_mesh_local_records();
@@ -126785,7 +126814,7 @@ ${asText(streams.stderr)}
         },
         activeMissionCount: (meshId) => {
           try {
-            return lazy.getMeshMissions(meshId, ["active"]).length;
+            return lazy.getMeshMissions(meshId, ["active"]).filter((m) => !isCarryOverMissionRecord(m)).length;
           } catch {
             return null;
           }
@@ -128151,7 +128180,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const missionList = Array.isArray(rec2(rec2(view2.missions)?.list)?.missions) ? rec2(rec2(view2.missions).list).missions : [];
       const activeMissions = missionList.filter((m) => readText4(m?.status) === "active" || readText4(m?.status) === "paused").map((m) => ({ id: readText4(m?.id), title: readText4(m?.title), status: readText4(m?.status) }));
       const now = extras.now ?? Date.now();
-      const staleMissions = missionList.filter((m) => readText4(m?.status) === "active").filter((m) => !isCarryOverMissionTitle(readText4(m?.title))).map((m) => {
+      const staleMissions = missionList.filter((m) => readText4(m?.status) === "active").filter((m) => !isCarryOverMissionRecord({ title: readText4(m?.title) })).map((m) => {
         const last = Date.parse(readText4(rec2(m?.tasks)?.lastActivityAt) || readText4(m?.updatedAt) || readText4(m?.createdAt));
         return { id: readText4(m?.id), title: readText4(m?.title), last };
       }).filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS).sort((a, b) => a.last - b.last).map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 864e5) }));
@@ -135928,7 +135957,7 @@ ${defangRelayBody(text4)}`;
         meshWork: (meshId) => {
           try {
             const q = getMeshQueueStats(meshId);
-            return { activeMissions: getMeshMissions(meshId, ["active"]).length, pending: q.pending, assigned: q.assigned };
+            return { activeMissions: getMeshMissions(meshId, ["active"]).filter((m) => !isCarryOverMissionRecord(m)).length, pending: q.pending, assigned: q.assigned };
           } catch {
             return null;
           }
@@ -176547,7 +176576,18 @@ ${output}` : "";
       };
     }
     async function forwardReportToOwner(ctx, remote, report, delivery = {}) {
-      return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report, ...delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}, ...typeof delivery.reportedAtMs === "number" ? { reportedAtMs: delivery.reportedAtMs } : {} }, `${report.outcome} report`);
+      const send = (r) => forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report: r, ...delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}, ...typeof delivery.reportedAtMs === "number" ? { reportedAtMs: delivery.reportedAtMs } : {} }, `${report.outcome} report`);
+      const first = await send(report);
+      if (first.success !== true && (report.decisionsNeeded || report.commits) && onlyUnknownStructuredFieldErrors(first)) {
+        const { decisionsNeeded: _d, commits: _c, ...legacy } = report;
+        LOG.warn("WorkerReport", `Owner ${remote.ownerDaemonId.slice(0, 16)} does not know decisions_needed/commits (older version) \u2014 resending the ${report.outcome} report for task ${remote.taskId ?? "?"} without them`);
+        return send(legacy);
+      }
+      return first;
+    }
+    function onlyUnknownStructuredFieldErrors(answer) {
+      if (answer.error !== "invalid_report" || !Array.isArray(answer.validationErrors) || answer.validationErrors.length === 0) return false;
+      return answer.validationErrors.every((e) => (e?.field === "decisionsNeeded" || e?.field === "commits") && /unknown field/.test(String(e?.message)));
     }
     async function forwardToOwner(ctx, remote, command, payload, what) {
       const dispatch2 = ctx?.deps?.dispatchMeshCommand;

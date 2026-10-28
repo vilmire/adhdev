@@ -17,7 +17,7 @@ import type { MeshNodeFacts } from '@adhdev/mesh-shared';
  * `setAssistantRelayHooks`, they are no-ops and the views report `null`.
  */
 
-import { daemonIdsEquivalent, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, isCarryOverMissionRecord, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import {
@@ -294,7 +294,7 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
             } catch { return null; }
         },
         activeMissionCount: (meshId) => {
-            try { return lazy.getMeshMissions(meshId, ['active']).length; } catch { return null; }
+            try { return lazy.getMeshMissions(meshId, ['active']).filter(m => !isCarryOverMissionRecord(m)).length; } catch { return null; }
         },
         pendingApprovals: (meshId) => {
             let n = 0;

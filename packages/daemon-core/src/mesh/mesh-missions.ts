@@ -263,7 +263,8 @@ export function upsertMeshMission(meshId: string, input: {
                 items.appendEvent(meshId, id, 'goal_changed', actor, { previousGoal: prevGoal, goal: result.goal ?? '' });
             }
         }
-        if (opts?.bump !== false) items.bumpVersion(meshId, id);
+        // A create is write #1 = version 1 (the column default); every later write bumps once.
+        if (existing && opts?.bump !== false) items.bumpVersion(meshId, id);
         const refreshed = store.getMission(meshId, id);
         if (refreshed) return { ...result, updatedAt: refreshed.updatedAt, version: refreshed.version, summary: refreshed.summary, outcome: refreshed.outcome, outcomeReason: refreshed.outcomeReason, isCarryOver: refreshed.isCarryOver };
     } catch (e: any) {

@@ -86,12 +86,22 @@ describe('acceptance #12 — migration preserves rows and is idempotent', () => 
 describe('every mission write bumps the version and appends an event (last-write-wins)', () => {
     it('legacy upsert path too; concurrent edits are never rejected', () => {
         const m = upsertMeshMission(meshId, { title: 'T', goal: 'g1' });
-        expect(getMeshMission(meshId, m.id)!.version).toBe(2); // create is write #1 on a version-1 row
+        expect(getMeshMission(meshId, m.id)!.version).toBe(1); // a create is write #1 = version 1
         upsertMeshMission(meshId, { id: m.id, title: 'T', goal: 'g2' });
         upsertMeshMission(meshId, { id: m.id, title: 'T', goal: 'g3' }); // "stale" writer: still accepted
-        expect(getMeshMission(meshId, m.id)!.version).toBe(4);
+        expect(getMeshMission(meshId, m.id)!.version).toBe(3);
         expect(getMeshMission(meshId, m.id)!.goal).toBe('g3');
         expect(events(m.id).map(e => e.type)).toEqual(['created', 'goal_changed', 'goal_changed']);
+    });
+});
+
+describe('version: one write = one bump', () => {
+    it('a structured create is version 1 (items in the same call do not add bumps); each later call bumps once', () => {
+        const r = write({ title: 'V', summary: 's', itemsAdd: [{ text: 'a' }, { text: 'b' }] });
+        expect(r.result.version).toBe(1);
+        expect(getMeshMission(meshId, r.record.id)!.version).toBe(1);
+        expect(write({ id: r.record.id, itemsAdd: [{ text: 'c' }] }).result.version).toBe(2);
+        expect(write({ id: r.record.id, summary: 'again' }).result.version).toBe(3);
     });
 });
 
@@ -482,25 +492,43 @@ describe('report_completion: decisions_needed + commits (worker-requested, evide
     });
 });
 
-describe('Refinery merge evidence', () => {
-    it('attaches an evidence item to the mission of the latest completed task on that node; nothing without a node match', () => {
+describe('Refinery merge evidence (exact-link attribution only)', () => {
+    it('attaches to the mission whose worker-reported commit the merge landed (prefix match) or whose branch ref matches; the same merge is recorded once', () => {
         const mission = upsertMeshMission(meshId, { title: 'Refined' });
-        const task = enqueueTask(meshId, 'work', { missionId: mission.id, difficulty: 'medium' } as any);
-        const row = store().db.prepare('SELECT payload FROM mesh_queue WHERE id = ?').get(task.id) as { payload: string };
-        store().db.prepare("UPDATE mesh_queue SET status = 'completed', assigned_node_id = ?, payload = ? WHERE id = ?")
-            .run('node-7', JSON.stringify({ ...JSON.parse(row.payload), status: 'completed', assignedNodeId: 'node-7' }), task.id);
-
-        expect(attachRefineMergeEvidence(meshId, 'node-other', { merged: true, branch: 'feat/x', into: 'main', mergedSha: 'deadbeef12' })).toBeNull();
-        expect(attachRefineMergeEvidence(meshId, 'node-7', { merged: false, branch: 'feat/x' })).toBeNull();
-        const hit = attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/x', into: 'main', mergedSha: 'deadbeef12', pushed: true })!;
+        const taskId = enqueueTask(meshId, 'work', { missionId: mission.id, difficulty: 'medium' } as any).id;
+        applyWorkerReportToMission(meshId, taskId, { outcome: 'completed', commits: ['deadbeef12'] });
+        const hit = attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/x', into: 'main', mergedSha: 'deadbeef12345678', pushed: true })!;
         expect(hit.missionId).toBe(mission.id);
         const ev = store().missionItems().getItem(meshId, hit.itemId!)!;
-        expect(ev.kind).toBe('evidence');
         expect(ev.text).toContain('Refinery merged feat/x into main');
         expect(ev.refs.map(r => r.kind)).toEqual(['commit', 'branch', 'task']);
-        // the same merge is not recorded twice
-        attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/x', into: 'main', mergedSha: 'deadbeef12', pushed: true });
-        expect(items(mission.id).filter(i => i.kind === 'evidence')).toHaveLength(1);
+        attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/x', into: 'main', mergedSha: 'deadbeef12345678', pushed: true });
+        expect(items(mission.id).filter(i => i.createdBy === 'daemon:refinery')).toHaveLength(1);
+
+        // a branch ref the coordinator recorded is an exact link too
+        const other = write({ title: 'Branch mission', itemsAdd: [{ kind: 'evidence', text: 'work lives here', refs: [{ kind: 'branch', value: 'feat/y' }] }] });
+        expect(attachRefineMergeEvidence(meshId, 'node-9', { merged: true, branch: 'feat/y', into: 'main', mergedSha: '0123456789ab' })!.missionId).toBe(other.record.id);
+    });
+
+    it('mismatch cases attach NOTHING: unrelated branch/sha, unmerged result, or a link that spans two missions', () => {
+        const a = upsertMeshMission(meshId, { title: 'A' });
+        const taskA = enqueueTask(meshId, 'a', { missionId: a.id, difficulty: 'medium' } as any).id;
+        // a completed task on node-7 exists (the OLD heuristic would have attributed to it)
+        const row = store().db.prepare('SELECT payload FROM mesh_queue WHERE id = ?').get(taskA) as { payload: string };
+        store().db.prepare("UPDATE mesh_queue SET status = 'completed', assigned_node_id = 'node-7', payload = ? WHERE id = ?")
+            .run(JSON.stringify({ ...JSON.parse(row.payload), status: 'completed', assignedNodeId: 'node-7' }), taskA);
+        applyWorkerReportToMission(meshId, taskA, { outcome: 'completed', commits: ['aaaaaaa1111'] });
+
+        expect(attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/other', into: 'main', mergedSha: 'bbbbbbb2222222' })).toBeNull();
+        expect(attachRefineMergeEvidence(meshId, 'node-7', { merged: false, branch: 'feat/x', mergedSha: 'aaaaaaa1111' })).toBeNull();
+        expect(attachRefineMergeEvidence(meshId, 'node-7', { merged: true })).toBeNull();
+        expect(items(a.id).some(i => i.createdBy === 'daemon:refinery')).toBe(false);
+
+        // the same commit claimed by two missions is ambiguous
+        const b = upsertMeshMission(meshId, { title: 'B' });
+        const taskB = enqueueTask(meshId, 'b', { missionId: b.id, difficulty: 'medium' } as any).id;
+        applyWorkerReportToMission(meshId, taskB, { outcome: 'completed', commits: ['aaaaaaa1111'] });
+        expect(attachRefineMergeEvidence(meshId, 'node-7', { merged: true, branch: 'feat/x', mergedSha: 'aaaaaaa1111ffff' })).toBeNull();
     });
 });
 

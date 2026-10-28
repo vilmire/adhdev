@@ -80,6 +80,7 @@ import type { SessionInputPort } from '../sessions/session-input-service.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { RepoMeshPolicy } from '../repo-mesh-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { isCarryOverMissionRecord } from '@adhdev/mesh-shared';
 import { getMeshMissions, type MeshMissionRecord } from './mesh-missions.js';
 import { getQueue, getActiveDirectDispatches } from './mesh-work-queue.js';
 import { readActiveWorkRecords, readRefineJobRecords } from './mesh-local-records.js';
@@ -293,7 +294,7 @@ export async function maybeInjectIdleActiveMissionReminder(
 
         // Active missions gate — no active mission, nothing to remind about.
         // The auto carry-over mission is never a lingering plan to chase (design 2026-10-28 §13.1).
-        const activeMissions = getMeshMissions(meshId, ['active']).filter(m => !m.isCarryOver);
+        const activeMissions = getMeshMissions(meshId, ['active']).filter(m => !isCarryOverMissionRecord(m));
         if (activeMissions.length === 0) return false;
 
         // Fully-idle gate — any non-terminal queue/direct work suppresses the reminder.

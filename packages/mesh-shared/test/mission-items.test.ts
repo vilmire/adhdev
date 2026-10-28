@@ -4,6 +4,7 @@ import {
     MISSION_LIMITS,
     boundEventPayload,
     deriveItemDedupeKey,
+    isCarryOverMissionRecord,
     isCarryOverMissionTitle,
     isMissionOutcome,
     normalizeDecisionInput,
@@ -117,6 +118,11 @@ describe('mission-items normalization (design 2026-10-28 §4)', () => {
     it('carry-over title is recognizable', () => {
         expect(isCarryOverMissionTitle(CARRY_OVER_MISSION_TITLE)).toBe(true)
         expect(isCarryOverMissionTitle('Other')).toBe(false)
+        // the one predicate: the daemon flag wins; wire views without the flag fall back to the title
+        expect(isCarryOverMissionRecord({ isCarryOver: true, title: 'anything' })).toBe(true)
+        expect(isCarryOverMissionRecord({ title: CARRY_OVER_MISSION_TITLE })).toBe(true)
+        expect(isCarryOverMissionRecord({ title: 'Other' })).toBe(false)
+        expect(isCarryOverMissionRecord(null)).toBe(false)
     })
 })
 

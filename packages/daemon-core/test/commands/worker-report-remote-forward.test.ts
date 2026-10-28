@@ -493,6 +493,21 @@ describe('F7b — late report against a recently-terminal attempt', () => {
     expect(sinkCalls).toHaveLength(1)
   })
 
+  it('local: a late report\'s decisions_needed still reach the owner as a worker-requested decision (once)', async () => {
+    const ids = freshIds()
+    seedOwnerTerminalTask(ids, 60_000)
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const report = { ...REPORT, decisionsNeeded: [{ question: 'Late question: ship it?' }] }
+    const res: any = await workerReportHandlers.worker_report_completion(ownerCtx, { bind, report })
+    expect(res).toMatchObject({ success: true, late: true })
+    await workerReportHandlers.worker_report_completion(ownerCtx, { bind, report }) // duplicate replay
+    const store = MeshRuntimeStore.getInstance().missionItems()
+    const carry = store.findCarryOverMissionId(ids.meshId)!
+    const decisions = store.listItems(ids.meshId, carry, { kinds: ['decision'] })
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]).toMatchObject({ createdBy: `worker:${ids.taskId}`, state: 'open' })
+  })
+
   it('local: a different reported outcome is recorded and flagged, never flips the terminal', async () => {
     const ids = freshIds()
     const attemptId = seedOwnerTerminalTask(ids, 30_000)
@@ -694,5 +709,44 @@ describe('F7 progress axis — a remote worker\'s progress note is forwarded to 
     expect(res).toMatchObject({ success: true, taskId: ids.taskId })
     expect(relay).not.toHaveBeenCalled()
     expect(progressRows(ids.meshId, ids.taskId).map((r) => r.attemptId)).toEqual([attemptId])
+  })
+})
+
+describe('mixed versions — owner predates decisions_needed/commits (structured missions)', () => {
+  it('resends ONCE without the new fields and keeps the report; the worker never has to resend', async () => {
+    const ids = freshIds()
+    const attemptId = `mesh_direct:${ids.taskId}`
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const relay = vi.fn(async (_d: string, _c: string, args: Record<string, any>) => {
+      const unknown = ['decisionsNeeded', 'commits'].filter((k) => k in args.report)
+      if (unknown.length) {
+        return { success: false, error: 'invalid_report', validationErrors: unknown.map((field) => ({ field, message: `unknown field '${field}' (expected one of: outcome, summary)` })) }
+      }
+      return { success: true, taskId: ids.taskId, attemptId, outcome: 'completed', duplicate: false, handoffNoteRecorded: true }
+    })
+    const res: any = await workerReportHandlers.worker_report_completion(
+      workerCtx(ids.sessionId, stampSettings(ids, attemptId), relay),
+      { bind, report: { ...REPORT, commits: ['abc1234'], decisionsNeeded: [{ question: 'Which DB?' }] } },
+    )
+    expect(res.success).toBe(true)
+    expect(relay).toHaveBeenCalledTimes(2)
+    const second = (relay.mock.calls[1] as any)[2].report
+    expect(second).toEqual(REPORT) // everything else kept verbatim
+  })
+
+  it('does not retry for any other refusal, nor when the report used no new fields', async () => {
+    const ids = freshIds()
+    const attemptId = `mesh_direct:${ids.taskId}`
+    const bind = mintWorkerSessionBind({ meshId: ids.meshId, sessionId: ids.sessionId, nodeId: ids.nodeId }).bind
+    const other = vi.fn(async () => ({ success: false, error: 'invalid_report', validationErrors: [{ field: 'summary', message: 'summary is required' }] }))
+    const r1: any = await workerReportHandlers.worker_report_completion(
+      workerCtx(ids.sessionId, stampSettings(ids, attemptId), other),
+      { bind, report: { ...REPORT, commits: ['abc1234'] } },
+    )
+    expect(r1.success).toBe(false)
+    expect(other).toHaveBeenCalledTimes(1)
+    const plain = vi.fn(async () => ({ success: false, error: 'invalid_report', validationErrors: [{ field: 'commits', message: "unknown field 'commits'" }] }))
+    await workerReportHandlers.worker_report_completion(workerCtx(ids.sessionId, stampSettings(ids, attemptId), plain), { bind, report: REPORT })
+    expect(plain).toHaveBeenCalledTimes(1)
   })
 })

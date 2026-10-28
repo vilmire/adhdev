@@ -357,6 +357,14 @@ export function boundEventPayload(payload: Record<string, unknown>): string {
 
 /** The carry-over mission's fixed title (design §5.1). */
 export const CARRY_OVER_MISSION_TITLE = '이월 — 닫힌 미션에서 넘어온 항목'
+/**
+ * THE one predicate for "is this the auto carry-over mission". The daemon's `is_carry_over`
+ * column (`isCarryOver`) is the source of truth; wire views that cannot carry the flag (older
+ * strict decoders reject unknown keys) fall back to the fixed title. Use this everywhere.
+ */
+export function isCarryOverMissionRecord(m: { isCarryOver?: boolean; title?: unknown } | null | undefined): boolean {
+    return !!m && (m.isCarryOver === true || isCarryOverMissionTitle(m.title))
+}
 /** The carry-over mission's title is fixed (the daemon ignores renames), so a title match identifies it on wire views that carry no flag. */
 export function isCarryOverMissionTitle(title: unknown): boolean {
     return typeof title === 'string' && title.trim() === CARRY_OVER_MISSION_TITLE

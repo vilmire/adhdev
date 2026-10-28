@@ -220,6 +220,14 @@ export class MissionItemStore {
         return rows.map(rowToItem);
     }
 
+    /** Items of the mesh carrying any ref (newest first, bounded) — the exact-link lookup for Refinery attribution. */
+    listItemsWithRefs(meshId: string, limit = 2000): MissionItemRecord[] {
+        const rows = this.db.prepare(
+            'SELECT * FROM mesh_mission_items WHERE mesh_id = ? AND refs_json IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT ?',
+        ).all(meshId, limit) as Array<Record<string, any>>;
+        return rows.map(rowToItem);
+    }
+
     /** All open items of the mesh (any mission) of one kind — the future decision-inbox projection reads this. */
     listOpenByKind(meshId: string, kind: MissionItemKind): MissionItemRecord[] {
         const rows = this.db.prepare(

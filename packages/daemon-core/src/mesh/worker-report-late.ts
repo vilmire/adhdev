@@ -1,3 +1,4 @@
+import { applyWorkerReportToMission } from './mesh-mission-structured.js';
 import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
 /**
  * Late worker reports: a `report_completion` that arrives after its attempt already
@@ -256,6 +257,11 @@ export function acceptLateWorkerCompletionReport(
     } else if (report.handoffNotes) {
         handoffNoteRecorded = true;
     }
+
+    // Structured missions: a late report's decisions_needed / commits still matter (the owner must
+    // see the question; the commit is still evidence). Additive and best-effort; a replayed late
+    // report (duplicate) adds nothing.
+    if (!duplicate) applyWorkerReportToMission(identity.meshId, identity.taskId, report);
 
     if (!duplicate) {
         const sink = lateNoticeSinkOverride === undefined ? queueWorkerLateReportNotice : lateNoticeSinkOverride;

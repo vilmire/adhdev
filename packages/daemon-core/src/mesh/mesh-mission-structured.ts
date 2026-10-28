@@ -19,6 +19,7 @@ import {
     OWNER_ABANDON_CONFIRM_KEY_PREFIX,
     OWNER_ABANDON_CONFIRM_OPTIONS,
     OWNER_ABANDON_CONFIRM_QUESTION,
+    isCarryOverMissionRecord,
     isMissionOutcome,
     normalizeMissionItemInput,
     normalizeMissionItemUpdate,
@@ -87,9 +88,7 @@ function store(): MeshRuntimeStore {
     return MeshRuntimeStore.getInstance();
 }
 
-export function isCarryOverMission(record: { isCarryOver?: boolean } | null | undefined): boolean {
-    return record?.isCarryOver === true;
-}
+export const isCarryOverMission = isCarryOverMissionRecord;
 
 /** The mesh's carry-over mission, created (once, active) on first need. */
 export function ensureCarryOverMission(meshId: string): string {
@@ -412,7 +411,7 @@ export function upsertStructuredMission(
 
         // Every call is one write: exactly one version bump (last-write-wins, no conflict).
         void wrote;
-        result.version = items.bumpVersion(meshId, missionId);
+        result.version = created ? (items.getStructured(meshId, missionId)?.version ?? 1) : items.bumpVersion(meshId, missionId);
         const record = getMeshMission(meshId, missionId)!;
         return { record, result };
     });
@@ -521,11 +520,12 @@ export function applyWorkerReportToMission(
 }
 
 /**
- * Refinery recorded a merge → attach an `evidence` item to the mission of the task
- * that produced the branch. The refine job names a node and a branch, not a task, so
- * the attribution is "the most recently completed mission task on that node" — a
- * best-effort association (wrong attribution is worse than none, so no node match →
- * no evidence).
+ * Refinery recorded a merge → attach an `evidence` item to the mission that EXACTLY owns the work.
+ * A refine job names a node and a branch, not a task, so "latest completed task on that node" was
+ * a guess that could land on the wrong mission. The attribution therefore needs an exact link,
+ * else nothing is attached: a mission item whose ref is this `branch` (kind=branch, same value), or
+ * a `commit` ref (e.g. a worker-reported commits[] entry) that the merged SHA equals/abbreviates.
+ * Links to more than one mission are ambiguous → nothing.
  */
 export function attachRefineMergeEvidence(
     meshId: string,
@@ -533,34 +533,49 @@ export function attachRefineMergeEvidence(
     result: Record<string, unknown> | undefined,
 ): { missionId: string; itemId?: string } | null {
     try {
-        if (!result || !nodeId || result.merged !== true) return null;
+        if (!result || result.merged !== true) return null;
         const s = store();
-        const candidates = s.getQueueEntries(meshId, ['completed'])
-            .filter(t => t.missionId && t.assignedNodeId === nodeId)
-            .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-        const task = candidates[0];
-        if (!task?.missionId || !s.getMission(meshId, task.missionId)) return null;
+        const branchName = typeof result.branch === 'string' ? result.branch : '';
+        const mergedSha = typeof result.mergedSha === 'string' ? result.mergedSha.toLowerCase() : '';
+        if (!branchName && !mergedSha) return null;
+        const linked = new Set<string>();
+        let linkedTaskId: string | undefined;
+        for (const it of s.missionItems().listItemsWithRefs(meshId)) {
+            if (it.kind === 'evidence' && it.createdBy === 'daemon:refinery') continue; // our own earlier output is not a link
+            for (const r of it.refs) {
+                const v = r.value.toLowerCase();
+                const hit = (r.kind === 'branch' && branchName !== '' && r.value === branchName)
+                    || (r.kind === 'commit' && mergedSha !== '' && v.length >= 7 && (mergedSha.startsWith(v) || v.startsWith(mergedSha)));
+                if (hit && s.getMission(meshId, it.missionId)) {
+                    linked.add(it.missionId);
+                    linkedTaskId = linkedTaskId ?? it.refs.find(x => x.kind === 'task')?.value;
+                }
+            }
+        }
+        if (linked.size !== 1) return null;
+        const missionId = [...linked][0];
+        const task = { id: linkedTaskId, missionId };
         const branch = typeof result.branch === 'string' ? result.branch : '';
         const into = typeof result.into === 'string' ? result.into : '';
         const sha = typeof result.mergedSha === 'string' ? result.mergedSha : '';
         const refs: MissionItemRef[] = [];
         if (sha) refs.push({ kind: 'commit', value: sha, ...(into ? { note: `merged into ${into}` } : {}) });
         if (branch) refs.push({ kind: 'branch', value: branch });
-        refs.push({ kind: 'task', value: task.id });
+        if (task.id) refs.push({ kind: 'task', value: task.id });
         const n = normalizeMissionItemInput({
             kind: 'evidence',
             text: `Refinery merged ${branch || 'branch'}${into ? ` into ${into}` : ''}${sha ? ` (${sha.slice(0, 12)})` : ''}${result.pushed === true ? ', pushed' : ''}`,
             refs,
-            dedupe_key: `refine-merge:${nodeId}:${sha || branch}`,
+            dedupe_key: `refine-merge:${nodeId ?? ''}:${sha || branch}`,
         });
         if ('error' in n) return null;
         let itemId: string | undefined;
         s.transaction(() => {
-            const r = addNormalizedItem(meshId, task.missionId!, n.item, 'daemon:refinery', 'daemon');
+            const r = addNormalizedItem(meshId, missionId, n.item, 'daemon:refinery', 'daemon');
             itemId = r.id;
-            if (!r.deduped) s.missionItems().bumpVersion(meshId, task.missionId!);
+            if (!r.deduped) s.missionItems().bumpVersion(meshId, missionId);
         });
-        return { missionId: task.missionId, itemId };
+        return { missionId, itemId };
     } catch (e: any) {
         LOG.warn('MeshMissions', `refine merge → mission evidence failed: ${e?.message || e}`);
         return null;

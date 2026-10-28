@@ -348,7 +348,25 @@ async function forwardReportToOwner(
     report: WorkerCompletionReport,
     delivery: { deliveryId?: string; reportedAtMs?: unknown } = {},
 ): Promise<Record<string, unknown> & { success: boolean }> {
-    return forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report, ...(delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}), ...(typeof delivery.reportedAtMs === 'number' ? { reportedAtMs: delivery.reportedAtMs } : {}) }, `${report.outcome} report`);
+    const send = (r: WorkerCompletionReport) => forwardToOwner(ctx, remote, WORKER_REPORT_FORWARD_COMMAND, { report: r, ...(delivery.deliveryId ? { deliveryId: delivery.deliveryId } : {}), ...(typeof delivery.reportedAtMs === 'number' ? { reportedAtMs: delivery.reportedAtMs } : {}) }, `${report.outcome} report`);
+    const first = await send(report);
+    // Mixed-version rollout (structured missions, design 2026-10-28 §13.1): an owner daemon that
+    // predates `decisionsNeeded`/`commits` refuses the whole report for an unknown field. Those two
+    // are optional extras, so degrade automatically — resend ONCE without them and keep the report —
+    // instead of making the worker resend. (The bridge path retains its envelope verbatim, so it is
+    // not rewritten here.)
+    if (first.success !== true && (report.decisionsNeeded || report.commits) && onlyUnknownStructuredFieldErrors(first)) {
+        const { decisionsNeeded: _d, commits: _c, ...legacy } = report;
+        LOG.warn('WorkerReport', `Owner ${remote.ownerDaemonId.slice(0, 16)} does not know decisions_needed/commits (older version) — resending the ${report.outcome} report for task ${remote.taskId ?? '?'} without them`);
+        return send(legacy as WorkerCompletionReport);
+    }
+    return first;
+}
+
+/** True when an owner's `invalid_report` refusal names only the structured-missions report fields as unknown. */
+function onlyUnknownStructuredFieldErrors(answer: Record<string, unknown>): boolean {
+    if (answer.error !== 'invalid_report' || !Array.isArray(answer.validationErrors) || answer.validationErrors.length === 0) return false;
+    return answer.validationErrors.every((e: any) => (e?.field === 'decisionsNeeded' || e?.field === 'commits') && /unknown field/.test(String(e?.message)));
 }
 
 /**

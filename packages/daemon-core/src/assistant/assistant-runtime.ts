@@ -27,7 +27,7 @@ import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
  * those coordinator turns, so they never reach this bus.
  */
 
-import { SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
+import { isCarryOverMissionRecord, SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { collectCoordinatorReplies } from './assistant-relay-audit.js';
@@ -258,7 +258,7 @@ export function buildAssistantRelayPorts(
         meshWork: (meshId): MeshWorkCounts | null => {
             try {
                 const q = getMeshQueueStats(meshId);
-                return { activeMissions: getMeshMissions(meshId, ['active']).length, pending: q.pending, assigned: q.assigned };
+                return { activeMissions: getMeshMissions(meshId, ['active']).filter(m => !isCarryOverMissionRecord(m)).length, pending: q.pending, assigned: q.assigned };
             } catch {
                 return null;
             }
