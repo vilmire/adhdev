@@ -249,6 +249,12 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'cooperative_maintenance_mcp_poll', 'cooperative_maintenance_mcp_reply',
     'cooperative_maintenance_actor_observe', 'cooperative_maintenance_observe',
     'cooperative_maintenance_status',
+    // Project file transfer (low-family/project-transfer.ts, 2026-10-28): 8 owner
+    // commands (sources p2p + standalone) + `project_transfer_peer` (mesh,
+    // meshSender 'authenticated_peer'); pinned by the sources test below.
+    'project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create',
+    'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
+    'project_transfer_list', 'project_transfer_status', 'project_transfer_peer',
     // Intentional hold commands and their compatibility aliases.
     'maintenance_new_work_hold_set',
     'maintenance_new_work_hold_extend',
@@ -483,6 +489,26 @@ describe('turn-ledger IPC commands (C-W6)', () => {
             const spec = getDaemonCommandRegistry().get(name);
             expect(spec?.family, name).toBe('low');
             expect(spec?.sources, name).toEqual(['ipc', 'standalone']);
+        }
+    });
+});
+
+describe('project transfer commands', () => {
+    it('owner commands are p2p + standalone only; the peer op is mesh-only with an authenticated sender', () => {
+        const owner = ['capabilities', 'browse', 'create', 'approve', 'revoke_approval', 'cancel', 'list', 'status'].map((n) => `project_transfer_${n}`);
+        for (const name of owner) {
+            const spec = getDaemonCommandRegistry().get(name);
+            expect(spec?.family, name).toBe('low');
+            expect(spec?.sources, name).toEqual(['p2p', 'standalone']);
+        }
+        const peer = getDaemonCommandRegistry().get('project_transfer_peer');
+        expect(peer?.family).toBe('low');
+        expect(peer?.sources).toEqual(['mesh']);
+        expect(peer?.meshSender).toBe('authenticated_peer');
+        // no other attribute is pinned for these commands
+        for (const name of [...owner, 'project_transfer_peer']) {
+            const { run: _r, ...rest } = getDaemonCommandRegistry().get(name) as unknown as Record<string, unknown>;
+            expect(Object.keys(rest).sort(), name).toEqual(name === 'project_transfer_peer' ? ['family', 'meshSender', 'name', 'sources'] : ['family', 'name', 'sources']);
         }
     });
 });

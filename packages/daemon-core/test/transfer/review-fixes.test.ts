@@ -116,6 +116,26 @@ describe('M4 consent age is enforced on the hot path', () => {
   });
 });
 
+describe('M4 publish-time guard', () => {
+  it.each(['authority', 'consent'] as const)('%s lost after the last block is verified, before publish => nothing published', async (kind) => {
+    const t = await setupPair({ 'proj/a.txt': 'hello' });
+    track(t.a, t.b);
+    let clock = Date.now();
+    t.b.ports.now = () => clock;
+    const orig = TransferReceiver.prototype.verifyAll;
+    vi.spyOn(TransferReceiver.prototype, 'verifyAll').mockImplementation(function (this: TransferReceiver) {
+      orig.call(this); // the bytes verify fine ...
+      if (kind === 'authority') t.b.authGen.value = 'gen-2'; else clock += 25 * 3_600_000; // ... then consent/authority is lost
+    });
+    await approveBoth(t.a, t.b, t.id, t.rec.selectionDigest);
+    await waitFor(() => ['revoked', 'expired', 'completed', 'failed'].includes(t.b.engine.get(t.id)?.state ?? ''));
+    const rec = t.b.engine.get(t.id)!;
+    expect(rec.state).toBe(kind === 'authority' ? 'revoked' : 'expired');
+    expect(rec.publishedName).toBeUndefined();
+    expect(fs.readdirSync(t.b.ws.path).filter((n) => !n.startsWith('.adhdev'))).toEqual([]);
+  });
+});
+
 describe('M5 secret list additions', () => {
   it.each([
     'application_default_credentials.json', 'a/firebase-adminsdk-abc12.json', '.cargo/credentials', '.cargo/credentials.toml', 'x/.cargo/credentials.toml',
