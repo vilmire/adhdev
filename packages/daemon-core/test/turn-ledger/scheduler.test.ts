@@ -556,6 +556,42 @@ describe('weak expiry requires a fresh completed probe', () => {
 // genuine at the first idle; with the report gate the attempt stays open through
 // the false idle and commits ONCE, on the report.
 describe('report gate — the rc.40 false-idle sequence commits once, on the report', () => {
+    it.each(['report', 'hard_ceiling'] as const)('direct missing-report expiry releases its hold once and preserves %s authority', async (resolution) => {
+        const r = rig();
+        toGenerating(r, 'mesh_direct');
+        r.ledger.observe(evd('turn_end', { strength: 'weak' }));
+        r.advance(weakConfirmMs(P) + 1);
+        r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
+        await r.scheduler.tick();
+        expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'finalizing', terminal: null });
+        expect(r.ledger.store.activeHolds('a1').some(h => h.reason === 'weak_candidate')).toBe(false);
+        const candidates = () => rowsOf(r.db, 'notify', 'a1').filter(row =>
+            (JSON.parse(String(row.payload_json)) as { notify?: string }).notify === 'candidate');
+        expect(candidates()).toHaveLength(1);
+        const expiries = rowsOf(r.db, 'hold_expired', 'a1').length;
+        for (let i = 0; i < 3; i++) {
+            r.advance(1);
+            await r.scheduler.tick();
+        }
+        expect(rowsOf(r.db, 'hold_expired', 'a1')).toHaveLength(expiries);
+        expect(candidates()).toHaveLength(1);
+        expect(r.host.calls.filter(c => c.startsWith('terminal:'))).toEqual([]);
+        expect(r.ledger.nextHoldDeadline(r.now)!).toBeGreaterThan(r.now);
+        if (resolution === 'report') {
+            r.ledger.observe(evd('worker_report', { outcome: 'completed', hasHandoffNotes: false },
+                { source: 'worker_tool', at: r.now }));
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+        } else {
+            r.advance(P.hardCeilingMs);
+            await r.scheduler.tick();
+            expect(r.ledger.getAttempt('a1')).toMatchObject({ state: 'stopping', terminal: null });
+            await confirmFixtureWriterQuiescence(r.ledger);
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', reason: 'hard_ceiling' });
+        }
+        expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(1);
+        expect(candidates()).toHaveLength(1);
+    });
+
     it('idle (report expected) → tick → busy → report → idle: one tool_report commit, one completion notice', async () => {
         const r = rig();
         toGenerating(r, 'mesh_direct');

@@ -7,8 +7,8 @@
  * must be able to tell a fresh reading from one left behind by a session that
  * ended yesterday.
  *
- * Content boundary: only the numbers Claude Code reports about plan
- * consumption are persisted. The statusline JSON also carries `cwd`,
+ * Content boundary: plan consumption numbers and a one-way producer account
+ * digest (or explicit unknown) are persisted; raw account/org IDs are not. The statusline JSON also carries `cwd`,
  * `transcript_path`, `session_id` and cost; none of that is quota, so none of
  * it is written here.
  *
@@ -20,6 +20,7 @@
 'use strict';
 
 import { toNumber } from '../fetchers/coerce.js';
+import { accountLineageFromStableIdentity, quotaAccountLineage, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage } from '../account-lineage.js';
 
 /** Bump when the on-disk shape changes incompatibly. */
 export const SNAPSHOT_VERSION = 1;
@@ -42,8 +43,26 @@ export interface StatuslineSnapshot {
     sevenDay: StatuslineWindowRecord | null;
     /** Claude Code version that produced the reading, for diagnostics. */
     cliVersion?: string | null;
+    /** Producer-bound account digest. Missing in legacy files; never inferred by the reader. */
+    accountLineage?: QuotaAccountLineage;
     /** Phase E: the model id Claude Code reported (`model.id`); see the header note. */
     model?: string | null;
+}
+
+/**
+ * Claude's remote-session launcher supplies these non-credential identity fields
+ * in the owning CLI's environment. They stay bound to that process when another
+ * CLI switches the on-disk account. Ordinary local sessions do not supply them:
+ * no statusline stdin identity is documented, so those captures remain unknown.
+ * Never substitute ~/.claude.json, install-time identity, or wrapper launch time:
+ * the wrapper is a new child of a potentially long-lived, old-account CLI.
+ */
+export function statuslineProducerLineage(env: NodeJS.ProcessEnv): QuotaAccountLineage {
+    const account = env.CLAUDE_CODE_ACCOUNT_UUID?.trim();
+    const org = env.CLAUDE_CODE_ORGANIZATION_UUID?.trim();
+    if (!account || !org) return UNKNOWN_ACCOUNT_LINEAGE;
+    return accountLineageFromStableIdentity('claude-cli', 'claude-code:statusline-rate-limits',
+        'claude-code:oauthAccount', JSON.stringify([account, org]));
 }
 
 /**
@@ -74,7 +93,7 @@ function windowsEqual(a: StatuslineWindowRecord | null, b: StatuslineWindowRecor
  * Decide whether a freshly-parsed reading is worth writing.
  *
  * Three rules, in order:
- *  - nothing on disk yet → always write;
+ *  - nothing on disk yet, or producer identity changed → always write;
  *  - inside the minimum interval → never write, even if the value changed
  *    (this is the rate limiter that survives a burst of invocations);
  *  - past the minimum → write when the numbers moved, or when the previous
@@ -85,7 +104,7 @@ export function shouldWriteSnapshot(
     next: StatuslineSnapshot,
     nowMs: number,
 ): boolean {
-    if (previous === null) {
+    if (previous === null || JSON.stringify(previous.accountLineage) !== JSON.stringify(next.accountLineage)) {
         return true;
     }
     const age = nowMs - previous.capturedAt;
@@ -135,7 +154,7 @@ function parseWindow(raw: unknown): StatuslineWindowRecord | null {
  * absent entirely for API-key users and for subscribers before the first API
  * response of a session, which is ordinary, not an error.
  */
-export function snapshotFromStatuslineInput(input: unknown, nowMs: number): StatuslineSnapshot | null {
+export function snapshotFromStatuslineInput(input: unknown, nowMs: number, producerEnv: NodeJS.ProcessEnv = {}): StatuslineSnapshot | null {
     if (typeof input !== 'object' || input === null) {
         return null;
     }
@@ -155,6 +174,7 @@ export function snapshotFromStatuslineInput(input: unknown, nowMs: number): Stat
     return {
         version: SNAPSHOT_VERSION,
         capturedAt: nowMs,
+        accountLineage: statuslineProducerLineage(producerEnv),
         fiveHour,
         sevenDay,
         ...(typeof version === 'string' ? { cliVersion: version } : {}),
@@ -189,6 +209,7 @@ export function parseSnapshotFile(raw: string): StatuslineSnapshot | null {
     return {
         version: SNAPSHOT_VERSION,
         capturedAt,
+        ...(record.accountLineage !== undefined ? { accountLineage: quotaAccountLineage(record.accountLineage) } : {}),
         fiveHour,
         sevenDay,
         ...(typeof record.cliVersion === 'string' ? { cliVersion: record.cliVersion } : {}),

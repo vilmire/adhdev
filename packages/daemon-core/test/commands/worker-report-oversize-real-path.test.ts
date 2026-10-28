@@ -17,7 +17,8 @@
  *     receipt the worker sees;
  *   - a corrected report is accepted as tool_report on that same attempt;
  *   - if the worker dies instead (liveness unknown), the report-await expiry
- *     re-probes once and then FAILS the attempt — never completed — and the
+ *     keeps a missing direct report incomplete; a refused report's correction
+ *     deadline FAILS the attempt — never completed — and the
  *     refusal row survives with its generation.
  */
 import { randomUUID } from 'node:crypto'
@@ -248,34 +249,33 @@ describe('over-limit report_completion — real path (mcp outbox → daemon → 
     expect(r.refusedRows()).toHaveLength(1)
   })
 
-  it('R13x final failure explicitly refuses a corrected late report rather than accepting only its summary', async () => {
+  it('a missing direct report stays recoverable after the old liveness probe grace', async () => {
     const r = rig()
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
     clock += P.awaitReportMs + 1
-    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
-    r.observe({ kind: 'liveness', result: 'unknown', probeStartedAtMs: clock + 1 }, { source: 'coordinator_probe', at: clock + 1 })
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13d')
     clock += endProbeGraceMs(P) + 1
-    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13x')
-    const refused = await r.report(OVERSIZE)
-    expect(refused.isError).toBe(true)
-    expect(refused.text).toContain(`attempt ${r.attemptId}`)
-    const corrected = await r.report('Late correction after R13x.')
-    expect(corrected.isError).toBe(true)
-    expect(corrected.text).toContain('correction_too_late')
-    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' })
-    expect(r.queueStatus()).toBe('failed')
-    expect(r.reportRows()).toHaveLength(0)
+    expect(ledger!.sweepExpiredHolds(clock).some(x => x.rule === 'R13x' || x.rule === 'R13z')).toBe(false)
+    expect(r.attempt()!.terminal).toBeNull()
+    expect(r.queueStatus()).toBe('assigned')
+    await refuseOversize(r)
+    const corrected = await r.report('Recovered direct report after the original wait window.')
+    expect(corrected.isError).toBeFalsy()
+    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report', reason: 'worker_reported' })
+    expect(r.queueStatus()).toBe('completed')
+    expect(r.reportRows()).toHaveLength(1)
+    expect(r.refusedRows()).toHaveLength(1)
   })
 
-  it('a refusal inside the liveness re-probe grace grants a bounded correction window on that same attempt', async () => {
+  it('a refusal after the direct-report wait grants a bounded correction window on that same attempt', async () => {
     const r = rig()
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     r.observe({ kind: 'liveness', result: 'unknown' }, { source: 'coordinator_probe' })
     clock += P.awaitReportMs + 1
-    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13d')
     await refuseOversize(r)
     clock += endProbeGraceMs(P) + 1
     expect(ledger!.sweepExpiredHolds(clock).some(x => x.rule === 'R13x' || x.rule === 'R13z')).toBe(false)
@@ -293,17 +293,21 @@ describe('over-limit report_completion — real path (mcp outbox → daemon → 
     expect(r.refusedRows()[0]).toMatchObject({ attemptId: r.attemptId, generation: 0 })
   })
 
-  it('stale alive never commits weak; absent new probe result ends as an explicit inconclusive timeout', () => {
+  it('stale alive never commits a direct task or creates a weak-end probe timeout', () => {
     const r = rig()
     let clock = Date.now()
     vi.spyOn(Date, 'now').mockImplementation(() => clock)
     r.observe({ kind: 'liveness', result: 'alive' }, { source: 'coordinator_probe' })
     clock += P.awaitReportMs + 1
-    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13u')
+    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13d')
     expect(r.attempt()!.terminal).toBeNull()
     clock += endProbeGraceMs(P) + 1
-    expect(ledger!.sweepExpiredHolds(clock).map(x => x.rule)).toContain('R13z')
-    expect(r.attempt()!.terminal).toMatchObject({ outcome: 'failed', reason: 'weak_end_probe_unobserved' })
-    expect(r.queueStatus()).toBe('failed')
+    expect(ledger!.sweepExpiredHolds(clock).some(x => x.rule === 'R13x' || x.rule === 'R13z')).toBe(false)
+    expect(r.attempt()!.terminal).toBeNull()
+    expect(r.queueStatus()).toBe('assigned')
+    expect(r.reportRows()).toHaveLength(0)
+    const holds = ledger!.store.activeHolds(r.attemptId)
+    expect(holds.some(h => h.reason === 'await_report' || h.reason === 'liveness_reprobe')).toBe(false)
+    expect(holds.some(h => h.reason === 'hard_ceiling')).toBe(true)
   })
 })

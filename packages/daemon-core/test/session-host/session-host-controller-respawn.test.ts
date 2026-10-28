@@ -264,7 +264,7 @@ describe('SessionHostController dead-host respawn', () => {
             workspace: tmp,
             launchCommand: { command: process.execPath, args: ['-e', ''] },
         });
-        server1.registry.markStarted(record.sessionId, process.pid);
+        const retainedRecord = server1.registry.markStarted(record.sessionId, process.pid);
         (server1 as any).runtimes.set(record.sessionId, {
             write: () => {},
             resize: () => {},
@@ -301,14 +301,10 @@ describe('SessionHostController dead-host respawn', () => {
                 storageRootDir: path.join(tmp, 'storage-2'),
             });
             await server2.start();
-            const record2 = server2.registry.createSession({
-                sessionId: 'sess-m4-transport',
-                providerType: 'codex',
-                category: 'cli',
-                workspace: tmp,
-                launchCommand: { command: process.execPath, args: ['-e', ''] },
-            });
-            server2.registry.markStarted(record2.sessionId, process.pid);
+            // Restore the retained process, including its original incarnation pin.
+            const record2 = server2.registry.restoreSession(retainedRecord);
+            expect(record2.runtimeKey).toBe(retainedRecord.runtimeKey);
+            expect(record2.startedAt).toBe(retainedRecord.startedAt);
             (server2 as any).runtimes.set(record2.sessionId, {
                 write: () => {},
                 resize: () => {},
@@ -316,7 +312,10 @@ describe('SessionHostController dead-host respawn', () => {
             });
 
             // Wait for transport's backoff loop to reconnect and re-attach without any daemon write()
-            await new Promise((resolve) => setTimeout(resolve, 750));
+            await vi.waitFor(() => {
+                expect((transport as any).attached).toBe(true);
+                expect((transport as any).reconnecting).toBe(false);
+            });
 
             const { seq } = server2.registry.appendOutput(record2.sessionId, 'output-after-4s-replacement\n');
             (server2 as any).emitEvent({

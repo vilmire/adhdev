@@ -267,7 +267,11 @@ async function refuseInvalidReport(
         const summaryLength = typeof raw.summary === 'string' ? raw.summary.trim().length : null;
         const deliveryId = normalizeWorkerDeliveryId(args?.deliveryId);
         const fields = errors.map((e) => e.field);
-        if (!hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
+        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
+        // A stored local delivery must not acquire a different remote identity
+        // from the session's later assignment, even for a rejected report.
+        if (prepared ? !selfDaemonPredicate(ctx)?.(prepared.ownerDaemonId)
+            : !hasLocalWorkerIdentity(credential, { isSelfDaemon: selfDaemonPredicate(ctx), reportedAtMs: args?.reportedAtMs })) {
             const remote = await resolveRemoteWorker(ctx, args);
             if (remote && remote.taskId && remote.attemptId && Number.isInteger(remote.generation)) {
                 const owner = await forwardToOwner(ctx, remote, WORKER_REFUSAL_FORWARD_COMMAND, {
@@ -278,13 +282,16 @@ async function refuseInvalidReport(
                 return { ...answer, ...(owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }), ...(owner.error === 'worker_protocol_unsupported' || owner.error === 'forward_failed' ? { provenanceError: owner.error } : {}) };
             }
         }
-        const prepared = args?.prepared ? validatePreparedDelivery(MeshRuntimeStore.getInstance().db, args) : null;
         if (prepared && daemonIdsEquivalent(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? '')) {
             const db = MeshRuntimeStore.getInstance().db, self = bridgeIdentity(ctx.deps.statusInstanceId ?? '', ctx.deps.statusVersion);
             const handled = commitLocalBridgeDelivery(db, { protocol: 1, kind: 'refusal', senderDaemonId: self.daemonId, senderCommit: self.commit,
                 senderVersion: self.version, ...prepared, payload: { fields: safeRefusalFields(fields), summaryLength } }, () => {
                 const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId);
-                if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId || !daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: 'stale_report' };
+                if (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId
+                    // eslint-disable-next-line no-restricted-syntax -- Refusal receipt consumption requires the exact nodeId pinned by this credential's saved preparation; an alias is a different claim.
+                    || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId
+                    || !daemonIdsEquivalent(attempt.ownerDaemonId, prepared.ownerDaemonId)
+                    || !daemonIdsEquivalent(attempt.ownerDaemonId, self.daemonId)) return { success: false, error: 'stale_report' };
                 const receipt = recordRefusedWorkerReportForIdentity({ token: '', ...prepared }, { fields, summaryLength },
                     { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs });
                 return receipt?.recorded ? { ...answer, receipt } : { success: false, error: 'storage_failed', receiptPending: true };
@@ -381,7 +388,12 @@ async function forwardToOwner(
             senderCommit: self.commit, senderVersion: self.version, ...claim, nodeId: remote.nodeId,
             deliveryId: payload.deliveryId, reportedAtMs: payload.reportedAtMs, payload: content } as BridgeEnvelope;
         const saved = typeof payload.deliveryId === 'string' ? findBridgeMemberDelivery(db, self.daemonId, payload.deliveryId) : null;
-        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId || saved.reportedAtMs !== payload.reportedAtMs || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: 'worker_delivery_identity_conflict' };
+        if (saved && (saved.sessionId !== remote.sessionId || saved.meshId !== remote.meshId
+            || saved.taskId !== remote.taskId || saved.attemptId !== remote.attemptId || saved.generation !== remote.generation
+            // eslint-disable-next-line no-restricted-syntax -- A saved delivery must retain its original envelope nodeId byte-for-byte; equivalent node forms cannot replace that claim.
+            || saved.nodeId !== remote.nodeId || !daemonIdsEquivalent(saved.ownerDaemonId, remote.ownerDaemonId)
+            || saved.kind !== kind || saved.reportedAtMs !== payload.reportedAtMs
+            || stableBridgeJson(saved.payload) !== stableBridgeJson(content))) return { success: false, error: 'worker_delivery_identity_conflict' };
         try { return await sendBridgeDelivery(db, saved ?? envelope, dispatch); }
         catch { return { success: false, error: 'worker_delivery_identity_conflict' }; }
     }
@@ -583,7 +595,9 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             // is written here.
             const isSelfDaemon = selfDaemonPredicate(_ctx);
             let response: Record<string, unknown> & { success: boolean };
-            if (!hasLocalWorkerIdentity(credential, { isSelfDaemon, reportedAtMs })) {
+            // Prepared routing is immutable. A later local/remote assignment
+            // must never choose which identity consumes this saved report.
+            if (prepared ? !isSelfDaemon?.(prepared.ownerDaemonId) : !hasLocalWorkerIdentity(credential, { isSelfDaemon, reportedAtMs })) {
                 const remote = await resolveRemoteWorker(_ctx, args);
                 if (remote) {
                     response = await forwardReportToOwner(_ctx, remote, report, { deliveryId, reportedAtMs });
@@ -593,8 +607,13 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
             }
             const apply = () => {
                 const attempt = prepared ? MeshRuntimeStore.getInstance().turnStore().getAttempt(prepared.attemptId) : null;
-                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId)) return { success: false, error: 'stale_report' };
-                return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs }));
+                if (prepared && (!attempt || attempt.generation !== prepared.generation || attempt.sessionId !== prepared.sessionId
+                    // eslint-disable-next-line no-restricted-syntax -- Report receipt consumption requires the exact nodeId pinned by this credential's saved preparation; aliases cannot authorize completion.
+                    || attempt.meshId !== prepared.meshId || attempt.taskId !== prepared.taskId || attempt.nodeId !== prepared.nodeId
+                    || !daemonIdsEquivalent(attempt.ownerDaemonId, prepared.ownerDaemonId) || !isSelfDaemon || !isSelfDaemon(attempt.ownerDaemonId))) {
+                    return { success: false, error: 'stale_report' };
+                }
+                return toReportResponse(acceptWorkerCompletionReport(credential, report, { isSelfDaemon, reportedAtMs, preparedIdentity: prepared ?? undefined }));
             };
             if (prepared) {
                 const self = bridgeIdentity(_ctx.deps.statusInstanceId ?? '', _ctx.deps.statusVersion);

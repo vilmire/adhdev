@@ -30,10 +30,9 @@ import type {
   SessionTermination,
 } from '@adhdev/session-host-core';
 import { PtySessionRuntime } from './runtime.js';
-import { HostUpgradeLease, type HostUpgradeBinding } from './upgrade-lease.js';
+import { HostUpgradeLease } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
 import { acquireHostInstanceLock, type HostInstanceLock } from './host-instance-lock.js';
-import type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 
 export {
   sessionHostInstanceArg,
@@ -43,6 +42,7 @@ export {
 export type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 import {
   buildHostDiagnostics,
+  resolveHostEntryPath,
   pushRecent,
 } from './session-diagnostics.js';
 import {
@@ -58,38 +58,8 @@ import {
 
 export const DEFAULT_EVICT_SIGKILL_GRACE_MS = 4_000;
 
-export interface SessionHostServerOptions {
-  endpoint?: SessionHostEndpoint;
-  /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
-  upgradeBinding?: HostUpgradeBinding;
-  appName?: string;
-  /** Explicit session-host state root (runtime records + tombstones). */
-  storageRootDir?: string;
-  /** Instance config directory used to verify single matching --instance-config-key on prior owners. */
-  instanceConfigDir?: string;
-  /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
-  pidFilePath?: string;
-  /** Exclusive host lock dir; defaults to `<pidFilePath>.lock`. No pidfile and no path = no lock. */
-  instanceLockPath?: string;
-  /** Keep the instance lock through stop() so only process death releases it (the CLI host sets this). */
-  holdInstanceLockUntilExit?: boolean;
-  /** Optional predicate override for testing whether a prior pid is alive. */
-  isPidAlive?: (pid: number) => boolean;
-  /** Optional predicate override for testing whether a prior pid is a managed session-host. */
-  isManagedOwnerPid?: (pid: number) => boolean;
-  /** Unsupported legacy replacement context; ordinary startup rejects its presence. */
-  replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
-  /** Optional native birth probe override (`ps -o lstart=`). */
-  getOwnerBirth?: (pid: number) => string | null;
-  /** Optional unix socket owner PID probe override (`lsof -t`). */
-  getSocketOwnerPids?: (endpointPath: string) => number[] | null;
-  /** Cancellation is checked after blocking reads and before startup effects. */
-  isCancelled?: () => boolean;
-  /** Optional process command-line probe override (`ps -o args=`). */
-  readOwnerArgs?: (pid: number) => string | null;
-  /** Legacy option retained for source compatibility; automatic live eviction is unsupported. */
-  evictGraceMs?: number;
-}
+import type { SessionHostServerOptions } from './server-options.js';
+export type { SessionHostServerOptions } from './server-options.js';
 
 export class SessionHostServer extends EventEmitter {
   readonly endpoint: SessionHostEndpoint;
@@ -461,7 +431,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse> {
-    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
+    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session_census', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -501,12 +471,25 @@ export class SessionHostServer extends EventEmitter {
         }
         case 'list_sessions':
           return { success: true, result: this.registry.listSessionSummaries(request.payload?.activeOnly === true) };
+        case 'get_session_census':
+          return { success: true, result: {
+            hostStartedAt: this.startedAt,
+            endpoint: this.endpoint.path,
+            hostEntryPath: resolveHostEntryPath(),
+            ...this.registry.getSessionCensus(request.payload.sessionIds),
+          } };
         case 'get_session': {
           const record = this.registry.getSession(request.payload.sessionId);
           return record ? { success: true, result: record } : { success: false, error: 'session_absent' };
         }
-        case 'attach_session': {
-          const record = this.registry.attachClient(request.payload);
+        case 'attach_session':
+        case 'attach_session_if_incarnation': {
+          const record = request.type === 'attach_session_if_incarnation'
+            ? this.registry.attachClientIfIncarnation(request.payload)
+            : this.registry.attachClient(request.payload);
+          // Keep guarded comparison, registry grant and socket subscription in
+          // the same synchronous turn, before handleIncomingRequest awaits us.
+          if (request.type === 'attach_session_if_incarnation' && sourceSocket) this.subscribeSocketToSession(sourceSocket, record.sessionId);
           this.schedulePersist(record.sessionId);
           const client = record.attachedClients.find(item => item.clientId === request.payload.clientId);
           if (client) {

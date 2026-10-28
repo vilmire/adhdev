@@ -1693,7 +1693,7 @@ var SessionHostServer = class extends EventEmitter {
     this.removeAllListeners();
   }
   async handleRequest(request, sourceSocket) {
-    const readOnly = ["get_upgrade_lease", "acquire_upgrade_lease", "release_upgrade_lease", "get_host_diagnostics", "get_session", "list_sessions", "get_snapshot", "get_terminal_snapshot"].includes(request.type);
+    const readOnly = ["get_upgrade_lease", "acquire_upgrade_lease", "release_upgrade_lease", "get_host_diagnostics", "get_session_census", "get_session", "list_sessions", "get_snapshot", "get_terminal_snapshot"].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -1734,12 +1734,21 @@ var SessionHostServer = class extends EventEmitter {
         }
         case "list_sessions":
           return { success: true, result: this.registry.listSessionSummaries(request.payload?.activeOnly === true) };
+        case "get_session_census":
+          return { success: true, result: {
+            hostStartedAt: this.startedAt,
+            endpoint: this.endpoint.path,
+            hostEntryPath: resolveHostEntryPath(),
+            ...this.registry.getSessionCensus(request.payload.sessionIds)
+          } };
         case "get_session": {
           const record = this.registry.getSession(request.payload.sessionId);
           return record ? { success: true, result: record } : { success: false, error: "session_absent" };
         }
-        case "attach_session": {
-          const record = this.registry.attachClient(request.payload);
+        case "attach_session":
+        case "attach_session_if_incarnation": {
+          const record = request.type === "attach_session_if_incarnation" ? this.registry.attachClientIfIncarnation(request.payload) : this.registry.attachClient(request.payload);
+          if (request.type === "attach_session_if_incarnation" && sourceSocket) this.subscribeSocketToSession(sourceSocket, record.sessionId);
           this.schedulePersist(record.sessionId);
           const client = record.attachedClients.find((item) => item.clientId === request.payload.clientId);
           if (client) {

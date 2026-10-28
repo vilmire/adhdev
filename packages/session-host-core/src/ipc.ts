@@ -1,6 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as net from 'net';
+import { createHash } from 'crypto';
 import { generateUUID } from './uuid.js';
 import { StringDecoder } from 'string_decoder';
 import type {
@@ -41,6 +42,8 @@ export interface SessionHostEndpointOptions {
   ipcKey?: string;
   /** Test seam: override the platform the endpoint shape is derived for. */
   platform?: NodeJS.Platform;
+  /** Test seam: override the temporary directory used for endpoint derivation. */
+  tmpDir?: string;
 }
 
 export function getDefaultSessionHostEndpoint(
@@ -62,10 +65,25 @@ export function getDefaultSessionHostEndpoint(
     };
   }
 
-  return {
+  const endpoint: SessionHostEndpoint = {
     kind: 'unix',
-    path: path.join(os.tmpdir(), `${appName}-session-host${suffix}.sock`),
+    path: path.join(options.tmpDir ?? os.tmpdir(), `${appName}-session-host${suffix}.sock`),
   };
+  const limit = platform === 'linux' ? 108 : 104;
+  if (Buffer.byteLength(endpoint.path, 'utf8') + 1 <= limit) return endpoint;
+
+  // Only an endpoint that cannot fit sockaddr_un changes. In particular, do not
+  // probe, relocate or unlink a legacy socket: every valid short path stays
+  // identical, including discovery by already-running hosts. Parent, host and
+  // CLI share this pure derivation. Hash the complete legacy namespace (tmpdir,
+  // app name and config-derived ipcKey), plus uid for the shared /tmp directory.
+  // A full SHA-256 avoids truncating long/multibyte names into aliases. Keep the
+  // literal /tmp spelling: Darwin's /private/tmp realpath needlessly adds bytes.
+  const identity = JSON.stringify([endpoint.path, appName, rawKey, process.getuid?.() ?? null]);
+  const digest = createHash('sha256').update(identity, 'utf8').digest('hex');
+  const shortened: SessionHostEndpoint = { kind: 'unix', path: `/tmp/adhdev-sh-${digest}.sock` };
+  validateSessionHostEndpoint(shortened, platform);
+  return shortened;
 }
 
 function serializeEnvelope(envelope: SessionHostWireEnvelope): string {
@@ -344,14 +362,10 @@ export class SessionHostClient {
             observerLagMs,
           },
         );
-        if (this.socket === socket) {
-          this.disconnect(timeoutError);
-        } else {
-          this.requestWaiters.delete(requestId);
-          this.disconnectedSockets.add(socket);
-          try { socket.destroy(); } catch { /* noop */ }
-          reject(timeoutError);
-        }
+        // A deadline says nothing about socket or process liveness. Remove only
+        // this waiter; the parser safely discards its eventual late response.
+        this.requestWaiters.delete(requestId);
+        reject(timeoutError);
       }, timeoutMs);
       this.requestWaiters.set(requestId, {
         resolve: (value) => { clearTimeout(timeout); resolve(value as SessionHostResponse<T>); },
@@ -507,14 +521,15 @@ export class SessionHostClient {
     const deadline = Date.now() + timeoutMs;
     const alreadyConnected = this.isConnected() && !this.connectPromise;
     // A probe must also bound a connect/re-attach already in flight on this
-    // client; that task may have started with the normal 30s timeout.
+    // client; that task may have started with the normal 30s timeout. The
+    // request budget must not shorten or cancel that shared connection task.
     if (options.timeoutMs !== undefined) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const raceStartedAt = Date.now();
       const raceStartedMonotonicAt = performance.now();
       try {
         await Promise.race([
-          this.connect(timeoutMs),
+          this.connect(),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => {
               const actualElapsedMs = Math.max(0, Math.round(performance.now() - raceStartedMonotonicAt));
@@ -531,7 +546,6 @@ export class SessionHostClient {
                 },
               );
               reject(error);
-              this.disconnect(error);
             }, timeoutMs);
           }),
         ]);

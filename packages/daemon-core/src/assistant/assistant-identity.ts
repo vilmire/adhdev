@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import type { HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
 import { isPidAlive } from '../launch-defaults/owned-lock.js';
-import { getDefaultSessionHostEndpoint, SessionHostClient, type SessionHostDiagnostics } from '@adhdev/session-host-core';
+import { getDefaultSessionHostEndpoint, SessionHostClient, type SessionHostCensus } from '@adhdev/session-host-core';
 import { isManagedSessionHostCommandLine } from '../commands/process-lifecycle.js';
 import { readPersistedRuntimeRecord } from '../session-host/persisted-runtime-record.js';
 import type { AssistantRegistryEntry } from './assistant-registry.js';
@@ -26,24 +26,27 @@ export function assistantRestoreCandidate(entry: AssistantRegistryEntry | null, 
 }
 
 /** Verify the namespace endpoint and host's recorded identity, then use its
- * current census. PID existence alone cannot distinguish a reused PID. */
-async function verifiedHostAssistants(configDir: string, namespace: string, ipcKey: string, boundSessionId?: string): Promise<Set<string> | undefined> {
+ * bounded candidate census. PID existence alone cannot distinguish a reused PID. */
+async function verifiedHostAssistants(configDir: string, namespace: string, ipcKey: string, candidates: Set<string>): Promise<Set<string> | undefined> {
     const endpoint = getDefaultSessionHostEndpoint(namespace, { ipcKey });
-    const client = new SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+    // One total budget includes connection and response. Large candidate sets
+    // stay uncertain instead of turning startup into a bulk inventory transfer.
+    if (candidates.size > 128 || [...candidates].some(id => id.length > 256)) return undefined;
+    const budgetMs = 2_000;
+    const client = new SessionHostClient({ endpoint, requestTimeoutMs: budgetMs, registerAsShared: false });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
         const response = await Promise.race([
-            client.request<SessionHostDiagnostics>({ type: 'get_host_diagnostics', payload: { includeSessions: true } }),
-            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('assistant_host_probe_timeout')), 500); }),
+            client.request<SessionHostCensus>({ type: 'get_session_census', payload: { sessionIds: [...candidates] } }, { timeoutMs: budgetMs }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('assistant_host_probe_timeout')), budgetMs); }),
         ]);
         const host = response.result;
         if (!response.success || !host || host.endpoint !== endpoint.path || !(host.hostStartedAt > 0)
             || typeof host.hostEntryPath !== 'string' || !isManagedSessionHostCommandLine(`node "${host.hostEntryPath.replace(/\\/g, '/')}"`)
-            || !Array.isArray(host.sessions)) return undefined;
-        return new Set(host.sessions.filter(r => r.category === 'cli' && !r.termination
-            && ['starting', 'running', 'stopping', 'interrupted'].includes(r.lifecycle)
-            && (r.sessionId === boundSessionId || hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant === true, launchRecord: r.meta?.launchRecord })))
-            .map(r => r.sessionId));
+            || host.hasOtherAssistantCandidates !== false
+            || !Array.isArray(host.liveSessionIds) || host.liveSessionIds.length > candidates.size
+            || host.liveSessionIds.some(id => typeof id !== 'string' || !candidates.has(id))) return undefined;
+        return new Set(host.liveSessionIds);
     } catch (error) {
         // A dead pid plus an absent endpoint can dismiss a stale snapshot. A
         // live/reused/missing pid cannot establish host identity or liveness.
@@ -107,9 +110,9 @@ export async function persistedAssistantRuntimeIds(configDir: string, options: {
             candidates.add(r.sessionId);
         }
         // Ordinary sessions never cause PID/socket probes. One census per host,
-        // irrespective of the number of assistant records or snapshots.
+        // with no prompts, terminal snapshots or diagnostic bodies.
         if (!candidates.size) continue;
-        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
+        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, candidates);
         if (verified) for (const id of verified) {
             ids.add(id);
             options.onConflictEvidence?.({ namespace, sessionId: id, reason: 'host census reports a live assistant' });
