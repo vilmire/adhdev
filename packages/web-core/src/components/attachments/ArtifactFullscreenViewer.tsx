@@ -28,7 +28,7 @@ export interface ArtifactFullscreenViewerProps {
     /** `modal` (default) portals over the app; `page` fills a standalone window. */
     mode?: 'modal' | 'page'
     /** Optional prev/next across artifacts of the same chat (arrow keys). */
-    position?: { index: number; total: number }
+    position?: { index: number; total: number; /** More artifacts exist beyond the loaded `total` (shown as "N+"). */ more?: boolean }
     onNavigate?: (delta: -1 | 1) => void
     /** Hide the "open in new window" button (it is always hidden in `page` mode). */
     disablePopOut?: boolean
@@ -117,6 +117,7 @@ export function ArtifactFullscreenViewer({
     const [textScale, setTextScale] = useState(1)
     const [zoom, setZoom] = useState(100)
     const [popOutBlocked, setPopOutBlocked] = useState(false)
+    const [imageFailed, setImageFailed] = useState(false)
     const [tocOpen, setTocOpen] = useState(isWideViewport)
 
     // Capture the opener once so focus can return to it on close.
@@ -138,6 +139,7 @@ export function ArtifactFullscreenViewer({
     // Reset per-artifact view state when navigating between artifacts.
     useEffect(() => {
         setZoom(100)
+        setImageFailed(false)
     }, [item])
 
     const close = useCallback(() => {
@@ -237,7 +239,7 @@ export function ArtifactFullscreenViewer({
         >
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-3 py-2 sm:px-4">
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold" data-testid="artifact-fullscreen-title">{item.title || item.filename}</div>
+                    <div className="truncate text-sm font-semibold" data-testid="artifact-fullscreen-title" title={item.title || item.filename}>{item.title || item.filename}</div>
                     <div className="flex flex-wrap items-center gap-1.5 font-mono text-3xs text-text-muted">
                         <span className="truncate">{item.filename}</span>
                         <span aria-hidden="true">·</span>
@@ -247,7 +249,7 @@ export function ArtifactFullscreenViewer({
                         {position && position.total > 1 && (
                             <>
                                 <span aria-hidden="true">·</span>
-                                <span data-testid="artifact-fullscreen-position">{`${position.index + 1}/${position.total}`}</span>
+                                <span data-testid="artifact-fullscreen-position">{`${position.index + 1}/${position.total}${position.more ? '+' : ''}`}</span>
                             </>
                         )}
                     </div>
@@ -293,6 +295,11 @@ export function ArtifactFullscreenViewer({
                     {tr('artifact.popoutBlocked')}
                 </div>
             )}
+            {item.sha256Changed && (
+                <div role="status" data-testid="artifact-changed-notice" className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-2xs text-amber-800 dark:text-amber-200">
+                    {tr('artifact.changedNotice')}
+                </div>
+            )}
             <div className="relative flex min-h-0 flex-1">
                 {showToc && tocOpen && (
                     <nav aria-label={tr('artifact.toc')} data-testid="artifact-toc" className="w-56 shrink-0 overflow-auto border-r border-border-subtle p-3 text-2xs max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10 max-md:bg-bg-primary max-md:shadow-xl">
@@ -309,7 +316,7 @@ export function ArtifactFullscreenViewer({
                     </nav>
                 )}
                 <div
-                    className="min-w-0 flex-1 overflow-auto p-2 sm:p-4"
+                    className={`min-w-0 flex-1 overflow-auto p-2 sm:p-4${isImage ? ' flex' : ''}`}
                     data-testid="artifact-fullscreen-body"
                     onTouchStart={(e) => { if (isImage && e.touches.length === 2) pinchRef.current = { dist: touchDist(e), zoom } }}
                     onTouchMove={(e) => {
@@ -320,14 +327,25 @@ export function ArtifactFullscreenViewer({
                     onTouchEnd={() => { pinchRef.current = null }}
                 >
                     {isImage ? (
-                        imageUrl ? (
-                            <div className="flex min-h-full min-w-full items-center justify-center" style={{ touchAction: 'pan-x pan-y' }}>
+                        imageFailed ? (
+                            <div role="alert" data-testid="artifact-image-broken" className="m-auto max-w-md px-4 py-8 text-center text-sm text-text-secondary">
+                                {tr('artifact.imageBroken')}
+                            </div>
+                        ) : imageUrl ? (
+                            // 100% = the whole image fits the body (never upscaled past natural size); the
+                            // zoom factor scales the fit box, so >100 scrolls and <100 shrinks.
+                            <div
+                                className="m-auto flex shrink-0 items-center justify-center"
+                                style={{ width: `${zoom}%`, height: `${zoom}%`, touchAction: 'pan-x pan-y' }}
+                                data-testid="artifact-image-box"
+                            >
                                 <img
                                     src={imageUrl}
                                     alt={item.title || item.filename}
                                     data-testid="artifact-fullscreen-image"
                                     draggable={false}
-                                    style={{ width: `${zoom}%`, maxWidth: zoom <= 100 ? '100%' : 'none', maxHeight: zoom <= 100 ? '100%' : 'none', objectFit: 'contain' }}
+                                    onError={() => setImageFailed(true)}
+                                    style={{ width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                                 />
                             </div>
                         ) : null

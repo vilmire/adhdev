@@ -31,6 +31,8 @@ export type ArtifactTranslationKey =
     | 'artifact.fit'
     | 'artifact.hashChangedWarning'
     | 'artifact.hashChangedDetail'
+    | 'artifact.imageBroken'
+    | 'artifact.changedNotice'
     | 'artifact.invalidJsonNotice'
     | 'artifact.emptyContent'
     | 'artifact.errorMissingSession'
@@ -77,6 +79,8 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.fit': 'Fit',
         'artifact.hashChangedWarning': 'File modified since registration',
         'artifact.hashChangedDetail': 'The workspace file SHA-256 hash changed after this artifact was registered.',
+        'artifact.imageBroken': 'This image can\'t be displayed. You can still download the file.',
+        'artifact.changedNotice': 'The file changed after it was registered — showing its current content.',
         'artifact.invalidJsonNotice': 'Malformed JSON — showing raw text',
         'artifact.emptyContent': 'Empty artifact file',
         'artifact.errorMissingSession': 'Session context is required to load this artifact.',
@@ -120,6 +124,8 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.fit': '맞춤',
         'artifact.hashChangedWarning': '등록 이후 파일이 변경됨',
         'artifact.hashChangedDetail': '이 산출물이 등록된 이후 작업 공간 파일의 SHA-256 해시가 변경되었습니다.',
+        'artifact.imageBroken': '이 이미지를 표시할 수 없습니다. 파일은 그대로 다운로드할 수 있습니다.',
+        'artifact.changedNotice': '파일이 등록된 뒤 바뀌었습니다 — 현재 내용을 보여줍니다.',
         'artifact.invalidJsonNotice': '유효하지 않은 JSON — 원문 텍스트로 표시합니다',
         'artifact.emptyContent': '빈 산출물 파일입니다',
         'artifact.errorMissingSession': '이 산출물을 불러오려면 세션 정보가 필요합니다.',
@@ -163,6 +169,8 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.fit': '全体表示',
         'artifact.hashChangedWarning': '登録後にファイルが変更されました',
         'artifact.hashChangedDetail': 'このアーティファクトの登録後にワークスペースファイルの SHA-256 ハッシュが変更されました。',
+        'artifact.imageBroken': 'この画像は表示できません。ファイルはダウンロードできます。',
+        'artifact.changedNotice': '登録後にファイルが変更されました — 現在の内容を表示しています。',
         'artifact.invalidJsonNotice': '不正な JSON — 生テキストを表示しています',
         'artifact.emptyContent': '空のアーティファクトファイル',
         'artifact.errorMissingSession': 'このアーティファクトを読み込むにはセッション情報が必要です。',
@@ -206,6 +214,8 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.fit': '适应',
         'artifact.hashChangedWarning': '文件在注册后已更改',
         'artifact.hashChangedDetail': '此产物注册后，工作区文件的 SHA-256 哈希值已发生更改。',
+        'artifact.imageBroken': '无法显示此图片。你仍可下载该文件。',
+        'artifact.changedNotice': '文件在注册后已更改 — 当前显示的是最新内容。',
         'artifact.invalidJsonNotice': 'JSON 格式无效 — 显示原始文本',
         'artifact.emptyContent': '空产物文件',
         'artifact.errorMissingSession': '加载此产物需要会话上下文。',
@@ -249,6 +259,8 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.fit': 'Ajustar',
         'artifact.hashChangedWarning': 'Archivo modificado tras el registro',
         'artifact.hashChangedDetail': 'El hash SHA-256 del archivo en el espacio de trabajo cambió después de registrar este artefacto.',
+        'artifact.imageBroken': 'No se puede mostrar esta imagen. Aún puedes descargar el archivo.',
+        'artifact.changedNotice': 'El archivo cambió después de registrarse: se muestra su contenido actual.',
         'artifact.invalidJsonNotice': 'JSON no válido — mostrando texto sin formato',
         'artifact.emptyContent': 'Archivo de artefacto vacío',
         'artifact.errorMissingSession': 'Se requiere el contexto de la sesión para cargar este artefacto.',

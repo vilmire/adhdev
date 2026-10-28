@@ -12,6 +12,8 @@ export interface ArtifactViewerItem {
     text: string | null
     /** Raw bytes for images (and download of any kind). */
     blob: Blob | null
+    /** The workspace file changed after the artifact was registered. */
+    sha256Changed?: boolean
 }
 
 export function toArtifactViewerItem(payload: ArtifactResolvedPayload): ArtifactViewerItem {
@@ -24,6 +26,7 @@ export function toArtifactViewerItem(payload: ArtifactResolvedPayload): Artifact
         mime: payload.mime,
         sizeBytes: payload.sizeBytes,
         text: payload.kind === 'image' ? null : (payload.textContent ?? payload.content ?? ''),
+        sha256Changed: payload.sha256Changed === true,
         blob: typeof Blob === 'undefined' ? null : new Blob([copy.buffer], { type: payload.mime }),
     }
 }

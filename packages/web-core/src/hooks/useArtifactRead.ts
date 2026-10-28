@@ -397,6 +397,21 @@ export function resolveArtifactSessionTarget(
     return null
 }
 
+/**
+ * Daemon failures arrive as `{ success:false, code, error }` where `error` is a
+ * human sentence ending in "(code)"; older shapes put the bare code in `error`.
+ * Always resolve to the bare machine code, never the sentence.
+ */
+function extractArtifactErrorCode(body: Record<string, unknown>): UseArtifactReadResult['errorCode'] {
+    const bare = /^[a-z][a-z0-9_]*$/
+    if (typeof body.code === 'string' && bare.test(body.code.trim())) return body.code.trim() as UseArtifactReadResult['errorCode']
+    const error = typeof body.error === 'string' ? body.error.trim() : ''
+    if (bare.test(error)) return error as UseArtifactReadResult['errorCode']
+    const tail = /\(([a-z][a-z0-9_]*)\)\s*$/.exec(error)
+    if (tail) return tail[1] as UseArtifactReadResult['errorCode']
+    return 'request_failed'
+}
+
 export function readArtifactFetchCommandResponse(
     raw: unknown,
     expected: {
@@ -415,9 +430,7 @@ export function readArtifactFetchCommandResponse(
         return { data: null, error: 'Empty artifact response', errorCode: 'request_failed' }
     }
     if (body.success === false) {
-        const code = typeof body.error === 'string' && body.error.trim()
-            ? (body.error.trim() as UseArtifactReadResult['errorCode'])
-            : 'request_failed'
+        const code = extractArtifactErrorCode(body)
         const msg = typeof body.message === 'string' && body.message.trim()
             ? body.message.trim()
             : typeof body.error === 'string' && body.error.trim()

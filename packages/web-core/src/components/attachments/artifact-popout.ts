@@ -20,6 +20,7 @@ export interface ArtifactPopoutWirePayload {
     text: string | null
     /** Structured-cloneable Blob (never an object URL — those are origin/window scoped). */
     blob: Blob | null
+    sha256Changed?: boolean
 }
 
 const KINDS = new Set(['markdown', 'diff', 'json', 'text', 'image'])
@@ -32,6 +33,7 @@ export function isArtifactPopoutWirePayload(value: unknown): value is ArtifactPo
         && typeof v.kind === 'string' && KINDS.has(v.kind)
         && typeof v.mime === 'string'
         && typeof v.sizeBytes === 'number'
+        && (v.sha256Changed === undefined || typeof v.sha256Changed === 'boolean')
         && (v.text === null || typeof v.text === 'string')
         && (v.blob === null || (typeof Blob !== 'undefined' && v.blob instanceof Blob))
 }

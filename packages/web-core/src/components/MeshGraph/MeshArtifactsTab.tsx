@@ -9,6 +9,7 @@ import { formatAbsoluteTime, formatRelativeTimeLocalized } from '../../utils/tim
 import { RefreshButton } from '../ui/RefreshButton'
 import { ArtifactFullscreenViewer } from '../attachments/ArtifactFullscreenViewer'
 import { getArtifactKindLabel } from '../attachments/artifact-i18n'
+import { artifactErrorCodeOf, classifyArtifactOpenError } from '../attachments/artifact-open-error'
 import { toArtifactViewerItem, type ArtifactViewerItem } from '../attachments/artifact-viewer-item'
 import { Badge } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import {
@@ -46,6 +47,10 @@ function ArtifactThumb({ attachment, hostDaemonId, sendCommand }: {
     attachmentRef.current = attachment
     const [src, setSrc] = useState<string | null>(null)
     const [loaded, setLoaded] = useState(false)
+    // A failed thumbnail retries when the list is refreshed (the attachment object is new then).
+    const failedRef = useRef(false)
+    const [attempt, setAttempt] = useState(0)
+    useEffect(() => { if (failedRef.current) { failedRef.current = false; setAttempt(a => a + 1) } }, [attachment])
     const eligible = attachment.kind === 'image' && attachment.sizeBytes <= THUMBNAIL_MAX_BYTES
     const { artifactId, sha256 } = attachment
     // Keyed on the artifact's identity (not the attachment object, which is new after
@@ -53,6 +58,7 @@ function ArtifactThumb({ attachment, hostDaemonId, sendCommand }: {
     useEffect(() => {
         setSrc(null)
         setLoaded(false)
+        failedRef.current = false
         if (!eligible || typeof IntersectionObserver === 'undefined' || !ref.current) return
         let cancelled = false
         let url: string | null = null
@@ -83,7 +89,7 @@ function ArtifactThumb({ attachment, hostDaemonId, sendCommand }: {
             queued.promise.then(blob => {
                 cancelQueued = null
                 if (blob) show(blob)
-            }).catch(() => { cancelQueued = null /* the glyph stays; open the viewer for the real error */ })
+            }).catch(() => { cancelQueued = null; failedRef.current = true /* the glyph stays until the next list refresh retries */ })
         }, { rootMargin: '120px' })
         observer.observe(ref.current)
         return () => {
@@ -93,7 +99,7 @@ function ArtifactThumb({ attachment, hostDaemonId, sendCommand }: {
             if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
             setSrc(null)
         }
-    }, [artifactId, sha256, eligible, hostDaemonId, sendCommand])
+    }, [artifactId, sha256, eligible, hostDaemonId, sendCommand, attempt])
     return (
         <div ref={ref} className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary text-3xs font-bold text-text-muted" aria-hidden="true">
             {!loaded && KIND_GLYPH[attachment.kind]}
@@ -107,8 +113,9 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
     const [kind, setKind] = useState<MeshArtifactKindFilter>('all')
     const [query, setQuery] = useState('')
     const [viewer, setViewer] = useState<{ artifactId: string; item: ArtifactViewerItem } | null>(null)
-    const [openError, setOpenError] = useState<string | null>(null)
-    const [opening, setOpening] = useState(false)
+    const [openError, setOpenError] = useState<{ artifactId: string; message: string; raw: string } | null>(null)
+    const [openingId, setOpeningId] = useState<string | null>(null)
+    const opening = openingId !== null
     const { attachments, loading, loadingMore, error, hasMore, refresh, loadMore } = useMeshArtifacts({
         meshId: status.meshId,
         hostDaemonId: daemonId,
@@ -130,7 +137,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
         const target = view.ordered[index]
         if (!target || !daemonId || !sendDaemonCommand) return
         const seq = ++openSeqRef.current
-        setOpening(true)
+        setOpeningId(target.attachment.artifactId)
         setOpenError(null)
         try {
             const payload = await fetchMeshArtifactPayload({ sendCommand: sendDaemonCommand, hostDaemonId: daemonId, attachment: target.attachment })
@@ -138,11 +145,14 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
             if (openSeqRef.current !== seq) return
             setViewer({ artifactId: target.attachment.artifactId, item: toArtifactViewerItem(payload) })
         } catch (err) {
-            if (openSeqRef.current === seq) setOpenError(err instanceof Error ? err.message : String(err))
+            if (openSeqRef.current === seq) {
+                const raw = err instanceof Error ? err.message : String(err)
+                setOpenError({ artifactId: target.attachment.artifactId, message: t(classifyArtifactOpenError(artifactErrorCodeOf(err), raw)), raw })
+            }
         } finally {
-            if (openSeqRef.current === seq) setOpening(false)
+            if (openSeqRef.current === seq) setOpeningId(null)
         }
-    }, [daemonId, sendDaemonCommand, view.ordered])
+    }, [daemonId, sendDaemonCommand, t, view.ordered])
 
     const viewerIndex = viewer ? view.ordered.findIndex(i => i.attachment.artifactId === viewer.artifactId) : -1
     const onNavigate = useCallback((delta: -1 | 1) => {
@@ -170,11 +180,19 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
         const title = att.title || att.filename
         const index = view.ordered.indexOf(item)
         const preview = artifactPreviewLine(att.kind, att.previewText)
+        const isOpening = openingId === att.artifactId
+        const rowError = openError?.artifactId === att.artifactId ? openError : null
+        // Focus the row's button first so the viewer's opener capture can return focus here on close.
+        const openFromRow = (row: Element | null) => {
+            row?.querySelector<HTMLElement>('[data-testid="mesh-artifact-open"]')?.focus({ preventScroll: true })
+            void openAt(index)
+        }
         return (
             <li
                 key={att.artifactId}
-                onClick={event => { if (!(event.target as HTMLElement).closest('button, a')) void openAt(index) }}
-                className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 p-2 transition-colors hover:border-border-default hover:bg-bg-secondary focus-within:border-accent"
+                onClick={event => { if (!(event.target as HTMLElement).closest('button, a')) openFromRow(event.currentTarget) }}
+                aria-busy={isOpening || undefined}
+                className={`flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 p-2 transition-colors hover:border-border-default hover:bg-bg-secondary focus-within:border-accent${isOpening ? ' opacity-60' : ''}`}
                 data-testid="mesh-artifact-row"
                 data-artifact-id={att.artifactId}
             >
@@ -184,13 +202,23 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                 <div className="min-w-0 flex-1">
                     <button
                         type="button"
-                        onClick={() => void openAt(index)}
+                        onClick={event => openFromRow(event.currentTarget.closest('li'))}
+                        title={title}
                         aria-label={t('mesh.obs.artifactsOpenAria', { title })}
                         className="block max-w-full truncate text-left text-sm font-semibold text-text-primary hover:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                         data-testid="mesh-artifact-open"
                     >
                         {title}
                     </button>
+                    {isOpening && (
+                        <div className="mt-0.5 flex items-center gap-1.5 text-3xs text-text-muted" data-testid="mesh-artifact-opening" role="status">
+                            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true" />
+                            {t('mesh.obs.artifactsOpening')}
+                        </div>
+                    )}
+                    {rowError && (
+                        <p role="alert" title={rowError.raw} className="mt-0.5 text-2xs text-rose-700 dark:text-rose-200" data-testid="mesh-artifact-open-error">{rowError.message}</p>
+                    )}
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-3xs text-text-muted">
                         <span>{kindLabel(att.kind)}</span>
                         {att.filename && att.filename !== title && <span className="truncate">{att.filename}</span>}
@@ -223,15 +251,19 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 pb-3" data-testid="mesh-artifacts-tab">
             <div className="flex flex-wrap items-center gap-2 pt-1">
-                <input
-                    type="search"
-                    value={query}
-                    onChange={e => setQuery(e.target.value)}
-                    placeholder={t('mesh.obs.artifactsSearchPlaceholder')}
-                    aria-label={t('mesh.obs.artifactsSearchPlaceholder')}
-                    className="min-w-[10rem] flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-                />
-                <div role="group" aria-label={t('mesh.obs.artifactsKindAria')} className="flex flex-wrap items-center gap-1">
+                <div className="flex min-w-0 flex-1 basis-[12rem] items-center gap-2">
+                    <input
+                        type="search"
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        placeholder={t('mesh.obs.artifactsSearchPlaceholder')}
+                        aria-label={t('mesh.obs.artifactsSearchPlaceholder')}
+                        className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-bg-secondary px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    />
+                    <RefreshButton onClick={refresh} refreshing={loading} disabled={noHost} className="h-8 w-8 shrink-0" />
+                </div>
+                {/* One scrollable row on narrow screens instead of wrapping onto extra lines. */}
+                <div role="group" aria-label={t('mesh.obs.artifactsKindAria')} className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto max-sm:w-full" data-testid="mesh-artifact-kinds">
                     {KIND_FILTERS.map(k => (
                         <button
                             key={k}
@@ -239,16 +271,13 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                             aria-pressed={kind === k}
                             onClick={() => setKind(k)}
                             data-testid={`mesh-artifact-kind-${k}`}
-                            className={`rounded-full border px-2.5 py-1 text-2xs font-medium ${kind === k ? 'border-accent text-accent' : 'border-border-subtle text-text-secondary hover:border-border-default'}`}
+                            className={`shrink-0 rounded-full border px-2.5 py-1 text-2xs font-medium ${kind === k ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle text-text-secondary hover:border-border-default'}`}
                         >
                             {kindLabel(k)}
                         </button>
                     ))}
                 </div>
-                <RefreshButton onClick={refresh} refreshing={loading} disabled={noHost} className="h-8 w-8" />
             </div>
-
-            {openError && <div role="alert" className="rounded-lg border border-rose-500/40 px-3 py-2 text-xs text-rose-700 dark:text-rose-200">{t('mesh.obs.artifactsOpenFailed', { reason: openError })}</div>}
 
             {noHost ? (
                 <div className="px-3 py-8 text-center text-sm text-text-muted">{t('mesh.obs.artifactsNoHost')}</div>
@@ -279,6 +308,9 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                 ))
             )}
 
+            {hasMore && !noHost && filtered && (
+                <p className="text-center text-2xs text-text-muted" data-testid="mesh-artifacts-more-hint">{t('mesh.obs.artifactsMoreHint')}</p>
+            )}
             {hasMore && !noHost && (
                 <button
                     type="button"
@@ -296,7 +328,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                     item={viewer.item}
                     popOutPayload={viewer.item}
                     onClose={() => setViewer(null)}
-                    position={viewerIndex >= 0 ? { index: viewerIndex, total: view.ordered.length } : undefined}
+                    position={viewerIndex >= 0 ? { index: viewerIndex, total: view.ordered.length, more: hasMore } : undefined}
                     onNavigate={viewerIndex >= 0 ? onNavigate : undefined}
                 />
             )}

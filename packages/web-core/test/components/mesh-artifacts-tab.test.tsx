@@ -199,6 +199,110 @@ describe('MeshArtifactsTab', () => {
         expect(document.querySelector('[data-testid="artifact-fullscreen-title"]')?.textContent).toBe('Data')
     })
 
+    function failingFetchSend(over: Record<string, unknown>, gate?: { resolve?: () => void }) {
+        const base = makeSend()
+        return vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_fetch') {
+                if (gate) await new Promise<void>(res => { gate.resolve = res })
+                return { success: false, ...over }
+            }
+            return base(d, type, payload)
+        })
+    }
+    const openButtons = () => container.querySelectorAll('[data-testid="mesh-artifact-open"]')
+
+    it('shows opening feedback on the row being opened while the fetch is slow', async () => {
+        const gate: { resolve?: () => void } = {}
+        await mount(failingFetchSend({ code: 'artifact_not_found', error: 'x (artifact_not_found)' }, gate) as any)
+        await act(async () => { (openButtons()[0] as HTMLButtonElement).click() })
+        const rows = container.querySelectorAll('[data-testid="mesh-artifact-row"]')
+        expect(rows[0]!.getAttribute('aria-busy')).toBe('true')
+        expect(rows[0]!.querySelector('[data-testid="mesh-artifact-opening"]')?.textContent).toContain('Opening')
+        expect(rows[1]!.getAttribute('aria-busy')).toBeNull()
+        await act(async () => { gate.resolve!(); await new Promise(r => setTimeout(r, 0)) })
+        expect(rows[0]!.getAttribute('aria-busy')).toBeNull()
+        expect(container.querySelector('[data-testid="mesh-artifact-opening"]')).toBeNull()
+    })
+
+    it('renders a localized open error inline on the failed row and clears it on the next open', async () => {
+        const send = vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_fetch' && payload.artifactId === 'a2') {
+                return { success: false, code: 'artifact_not_found', error: 'Artifact file not found: missing.md (artifact_not_found)' }
+            }
+            return makeSend()(d, type, payload)
+        })
+        await mount(send as any)
+        await act(async () => { (openButtons()[1] as HTMLButtonElement).click() })
+        await flush()
+        const rows = container.querySelectorAll('[data-testid="mesh-artifact-row"]')
+        const alert = rows[1]!.querySelector('[role="alert"]')!
+        expect(alert.textContent).toContain('deleted or moved')
+        expect(alert.textContent).not.toContain('artifact_not_found')
+        expect(alert.getAttribute('title')).toContain('Artifact file not found: missing.md')
+        expect(container.querySelectorAll('[role="alert"]').length).toBe(1)
+        // Another open starts: the old error clears.
+        await act(async () => { (openButtons()[0] as HTMLButtonElement).click() })
+        await flush()
+        expect(container.querySelector('[data-testid="mesh-artifact-open-error"]')).toBeNull()
+    })
+
+    it('maps a timed-out origin to the offline message', async () => {
+        const send = vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_fetch') throw new Error('Command artifact_fetch timed out')
+            return makeSend()(d, type, payload)
+        })
+        await mount(send as any)
+        await act(async () => { (openButtons()[0] as HTMLButtonElement).click() })
+        await flush()
+        expect(container.querySelector('[data-testid="mesh-artifact-open-error"]')?.textContent).toContain('offline')
+    })
+
+    it('puts the full title on the open button as a tooltip', async () => {
+        await mount(makeSend())
+        expect(openButtons()[0]!.getAttribute('title')).toBe('Title a1')
+    })
+
+    it('hints that more artifacts exist when a filter is active and pages are unloaded', async () => {
+        const base = makeSend()
+        const send = vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_list') return { success: true, attachments: data, hasMore: true, nextCursor: 'c1' }
+            return base(d, type, payload)
+        })
+        await mount(send as any)
+        expect(container.querySelector('[data-testid="mesh-artifacts-more-hint"]')).toBeNull()
+        const input = container.querySelector('input[type="search"]') as HTMLInputElement
+        await act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'zzz-no-such')
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+        })
+        expect(container.querySelector('[data-testid="mesh-artifact-row"]')).toBeNull()
+        expect(container.querySelector('[data-testid="mesh-artifacts-more-hint"]')).not.toBeNull()
+        await act(async () => { (container.querySelector('[data-testid="mesh-artifacts-load-more"]') as HTMLButtonElement).click() })
+        expect(send.mock.calls.filter(c => c[1] === 'artifact_list').length).toBe(2)
+    })
+
+    it('shows the loaded total as "N+" in the viewer when more pages exist', async () => {
+        const base = makeSend()
+        const send = vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_list') return { success: true, attachments: data, hasMore: true, nextCursor: 'c1' }
+            return base(d, type, payload)
+        })
+        await mount(send as any)
+        await act(async () => { (openButtons()[0] as HTMLButtonElement).click() })
+        await flush()
+        expect(document.querySelector('[data-testid="artifact-fullscreen-position"]')?.textContent).toBe('1/4+')
+    })
+
+    it('focuses the row open button when the row whitespace is clicked, so closing returns focus there', async () => {
+        await mount(makeSend())
+        const row = container.querySelectorAll('[data-testid="mesh-artifact-row"]')[0] as HTMLElement
+        await act(async () => { row.click() })
+        await flush()
+        expect(document.activeElement).not.toBe(openButtons()[0])
+        await act(async () => { (document.querySelector('[data-testid="artifact-fullscreen-close"]') as HTMLButtonElement).click() })
+        expect(document.activeElement).toBe(openButtons()[0])
+    })
+
     it('mesh switch clears the previous mesh list immediately', async () => {
         const send = makeSend()
         await mount(send)
