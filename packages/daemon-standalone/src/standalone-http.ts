@@ -499,6 +499,15 @@ export class StandaloneHttpApi {
 
     const parsedUrl = new URL(url, 'http://localhost');
 
+    // Unauthenticated liveness probe (boot smoke, supervisors). Runs after the
+    // Host/Origin guards above and exposes nothing beyond "alive" + pid; it does
+    // not bypass auth for any other route.
+    if (parsedUrl.pathname === '/health' && (method === 'GET' || method === 'HEAD')) {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(method === 'HEAD' ? undefined : JSON.stringify({ ok: true, pid: process.pid }));
+      return;
+    }
+
     if (parsedUrl.pathname === '/auth/session' && method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(this.buildAuthStatus(req, url)));
