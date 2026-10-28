@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync, statSync, chmodSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -30,7 +30,8 @@ vi.mock('../../src/config/config.js', () => ({
     getMachineNickname: () => (({ machineId: 'test-machine' }) as any).machineNickname ?? null,
 }));
 
-import { withStrictMeshConfigWriteLock } from '../../src/config/mesh-config-store.js';
+import { withStrictMeshConfigWriteLock, MeshConfigStrictLockError } from '../../src/config/mesh-config-store.js';
+import { reclaimStaleLegacyMeshConfigLock } from '../../src/config/mesh-config-legacy-lock.js';
 import { addNode, listMeshes, getMesh } from '../../src/config/mesh-config.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -171,5 +172,83 @@ describe('mesh-config — cross-process write lock', () => {
         expect(Date.now() - started).toBeLessThan(1_000);
         expect(meshes[0].nodes.map(n => n.id)).toEqual(['node_r']);
         rmSync(lockPath(), { recursive: true, force: true });
+    });
+});
+
+describe('mesh-config — lock hardening', () => {
+    const wl = () => `${configPath()}.write-lock.sqlite`;
+    const legacyLock = (ageMs: number, marker = false) => {
+        mkdirSync(lockPath(), { recursive: true });
+        if (marker) writeFileSync(join(lockPath(), 'operator-recovery-owner'), 'x');
+        const t = new Date(Date.now() - ageMs);
+        utimesSync(lockPath(), t, t);
+    };
+
+    it('boot reclaim removes an old, empty legacy lock and writers then succeed', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_r')] });
+        legacyLock(60 * 60_000);
+        expect(reclaimStaleLegacyMeshConfigLock(configPath())).toMatchObject({ reclaimed: true });
+        expect(existsSync(lockPath())).toBe(false);
+        expect(addNode('mesh_r', { workspace: '/tmp/r1' })).toBeDefined();
+    });
+
+    it('boot reclaim keeps a fresh lock; writers still get store_busy with a legacy explanation', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_f')] });
+        legacyLock(1000);
+        expect(reclaimStaleLegacyMeshConfigLock(configPath())).toEqual({ reclaimed: false, reason: 'fresh' });
+        expect(existsSync(lockPath())).toBe(true);
+        let err: any;
+        try { withStrictMeshConfigWriteLock(() => 1); } catch (e) { err = e; }
+        expect(err).toBeInstanceOf(MeshConfigStrictLockError);
+        expect(err.code).toBe('store_busy');
+        expect(err.reason).toBe('legacy_lock_present');
+        expect(err.message).toContain('write lock is held');
+        expect(err.message).toContain('older ADHDev version');
+    });
+
+    it('boot reclaim keeps an old lock that has the owner marker (or any contents) or is not a directory', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_m')] });
+        legacyLock(60 * 60_000, true);
+        expect(reclaimStaleLegacyMeshConfigLock(configPath())).toEqual({ reclaimed: false, reason: 'has_contents' });
+        expect(existsSync(join(lockPath(), 'operator-recovery-owner'))).toBe(true);
+        rmSync(lockPath(), { recursive: true });
+        writeFileSync(lockPath(), 'file');
+        expect(reclaimStaleLegacyMeshConfigLock(configPath())).toEqual({ reclaimed: false, reason: 'not_directory' });
+        expect(reclaimStaleLegacyMeshConfigLock(join(testTmpDir, 'nowhere', 'meshes.json'))).toEqual({ reclaimed: false, reason: 'absent' });
+    });
+
+    it('chmod (ctime change) does not break a later acquire', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_c')] });
+        expect(withStrictMeshConfigWriteLock(() => 1)).toBe(1);
+        chmodSync(wl(), 0o644);
+        chmodSync(wl(), 0o600);
+        expect(withStrictMeshConfigWriteLock(() => 2)).toBe(2);
+    });
+
+    it('deleting and recreating the config dir between writes re-pins without a reset', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_d')] });
+        expect(addNode('mesh_d', { workspace: '/tmp/d1' })).toBeDefined();
+        rmSync(testConfigDir, { recursive: true, force: true });
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_d')] });
+        expect(addNode('mesh_d', { workspace: '/tmp/d2' })).toBeDefined();
+        rmSync(wl(), { force: true }); // lock file alone removed
+        expect(addNode('mesh_d', { workspace: '/tmp/d3' })).toBeDefined();
+    });
+
+    it('mid-span replacement of the lock file is still refused and nothing is published', () => {
+        writeRawMeshConfig({ meshes: [baseMesh('mesh_s')] });
+        let err: any;
+        try {
+            withStrictMeshConfigWriteLock(() => {
+                rmSync(wl());
+                writeFileSync(wl(), '');
+                addNode('mesh_s', { workspace: '/tmp/swapped' });
+            });
+        } catch (e) { err = e; }
+        expect(err).toBeInstanceOf(MeshConfigStrictLockError);
+        expect(err.code).toBe('project_storage_unavailable');
+        expect(err.reason).toBe('path_changed');
+        expect(err.message).toContain('restart the daemon');
+        expect(getMesh('mesh_s')!.nodes).toEqual([]);
     });
 });
