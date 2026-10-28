@@ -22,6 +22,8 @@ import {
     buildApprovalToastDescriptors,
     buildViewRequestToastActions,
     formatApprovalToastMessage,
+    isApprovalAlreadyHandledOutcome,
+    isSessionApprovalPending,
 } from './event-manager-helpers'
 
 // ─── Types ────────────────────────────────────────
@@ -72,7 +74,13 @@ export function describeToastError(error: unknown): string | undefined {
 
 export type ToastCallback = (toast: ToastConfig) => void
 export type StatusEventCallback = (payload: StatusEventPayload) => void
-export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void
+/**
+ * Returns the command outcome when the caller can supply it (a rejected command
+ * should be mapped to its error text, not thrown) so approval toasts can tell
+ * "that approval is already gone" apart from success.
+ */
+export type ResolveActionFn = (routeId: string, action: string, payload: Record<string, any>) => void | Promise<unknown>
+export type ToastDismissCallback = (toastId: number) => void
 export type ViewRequestRespondFn = (orgId: string, requestId: string, action: 'approve' | 'reject') => Promise<any>
 /**
  * MULTISELECT-REMOTE-DEADLOCK: write an `agent:waiting_choice` event's structured
@@ -96,6 +104,17 @@ class EventManager {
 
     // Registered callbacks
     private toastCallbacks: ToastCallback[] = []
+    private toastDismissCallbacks: ToastDismissCallback[] = []
+    /**
+     * Live approval action toasts, by toast targetKey. The daemon's
+     * `agent:approval_resolved` never reaches dashboards (not in the
+     * status-event allow-list, on either the WS or the P2P leg), so liveness is
+     * derived from session state fed through setIdes.
+     */
+    private approvalToasts = new Map<string, { toastId: number; sessionId: string | null; shownAt: number; seenPending: boolean; timer: ReturnType<typeof setTimeout> | null }>()
+    /** A freshly shown toast may race a metadata snapshot that predates the modal. */
+    private readonly APPROVAL_TOAST_STALE_GRACE_MS = 2500
+    private lastApprovalToastId = 0
     private statusEventCallbacks: StatusEventCallback[] = []
     private resolveActionFn: ResolveActionFn | null = null
     private viewRequestRespondFn: ViewRequestRespondFn | null = null
@@ -111,6 +130,14 @@ class EventManager {
         this.toastCallbacks.push(callback)
         return () => {
             this.toastCallbacks = this.toastCallbacks.filter(cb => cb !== callback)
+        }
+    }
+
+    /** Register a toast-removal callback (toast id). Returns unsubscribe function. */
+    onToastDismiss(callback: ToastDismissCallback): () => void {
+        this.toastDismissCallbacks.push(callback)
+        return () => {
+            this.toastDismissCallbacks = this.toastDismissCallbacks.filter(cb => cb !== callback)
         }
     }
 
@@ -130,6 +157,7 @@ class EventManager {
     /** Update known IDEs (for routeId lookup) */
     setIdes(ides: KnownIdeEntry[]): void {
         this.ides = ides
+        this.reconcileApprovalToasts()
     }
 
     /** Set the view request respond function (for team:view_request approval/rejection) */
@@ -180,6 +208,60 @@ class EventManager {
 
     public emitToast(toast: ToastConfig): void {
         for (const cb of this.toastCallbacks) cb(toast)
+    }
+
+    public dismissToast(toastId: number): void {
+        for (const cb of this.toastDismissCallbacks) cb(toastId)
+    }
+
+    // ─── Approval toast liveness ──────────────────
+
+    private dismissApprovalToast(targetKey: string): void {
+        const tracked = this.approvalToasts.get(targetKey)
+        if (!tracked) return
+        if (tracked.timer) clearTimeout(tracked.timer)
+        this.approvalToasts.delete(targetKey)
+        this.dismissToast(tracked.toastId)
+    }
+
+    private findSessionEntry(sessionId: string): unknown {
+        for (const ide of this.ides) {
+            if (ide.id === sessionId || ide.sessionId === sessionId) return ide
+            const child = (Array.isArray(ide.childSessions) ? ide.childSessions : []).find((c) => c?.id === sessionId)
+            if (child) return child
+        }
+        return null
+    }
+
+    /**
+     * Close approval toasts whose approval is no longer pending in live session
+     * state. A session we cannot find is left alone. Because the metadata lane
+     * can lag the status event, a toast is only judged stale once it has seen the
+     * session pending or the grace has elapsed (a re-check is scheduled).
+     */
+    private reconcileApprovalToasts(): void {
+        for (const [key, tracked] of [...this.approvalToasts]) {
+            if (!tracked.sessionId) continue
+            const entry = this.findSessionEntry(tracked.sessionId)
+            if (!entry) continue
+            if (isSessionApprovalPending(entry)) { tracked.seenPending = true; continue }
+            const age = Date.now() - tracked.shownAt
+            if (tracked.seenPending || age >= this.APPROVAL_TOAST_STALE_GRACE_MS) {
+                this.dismissApprovalToast(key)
+            } else if (!tracked.timer) {
+                tracked.timer = setTimeout(() => {
+                    tracked.timer = null
+                    if (this.approvalToasts.get(key) === tracked) this.reconcileApprovalToasts()
+                }, this.APPROVAL_TOAST_STALE_GRACE_MS - age + 10)
+            }
+        }
+    }
+
+    private handleApprovalActionOutcome(targetKey: string, toastId: number, outcome: unknown): void {
+        if (!isApprovalAlreadyHandledOutcome(outcome)) return
+        if (this.approvalToasts.get(targetKey)?.toastId === toastId) this.dismissApprovalToast(targetKey)
+        else this.dismissToast(toastId)
+        this.showToast(i18next.t('event.approvalAlreadyHandled'), 'info', { targetKey })
     }
 
     public showToast(message: string, type: 'success' | 'info' | 'warning' = 'info', opts?: Partial<ToastConfig>): void {
@@ -331,6 +413,13 @@ class EventManager {
             this.hydrateInteractivePromptFromEvent(payload)
         }
 
+        // Forward-compatible: the daemon does not currently put approval_resolved on
+        // the dashboard wire, but if it ever does it must close the toast.
+        if ((payload.event as string) === 'agent:approval_resolved') {
+            if (conversationKey) this.dismissApprovalToast(conversationKey)
+            return
+        }
+
         if (this.isDuplicate(dedupKey)) return
 
         for (const callback of this.statusEventCallbacks) {
@@ -392,26 +481,41 @@ class EventManager {
                 const routeId = this.resolveActionRouteTarget(payload)
                 if (!routeId) return
                 const resolveAction = this.resolveActionFn
+                const approvalKey = conversationKey || routeId
+                // Unique even for two approvals in one millisecond: dismiss is by id.
+                const toastId = Math.max(Date.now(), this.lastApprovalToastId + 1)
+                this.lastApprovalToastId = toastId
                 const actions: ToastAction[] = buildApprovalToastDescriptors(payload.modalButtons).map((descriptor) => ({
                     label: descriptor.label,
                     variant: descriptor.variant,
                     onClick: () => {
-                        resolveAction(routeId, 'resolve_action', {
-                            action: descriptor.action,
-                            button: descriptor.button,
-                            buttonIndex: descriptor.buttonIndex,
-                            ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
-                        })
+                        let outcome: void | Promise<unknown>
+                        try {
+                            outcome = resolveAction(routeId, 'resolve_action', {
+                                action: descriptor.action,
+                                button: descriptor.button,
+                                buttonIndex: descriptor.buttonIndex,
+                                ...(payload.targetSessionId && { targetSessionId: payload.targetSessionId }),
+                            })
+                        } catch { return }
+                        void Promise.resolve(outcome)
+                            .then((result) => this.handleApprovalActionOutcome(approvalKey, toastId, result))
+                            .catch(() => {})
                     },
                 }))
 
                 const contextMsg = formatApprovalToastMessage(ideLabel, payload.modalMessage, msg)
 
-                const toastId = Date.now()
+                // A newer approval for the same target replaces the old toast.
+                this.dismissApprovalToast(approvalKey)
                 this.emitToast({
                     id: toastId, message: contextMsg, type, timestamp: toastId,
-                    targetKey: conversationKey || routeId, actions, duration: 15000,
+                    targetKey: approvalKey, actions, duration: 15000,
                 })
+                this.approvalToasts.set(approvalKey, {
+                    toastId, sessionId: payload.targetSessionId || null, shownAt: Date.now(), seenPending: false, timer: null,
+                })
+                this.reconcileApprovalToasts()
                 msg = '' // skip default toast
             }
 

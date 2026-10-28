@@ -32,7 +32,12 @@ export function useDashboardEventManager({
 
     useEffect(() => {
         eventManager.setResolveAction((routeId, cmd, payload) => {
-            sendDaemonCommand(routeId, cmd, payload).catch(() => {})
+            // Hand the outcome back (errors mapped to their text) so approval toasts
+            // can recognise "that approval is already gone".
+            return sendDaemonCommand(routeId, cmd, payload).catch((error: unknown) => ({
+                success: false,
+                error: error instanceof Error ? error.message : String(error ?? ''),
+            }))
         })
     }, [sendDaemonCommand])
 
@@ -63,8 +68,13 @@ export function useDashboardEventManager({
             setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id || t.pinned)), dur)
         })
 
+        const unsubDismiss = eventManager.onToastDismiss((toastId) => {
+            setToasts(prev => prev.some(t => t.id === toastId) ? prev.filter(t => t.id !== toastId) : prev)
+        })
+
         return () => {
             unsubToast()
+            unsubDismiss()
         }
     }, [setToasts])
 

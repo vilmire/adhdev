@@ -87,6 +87,7 @@
         },
         "taskCompleted": "{{label}} エージェントのタスクが完了しました",
         "taskCompletedWithDuration": "{{label}} エージェントのタスクが完了しました（{{duration}}）",
+        "approvalAlreadyHandled": "このリクエストは既に処理されています",
         "approvalNeeded": "{{label}} の承認が必要です",
         "questionNeeded": "{{label}} の質問に回答が必要です",
         "noProgress": "{{label}} エージェントに進捗がありません",

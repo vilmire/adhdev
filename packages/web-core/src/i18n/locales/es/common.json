@@ -87,6 +87,7 @@
         },
         "taskCompleted": "La tarea del agente {{label}} se completó",
         "taskCompletedWithDuration": "La tarea del agente {{label}} se completó ({{duration}})",
+        "approvalAlreadyHandled": "Esta solicitud ya fue gestionada",
         "approvalNeeded": "Se requiere aprobación de {{label}}",
         "questionNeeded": "{{label}} tiene una pregunta pendiente",
         "noProgress": "El agente {{label}} no muestra progreso",

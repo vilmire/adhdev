@@ -87,6 +87,7 @@
         },
         "taskCompleted": "{{label}} agent task completed",
         "taskCompletedWithDuration": "{{label}} agent task completed ({{duration}})",
+        "approvalAlreadyHandled": "This request was already handled",
         "approvalNeeded": "{{label}} approval needed",
         "questionNeeded": "{{label}} question needs an answer",
         "noProgress": "{{label}} agent shows no progress",

@@ -188,7 +188,10 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             const dur = toast.duration || 5000
             setTimeout(() => daemonCtx.setToasts((prev) => prev.filter(t => t.id !== toast.id || t.pinned)), dur)
         })
-        return unsubToast
+        const unsubDismiss = eventManager.onToastDismiss((toastId) => {
+            daemonCtx.setToasts((prev) => prev.some(t => t.id === toastId) ? prev.filter(t => t.id !== toastId) : prev)
+        })
+        return () => { unsubToast(); unsubDismiss() }
     }, [daemonCtx])
 
     // ─── Derive machine data ─────────────────────────
