@@ -19,7 +19,7 @@ Use self-hosted when you want:
 Self-hosted does **not** include the hosted cloud features such as:
 
 - remote access outside your network
-- multi-machine cloud dashboards
+- one account view of machines on different networks (machines that reach each other directly can still pair self-hosted — see setup.md)
 - API keys and hosted webhooks
 - push notifications
 

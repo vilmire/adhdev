@@ -2,7 +2,7 @@
 
 Run ADHDev locally without any cloud dependency.
 
-Standalone mode bundles the local dashboard, local HTTP/WebSocket API, and session-host runtime owner on one machine.
+Standalone mode bundles the local dashboard, local HTTP/WebSocket API, and session-host runtime owner on your machine. Machines that can reach each other directly (same network or Tailscale) can be paired into one mesh with a code, with no account; see Multi-machine pairing below.
 
 ## Quick Start
 
@@ -160,12 +160,23 @@ If the standalone dashboard temporarily loses its local websocket connection, th
 | Feature | Self-hosted | Cloud |
 |---------|:-----------:|:-----:|
 | Remote access outside LAN | ❌ | ✅ |
-| Multi-machine management | ❌ | ✅ |
+| Multi-machine management outside your own network | ❌ | ✅ |
+| Pair machines on the same network or Tailscale (no account) | ✅ | — |
 | OAuth / account system | ❌ | ✅ |
 | Push notifications | ❌ | ✅ |
 | Local standalone REST API | ✅ | ❌ |
 | Hosted cloud REST API | ❌ | ✅ |
 | Local runtime commands | ✅ | ✅ |
+
+## Multi-machine pairing
+
+A free standalone daemon can host a mesh that spans several machines (1.0.76; fixed end to end in 1.0.77):
+
+1. Start the host on an address the other machine can reach: `--host 0.0.0.0` or a LAN/Tailscale IP. The default `127.0.0.1` is loopback only, and the pairing card warns about it.
+2. On the host's mesh screen, open the **Connect another machine** card, **Host** tab, and click **Create pairing code**. Copy the address and the code (shown once, with an expiry).
+3. On the other machine's mesh screen, open the **Member** tab, enter `host:port` and the code, and click **Connect**.
+
+Mesh peers do not use the dashboard token; each authenticates on `/ws/mesh` with its own pairing secret. Reaching machines outside your network, push notifications, the hosted REST API and project file transfer between machines remain Cloud-only.
 
 ## Next Steps
 
