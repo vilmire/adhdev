@@ -161,8 +161,10 @@ export function ArtifactFullscreenViewer({
                 event.preventDefault(); firstEl.focus()
             }
         }
-        document.addEventListener('keydown', onKeyDown)
-        return () => document.removeEventListener('keydown', onKeyDown)
+        // Capture phase on window: the viewer can open on top of another dialog (the mesh
+        // surface), whose own Escape handler must not also close underneath it.
+        window.addEventListener('keydown', onKeyDown, true)
+        return () => window.removeEventListener('keydown', onKeyDown, true)
     }, [close, isModal, onNavigate])
 
     const headings = useMemo(
@@ -203,7 +205,7 @@ export function ArtifactFullscreenViewer({
             aria-label={item.title || item.filename}
             data-testid="artifact-fullscreen-viewer"
             data-viewer-mode={mode}
-            className={`${isModal ? 'fixed inset-0 z-50' : 'h-screen w-screen'} flex flex-col bg-bg-primary text-text-primary`}
+            className={`${isModal ? 'fixed inset-0 z-[var(--z-modal)]' : 'h-screen w-screen'} flex flex-col bg-bg-primary text-text-primary`}
         >
             <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-3 py-2 sm:px-4">
                 <div className="min-w-0 flex-1">
@@ -264,7 +266,7 @@ export function ArtifactFullscreenViewer({
                 {showToc && tocOpen && (
                     <nav aria-label={tr('artifact.toc')} data-testid="artifact-toc" className="w-56 shrink-0 overflow-auto border-r border-border-subtle p-3 text-2xs max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10 max-md:mt-14 max-md:bg-bg-primary max-md:shadow-xl">
                         <div className="mb-2 font-semibold text-text-muted">{tr('artifact.toc')}</div>
-                        <ul className="flex flex-col gap-0.5">
+                        <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
                             {headings.map((h, i) => (
                                 <li key={i} style={{ paddingLeft: `${(h.level - 1) * 10}px` }}>
                                     <button type="button" onClick={() => jumpToHeading(i)} className="w-full truncate rounded px-1.5 py-1 text-left text-text-secondary hover:bg-bg-secondary hover:text-text-primary" title={h.text}>

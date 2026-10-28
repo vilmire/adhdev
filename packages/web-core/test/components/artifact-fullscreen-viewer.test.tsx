@@ -53,6 +53,22 @@ describe('ArtifactFullscreenViewer', () => {
         opener.remove()
     })
 
+    it('opens above a parent dialog and Esc does not also close that dialog', async () => {
+        // The viewer can open from inside the mesh surface dialog (z = --z-modal-backdrop),
+        // whose own window-level Escape handler must not fire when the viewer closes.
+        const parentClose = vi.fn()
+        const parentHandler = (event: KeyboardEvent) => { if (event.key === 'Escape') parentClose() }
+        document.addEventListener('keydown', parentHandler, true)
+        const onClose = vi.fn()
+        await render(<ArtifactFullscreenViewer item={item()} onClose={onClose} />)
+        const viewer = document.querySelector('[data-testid="artifact-fullscreen-viewer"]') as HTMLElement
+        expect(viewer.closest('[class*="z-[var(--z-modal)]"]') ?? (viewer.className.includes('z-[var(--z-modal)]') ? viewer : null)).not.toBeNull()
+        await act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+        expect(onClose).toHaveBeenCalledTimes(1)
+        expect(parentClose).not.toHaveBeenCalled()
+        document.removeEventListener('keydown', parentHandler, true)
+    })
+
     it('text size controls change the content scale', async () => {
         await render(<ArtifactFullscreenViewer item={item()} onClose={() => {}} />)
         const content = () => document.querySelector('[data-testid="artifact-fullscreen-content"]') as HTMLElement

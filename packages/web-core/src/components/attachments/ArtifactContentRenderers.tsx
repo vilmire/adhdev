@@ -233,7 +233,7 @@ export function ArtifactContentRenderer({ payload, objectUrl, variant = 'inline'
                         <div
                             ref={dialogRef}
                             tabIndex={-1}
-                            className="fixed inset-0 z-50 flex flex-col bg-black/85 p-4 backdrop-blur-sm"
+                            className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-black/85 p-4 backdrop-blur-sm"
                             role="dialog"
                             aria-modal="true"
                             aria-label={payload.title || payload.filename}
