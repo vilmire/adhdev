@@ -93,6 +93,8 @@ export interface MissionDecisionDelivery {
     messageId: string
     state: 'pending' | 'sent' | 'acked'
     lastAttemptAt?: string
+    /** What the coordinator is told: a first answer, a changed answer, or an undone one. Daemon-written. */
+    kind?: 'answered' | 'changed' | 'undone'
 }
 
 export interface MissionDecision {
@@ -112,6 +114,10 @@ export interface MissionDecision {
      * older than `answer.at` (a changed answer re-surfaces). Written only by the daemon.
      */
     promptAckedAt?: string
+    /** Counts answer writes (answer / change / undo); delivery messageIds are `decision:<itemId>:r<n>`. Daemon-written. */
+    answerRevision?: number
+    /** ISO time an `onDue: remind` crossing was recorded (once per dueAt). Daemon-written. */
+    remindedAt?: string
 }
 
 export interface NormalizedMissionItem {

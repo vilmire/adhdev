@@ -34,6 +34,7 @@ import { resolveWorktreeNodeRetentionGraceMs } from './mesh-retention-config.js'
 import { runPendingCoordinatorCatchupScan } from './mesh-auto-fast-forward.js';
 import { sweepQueueDependencyStalls } from './mesh-queue-dependency-notice.js';
 import { runOrphanedDispatchSweep } from './mesh-orphaned-dispatch-sweep.js';
+import { componentsDecisionSender, runDecisionTick } from './mesh-mission-decision-delivery.js';
 import { readText } from '@adhdev/mesh-shared';
 import { contractHousekeeping } from './contract-runtime.js';
 import { depositWorkerMailboxMessage } from './worker-mailbox.js';
@@ -146,6 +147,14 @@ export async function runMeshHousekeepingTick(
             } catch (e: any) {
                 LOG.warn('MeshHousekeeping', `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
             }
+        }
+        // ── owner decisions (design 2026-10-28 §6.3/§6.5) ──
+        // Past-due decisions auto-apply / remind, and answers whose coordinator
+        // delivery failed (or was armed by an auto-apply) are (re)sent. Idle cost:
+        // two indexed reads per hosted mesh.
+        const decisionSend = componentsDecisionSender(components);
+        for (const { mesh } of hosted) {
+            await runDecisionTick(mesh.id, decisionSend, nowMs);
         }
     }
 

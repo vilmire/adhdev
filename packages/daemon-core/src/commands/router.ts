@@ -72,6 +72,7 @@ import { driverSpecs, closeDriverService } from './med-family/drivers.js';
 import { artifactSpecs, rejectUntrustedArtifactIngress } from './med-family/artifacts.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
+import { missionDecisionSpecs } from './high-family/mission-decisions.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
@@ -327,6 +328,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...assistantActionSpecs,
             ...assistantThreadSpecs,
             ...assistantWatchSpecs,
+            ...missionDecisionSpecs,
             ...assistantRemoteSpecs,
             ...assistantLaunchSpecs,
             ...launchDefaultsSpecs,

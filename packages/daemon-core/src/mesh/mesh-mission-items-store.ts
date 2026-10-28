@@ -55,7 +55,7 @@ export function missionRowFromSql(row: Record<string, any>): MeshMissionRow {
 
 export type MissionEventType =
     | 'created' | 'status_changed' | 'summary_changed' | 'goal_changed' | 'item_added'
-    | 'item_state_changed' | 'decision_answered' | 'decision_answer_undone' | 'outcome_set' | 'items_moved'
+    | 'item_state_changed' | 'decision_answered' | 'decision_answer_changed' | 'decision_answer_undone' | 'decision_reminded' | 'outcome_set' | 'items_moved'
     /** retention: one summary row replacing a long-closed mission's history */
     | 'collapsed';
 
@@ -233,6 +233,15 @@ export class MissionItemStore {
         const rows = this.db.prepare(
             "SELECT * FROM mesh_mission_items WHERE mesh_id = ? AND kind = ? AND state = 'open' ORDER BY created_at ASC, rowid ASC",
         ).all(meshId, kind) as Array<Record<string, any>>;
+        return rows.map(rowToItem);
+    }
+
+    /** Decision items of the mesh in any of `states` (the decision projection / delivery tick read this). */
+    listByKindStates(meshId: string, kind: MissionItemKind, states: readonly MissionItemState[]): MissionItemRecord[] {
+        if (!states.length) return [];
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_mission_items WHERE mesh_id = ? AND kind = ? AND state IN (${states.map(() => '?').join(', ')}) ORDER BY created_at ASC, rowid ASC`,
+        ).all(meshId, kind, ...states) as Array<Record<string, any>>;
         return rows.map(rowToItem);
     }
 

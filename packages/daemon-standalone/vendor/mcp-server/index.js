@@ -24585,7 +24585,7 @@ var require_dist3 = __commonJS({
       return coreA === coreB;
     }
     function expandDaemonIdForms(ids) {
-      const list2 = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
+      const list3 = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
       const out = [];
       const seen2 = /* @__PURE__ */ new Set();
       const add = (value) => {
@@ -24593,8 +24593,8 @@ var require_dist3 = __commonJS({
         seen2.add(value);
         out.push(value);
       };
-      for (const raw of list2) add(readString2(raw));
-      for (const raw of list2) {
+      for (const raw of list3) add(readString2(raw));
+      for (const raw of list3) {
         const core2 = machineCoreFromDaemonId(readString2(raw));
         if (!core2 || !core2.startsWith("mach_")) continue;
         add(core2);
@@ -24724,9 +24724,9 @@ var require_dist3 = __commonJS({
         if (!b) continue;
         const entry = { difficulty: diff, model: b.model, thinkingLevel: b.thinkingLevel };
         if (b.provider) {
-          const list2 = byProvider.get(b.provider) ?? [];
-          list2.push(entry);
-          byProvider.set(b.provider, list2);
+          const list3 = byProvider.get(b.provider) ?? [];
+          list3.push(entry);
+          byProvider.set(b.provider, list3);
         } else {
           shared2.push(entry);
         }
@@ -25962,8 +25962,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (value.carryOverTo !== void 0 && !isEvidenceIdentifier2(value.carryOverTo)) return false;
       for (const k of ["itemsAdd", "itemsUpdate"]) {
-        const list2 = value[k];
-        if (list2 !== void 0 && (!Array.isArray(list2) || list2.length > 500 || !list2.every(isRecord2))) return false;
+        const list3 = value[k];
+        if (list3 !== void 0 && (!Array.isArray(list3) || list3.length > 500 || !list3.every(isRecord2))) return false;
       }
       if (value.goal !== void 0 && typeof value.goal !== "string") return false;
       if (value.status !== void 0 && !isMeshMissionStatusValue3(value.status)) return false;
@@ -26493,10 +26493,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return false;
     }
-    function findOwnershipConflicts2(candidate, inFlight4) {
+    function findOwnershipConflicts2(candidate, inFlight5) {
       if (candidate.paths.length === 0) return [];
       const conflicts = [];
-      for (const other of inFlight4) {
+      for (const other of inFlight5) {
         if (other.paths.paths.length === 0) continue;
         const overlappingPaths = [];
         for (const pa of candidate.paths) {
@@ -26828,11 +26828,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       const collections = /* @__PURE__ */ new Map();
       for (const [path124, idField] of Object.entries(spec.collections)) {
-        const list2 = readPath(doc, path124);
-        if (!Array.isArray(list2)) continue;
+        const list3 = readPath(doc, path124);
+        if (!Array.isArray(list3)) continue;
         const rows = /* @__PURE__ */ new Map();
         const order = [];
-        for (const row2 of list2) {
+        for (const row2 of list3) {
           if (!isRecord3(row2)) continue;
           const id222 = row2[idField];
           if (typeof id222 !== "string" || !id222 || rows.has(id222)) continue;
@@ -26990,14 +26990,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           continue;
         }
         if (!change && heldList === void 0) continue;
-        const list2 = change ? foldCollection(heldList, change, idField) : heldList;
+        const list3 = change ? foldCollection(heldList, change, idField) : heldList;
         const [head, tail] = splitPath(path124);
         if (!tail) {
-          next[head] = list2;
+          next[head] = list3;
           continue;
         }
         const parent = isRecord3(next[head]) ? { ...next[head] } : {};
-        parent[tail] = list2;
+        parent[tail] = list3;
         next[head] = parent;
       }
       return next;
@@ -28774,14 +28774,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return { keys: keys2, cursorRow };
     }
-    function buildAntigravityQuestionKeystrokes(question, answer, options) {
+    function buildAntigravityQuestionKeystrokes(question, answer2, options) {
       const realOptionCount = question.options.length;
       if (realOptionCount < 1) {
         throw new Error(`Question ${question.questionId} has no options`);
       }
       const writeInRow = realOptionCount + 1;
       let cursorRow = options?.currentCursorRow && options.currentCursorRow >= 1 ? options.currentCursorRow : 1;
-      const freeform = answer.freeformText?.trim() ?? "";
+      const freeform = answer2.freeformText?.trim() ?? "";
       if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === void 0) {
         throw new Error(
           `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`
@@ -28791,7 +28791,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (question.allowFreeform === false) {
           throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
         }
-        if (!question.multiSelect && answer.selectedLabels.length > 0) {
+        if (!question.multiSelect && answer2.selectedLabels.length > 0) {
           throw new Error(
             `Single-select question ${question.questionId} cannot combine option selection with freeform write-in`
           );
@@ -28810,7 +28810,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           keys3 += `${freeform}\r`;
           return keys3;
         }
-        const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+        const desiredRows = resolveSelectedOptionRows(question, answer2.selectedLabels);
         const toggleRows = computeMultiSelectToggleRows(
           realOptionCount,
           desiredRows,
@@ -28846,11 +28846,11 @@ ${renderWorkerProtocolFooter2(input)}`;
         keys2 += `${freeform}\r`;
         return keys2;
       }
-      const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+      const treatAsMultiSelect = question.multiSelect || answer2.selectedLabels.length > 1;
       if (treatAsMultiSelect && !question.multiSelect) {
         throw new Error(`Expected one selected label for ${question.questionId}`);
       }
-      const selectedRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+      const selectedRows = resolveSelectedOptionRows(question, answer2.selectedLabels);
       if (question.multiSelect) {
         if (selectedRows.length === 0) {
           throw new Error(`Expected at least one selected label for ${question.questionId}`);
@@ -28958,8 +28958,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (raw.action === "dismiss" && raw.binding.transport !== "codex_async") throw new Error("Native RPC dismissal is unsupported");
       for (const key5 of Reflect.ownKeys(raw.answers)) {
         if (typeof key5 !== "string" || !key5.trim()) throw new Error("Malformed native question id");
-        const answer = raw.answers[key5];
-        if (!isRecord10(answer) || hasUnknownKeys(answer, ["selectedLabels", "freeformText"]) || !Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label2) => typeof label2 !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") {
+        const answer2 = raw.answers[key5];
+        if (!isRecord10(answer2) || hasUnknownKeys(answer2, ["selectedLabels", "freeformText"]) || !Array.isArray(answer2.selectedLabels) || answer2.selectedLabels.some((label2) => typeof label2 !== "string") || new Set(answer2.selectedLabels).size !== answer2.selectedLabels.length || answer2.freeformText !== void 0 && typeof answer2.freeformText !== "string") {
           throw new Error("Malformed or unsupported native answer");
         }
       }
@@ -28976,9 +28976,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       const answers = /* @__PURE__ */ Object.create(null);
       for (const [questionId, answerRaw] of Object.entries(record7.answers)) {
         if (!answerRaw || typeof answerRaw !== "object" || Array.isArray(answerRaw)) continue;
-        const answer = answerRaw;
-        const selectedLabels = record7.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
-        const freeformText = readString2(answer.freeformText);
+        const answer2 = answerRaw;
+        const selectedLabels = record7.binding && Array.isArray(answer2.selectedLabels) ? answer2.selectedLabels.slice() : readStringArray2(answer2.selectedLabels);
+        const freeformText = readString2(answer2.freeformText);
         answers[questionId] = {
           selectedLabels,
           ...freeformText ? { freeformText } : {}
@@ -29364,12 +29364,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
       const steps = [];
       for (const question of prompt.questions) {
-        const answer = response.answers[question.questionId];
-        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-        const freeformText = answer.freeformText?.trim() ?? "";
-        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+        const answer2 = response.answers[question.questionId];
+        if (!answer2) throw new Error(`Missing answer for ${question.questionId}`);
+        const freeformText = answer2.freeformText?.trim() ?? "";
+        const treatAsMultiSelect = question.multiSelect || answer2.selectedLabels.length > 1;
         if (treatAsMultiSelect) {
-          const labels = answer.selectedLabels;
+          const labels = answer2.selectedLabels;
           if (labels.length === 0) {
             throw new Error(`Expected at least one selected label for ${question.questionId}`);
           }
@@ -29386,9 +29386,9 @@ ${renderWorkerProtocolFooter2(input)}`;
           for (const ch of freeformText) steps.push(ch);
           steps.push("\r");
         } else {
-          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
-          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+          if (answer2.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+          const selectedIndex = question.options.findIndex((option) => option.label === answer2.selectedLabels[0]);
+          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer2.selectedLabels[0]}`);
           steps.push(String(selectedIndex + 1));
           if (question.options.some((option) => option.preview)) steps.push("\r");
         }
@@ -29400,12 +29400,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
       const steps = [];
       for (const question of prompt.questions) {
-        const answer = response.answers[question.questionId];
-        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-        const freeformText = answer.freeformText?.trim() ?? "";
-        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+        const answer2 = response.answers[question.questionId];
+        if (!answer2) throw new Error(`Missing answer for ${question.questionId}`);
+        const freeformText = answer2.freeformText?.trim() ?? "";
+        const treatAsMultiSelect = question.multiSelect || answer2.selectedLabels.length > 1;
         if (treatAsMultiSelect) {
-          const labels = answer.selectedLabels;
+          const labels = answer2.selectedLabels;
           if (labels.length === 0) {
             throw new Error(`Expected at least one selected label for ${question.questionId}`);
           }
@@ -29420,9 +29420,9 @@ ${renderWorkerProtocolFooter2(input)}`;
           for (const ch of freeformText) steps.push(ch);
           steps.push("\r");
         } else {
-          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
-          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+          if (answer2.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+          const selectedIndex = question.options.findIndex((option) => option.label === answer2.selectedLabels[0]);
+          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer2.selectedLabels[0]}`);
           steps.push(String(selectedIndex + 1));
         }
       }
@@ -31288,10 +31288,10 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (cached5 && lastCheckedAt - cached5.cachedAt < GIT_STATUS_CACHE_TTL_MS) {
           return cached5.status;
         }
-        const inFlight4 = inFlightStatusReads.get(cacheKey);
-        if (inFlight4 && inFlight4.timeoutMs >= callerTimeoutMs && callerStartedAtPerf - inFlight4.startedAtPerf < inFlight4.timeoutMs) {
+        const inFlight5 = inFlightStatusReads.get(cacheKey);
+        if (inFlight5 && inFlight5.timeoutMs >= callerTimeoutMs && callerStartedAtPerf - inFlight5.startedAtPerf < inFlight5.timeoutMs) {
           return awaitWithCallerDeadline(
-            inFlight4.promise,
+            inFlight5.promise,
             callerTimeoutMs,
             signal,
             workspace,
@@ -32551,7 +32551,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
       interceptorInstalled = true;
-      const stripAnsi3 = (str20) => str20.replace(/\x1B\[[0-9;]*m/g, "");
+      const stripAnsi3 = (str21) => str21.replace(/\x1B\[[0-9;]*m/g, "");
       const isDaemonLogLine = (msg) => /\[(DBG|INF|WRN|ERR)\]/.test(msg);
       console.log = (...args) => {
         origConsoleLog(...args);
@@ -32734,41 +32734,41 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     function validateRetirementProof(repo, layer, { ref: ref2, env: env2, proofFile } = {}) {
-      const fail8 = () => {
+      const fail9 = () => {
         throw Error("invalid_normal_retirement_proof: current source/output/config and successful command logs required");
       };
       try {
         const proof = JSON.parse((0, import_node_fs3.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
-        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail8();
+        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail9();
         for (const target4 of ["root", "oss"]) {
-          if (target4 !== layer && proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4)) fail8();
-          if (proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4, proof.trees?.[target4])) fail8();
+          if (target4 !== layer && proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4)) fail9();
+          if (proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4, proof.trees?.[target4])) fail9();
         }
         if (layer === "root") {
           const pin = retirementGit(repo, ref2 ? ["rev-parse", `${ref2}:oss`] : ["rev-parse", ":oss"], env2);
-          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail8();
+          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail9();
         }
         const specs = configuredRetirementGates(proof.rootRepo, layer === "root" ? env2 : void 0);
-        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail8();
+        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail9();
         const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs3.readFileSync)(receipt.log));
-        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail8();
+        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail9();
         for (const target4 of ["root", "oss"]) {
           const repo2 = proof[`${target4}Repo`];
           const files = entries(repo2, proof.trees[target4]);
           const generated = (name) => retirementVendorDirs[target4].some((dir) => name.startsWith(`${dir}/`));
           const sources = files.filter((e) => !(target4 === "root" && e[2] === "oss") && !generated(e[2])).map(([mode, oid, path124]) => ({ mode, oid, path: path124 }));
           const outputs2 = files.filter((e) => generated(e[2])).map(([mode, oid, name]) => [name, mode, digest(retirementGit(repo2, ["cat-file", "blob", oid], void 0, true))]);
-          if (proof.generation.sources?.[target4] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target4]) !== JSON.stringify(outputs2)) fail8();
+          if (proof.generation.sources?.[target4] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target4]) !== JSON.stringify(outputs2)) fail9();
         }
         for (let i = 0; i < specs.length; i++) {
-          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail8();
+          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail9();
           const args = [...specs[i].args];
           if (["vendor-drift-root", "vendor-drift-oss"].includes(specs[i].id)) args.push("--tree", proof.trees[specs[i].id === "vendor-drift-root" ? "root" : "oss"]);
-          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail8();
+          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail9();
         }
         return proof;
       } catch {
-        fail8();
+        fail9();
       }
     }
     var import_node_child_process22;
@@ -33500,7 +33500,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         for (const e of entries2) {
           if (!e.localSha || ZERO.test(e.localSha)) continue;
           const ref2 = e.localRef || e.localSha;
-          const add = (list2) => list2.forEach((v) => violations.push({ ...v, ref: ref2 }));
+          const add = (list3) => list3.forEach((v) => violations.push({ ...v, ref: ref2 }));
           const phaseMarkers = await runGit2(cwd, ["ls-tree", "-z", e.localSha, "--", "scripts/refine-source-phase.json", "scripts/lib/refine-source-phase.json", ".adhdev-source-candidate.json"]);
           if (phaseMarkers.trim()) add([{ kind: "source_phase", sha: e.localSha, file: "(source phase)", line: 1, detail: "source_not_publishable: combined generation and final gates required" }]);
           for (const l of scanRef(e.remoteRef || "")) add([{ kind: "path", sha: e.localSha, file: "(destination ref)", line: l.line, detail: l.name || l.match }]);
@@ -33683,20 +33683,20 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v.trim() && !/[\n\r\0]/.test(v))) {
         return { error: "must be an array of non-empty path strings" };
       }
-      const list2 = [];
+      const list3 = [];
       for (const raw of value) {
         const v = raw.trim().replace(/\/+$/, "");
         if (v === REFINE_SCHEDULE_WILDCARD) {
-          list2.push(v);
+          list3.push(v);
           continue;
         }
         const segments = v.split("/");
         if (!v || v.startsWith("/") || /^[A-Za-z]:/.test(v) || v.includes("\\") || segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
           return { error: `path "${raw}" is not a canonical repo-relative POSIX path (no leading '/', drive letter, backslash, or '.', '..', empty segments)` };
         }
-        list2.push(v);
+        list3.push(v);
       }
-      return { list: [...new Set(list2)] };
+      return { list: [...new Set(list3)] };
     }
     function overlaps(a, b) {
       if (a === REFINE_SCHEDULE_WILDCARD || b === REFINE_SCHEDULE_WILDCARD) return true;
@@ -35181,9 +35181,9 @@ ${tail}`;
             { cwd: submodulePath, remoteName, remoteUrl, patterns: await loadPublicPushPatternsForRepo(patternRepo), integrationBase }
           );
           for (const v of violations) {
-            const list2 = violationsBySha.get(v.sha) || [];
-            list2.push(v.kind === "identity" ? `identity: ${v.detail}` : `${v.file}:${v.line} personal path: ${v.detail}`);
-            violationsBySha.set(v.sha, list2);
+            const list3 = violationsBySha.get(v.sha) || [];
+            list3.push(v.kind === "identity" ? `identity: ${v.detail}` : `${v.file}:${v.line} personal path: ${v.detail}`);
+            violationsBySha.set(v.sha, list3);
           }
         }
       } catch (e) {
@@ -35960,16 +35960,16 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       }
     });
     async function runAsyncBatch(items, worker, options = {}) {
-      const list2 = Array.from(items);
-      if (list2.length === 0) return;
-      const concurrency = Math.max(1, Math.min(list2.length, Math.floor(options.concurrency || 1)));
+      const list3 = Array.from(items);
+      if (list3.length === 0) return;
+      const concurrency = Math.max(1, Math.min(list3.length, Math.floor(options.concurrency || 1)));
       let nextIndex = 0;
       const runners = Array.from({ length: concurrency }, async () => {
         while (true) {
           const currentIndex = nextIndex;
           nextIndex += 1;
-          if (currentIndex >= list2.length) return;
-          await worker(list2[currentIndex], currentIndex);
+          if (currentIndex >= list3.length) return;
+          await worker(list3[currentIndex], currentIndex);
         }
       });
       await Promise.all(runners);
@@ -36183,8 +36183,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function getCliInventorySignature(providerLoader) {
       const loader2 = providerLoader;
       const revision = typeof loader2?.getCliDetectionRevision === "function" ? loader2.getCliDetectionRevision() : 0;
-      const list2 = loader2?.getCliDetectionList?.() ?? [];
-      const signature = list2.map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ""}:${c.enabled !== false ? "1" : "0"}`).join("|");
+      const list3 = loader2?.getCliDetectionList?.() ?? [];
+      const signature = list3.map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ""}:${c.enabled !== false ? "1" : "0"}`).join("|");
       return { revision, signature };
     }
     function readCliInventorySlot(providerLoader) {
@@ -36260,8 +36260,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         }
       }
       const detectFn = effectiveOptions?.detectFn ?? detectCLIs;
-      let inFlight4 = !effectiveOptions?.forceRefresh && !effectiveOptions?.detectFn && sameRevisionAndSignature ? existing?.inFlight : void 0;
-      if (!inFlight4) {
+      let inFlight5 = !effectiveOptions?.forceRefresh && !effectiveOptions?.detectFn && sameRevisionAndSignature ? existing?.inFlight : void 0;
+      if (!inFlight5) {
         const refreshPromise = (async () => {
           const detected = await detectFn(loader2, { includeVersion: false });
           if (!effectiveOptions?.detectFn && typeof loaderWithCache.setCliDetectionResults === "function") {
@@ -36288,12 +36288,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
             }
           });
         }
-        inFlight4 = refreshPromise;
+        inFlight5 = refreshPromise;
       }
       let timer;
       try {
         const timedResult = await Promise.race([
-          inFlight4.then((items) => ({ timedOut: false, items })),
+          inFlight5.then((items) => ({ timedOut: false, items })),
           new Promise((resolve66) => {
             timer = setTimeout(() => resolve66({ timedOut: true }), budgetMs);
           })
@@ -41622,11 +41622,11 @@ ${error.message || ""}`;
       }
       const v = validateWorkspacePath(abs);
       if (v.ok !== true) return { error: v.error };
-      const list2 = [...config.workspaces || []];
-      if (list2.some((w) => path25.resolve(w.path) === abs)) {
+      const list3 = [...config.workspaces || []];
+      if (list3.some((w) => path25.resolve(w.path) === abs)) {
         return { error: "Workspace already in list" };
       }
-      if (list2.length >= MAX_WORKSPACES) {
+      if (list3.length >= MAX_WORKSPACES) {
         return { error: `Maximum ${MAX_WORKSPACES} workspaces` };
       }
       const entry = {
@@ -41635,15 +41635,15 @@ ${error.message || ""}`;
         label: (label2 || "").trim() || defaultWorkspaceLabel(abs),
         addedAt: Date.now()
       };
-      list2.push(entry);
-      return { config: { ...config, workspaces: list2 }, entry };
+      list3.push(entry);
+      return { config: { ...config, workspaces: list3 }, entry };
     }
     function removeWorkspaceEntry(config, id4) {
-      const list2 = (config.workspaces || []).filter((w) => w.id !== id4);
-      if (list2.length === (config.workspaces || []).length) return { error: "Workspace not found" };
+      const list3 = (config.workspaces || []).filter((w) => w.id !== id4);
+      if (list3.length === (config.workspaces || []).length) return { error: "Workspace not found" };
       let defaultWorkspaceId = config.defaultWorkspaceId;
       if (defaultWorkspaceId === id4) defaultWorkspaceId = null;
-      return { config: { ...config, workspaces: list2, defaultWorkspaceId } };
+      return { config: { ...config, workspaces: list3, defaultWorkspaceId } };
     }
     function setDefaultWorkspaceId(config, id4) {
       if (id4 === null) {
@@ -41666,10 +41666,10 @@ ${error.message || ""}`;
       const existing = findWorkspaceByPath(config, rawPath);
       if (!existing) return { error: "Workspace not found" };
       const nextLabel = normalizeWorkspaceLabel(label2) || defaultWorkspaceLabel(expandPath(existing.path));
-      const list2 = (config.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
-      const entry = list2.find((w) => w.id === existing.id);
+      const list3 = (config.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
+      const entry = list3.find((w) => w.id === existing.id);
       if (!entry) return { error: "Workspace not found" };
-      return { config: { ...config, workspaces: list2 }, entry };
+      return { config: { ...config, workspaces: list3 }, entry };
     }
     var fs15;
     var os16;
@@ -44525,7 +44525,7 @@ ${error.message || ""}`;
       }
       return [...ids].sort();
     }
-    function migrateMesh(db2, store3, meshId, opts, report) {
+    function migrateMesh(db2, store4, meshId, opts, report) {
       const has = (table) => tableExists(db2, table);
       const nowMs2 = opts.nowMs;
       const chains = [];
@@ -44642,11 +44642,11 @@ ${error.message || ""}`;
         openBySession.set(a.sessionId, chain);
       }
       for (const chain of chains) {
-        store3.upsertAttempt(chain.attempt, nowMs2);
+        store4.upsertAttempt(chain.attempt, nowMs2);
         report.attempts++;
         if (!chain.attempt.terminal) {
           report.openAttempts++;
-          store3.syncHolds(chain.attempt.attemptId, [{
+          store4.syncHolds(chain.attempt.attemptId, [{
             holdId: `${chain.attempt.attemptId}:hard_ceiling`,
             attemptId: chain.attempt.attemptId,
             generation: null,
@@ -44665,7 +44665,7 @@ ${error.message || ""}`;
           const generation = chain?.members.get(row2.attempt_id) ?? 0;
           const verdict = row2.kind.startsWith("rejected_") ? "rejected" : "applied";
           const recordedAt = ms22(row2.recorded_at) ?? nowMs2;
-          const inserted = store3.insertEvent({
+          const inserted = store4.insertEvent({
             eventId: row2.event_id,
             meshId: meshId || null,
             attemptId: chain?.attempt.attemptId ?? row2.attempt_id,
@@ -44717,7 +44717,7 @@ ${error.message || ""}`;
             continue;
           }
           const a = chain.attempt;
-          const holds = [...store3.activeHolds(a.attemptId).filter((h) => h.reason !== "liveness"), {
+          const holds = [...store4.activeHolds(a.attemptId).filter((h) => h.reason !== "liveness"), {
             holdId: `${a.attemptId}:liveness`,
             attemptId: a.attemptId,
             generation: a.generation,
@@ -44727,7 +44727,7 @@ ${error.message || ""}`;
             data: {},
             createdAt: row2.held_at ?? nowMs2
           }];
-          store3.syncHolds(a.attemptId, holds, nowMs2);
+          store4.syncHolds(a.attemptId, holds, nowMs2);
         }
       }
       const setDelivery = db2.prepare(`UPDATE turn_attempts SET delivered_at = COALESCE(delivered_at, ?), notified_at = COALESCE(notified_at, ?),
@@ -44797,7 +44797,7 @@ ${error.message || ""}`;
             ...taskId && isEvidenceIdentifier2(taskId) ? { taskId } : {}
           };
           if (!meshId) continue;
-          const inserted = store3.insertEvent({
+          const inserted = store4.insertEvent({
             eventId,
             meshId,
             attemptId: null,
@@ -44825,7 +44825,7 @@ ${error.message || ""}`;
           if (row2.kind === OPERATOR_CANCEL_KIND) {
             const text4 = typeof payload.text === "string" ? payload.text.trim() : "";
             if (!text4) continue;
-            if (store3.insertOperatingNote({ noteId: row2.id, meshId, text: text4, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
+            if (store4.insertOperatingNote({ noteId: row2.id, meshId, text: text4, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
               report.operatingNotes++;
               byText.set(text4, [...byText.get(text4) ?? [], row2.id]);
             }
@@ -44833,8 +44833,8 @@ ${error.message || ""}`;
             report.operatingNoteTombstones++;
             const targetId = typeof payload.targetNoteId === "string" ? payload.targetNoteId.trim() : "";
             const targetFp = typeof payload.targetFingerprint === "string" ? payload.targetFingerprint.trim() : "";
-            if (targetId) store3.tombstoneOperatingNote(meshId, targetId, at);
-            for (const id4 of targetFp ? byText.get(targetFp) ?? [] : []) store3.tombstoneOperatingNote(meshId, id4, at);
+            if (targetId) store4.tombstoneOperatingNote(meshId, targetId, at);
+            for (const id4 of targetFp ? byText.get(targetFp) ?? [] : []) store4.tombstoneOperatingNote(meshId, id4, at);
           }
         }
       }
@@ -44858,10 +44858,10 @@ ${error.message || ""}`;
         report.exportedRows = exportLegacyTurnTables(db2, options.exportPath);
         report.exportPath = options.exportPath;
       }
-      const store3 = new TurnStore(db2);
+      const store4 = new TurnStore(db2);
       const meshIds = legacyMeshIds(db2);
       for (const meshId of meshIds) {
-        db2.transaction(() => migrateMesh(db2, store3, meshId, { ownerDaemonId: options.ownerDaemonId, nowMs: nowMs2, policy }, report)).immediate();
+        db2.transaction(() => migrateMesh(db2, store4, meshId, { ownerDaemonId: options.ownerDaemonId, nowMs: nowMs2, policy }, report)).immediate();
         report.meshes++;
       }
       db2.transaction(() => {
@@ -44940,7 +44940,7 @@ ${error.message || ""}`;
       }
       return written;
     }
-    function foldLedgerNotes(db2, store3, report) {
+    function foldLedgerNotes(db2, store4, report) {
       if (!tableExists(db2, "mesh_event_ledger")) return;
       const rows = db2.prepare(`SELECT id, mesh_id, timestamp, kind, session_id, payload FROM mesh_event_ledger WHERE kind IN (?, ?) ORDER BY timestamp, rowid`).all(NOTE_KIND, NOTE_TOMBSTONE_KIND);
       const idsByText = /* @__PURE__ */ new Map();
@@ -44959,7 +44959,7 @@ ${error.message || ""}`;
             ...str22(payload.sourceCoordinator) ? { sourceCoordinator: str22(payload.sourceCoordinator) } : {}
           };
           const created = Date.parse(typeof payload.createdAt === "string" ? payload.createdAt : "");
-          if (store3.insertOperatingNote({
+          if (store4.insertOperatingNote({
             noteId: row2.id,
             meshId: row2.mesh_id,
             text: text4,
@@ -44975,12 +44975,12 @@ ${error.message || ""}`;
         } else {
           const targetId = str22(payload.targetNoteId);
           const targetText = str22(payload.targetFingerprint);
-          if (targetId && store3.tombstoneOperatingNote(row2.mesh_id, targetId, atMs)) report.noteTombstonesApplied++;
+          if (targetId && store4.tombstoneOperatingNote(row2.mesh_id, targetId, atMs)) report.noteTombstonesApplied++;
           for (const id4 of targetText ? idsByText.get(`${row2.mesh_id}\0${targetText}`) ?? [] : []) {
-            if (store3.tombstoneOperatingNote(row2.mesh_id, id4, atMs)) report.noteTombstonesApplied++;
+            if (store4.tombstoneOperatingNote(row2.mesh_id, id4, atMs)) report.noteTombstonesApplied++;
           }
           if (targetText) {
-            store3.insertOperatingNote({
+            store4.insertOperatingNote({
               noteId: row2.id,
               meshId: row2.mesh_id,
               text: targetText,
@@ -45007,9 +45007,9 @@ ${error.message || ""}`;
         report.exportedRows = exportRows(db2, opts.exportPath);
         report.exportPath = opts.exportPath;
       }
-      const store3 = new TurnStore(db2);
+      const store4 = new TurnStore(db2);
       db2.transaction(() => {
-        foldLedgerNotes(db2, store3, report);
+        foldLedgerNotes(db2, store4, report);
         for (const table of V2_RETIRED_TABLES) {
           if (!tableExists(db2, table)) continue;
           db2.exec(`DROP TABLE ${table}`);
@@ -45565,6 +45565,14 @@ ${error.message || ""}`;
             ).all(meshId, kind);
             return rows.map(rowToItem);
           }
+          /** Decision items of the mesh in any of `states` (the decision projection / delivery tick read this). */
+          listByKindStates(meshId, kind, states) {
+            if (!states.length) return [];
+            const rows = this.db.prepare(
+              `SELECT * FROM mesh_mission_items WHERE mesh_id = ? AND kind = ? AND state IN (${states.map(() => "?").join(", ")}) ORDER BY created_at ASC, rowid ASC`
+            ).all(meshId, kind, ...states);
+            return rows.map(rowToItem);
+          }
           updateItem(meshId, itemId, patch) {
             const sets = ["updated_at = ?"];
             const args = [(/* @__PURE__ */ new Date()).toISOString()];
@@ -45980,9 +45988,9 @@ ${error.message || ""}`;
         };
       }
     });
-    function legacyWorkerBlockedTasks(store3, meshId) {
-      if (store3.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('mesh_queue', 'mesh_task_outputs', 'turn_attempts', 'turn_events')").get().n !== 4) return /* @__PURE__ */ new Map();
-      const rows = store3.db.prepare(`
+    function legacyWorkerBlockedTasks(store4, meshId) {
+      if (store4.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('mesh_queue', 'mesh_task_outputs', 'turn_attempts', 'turn_events')").get().n !== 4) return /* @__PURE__ */ new Map();
+      const rows = store4.db.prepare(`
         SELECT q.id, a.attempt_id, a.generation, a.attempt_no, a.session_id, a.data_json,
                o.version, o.attempt, o.envelope_json
         FROM mesh_queue q
@@ -46009,9 +46017,9 @@ ${error.message || ""}`;
       }
       return out;
     }
-    function projectWorkerOutcomeViews(store3, meshId, tasks) {
+    function projectWorkerOutcomeViews(store4, meshId, tasks) {
       if (!tasks.some((t) => t.status === "failed")) return [...tasks];
-      const proven = legacyWorkerBlockedTasks(store3, meshId);
+      const proven = legacyWorkerBlockedTasks(store4, meshId);
       return tasks.map((task) => {
         const statusProvenance = proven.get(task.id);
         return task.status === "failed" && statusProvenance ? { ...task, status: "blocked", statusProvenance } : task;
@@ -47856,8 +47864,8 @@ ${error.message || ""}`;
       return null;
     }
     function unwrapMeshRelayResult(raw, context2) {
-      const answer = findMeshRelayAnswer(raw);
-      if (answer) return answer;
+      const answer2 = findMeshRelayAnswer(raw);
+      if (answer2) return answer2;
       const detail = `the ${context2.command} relay answer from ${context2.peerDaemonId ? context2.peerDaemonId.slice(0, 24) : "the remote daemon"} was ${describe2(raw)}`;
       LOG.warn("MeshRelay", `Malformed relay result: ${detail}`);
       return {
@@ -47905,17 +47913,17 @@ ${error.message || ""}`;
         FROM turn_events e INDEXED BY ix_lifetime_accepted_session JOIN turn_attempts a ON a.attempt_id = e.attempt_id
         WHERE e.mesh_id = ? AND e.kind = ? AND e.session_id = ?`).all(meshId, kind, sessionId.trim());
     }
-    function readAcceptedOutput(store3, taskId) {
-      const version2 = store3.db.prepare("SELECT version FROM mesh_task_outputs WHERE task_id = ? ORDER BY version DESC LIMIT 1").get(taskId);
+    function readAcceptedOutput(store4, taskId) {
+      const version2 = store4.db.prepare("SELECT version FROM mesh_task_outputs WHERE task_id = ? ORDER BY version DESC LIMIT 1").get(taskId);
       if (!version2) return null;
-      let cache3 = outputs.get(store3.db);
+      let cache3 = outputs.get(store4.db);
       if (!cache3) {
         cache3 = /* @__PURE__ */ new Map();
-        outputs.set(store3.db, cache3);
+        outputs.set(store4.db, cache3);
       }
       const cached5 = cache3.get(taskId);
       if (cached5?.version === version2.version) return cached5.envelope;
-      const output = store3.getLatestTaskOutput(taskId);
+      const output = store4.getLatestTaskOutput(taskId);
       if (!output) throw new Error("lifetime_output_version_disappeared");
       const envelope = JSON.parse(output.envelopeJson);
       if (cache3.size >= 2048) cache3.delete(cache3.keys().next().value);
@@ -47980,11 +47988,11 @@ ${error.message || ""}`;
       return isIdleSessionState(state2);
     }
     function recordAcceptedSessionCompletion(identity4, nowMs2) {
-      const store3 = MeshRuntimeStore.getInstance();
-      afterBridgeCommit(store3.db, () => {
+      const store4 = MeshRuntimeStore.getInstance();
+      afterBridgeCommit(store4.db, () => {
         try {
           if (!identity4.attemptId || !identity4.sessionId) return;
-          const recorded = store3.turnStore().insertWorkerEvent({
+          const recorded = store4.turnStore().insertWorkerEvent({
             eventId: (0, import_node_crypto8.randomUUID)(),
             attemptId: identity4.attemptId,
             sessionId: identity4.sessionId,
@@ -47993,7 +48001,7 @@ ${error.message || ""}`;
             payload: {},
             atMs: nowMs2
           });
-          if (!recorded && !store3.turnStore().listWorkerEventsForTask(identity4.meshId, identity4.taskId, SESSION_COMPLETION_ACCEPTED_EVENT).some((event) => event.attemptId === identity4.attemptId && sessionIdsEquivalent(event.sessionId, identity4.sessionId))) {
+          if (!recorded && !store4.turnStore().listWorkerEventsForTask(identity4.meshId, identity4.taskId, SESSION_COMPLETION_ACCEPTED_EVENT).some((event) => event.attemptId === identity4.attemptId && sessionIdsEquivalent(event.sessionId, identity4.sessionId))) {
             throw new Error("accepted_lifetime_audit_not_persisted");
           }
         } catch (error) {
@@ -48003,13 +48011,13 @@ ${error.message || ""}`;
     }
     function acceptedCompletionSessionIds(meshId, sessions) {
       const ids = /* @__PURE__ */ new Set();
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       for (const { sessionId } of sessions) {
-        const turns = store3.turnStore();
+        const turns = store4.turnStore();
         const latest = turns.findPresentationAttemptForSession(sessionId)?.attempt;
         if (!latest || latest.meshId !== meshId || !latest.taskId || !latest.terminal || latest.state === "stopping" || latest.data.writerStop && latest.data.writerStop.confirmed !== true) continue;
-        const audit = readAcceptedSessionEvents(store3.db, meshId, sessionId, SESSION_COMPLETION_ACCEPTED_EVENT);
-        const envelope = readAcceptedOutput(store3, latest.taskId);
+        const audit = readAcceptedSessionEvents(store4.db, meshId, sessionId, SESSION_COMPLETION_ACCEPTED_EVENT);
+        const envelope = readAcceptedOutput(store4, latest.taskId);
         const currentAudit = audit.filter((e) => e.taskId === latest.taskId);
         if (currentAudit.length) {
           if (currentAudit.some((e) => e.generation === latest.generation)) ids.add(sessionId);
@@ -48537,10 +48545,10 @@ ${error.message || ""}`;
       }
       return hex;
     }
-    function utf8ToBytes(str20) {
-      if (typeof str20 !== "string")
+    function utf8ToBytes(str21) {
+      if (typeof str21 !== "string")
         throw new Error("string expected");
-      return new Uint8Array(new TextEncoder().encode(str20));
+      return new Uint8Array(new TextEncoder().encode(str21));
     }
     function toBytes(data) {
       if (typeof data === "string")
@@ -50520,14 +50528,14 @@ ${error.message || ""}`;
         return `keyed topics are compacted by pruneSuperseded (${topic})`;
       return null;
     }
-    function planMembers(store3, topic, o, streams, selfWriter, now) {
-      const recorded = new Map(store3.ackNodes(topic).map((r) => [r.node, r]));
+    function planMembers(store4, topic, o, streams, selfWriter, now) {
+      const recorded = new Map(store4.ackNodes(topic).map((r) => [r.node, r]));
       const excluded = new Set(o.excludeMembers ?? []);
       const writerNewest = /* @__PURE__ */ new Map();
       for (const s2 of streams) {
         if (s2.contigSeq === 0)
           continue;
-        const l = store3.hlcLAt(topic, s2.writer, s2.contigSeq);
+        const l = store4.hlcLAt(topic, s2.writer, s2.contigSeq);
         if (l !== void 0)
           writerNewest.set(s2.writer, l);
       }
@@ -50551,7 +50559,7 @@ ${error.message || ""}`;
         let firstAt = rec5?.firstAt;
         if (firstAt === void 0 && o.members !== void 0) {
           if (!o.dryRun)
-            store3.ackNodeName(topic, node, now);
+            store4.ackNodeName(topic, node, now);
           firstAt = now;
         }
         let evidence = null;
@@ -50571,9 +50579,9 @@ ${error.message || ""}`;
       }
       return { members, included, forget };
     }
-    function ackFloors(store3, topic, streams, included) {
+    function ackFloors(store4, topic, streams, included) {
       const acks = /* @__PURE__ */ new Map();
-      for (const a of store3.acksForTopic(topic))
+      for (const a of store4.acksForTopic(topic))
         acks.set(`${a.node}\0${a.writer}`, a.seq);
       const out = /* @__PURE__ */ new Map();
       for (const s2 of streams) {
@@ -50627,8 +50635,8 @@ ${error.message || ""}`;
           // `${topic}\0${node}\0${writer}` → recorded seq
           seenWritten = /* @__PURE__ */ new Map();
           // `${topic}\0${node}` → last seen_at written
-          constructor(store3, topics, selfWriter) {
-            this.store = store3;
+          constructor(store4, topics, selfWriter) {
+            this.store = store4;
             this.topics = topics;
             this.selfWriter = selfWriter;
           }
@@ -51021,9 +51029,9 @@ ${error.message || ""}`;
               snapCache: null
             };
             this.groups.set(key5, group);
-            const list2 = this.groupsByView.get(handle.name) ?? [];
-            list2.push(group);
-            this.groupsByView.set(handle.name, list2);
+            const list3 = this.groupsByView.get(handle.name) ?? [];
+            list3.push(group);
+            this.groupsByView.set(handle.name, list3);
             return group;
           }
           selectTail(topic, mode, defaultLimit, keyed) {
@@ -56132,9 +56140,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               this.deps.store.raw().run(`CREATE VIRTUAL TABLE IF NOT EXISTS "${inst.ftsTable}" USING fts5(${ftsCols.join(", ")})`);
             }
             this.views.set(name, inst);
-            const list2 = this.byTopic.get(topic) ?? [];
-            list2.push(inst);
-            this.byTopic.set(topic, list2);
+            const list3 = this.byTopic.get(topic) ?? [];
+            list3.push(inst);
+            this.byTopic.set(topic, list3);
             this.restore(inst);
             this.schedule(inst);
             return {
@@ -56517,8 +56525,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const timers = opts.timers ?? defaultTimers2;
       const rng = opts.rng ?? defaultRng();
       const topics = new TopicRegistry();
-      const store3 = new Store(opts.storage);
-      store3.init(constants6.durability);
+      const store4 = new Store(opts.storage);
+      store4.init(constants6.durability);
       const anomalyListeners = /* @__PURE__ */ new Set();
       const emitAnomaly = (a) => {
         for (const cb of anomalyListeners)
@@ -56526,7 +56534,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       };
       const retention = new RetentionStats();
       const core2 = new LogCore({
-        store: store3,
+        store: store4,
         topics,
         writerId: opts.writerId,
         clock,
@@ -56535,10 +56543,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         emitAnomaly,
         retention
       });
-      const acks = new AckRecorder(store3, topics, opts.writerId);
+      const acks = new AckRecorder(store4, topics, opts.writerId);
       const sync = new SyncEngine({
         core: core2,
-        store: store3,
+        store: store4,
         topics,
         writerId: opts.writerId,
         constants: constants6,
@@ -56547,8 +56555,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         emitAnomaly
       });
       sync.setRetention(acks, retention);
-      const consumers = new ConsumerHub({ store: store3, topics, timers, constants: constants6, clock });
-      const views = new ViewHub({ store: store3, topics, timers, constants: constants6, rng, emitAnomaly });
+      const consumers = new ConsumerHub({ store: store4, topics, timers, constants: constants6, clock });
+      const views = new ViewHub({ store: store4, topics, timers, constants: constants6, rng, emitAnomaly });
       anomalyListeners.add((a) => {
         if (a.kind !== "floor_adopted" || a.topic === void 0)
           return;
@@ -56557,7 +56565,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
       const finalityHub = new FinalityHub({
         core: core2,
-        store: store3,
+        store: store4,
         topics,
         constants: constants6,
         clock,
@@ -56567,7 +56575,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       sync.setFinalityHub(finalityHub);
       const registers = new RegisterHub({
         core: core2,
-        store: store3,
+        store: store4,
         topics,
         writerId: opts.writerId,
         constants: constants6,
@@ -56585,7 +56593,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       });
       const directives = new DirectiveHub({
         core: core2,
-        store: store3,
+        store: store4,
         topics,
         writerId: opts.writerId,
         emitAnomaly,
@@ -56595,7 +56603,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       sync.setDirectiveHub(directives);
       const snapshots2 = new SnapshotHub({
         core: core2,
-        store: store3,
+        store: store4,
         topics,
         views,
         registers,
@@ -56604,7 +56612,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         authority: opts.authority
       });
       sync.setSnapshotHub(snapshots2);
-      const archive = new ArchiveHub({ core: core2, store: store3, topics, views, registers, constants: constants6, clock, emitAnomaly });
+      const archive = new ArchiveHub({ core: core2, store: store4, topics, views, registers, constants: constants6, clock, emitAnomaly });
       consumers.setOnAdvance((topic) => archive.onConsumerAdvance(topic));
       const beaconHub = new BeaconHub({
         core: core2,
@@ -56690,9 +56698,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         export: (topic, format) => {
           if (format !== "jsonl")
             throw misuse(`unsupported export format ${String(format)}`);
-          return exportTopic({ core: core2, store: store3, topics, constants: constants6 }, topic);
+          return exportTopic({ core: core2, store: store4, topics, constants: constants6 }, topic);
         },
-        import: (topic, lines) => importTopic({ core: core2, store: store3, topics, constants: constants6 }, topic, lines),
+        import: (topic, lines) => importTopic({ core: core2, store: store4, topics, constants: constants6 }, topic, lines),
         async close() {
           if (closed)
             return;
@@ -56703,7 +56711,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           views.close();
           registers.close();
           beaconHub.close();
-          store3.close();
+          store4.close();
         }
       };
       const SCAN_DEFAULT_LIMIT = 500;
@@ -56723,9 +56731,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             return { entries: [], complete: true, truncatedBelow: false };
           const windowEnd = Math.min(toSeq, fromSeq + limit - 1);
           const bySeq = /* @__PURE__ */ new Map();
-          for (const e of store3.archivedEntries(topic, o.writer, fromSeq, windowEnd))
+          for (const e of store4.archivedEntries(topic, o.writer, fromSeq, windowEnd))
             bySeq.set(e.seq, e);
-          for (const { entry } of store3.entriesRange(topic, o.writer, fromSeq, windowEnd))
+          for (const { entry } of store4.entriesRange(topic, o.writer, fromSeq, windowEnd))
             bySeq.set(entry.seq, entry);
           for (const e of core2.ringTail(topic))
             if (e.writer === o.writer && e.seq >= fromSeq && e.seq <= windowEnd)
@@ -56741,12 +56749,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
         if (o.fromSeq !== void 0 || o.toSeq !== void 0)
           throw misuse("scanEntries: fromSeq/toSeq require writer");
-        const fetched = store3.entriesAfterOrder(topic, o.after ?? null, limit + 1);
+        const fetched = store4.entriesAfterOrder(topic, o.after ?? null, limit + 1);
         const within = o.through ? fetched.filter((e) => orderCompare(orderOf(e), o.through) <= 0) : fetched;
         const entries2 = within.slice(0, limit);
         const complete = within.length <= limit && (within.length < fetched.length || fetched.length <= limit);
         const cert = core2.getCert(topic);
-        const truncatedBelow = store3.archivedCount(topic) > 0 && (o.after === void 0 || cert !== null && orderCompare(o.after, cert.order) < 0);
+        const truncatedBelow = store4.archivedCount(topic) > 0 && (o.after === void 0 || cert !== null && orderCompare(o.after, cert.order) < 0);
         const r = { entries: entries2, complete, truncatedBelow };
         if (!complete && entries2.length > 0)
           r.nextAfter = orderOf(entries2[entries2.length - 1]);
@@ -56763,20 +56771,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const now = clock();
         for (const topic of topics.list()) {
           const cert = core2.getCert(topic);
-          const maxRowid = store3.maxRowid(topic);
+          const maxRowid = store4.maxRowid(topic);
           const consumers2 = {};
-          for (const c of store3.cursorsForTopic(topic)) {
+          for (const c of store4.cursorsForTopic(topic)) {
             consumers2[c.consumer] = {
               lastRowid: c.lastRowid,
               lagRows: Math.max(0, maxRowid - c.lastRowid)
             };
           }
           out.topics[topic] = {
-            writers: store3.listWriters(topic).length,
-            logRows: store3.logCount(topic),
-            pending: store3.pendingCountForTopic(topic),
-            quarantined: store3.quarantineCount(topic),
-            archived: store3.archivedCount(topic),
+            writers: store4.listWriters(topic).length,
+            logRows: store4.logCount(topic),
+            pending: store4.pendingCountForTopic(topic),
+            quarantined: store4.quarantineCount(topic),
+            archived: store4.archivedCount(topic),
             finalityGeneration: cert?.generation ?? null,
             certOrderAgeMs: cert ? Math.max(0, now - cert.order.l) : null,
             consumers: consumers2,
@@ -56798,8 +56806,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                 truncatedServed: 0,
                 truncatedUnservable: 0
               },
-              floorStreams: store3.floorsForTopic(topic).length,
-              ackNodes: store3.ackNodes(topic).length
+              floorStreams: store4.floorsForTopic(topic).length,
+              ackNodes: store4.ackNodes(topic).length
             };
           }
         }
@@ -56838,7 +56846,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             throw misuse("node is closed");
           topics.get(topic);
           const out = {};
-          for (const f of store3.floorsForTopic(topic))
+          for (const f of store4.floorsForTopic(topic))
             out[f.writer] = f.seq;
           return out;
         },
@@ -56898,7 +56906,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (closed)
             throw misuse("node is closed");
           topics.get(topic);
-          return store3.maxOrderUpTo(topic, Number.MAX_SAFE_INTEGER);
+          return store4.maxOrderUpTo(topic, Number.MAX_SAFE_INTEGER);
         },
         _core: core2,
         _views: views,
@@ -57569,8 +57577,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     function readTaskStatsEntries(meshId, tail) {
-      const store3 = MeshRuntimeStore.getInstance();
-      return readOwnTaskLifecycle(meshTopicIndexFor(store3.db), store3.turnStore(), meshId, { ownWriter: meshPublisherWriterId(), tail });
+      const store4 = MeshRuntimeStore.getInstance();
+      return readOwnTaskLifecycle(meshTopicIndexFor(store4.db), store4.turnStore(), meshId, { ownWriter: meshPublisherWriterId(), tail });
     }
     function readPayloadTaskId(entry) {
       const value = entry.payload?.taskId;
@@ -60501,10 +60509,10 @@ ${line}`;
         if (!entry.own) return { outcome: "skipped", why: "foreign" };
         const p = entry.payload;
         if (!isSelf(deps.selfDaemonIds(), str5(p.targetDaemonId))) return { outcome: "skipped", why: "not_addressed" };
-        const store3 = deps.ledger.store;
-        const isClaimed = () => store3.isDeliveryClaimed(entry.meshId, entry.writer, entry.seq);
+        const store4 = deps.ledger.store;
+        const isClaimed = () => store4.isDeliveryClaimed(entry.meshId, entry.writer, entry.seq);
         if (isClaimed()) return { outcome: "skipped", why: "already_delivered" };
-        const row2 = (str5(p.eventId) ? store3.getEvent(str5(p.eventId)) : null) ?? store3.findPublishedEvent(entry.writer, entry.seq, entry.meshId);
+        const row2 = (str5(p.eventId) ? store4.getEvent(str5(p.eventId)) : null) ?? store4.findPublishedEvent(entry.writer, entry.seq, entry.meshId);
         const eventName = str5(row2?.payload.event);
         if (eventName && deps.isControlEvent?.(eventName)) return { outcome: "skipped", why: "control" };
         const notify2 = isNotifyKind2(p.notify) ? p.notify : "mesh_event";
@@ -60902,10 +60910,10 @@ ${line}`;
       return out;
     }
     function filterProvidersByRequiredTags2(candidates, requiredTags) {
-      const list2 = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
+      const list3 = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
       const pins = providerPinsFromRequiredTags4(requiredTags);
-      if (pins.length === 0) return list2;
-      return list2.filter((type2) => pins.includes(type2));
+      if (pins.length === 0) return list3;
+      return list3.filter((type2) => pins.includes(type2));
     }
     var extraTagProviders;
     var init_mesh_node_capability_tags = __esm2({
@@ -61927,9 +61935,9 @@ ${line}`;
       if (entry.handshakePendingSince != null) return false;
       return now - entry.runtimeObservedAt < staleMs;
     }
-    function readLiveHeldRuntime(store3, args, now = Date.now()) {
-      if (!store3 || !args.meshId || !args.nodeId || !args.daemonId) return null;
-      const entry = store3.get(args.meshId, args.nodeId);
+    function readLiveHeldRuntime(store4, args, now = Date.now()) {
+      if (!store4 || !args.meshId || !args.nodeId || !args.daemonId) return null;
+      const entry = store4.get(args.meshId, args.nodeId);
       if (!entry || !isHeldRuntimeLive(entry, now) || !entry.runtime || entry.runtimeObservedAt === null) return null;
       if (!MeshNodeGitStateStore.runtimeBelongsToDaemon(entry, args.daemonId)) return null;
       return { runtime: entry.runtime, observedAt: entry.runtimeObservedAt };
@@ -61984,8 +61992,8 @@ ${line}`;
             if (this.inflight.has(key5)) return false;
             const now = this.now();
             this.lastNudgeAt.set(key5, now);
-            const { store: store3 } = this.options;
-            store3.recordProbeAttempt(target4.meshId, target4.nodeId, target4.workspace, now);
+            const { store: store4 } = this.options;
+            store4.recordProbeAttempt(target4.meshId, target4.nodeId, target4.workspace, now);
             const daemonKey = this.key(target4.meshId, target4.daemonId);
             this.daemonInflight.set(daemonKey, (this.daemonInflight.get(daemonKey) ?? 0) + 1);
             const run4 = (async () => {
@@ -61996,7 +62004,7 @@ ${line}`;
                 failure7 = error?.message ? String(error.message) : "nudge_failed";
               }
               if (failure7 === null) return false;
-              return store3.recordProbeFailure(target4.meshId, target4.nodeId, target4.workspace, failure7, this.now()).changed;
+              return store4.recordProbeFailure(target4.meshId, target4.nodeId, target4.workspace, failure7, this.now()).changed;
             })().catch(() => false).then((changed) => {
               if (this.inflight.get(key5) === run4) this.inflight.delete(key5);
               const left = (this.daemonInflight.get(daemonKey) ?? 1) - 1;
@@ -63797,40 +63805,40 @@ ${pattern}
         };
       }
       const key5 = mailboxKey(meshId, taskId);
-      const list2 = PENDING.get(key5) || [];
-      if (list2.length >= MAILBOX_MAX_PENDING_PER_TASK) {
+      const list3 = PENDING.get(key5) || [];
+      if (list3.length >= MAILBOX_MAX_PENDING_PER_TASK) {
         return {
           ok: false,
           error: "mailbox_full",
-          detail: `task ${taskId} already holds ${list2.length} undelivered message(s) \u2014 it is not reading its tool responses`
+          detail: `task ${taskId} already holds ${list3.length} undelivered message(s) \u2014 it is not reading its tool responses`
         };
       }
       const message = { id: (0, import_crypto12.randomUUID)(), meshId, taskId, text: text4, mintedAtMs: Date.now() };
-      list2.push(message);
-      PENDING.set(key5, list2);
-      return { ok: true, id: message.id, pending: list2.length };
+      list3.push(message);
+      PENDING.set(key5, list3);
+      return { ok: true, id: message.id, pending: list3.length };
     }
     function drainWorkerMailboxForTask(meshId, taskId) {
       const key5 = mailboxKey(String(meshId || "").trim(), String(taskId || "").trim());
-      const list2 = PENDING.get(key5);
-      if (!list2 || !list2.length) return [];
+      const list3 = PENDING.get(key5);
+      if (!list3 || !list3.length) return [];
       PENDING.delete(key5);
-      return list2;
+      return list3;
     }
     function peekWorkerMailboxCount(meshId, taskId) {
       return PENDING.get(mailboxKey(String(meshId || "").trim(), String(taskId || "").trim()))?.length ?? 0;
     }
     function discardWorkerMailboxForTask(meshId, taskId) {
       const key5 = mailboxKey(String(meshId || "").trim(), String(taskId || "").trim());
-      const list2 = PENDING.get(key5);
-      if (!list2) return 0;
+      const list3 = PENDING.get(key5);
+      if (!list3) return 0;
       PENDING.delete(key5);
-      return list2.length;
+      return list3.length;
     }
     function pruneWorkerMailboxes(keep) {
       let dropped = 0;
-      for (const [key5, list2] of [...PENDING.entries()]) {
-        const first = list2[0];
+      for (const [key5, list3] of [...PENDING.entries()]) {
+        const first = list3[0];
         if (!first) {
           PENDING.delete(key5);
           continue;
@@ -63843,7 +63851,7 @@ ${pattern}
         }
         if (!kept) {
           PENDING.delete(key5);
-          dropped += list2.length;
+          dropped += list3.length;
         }
       }
       return dropped;
@@ -64009,25 +64017,25 @@ ${rendered.join("\n\n")}`,
       }
     });
     function commitTaskTerminal(terminal) {
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       const nowIso = new Date(terminal.occurredAtMs ?? Date.now()).toISOString();
-      const result = store3.transaction(() => {
-        const entry = store3.findQueueEntryById(terminal.meshId, terminal.taskId);
+      const result = store4.transaction(() => {
+        const entry = store4.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false };
-        if (store3.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId)?.state === "stopping") {
+        if (store4.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId)?.state === "stopping") {
           return { entry, committed: false, duplicate: false };
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
-        applyTaskTerminalSteps(store3, entry, terminal, nowIso);
+        applyTaskTerminalSteps(store4, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false };
       });
-      if (result.committed) afterBridgeCommit(store3.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
+      if (result.committed) afterBridgeCommit(store4.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
       return result;
     }
-    function applyTaskTerminalSteps(store3, entry, terminal, nowIso, attemptNo) {
-      persistOutputVersion(store3, terminal, nowIso, attemptNo);
+    function applyTaskTerminalSteps(store4, entry, terminal, nowIso, attemptNo) {
+      persistOutputVersion(store4, terminal, nowIso, attemptNo);
       entry.status = terminal.status;
-      store3.updateQueueEntry(entry);
+      store4.updateQueueEntry(entry);
       endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
     }
     function terminalFenced(meshId, taskId) {
@@ -64045,14 +64053,14 @@ ${rendered.join("\n\n")}`,
       }
     }
     function applyTaskTerminalInTxn(input) {
-      const store3 = MeshRuntimeStore.getInstance();
-      return store3.transaction(() => {
-        const entry = store3.findQueueEntryById(input.meshId, input.taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      return store4.transaction(() => {
+        const entry = store4.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
         if (terminalFenced(input.meshId, input.taskId)) {
           const attemptId = input.attemptId;
-          if (attemptId) afterBridgeCommit(store3.db, () => expireWorkerTaskTokensForAttempt(input.meshId, input.taskId, attemptId));
+          if (attemptId) afterBridgeCommit(store4.db, () => expireWorkerTaskTokensForAttempt(input.meshId, input.taskId, attemptId));
           return { entry, transitioned: false };
         }
         const terminal = {
@@ -64066,7 +64074,7 @@ ${rendered.join("\n\n")}`,
           ...input.reason ? { reason: input.reason } : {},
           ...input.envelope ? { envelope: input.envelope } : {}
         };
-        applyTaskTerminalSteps(store3, entry, terminal, new Date(input.occurredAtMs).toISOString(), input.attemptNo);
+        applyTaskTerminalSteps(store4, entry, terminal, new Date(input.occurredAtMs).toISOString(), input.attemptNo);
         return { entry, transitioned: true };
       });
     }
@@ -64080,13 +64088,13 @@ ${rendered.join("\n\n")}`,
       } catch {
       }
     }
-    function persistOutputVersion(store3, terminal, nowIso, attemptNo) {
-      const latest = store3.getLatestTaskOutput(terminal.taskId);
+    function persistOutputVersion(store4, terminal, nowIso, attemptNo) {
+      const latest = store4.getLatestTaskOutput(terminal.taskId);
       const version2 = (latest?.version ?? 0) + 1;
       let attemptSeq = attemptNo !== void 0 ? attemptNo + 1 : 1;
       if (attemptNo === void 0) {
         try {
-          const attempt = store3.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId);
+          const attempt = store4.turnStore().findLatestAttemptForTask(terminal.meshId, terminal.taskId);
           if (attempt) attemptSeq = attempt.attemptNo + 1;
         } catch {
         }
@@ -64106,7 +64114,7 @@ ${rendered.join("\n\n")}`,
           provider_type: terminal.envelope?.providerType
         }
       });
-      store3.insertTaskOutput({
+      store4.insertTaskOutput({
         taskId: terminal.taskId,
         version: version2,
         meshId: terminal.meshId,
@@ -64881,8 +64889,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return open && INJECTION_CLOSED_STATES.has(open.state) ? open : null;
     }
     function retireOpenQueueAttemptForRequeue(meshId, taskId, opts) {
-      const store3 = MeshRuntimeStore.getInstance();
-      const open = findOpenQueueAttempt(store3.turnStore(), meshId, taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      const open = findOpenQueueAttempt(store4.turnStore(), meshId, taskId);
       if (!open) return { kind: "none" };
       if (open.state === "stopping" || !opts.force && INJECTION_CLOSED_STATES.has(open.state)) return { kind: "refused", attempt: open, reason: "attempt_open" };
       const ledger = getActiveTurnLedger();
@@ -64904,7 +64912,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (result.verdict !== "applied" || !result.attempt?.terminal) {
         return { kind: "refused", attempt: open, reason: "cancel_not_applied", detail: `${result.verdict}${result.rejection ? ` (${result.rejection})` : ""}` };
       }
-      afterBridgeCommit(store3.db, () => expireWorkerTaskTokensForAttempt(meshId, taskId, open.attemptId));
+      afterBridgeCommit(store4.db, () => expireWorkerTaskTokensForAttempt(meshId, taskId, open.attemptId));
       LOG.info("MeshQueue", `Requeue of task ${taskId} (mesh ${meshId}) retired its open attempt ${open.attemptId} g${open.generation} (${open.state} on ${open.sessionId}) \u2014 the next claim opens a fresh attempt`);
       return { kind: "closed", attempt: open };
     }
@@ -64922,9 +64930,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       };
     }
     function rebindRefusedClaimToOpenAttempt(meshId, taskId, attempt, now = Date.now()) {
-      const store3 = MeshRuntimeStore.getInstance();
-      return store3.transaction(() => {
-        const entry = store3.findQueueEntryById(meshId, taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      return store4.transaction(() => {
+        const entry = store4.findQueueEntryById(meshId, taskId);
         if (!entry || entry.status !== "assigned") return entry;
         entry.assignedSessionId = attempt.sessionId;
         if (attempt.nodeId) entry.assignedNodeId = attempt.nodeId;
@@ -64939,7 +64947,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         entry.claimRefusedCount = refusals;
         const backoffMs = Math.min(CLAIM_REFUSAL_BACKOFF_BASE_MS * Math.pow(2, refusals - 1), CLAIM_REFUSAL_BACKOFF_MAX_MS);
         entry.notBefore = new Date(now + backoffMs).toISOString();
-        store3.updateQueueEntry(entry);
+        store4.updateQueueEntry(entry);
         return entry;
       });
     }
@@ -64976,8 +64984,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (entry.status === "cancelled") return fromRow === "dependency_failed" ? fromRow : "operator_cancel";
       return fromRow === "unspecified" ? "task_failed" : fromRow;
     }
-    function collectWaitingQueueDependents(store3, meshId, rootId) {
-      const pending = store3.getQueueEntries(meshId, ["pending"]);
+    function collectWaitingQueueDependents(store4, meshId, rootId) {
+      const pending = store4.getQueueEntries(meshId, ["pending"]);
       const out = [];
       const seen2 = /* @__PURE__ */ new Set([rootId]);
       let frontier = [rootId];
@@ -64995,23 +65003,23 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       return out;
     }
-    function rootGeneration(store3, rootId) {
+    function rootGeneration(store4, rootId) {
       try {
-        return store3.getLatestTaskOutput(rootId)?.version ?? 0;
+        return store4.getLatestTaskOutput(rootId)?.version ?? 0;
       } catch {
         return 0;
       }
     }
     function buildQueueDependencyNotice(meshId, rootId, policy, cancelled, machineReason) {
-      const store3 = MeshRuntimeStore.getInstance();
-      const root = store3.findQueueEntryById(meshId, rootId);
+      const store4 = MeshRuntimeStore.getInstance();
+      const root = store4.findQueueEntryById(meshId, rootId);
       if (!root || root.status !== "failed" && root.status !== "cancelled") return null;
       const rootRef = {
         taskId: root.id,
         outcome: root.status,
         reasonCode: queueRootReasonCode(root, machineReason)
       };
-      const generation = rootGeneration(store3, rootId);
+      const generation = rootGeneration(store4, rootId);
       if (policy === "cancel") {
         const listed = cancelled.map((c) => {
           const via = (c.cancelReason ?? "").startsWith("dependency_failed:") ? c.cancelReason.slice("dependency_failed:".length) : void 0;
@@ -65020,7 +65028,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         if (listed.length === 0) return null;
         return { kind: "queue_dependency_cancelled", meshId, generation, root: rootRef, cancelled: listed };
       }
-      const waiting2 = collectWaitingQueueDependents(store3, meshId, rootId);
+      const waiting2 = collectWaitingQueueDependents(store4, meshId, rootId);
       if (waiting2.length === 0) return null;
       return { kind: "queue_dependency_blocked", meshId, generation, root: rootRef, waiting: waiting2, source: "mesh_queue_dependency" };
     }
@@ -65029,24 +65037,24 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return notice ? deliverQueueDependencyNotice(notice) : false;
     }
     function sweepQueueDependencyStalls(meshId, opts) {
-      const store3 = MeshRuntimeStore.getInstance();
-      const pending = store3.getQueueEntries(meshId, ["pending"]);
+      const store4 = MeshRuntimeStore.getInstance();
+      const pending = store4.getQueueEntries(meshId, ["pending"]);
       const deadRoots = /* @__PURE__ */ new Map();
       for (const entry of pending) {
         for (const dep of entry.dependsOn ?? []) {
           if (deadRoots.has(dep)) continue;
-          const row2 = store3.findQueueEntryById(meshId, dep);
+          const row2 = store4.findQueueEntryById(meshId, dep);
           if (row2 && (row2.status === "failed" || row2.status === "cancelled")) deadRoots.set(dep, row2);
         }
       }
       let noticesQueued = 0;
       for (const [rootId, root] of deadRoots) {
-        const waiting2 = collectWaitingQueueDependents(store3, meshId, rootId);
+        const waiting2 = collectWaitingQueueDependents(store4, meshId, rootId);
         if (waiting2.length === 0) continue;
         const notice = {
           kind: "queue_dependency_blocked",
           meshId,
-          generation: rootGeneration(store3, rootId),
+          generation: rootGeneration(store4, rootId),
           root: { taskId: rootId, outcome: root.status, reasonCode: queueRootReasonCode(root) },
           waiting: waiting2,
           source: "mesh_queue_stall_sweep"
@@ -65283,7 +65291,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         }
         idByRef.set(ref2, ids[i]);
       });
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       return withQueueLock(meshId, () => {
         const inserted = [];
         specs.forEach((spec, i) => {
@@ -65292,7 +65300,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           const dependsOn = normalizeDependsOn(spec.dependsOn).map((dep) => {
             const mapped = idByRef.get(dep);
             if (mapped) return mapped;
-            if (store3.findQueueEntryById(meshId, dep)) return dep;
+            if (store4.findQueueEntryById(meshId, dep)) return dep;
             throw new Error(
               `unknown_dependency: task ${label2} depends on '${dep}', which is neither a ref in this batch nor an existing task id` + (idByRef.size ? ` (batch refs: ${[...idByRef.keys()].join(", ")})` : "")
             );
@@ -65517,19 +65525,19 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         tellCoordinatorQueueDependency(meshId, failedTaskId, "block", [], machineReason);
         return [];
       }
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       const cancelled = [];
       const frontier = [failedTaskId];
       const seen2 = new Set(frontier);
       while (frontier.length > 0) {
         const currentId = frontier.pop();
-        const dependents = store3.getQueueEntries(meshId, ["pending"]).filter((entry) => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(currentId));
+        const dependents = store4.getQueueEntries(meshId, ["pending"]).filter((entry) => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(currentId));
         for (const dependent of dependents) {
           if (seen2.has(dependent.id)) continue;
           seen2.add(dependent.id);
           dependent.cancelledAt = (/* @__PURE__ */ new Date()).toISOString();
           dependent.cancelReason = `dependency_failed:${currentId}`;
-          store3.updateQueueEntry(dependent);
+          store4.updateQueueEntry(dependent);
           const committed = commitQueueTerminal(meshId, dependent.id, "cancelled", "cancellation", dependent.cancelReason);
           cancelled.push(committed ?? dependent);
           frontier.push(dependent.id);
@@ -65807,18 +65815,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     function failOrphanedUncorrelatedDispatch(meshId, taskId, reason, opts) {
       requireMeshHostQueueOwner(opts);
       const result = withQueueLock(meshId, () => {
-        const store3 = MeshRuntimeStore.getInstance();
-        const entry = store3.findQueueEntryById(meshId, taskId);
+        const store4 = MeshRuntimeStore.getInstance();
+        const entry = store4.findQueueEntryById(meshId, taskId);
         if (!entry || entry.status !== "assigned") return null;
         const attemptId = entry.attemptId?.trim();
         if (attemptId) {
           if (attemptId !== opts?.orphanedAttemptId) return null;
-          const attempt = store3.turnStore().getAttempt(attemptId);
+          const attempt = store4.turnStore().getAttempt(attemptId);
           if (attempt && !attempt.terminal) return null;
         } else if (opts?.orphanedAttemptId) return null;
         entry.cancelReason = reason;
         entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        store3.updateQueueEntry(entry);
+        store4.updateQueueEntry(entry);
         const failed = commitQueueTerminal(meshId, taskId, "failed", "queue_policy", reason);
         const cascaded = propagateDependencyFailure(meshId, taskId, reason);
         return { entry: failed ?? entry, cascaded };
@@ -65831,11 +65839,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function updateSessionTaskStatus(meshId, sessionId, status, opts) {
       const result = withQueueLock(meshId, () => {
-        const store3 = MeshRuntimeStore.getInstance();
+        const store4 = MeshRuntimeStore.getInstance();
         const occurredAtIso = opts?.occurredAt ? new Date(opts.occurredAt).toISOString() : void 0;
-        const entry = store3.findAssignedBySession(meshId, sessionId, occurredAtIso, opts?.taskId);
+        const entry = store4.findAssignedBySession(meshId, sessionId, occurredAtIso, opts?.taskId);
         if (!entry) {
-          const assignedRows = store3.getActiveAssignmentDetails(meshId).filter((r) => sessionIdsEquivalent(r.sessionId, sessionId));
+          const assignedRows = store4.getActiveAssignmentDetails(meshId).filter((r) => sessionIdsEquivalent(r.sessionId, sessionId));
           if (assignedRows.length > 0) {
             LOG.warn("MeshQueue", `No assigned queue row matched completion for mesh ${meshId} session ${sessionId} (taskId=${opts?.taskId ?? "none"}, occurredAt=${occurredAtIso ?? "none"}); ${assignedRows.length} assigned row(s) exist: ${assignedRows.map((r) => r.id).join(",")}`);
           }
@@ -65855,7 +65863,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           return { entry: commit2.entry ?? entry, cascaded };
         }
         entry.status = status;
-        store3.updateQueueEntry(entry);
+        store4.updateQueueEntry(entry);
         if (status !== "assigned") endTaskDispatchInFlight(meshId, entry.id);
         return { entry, cascaded: [] };
       });
@@ -65905,8 +65913,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function requeueTaskForLedgerReclaim(meshId, taskId, reason, nowIso) {
       return withQueueLock(meshId, () => {
-        const store3 = MeshRuntimeStore.getInstance();
-        const entry = store3.findQueueEntryById(meshId, taskId);
+        const store4 = MeshRuntimeStore.getInstance();
+        const entry = store4.findQueueEntryById(meshId, taskId);
         if (!entry || TERMINAL_TASK_STATUSES.has(entry.status)) return entry;
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
@@ -65920,7 +65928,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         entry.requeuedAt = nowIso;
         entry.requeueReason = reason;
         entry.updatedAt = nowIso;
-        store3.updateQueueEntry(entry);
+        store4.updateQueueEntry(entry);
         endTaskDispatchInFlight(meshId, taskId);
         terminalizeSiblingDispatch(meshId, taskId, "queue_task_stranded_reclaimed");
         return entry;
@@ -65928,15 +65936,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function applyDispatchFailureBackoff(meshId, taskId) {
       return withQueueLock(meshId, () => {
-        const store3 = MeshRuntimeStore.getInstance();
-        const entry = store3.findQueueEntryById(meshId, taskId);
+        const store4 = MeshRuntimeStore.getInstance();
+        const entry = store4.findQueueEntryById(meshId, taskId);
         if (!entry || entry.status !== "pending") return entry;
         const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
         entry.dispatchFailureCount = dispatchFailures;
         const backoffMs = DISPATCH_RETRY_BACKOFF_BASE_MS * Math.pow(2, dispatchFailures - 1);
         entry.notBefore = resolveNotBefore2(Math.min(backoffMs, DISPATCH_RETRY_BACKOFF_MAX_MS));
         entry.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-        store3.updateQueueEntry(entry);
+        store4.updateQueueEntry(entry);
         return entry;
       });
     }
@@ -69058,18 +69066,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function resolveDaemonSiblingNodeIds(nodeId, nodes) {
       const self = readNonEmpty(nodeId);
-      const list2 = Array.isArray(nodes) ? nodes : [];
-      if (!self || list2.length === 0) return self ? [self] : [];
-      const selfNode = list2.find(
+      const list3 = Array.isArray(nodes) ? nodes : [];
+      if (!self || list3.length === 0) return self ? [self] : [];
+      const selfNode = list3.find(
         (candidate) => candidate && typeof candidate === "object" && meshNodeIdMatches7(candidate, self)
       );
       if (!selfNode) return [self];
-      const selfKey = resolveNodeDaemonKey(selfNode, list2);
+      const selfKey = resolveNodeDaemonKey(selfNode, list3);
       const out = [self];
       const seen2 = /* @__PURE__ */ new Set([normalizeMeshNodeId({ id: self }) || self]);
-      for (const candidate of list2) {
+      for (const candidate of list3) {
         if (!candidate || typeof candidate !== "object") continue;
-        if (resolveNodeDaemonKey(candidate, list2) !== selfKey) continue;
+        if (resolveNodeDaemonKey(candidate, list3) !== selfKey) continue;
         const id4 = normalizeMeshNodeId(candidate);
         if (!id4 || seen2.has(id4)) continue;
         seen2.add(id4);
@@ -69984,10 +69992,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!state2) return false;
       return sessionStateLooksActive(state2);
     }
-    function isHeldRemoteSessionGenerating(store3, meshId, sessionId, now = Date.now()) {
-      if (!store3 || !meshId || !sessionId) return false;
-      for (const match of store3.findRuntimeSessions(sessionId, { meshId })) {
-        const entry = store3.get(match.meshId, match.nodeId);
+    function isHeldRemoteSessionGenerating(store4, meshId, sessionId, now = Date.now()) {
+      if (!store4 || !meshId || !sessionId) return false;
+      for (const match of store4.findRuntimeSessions(sessionId, { meshId })) {
+        const entry = store4.get(match.meshId, match.nodeId);
         if (!isHeldRuntimeLive(entry, now)) continue;
         if (sessionStateLooksActive(match.session)) return true;
       }
@@ -72455,10 +72463,10 @@ ${body}`;
     function contractAfterAcceptedCompletion(input) {
       const s2 = scopeOf(input.meshId, input.taskId);
       if (!s2) return null;
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       try {
-        const out = store3.getLatestTaskOutput(input.taskId);
-        const attempt = input.attemptId ? store3.turnStore().getAttempt(input.attemptId) : void 0;
+        const out = store4.getLatestTaskOutput(input.taskId);
+        const attempt = input.attemptId ? store4.turnStore().getAttempt(input.attemptId) : void 0;
         if (out && attempt && input.attemptId) {
           recordResultEvidence(s2.ctx, {
             meshId: input.meshId,
@@ -72522,10 +72530,10 @@ ${body}`;
       const ctx = getContractCtx();
       if (!ctx || !hasAnyStrictState(ctx)) return [];
       const rows = ctx.db.prepare(`SELECT task_id FROM contract_task_scopes WHERE mesh_id = ? AND mode = 'strict'`).all(meshId);
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       const out = [];
       for (const r of rows) {
-        const entry = store3.findQueueEntryById(meshId, r.task_id);
+        const entry = store4.findQueueEntryById(meshId, r.task_id);
         if (entry?.status === "completed" && nodeMatches(entry.assignedNodeId ?? entry.targetNodeId)) out.push({ meshId, taskId: r.task_id });
       }
       return out;
@@ -72616,17 +72624,17 @@ ${body}`;
     function contractRecoverPendingEvidence(meshId) {
       const ctx = getContractCtx();
       if (!ctx || !hasAnyStrictState(ctx)) return 0;
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       let joined = 0;
       const rows = ctx.db.prepare(`SELECT task_id FROM contract_task_scopes WHERE mesh_id = ? AND mode = 'strict'`).all(meshId);
       for (const r of rows) {
         try {
-          const entry = store3.findQueueEntryById(meshId, r.task_id);
-          const out = store3.getLatestTaskOutput(r.task_id);
+          const entry = store4.findQueueEntryById(meshId, r.task_id);
+          const out = store4.getLatestTaskOutput(r.task_id);
           if (entry?.status !== "completed" || !out || out.status !== "completed" || !entry.attemptId) continue;
           const has = ctx.db.prepare("SELECT 1 FROM contract_result_evidence WHERE mesh_id = ? AND task_id = ? AND output_version = ? AND payload_digest = ?").get(meshId, r.task_id, out.version, out.digest);
           if (has) continue;
-          const attempt = store3.turnStore().getAttempt(entry.attemptId);
+          const attempt = store4.turnStore().getAttempt(entry.attemptId);
           if (!attempt) continue;
           const res = recordResultEvidence(ctx, {
             meshId,
@@ -72755,9 +72763,9 @@ ${body}`;
         throw new Error(`invalid_mission_status: '${input.status}' (valid: ${MESH_MISSION_STATUSES22.join(", ")})`);
       }
       const requestedId = typeof input.id === "string" && input.id.trim() ? input.id.trim() : void 0;
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       if (requestedId) {
-        const target4 = store3.getMission(meshId, requestedId);
+        const target4 = store4.getMission(meshId, requestedId);
         if (!target4) {
           throw new Error(
             `mission_not_found: no mission with id '${requestedId}' on this mesh. Omit mission_id to create a new mission, or use mesh_mission_list to get a valid full id.`
@@ -72765,7 +72773,7 @@ ${body}`;
         }
       }
       if (requestedId && input.status === "completed") {
-        const completedIds = store3.getQueueFacts(meshId).filter((t) => t.missionId === requestedId && t.status === "completed").map((t) => t.id);
+        const completedIds = store4.getQueueFacts(meshId).filter((t) => t.missionId === requestedId && t.status === "completed").map((t) => t.id);
         const held = contractMissionHeldTaskIds(meshId, requestedId, completedIds);
         if (held.length) {
           throw new Error(
@@ -72774,7 +72782,7 @@ ${body}`;
         }
       }
       const id4 = requestedId ?? (0, import_crypto14.randomUUID)();
-      const existing = requestedId ? store3.getMission(meshId, id4) : null;
+      const existing = requestedId ? store4.getMission(meshId, id4) : null;
       const prevStatus = existing ? normalizeMissionStatus(existing.status) : null;
       const prevGoal = existing?.goal ?? "";
       const normalizedBrief = input.brief === void 0 ? void 0 : normalizeMissionBrief(input.brief).brief;
@@ -72787,8 +72795,8 @@ ${body}`;
         status: normalizeMissionStatus(input.status ?? existing?.status),
         briefJson
       };
-      store3.upsertMission(record7);
-      const saved = store3.getMission(meshId, id4);
+      store4.upsertMission(record7);
+      const saved = store4.getMission(meshId, id4);
       const result = {
         ...saved,
         status: normalizeMissionStatus(saved.status),
@@ -72801,7 +72809,7 @@ ${body}`;
         prevGoal
       });
       try {
-        const items = store3.missionItems();
+        const items = store4.missionItems();
         const actor = opts?.actor ?? "coordinator";
         if (!existing) {
           items.appendEvent(meshId, id4, "created", actor, { title: result.title, status: result.status, goal: result.goal });
@@ -72814,7 +72822,7 @@ ${body}`;
           }
         }
         if (existing && opts?.bump !== false) items.bumpVersion(meshId, id4);
-        const refreshed = store3.getMission(meshId, id4);
+        const refreshed = store4.getMission(meshId, id4);
         if (refreshed) return { ...result, updatedAt: refreshed.updatedAt, version: refreshed.version, summary: refreshed.summary, outcome: refreshed.outcome, outcomeReason: refreshed.outcomeReason, isCarryOver: refreshed.isCarryOver };
       } catch (e) {
         LOG.warn("MeshMissions", `mission history write failed for ${id4}: ${e?.message || e}`);
@@ -72931,21 +72939,21 @@ ${body}`;
       try {
         const mission = getMeshMission(meshId, missionId);
         if (!mission) return false;
-        const store3 = MeshRuntimeStore.getInstance();
+        const store4 = MeshRuntimeStore.getInstance();
         const aggregate = summarizeMissionTasks(meshId, missionId);
         const allTerminal = isMissionAllTasksTerminal(aggregate);
         const alreadyEmitted = typeof mission.closeCandidateEmittedAt === "string" && mission.closeCandidateEmittedAt.length > 0;
         if (!allTerminal) {
-          if (alreadyEmitted) store3.setMissionCloseCandidateEmittedAt(meshId, missionId, null);
+          if (alreadyEmitted) store4.setMissionCloseCandidateEmittedAt(meshId, missionId, null);
           return false;
         }
         if (mission.status !== "active") return false;
         if (alreadyEmitted) return false;
-        const completedIds = store3.getQueueFacts(meshId).filter((t) => t.missionId === missionId && t.status === "completed").map((t) => t.id);
+        const completedIds = store4.getQueueFacts(meshId).filter((t) => t.missionId === missionId && t.status === "completed").map((t) => t.id);
         if (contractMissionHeldTaskIds(meshId, missionId, completedIds).length > 0) return false;
         const emittedAt = (/* @__PURE__ */ new Date()).toISOString();
         emitMissionCloseCandidateEvent(meshId, mission, aggregate, emittedAt);
-        store3.setMissionCloseCandidateEmittedAt(meshId, missionId, emittedAt);
+        store4.setMissionCloseCandidateEmittedAt(meshId, missionId, emittedAt);
         return true;
       } catch (e) {
         LOG.warn("MeshMissions", `maybeEmitMissionCloseCandidate failed for mission ${missionId} on mesh ${meshId}: ${e?.message || e}`);
@@ -73810,10 +73818,10 @@ ${body}`;
       return loadNoteText(meshId, taskId);
     }
     function selectRelevantHandoffNotes(input) {
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       let rows;
       try {
-        rows = store3.turnStore().listWorkerEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
+        rows = store4.turnStore().listWorkerEventsByKind(input.meshId, WORKER_HANDOFF_EVENT_KIND, 200);
       } catch (e) {
         LOG.warn("HandoffNotes", `Handoff note lookup failed for mesh ${input.meshId}: ${e?.message || e}`);
         return [];
@@ -73924,9 +73932,9 @@ ${block2.text}`,
       const cutoffIso = new Date(nowMs2 - HANDOFF_RETENTION_MS).toISOString();
       let removed = 0;
       try {
-        const store3 = MeshRuntimeStore.getInstance();
-        removed = store3.turnStore().deleteWorkerEventsOlderThan(WORKER_HANDOFF_EVENT_KIND, nowMs2 - HANDOFF_RETENTION_MS);
-        store3.deleteHandoffNoteTextOlderThan(cutoffIso);
+        const store4 = MeshRuntimeStore.getInstance();
+        removed = store4.turnStore().deleteWorkerEventsOlderThan(WORKER_HANDOFF_EVENT_KIND, nowMs2 - HANDOFF_RETENTION_MS);
+        store4.deleteHandoffNoteTextOlderThan(cutoffIso);
       } catch (e) {
         LOG.warn("HandoffNotes", `Handoff retention sweep failed: ${e?.message || e}`);
       }
@@ -74265,13 +74273,13 @@ ${block2.text}`,
     }
     function resolveCurrentTaskForSession(meshId, sessionId, customStore = null) {
       try {
-        const store3 = customStore ?? MeshRuntimeStore.getInstance();
-        const entry = store3.findAssignedBySession(meshId, sessionId);
+        const store4 = customStore ?? MeshRuntimeStore.getInstance();
+        const entry = store4.findAssignedBySession(meshId, sessionId);
         if (!entry?.id) return null;
         let attemptId = entry.attemptId || void 0;
         if (!attemptId) {
           try {
-            const latest = store3.turnStore().findLatestAttemptForTask(meshId, entry.id);
+            const latest = store4.turnStore().findLatestAttemptForTask(meshId, entry.id);
             if (latest && !latest.terminal && (!latest.sessionId || sessionIdsEquivalent(latest.sessionId, sessionId))) attemptId = latest.attemptId;
           } catch {
           }
@@ -74284,8 +74292,8 @@ ${block2.text}`,
         return null;
       }
     }
-    function fenceWorkerReportOnLedger(store3, identity4, terminalStatus) {
-      const turns = store3.turnStore();
+    function fenceWorkerReportOnLedger(store4, identity4, terminalStatus) {
+      const turns = store4.turnStore();
       const current4 = turns.findLatestAttemptForTask(identity4.meshId, identity4.taskId);
       const attempt = identity4.attemptId ? turns.getAttempt(identity4.attemptId) : current4;
       if (!attempt || attempt.meshId !== identity4.meshId || attempt.taskId !== identity4.taskId) return "unknown_attempt";
@@ -74480,8 +74488,8 @@ ${block2.text}`,
       }
       const nowMs2 = opts.nowMs ?? Date.now();
       const nowIso = new Date(nowMs2).toISOString();
-      const store3 = MeshRuntimeStore.getInstance();
-      const recoveryAttempt = identity4.attemptId ? store3.turnStore().getAttempt(identity4.attemptId) : void 0;
+      const store4 = MeshRuntimeStore.getInstance();
+      const recoveryAttempt = identity4.attemptId ? store4.turnStore().getAttempt(identity4.attemptId) : void 0;
       const correction = recoveryAttempt?.data.reportCorrection;
       if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs2 >= correction.until) {
         return { accepted: false, refusal: "correction_too_late", detail: "The bounded correction deadline expired; no recovery was accepted." };
@@ -74493,16 +74501,16 @@ ${block2.text}`,
       const terminalStatus = report.outcome;
       let fence;
       try {
-        fence = fenceWorkerReportOnLedger(store3, identity4, terminalStatus);
+        fence = fenceWorkerReportOnLedger(store4, identity4, terminalStatus);
       } catch (e) {
         return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
       }
       if (fence === "unknown_attempt") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      const evidenceAttemptId = identity4.attemptId ?? store3.turnStore().findLatestAttemptForTask(identity4.meshId, identity4.taskId)?.attemptId;
+      const evidenceAttemptId = identity4.attemptId ?? store4.turnStore().findLatestAttemptForTask(identity4.meshId, identity4.taskId)?.attemptId;
       let evidenceRecorded = !evidenceAttemptId;
       if (evidenceAttemptId) {
         try {
-          evidenceRecorded = store3.turnStore().insertWorkerEvent({
+          evidenceRecorded = store4.turnStore().insertWorkerEvent({
             eventId: (0, import_crypto17.randomUUID)(),
             attemptId: evidenceAttemptId,
             sessionId: identity4.sessionId ?? null,
@@ -74544,7 +74552,7 @@ ${block2.text}`,
         handoffNoteError = noteResult.error;
       }
       if (fence !== "ok") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      if (evidenceAttemptId && store3.turnStore().getAttempt(evidenceAttemptId)?.state === "stopping") {
+      if (evidenceAttemptId && store4.turnStore().getAttempt(evidenceAttemptId)?.state === "stopping") {
         const ledger2 = getActiveTurnLedger();
         if (!ledger2) return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:no_owner_ledger" };
         observeAcceptedWorkerReport(ledger2, {
@@ -74625,7 +74633,7 @@ ${block2.text}`,
       }
       let ownedPathsMismatch;
       try {
-        const taskEntry = store3.findQueueEntryById(identity4.meshId, identity4.taskId);
+        const taskEntry = store4.findQueueEntryById(identity4.meshId, identity4.taskId);
         const owned = taskEntry?.ownedPaths;
         if (owned && owned.paths.length > 0) {
           const touched = [...report.touchedFiles || [], ...report.handoffNotes?.touchedFiles || []];
@@ -74653,7 +74661,7 @@ ${block2.text}`,
         }
       } catch {
       }
-      afterBridgeCommit(store3.db, () => LOG.info(
+      afterBridgeCommit(store4.db, () => LOG.info(
         "WorkerReport",
         `Accepted ${report.outcome} report for task ${identity4.taskId}` + (identity4.attemptId ? ` attempt ${identity4.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       ));
@@ -74883,40 +74891,40 @@ ${block2.text}`,
       };
     }
     function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
-      const refuse3 = (reason, detail) => ({ refused: reason, detail });
+      const refuse4 = (reason, detail) => ({ refused: reason, detail });
       const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
-      if (!senderDaemonId) return refuse3("sender_unknown", "the mesh transport did not identify the relaying daemon");
+      if (!senderDaemonId) return refuse4("sender_unknown", "the mesh transport did not identify the relaying daemon");
       const senderOwnsNode = (nodeId) => {
-        if (!nodeId) return refuse3("node_unresolved", "the owner's record of this task names no node");
+        if (!nodeId) return refuse4("node_unresolved", "the owner's record of this task names no node");
         let owner;
         try {
           owner = sender.nodeDaemonId(nodeId);
         } catch {
           owner = void 0;
         }
-        if (!owner) return refuse3("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
+        if (!owner) return refuse4("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
         if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
-          return refuse3("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
+          return refuse4("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
         }
         return null;
       };
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       let row2 = null;
       try {
-        row2 = store3.findAssignedBySession(claim.meshId, claim.sessionId, void 0, claim.taskId);
+        row2 = store4.findAssignedBySession(claim.meshId, claim.sessionId, void 0, claim.taskId);
       } catch {
         row2 = null;
       }
       if (row2?.id) {
         if (claim.taskId && claim.taskId !== row2.id) {
-          return refuse3("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store3, claim.meshId, claim.taskId)}`);
+          return refuse4("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
         }
         const rowNodeId2 = row2.assignedNodeId || row2.targetNodeId;
         const nodeRefusal2 = senderOwnsNode(rowNodeId2);
         if (nodeRefusal2) return nodeRefusal2;
         let latestAttempt = null;
         try {
-          latestAttempt = store3.turnStore().findLatestAttemptForTask(claim.meshId, row2.id) ?? null;
+          latestAttempt = store4.turnStore().findLatestAttemptForTask(claim.meshId, row2.id) ?? null;
         } catch {
           latestAttempt = null;
         }
@@ -74925,15 +74933,15 @@ ${block2.text}`,
           attemptId = latestAttempt?.attemptId;
         }
         if (claim.attemptId && claim.attemptId !== attemptId) {
-          return refuse3("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
+          return refuse4("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
         }
         if (latestAttempt && attemptId && latestAttempt.attemptId !== attemptId) {
-          return refuse3("attempt_mismatch", `task ${row2.id}'s latest attempt on the owner is ${latestAttempt.attemptId}, not ${attemptId}`);
+          return refuse4("attempt_mismatch", `task ${row2.id}'s latest attempt on the owner is ${latestAttempt.attemptId}, not ${attemptId}`);
         }
-        const attempt2 = attemptId ? store3.turnStore().getAttempt(attemptId) : latestAttempt;
-        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse3("generation_mismatch", "the claimed generation is no longer current");
-        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse3("attempt_mismatch", "the attempt is not owned here for this session");
-        if (latestAttempt && (latestAttempt.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(latestAttempt.ownerDaemonId))) return refuse3("attempt_mismatch", "the latest attempt is not owned here for this session");
+        const attempt2 = attemptId ? store4.turnStore().getAttempt(attemptId) : latestAttempt;
+        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse4("generation_mismatch", "the claimed generation is no longer current");
+        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse4("attempt_mismatch", "the attempt is not owned here for this session");
+        if (latestAttempt && (latestAttempt.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(latestAttempt.ownerDaemonId))) return refuse4("attempt_mismatch", "the latest attempt is not owned here for this session");
         if (!attempt2?.terminal && !latestAttempt?.terminal) {
           const token = findWorkerTaskTokenForSession(claim.meshId, row2.id, claim.sessionId);
           return {
@@ -74950,15 +74958,15 @@ ${block2.text}`,
       }
       const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs2, isSelfDaemon);
       if (!attempt) {
-        return refuse3("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store3, claim.meshId, claim.taskId) : ""}`);
+        return refuse4("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store4, claim.meshId, claim.taskId) : ""}`);
       }
       if (claim.taskId && claim.taskId !== attempt.taskId) {
-        return refuse3("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store3, claim.meshId, claim.taskId)}`);
+        return refuse4("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
       }
       if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
-        return refuse3("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
+        return refuse4("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
       }
-      if (claim.generation !== void 0 && claim.generation !== store3.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse3("generation_mismatch", "the terminal generation does not match");
+      if (claim.generation !== void 0 && claim.generation !== store4.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse4("generation_mismatch", "the terminal generation does not match");
       const nodeRefusal = senderOwnsNode(attempt.nodeId);
       if (nodeRefusal) return nodeRefusal;
       return {
@@ -74974,9 +74982,9 @@ ${block2.text}`,
         }
       };
     }
-    function describeOwnerRow(store3, meshId, taskId) {
+    function describeOwnerRow(store4, meshId, taskId) {
       try {
-        const entry = store3.findQueueEntryById(meshId, taskId);
+        const entry = store4.findQueueEntryById(meshId, taskId);
         if (!entry) return ` (task ${taskId} is unknown to the owner)`;
         const session = entry.assignedSessionId ? `, assigned to session ${entry.assignedSessionId}` : ", never claimed by a session";
         return ` (task ${taskId} is ${entry.status} on the owner${session})`;
@@ -75454,9 +75462,9 @@ ${block2.text}`,
             generation: e.generation,
             sessionId: e.sessionId
           };
-          const answer = { ...reply, deliveryReceipt: receipt };
-          db2.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='owner' AND sender_id=? AND delivery_id=?").run(JSON.stringify(answer), e.senderDaemonId, e.deliveryId);
-          return answer;
+          const answer2 = { ...reply, deliveryReceipt: receipt };
+          db2.prepare("UPDATE worker_bridge_delivery SET state='receipted',receipt_json=? WHERE side='owner' AND sender_id=? AND delivery_id=?").run(JSON.stringify(answer2), e.senderDaemonId, e.deliveryId);
+          return answer2;
         });
       } catch {
         return { success: false, error: "storage_failed" };
@@ -77114,6 +77122,7 @@ ${includeRefs[0]}`;
     });
     var mcp_command_ingress_exports = {};
     __export2(mcp_command_ingress_exports, {
+      MCP_ATTRIBUTED_COMMANDS: () => MCP_ATTRIBUTED_COMMANDS,
       __resetMcpSessionCredentialsForTest: () => __resetMcpSessionCredentialsForTest,
       attachAuthenticatedMcpCommand: () => attachAuthenticatedMcpCommand,
       bindAuthenticatedMcpWorkspace: () => bindAuthenticatedMcpWorkspace,
@@ -77228,7 +77237,7 @@ ${includeRefs[0]}`;
       if (!boundSessionId && !isWorkerScoped) {
         return { validScope: false };
       }
-      const isAssistantCmd = command === "assistant_artifact_list" || command === "assistant_artifact_read";
+      const isAssistantCmd = command === "assistant_artifact_list" || command === "assistant_artifact_read" || MCP_ATTRIBUTED_COMMANDS.has(command);
       if (isAssistantCmd) {
         if (!boundSessionId || scopeObj.isCoordinator === true || hasWorkerCredentialFields(args)) {
           return { validScope: false };
@@ -77269,10 +77278,10 @@ ${includeRefs[0]}`;
     }
     function argumentsKey(args) {
       const sessionAlias = typeof args.sessionId === "string" ? args.sessionId.trim() : void 0;
-      return JSON.stringify(Object.keys(args).filter((key5) => key5 !== "_interactionId" && !(key5 === "targetSessionId" && sessionAlias && args[key5] === sessionAlias)).sort().map((key5) => [key5, args[key5]]));
+      return JSON.stringify(Object.keys(args).filter((key5) => key5 !== "_interactionId" && key5 !== "_commandSource" && !(key5 === "targetSessionId" && sessionAlias && args[key5] === sessionAlias)).sort().map((key5) => [key5, args[key5]]));
     }
     function attachAuthenticatedMcpCommand(args, command, verifyCurrent, scope) {
-      if (!ARTIFACT_COMMANDS.has(command) || typeof verifyCurrent !== "function") return args;
+      if (!(ARTIFACT_COMMANDS.has(command) || MCP_ATTRIBUTED_COMMANDS.has(command)) || typeof verifyCurrent !== "function") return args;
       let live = false;
       try {
         live = verifyCurrent() === true;
@@ -77353,6 +77362,7 @@ ${includeRefs[0]}`;
     }
     var import_node_crypto16;
     var ARTIFACT_COMMANDS;
+    var MCP_ATTRIBUTED_COMMANDS;
     var STATE_KEY;
     var shared;
     var capabilities;
@@ -77374,6 +77384,7 @@ ${includeRefs[0]}`;
           "assistant_artifact_list",
           "assistant_artifact_read"
         ]);
+        MCP_ATTRIBUTED_COMMANDS = /* @__PURE__ */ new Set(["mission_decision_answer"]);
         STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.authenticatedMcpCommandIngress");
         shared = globalThis;
         if (!shared[STATE_KEY]) {
@@ -77686,7 +77697,7 @@ ${includeRefs[0]}`;
         init_dist();
         init_mcp_command_ingress();
         COMMAND_SOURCE_ARG = "_commandSource";
-        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve"]);
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer"]);
         TRUSTED_OWNER_INGRESS_STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.trustedOwnerIngressState");
         ({
           issuedOwnerIngressProofs,
@@ -77755,36 +77766,36 @@ ${includeRefs[0]}`;
         BUSY_PROJECTION_RECHECK_MS = 2e4;
       }
     });
-    function persistHold(store3, task) {
-      store3.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
-      store3.maybeCheckpointWal();
+    function persistHold(store4, task) {
+      store4.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
+      store4.maybeCheckpointWal();
     }
     function recordQueueTaskHold(meshId, taskId, reason, nodeId, preserveExisting = false) {
-      const store3 = MeshRuntimeStore.getInstance();
-      store3.transaction(() => {
-        const task = store3.findQueueEntryById(meshId, taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      store4.transaction(() => {
+        const task = store4.findQueueEntryById(meshId, taskId);
         if (!task || task.status !== "pending" || preserveExisting && task.hold) return;
-        const queue = store3.getQueueEntries(meshId, ["pending", "assigned"]);
+        const queue = store4.getQueueEntries(meshId, ["pending", "assigned"]);
         const context2 = queueHoldContext(task, reason, queue, nodeId);
         if (reason === "dependencies_unsatisfied") {
-          const completed = new Set(store3.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
+          const completed = new Set(store4.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
           context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
         }
         const before = JSON.stringify(task.hold);
         setQueueTaskHold(task, reason, context2);
         if (before === JSON.stringify(task.hold)) return;
-        persistHold(store3, task);
+        persistHold(store4, task);
       });
     }
     function notifyHeldQueueTasks(meshId, now = Date.now()) {
-      const store3 = MeshRuntimeStore.getInstance();
-      const queue = store3.getQueueEntries(meshId, ["pending", "assigned"]);
+      const store4 = MeshRuntimeStore.getInstance();
+      const queue = store4.getQueueEntries(meshId, ["pending", "assigned"]);
       for (const snapshot of queue) {
         const view2 = queueTaskHoldView(snapshot, queue, now);
         if (!view2 || view2.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
         if (isDifficultyFloorWaitReason(view2.reason) || view2.reason === "difficulty_floor_unmet") continue;
-        store3.transaction(() => {
-          const task = store3.findQueueEntryById(meshId, snapshot.id);
+        store4.transaction(() => {
+          const task = store4.findQueueEntryById(meshId, snapshot.id);
           if (!task || task.status !== "pending" || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
           const eventId = `queue-hold:${meshId}:${task.id}:${view2.since}:${view2.reason}:${view2.blockingTaskIds.join(",")}`;
           const blockers = view2.blockingTasks.map((b) => `${b.taskId} (${b.title})`).join(", ");
@@ -77801,7 +77812,7 @@ ${includeRefs[0]}`;
             metadataEvent: { source: "mesh_queue_hold", taskId: task.id, hold: view2, coordinatorMessage }
           })) {
             task.holdNoticeId = eventId;
-            persistHold(store3, task);
+            persistHold(store4, task);
           }
         });
       }
@@ -81903,8 +81914,8 @@ ${includeRefs[0]}`;
     }
     function prepareDispatchReadiness(mesh, workspace, opts) {
       const key5 = keyOf(workspace);
-      const inFlight4 = preparing.get(key5);
-      if (inFlight4) return inFlight4.then((result) => ({ ...result, outcome: result.outcome === "ready" ? "ready" : "joined" }));
+      const inFlight5 = preparing.get(key5);
+      if (inFlight5) return inFlight5.then((result) => ({ ...result, outcome: result.outcome === "ready" ? "ready" : "joined" }));
       const before = currentDispatchReadiness(mesh, workspace).diagnosis;
       if (before.ready || !before.blockers.some((b) => b.preparable)) return Promise.resolve({ outcome: "not_needed", diagnosis: before });
       if (opts?.signal?.aborted) return Promise.resolve({ outcome: "cancelled", diagnosis: before });
@@ -83113,16 +83124,16 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       return [...ids];
     }
     function loadPredecessor(meshId, taskId) {
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       let atMs = Number.MAX_SAFE_INTEGER;
       try {
-        const entry = store3.findQueueEntryById(meshId, taskId);
+        const entry = store4.findQueueEntryById(meshId, taskId);
         const created = entry ? Date.parse(entry.createdAt) : NaN;
         if (Number.isFinite(created)) atMs = created;
       } catch {
       }
       try {
-        const output = store3.getLatestTaskOutput(taskId);
+        const output = store4.getLatestTaskOutput(taskId);
         if (output) {
           const envelope = JSON.parse(output.envelopeJson);
           const completedAt = typeof envelope.completed_at === "string" ? Date.parse(envelope.completed_at) : NaN;
@@ -83510,7 +83521,7 @@ ${upstream}`;
       const ledger = ctx.components.turnLedger, ref2 = ctx.attemptRef;
       if (!ledger || !ref2) return false;
       const before = ledger.getAttempt(ref2.attemptId);
-      const store3 = MeshRuntimeStore.getInstance(), db2 = store3.db;
+      const store4 = MeshRuntimeStore.getInstance(), db2 = store4.db;
       db2.exec("CREATE TABLE IF NOT EXISTS mesh_holder_reconciles (operation_id TEXT PRIMARY KEY, context_json TEXT NOT NULL, holder TEXT NOT NULL, phase TEXT NOT NULL, tries INTEGER NOT NULL)");
       const existing = db2.prepare("SELECT phase,tries FROM mesh_holder_reconciles WHERE operation_id = ?").get(operationId);
       if (!existing && (!before || before.terminal || before.state === "stopping" || before.generation !== ref2.generation)) return false;
@@ -83572,8 +83583,8 @@ ${upstream}`;
         const proof = await invoke("prepare");
         if (!proof.success || proof.attached !== true || proof.operationId !== operationId || proof.sessionId !== holderSessionId || proof.meshId !== mc.meshId || proof.taskId !== mc.taskId || proof.attemptId !== mc.attemptId || proof.attemptGeneration !== mc.attemptGeneration || proof.dispatchNonce !== mc.dispatchNonce) return false;
         attached = true;
-        bridgeReceiptTransaction(store3.db, () => {
-          const a = ledger.getAttempt(ref2.attemptId), q = store3.findQueueEntryById(ctx.meshId, ctx.task.id);
+        bridgeReceiptTransaction(store4.db, () => {
+          const a = ledger.getAttempt(ref2.attemptId), q = store4.findQueueEntryById(ctx.meshId, ctx.task.id);
           if (!a || a.terminal || a.state === "stopping" || a.generation !== ref2.generation || a.sessionId !== before.sessionId || a.meshId !== ctx.meshId || a.taskId !== ctx.task.id || !pinnedMeshNodeIdMatches(a.nodeId, ctx.nodeId) || a.providerType !== ctx.providerType || !q || q.status !== "assigned" || q.assignedSessionId !== ctx.sessionId || !pinnedMeshNodeIdMatches(q.assignedNodeId, ctx.nodeId) || q.assignedProviderType !== ctx.providerType || q.attemptId !== ref2.attemptId || q.dispatchNonce !== ctx.task.dispatchNonce) throw new Error("holder_owner_CAS_changed");
           const result = ledger.observe({
             eventId: operationId,
@@ -83589,7 +83600,7 @@ ${upstream}`;
           });
           if (result.rule !== "R25" || result.verdict !== "applied") throw new Error("holder_ledger_CAS_refused");
           q.assignedSessionId = holderSessionId;
-          store3.updateQueueEntry(q);
+          store4.updateQueueEntry(q);
           contractRebindHolder({ meshId: ctx.meshId, taskId: ctx.task.id, attemptId: ref2.attemptId, generation: ref2.generation, losingSessionId: ctx.sessionId, holderSessionId });
           db2.prepare("UPDATE mesh_holder_reconciles SET phase = 'bound' WHERE operation_id = ?").run(operationId);
         });
@@ -84088,9 +84099,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     });
     function collectPinnedRemoteIdleCandidates(components, meshId, mesh, alreadyOffered, now = Date.now()) {
-      const store3 = components.router?.meshNodeGitState;
+      const store4 = components.router?.meshNodeGitState;
       const nodes = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
-      if (!store3 || nodes.length === 0) return [];
+      if (!store4 || nodes.length === 0) return [];
       let pending;
       try {
         pending = getQueue(meshId, { status: ["pending"] });
@@ -84108,7 +84119,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const node = nodes.find((n) => meshNodeIdMatches7(n, targetNodeId));
         if (!node) continue;
         const daemonId = readMeshNodeDaemonId(node) ?? "";
-        const held = readLiveHeldRuntime(store3, { meshId, nodeId: readText(node.id) || targetNodeId, daemonId }, now);
+        const held = readLiveHeldRuntime(store4, { meshId, nodeId: readText(node.id) || targetNodeId, daemonId }, now);
         const session = held?.runtime.sessions.find((s2) => sessionIdsEquivalent(readText(s2.id) || readText(s2.instanceId) || readText(s2.sessionId), targetSessionId));
         if (!session || readText(session.status).toLowerCase() !== "idle") continue;
         const providerType = readText(session.providerType);
@@ -85682,8 +85693,8 @@ ${continuationNotice}` } : task,
     }
     function localEnabledCliProviders(providerLoader) {
       try {
-        const list2 = typeof providerLoader?.getCliDetectionList === "function" ? providerLoader.getCliDetectionList() : [];
-        return Array.isArray(list2) ? list2.filter((e) => e && e.enabled !== false && typeof e.id === "string").map((e) => e.id) : [];
+        const list3 = typeof providerLoader?.getCliDetectionList === "function" ? providerLoader.getCliDetectionList() : [];
+        return Array.isArray(list3) ? list3.filter((e) => e && e.enabled !== false && typeof e.id === "string").map((e) => e.id) : [];
       } catch {
         return [];
       }
@@ -87705,8 +87716,8 @@ ${continuationNotice}` } : task,
       if (!candidate || isTaskReadonly3(candidate)) {
         return { allowed: true, conflicts: [] };
       }
-      const inFlight4 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
-      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight4);
+      const inFlight5 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
+      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight5);
       if (conflicts.length === 0) return { allowed: true, conflicts: [] };
       return {
         allowed: false,
@@ -87718,7 +87729,7 @@ ${continuationNotice}` } : task,
       return host.transaction(() => {
         if (bridgeDispatchFrozen(host.db, meshId) || sessionIsStopping(host.db, sessionId)) return null;
         host.ensureLegacyQueueMigrated(meshId);
-        const refuse3 = (reason, detail, deepest) => {
+        const refuse4 = (reason, detail, deepest) => {
           if (opts?.outRefusal) {
             opts.outRefusal.reason = reason;
             if (detail) opts.outRefusal.detail = detail;
@@ -87731,14 +87742,14 @@ ${continuationNotice}` } : task,
         };
         const activeHold = evaluateNewWorkHold({ meshId });
         if (activeHold.held) {
-          return refuse3(NEW_WORK_HELD_CODE2, formatNewWorkHeldToken({
+          return refuse4(NEW_WORK_HELD_CODE2, formatNewWorkHeldToken({
             holdId: activeHold.hold.holdId || "active",
             revision: activeHold.hold.revision,
             expiresAt: activeHold.hold.expiresAt || 0,
             phase: activeHold.hold.phase
           }));
         }
-        if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse3("session_already_assigned");
+        if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse4("session_already_assigned");
         const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId, nodeId);
         const providerType = typeof opts?.providerType === "string" ? opts.providerType.trim() : "";
         const providerMaxParallel = opts?.providerMaxParallel;
@@ -87907,19 +87918,19 @@ ${continuationNotice}` } : task,
           }
         })));
         if (!selected2.entry) {
-          if (!candidates.length) return refuse3("no_pending_candidates");
+          if (!candidates.length) return refuse4("no_pending_candidates");
           if (selected2.reason === "owned_paths_conflict" && selected2.deepest) {
             const conflicts = ownedPathsConflictFor(selected2.deepest);
-            return refuse3("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
+            return refuse4("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
           }
           if (selected2.reason === "dirty_workspace") {
-            return refuse3("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected2.deepest);
+            return refuse4("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected2.deepest);
           }
           if (selected2.reason === "node_stale_behind_upstream") {
             const behindDetail = nodeGitGate?.behind !== void 0 ? `node ${nodeId} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})` : `node ${nodeId} is behind upstream beyond the configured maxBehind`;
-            return refuse3("node_stale_behind_upstream", behindDetail, selected2.deepest);
+            return refuse4("node_stale_behind_upstream", behindDetail, selected2.deepest);
           }
-          return refuse3(
+          return refuse4(
             selected2.reason,
             selected2.deepest ? `closest candidate ${selected2.deepest.id} of ${candidates.length}` : void 0,
             selected2.deepest
@@ -88029,14 +88040,14 @@ ${continuationNotice}` } : task,
     });
     function pruneMeshRuntimeRetention() {
       try {
-        const store3 = MeshRuntimeStore.getInstance();
-        const localRecords = store3.localRecordStore().prune(MESH_LOCAL_RECORD_RETENTION_MS);
-        const toolCalls = store3.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
-        const { queue: terminalQueue, taskOutputs } = store3.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS);
-        const topicIndex = meshTopicIndexFor(store3.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
-        const turn = store3.transaction(() => store3.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
-        store3.db.prepare("DELETE FROM session_artifacts WHERE updated_at < ?").run(Date.now() - MESH_SESSION_ARTIFACTS_RETENTION_MS);
-        const missionEvents = store3.missionItems().pruneEvents().deleted;
+        const store4 = MeshRuntimeStore.getInstance();
+        const localRecords = store4.localRecordStore().prune(MESH_LOCAL_RECORD_RETENTION_MS);
+        const toolCalls = store4.pruneToolCallLog(MESH_TOOL_CALL_LOG_RETENTION_MS);
+        const { queue: terminalQueue, taskOutputs } = store4.pruneTerminalQueue(MESH_TERMINAL_QUEUE_RETENTION_MS);
+        const topicIndex = meshTopicIndexFor(store4.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
+        const turn = store4.transaction(() => store4.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
+        store4.db.prepare("DELETE FROM session_artifacts WHERE updated_at < ?").run(Date.now() - MESH_SESSION_ARTIFACTS_RETENTION_MS);
+        const missionEvents = store4.missionItems().pruneEvents().deleted;
         if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts + missionEvents > 0) {
           LOG.info("MeshRuntimeStore", `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue (+${taskOutputs} task-output) / ${topicIndex} topic-index / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) / ${missionEvents} mission-event row(s)`);
         }
@@ -89031,8 +89042,8 @@ ${continuationNotice}` } : task,
     function recordOperatingNote(meshId, input) {
       const text4 = input.text.trim();
       if (!text4) throw new Error("recordOperatingNote requires non-empty text");
-      const store3 = turnStore();
-      const live = store3.listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
+      const store4 = turnStore();
+      const live = store4.listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
       const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text4);
       if (existing) return toEntry(existing);
       const nowMs2 = input.createdAtMs ?? Date.now();
@@ -89052,9 +89063,9 @@ ${continuationNotice}` } : task,
         createdAt: nowMs2,
         meta: meta2
       };
-      store3.insertOperatingNote(row2);
-      const retracted = store3.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text4);
-      if (retracted) store3.tombstoneOperatingNote(meshId, row2.noteId, nowMs2);
+      store4.insertOperatingNote(row2);
+      const retracted = store4.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text4);
+      if (retracted) store4.tombstoneOperatingNote(meshId, row2.noteId, nowMs2);
       try {
         pruneOperatingNotes(meshId);
       } catch {
@@ -89065,18 +89076,18 @@ ${continuationNotice}` } : task,
       const noteId = typeof target4.noteId === "string" ? target4.noteId.trim() : "";
       const text4 = typeof target4.text === "string" ? target4.text.trim() : "";
       if (!noteId && !text4) throw new Error("forgetOperatingNote requires a noteId or text target");
-      const store3 = turnStore();
+      const store4 = turnStore();
       const nowMs2 = Date.now();
       let matched = 0;
-      for (const note2 of store3.listOperatingNotes(meshId)) {
+      for (const note2 of store4.listOperatingNotes(meshId)) {
         if (note2.meta.textTombstone) continue;
         if (noteId && note2.noteId === noteId || text4 && note2.text.trim() === text4) {
-          if (store3.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
+          if (store4.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
       const tombstoneId = (0, import_crypto22.randomUUID)();
       if (text4) {
-        store3.insertOperatingNote({
+        store4.insertOperatingNote({
           noteId: tombstoneId,
           meshId,
           text: text4,
@@ -89093,13 +89104,13 @@ ${continuationNotice}` } : task,
       return { matched, tombstoneId };
     }
     function pruneOperatingNotes(meshId, keepLatest = OPERATING_NOTE_KEEP_LATEST) {
-      const store3 = turnStore();
-      const rows = store3.listOperatingNotes(meshId, { includeTombstoned: true }).filter((r) => !r.meta.textTombstone);
+      const store4 = turnStore();
+      const rows = store4.listOperatingNotes(meshId, { includeTombstoned: true }).filter((r) => !r.meta.textTombstone);
       const remove = rows.filter((r) => r.tombstonedAt !== null).map((r) => r.noteId);
       const live = rows.filter((r) => r.tombstonedAt === null);
       const bound = Math.max(0, Math.floor(keepLatest));
       if (live.length > bound) remove.push(...live.slice(0, live.length - bound).map((r) => r.noteId));
-      return remove.length ? store3.deleteOperatingNotes(meshId, remove) : 0;
+      return remove.length ? store4.deleteOperatingNotes(meshId, remove) : 0;
     }
     function isNoteExpired(note2, now) {
       return resolveNoteExpiry(note2, now).expired;
@@ -90928,12 +90939,12 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const childrenByPpid = /* @__PURE__ */ new Map();
       for (const node of table) {
         byPid.set(node.pid, node);
-        let list2 = childrenByPpid.get(node.ppid);
-        if (!list2) {
-          list2 = [];
-          childrenByPpid.set(node.ppid, list2);
+        let list3 = childrenByPpid.get(node.ppid);
+        if (!list3) {
+          list3 = [];
+          childrenByPpid.set(node.ppid, list3);
         }
-        list2.push(node);
+        list3.push(node);
       }
       const index = { byPid, childrenByPpid };
       indexCache.set(table, index);
@@ -91359,18 +91370,18 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const now = options.now ?? Date.now;
       const read2 = options.read ?? ((p) => readSystemProcessTableAsync(p));
       let current4 = null;
-      let inFlight4 = null;
+      let inFlight5 = null;
       let nextReadAllowedAt = 0;
       let reads = 0;
       let failures = 0;
       const fresh = (at) => current4 !== null && at - current4.readAtMs <= ttlMs;
       const usable2 = (at) => current4 !== null && at - current4.readAtMs <= maxStaleMs ? current4 : null;
       function startRefresh(at) {
-        if (inFlight4) return inFlight4;
+        if (inFlight5) return inFlight5;
         if (at < nextReadAllowedAt) return null;
         reads += 1;
         const startedAt = at;
-        inFlight4 = (async () => {
+        inFlight5 = (async () => {
           try {
             const table = await read2(platform10);
             if (table && table.length > 0) {
@@ -91387,10 +91398,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
             nextReadAllowedAt = now() + failureBackoffMs;
             return null;
           } finally {
-            inFlight4 = null;
+            inFlight5 = null;
           }
         })();
-        return inFlight4;
+        return inFlight5;
       }
       return {
         peek() {
@@ -91417,7 +91428,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
             if (timer) clearTimeout(timer);
           }
         },
-        stats: () => ({ reads, failures, inFlight: inFlight4 !== null })
+        stats: () => ({ reads, failures, inFlight: inFlight5 !== null })
       };
     }
     function getSharedProcessTableSource() {
@@ -93134,9 +93145,9 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           buildMeshAsyncRefineJobs2({ meshId, ledgerEntries: refineLedgerEntries })
         ).activeJobs;
         if (activeRefineJobs.length > 0) return false;
-        const store3 = MeshRuntimeStore.getInstance();
+        const store4 = MeshRuntimeStore.getInstance();
         const hash4 = missionSetHash(activeMissions);
-        const last = store3.getIdleReminderState(meshId);
+        const last = store4.getIdleReminderState(meshId);
         if (!shouldFireIdleReminder(last, hash4, now)) return false;
         const message = buildIdleReminderMessage(activeMissions);
         const outcome = await coordinator.input.submit({
@@ -93148,7 +93159,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           createdAt: now
         });
         if (outcome.kind !== "delivered" && outcome.kind !== "queued") return false;
-        store3.setIdleReminderState(meshId, { emittedAt: now, missionSetHash: hash4 });
+        store4.setIdleReminderState(meshId, { emittedAt: now, missionSetHash: hash4 });
         LOG.info(
           "MeshIdleReminder",
           `${outcome.kind === "queued" ? "Queued" : "Injected"} idle reminder for mesh ${meshId} (${activeMissions.length} active mission(s), fully idle)`
@@ -94227,18 +94238,18 @@ ${closeSentinel}`;
         const cont = getOrCreateNest(root, key5.slice(0, -1), true);
         const lastKey = key5[key5.length - 1];
         if (lastKey in cont) {
-          const list3 = cont[lastKey];
-          if (!Array.isArray(list3) || !arrayOfTables.has(list3)) {
+          const list4 = cont[lastKey];
+          if (!Array.isArray(list4) || !arrayOfTables.has(list4)) {
             throw invalidToml(`cannot overwrite non-array-of-tables key at [[${key5.join(".")}]]`);
           }
           const elem2 = createTable();
-          list3.push(elem2);
+          list4.push(elem2);
           return elem2;
         }
         const elem = createTable();
-        const list2 = [elem];
-        arrayOfTables.add(list2);
-        cont[lastKey] = list2;
+        const list3 = [elem];
+        arrayOfTables.add(list3);
+        cont[lastKey] = list3;
         return elem;
       };
       const parseEscape = (allowMultilineContinuations) => {
@@ -99599,16 +99610,16 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     async function checkRoster(deps, meshId, sender, args, opts = {}) {
       if (!meshId) return refuse(sender, "mesh_sender_not_on_roster", "command names no mesh");
-      const answer = await rosterAnswer(deps, meshId, sender, args, opts);
-      if (answer.known && answer.onRoster) {
-        return { ok: true, sender, evidence: `${answer.source}:${meshId}` };
+      const answer2 = await rosterAnswer(deps, meshId, sender, args, opts);
+      if (answer2.known && answer2.onRoster) {
+        return { ok: true, sender, evidence: `${answer2.source}:${meshId}` };
       }
       if (opts.allowFollowerAcl) {
         const followerVerdict = await checkFollowerAccess(deps, meshId, sender, args);
         if (followerVerdict) return followerVerdict;
       }
-      if (!answer.known) return refuse(sender, "mesh_sender_not_on_roster", `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
-      return refuse(sender, "mesh_sender_not_on_roster", answer.detail || `sender is not on the roster of mesh ${meshId} (${answer.source})`);
+      if (!answer2.known) return refuse(sender, "mesh_sender_not_on_roster", `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
+      return refuse(sender, "mesh_sender_not_on_roster", answer2.detail || `sender is not on the roster of mesh ${meshId} (${answer2.source})`);
     }
     async function checkAnyMemberMesh(deps, sender, args) {
       const named = readCommandMeshId(args);
@@ -99686,9 +99697,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return { ok: true, sender, evidence: `mesh_host_record:${meshId}` };
       }
       if (!anchor && meshContextClaimsSender(args, meshId, sender)) {
-        const answer = await rosterAnswer(deps, meshId, sender, args, { tofuClaim: true });
-        if (answer.known && answer.onRoster) return { ok: true, sender, evidence: `first_binding:${sessionId}` };
-        return refuse(sender, "mesh_sender_not_session_coordinator", `session ${sessionId} has no coordinator anchor, and ${answer.known ? answer.detail || `the sender is not on mesh ${meshId} (${answer.source})` : `this daemon holds no host evidence for mesh ${meshId}`}`);
+        const answer2 = await rosterAnswer(deps, meshId, sender, args, { tofuClaim: true });
+        if (answer2.known && answer2.onRoster) return { ok: true, sender, evidence: `first_binding:${sessionId}` };
+        return refuse(sender, "mesh_sender_not_session_coordinator", `session ${sessionId} has no coordinator anchor, and ${answer2.known ? answer2.detail || `the sender is not on mesh ${meshId} (${answer2.source})` : `this daemon holds no host evidence for mesh ${meshId}`}`);
       }
       return refuse(sender, "mesh_sender_not_session_coordinator", anchor ? `session ${sessionId} is coordinated by ${anchor.slice(0, 20)}, and the sender is not the host of mesh ${meshId}` : `session ${sessionId} has no coordinator anchor, and the sender is not the host of mesh ${meshId}`);
     }
@@ -103883,12 +103894,12 @@ ${result.stderr}`, result.code);
         );
       }
     }
-    function isPlausibleDecodedText(str20) {
-      if (!str20 || str20.length < 6) return false;
-      const len = Math.min(str20.length, 512);
+    function isPlausibleDecodedText(str21) {
+      if (!str21 || str21.length < 6) return false;
+      const len = Math.min(str21.length, 512);
       let asciiPrintable = 0;
       for (let i = 0; i < len; i++) {
-        const code = str20.charCodeAt(i);
+        const code = str21.charCodeAt(i);
         if (code === 65533) return false;
         if (code >= 0 && code <= 8 || code === 11 || code === 12 || code >= 14 && code <= 31 || code >= 127 && code <= 159) {
           return false;
@@ -105136,12 +105147,12 @@ ${result.stderr}`, result.code);
               this.tombstone(entry);
               deletes.push(id4);
             }
-            const list2 = ids;
-            const ordChanged = this.assignOrds(list2, previouslyLive, claimed);
+            const list3 = ids;
+            const ordChanged = this.assignOrds(list3, previouslyLive, claimed);
             const upserts = [];
             const assignments = new Array(count);
             for (let i = 0; i < count; i += 1) {
-              const id4 = list2[i];
+              const id4 = list3[i];
               const entry = this.entries.get(id4);
               const input = inputs[i];
               if (created.has(id4)) {
@@ -105233,14 +105244,14 @@ ${result.stderr}`, result.code);
            * Returns the ids whose `ord` changed (moved or revived; new ids are
            * counted as created, not changed).
            */
-          assignOrds(list2, previouslyLive, claimed) {
+          assignOrds(list3, previouslyLive, claimed) {
             const changed = /* @__PURE__ */ new Set();
             const survivorPositions = [];
-            for (let i2 = 0; i2 < list2.length; i2 += 1) {
-              if (previouslyLive.has(list2[i2]) && this.entries.get(list2[i2]).ord) survivorPositions.push(i2);
+            for (let i2 = 0; i2 < list3.length; i2 += 1) {
+              if (previouslyLive.has(list3[i2]) && this.entries.get(list3[i2]).ord) survivorPositions.push(i2);
             }
             const keep = new Set(
-              longestIncreasingSubsequence(survivorPositions.map((i2) => this.entries.get(list2[i2]).ord)).map((k) => survivorPositions[k])
+              longestIncreasingSubsequence(survivorPositions.map((i2) => this.entries.get(list3[i2]).ord)).map((k) => survivorPositions[k])
             );
             let maxRetainedOrd = null;
             for (const entry of this.entries.values()) {
@@ -105248,19 +105259,19 @@ ${result.stderr}`, result.code);
               if (maxRetainedOrd === null || entry.ord > maxRetainedOrd) maxRetainedOrd = entry.ord;
             }
             let i = 0;
-            while (i < list2.length) {
+            while (i < list3.length) {
               if (keep.has(i)) {
                 i += 1;
                 continue;
               }
               let j = i;
-              while (j < list2.length && !keep.has(j)) j += 1;
-              let lower = i > 0 ? this.entries.get(list2[i - 1]).ord : maxRetainedOrd;
-              const upper = j < list2.length ? this.entries.get(list2[j]).ord : null;
+              while (j < list3.length && !keep.has(j)) j += 1;
+              let lower = i > 0 ? this.entries.get(list3[i - 1]).ord : maxRetainedOrd;
+              const upper = j < list3.length ? this.entries.get(list3[j]).ord : null;
               if (lower !== null && upper !== null && lower >= upper) lower = null;
               const keys2 = generateNKeysBetween(lower || null, upper, j - i);
               for (let k = i; k < j; k += 1) {
-                const entry = this.entries.get(list2[k]);
+                const entry = this.entries.get(list3[k]);
                 const nextOrd = keys2[k - i];
                 if (entry.ord !== nextOrd) {
                   if (entry.ord) changed.add(entry.id);
@@ -108248,21 +108259,21 @@ ${result.stderr}`, result.code);
               resolvedBy: resolving?.resolvedBy,
               reviewTurnId
             });
-            const fail8 = (outcome) => (journal2(outcome.result), outcome);
-            if (state2.unreadable) return fail8({ result: "memory_store_unreadable" });
-            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail8({ result: "memory_user_requires_human" });
+            const fail9 = (outcome) => (journal2(outcome.result), outcome);
+            if (state2.unreadable) return fail9({ result: "memory_store_unreadable" });
+            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail9({ result: "memory_user_requires_human" });
             if (content !== null) {
               const reason = validateContent(content);
-              if (reason) return fail8({ result: "memory_invalid_format", reason });
+              if (reason) return fail9({ result: "memory_invalid_format", reason });
             }
             let index = -1;
             if (op.action !== "add") {
               const match = typeof op.match === "string" ? op.match : "";
-              if (!match.trim()) return fail8({ result: "memory_invalid_format", reason: "empty_match" });
+              if (!match.trim()) return fail9({ result: "memory_invalid_format", reason: "empty_match" });
               const hits = state2.entries.map((e, i) => e.includes(match) ? i : -1).filter((i) => i >= 0);
-              if (hits.length === 0) return fail8({ result: "memory_no_match" });
+              if (hits.length === 0) return fail9({ result: "memory_no_match" });
               if (hits.length > 1) {
-                return fail8({
+                return fail9({
                   result: "memory_ambiguous",
                   candidates: hits.map((i) => firstChars(state2.entries[i], CANDIDATE_PREVIEW_CHARS))
                 });
@@ -108276,16 +108287,16 @@ ${result.stderr}`, result.code);
             else next.splice(index, 1);
             const used2 = usedOf(next);
             if (used2 > state2.budget && used2 > state2.used) {
-              return fail8({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
+              return fail9({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
             }
             if (content !== null && state2.entries.some((e, i) => e === content && i !== index)) {
-              return fail8({ result: "memory_duplicate" });
+              return fail9({ result: "memory_duplicate" });
             }
-            if (op.action === "replace" && before === content) return fail8({ result: "memory_duplicate" });
-            if (content !== null && detectCredential(content)) return fail8({ result: "memory_secret_rejected" });
+            if (op.action === "replace" && before === content) return fail9({ result: "memory_duplicate" });
+            if (content !== null && detectCredential(content)) return fail9({ result: "memory_secret_rejected" });
             const finding = content !== null ? scanWriteContent(content) : null;
             if (finding) {
-              return fail8(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
+              return fail9(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
             }
             if (!resolving && mustStage(origin)) {
               const stagedId = this.stage(op, origin, reviewTurnId);
@@ -109349,7 +109360,7 @@ ${body}`;
       const r = raw;
       const base = newSkillState(ORIGINS.includes(r.origin) ? r.origin : "owner", fallbackIso);
       const num2 = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
-      const str20 = (v) => typeof v === "string" ? v : null;
+      const str21 = (v) => typeof v === "string" ? v : null;
       const counters4 = (v) => {
         const out = {};
         if (v && typeof v === "object") {
@@ -109361,12 +109372,12 @@ ${body}`;
         ...base,
         status: STATUSES.includes(r.status) ? r.status : "active",
         pinned: r.pinned === true,
-        createdAt: str20(r.createdAt) ?? fallbackIso,
-        statusChangedAt: str20(r.statusChangedAt) ?? str20(r.createdAt) ?? fallbackIso,
+        createdAt: str21(r.createdAt) ?? fallbackIso,
+        statusChangedAt: str21(r.statusChangedAt) ?? str21(r.createdAt) ?? fallbackIso,
         viewCount: num2(r.viewCount),
-        lastViewedAt: str20(r.lastViewedAt),
+        lastViewedAt: str21(r.lastViewedAt),
         patchCount: num2(r.patchCount),
-        lastPatchedAt: str20(r.lastPatchedAt),
+        lastPatchedAt: str21(r.lastPatchedAt),
         patchesSinceReview: num2(r.patchesSinceReview),
         sessionPatches: counters4(r.sessionPatches),
         turnPatches: counters4(r.turnPatches)
@@ -109915,11 +109926,11 @@ ${body}`;
           }
           /** Owner import (Hermes): origin `imported`, no staging, every format/limit/credential check. */
           importSkill(input) {
-            const fail8 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
+            const fail9 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
             const { refusal: refusal2, files } = this.prepareImport(input);
-            if (refusal2) return fail8(refusal2);
+            if (refusal2) return fail9(refusal2);
             const live = this.liveCount();
-            if (live >= SKILL_LIMITS.liveSkills) return fail8({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
+            if (live >= SKILL_LIMITS.liveSkills) return fail9({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
             this.writeFiles(input.name, [{ path: SKILL_FILE, content: composeSkillMd(input.frontmatterRaw, input.body) }, ...files]);
             const { file } = this.loadState();
             file.skills[input.name] = newSkillState("imported", this.now().toISOString());
@@ -109940,14 +109951,14 @@ ${body}`;
         for (const [name, u] of Object.entries(raw ?? {})) {
           if (!u || typeof u !== "object") continue;
           const num2 = (v) => typeof v === "number" ? v : void 0;
-          const str20 = (v) => typeof v === "string" ? v : void 0;
+          const str21 = (v) => typeof v === "string" ? v : void 0;
           out.set(name, {
-            state: str20(u.state),
+            state: str21(u.state),
             pinned: u.pinned === true,
             viewCount: num2(u.view_count),
             patchCount: num2(u.patch_count),
-            createdAt: str20(u.created_at),
-            lastUsedAt: str20(u.last_used_at)
+            createdAt: str21(u.created_at),
+            lastUsedAt: str21(u.last_used_at)
           });
         }
       } catch {
@@ -110382,9 +110393,9 @@ ${body}`;
           }
           /** Entry point for G1a-5 discovery/service wiring. Trusted elevated drivers
            * remain installed until an owner toggle; all external trust levels stage. */
-          prepare(module22, digest5, store3) {
-            if (store3.isDisabled(module22.type)) return { state: "installed" };
-            if (store3.isReady(module22.type, digest5) || store3.autoActivateIfTrustedLow(module22, digest5)) return { state: "ready" };
+          prepare(module22, digest5, store4) {
+            if (store4.isDisabled(module22.type)) return { state: "installed" };
+            if (store4.isReady(module22.type, digest5) || store4.autoActivateIfTrustedLow(module22, digest5)) return { state: "ready" };
             if (module22._sourceTrust === "trusted") return { state: "installed" };
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest5);
             if (existing) return { state: "staged", stagedId: existing.id };
@@ -110393,22 +110404,22 @@ ${body}`;
           }
           /** Called only behind assistant_staged_resolve's owner-source gate. Read the
            * currently installed tree, never caller-supplied type/digest/permissions. */
-          resolve(id4, decision, store3, readCurrent) {
-            const fail8 = (code) => ({ success: false, code });
-            if (decision !== "apply" && decision !== "discard") return fail8("invalid_args");
+          resolve(id4, decision, store4, readCurrent) {
+            const fail9 = (code) => ({ success: false, code });
+            if (decision !== "apply" && decision !== "discard") return fail9("invalid_args");
             const rec5 = this.read(id4);
-            if (!rec5) return fail8("staged_not_found");
+            if (!rec5) return fail9("staged_not_found");
             if (decision === "discard") {
               this.discarded.add(`${rec5.type}\0${rec5.treeDigest}`);
               this.remove(id4);
               return { success: true, result: "discarded" };
             }
-            if (this.now().getTime() - Date.parse(rec5.createdAt) >= MAX_AGE) return fail8("expired");
+            if (this.now().getTime() - Date.parse(rec5.createdAt) >= MAX_AGE) return fail9("expired");
             const current4 = readCurrent(rec5.type);
-            if (!current4) return fail8("driver_not_installed");
+            if (!current4) return fail9("driver_not_installed");
             const risk = deriveDriverRiskClass(current4.module);
-            if (current4.module.type !== rec5.type || current4.module.name !== rec5.name || current4.module.providerVersion !== rec5.providerVersion || (current4.module.publisher ?? void 0) !== (rec5.publisher ?? void 0) || current4.treeDigest !== rec5.treeDigest || risk.riskClass !== rec5.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec5.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec5.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec5.runtime)) return fail8("stale");
-            if (!store3.approve(current4.module, rec5.treeDigest)) return fail8("driver_disabled");
+            if (current4.module.type !== rec5.type || current4.module.name !== rec5.name || current4.module.providerVersion !== rec5.providerVersion || (current4.module.publisher ?? void 0) !== (rec5.publisher ?? void 0) || current4.treeDigest !== rec5.treeDigest || risk.riskClass !== rec5.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec5.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec5.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec5.runtime)) return fail9("stale");
+            if (!store4.approve(current4.module, rec5.treeDigest)) return fail9("driver_disabled");
             this.remove(id4);
             return { success: true, result: "applied", type: rec5.type, treeDigest: rec5.treeDigest };
           }
@@ -110515,35 +110526,35 @@ ${body}`;
       const issue = selectionSchemaIssue(candidate);
       if (!isLaunchRole(role) || issue) return { ok: false, issue: issue ?? { field: "provider", reason: "invalid_schema" } };
       const selection = { ...candidate };
-      const fail8 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
+      const fail9 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
       try {
         selection.provider = ports.resolveAlias(selection.provider);
         const facts = ports.getProvider(selection.provider, selection.model);
-        if (!facts || facts.type !== selection.provider) return fail8("provider", "provider_unknown");
-        if (facts.category !== "cli") return fail8("provider", "provider_not_cli");
-        if (facts.enabled !== true) return fail8("provider", "provider_disabled");
-        if (facts.detected !== true) return fail8("provider", "provider_not_detected");
-        if (facts.quotaGated === true) return fail8("provider", "provider_quota_gated");
+        if (!facts || facts.type !== selection.provider) return fail9("provider", "provider_unknown");
+        if (facts.category !== "cli") return fail9("provider", "provider_not_cli");
+        if (facts.enabled !== true) return fail9("provider", "provider_disabled");
+        if (facts.detected !== true) return fail9("provider", "provider_not_detected");
+        if (facts.quotaGated === true) return fail9("provider", "provider_quota_gated");
         if (role === "assistant" ? facts.assistant.supported !== true : !["supported", "manual"].includes(facts.coordinator)) {
-          return fail8("provider", "provider_not_eligible");
+          return fail9("provider", "provider_not_eligible");
         }
         const warnings = [];
         if (role === "coordinator" && facts.coordinator === "manual") warnings.push("manual_mcp_setup_required");
         if (selection.model !== void 0) {
-          if (!facts.modelLaunchArgs?.length) return fail8("model", "model_unsupported");
-          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail8("model", "model_provider_mismatch");
+          if (!facts.modelLaunchArgs?.length) return fail9("model", "model_unsupported");
+          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail9("model", "model_provider_mismatch");
           const options = resolveModelOptions(facts.modelOptions, facts.discovery, facts.modelLaunchValueMap);
           if (facts.discovery?.status === "ok") {
-            if (!facts.discovery.models.length) return fail8("model", "catalog_unavailable");
-            if (!options.includes(selection.model)) return fail8("model", "model_not_offered", options);
+            if (!facts.discovery.models.length) return fail9("model", "catalog_unavailable");
+            if (!options.includes(selection.model)) return fail9("model", "model_not_offered", options);
           } else {
             warnings.push("catalog_unverified");
           }
         }
         if (selection.thinkingLevel !== void 0) {
-          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail8("thinkingLevel", "thinking_unsupported");
+          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail9("thinkingLevel", "thinking_unsupported");
           if (!facts.thinkingLevelOptions?.includes(selection.thinkingLevel)) {
-            return fail8("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
+            return fail9("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
           }
         }
         const toolRestriction = facts.assistant.toolRestriction;
@@ -110555,7 +110566,7 @@ ${body}`;
           lowersToolLock: role === "assistant" && previousToolRestriction === "enforced" && toolRestriction === "prompt_only"
         };
       } catch {
-        return fail8("provider", "catalog_unavailable");
+        return fail9("provider", "catalog_unavailable");
       }
     }
     var init_validate = __esm2({
@@ -110633,25 +110644,25 @@ ${body}`;
           }
           /** Call only after owner/tool authorization and staging decisions. */
           write(request) {
-            const fail8 = (code, reason) => ({ ok: false, code, reason, committed: false });
+            const fail9 = (code, reason) => ({ ok: false, code, reason, committed: false });
             if (!isRecord9(request) || !hasOnlyKeys3(request, ["role", "selection", "expectedRevision", "by", "origin", "previousToolRestriction"]) || !isLaunchRole(request.role) || !integer(request.expectedRevision) || !["owner", "assistant"].includes(request.by) || !origins.includes(request.origin) || request.previousToolRestriction !== void 0 && !["enforced", "prompt_only"].includes(request.previousToolRestriction)) {
-              return fail8("invalid_args", "invalid_write_request");
+              return fail9("invalid_args", "invalid_write_request");
             }
             const dir = (0, import_node_path18.resolve)(this.path, "..");
             const lock = `${this.path}.lock`;
             try {
               (0, import_node_fs222.mkdirSync)(dir, { recursive: true, mode: 448 });
             } catch {
-              return fail8("persistence_failed", "config_directory_unavailable");
+              return fail9("persistence_failed", "config_directory_unavailable");
             }
             const acquired = acquireOwnedLock(lock, this.lockOptions);
-            if (!acquired.ok) return fail8(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
+            if (!acquired.ok) return fail9(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
             try {
               const current4 = this.read();
-              if (current4.status === "invalid" || current4.status === "unreadable") return fail8("store_unavailable", current4.reason);
+              if (current4.status === "invalid" || current4.status === "unreadable") return fail9("store_unavailable", current4.reason);
               const revision = current4.status === "ok" ? current4.document.revision : 0;
               if (revision !== request.expectedRevision) return { ok: false, code: "revision_conflict", reason: "document_revision_changed", committed: false, actualRevision: revision };
-              if (revision >= Number.MAX_SAFE_INTEGER) return fail8("store_unavailable", "revision_exhausted");
+              if (revision >= Number.MAX_SAFE_INTEGER) return fail9("store_unavailable", "revision_exhausted");
               let selection = null;
               let warnings = [];
               let lowersToolLock = false;
@@ -111289,8 +111300,8 @@ ${body}`;
                 timer.unref?.();
               })
             ]);
-            const answer = findMeshRelayAnswer(raw);
-            const got = answer?.success === true ? rec(answer.mesh) : null;
+            const answer2 = findMeshRelayAnswer(raw);
+            const got = answer2?.success === true ? rec(answer2.mesh) : null;
             mesh = got && readText(got.id) === m.id ? got : null;
           } catch {
             mesh = null;
@@ -113182,10 +113193,10 @@ ${detail.join("\n")}` : stripped;
           dispatchAcknowledgement(messageId, nonce) {
             return this.acceptance.watermark(messageId, nonce);
           }
-          submitState(messageId, inFlight4) {
+          submitState(messageId, inFlight5) {
             if (this.recovering?.messageId === messageId) return "in_flight";
             if (this.hold?.send.messageId === messageId) return "unknown";
-            if (this.current?.messageId === messageId && inFlight4) return "in_flight";
+            if (this.current?.messageId === messageId && inFlight5) return "in_flight";
             return this.outcomes.get(messageId) ?? "unknown";
           }
           /** Paste-gate readiness: the row now shows this owned send's own body. */
@@ -115264,8 +115275,8 @@ ${detail.join("\n")}` : stripped;
       }
     });
     async function settleQueueWriter(meshId, taskId, reason) {
-      const store3 = MeshRuntimeStore.getInstance();
-      const attempt = store3.turnStore().findLatestAttemptForTask(meshId, taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      const attempt = store4.turnStore().findLatestAttemptForTask(meshId, taskId);
       if (!attempt || attempt.terminal) return;
       const ledger = getActiveTurnLedger();
       if (!ledger || !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) return;
@@ -115296,13 +115307,13 @@ ${detail.join("\n")}` : stripped;
       if (!host?.actor || !host.repoIdentity || !host.machineId) throw new Error("authenticated_host_required");
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new Error("invalid_expected_revision");
       if (!patch || typeof patch !== "object" || Array.isArray(patch) || !Object.keys(patch).length || Object.keys(patch).some((k) => !["message", "ownedPaths", "phase", "dependsOn", "routingPreferences", "review"].includes(k))) throw new Error("unsupported_revision_patch");
-      const store3 = MeshRuntimeStore.getInstance();
-      return store3.transaction(() => {
-        const before = store3.findQueueEntryById(meshId, taskId);
+      const store4 = MeshRuntimeStore.getInstance();
+      return store4.transaction(() => {
+        const before = store4.findQueueEntryById(meshId, taskId);
         if (!before) throw new Error("task_not_found");
         if (before.status !== "pending") throw new Error("pending_required: active edits require a future versioned quiescent handoff");
         if ((before.revision ?? 0) !== expectedRevision) throw new Error("stale_revision");
-        if (isTaskDispatchInFlight(meshId, taskId) || findOpenQueueAttempt(store3.turnStore(), meshId, taskId)) throw new Error("open_attempt_revision_refused");
+        if (isTaskDispatchInFlight(meshId, taskId) || findOpenQueueAttempt(store4.turnStore(), meshId, taskId)) throw new Error("open_attempt_revision_refused");
         const next = structuredClone(before);
         if (patch.message !== void 0) {
           if (typeof patch.message !== "string" || !patch.message.trim()) throw new Error("invalid_revision_message");
@@ -115324,7 +115335,7 @@ ${detail.join("\n")}` : stripped;
         }
         if (patch.routingPreferences !== void 0) next.routingPreferences = normalizeRoutingPreferences(patch.routingPreferences);
         if (patch.review !== void 0) {
-          if (!patch.review || Object.keys(patch.review).some((k) => !["sourceTaskId", "differentProvider"].includes(k)) || patch.review.differentProvider !== true || typeof patch.review.sourceTaskId !== "string" || !store3.findQueueEntryById(meshId, patch.review.sourceTaskId) || patch.review.sourceTaskId === taskId || !next.readonly && next.taskMode !== "live_debug_readonly") throw new Error("invalid_review_contract");
+          if (!patch.review || Object.keys(patch.review).some((k) => !["sourceTaskId", "differentProvider"].includes(k)) || patch.review.differentProvider !== true || typeof patch.review.sourceTaskId !== "string" || !store4.findQueueEntryById(meshId, patch.review.sourceTaskId) || patch.review.sourceTaskId === taskId || !next.readonly && next.taskMode !== "live_debug_readonly") throw new Error("invalid_review_contract");
           next.review = patch.review;
         }
         if (next.phase) {
@@ -115334,7 +115345,7 @@ ${detail.join("\n")}` : stripped;
         if (patch.dependsOn !== void 0) {
           if (!Array.isArray(patch.dependsOn) || patch.dependsOn.some((id4) => typeof id4 !== "string" || !id4.trim())) throw new Error("invalid_revision_dependencies");
           next.dependsOn = [...new Set(patch.dependsOn.map((id4) => id4.trim()))];
-          const queue = store3.getQueueEntries(meshId);
+          const queue = store4.getQueueEntries(meshId);
           const adjacency = new Map(queue.map((t) => [t.id, t.dependsOn ?? []]));
           if (next.dependsOn.some((id4) => !adjacency.has(id4))) throw new Error("unknown_dependency");
           adjacency.set(taskId, next.dependsOn);
@@ -115347,14 +115358,14 @@ ${detail.join("\n")}` : stripped;
             stack.push(...adjacency.get(id4) ?? []);
           }
         }
-        assertSourceDependencyGraph(store3.getQueueEntries(meshId).map((t) => t.id === taskId ? next : t));
-        const admission = evaluateTaskOwnedPathsAdmission(store3, meshId, next);
+        assertSourceDependencyGraph(store4.getQueueEntries(meshId).map((t) => t.id === taskId ? next : t));
+        const admission = evaluateTaskOwnedPathsAdmission(store4, meshId, next);
         const expandedPaths = patch.ownedPaths !== void 0 && (next.ownedPaths?.paths ?? []).some((entry) => !(before.ownedPaths?.paths ?? []).some((old) => old.path === entry.path && (old.subtree || !entry.subtree) || old.subtree && entry.path.startsWith(`${old.path}/`)));
         const expandsIntegration = patch.phase === "integration" && before.phase !== "integration";
         const installsPhysicalContext = !!next.ownershipScope && !before.ownershipScope;
         if (!admission.allowed && (expandedPaths || expandsIntegration || installsPhysicalContext)) throw new Error(`ownership_collision: ${admission.detail}`);
         if (next.ownedPaths && next.phase === "source") {
-          next.logicalOverlapWarnings = store3.getQueueEntries(meshId).flatMap((other) => {
+          next.logicalOverlapWarnings = store4.getQueueEntries(meshId).flatMap((other) => {
             if (other.id === taskId || other.phase !== "source" || !other.ownedPaths || other.status === "cancelled" || other.status === "failed") return [];
             return findOwnershipConflicts2(next.ownedPaths, [{ taskId: other.id, paths: other.ownedPaths }]).map((c) => ({ ...c, action: "serialize_integration" }));
           });
@@ -115368,7 +115379,7 @@ ${detail.join("\n")}` : stripped;
         delete next.hold;
         delete next.holdNoticeId;
         delete next.autoLaunch;
-        store3.updateQueueEntry(next);
+        store4.updateQueueEntry(next);
         return next;
       });
     }
@@ -115621,15 +115632,15 @@ ${detail.join("\n")}` : stripped;
             const holdQueue = blockerIds.map((id4) => holdStore.findQueueEntryById(req.meshId, id4)).filter((entry) => entry !== null);
             const wire = req.view ? entries2.map((e) => ({ ...summarizeQueueEntryInputForView2(e), ...e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {} })) : entries2;
             const response = { entries: wire };
-            const store3 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
-            if (store3 && req.withCounts) {
+            const store4 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
+            if (store4 && req.withCounts) {
               const olderThanIso = req.historicalOlderThanMs !== void 0 ? new Date(Date.now() - req.historicalOlderThanMs).toISOString() : void 0;
-              const { counts, oldHistoricalCount, legacyReportedBlockedCount } = store3.getQueueStatusCounts(req.meshId, olderThanIso);
+              const { counts, oldHistoricalCount, legacyReportedBlockedCount } = store4.getQueueStatusCounts(req.meshId, olderThanIso);
               response.counts = counts;
               if (legacyReportedBlockedCount) response.legacyReportedBlockedCount = legacyReportedBlockedCount;
               if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
             }
-            if (store3 && req.withDependencyHeads) {
+            if (store4 && req.withDependencyHeads) {
               const returned = new Set(entries2.map((e) => e.id));
               const depIds = [];
               for (const e of entries2) {
@@ -115637,7 +115648,7 @@ ${detail.join("\n")}` : stripped;
                   if (typeof dep === "string" && !returned.has(dep)) depIds.push(dep);
                 }
               }
-              response.dependencyHeads = store3.getQueueDependencyHeads(req.meshId, depIds);
+              response.dependencyHeads = store4.getQueueDependencyHeads(req.meshId, depIds);
             }
             return { success: true, ...response };
           } catch (e) {
@@ -116181,20 +116192,20 @@ ${detail.join("\n")}` : stripped;
           const ledger = getActiveTurnLedger();
           if (!ledger) return unavailable2("no active turn ledger (boot wiring pending \u2014 see file header)");
           try {
-            const store3 = ledger.store;
+            const store4 = ledger.store;
             let attempts = [];
             if (req.attemptId) {
-              const a = store3.getAttempt(req.attemptId);
+              const a = store4.getAttempt(req.attemptId);
               if (a) attempts = [a];
             } else if (req.taskId) {
-              attempts = store3.listAttemptsForTask(req.meshId, req.taskId).filter((a) => a !== null);
+              attempts = store4.listAttemptsForTask(req.meshId, req.taskId).filter((a) => a !== null);
             } else {
-              attempts = store3.listOpenAttempts({ meshId: req.meshId }).filter((a) => a !== null);
+              attempts = store4.listOpenAttempts({ meshId: req.meshId }).filter((a) => a !== null);
             }
             if (req.sessionId) attempts = attempts.filter((a) => a.sessionId === req.sessionId);
             if (req.state) attempts = attempts.filter((a) => a.state === req.state);
             if (typeof req.tail === "number") attempts = attempts.slice(-req.tail);
-            const events = req.attemptId ? store3.listEvents(req.attemptId) : [];
+            const events = req.attemptId ? store4.listEvents(req.attemptId) : [];
             const response = {
               attempts: attempts.map((a) => ({
                 attemptId: a.attemptId,
@@ -116561,7 +116572,7 @@ ${detail.join("\n")}` : stripped;
         return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
       };
       const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
-      const fail8 = () => {
+      const fail9 = () => {
         LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
       };
@@ -116586,7 +116597,7 @@ ${detail.join("\n")}` : stripped;
           LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
           return;
         }
-        fail8();
+        fail9();
       });
       return true;
     }
@@ -118612,12 +118623,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (existing) return existing;
       }
       const meshStore = getMeshRuntimeStore(ctx);
-      const store3 = new ArtifactStore(meshStore.db);
+      const store4 = new ArtifactStore(meshStore.db);
       if (ctx.deps) {
         const prev = runtimeByDeps.get(ctx.deps) ?? {};
-        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store3 });
+        runtimeByDeps.set(ctx.deps, { ...prev, artifactStore: store4 });
       }
-      return store3;
+      return store4;
     }
     var ARTIFACT_RUNTIME_BY_DEPS_KEY;
     var runtimeByDeps;
@@ -119640,17 +119651,17 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       if (!sessionWorkspace && !nodeWorkspaceRoot && opts?.allowStoredArtifactWorkspaceFallback) {
         try {
-          const store3 = getArtifactStore(ctx);
+          const store4 = getArtifactStore(ctx);
           const targetArtifactId = trimString3(opts.artifactId);
           if (targetArtifactId) {
-            const rec5 = store3.get(targetArtifactId);
+            const rec5 = store4.get(targetArtifactId);
             if (rec5 && sessionIdsEquivalent(rec5.sessionId, sessionId) && trimString3(rec5.workspaceRoot)) {
               sessionWorkspace = trimString3(rec5.workspaceRoot);
               status = "stopped";
             }
           }
           if (!sessionWorkspace && sessionId) {
-            const existing = store3.listBySession(sessionId, { limit: 1 });
+            const existing = store4.listBySession(sessionId, { limit: 1 });
             if (existing.length > 0 && trimString3(existing[0].workspaceRoot)) {
               sessionWorkspace = trimString3(existing[0].workspaceRoot);
               status = "stopped";
@@ -119740,8 +119751,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       } catch {
       }
       try {
-        const store3 = getArtifactStore(ctx);
-        const existing = store3.listBySession(sessionId, { limit: 10 });
+        const store4 = getArtifactStore(ctx);
+        const existing = store4.listBySession(sessionId, { limit: 10 });
         if (existing.some((rec5) => rec5.meshId === meshId)) return true;
       } catch {
       }
@@ -119954,8 +119965,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       return chunks;
     }
-    function listWorkerAuthorizedArtifacts(ctx, authority, store3, options) {
-      const own2 = store3.listBySession(authority.sessionId, { limit: options?.limit });
+    function listWorkerAuthorizedArtifacts(ctx, authority, store4, options) {
+      const own2 = store4.listBySession(authority.sessionId, { limit: options?.limit });
       const meshStore = getMeshRuntimeStore(ctx);
       const taskEntry = authority.meshId && authority.taskId ? meshStore.findQueueEntryById(authority.meshId, authority.taskId) : null;
       const taskPayload = taskEntry?.payload ?? {};
@@ -119969,7 +119980,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       for (const rawId of rawInputIds) {
         const id4 = trimString3(rawId);
         if (!id4 || seen2.has(id4)) continue;
-        const record7 = store3.get(id4) ?? remoteArtifactById.get(id4);
+        const record7 = store4.get(id4) ?? remoteArtifactById.get(id4);
         if (!record7) continue;
         let recordMissionId = trimString3(record7.missionId);
         if (!recordMissionId && record7.taskId) {
@@ -120247,7 +120258,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
             const queuePayload = queueEntry.payload ?? {};
             const missionId = trimString3(queueEntry.missionId) || trimString3(queuePayload.missionId) || null;
-            const store3 = getArtifactStore(ctx);
+            const store4 = getArtifactStore(ctx);
             if (resolveScopeOnly) {
               const rawInputIds = Array.isArray(queueEntry.inputArtifactIds) ? queueEntry.inputArtifactIds : Array.isArray(queuePayload.inputArtifactIds) ? queuePayload.inputArtifactIds : [];
               const inputArtifactIds = rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0);
@@ -120265,7 +120276,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const inputArtifacts = [];
               const allowedSet = new Set(inputArtifactIds);
               for (const id4 of inputArtifactIds) {
-                const rec5 = store3.get(id4);
+                const rec5 = store4.get(id4);
                 if (!rec5) continue;
                 const recMissionId = resolveRecMission(rec5);
                 const sameMission = Boolean(missionId && recMissionId && missionId === recMissionId);
@@ -120281,7 +120292,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               let requestedArtifact = null;
               const reqArtifactId = trimString3(args?.artifactId);
               if (reqArtifactId) {
-                const reqRec = store3.get(reqArtifactId);
+                const reqRec = store4.get(reqArtifactId);
                 if (!reqRec) {
                   return { success: false, code: "artifact_not_found", error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
                 }
@@ -120324,7 +120335,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const clampedCreatedAt = Number.isFinite(rawCreated) && rawCreated > 0 ? Math.min(Math.trunc(rawCreated), maxForwardedTimestamp) : hostNow;
             const rawUpdated = Number(rawArtifact.updatedAt);
             const clampedUpdatedAt = Number.isFinite(rawUpdated) && rawUpdated > 0 ? Math.max(clampedCreatedAt, Math.min(Math.trunc(rawUpdated), maxForwardedTimestamp)) : clampedCreatedAt;
-            const upserted = store3.upsertForwardedArtifact({
+            const upserted = store4.upsertForwardedArtifact({
               artifactId: trimString3(rawArtifact.artifactId),
               sessionId: ownerIdentity.sessionId,
               taskId: ownerIdentity.taskId,
@@ -120366,8 +120377,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             return { success: false, code: "invalid_arguments", error: "artifactId is required" };
           }
           try {
-            const store3 = getArtifactStore(ctx);
-            const record7 = store3.get(artifactId);
+            const store4 = getArtifactStore(ctx);
+            const record7 = store4.get(artifactId);
             if (!record7) {
               return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
@@ -120423,7 +120434,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             if (mode === "read") {
               const readOffset = typeof args?.offset === "number" ? args.offset : typeof args?.pageOffset === "number" ? args.pageOffset : void 0;
               const readLimit = typeof args?.limit === "number" ? args.limit : void 0;
-              const readRes = store3.readArtifactContent(boundArtifactId, {
+              const readRes = store4.readArtifactContent(boundArtifactId, {
                 sessionId: record7.sessionId,
                 trustedWorkspaceRoot: record7.workspaceRoot,
                 ...readOffset !== void 0 ? { offset: readOffset } : {},
@@ -120454,7 +120465,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 attachment: toChatAttachmentMeta(record7)
               };
             }
-            const fetched = store3.fetchArtifactContent(boundArtifactId, {
+            const fetched = store4.fetchArtifactContent(boundArtifactId, {
               sessionId: record7.sessionId,
               trustedWorkspaceRoot: record7.workspaceRoot
             });
@@ -120515,8 +120526,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const rawLimit = args.limit;
       const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH) : OWNER_MESH_LIST_DEFAULT_LIMIT;
       const cursor = parseCursor(args.cursor);
-      const store3 = getArtifactStore(ctx);
-      let records = store3.listByMesh(meshId, { ...missionId ? { missionId } : {} });
+      const store4 = getArtifactStore(ctx);
+      let records = store4.listByMesh(meshId, { ...missionId ? { missionId } : {} });
       if (kind) records = records.filter((rec5) => rec5.kind === kind);
       if (cursor) {
         const at = records.findIndex((rec5) => rec5.artifactId === cursor.artifactId);
@@ -121114,11 +121125,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
       };
     }
-    function getStoreRegistrationStateMap(store3) {
-      let map2 = registrationStateByStore.get(store3);
+    function getStoreRegistrationStateMap(store4) {
+      let map2 = registrationStateByStore.get(store4);
       if (!map2) {
         map2 = /* @__PURE__ */ new Map();
-        registrationStateByStore.set(store3, map2);
+        registrationStateByStore.set(store4, map2);
       }
       return map2;
     }
@@ -121138,8 +121149,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         return { success: false, code: "invalid_arguments", error: "artifactId is required" };
       }
       try {
-        const store3 = getArtifactStore(ctx);
-        const localRecord = store3.get(artifactId);
+        const store4 = getArtifactStore(ctx);
+        const localRecord = store4.get(artifactId);
         const record7 = localRecord ?? authority.remoteRequestedArtifact ?? null;
         if (!record7) {
           return {
@@ -121168,7 +121179,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (isReadCommand) {
           const readOffset = typeof args?.offset === "number" ? args.offset : typeof args?.pageOffset === "number" ? args.pageOffset : void 0;
           const readLimit = typeof args?.limit === "number" ? args.limit : void 0;
-          const readRes = store3.readArtifactContent(artifactId, {
+          const readRes = store4.readArtifactContent(artifactId, {
             sessionId: record7.sessionId,
             ...trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {},
             ...readOffset !== void 0 ? { offset: readOffset } : {},
@@ -121182,7 +121193,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             attachment: toChatAttachmentMeta(record7)
           };
         }
-        const fetched = store3.fetchArtifactContent(artifactId, {
+        const fetched = store4.fetchArtifactContent(artifactId, {
           sessionId: record7.sessionId,
           ...trustedWorkspaceRoot ? { trustedWorkspaceRoot } : {}
         });
@@ -121254,9 +121265,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           const declaredMime = trimString4(args?.mime) || trimString4(args?.declaredMime) || void 0;
           const title = typeof args?.title === "string" ? args.title : void 0;
           try {
-            const store3 = getArtifactStore(ctx);
-            const stateMap = getStoreRegistrationStateMap(store3);
-            const registered = store3.register({
+            const store4 = getArtifactStore(ctx);
+            const stateMap = getStoreRegistrationStateMap(store4);
+            const registered = store4.register({
               sessionId: authority.sessionId,
               taskId: authority.taskId,
               meshId: authority.meshId,
@@ -121307,7 +121318,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                   }
                 } else if (isStillLatestPending && currentState?.lastConfirmedRecord) {
                   try {
-                    store3.upsertForwardedArtifact(currentState.lastConfirmedRecord);
+                    store4.upsertForwardedArtifact(currentState.lastConfirmedRecord);
                   } catch {
                   }
                 }
@@ -121319,11 +121330,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               }
               if (forwardAns.artifact && typeof forwardAns.artifact === "object") {
                 if (!currentState || currentState.latestSeq === mySeq) {
-                  const synced = store3.upsertForwardedArtifact(forwardAns.artifact);
+                  const synced = store4.upsertForwardedArtifact(forwardAns.artifact);
                   finalRecord = synced.record;
                   finalAttachment = synced.attachment;
                 } else {
-                  const existingLocal = store3.getById(artifactId);
+                  const existingLocal = store4.getById(artifactId);
                   if (existingLocal) {
                     finalRecord = existingLocal;
                   }
@@ -121413,22 +121424,22 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           const filterMissionId = trimString4(args?.missionId);
           const hasExplicitSession = Boolean(trimString4(args?.sessionId) || trimString4(args?.targetSessionId));
           try {
-            const store3 = getArtifactStore(ctx);
+            const store4 = getArtifactStore(ctx);
             let artifacts;
             if (filterMissionId && (authority.isCoordinator || ingress.ownerTrusted)) {
-              artifacts = store3.listByMission(filterMissionId, {
+              artifacts = store4.listByMission(filterMissionId, {
                 ...authority.meshId ? { meshId: authority.meshId } : {},
                 limit
               });
             } else if (!hasExplicitSession && authority.isCoordinator && authority.meshId) {
-              artifacts = store3.listByMesh(authority.meshId, {
+              artifacts = store4.listByMesh(authority.meshId, {
                 ...filterMissionId ? { missionId: filterMissionId } : {},
                 limit
               });
             } else if (!hasExplicitSession && authority.producerRole === "worker") {
-              artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store3, { filterMissionId, limit });
+              artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store4, { filterMissionId, limit });
             } else {
-              artifacts = store3.listBySession(authority.sessionId, { limit });
+              artifacts = store4.listBySession(authority.sessionId, { limit });
               if (filterMissionId) artifacts = artifacts.filter((rec5) => rec5.missionId === filterMissionId);
             }
             const attachments = artifacts.map((record7) => toChatAttachmentMeta(record7));
@@ -124022,8 +124033,8 @@ ${asText(streams.stderr)}
         return skip("queue_reference", "An active/pending/assigned queue task or direct dispatch still references this node.");
       }
       const refineJobs = buildMeshAsyncRefineJobs2({ meshId, ledgerEntries: ctx.ledgerEntries });
-      const inFlight4 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent4(job.nodeId, nodeId) || daemonIdsEquivalent4(job.targetNodeId, nodeId)));
-      if (inFlight4) {
+      const inFlight5 = refineJobs.some((job) => (job.status === "accepted" || job.status === "running") && (daemonIdsEquivalent4(job.nodeId, nodeId) || daemonIdsEquivalent4(job.targetNodeId, nodeId)));
+      if (inFlight5) {
         return skip("review_inflight", "A Refinery job for this node is still in flight.");
       }
       if (hasBlockedReviewRefineResult(nodeId, ctx.ledgerEntries)) {
@@ -124155,7 +124166,7 @@ ${asText(streams.stderr)}
       const meshId = String(mesh?.id || mesh?.name || "");
       const nodeId = entry.nodeId;
       const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
-      const fail8 = (code, error) => {
+      const fail9 = (code, error) => {
         entry.execution = { attempted: true, success: false, code, error };
         metrics.removalFailures++;
       };
@@ -124181,7 +124192,7 @@ ${asText(streams.stderr)}
         const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
         if (precheck.ok === false) {
           entry.reasonCode = "execution_precheck_refused";
-          fail8(precheck.code, precheck.error);
+          fail9(precheck.code, precheck.error);
           return;
         }
         if (deps.cleanupMeshSessions) {
@@ -124193,7 +124204,7 @@ ${asText(streams.stderr)}
         const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId });
         if (cleanup.success === false) {
           entry.reasonCode = "execution_cleanup_failed";
-          fail8(cleanup.code, cleanup.error);
+          fail9(cleanup.code, cleanup.error);
           return;
         }
         if (cleanup.skipped !== true) {
@@ -124221,7 +124232,7 @@ ${asText(streams.stderr)}
         try {
           removed = removeNodeFromMesh(meshId, nodeId) === true;
         } catch (e) {
-          fail8("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
+          fail9("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
           return;
         }
         try {
@@ -124233,7 +124244,7 @@ ${asText(streams.stderr)}
         }
         if (!removed) {
           entry.reasonCode = "execution_membership_not_removed";
-          fail8("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
+          fail9("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
           return;
         }
         try {
@@ -125706,14 +125717,14 @@ ${asText(streams.stderr)}
       } finally {
         if (timer) clearTimeout(timer);
       }
-      const answer = findMeshRelayAnswer(raw);
-      if (!answer) return unreachable("relay_failed", "the host answered with a malformed relay result");
-      if (answer.success === true) return { ok: true, result: answer };
-      const transportCode = str10(answer.code);
+      const answer2 = findMeshRelayAnswer(raw);
+      if (!answer2) return unreachable("relay_failed", "the host answered with a malformed relay result");
+      if (answer2.success === true) return { ok: true, result: answer2 };
+      const transportCode = str10(answer2.code);
       if (/^p2p_/.test(transportCode) && transportCode !== "mesh_logic_or_provider_failure") {
-        return unreachable(transportCode === "p2p_daemon_offline" ? "host_offline" : transportCode === "p2p_timeout" ? "relay_timeout" : "relay_failed", str10(answer.error) || transportCode);
+        return unreachable(transportCode === "p2p_daemon_offline" ? "host_offline" : transportCode === "p2p_timeout" ? "relay_timeout" : "relay_failed", str10(answer2.error) || transportCode);
       }
-      const detail = str10(answer.detail);
+      const detail = str10(answer2.detail);
       const detailMatch = FOLLOWER_REFUSAL_DETAIL_RE.exec(detail);
       if (detailMatch) {
         const specificCode = detailMatch[1];
@@ -125721,8 +125732,8 @@ ${asText(streams.stderr)}
           ok: false,
           kind: "refused",
           code: specificCode,
-          error: detail || str10(answer.error) || specificCode,
-          result: answer
+          error: detail || str10(answer2.error) || specificCode,
+          result: answer2
         };
       }
       if (target4.followerAccess && transportCode === "mesh_sender_not_on_roster") {
@@ -125730,13 +125741,13 @@ ${asText(streams.stderr)}
           ok: false,
           kind: "refused",
           code: "remote_access_denied",
-          error: detail || str10(answer.error) || "remote_access_denied",
-          result: answer
+          error: detail || str10(answer2.error) || "remote_access_denied",
+          result: answer2
         };
       }
-      const error = str10(answer.error);
+      const error = str10(answer2.error);
       const code = transportCode || (/^unknown command/i.test(error) ? "host_unsupported" : error) || "host_refused";
-      return { ok: false, kind: "refused", code, error: error || code, result: answer };
+      return { ok: false, kind: "refused", code, error: error || code, result: answer2 };
     }
     var ASSISTANT_REMOTE_PROJECT_COMMAND2;
     var ASSISTANT_REMOTE_OPS;
@@ -125949,9 +125960,9 @@ ${asText(streams.stderr)}
           const st = (0, import_fs41.statSync)(path124);
           if (!st.isFile()) continue;
           const pid = Number(match[1]);
-          const list2 = sets.get(pid) ?? [];
-          list2.push({ path: path124, mtimeMs: st.mtimeMs });
-          sets.set(pid, list2);
+          const list3 = sets.get(pid) ?? [];
+          list3.push({ path: path124, mtimeMs: st.mtimeMs });
+          sets.set(pid, list3);
         } catch {
         }
       }
@@ -126595,1624 +126606,799 @@ ${asText(streams.stderr)}
         init_mesh_node_identity();
       }
     });
-    var mesh_housekeeping_tick_exports = {};
-    __export2(mesh_housekeeping_tick_exports, {
-      DISK_RETENTION_INTERVAL_MS: () => DISK_RETENTION_INTERVAL_MS,
-      IDLE_SESSION_REAP_INTERVAL_MS: () => IDLE_SESSION_REAP_INTERVAL_MS,
-      claimPendingQueues: () => claimPendingQueues,
-      hostedMeshes: () => hostedMeshes,
-      runMeshHousekeepingTick: () => runMeshHousekeepingTick,
-      startMeshHousekeeping: () => startMeshHousekeeping
-    });
-    function hostedMeshes(components, meshes = listMeshes()) {
-      const drainDaemonIds = resolveCoordinatorDaemonIds(components);
+    function store3() {
+      return MeshRuntimeStore.getInstance();
+    }
+    function decisionMessageId(itemId, revision) {
+      return `decision:${itemId}:r${revision}`;
+    }
+    function coordinatorWasTold(prev) {
+      return !!prev && (prev.state !== "pending" || prev.kind !== "answered");
+    }
+    function fail3(code, error, extra) {
+      return { ok: false, code, error, ...extra ?? {} };
+    }
+    function describeDecisionAnswer(d) {
+      const a = d.answer;
+      if (!a) return "(no answer)";
+      const opt = a.optionId ? d.options.find((o) => o.id === a.optionId) : void 0;
+      const parts = [
+        a.optionId ? `${a.optionId}${opt ? `: ${opt.label}` : ""}` : "",
+        a.text ?? ""
+      ].filter(Boolean);
+      return parts.join(" \u2014 ") || "(no text)";
+    }
+    function answerMissionDecision(req, actor, nowMs2 = Date.now()) {
+      const s2 = store3();
+      const result = s2.transaction(() => {
+        const items = s2.missionItems();
+        const item = items.getItem(req.meshId, req.itemId);
+        if (!item || item.kind !== "decision" || !item.decision) {
+          return fail3("decision_not_found", `no decision item '${req.itemId}' on this mesh`);
+        }
+        const d = item.decision;
+        if (item.state !== "open" && item.state !== "answered") {
+          return fail3("decision_not_open", `decision is ${item.state} \u2014 it can no longer be answered`);
+        }
+        const nowIso = new Date(nowMs2).toISOString();
+        const prevRevision = d.answerRevision ?? (d.answer ? 1 : 0);
+        const { promptAckedAt: _seen, ...dRest } = d;
+        if (req.undo === true) {
+          if (item.state !== "answered" || !d.answer) return fail3("nothing_to_undo", "this decision has no answer to undo");
+          const revision2 = prevRevision + 1;
+          const told2 = coordinatorWasTold(d.delivery) && d.delivery?.kind !== "undone";
+          const { answer: _a, delivery: _dl, ...rest } = dRest;
+          const delivery2 = told2 ? { messageId: decisionMessageId(item.id, revision2), state: "pending", kind: "undone" } : void 0;
+          items.updateItem(req.meshId, item.id, {
+            state: "open",
+            decision: { ...rest, answerRevision: revision2, ...delivery2 ? { delivery: delivery2 } : {} }
+          });
+          items.appendEvent(req.meshId, item.missionId, "decision_answer_undone", actor.by, {
+            itemId: item.id,
+            revision: revision2,
+            via: actor.via,
+            wasAnswer: truncateMissionText(describeDecisionAnswer(d), 200),
+            notifyCoordinator: told2
+          });
+          items.bumpVersion(req.meshId, item.missionId, nowIso);
+          return { ok: true, action: "undone", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision: revision2, ...delivery2 ? { delivery: delivery2 } : {} };
+        }
+        const optionId = typeof req.optionId === "string" ? req.optionId.trim() : "";
+        const rawText = typeof req.text === "string" ? req.text.trim() : "";
+        if (!optionId && !rawText) return fail3("answer_required", "give an optionId or a text answer");
+        if (optionId && !d.options.some((o) => o.id === optionId)) {
+          return fail3("unknown_option", `option '${optionId}' does not exist on this decision`, { validOptions: d.options.map((o) => o.id) });
+        }
+        if (rawText && !optionId && !d.allowFreeText && d.options.length > 0) {
+          return fail3("free_text_not_allowed", "this decision only accepts one of its options", { validOptions: d.options.map((o) => o.id) });
+        }
+        const interpretedFrom = typeof req.interpretedFrom === "string" ? req.interpretedFrom.trim() : "";
+        if (actor.via === "assistant" && !interpretedFrom) {
+          return fail3("interpreted_from_required", "an assistant answer must carry the owner's words (interpretedFrom)");
+        }
+        const text4 = rawText ? truncateMissionText(rawText, DECISION_ANSWER_TEXT_MAX) : "";
+        const same = item.state === "answered" && d.answer && (d.answer.optionId ?? "") === optionId && (d.answer.text ?? "") === text4;
+        if (same) {
+          return { ok: true, action: "unchanged", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision: prevRevision, answer: d.answer };
+        }
+        const wasAnswered = item.state === "answered";
+        const prev = d.delivery;
+        const told = coordinatorWasTold(prev);
+        const changed = told && (wasAnswered || prev?.kind === "undone" && prev.state === "pending");
+        const kind = changed ? "changed" : "answered";
+        const revision = prevRevision + 1;
+        const answer2 = {
+          ...optionId ? { optionId } : {},
+          ...text4 ? { text: text4 } : {},
+          by: actor.by,
+          via: actor.via,
+          ...interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, DECISION_INTERPRETED_FROM_MAX) } : {},
+          at: nowIso
+        };
+        const delivery = { messageId: decisionMessageId(item.id, revision), state: "pending", kind };
+        items.updateItem(req.meshId, item.id, {
+          state: "answered",
+          decision: { ...dRest, answer: answer2, answerRevision: revision, delivery }
+        });
+        const eventType = wasAnswered ? "decision_answer_changed" : "decision_answered";
+        items.appendEvent(req.meshId, item.missionId, eventType, actor.by, {
+          itemId: item.id,
+          revision,
+          ...optionId ? { optionId } : {},
+          ...text4 ? { text: truncateMissionText(text4, 200) } : {},
+          via: actor.via,
+          ...interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, 200) } : {},
+          ...wasAnswered && d.answer ? { previous: truncateMissionText(describeDecisionAnswer(d), 200) } : {}
+        });
+        items.bumpVersion(req.meshId, item.missionId, nowIso);
+        return { ok: true, action: wasAnswered ? "changed" : "answered", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision, answer: answer2, delivery };
+      });
+      if (result.ok && result.action !== "unchanged") notifyMissionChanged(req.meshId);
+      return result;
+    }
+    function sourceOf(createdBy) {
+      if (createdBy?.startsWith("worker")) return "worker";
+      if (createdBy?.startsWith("daemon")) return "daemon";
+      return "coordinator";
+    }
+    function dueMs(iso) {
+      if (!iso) return Number.POSITIVE_INFINITY;
+      const t = Date.parse(iso);
+      return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+    }
+    function compareOwnerDecisions(a, b) {
+      const ba = a.urgency === "blocking" ? 0 : 1;
+      const bb = b.urgency === "blocking" ? 0 : 1;
+      if (ba !== bb) return ba - bb;
+      const da = dueMs(a.dueAt);
+      const db2 = dueMs(b.dueAt);
+      if (da !== db2) return da < db2 ? -1 : 1;
+      return a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0;
+    }
+    function toEntry2(item, missionTitle, carryOver) {
+      const d = item.decision;
+      if (!d) return null;
+      return {
+        meshId: item.meshId,
+        missionId: item.missionId,
+        missionTitle,
+        itemId: item.id,
+        question: d.question || item.text,
+        ...d.context ? { context: d.context } : {},
+        options: d.options.map((o) => ({ id: o.id, label: o.label, ...o.detail ? { detail: o.detail } : {} })),
+        ...d.recommended ? { recommended: d.recommended } : {},
+        allowFreeText: d.allowFreeText,
+        urgency: d.urgency,
+        ...d.dueAt ? { dueAt: d.dueAt } : {},
+        onDue: d.onDue,
+        source: sourceOf(item.createdBy),
+        createdAt: item.createdAt,
+        ...carryOver ? { carryOver: true } : {},
+        ...d.remindedAt ? { remindedAt: d.remindedAt } : {}
+      };
+    }
+    function buildOwnerDecisions(meshId) {
+      const items = store3().missionItems().listOpenByKind(meshId, "decision");
+      const missionCache = /* @__PURE__ */ new Map();
       const out = [];
-      for (const mesh of meshes) {
-        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
-        if (daemonHostsMesh(mesh, selfIds)) out.push({ mesh, selfIds });
+      for (const item of items) {
+        let m = missionCache.get(item.missionId);
+        if (!m) {
+          const rec5 = getMeshMission(meshId, item.missionId);
+          m = { title: rec5?.title ?? item.missionId, carryOver: rec5 ? isCarryOverMissionRecord(rec5) : false };
+          missionCache.set(item.missionId, m);
+        }
+        const e = toEntry2(item, m.title, m.carryOver);
+        if (e) out.push(e);
+      }
+      return out.sort(compareOwnerDecisions);
+    }
+    function listRecentlyAnswered(meshId, sinceMs) {
+      const cutoff = new Date(sinceMs).toISOString();
+      return store3().missionItems().listByKindStates(meshId, "decision", ["answered"]).filter((i) => i.decision?.answer && i.decision.answer.at >= cutoff).map((i) => ({
+        meshId,
+        missionId: i.missionId,
+        itemId: i.id,
+        question: i.decision.question,
+        answer: i.decision.answer,
+        revision: i.decision.answerRevision ?? 1,
+        ...i.decision.delivery ? { deliveryState: i.decision.delivery.state } : {},
+        autoApplied: i.decision.answer.by === "auto_recommended"
+      })).sort((a, b) => a.answer.at < b.answer.at ? 1 : -1);
+    }
+    function processDecisionDeadlines(meshId, nowMs2 = Date.now()) {
+      const s2 = store3();
+      const out = { autoApplied: [], reminded: [] };
+      const nowIso = new Date(nowMs2).toISOString();
+      for (const item of s2.missionItems().listOpenByKind(meshId, "decision")) {
+        const d = item.decision;
+        if (!d?.dueAt) continue;
+        const due = Date.parse(d.dueAt);
+        if (!Number.isFinite(due) || due > nowMs2) continue;
+        if (d.onDue === "apply_recommended" && d.recommended && d.options.some((o) => o.id === d.recommended)) {
+          const r = answerMissionDecision({ meshId, itemId: item.id, optionId: d.recommended }, { by: "auto_recommended", via: "auto" }, nowMs2);
+          if (r.ok) out.autoApplied.push(item.id);
+          continue;
+        }
+        if (d.remindedAt && d.remindedAt >= d.dueAt) continue;
+        s2.transaction(() => {
+          const items = s2.missionItems();
+          items.updateItem(meshId, item.id, { decision: { ...d, remindedAt: nowIso } });
+          items.appendEvent(meshId, item.missionId, "decision_reminded", "daemon", {
+            itemId: item.id,
+            dueAt: d.dueAt,
+            urgency: d.urgency,
+            question: truncateMissionText(d.question, MISSION_LIMITS2.question)
+          });
+          items.bumpVersion(meshId, item.missionId, nowIso);
+        });
+        out.reminded.push(item.id);
+        notifyMissionChanged(meshId);
       }
       return out;
     }
-    async function claimPendingQueues(components, meshes) {
-      let store3;
-      try {
-        store3 = MeshRuntimeStore.getInstance();
-      } catch {
-        return;
-      }
-      for (const { mesh } of hostedMeshes(components, meshes)) {
-        try {
-          if (store3.pendingQueueTaskCount(mesh.id) === 0) continue;
-        } catch {
-        }
-        try {
-          await triggerMeshQueue(components, mesh.id);
-        } catch (e) {
-          LOG.warn("MeshHousekeeping", `Pending-claim trigger failed for mesh ${mesh.id}: ${e?.message || e}`);
-        }
-      }
-    }
-    async function runMeshHousekeepingTick(components, state2 = {}, nowMs2 = Date.now()) {
-      const meshesSnapshot = listMeshes();
-      const hosted = hostedMeshes(components, meshesSnapshot);
-      let store3;
-      try {
-        store3 = MeshRuntimeStore.getInstance();
-      } catch {
-        store3 = void 0;
-      }
-      if (components.router) {
-        for (const mesh of meshesSnapshot) {
-          try {
-            if (components.router.getCachedInlineMesh(mesh.id)) components.router.getCachedInlineMesh(mesh.id, mesh);
-          } catch (e) {
-            LOG.warn("MeshHousekeeping", `Inline-cache membership merge failed for mesh ${mesh.id}: ${e?.message || e}`);
-          }
-        }
-      }
-      for (const { mesh } of hosted) {
-        try {
-          await runPendingCoordinatorCatchupScan(components, mesh);
-        } catch (e) {
-          LOG.warn("MeshHousekeeping", `Coordinator catch-up scan failed for mesh ${mesh.id}: ${e?.message || e}`);
-        }
-      }
-      if (store3) {
-        for (const { mesh } of hosted) {
-          try {
-            sweepQueueDependencyStalls(mesh.id);
-          } catch (e) {
-            LOG.warn("MeshHousekeeping", `Queue dependency stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
-          }
-        }
-        for (const { mesh } of hosted) {
-          try {
-            runOrphanedDispatchSweep(components, mesh.id, nowMs2);
-          } catch (e) {
-            LOG.warn("MeshHousekeeping", `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
-          }
-        }
-      }
-      const diskDue = state2.lastDiskRetentionRunAt === void 0 || nowMs2 - state2.lastDiskRetentionRunAt >= DISK_RETENTION_INTERVAL_MS;
-      if (diskDue) {
-        state2.lastDiskRetentionRunAt = nowMs2;
-        try {
-          runDiskRetentionSweep(nowMs2);
-        } catch (e) {
-          LOG.warn("MeshHousekeeping", `Disk retention sweep failed: ${e?.message || e}`);
-        }
-        pruneMeshRuntimeRetention();
-        for (const { mesh } of hosted) {
-          try {
-            await detectAndSignalOrphanWorktrees(mesh, nowMs2);
-          } catch (e) {
-            LOG.warn("MeshHousekeeping", `Orphan worktree detection failed for mesh ${mesh.id}: ${e?.message || e}`);
-          }
-        }
-        if (components.router && resolveWorktreeNodeRetentionGraceMs() > 0) {
-          const router = components.router;
-          const retentionDeps = {
-            precheckLocalWorktreeRemovable: (args) => router.precheckLocalWorktreeRemovable(args),
-            cleanupLocalWorktreeNode: (args) => router.cleanupLocalWorktreeNode(args),
-            getWorktreeForceCleanupConvergence: (args) => router.getWorktreeForceCleanupConvergence(args),
-            cleanupMeshSessions: (args) => router.cleanupMeshSessions(args),
-            listSessions: async () => {
-              try {
-                return await router.deps.sessionHostControl?.listSessions() ?? [];
-              } catch {
-                return [];
-              }
-            },
-            getCachedInlineMesh: (meshId) => router.getCachedInlineMesh(meshId),
-            removeInlineMeshNode: (meshId, mesh, nodeId) => router.removeInlineMeshNode(meshId, mesh, nodeId),
-            invalidateAggregateMeshStatus: (meshId) => router.invalidateAggregateMeshStatus(meshId)
-          };
-          const tickId = `housekeeping-${nowMs2}`;
-          for (const { mesh } of hosted) {
-            try {
-              await runWorktreeNodeRetentionTick(retentionDeps, { mesh, nowMs: nowMs2, tickId, execute: true, executeMode: "auto" });
-            } catch (e) {
-              LOG.warn("MeshHousekeeping", `Worktree-node retention failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-          }
-        }
-      }
-      try {
-        contractHousekeeping(hosted.map((h) => h.mesh.id), {
-          deposit: depositWorkerMailboxMessage,
-          publishHeld: (note2) => publishHeldHandoffNote(note2, nowMs2)
-        }, nowMs2);
-      } catch (e) {
-        LOG.warn("MeshHousekeeping", `Contract housekeeping failed: ${e?.message || e}`);
-      }
-      if (components.router) {
-        const reapDue = state2.lastIdleSessionReapRunAt === void 0 || nowMs2 - state2.lastIdleSessionReapRunAt >= IDLE_SESSION_REAP_INTERVAL_MS;
-        if (reapDue) {
-          state2.lastIdleSessionReapRunAt = nowMs2;
-          for (const { mesh } of hosted) {
-            try {
-              await runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, nowMs2), { meshId: mesh.id, policy: (() => {
-                const m = getMesh(mesh.id);
-                return m ? resolveMeshPolicy2(m.policy) : void 0;
-              })(), now: nowMs2 });
-            } catch (e) {
-              LOG.warn("MeshHousekeeping", `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
-            }
-          }
-        }
-      }
-    }
-    function startMeshHousekeeping(components, intervalMs, opts = {}) {
-      const state2 = {};
-      let running = false;
-      const timer = setInterval(() => {
-        if (running) return;
-        running = true;
-        void (async () => {
-          await runMeshHousekeepingTick(components, state2);
-          if (opts.claim) await claimPendingQueues(components);
-        })().catch((e) => LOG.warn("MeshHousekeeping", `Housekeeping tick error: ${e?.message || e}`)).finally(() => {
-          running = false;
-        });
-      }, intervalMs);
-      if (typeof timer.unref === "function") timer.unref();
-      LOG.info("MeshHousekeeping", `Mesh housekeeping started (interval ${intervalMs}ms, local daemon ${readText(getMachineId()) || "unknown"})`);
-      return {
-        stop() {
-          clearInterval(timer);
-          LOG.info("MeshHousekeeping", "Mesh housekeeping stopped");
-        }
-      };
-    }
-    var DISK_RETENTION_INTERVAL_MS;
-    var IDLE_SESSION_REAP_INTERVAL_MS;
-    var init_mesh_housekeeping_tick = __esm2({
-      "src/mesh/mesh-housekeeping-tick.ts"() {
+    var DECISION_ANSWER_TEXT_MAX;
+    var DECISION_INTERPRETED_FROM_MAX;
+    var init_mesh_mission_decisions = __esm2({
+      "src/mesh/mesh-mission-decisions.ts"() {
         "use strict";
-        init_config();
-        init_mesh_config();
-        init_logger();
-        init_repo_mesh_types();
-        init_mesh_runtime_store();
-        init_mesh_events_coordinator();
-        init_mesh_reconcile_identity();
-        init_mesh_disk_retention();
-        init_mesh_runtime_store();
-        init_mesh_worktree_retention();
-        init_mesh_session_lifetime_runtime();
-        init_mesh_idle_session_reaper();
-        init_mesh_retention_config();
-        init_mesh_auto_fast_forward();
-        init_mesh_queue_dependency_notice();
-        init_mesh_orphaned_dispatch_sweep();
         init_dist();
-        init_contract_runtime();
-        init_worker_mailbox();
-        init_worker_report();
-        DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
-        IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1e3;
+        init_mesh_runtime_store();
+        init_mesh_missions();
+        init_mesh_mission_change_notifier();
+        DECISION_ANSWER_TEXT_MAX = 1e3;
+        DECISION_INTERPRETED_FROM_MAX = 500;
       }
     });
-    var mesh_notification_status_line_exports = {};
-    __export2(mesh_notification_status_line_exports, {
-      MESH_STATUS_LINE_MAX_CHARS: () => MESH_STATUS_LINE_MAX_CHARS,
-      buildMeshStatusLineForNotification: () => buildMeshStatusLineForNotification,
-      renderMeshStatusLine: () => renderMeshStatusLine
-    });
-    function renderMeshStatusLine(inputs) {
-      const total = inputs.totalActiveCount;
-      if (!Number.isFinite(total) || total <= 0) return null;
-      const parts = [];
-      for (const status of STATUS_RENDER_ORDER) {
-        const count = inputs.statusCounts?.[status] ?? 0;
-        if (count > 0) parts.push(`${count} ${status}`);
-      }
-      const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
-      const entries2 = [];
-      const sorted = inputs.activeWork.filter((record7) => typeof record7?.taskId === "string" && record7.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
-      for (const record7 of sorted) {
-        const id4 = record7.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
-        entries2.push(`${id4} ${record7.status}`);
-      }
-      if (entries2.length === 0) return clampToBound(head);
-      let line = head;
-      const shown = [];
-      for (let i = 0; i < entries2.length; i++) {
-        const isLast = i === entries2.length - 1;
-        const candidate = [...shown, entries2[i]];
-        const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
-        if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
-        shown.push(entries2[i]);
-        line = head + suffix;
-      }
-      if (shown.length === 0) return clampToBound(head);
-      return clampToBound(line);
+    function githubRemote(value) {
+      if (typeof value !== "string") return null;
+      const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(value);
+      if (!match || match[2] === "." || match[2] === "..") return null;
+      const identity4 = `github.com/${match[1]}/${match[2]}`.toLowerCase();
+      return { identity: identity4, url: `https://${identity4}.git` };
     }
-    function clampToBound(line) {
-      if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
-      return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
-    }
-    function buildMeshStatusLineForNotification(meshId, now, nodes) {
-      if (!meshId) return null;
+    async function git4(workspace, args) {
+      const isClone = args[0] === "clone";
+      const timeout = isClone ? REMOTE_GIT_CLONE_TIMEOUT_MS : REMOTE_GIT_TIMEOUT_MS;
       try {
-        const built = buildMeshActiveWork({
-          meshId,
-          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
-          directDispatches: getActiveDirectDispatches(meshId),
-          ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
-          nodes,
-          now: now ?? Date.now()
-        });
-        return renderMeshStatusLine({
-          activeWork: built.activeWork,
-          statusCounts: built.summary.statusCounts,
-          totalActiveCount: built.summary.totalActiveCount
-        });
-      } catch (e) {
-        LOG.debug("MeshReconcile", `Mesh status line build failed for mesh ${meshId}: ${e?.message || e}`);
-        return null;
-      }
-    }
-    var MESH_STATUS_LINE_MAX_CHARS;
-    var TASK_ID_PREFIX_CHARS;
-    var ACTIVE_WORK_LEDGER_KINDS;
-    var STATUS_RENDER_ORDER;
-    var STATUS_ACTIONABILITY_RANK;
-    var init_mesh_notification_status_line = __esm2({
-      "src/mesh/mesh-notification-status-line.ts"() {
-        "use strict";
-        init_logger();
-        init_mesh_active_work();
-        init_mesh_work_queue();
-        init_mesh_local_records();
-        MESH_STATUS_LINE_MAX_CHARS = 200;
-        TASK_ID_PREFIX_CHARS = 7;
-        ACTIVE_WORK_LEDGER_KINDS = [
-          "task_dispatched",
-          "task_completed",
-          "task_failed",
-          "task_stalled",
-          "task_approval_needed",
-          "task_approval_resolved",
-          "task_question_pending",
-          "session_stopped"
-        ];
-        STATUS_RENDER_ORDER = [
-          "awaiting_approval",
-          "awaiting_choice",
-          "failed",
-          "generating",
-          "pending",
-          "assigned",
-          "finalizing",
-          "idle"
-        ];
-        STATUS_ACTIONABILITY_RANK = Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i]));
-      }
-    });
-    function setAssistantRelayHooks(hooks) {
-      relayHooks = hooks ?? {};
-    }
-    async function getAssistantProjectPorts(ctx) {
-      if (factoryOverride) return factoryOverride(ctx);
-      await preloadAssistantProjectReaders();
-      return createDefaultProjectPorts(ctx);
-    }
-    function readText3(v) {
-      return typeof v === "string" ? v.trim() : "";
-    }
-    function cliInstances(ctx) {
-      return ctx.components().instanceManager.getByCategory("cli");
-    }
-    function createDefaultProjectPorts(ctx) {
-      const svc = getAssistantServices();
-      const lazy = loadMeshReaders();
-      return {
-        selfDaemonId: () => ctx.selfDaemonId,
-        localNodeFacts: () => buildLocalNodeFacts(),
-        coordinatorSessionAuthorized: (meshId, sid) => lazy.listCoordinatorsForMesh(meshId).some((e) => e.sessionId === sid),
-        listMeshes: () => svc.listMeshes(),
-        isHostedHere: (mesh) => svc.isMeshHostedHere ? svc.isMeshHostedHere(mesh) : lazy.hostedMeshes(ctx.components(), [mesh]).length > 0,
-        aliases: () => lazy.assistantAliases(),
-        coordinators: (meshId) => {
-          const components = ctx.components();
-          const started = new Map(lazy.listCoordinatorsForMesh(meshId).map((e) => [e.sessionId, e.startedAt]));
-          const settingsOf = /* @__PURE__ */ new Map();
-          const terminalIds = /* @__PURE__ */ new Set();
-          for (const inst of cliInstances(ctx)) {
-            const state2 = inst.getState?.();
-            const id4 = readText3(state2?.instanceId);
-            if (!id4) continue;
-            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) {
-              terminalIds.add(id4);
-              continue;
-            }
-            if (state2?.settings && typeof state2.settings === "object") settingsOf.set(id4, state2.settings);
-          }
-          return lazy.listLocalCoordinatorSessions(components, meshId).filter((v) => !terminalIds.has(v.sessionId)).map((v) => ({
-            sessionId: v.sessionId,
-            idle: v.idle,
-            modalParked: v.modalParked,
-            managedByAssistant: settingsOf.get(v.sessionId)?.managedByAssistant === true,
-            ...started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}
-          }));
-        },
-        isCoordinatorLive: async (sessionId) => {
-          const id4 = readText3(sessionId);
-          if (!id4) return "dead";
-          let components;
-          try {
-            components = ctx.components();
-          } catch {
-            return "live";
-          }
-          if (!components) return "live";
-          if (components.sessionRegistry?.wasInstanceTerminated?.(id4)) return "dead";
-          const byCat = typeof components.instanceManager?.getByCategory === "function" ? components.instanceManager.getByCategory("cli") : [];
-          const allInstances = Array.isArray(byCat) ? byCat : [];
-          const inst = components.instanceManager?.getInstance?.(id4) ?? allInstances.find((i) => readText3(i?.getState?.()?.instanceId) === id4);
-          if (inst) {
-            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return "dead";
-            const state2 = inst.getState?.();
-            const adapter = inst.adapter ?? (typeof inst.getAdapter === "function" ? inst.getAdapter() : void 0);
-            const runtimeMeta = (typeof adapter?.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : void 0) ?? state2?.runtime;
-            if (runtimeMeta && typeof runtimeMeta === "object" && !isLiveSessionHostRuntimeMetadata(runtimeMeta)) {
-              return "dead";
-            }
-          }
-          const sessionHostControl = components.router?.deps?.sessionHostControl ?? components.sessionHost?.control ?? components.sessionHostControl;
-          if (sessionHostControl && typeof sessionHostControl.listSessions === "function") {
-            const timedOut = /* @__PURE__ */ Symbol("session_host_liveness_timeout");
+        const out = await new Promise((resolveOut, rejectOut) => {
+          const child = (0, import_node_child_process21.spawn)("git", ["-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", "-c", "http.followRedirects=false", "-C", workspace, ...args], {
+            cwd: getConfigDir2(),
+            shell: false,
+            windowsHide: true,
+            detached: process.platform !== "win32",
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }
+          });
+          let stdout = "", stderr = "", bytes = 0;
+          let error;
+          let stopping;
+          let watchdog;
+          let closeChild;
+          const close3 = new Promise((r) => {
+            closeChild = r;
+          });
+          const waitForClose = async (ms3) => {
             let timer;
             try {
-              const records = await Promise.race([
-                Promise.resolve().then(() => sessionHostControl.listSessions()),
-                new Promise((resolve66) => {
-                  timer = setTimeout(() => resolve66(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
-                  timer.unref?.();
-                })
-              ]);
-              if (records === timedOut) return "unknown";
-              if (Array.isArray(records)) {
-                const record7 = records.find((r) => readText3(r?.sessionId ?? r?.runtimeId) === id4);
-                if (!record7 || !isLiveSessionHostRuntimeMetadata(record7)) return "dead";
-                return "live";
-              }
-              return "unknown";
-            } catch {
-              return "unknown";
+              return await Promise.race([close3.then(() => true), new Promise((r) => {
+                timer = setTimeout(() => r(false), ms3);
+              })]);
             } finally {
-              if (timer !== void 0) clearTimeout(timer);
+              if (timer) clearTimeout(timer);
             }
-          }
-          return "live";
-        },
-        lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
-        queueCounts: (meshId) => {
-          try {
-            const s2 = lazy.getMeshQueueStats(meshId);
-            return { pending: s2.pending, assigned: s2.assigned, failed: s2.failed };
-          } catch {
-            return null;
-          }
-        },
-        activeMissionCount: (meshId) => {
-          try {
-            return lazy.getMeshMissions(meshId, ["active"]).filter((m) => !isCarryOverMissionRecord(m)).length;
-          } catch {
-            return null;
-          }
-        },
-        pendingApprovals: (meshId) => {
-          let n = 0;
-          for (const inst of cliInstances(ctx)) {
-            const state2 = inst.getState?.();
-            const settings2 = state2?.settings ?? {};
-            if (readText3(settings2.meshCoordinatorFor) !== meshId && readText3(settings2.meshNodeFor) !== meshId) continue;
-            if (APPROVAL_STATUSES.has(readText3(state2?.status).toLowerCase())) n++;
-          }
-          return n;
-        },
-        relay: relayHooks,
-        execute: ctx.execute,
-        remoteHost: (mesh) => describeRemoteHost(mesh, ctx.selfDaemonId, ctx.transport ?? {}, lazy.peerHostMeshIds),
-        followedRemoteProjects: () => lazy.assistantRegistry().listFollowedRemoteProjects(),
-        followedRemoteHost: (entry) => describeFollowedRemoteHost(
-          entry,
-          ctx.selfDaemonId,
-          lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId),
-          ctx.transport ?? {}
-        ),
-        updateFollowedRemoteObservation: (key5, patch) => {
-          lazy.assistantRegistry().updateFollowedRemoteProject(key5, patch);
-        },
-        markFollowedRemoteRevoked: (key5, reason) => {
-          const code = readText3(reason) || "host_revoked";
-          lazy.assistantRegistry().updateFollowedRemoteProject(key5, {
-            state: "revoked",
-            revokedAt: Date.now(),
-            revokedReason: code,
-            lastErrorCode: code
-          });
-        },
-        verifyOwnerBinding: () => {
-          const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
-          return v.ok ? { ok: true, bindingRevision: v.receipt?.bindingRevision ?? v.binding?.bindingRevision } : { ok: false, code: v.code, error: v.error };
-        },
-        refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
-        callHost: (target4, op, args) => callRemoteHost(ctx.transport ?? {}, target4, op, args),
-        coordinatorTurns: (sessionId, limit = 5) => {
-          try {
-            const store3 = lazy.turnStore();
-            const open = store3.findOpenAttemptForSession(sessionId);
-            return {
-              open: !!open && open.scope === "plain",
-              committed: store3.listTerminalPlainAttemptsForSession(sessionId, limit).map((a) => ({ attemptId: a.attemptId, outcome: a.terminal?.outcome ?? "completed", at: a.terminal?.at ?? a.acceptedAt }))
-            };
-          } catch {
-            return { open: false, committed: [] };
-          }
-        },
-        meshStatusLine: (meshId) => {
-          try {
-            return lazy.meshStatusLine(meshId);
-          } catch {
-            return null;
-          }
-        },
-        // A2: the SAME daemon-wide `getByCategory('cli')` read the coordinator
-        // view above narrows — taken unnarrowed here on purpose.
-        liveSessionStates: () => cliInstances(ctx).map((inst) => inst.getState?.()).filter((s2) => !!s2),
-        routePreview: async (meshId, difficulty) => {
-          try {
-            const out = await ctx.execute("mesh_route_preview", { meshId, difficulty });
-            const preview = out.success ? out.preview : null;
-            return preview && typeof preview === "object" && !Array.isArray(preview) ? preview : null;
-          } catch {
-            return null;
-          }
-        }
-      };
-    }
-    async function preloadAssistantProjectReaders() {
-      if (readers) return;
-      const [hk, fwd, reg, queue, missions, registry, runtimeStore, statusLine, secrets] = await Promise.all([
-        Promise.resolve().then(() => (init_mesh_housekeeping_tick(), mesh_housekeeping_tick_exports)),
-        Promise.resolve().then(() => (init_mesh_event_forwarding(), mesh_event_forwarding_exports)),
-        Promise.resolve().then(() => (init_coordinator_registry(), coordinator_registry_exports)),
-        Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports)),
-        Promise.resolve().then(() => (init_mesh_missions(), mesh_missions_exports)),
-        Promise.resolve().then(() => (init_assistant_registry(), assistant_registry_exports)),
-        Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports)),
-        Promise.resolve().then(() => (init_mesh_notification_status_line(), mesh_notification_status_line_exports)),
-        Promise.resolve().then(() => (init_mesh_peer_secrets(), mesh_peer_secrets_exports))
-      ]);
-      readers = {
-        hostedMeshes: hk.hostedMeshes,
-        listLocalCoordinatorSessions: fwd.listLocalCoordinatorSessions,
-        listCoordinatorsForMesh: reg.listCoordinatorsForMesh,
-        getMeshQueueStats: queue.getMeshQueueStats,
-        getMeshMissions: missions.getMeshMissions,
-        assistantRegistry: () => registry.getAssistantRegistry(),
-        assistantAliases: () => registry.getAssistantRegistry().reload()?.aliases ?? {},
-        turnStore: () => runtimeStore.MeshRuntimeStore.getInstance().turnStore(),
-        meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
-        peerHostMeshIds: (hostDaemonId) => {
-          try {
-            return secrets.listPeerSecrets().filter((r) => r.role === "member" && daemonIdsEquivalent4(r.peerDaemonId, hostDaemonId)).map((r) => r.meshId);
-          } catch {
-            return [];
-          }
-        }
-      };
-    }
-    function loadMeshReaders() {
-      if (!readers) throw new Error("assistant project readers not loaded (call preloadAssistantProjectReaders first)");
-      return readers;
-    }
-    var relayHooks;
-    var SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS;
-    var factoryOverride;
-    var APPROVAL_STATUSES;
-    var readers;
-    var init_assistant_project_ports = __esm2({
-      "src/assistant/assistant-project-ports.ts"() {
-        "use strict";
-        init_node_facts();
-        init_dist();
-        init_coordinator_lifecycle();
-        init_assistant_services();
-        init_assistant_remote_host();
-        init_member_meshes();
-        relayHooks = {};
-        SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 1500;
-        factoryOverride = null;
-        APPROVAL_STATUSES = /* @__PURE__ */ new Set(["waiting_approval", "waiting_choice"]);
-        readers = null;
-      }
-    });
-    function evaluateReviewTrigger(input, rules = REVIEW_TRIGGER_RULES) {
-      if (input.reviewTurnSetting === false) return { due: false, reason: "disabled" };
-      if (input.mcpOnly) return { due: false, reason: "mcp_only" };
-      if (input.idleSince === null || !Number.isFinite(input.idleSince)) return { due: false, reason: "not_idle" };
-      if (input.now - input.idleSince < rules.minIdleMs) return { due: false, reason: "idle_too_short" };
-      if (input.modalOpen) return { due: false, reason: "modal_open" };
-      if (input.humanInputsSinceLastReview < rules.minHumanInputs) return { due: false, reason: "too_few_inputs" };
-      const reviews = input.reviewAts.filter((t) => Number.isFinite(t));
-      const last = reviews.length ? Math.max(...reviews) : null;
-      if (last !== null && input.now - last < rules.minSinceLastReviewMs) return { due: false, reason: "too_soon" };
-      const inLastDay = reviews.filter((t) => input.now - t < DAY_MS4).length;
-      if (inLastDay >= rules.maxPerDay) return { due: false, reason: "daily_cap" };
-      const q = input.quotaRemainingPct;
-      if (typeof q !== "number" || !Number.isFinite(q) || q < rules.minQuotaRemainingPct) return { due: false, reason: "low_quota" };
-      return { due: true };
-    }
-    function buildReviewInput(now) {
-      return { text: REVIEW_INPUT_TEXT, messageId: `${REVIEW_MESSAGE_ID_PREFIX}${now}`, origin: "assistant", policyMode: "queue" };
-    }
-    function reviewTurnVerbDecision(verb, reviewTurnOpen) {
-      if (!reviewTurnOpen || REVIEW_TURN_VERB_SET.has(verb)) return { allowed: true };
-      return { allowed: false, code: REVIEW_TURN_TOOL_DENIED };
-    }
-    var REVIEW_TRIGGER_RULES;
-    var DAY_MS4;
-    var REVIEW_INPUT_TEXT;
-    var REVIEW_MESSAGE_ID_PREFIX;
-    var REVIEW_TURN_TOOL_DENIED;
-    var REVIEW_TURN_VERB_SET;
-    var init_assistant_review = __esm2({
-      "src/assistant/assistant-review.ts"() {
-        "use strict";
-        init_dist();
-        REVIEW_TRIGGER_RULES = {
-          /** Assistant idle at least this long. */
-          minIdleMs: 10 * 60 * 1e3,
-          /** Human inputs since the last review. */
-          minHumanInputs: 6,
-          /** Since the last review. */
-          minSinceLastReviewMs: 2 * 60 * 60 * 1e3,
-          /** Reviews per rolling 24 h. */
-          maxPerDay: 4,
-          /** Skip below this remaining % of the assistant CLI's tightest quota window. */
-          minQuotaRemainingPct: 20
-        };
-        DAY_MS4 = 24 * 60 * 60 * 1e3;
-        REVIEW_INPUT_TEXT = '[ADHDev review] If the conversation since the last review produced rules, environment facts, user preferences or recurring procedures that the next session will need, save them with memory / skill_manage / project_note. Merge or fix entries that already exist. If there is nothing to save, reply with the single word "nothing". Do not use any other tool.';
-        REVIEW_MESSAGE_ID_PREFIX = "review:";
-        REVIEW_TURN_TOOL_DENIED = "review_turn_tool_denied";
-        REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
-      }
-    });
-    function fail3(code, error, detail = {}) {
-      return { success: false, code, error, ...detail };
-    }
-    function parse(args, write, assistant) {
-      const raw = args === void 0 ? {} : args;
-      if (!isRecord9(raw) || !hasOnlyKeys3(raw, [
-        "action",
-        "role",
-        "project",
-        "provider",
-        "model",
-        "thinkingLevel",
-        ...write ? ["expectedRevision"] : [],
-        ...assistant ? ["assistantSessionId"] : []
-      ])) return null;
-      const action2 = raw.action === void 0 && !write ? "get" : raw.action;
-      if (write ? action2 !== "set" && action2 !== "clear" : action2 !== "get" && action2 !== "check") return null;
-      if (action2 !== "get" && !isLaunchRole(raw.role) || Object.hasOwn(raw, "role") && !isLaunchRole(raw.role)) return null;
-      if (Object.hasOwn(raw, "project") && (raw.role !== "coordinator" || typeof raw.project !== "string" || !raw.project.trim() || raw.project !== raw.project.trim())) return null;
-      if (Object.hasOwn(raw, "assistantSessionId") && (typeof raw.assistantSessionId !== "string" || !raw.assistantSessionId.trim())) return null;
-      const selection = Object.fromEntries(["provider", "model", "thinkingLevel"].filter((key5) => Object.hasOwn(raw, key5)).map((key5) => [key5, raw[key5]]));
-      if (action2 === "set" || action2 === "check") {
-        if (selectionSchemaIssue(selection)) return null;
-      } else if (Object.keys(selection).length) return null;
-      if (write && (!Number.isSafeInteger(raw.expectedRevision) || raw.expectedRevision < 0)) return null;
-      return {
-        action: action2,
-        ...isLaunchRole(raw.role) ? { role: raw.role } : {},
-        ...typeof raw.project === "string" ? { project: raw.project } : {},
-        ...action2 === "set" || action2 === "check" ? { selection } : {},
-        ...write ? { expectedRevision: raw.expectedRevision } : {},
-        ...typeof raw.assistantSessionId === "string" ? { sessionId: raw.assistantSessionId } : {}
-      };
-    }
-    function diskError(stored) {
-      if (stored.status === "ok" && isLaunchDefaultsDocument(stored.document)) return null;
-      return stored.status === "missing" ? fail3("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail3(
-        "launch_default_unavailable",
-        "Launch defaults cannot be read.",
-        { reason: stored.status === "ok" ? "launch_defaults_schema_invalid" : stored.reason }
-      );
-    }
-    function projectState(ports, ref2) {
-      if (!ports.projects) return { ok: false, code: "project_storage_unavailable" };
-      const read2 = ports.projects.read(ref2);
-      if (!read2.ok) return read2;
-      const state2 = read2.state;
-      if (!isRecord9(state2) || typeof state2.projectId !== "string" || !state2.projectId.trim() || !Number.isSafeInteger(state2.revision) || state2.revision < 0 || state2.entry !== null && (!isRecord9(state2.entry) || state2.entry.revision !== state2.revision || !isLaunchDefaultsDocument({ version: 1, revision: state2.revision, coordinator: state2.entry, history: [] }))) {
-        return { ok: false, code: "project_storage_unavailable" };
-      }
-      return read2;
-    }
-    function previousRestriction(ports, previous) {
-      const live = ports.currentAssistantToolRestriction?.();
-      const prior = previous ? ports.validation.getProvider(ports.validation.resolveAlias(previous.provider))?.assistant.toolRestriction : void 0;
-      return live === "enforced" || prior === "enforced" ? "enforced" : live ?? prior;
-    }
-    function persistenceFailure(result) {
-      return fail3(result.code, result.reason, {
-        reason: result.reason,
-        committed: result.committed,
-        ...result.actualRevision !== void 0 ? { actualRevision: result.actualRevision } : {},
-        ...result.document ? { documentRevision: result.document.revision } : {},
-        ...result.validation ? result.validation.issue : {}
-      });
-    }
-    function createLaunchDefaultsHandlers(ports) {
-      const run4 = async (args, write2, assistant) => {
-        const input = parse(args, write2, assistant);
-        if (!input) return fail3("invalid_args", "Invalid launch defaults request.");
-        let origin = "owner";
-        if (assistant) {
-          const authority = ports.assistantContext?.(input.sessionId);
-          if (authority?.reviewTurnOpen || authority?.origin === "review") {
-            return fail3("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
-          }
-          origin = authority?.origin === "human" || authority?.origin === "review_tainted" ? authority.origin : "relay";
-        }
-        const stored = ports.store.read();
-        const unavailable3 = diskError(stored);
-        if (unavailable3 && !(stored.status === "missing" && !input.project && (input.action === "get" || write2 || input.action === "check"))) return unavailable3;
-        let project;
-        if (input.project) {
-          const read3 = projectState(ports, input.project);
-          if (!read3.ok) return fail3(read3.code, read3.code);
-          project = read3.state;
-        }
-        if (input.action === "get") {
-          const roles = {};
-          for (const role2 of input.role ? [input.role] : ["assistant", "coordinator"]) {
-            const effective = resolveLaunchSelection({
-              role: role2,
-              stored,
-              ...project?.entry ? { hostCoordinatorLaunch: {
-                projectId: project.projectId,
-                revision: project.revision,
-                selection: pickSelection(project.entry)
-              } } : {}
-            }, ports.validation);
-            roles[role2] = { stored: stored.status === "ok" ? stored.document[role2] ?? null : null, effective };
-          }
-          return {
-            success: true,
-            result: "get",
-            documentRevision: stored.status === "ok" ? stored.document.revision : 0,
-            roles,
-            ...project ? { project } : {}
           };
-        }
-        const role = input.role;
-        const previous = project ? project.entry : stored.status === "ok" ? stored.document[role] ?? null : null;
-        const restriction = role === "assistant" && input.selection && (assistant || input.action === "check") ? previousRestriction(ports, previous) : void 0;
-        let selection = null;
-        let warnings = [];
-        let lowersToolLock = false;
-        if (input.selection) {
-          const validated = validateLaunchDefault(role, input.selection, ports.validation, restriction);
-          if (!validated.ok) return fail3("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
-          selection = validated.selection;
-          warnings = validated.warnings;
-          lowersToolLock = validated.lowersToolLock;
-          if (input.action === "check") return {
-            success: true,
-            result: "check",
-            role,
-            selection,
-            warnings,
-            toolRestriction: validated.toolRestriction,
-            lowersToolLock
-          };
-        }
-        const revision = project?.revision ?? (stored.status === "ok" ? stored.document.revision : 0);
-        if (input.expectedRevision !== revision) return fail3("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
-        const providerChange = assistant && role === "assistant" && selection !== null && (!previous || ports.validation.resolveAlias(previous.provider) !== selection.provider);
-        if (assistant && (mustStage(origin) || providerChange && lowersToolLock)) {
-          if (!ports.stage) return fail3("staging_unavailable", "Owner Inbox staging is unavailable.");
-          let stagedId;
-          try {
-            stagedId = ports.stage({
-              kind: "launch_defaults",
-              role,
-              selection,
-              previous,
-              expectedRevision: revision,
-              origin,
-              ...project ? { project: project.projectId } : {},
-              ...input.sessionId ? { callerSessionId: input.sessionId } : {}
-            });
-          } catch {
-            return fail3("staging_failed", "Could not stage launch defaults.");
-          }
-          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail3("staging_failed", "Invalid owner Inbox proposal identifier.");
-          return {
-            success: true,
-            result: "staged",
-            role,
-            stagedId,
-            previous,
-            selection,
-            expectedRevision: revision,
-            warnings,
-            note: NEXT_LAUNCH
-          };
-        }
-        if (project) {
-          const projectId = project.projectId;
-          return ports.projects.withWriteLock(() => {
-            const fresh = projectState(ports, projectId);
-            if (!fresh.ok) return fail3(fresh.code, fresh.code);
-            if (fresh.state.projectId !== projectId) return fail3("project_storage_unavailable", "Host project identity changed.");
-            if (fresh.state.revision !== input.expectedRevision) return fail3("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
-            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail3("store_unavailable", "Project revision exhausted.");
-            if (selection) {
-              const checked = validateLaunchDefault(role, selection, ports.validation);
-              if (!checked.ok) return fail3("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
-              warnings = checked.warnings;
+          const signalGroup = (signal) => {
+            if (!child.pid) return;
+            try {
+              process.kill(-child.pid, signal);
+            } catch (e) {
+              if (e?.code !== "ESRCH") throw e;
             }
-            const nextRevision = fresh.state.revision + 1;
-            const entry = selection ? {
-              ...selection,
-              revision: nextRevision,
-              setBy: assistant ? "assistant" : "owner",
-              setAt: Date.now()
-            } : null;
-            const outcome = ports.projects.replace({ projectId, revision: nextRevision, entry });
-            if (!outcome.ok) return fail3("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
-            return {
-              success: true,
-              result: "applied",
-              role,
-              scope: "project",
-              projectId,
-              entry,
-              previous: fresh.state.entry,
-              revision: nextRevision,
-              warnings,
-              durable: true,
-              note: NEXT_LAUNCH
-            };
-          });
-        }
-        const result = ports.store.write({
-          role,
-          selection,
-          expectedRevision: input.expectedRevision,
-          by: assistant ? "assistant" : "owner",
-          origin,
-          previousToolRestriction: restriction
-        });
-        if (!result.ok) return persistenceFailure(result);
-        return {
-          success: true,
-          result: "applied",
-          role,
-          scope: "global",
-          entry: result.document[role] ?? null,
-          previous: result.previous,
-          revision: result.document.revision,
-          warnings: result.warnings,
-          durable: result.durable,
-          note: NEXT_LAUNCH
-        };
-      };
-      const guarded = async (args, write2, assistant) => {
-        try {
-          return await run4(args, write2, assistant);
-        } catch (error) {
-          if (error instanceof MeshConfigStrictLockError) return fail3(error.code, error.message, {
-            committed: false,
-            ...error.lockPath ? { reason: `${error.code === "store_busy" ? "write_lock_held" : "write_lock_unavailable"}: ${error.lockPath}` } : {}
-          });
-          if (error instanceof LaunchDefaultsCatalogError) return fail3("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
-          return fail3("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
-        }
-      };
-      const read2 = (args, assistant) => guarded(args, false, assistant);
-      const write = (args, assistant) => guarded(args, true, assistant);
-      return {
-        launch_defaults_get: (_context, args) => read2(args, false),
-        launch_defaults_set: (_context, args) => write(args, false),
-        assistant_launch_defaults: (_context, args) => read2(args, true),
-        assistant_launch_defaults_set: (_context, args) => write(args, true)
-      };
-    }
-    function pickSelection(entry) {
-      return {
-        provider: entry.provider,
-        ...entry.model !== void 0 ? { model: entry.model } : {},
-        ...entry.thinkingLevel !== void 0 ? { thinkingLevel: entry.thinkingLevel } : {}
-      };
-    }
-    function productionHandler(name) {
-      return async (ctx, args) => ({ ...await createLaunchDefaultsHandlers(getLaunchDefaultsCommandPorts(ctx))[name](ctx, args) });
-    }
-    var launchDefaultsCommandSources;
-    var NEXT_LAUNCH;
-    var launchDefaultsSpecs;
-    var init_launch_defaults2 = __esm2({
-      "src/commands/high-family/launch-defaults.ts"() {
-        "use strict";
-        init_store_guards();
-        init_command_registry();
-        init_mesh_config_store();
-        init_ports();
-        init_launch_defaults();
-        launchDefaultsCommandSources = {
-          launch_defaults_get: COMMAND_SOURCES,
-          launch_defaults_set: ["p2p", "ws", "standalone"],
-          assistant_launch_defaults: ["ipc", "standalone"],
-          assistant_launch_defaults_set: ["ipc", "standalone"]
-        };
-        NEXT_LAUNCH = "Applies to the next launch; running sessions are unchanged.";
-        launchDefaultsSpecs = defineCommandSpecs("high", {
-          launch_defaults_get: productionHandler("launch_defaults_get"),
-          launch_defaults_set: productionHandler("launch_defaults_set"),
-          assistant_launch_defaults: productionHandler("assistant_launch_defaults"),
-          assistant_launch_defaults_set: productionHandler("assistant_launch_defaults_set")
-        }, {
-          launch_defaults_get: { sources: launchDefaultsCommandSources.launch_defaults_get, meshSender: "authenticated_peer" },
-          launch_defaults_set: { sources: launchDefaultsCommandSources.launch_defaults_set, invalidates: ["daemon.metadata"] },
-          assistant_launch_defaults: { sources: launchDefaultsCommandSources.assistant_launch_defaults },
-          assistant_launch_defaults_set: { sources: launchDefaultsCommandSources.assistant_launch_defaults_set, invalidates: ["daemon.metadata"] }
-        }, { stripTransportMetadata: true });
-      }
-    });
-    async function projectPortsFor(ctx) {
-      return getAssistantProjectPorts({
-        components: ctx.components,
-        execute: (cmd, args) => ctx.execute(cmd, args, "ipc", { inProcess: true }),
-        selfDaemonId: str11(ctx.deps?.statusInstanceId),
-        transport: {
-          ...ctx.deps?.dispatchMeshCommand ? { dispatch: ctx.deps.dispatchMeshCommand } : {},
-          ...ctx.deps?.getMeshPeerConnectionStatus ? { peerStatus: ctx.deps.getMeshPeerConnectionStatus } : {}
-        }
-      });
-    }
-    function noteTextRefusal(text4) {
-      if (!text4) return null;
-      if (detectCredential(text4)) return { result: "note_secret_rejected" };
-      const f = scanWriteContent(text4);
-      if (!f) return null;
-      return { result: f.kind === "hidden_chars" ? "note_hidden_chars_rejected" : "note_injection_rejected", pattern: f.pattern };
-    }
-    function creditReview(svc, reviewTurnId, result, kind) {
-      if (!reviewTurnId || result !== "applied") return;
-      try {
-        svc.reviewMetrics?.creditReviewWrite(reviewTurnId, kind, Date.now());
-      } catch {
-      }
-    }
-    function str11(v) {
-      return typeof v === "string" ? v.trim() : "";
-    }
-    function rawStr(v) {
-      return typeof v === "string" ? v : void 0;
-    }
-    function respond(outcome, extra = {}) {
-      const success = OK_RESULTS.has(outcome.result);
-      return { success, ...success ? {} : { code: outcome.result }, ...extra, ...outcome };
-    }
-    function invalidArgs(error) {
-      return { success: false, code: "invalid_args", error };
-    }
-    function readAssistantSessionId(args) {
-      return str11(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG2]);
-    }
-    function assistantToolGate(verb, args, svc = getAssistantServices()) {
-      const sid = readAssistantSessionId(args);
-      const decision = reviewTurnVerbDecision(verb, !!sid && svc.inputLog.isReviewTurnOpen(sid));
-      if (decision.allowed) return null;
-      return { success: false, code: decision.code, error: `${verb} is not available during the review turn` };
-    }
-    async function resolveNoteProject(ctx, svc, ref2) {
-      const r = resolveAssistantProject(ref2, svc.listMeshes());
-      if (!r.ok) {
-        const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
-        return { ok: false, result: { success: false, code: r.code, error: r.code, ...detail } };
-      }
-      let hosted;
-      if (svc.isMeshHostedHere) {
-        hosted = svc.isMeshHostedHere(r.mesh);
-      } else {
-        try {
-          const components = ctx.components();
-          const { hostedMeshes: hostedMeshes2 } = await Promise.resolve().then(() => (init_mesh_housekeeping_tick(), mesh_housekeeping_tick_exports));
-          hosted = hostedMeshes2(components, [r.mesh]).length > 0;
-        } catch (e) {
-          if (isDaemonComponentsNotReady(e)) return { ok: false, result: componentsNotReadyResult(e) };
-          throw e;
-        }
-      }
-      if (!hosted) {
-        try {
-          const ports = await projectPortsFor(ctx);
-          return { ok: true, mesh: r.mesh, slug: r.slug, remote: { host: ports.remoteHost(r.mesh), ports } };
-        } catch (e) {
-          if (isDaemonComponentsNotReady(e)) return { ok: false, result: componentsNotReadyResult(e) };
-          throw e;
-        }
-      }
-      return { ok: true, mesh: r.mesh, slug: r.slug };
-    }
-    async function applyRemoteNote(project, op, origin, callerSessionId) {
-      const remote = project.remote;
-      const out = remote.host.reachable ? await remote.ports.callHost(remote.host, "note", { ...op, origin, ...callerSessionId ? { callerSessionId } : {} }) : { ok: false, kind: "unreachable", code: "project_unreachable", reason: remote.host.reason ?? "relay_failed", error: "host unreachable" };
-      if (out.ok) {
-        const r = out.result;
-        return {
-          result: typeof r.result === "string" ? r.result : "applied",
-          ...typeof r.noteId === "string" ? { noteId: r.noteId } : {},
-          ...typeof r.id === "string" ? { id: r.id } : {},
-          ...typeof r.matched === "number" ? { matched: r.matched } : {},
-          ...typeof r.count === "number" ? { count: r.count } : {},
-          ...Array.isArray(r.notes) ? { notes: r.notes } : {},
-          ...r.note && typeof r.note === "object" ? { note: r.note } : {},
-          ...typeof r.text === "string" ? { text: r.text } : {},
-          ...typeof r.scope === "string" ? { scope: r.scope } : {},
-          ...typeof r.pinned === "boolean" ? { pinned: r.pinned } : {},
-          ...r.category !== void 0 ? { category: r.category } : {},
-          ...typeof r.createdAt === "string" ? { createdAt: r.createdAt } : {},
-          ...typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {},
-          ...typeof r.expired === "boolean" ? { expired: r.expired } : {},
-          host: remote.host.label,
-          via: "relay"
-        };
-      }
-      if (out.kind === "unreachable") return { result: "project_unreachable", reason: out.reason, host: remote.host.label, error: out.error };
-      return { result: out.code, host: remote.host.label, error: out.error };
-    }
-    function parseNoteOp(args) {
-      const action2 = str11(args?.action);
-      const text4 = str11(args?.text);
-      if (action2 === "record") {
-        if (!text4) return "text required for record";
-        const category = str11(args?.category);
-        if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
-          return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
-        }
-        return { action: action2, text: text4, ...category ? { category } : {} };
-      }
-      if (action2 === "forget") {
-        const noteId = str11(args?.note_id) || str11(args?.noteId);
-        if (!noteId && !text4) return "note_id or text required for forget";
-        return { action: action2, ...noteId ? { noteId } : {}, ...text4 ? { text: text4 } : {} };
-      }
-      if (action2 === "list") {
-        return { action: action2 };
-      }
-      if (action2 === "read") {
-        const noteId = str11(args?.note_id) || str11(args?.noteId);
-        if (!noteId) return "note_id required for read";
-        return { action: action2, noteId };
-      }
-      return "action must be record, forget, list or read";
-    }
-    async function applyNote(svc, meshId, op, origin, callerSessionId) {
-      if (op.action === "record") {
-        const entry2 = await svc.operatingNotes.record(meshId, {
-          text: op.text,
-          ...op.category ? { category: op.category } : {},
-          sourceCoordinator: origin === "owner" ? "assistant:owner" : "assistant",
-          ...callerSessionId ? { callerSessionId } : {}
-        });
-        return { result: "applied", noteId: entry2.id };
-      }
-      if (op.action === "forget") {
-        const r = await svc.operatingNotes.forget(meshId, { ...op.noteId ? { noteId: op.noteId } : {}, ...op.text ? { text: op.text } : {}, reason: "assistant" });
-        return { result: "applied", matched: r.matched };
-      }
-      const {
-        readOperatingNotes: readOperatingNotes2,
-        readOperatingNoteById: readOperatingNoteById2,
-        resolveNoteExpiry: resolveNoteExpiry2,
-        previewOperatingNoteText: previewOperatingNoteText2,
-        resolveOperatingNoteScope: resolveOperatingNoteScope2
-      } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
-      const nowMs2 = Date.now();
-      if (op.action === "list") {
-        const entries2 = svc.operatingNotes.list ? await svc.operatingNotes.list(meshId, { tail: 100 }) : readOperatingNotes2(meshId, { tail: 100 });
-        const notes = entries2.map((e) => {
-          const p2 = e.payload || {};
-          const text5 = typeof p2.text === "string" ? p2.text : "";
-          const createdAt2 = typeof p2.createdAt === "string" ? p2.createdAt : e.timestamp;
-          const pinned2 = p2.pinned === true;
-          const category2 = typeof p2.category === "string" ? p2.category : void 0;
-          const sourceCoordinator2 = typeof p2.sourceCoordinator === "string" ? p2.sourceCoordinator : void 0;
-          const explicitExpiry2 = typeof p2.expiresAt === "string" ? p2.expiresAt : void 0;
-          const lifetime2 = resolveNoteExpiry2({ category: category2, pinned: pinned2, createdAt: createdAt2, ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {} }, nowMs2);
-          const { preview, truncated } = previewOperatingNoteText2(text5);
-          const scope2 = resolveOperatingNoteScope2({ pinned: pinned2, sourceCoordinator: sourceCoordinator2 }, "project");
-          return {
-            id: e.id,
-            noteId: e.id,
-            scope: scope2,
-            pinned: pinned2,
-            category: category2 ?? null,
-            createdAt: createdAt2,
-            updatedAt: createdAt2,
-            preview,
-            truncated,
-            expired: lifetime2.expired,
-            ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {},
-            ...lifetime2.effectiveExpiresAt ? { effectiveExpiresAt: lifetime2.effectiveExpiresAt } : {},
-            ...typeof p2.subjectKey === "string" ? { subjectKey: p2.subjectKey } : {},
-            ...sourceCoordinator2 ? { sourceCoordinator: sourceCoordinator2 } : {}
           };
-        });
-        return { result: "list", count: notes.length, notes };
-      }
-      const entry = svc.operatingNotes.read ? await svc.operatingNotes.read(meshId, op.noteId) : readOperatingNoteById2(meshId, op.noteId);
-      if (!entry) {
-        return {
-          result: "note_not_found",
-          noteId: op.noteId,
-          error: `No live operating note matched note_id '${op.noteId}'.`
-        };
-      }
-      const p = entry.payload || {};
-      const text4 = typeof p.text === "string" ? p.text : "";
-      const createdAt = typeof p.createdAt === "string" ? p.createdAt : entry.timestamp;
-      const pinned = p.pinned === true;
-      const category = typeof p.category === "string" ? p.category : void 0;
-      const sourceCoordinator = typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0;
-      const explicitExpiry = typeof p.expiresAt === "string" ? p.expiresAt : void 0;
-      const lifetime = resolveNoteExpiry2({ category, pinned, createdAt, ...explicitExpiry ? { expiresAt: explicitExpiry } : {} }, nowMs2);
-      const scope = resolveOperatingNoteScope2({ pinned, sourceCoordinator }, "project");
-      const detail = {
-        id: entry.id,
-        noteId: entry.id,
-        scope,
-        text: text4,
-        pinned,
-        category: category ?? null,
-        createdAt,
-        updatedAt: createdAt,
-        expired: lifetime.expired,
-        ...explicitExpiry ? { expiresAt: explicitExpiry } : {},
-        ...lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {},
-        ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {},
-        ...typeof p.supersedes === "string" ? { supersedes: p.supersedes } : {},
-        ...sourceCoordinator ? { sourceCoordinator } : {}
-      };
-      return {
-        result: "ok",
-        ...detail,
-        note: detail
-      };
-    }
-    function parseMemoryOp(args) {
-      const action2 = str11(args?.action);
-      const target4 = str11(args?.target);
-      if (target4 !== "memory" && target4 !== "user") return "target must be memory or user";
-      const text4 = rawStr(args?.text);
-      const match = rawStr(args?.match);
-      if (action2 === "add") return { action: action2, target: target4, content: text4 ?? "" };
-      if (action2 === "replace") return { action: action2, target: target4, match: match ?? "", content: text4 ?? "" };
-      if (action2 === "remove") return { action: action2, target: target4, match: match ?? "" };
-      return "action must be add, replace or remove";
-    }
-    function parseSkillOp(args) {
-      const action2 = str11(args?.action);
-      const name = str11(args?.name);
-      if (action2 === "create") {
-        const project = str11(args?.project);
-        return { action: action2, name, description: rawStr(args?.description) ?? "", body: rawStr(args?.body) ?? "", ...project ? { project } : {} };
-      }
-      if (action2 === "patch") {
-        const op = { action: action2, name };
-        for (const k of ["old", "new", "file", "description"]) {
-          const v = rawStr(args?.[k]);
-          if (v !== void 0) op[k] = v;
-        }
-        return op;
-      }
-      if (action2 === "archive") return { action: action2, name };
-      return "action must be create, patch or archive";
-    }
-    async function resolveStagedOne(ctx, svc, id4, decision) {
-      if (id4.startsWith("ldf-")) {
-        if (!svc.launchDefaults) return { success: false, code: "staging_unavailable" };
-        return svc.launchDefaults.resolve(id4, decision, async (proposal, documentRevision) => {
-          const ports = getLaunchDefaultsCommandPorts(ctx);
-          if (proposal.project) {
-            const stored = ports.store.read();
-            if (stored.status !== "ok") return {
-              success: false,
-              code: "launch_default_unavailable",
-              error: "Global launch-default setup cannot be read."
-            };
-            if (stored.document.revision !== documentRevision) return {
-              success: false,
-              code: "revision_conflict",
-              error: "Global launch-default generation changed.",
-              actualRevision: stored.document.revision,
-              committed: false
-            };
-          }
-          return createLaunchDefaultsHandlers(ports).launch_defaults_set(ctx, {
-            action: proposal.selection === null ? "clear" : "set",
-            role: proposal.role,
-            expectedRevision: proposal.expectedRevision,
-            ...proposal.project ? { project: proposal.project } : {},
-            ...proposal.selection
-          });
-        });
-      }
-      if (id4.startsWith("driver-activation-")) {
-        if (!svc.driverStaging || !svc.driverActivations) return { success: false, code: "staging_unavailable" };
-        return svc.driverStaging.resolve(
-          id4,
-          decision,
-          svc.driverActivations,
-          (type2) => readInstalledDriver(ctx.deps.providerLoader, type2)
-        );
-      }
-      if (id4.startsWith("mem-")) {
-        const reviewTurnId = decision === "apply" ? svc.memory.listStaged().find((r) => r.id === id4)?.reviewTurnId : void 0;
-        const out = svc.memory.resolveStaged(id4, decision);
-        creditReview(svc, reviewTurnId, out.result, "approved");
-        return respond(out);
-      }
-      if (id4.startsWith("skl-")) {
-        const reviewTurnId = decision === "apply" ? svc.skills.listStaged().find((r) => r.id === id4)?.reviewTurnId : void 0;
-        const out = svc.skills.resolveStaged(id4, decision);
-        creditReview(svc, reviewTurnId, out.result, "approved");
-        return respond(out);
-      }
-      if (id4.startsWith("note-")) return resolveStagedNote(ctx, svc, id4, decision);
-      return respond({ result: "staged_not_found" });
-    }
-    async function resolveReviewBatch(ctx, svc, reviewTurnId, decision) {
-      const ids = [
-        ...svc.memory.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
-        ...svc.skills.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
-        ...svc.notes.list().filter((r) => r.reviewTurnId === reviewTurnId)
-      ].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((r) => r.id);
-      if (!ids.length) return respond({ result: "staged_not_found" }, { reviewTurnId });
-      const results = [];
-      for (const id4 of ids) {
-        const r = await resolveStagedOne(ctx, svc, id4, decision);
-        results.push({ id: id4, ...r });
-      }
-      const failed = results.filter((r) => r.success !== true).length;
-      return {
-        success: failed === 0,
-        ...failed ? { code: "staged_batch_partial" } : {},
-        result: failed ? "staged_batch_partial" : decision === "apply" ? "applied" : "discarded",
-        reviewTurnId,
-        resolved: results.length - failed,
-        failed,
-        results
-      };
-    }
-    async function resolveStagedNote(ctx, svc, id4, decision) {
-      const rec5 = svc.notes.read(id4);
-      if (!rec5) return respond({ result: "staged_not_found" });
-      if (decision === "discard") {
-        svc.notes.remove(id4);
-        return respond({ result: "discarded" });
-      }
-      const project = await resolveNoteProject(ctx, svc, rec5.meshId);
-      if (!project.ok) return project.result;
-      const wrap2 = { project: project.slug, meshId: project.mesh.id };
-      const refusal2 = noteTextRefusal(rec5.op.text);
-      if (refusal2) return respond(refusal2, wrap2);
-      if (project.remote) {
-        const remote = await applyRemoteNote(project, rec5.op, "owner", rec5.callerSessionId);
-        if (remote.result !== "applied") return respond(remote, wrap2);
-        svc.notes.remove(id4);
-        creditReview(svc, rec5.reviewTurnId, remote.result, "approved");
-        return respond(remote, wrap2);
-      }
-      const applied = await applyNote(svc, rec5.meshId, rec5.op, "owner", rec5.callerSessionId);
-      svc.notes.remove(id4);
-      creditReview(svc, rec5.reviewTurnId, applied.result, "approved");
-      return respond(applied, wrap2);
-    }
-    function applyMemoryLimitsUpdate(svc, args) {
-      const hasMemory = args !== null && typeof args === "object" && args.memory !== void 0;
-      const hasUser = args !== null && typeof args === "object" && args.user !== void 0;
-      if (!hasMemory && !hasUser) {
-        return invalidArgs("memory or user limit required");
-      }
-      if (hasMemory && (typeof args.memory !== "number" || !Number.isFinite(args.memory))) {
-        return invalidArgs("memory limit must be a finite number");
-      }
-      if (hasUser && (typeof args.user !== "number" || !Number.isFinite(args.user))) {
-        return invalidArgs("user limit must be a finite number");
-      }
-      const patch = {
-        ...hasMemory ? { memory: Math.round(args.memory) } : {},
-        ...hasUser ? { user: Math.round(args.user) } : {}
-      };
-      const rangeErr = svc.memory.validateBudgets(patch);
-      if (rangeErr) {
-        return {
-          success: false,
-          ...rangeErr
-        };
-      }
-      svc.memory.setBudgets(patch);
-      try {
-        getAssistantRegistry().reload();
-      } catch {
-      }
-      const status = svc.memory.status();
-      return { success: true, result: "applied", limits: status.budgets, ...status };
-    }
-    var ASSISTANT_TOOL_SOURCES;
-    var ASSISTANT_OWNER_SOURCES;
-    var ASSISTANT_MEMORY_LIMITS_COMMAND;
-    var OK_RESULTS;
-    var assistantStoreHandlers;
-    var assistantStoreSpecs;
-    var init_assistant_store = __esm2({
-      "src/commands/high-family/assistant-store.ts"() {
-        "use strict";
-        init_drivers();
-        init_command_args();
-        init_dist();
-        init_command_registry();
-        init_daemon_components_port();
-        init_assistant_services();
-        init_assistant_project_ports();
-        init_assistant_review();
-        init_assistant_projects();
-        init_note_staging();
-        init_store_guards();
-        init_hermes_import();
-        init_assistant_registry();
-        init_launch_defaults2();
-        init_installed_driver();
-        init_ports();
-        ASSISTANT_TOOL_SOURCES = ["ipc", "standalone"];
-        ASSISTANT_OWNER_SOURCES = ["p2p", "ws", "standalone"];
-        ASSISTANT_MEMORY_LIMITS_COMMAND = "assistant_memory_limits";
-        OK_RESULTS = /* @__PURE__ */ new Set(["applied", "staged", "memory_duplicate", "ok", "list", "discarded"]);
-        assistantStoreHandlers = {
-          [ASSISTANT_VERB2.memory]: async (_ctx, args) => {
-            const svc = getAssistantServices();
-            const gate = assistantToolGate(ASSISTANT_VERB2.memory, args, svc);
-            if (gate) return gate;
-            const op = parseMemoryOp(args);
-            if (typeof op === "string") return invalidArgs(op);
-            const w = svc.inputLog.writeContext(readAssistantSessionId(args));
-            const out = svc.memory.apply(op, w.origin, { reviewTurnId: w.reviewTurnId });
-            creditReview(svc, w.reviewTurnId, out.result, "applied");
-            return respond(out);
-          },
-          [ASSISTANT_VERB2.skillView]: async (_ctx, args) => {
-            const svc = getAssistantServices();
-            const gate = assistantToolGate(ASSISTANT_VERB2.skillView, args, svc);
-            if (gate) return gate;
-            const name = str11(args?.name);
-            if (!name) return invalidArgs("name required");
-            const file = rawStr(args?.file);
-            return respond(svc.skills.view(name, file !== void 0 ? { file } : {}));
-          },
-          [ASSISTANT_VERB2.skillManage]: async (_ctx, args) => {
-            const svc = getAssistantServices();
-            const gate = assistantToolGate(ASSISTANT_VERB2.skillManage, args, svc);
-            if (gate) return gate;
-            const op = parseSkillOp(args);
-            if (typeof op === "string") return invalidArgs(op);
-            const w = svc.inputLog.writeContext(readAssistantSessionId(args));
-            const out = svc.skills.manage(op, w.origin, { sessionId: w.sessionId, turnId: w.turnId, ...w.reviewTurnId ? { reviewTurnId: w.reviewTurnId } : {} });
-            creditReview(svc, w.reviewTurnId, out.result, "applied");
-            return respond(out);
-          },
-          [ASSISTANT_VERB2.projectNote]: async (ctx, args) => {
-            const svc = getAssistantServices();
-            const gate = assistantToolGate(ASSISTANT_VERB2.projectNote, args, svc);
-            if (gate) return gate;
-            const op = parseNoteOp(args);
-            if (typeof op === "string") return invalidArgs(op);
-            const project = await resolveNoteProject(ctx, svc, args?.project);
-            if (!project.ok) return project.result;
-            const wrap2 = { project: project.slug, meshId: project.mesh.id };
-            const sid = readAssistantSessionId(args);
-            if (op.action === "list" || op.action === "read") {
-              if (project.remote) return respond(await applyRemoteNote(project, op, "human", sid || void 0), wrap2);
-              return respond(await applyNote(svc, project.mesh.id, op, "human", sid || void 0), wrap2);
-            }
-            const refusal2 = noteTextRefusal(op.text);
-            if (refusal2) return respond(refusal2, wrap2);
-            const { origin, reviewTurnId } = svc.inputLog.writeContext(sid);
-            if (mustStage(origin) || isReviewOrigin(origin)) {
-              const stagedId = svc.notes.write({
-                origin,
-                meshId: project.mesh.id,
-                project: project.slug,
-                ...sid ? { callerSessionId: sid } : {},
-                op,
-                ...reviewTurnId ? { reviewTurnId } : {}
-              });
-              return respond({ result: "staged", stagedId }, wrap2);
-            }
-            if (project.remote) return respond(await applyRemoteNote(project, op, origin === "owner" ? "owner" : "human", sid || void 0), wrap2);
-            return respond(await applyNote(svc, project.mesh.id, op, origin, sid || void 0), wrap2);
-          },
-          // ── owner verbs ─────────────────────────────────────────────────────────
-          [ASSISTANT_VERB2.stagedResolve]: async (ctx, args) => {
-            const svc = getAssistantServices();
-            const action2 = str11(args?.action) || "resolve";
-            if (action2 === "list") {
-              let driverActions = [];
-              if (typeof ctx.deps?.providerLoader?.getByCategory === "function") {
-                const drivers = getDriverService(ctx);
-                await drivers.list().catch(() => {
+          const terminate = async () => {
+            try {
+              if (process.platform === "win32" && child.pid) {
+                await new Promise((done, fail9) => {
+                  const deadline = setTimeout(() => fail9(new Error("Tree termination unconfirmed")), 5e3);
+                  (0, import_node_child_process21.execFile)("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5e3 }, (err) => {
+                    clearTimeout(deadline);
+                    if (err) fail9(err);
+                    else done();
+                  });
                 });
-                driverActions = drivers.stagedActions();
+              } else {
+                signalGroup("SIGTERM");
+                await waitForClose(2e3);
+                signalGroup("SIGKILL");
               }
-              return {
-                success: true,
-                memory: svc.memory.listStaged(),
-                skills: svc.skills.listStaged(),
-                notes: svc.notes.list(),
-                launchDefaults: svc.launchDefaults?.list() ?? [],
-                driverActivations: svc.driverStaging?.list() ?? [],
-                driverActions,
-                memoryStatus: svc.memory.status()
-              };
+              if (!await waitForClose(5e3)) throw new Error("Child close not confirmed");
+            } catch {
+              throw new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "Process termination could not be confirmed. Preserve the checkout and lock; inspect the selected daemon locally.", true);
             }
-            if (action2 !== "resolve") return invalidArgs("action must be list or resolve");
-            const id4 = str11(args?.id);
-            const reviewTurnId = str11(args?.reviewTurnId);
-            const decision = str11(args?.decision);
-            if (!id4 && !reviewTurnId) return invalidArgs("id or reviewTurnId required");
-            if (id4 && reviewTurnId) return invalidArgs("pass id or reviewTurnId, not both");
-            if (id4.startsWith("ldf-")) {
-              if (Object.keys(args ?? {}).some((key5) => !["action", "id", "decision", "_interactionId", "_meshSenderDaemonId", "_commandSource"].includes(key5))) {
-                return invalidArgs("Launch-default resolution accepts only id and decision.");
-              }
-              if (decision !== "apply" && decision !== "discard" && decision !== "reject") return invalidArgs("decision must be apply, discard or reject");
-              return resolveStagedOne(ctx, svc, id4, decision === "reject" ? "discard" : decision);
+          };
+          const stop = (reason) => {
+            if (stopping) return;
+            error = reason;
+            clearTimeout(wall);
+            if (watchdog) clearTimeout(watchdog);
+            stopping = terminate();
+            void stopping.then(() => rejectOut(error), rejectOut);
+          };
+          const wall = setTimeout(() => stop({ killed: true }), timeout);
+          const armWatchdog = () => {
+            if (!isClone || stopping) return;
+            if (watchdog) clearTimeout(watchdog);
+            watchdog = setTimeout(() => stop({ killed: true }), REMOTE_GIT_CLONE_WATCHDOG_MS);
+          };
+          const collect = (stream, chunk) => {
+            if (stopping) return;
+            bytes += Buffer.byteLength(chunk);
+            if (bytes > 1024 * 1024) {
+              stop({ code: "ENOBUFS" });
+              return;
             }
-            if (decision !== "apply" && decision !== "discard") return invalidArgs("decision must be apply or discard");
-            if (id4.startsWith("driver-action-")) {
-              const source2 = readCommandSource(args);
-              if (source2 !== "p2p" && source2 !== "ws" && source2 !== "standalone") return { success: false, code: "COMMAND_SOURCE_REJECTED" };
-              return getDriverService(ctx).resolveAction(id4, decision, source2);
+            if (stream === "stdout") stdout += chunk.toString();
+            else stderr += chunk.toString();
+            armWatchdog();
+          };
+          child.stdout.on("data", (chunk) => collect("stdout", chunk));
+          child.stderr.on("data", (chunk) => collect("stderr", chunk));
+          child.once("error", (e) => {
+            error = e;
+          });
+          child.once("close", (code) => {
+            closeChild();
+            clearTimeout(wall);
+            if (watchdog) clearTimeout(watchdog);
+            if (stopping) return;
+            if (error || code !== 0) rejectOut(error ?? { code, stderr });
+            else resolveOut(stdout);
+          });
+          armWatchdog();
+        });
+        return out.trim();
+      } catch (e) {
+        if (e instanceof AttachFailure) throw e;
+        if (e?.code === "ENOENT") throw new AttachFailure("GIT_UNAVAILABLE", "repository_access", "Install Git on the selected daemon, then explicitly retry.");
+        if (e?.code === "ENOBUFS" || e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw new AttachFailure("ENOBUFS", "repository_access", "Git output exceeded the safety buffer. Inspect the repository on the selected daemon.");
+        if (e?.killed === true) throw new AttachFailure("GIT_TIMEOUT", "repository_access", "Git did not finish in time. Check the selected daemon network and repository size, then explicitly retry.");
+        const auth = /authentication|could not read username|terminal prompts disabled|403|401|repository not found/i.test(String(e?.stderr ?? ""));
+        throw new AttachFailure(auth ? "GIT_AUTH_REQUIRED" : "REPOSITORY_ACCESS_FAILED", "repository_access", "Configure Git access to this private GitHub repository on the selected daemon, then explicitly retry.");
+      }
+    }
+    async function managedCheckoutPath(meshId, identity4) {
+      const config = await (0, import_promises11.realpath)(getConfigDir2());
+      const root = (0, import_node_path28.join)(config, "remote-projects");
+      try {
+        await (0, import_promises11.mkdir)(root);
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+      }
+      if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path28.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
+      const key5 = (0, import_node_crypto54.createHash)("sha256").update(`${meshId}\0${identity4}`).digest("hex").slice(0, 24);
+      return (0, import_node_path28.join)(root, key5);
+    }
+    async function verifyCheckout(workspace, identity4) {
+      const info = await (0, import_promises11.lstat)(workspace);
+      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises11.realpath)(workspace) !== (0, import_node_path28.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
+      const root = await git4(workspace, ["rev-parse", "--show-toplevel"]);
+      if (await (0, import_promises11.realpath)(root) !== await (0, import_promises11.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
+      const remote = githubRemote(await git4(workspace, ["remote", "get-url", "origin"]));
+      if (remote?.identity !== identity4) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
+    }
+    async function present(path124) {
+      try {
+        await (0, import_promises11.lstat)(path124);
+        return true;
+      } catch (e) {
+        if (e.code === "ENOENT") return false;
+        throw e;
+      }
+    }
+    function pidAlive2(pid) {
+      if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (e) {
+        return e?.code === "EPERM";
+      }
+    }
+    async function readOwner2(lockPath) {
+      const info = await (0, import_promises11.lstat)(lockPath);
+      if (!info.isFile() || info.isSymbolicLink()) throw recovery();
+      let owner;
+      try {
+        owner = JSON.parse(await (0, import_promises11.readFile)(lockPath, "utf-8"));
+      } catch {
+        throw recovery();
+      }
+      if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.nonce !== "string" || !/^[0-9a-f-]{36}$/.test(owner.nonce)) throw recovery();
+      return owner;
+    }
+    async function guardIsStale(guard2) {
+      let info;
+      try {
+        info = await (0, import_promises11.lstat)(guard2);
+      } catch (e) {
+        if (e?.code === "ENOENT") return false;
+        throw e;
+      }
+      if (info.isSymbolicLink() || !info.isDirectory()) return true;
+      let owner;
+      try {
+        owner = await readOwner2((0, import_node_path28.join)(guard2, "owner"));
+      } catch {
+        owner = void 0;
+      }
+      if (owner && !pidAlive2(owner.pid)) return true;
+      return Date.now() - info.mtimeMs > LOCK_GUARD_STALE_MS;
+    }
+    async function lockMutation(lockPath, action2) {
+      const guard2 = `${lockPath}.guard`;
+      try {
+        await (0, import_promises11.mkdir)(guard2);
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+        if (await guardIsStale(guard2)) throw guardRecovery(guard2);
+        throw busy();
+      }
+      const ownerPath = (0, import_node_path28.join)(guard2, "owner");
+      const self = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
+      try {
+        await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
+      } catch (e) {
+        await (0, import_promises11.rm)(ownerPath, { force: true }).then(() => (0, import_promises11.rmdir)(guard2)).catch(() => {
+        });
+        throw e;
+      }
+      try {
+        return await action2();
+      } finally {
+        const current4 = await readOwner2(ownerPath);
+        if (current4.nonce !== self.nonce || current4.pid !== self.pid) throw guardRecovery(guard2);
+        await (0, import_promises11.rm)(ownerPath);
+        await (0, import_promises11.rmdir)(guard2);
+      }
+    }
+    async function acquireLock(lockPath) {
+      return lockMutation(lockPath, async () => {
+        if (await present(lockPath)) {
+          const old = await readOwner2(lockPath);
+          if (pidAlive2(old.pid)) throw busy();
+          const current4 = await readOwner2(lockPath);
+          if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
+          await (0, import_promises11.rm)(lockPath);
+        }
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
+        await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
+        return owner;
+      });
+    }
+    async function releaseLock(lockPath, owner) {
+      await lockMutation(lockPath, async () => {
+        const current4 = await readOwner2(lockPath);
+        if (current4.nonce !== owner.nonce || current4.pid !== owner.pid) throw recovery();
+        await (0, import_promises11.rm)(lockPath);
+      });
+    }
+    async function completedStaging(staging, meshId, identity4) {
+      const marker2 = `${staging}.complete`;
+      const info = await (0, import_promises11.lstat)(marker2);
+      if (!info.isFile() || info.isSymbolicLink()) throw recovery();
+      const evidence = JSON.parse(await (0, import_promises11.readFile)(marker2, "utf-8"));
+      const dir = await (0, import_promises11.lstat)(staging);
+      if (evidence.meshId !== meshId || evidence.identity !== identity4 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
+      await verifyCheckout(staging, identity4);
+    }
+    async function discardStaleMarker(marker2) {
+      let info;
+      try {
+        info = await (0, import_promises11.lstat)(marker2);
+      } catch (e) {
+        if (e?.code === "ENOENT") return;
+        throw e;
+      }
+      if (!info.isFile() && !info.isSymbolicLink()) throw recovery();
+      await (0, import_promises11.rm)(marker2);
+    }
+    async function renameWithRetry(from, to) {
+      for (let i = 0; ; i++) {
+        try {
+          await (0, import_promises11.rename)(from, to);
+          return;
+        } catch (e) {
+          if (i >= 5 || !["EPERM", "EBUSY", "EACCES"].includes(e?.code)) throw e;
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+    }
+    async function checkoutRemote(meshId, remote) {
+      const workspace = await managedCheckoutPath(meshId, remote.identity);
+      if (inFlight3.has(workspace)) throw new AttachFailure("ATTACH_IN_PROGRESS", "checkout", "Wait for the current attachment result; do not retry repeatedly.");
+      const lockPath = `${workspace}.lock`;
+      inFlight3.add(workspace);
+      let owner;
+      let cleanupSafe = true;
+      try {
+        owner = await acquireLock(lockPath);
+        await git4(getConfigDir2(), ["ls-remote", "--exit-code", remote.url, "HEAD"]);
+        let reused = await present(workspace);
+        if (!reused) {
+          const staging = `${workspace}.pending`;
+          let claimed = false;
+          if (!await present(staging)) await discardStaleMarker(`${staging}.complete`);
+          try {
+            await (0, import_promises11.mkdir)(staging);
+            claimed = true;
+          } catch (e) {
+            if (e?.code !== "EEXIST") throw e;
+          }
+          if (!claimed) {
+            try {
+              await completedStaging(staging, meshId, remote.identity);
+            } catch (e) {
+              if (e instanceof AttachFailure && e.preserveCheckout) throw e;
+              throw new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "A previous checkout is preserved in the .pending directory. Inspect it locally before retrying.");
             }
-            if (reviewTurnId) return resolveReviewBatch(ctx, svc, reviewTurnId, decision);
-            return resolveStagedOne(ctx, svc, id4, decision);
-          },
-          [ASSISTANT_VERB2.storeAdmin]: async (_ctx, args) => {
-            const svc = getAssistantServices();
-            const target4 = str11(args?.target);
-            const action2 = str11(args?.action);
-            if (target4 === "skill") {
-              const name = str11(args?.name);
-              if (!name) return invalidArgs("name required");
-              if (action2 === "pin") return respond(svc.skills.pin(name));
-              if (action2 === "unpin") return respond(svc.skills.unpin(name));
-              if (action2 === "clear_review") return respond(svc.skills.clearReviewLock(name));
-              if (action2 === "restore") return respond(svc.skills.restore(name));
-              return invalidArgs("skill action must be pin, unpin, clear_review or restore");
+            if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
+            await renameWithRetry(staging, workspace);
+            await (0, import_promises11.rm)(`${staging}.complete`);
+            reused = true;
+          } else {
+            try {
+              await git4(getConfigDir2(), ["clone", "--progress", "--origin", "origin", "--", remote.url, staging]);
+            } catch (e) {
+              if (!(e instanceof AttachFailure && e.preserveCheckout)) await (0, import_promises11.rm)(staging, { recursive: true, force: true }).catch(() => {
+              });
+              throw e;
             }
-            if (target4 === "memory") {
-              if (action2 === "get_limits") {
-                return { success: true, result: "ok", ...svc.memory.status() };
-              }
-              if (action2 === "set_limits") {
-                return applyMemoryLimitsUpdate(svc, args);
-              }
-              if (action2 !== "remove") return invalidArgs("memory action must be remove, get_limits or set_limits");
-              const file = str11(args?.file);
-              if (file !== "memory" && file !== "user") return invalidArgs("file must be memory or user");
-              return respond(svc.memory.apply({ action: "remove", target: file, match: rawStr(args?.match) ?? "" }, "owner"));
-            }
-            return invalidArgs("target must be skill or memory");
-          },
-          [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
-            const svc = getAssistantServices();
-            const rawAction = str11(args?.action);
-            const hasBudgetField = args !== null && typeof args === "object" && ("memory" in args || "user" in args);
-            const action2 = rawAction || (hasBudgetField ? "set" : "get");
-            if (action2 === "get") {
-              return { success: true, result: "ok", ...svc.memory.status() };
-            }
-            if (action2 === "set") {
-              return applyMemoryLimitsUpdate(svc, args);
-            }
-            return invalidArgs("action must be get or set");
-          },
-          [ASSISTANT_VERB2.importSkills]: async (ctx, args) => {
-            const svc = getAssistantServices();
-            if (str11(args?.action) === "scan") return { success: true, result: "scan", scan: scanHermesHome(svc.hermesHome) };
-            const req = {
-              hermesHome: svc.hermesHome,
-              dryRun: args?.dryRun !== false,
-              ...Array.isArray(args?.skills) ? { skills: args.skills.filter((s2) => typeof s2 === "string") } : {},
-              ...Array.isArray(args?.memory) ? { memory: args.memory } : {}
-            };
-            const result = importFromHermes(req, { skills: svc.skills, memory: svc.memory });
-            const notes = [];
-            for (const n of result.operatingNotes) {
-              const project = await resolveNoteProject(ctx, svc, n.project);
-              if (!project.ok) {
-                notes.push({ id: n.id, project: n.project, result: project.result.code });
-                continue;
-              }
-              const refusal2 = noteTextRefusal(n.text);
-              if (refusal2) {
-                notes.push({ id: n.id, project: project.slug, ...refusal2 });
-                continue;
-              }
-              if (result.dryRun) {
-                notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, result: "would_record" });
-                continue;
-              }
-              const applied = project.remote ? await applyRemoteNote(project, { action: "record", text: n.text }, "owner") : await applyNote(svc, project.mesh.id, { action: "record", text: n.text }, "owner");
-              notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, ...applied });
-            }
-            return { success: true, ...result, operatingNoteResults: notes };
+            await verifyCheckout(staging, remote.identity);
+            const dir = await (0, import_promises11.lstat)(staging);
+            await (0, import_promises11.writeFile)(`${staging}.complete`, JSON.stringify({ meshId, identity: remote.identity, nonce: owner.nonce, dev: dir.dev, ino: dir.ino }), { flag: "wx" });
+            if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
+            await renameWithRetry(staging, workspace);
+            await (0, import_promises11.rm)(`${staging}.complete`);
+          }
+        }
+        await verifyCheckout(workspace, remote.identity);
+        return { workspace, reused };
+      } catch (e) {
+        if (e instanceof AttachFailure && e.preserveCheckout) cleanupSafe = false;
+        throw e;
+      } finally {
+        try {
+          if (owner && cleanupSafe) await releaseLock(lockPath, owner);
+        } finally {
+          inFlight3.delete(workspace);
+        }
+      }
+    }
+    async function pythonResourcePreflight() {
+      const commands = process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
+      for (const [cmd, prefix] of commands) try {
+        await exec5(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
+          cwd: getConfigDir2(),
+          shell: false,
+          windowsHide: true,
+          timeout: 1e4,
+          maxBuffer: 4096,
+          env: { ...process.env, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1" }
+        });
+        return { ready: true, code: "RESOURCE_READY" };
+      } catch {
+      }
+      return { ready: false, code: "GITPYTHON_UNAVAILABLE", action: "Configure Python and GitPython on the selected machine, then rerun the readiness check. No packages were installed." };
+    }
+    var import_node_child_process21;
+    var import_node_util12;
+    var import_node_crypto54;
+    var import_promises11;
+    var import_node_path28;
+    var exec5;
+    var REMOTE_GIT_TIMEOUT_MS;
+    var REMOTE_GIT_CLONE_TIMEOUT_MS;
+    var REMOTE_GIT_CLONE_WATCHDOG_MS;
+    var AttachFailure;
+    var refusal;
+    var busy;
+    var recovery;
+    var LOCK_GUARD_STALE_MS;
+    var guardRecovery;
+    var inFlight3;
+    var init_remote_project_checkout = __esm2({
+      "src/assistant/remote-project-checkout.ts"() {
+        "use strict";
+        import_node_child_process21 = require("child_process");
+        import_node_util12 = require("util");
+        import_node_crypto54 = require("crypto");
+        import_promises11 = require("fs/promises");
+        import_node_path28 = require("path");
+        init_config();
+        exec5 = (0, import_node_util12.promisify)(import_node_child_process21.execFile);
+        REMOTE_GIT_TIMEOUT_MS = 12e4;
+        REMOTE_GIT_CLONE_TIMEOUT_MS = 18 * 6e4;
+        REMOTE_GIT_CLONE_WATCHDOG_MS = 12e4;
+        AttachFailure = class extends Error {
+          constructor(code, stage, action2, preserveCheckout = false) {
+            super(code);
+            this.code = code;
+            this.stage = stage;
+            this.action = action2;
+            this.preserveCheckout = preserveCheckout;
           }
         };
-        assistantStoreSpecs = defineCommandSpecs("high", assistantStoreHandlers, {
-          [ASSISTANT_VERB2.memory]: { sources: [...ASSISTANT_TOOL_SOURCES] },
-          [ASSISTANT_VERB2.skillView]: { sources: [...ASSISTANT_TOOL_SOURCES] },
-          [ASSISTANT_VERB2.skillManage]: { sources: [...ASSISTANT_TOOL_SOURCES] },
-          [ASSISTANT_VERB2.projectNote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
-          [ASSISTANT_VERB2.stagedResolve]: { sources: [...ASSISTANT_OWNER_SOURCES] },
-          [ASSISTANT_VERB2.storeAdmin]: { sources: [...ASSISTANT_OWNER_SOURCES] },
-          [ASSISTANT_MEMORY_LIMITS_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
-          [ASSISTANT_VERB2.importSkills]: { sources: [...ASSISTANT_OWNER_SOURCES] }
-        });
+        refusal = (e) => e instanceof AttachFailure ? { success: false, code: e.code, stage: e.stage, action: e.action, attached: false } : { success: false, code: "ATTACH_FAILED", stage: "checkout", action: "Inspect the selected daemon locally before retrying. Existing files were preserved.", attached: false };
+        busy = () => new AttachFailure("ATTACH_IN_PROGRESS", "checkout", "Wait for the current attachment result; do not retry repeatedly.");
+        recovery = () => new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "Preserve the checkout and lock. Inspect the previous attempt locally before retrying.");
+        LOCK_GUARD_STALE_MS = 6e4;
+        guardRecovery = (guard2) => new AttachFailure(
+          "CHECKOUT_RECOVERY_REQUIRED",
+          "checkout",
+          `A previous attempt was interrupted while holding the lock guard remote-projects/${(0, import_node_path28.basename)(guard2)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`
+        );
+        inFlight3 = /* @__PURE__ */ new Set();
       }
     });
-    function terminalRetryIdentity(intent) {
-      return (0, import_crypto37.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
+    function formatProjectAttachDisabledHint(info) {
+      const roleLabel = info.role === "source" ? "source" : info.role === "target" ? "target" : "selected";
+      const name = str11(info.machineName).trim();
+      const id4 = str11(info.daemonId).trim();
+      const machineDesc = name && id4 && name !== id4 ? `${name} (${id4})` : name || id4 || "this machine";
+      const stagePart = str11(info.stage).trim() ? ` at stage "${str11(info.stage).trim()}"` : "";
+      return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard \u2192 Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\` enabled.`;
     }
-    function readTerminalEvents(db2, meshId, kind, entityId, since, receipts) {
-      const ids = receipts.slice(0, 256);
-      const hasTurns = !!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turn_attempts'").get();
-      const receiptAliases = kind === "task" && hasTurns && ids.length ? db2.prepare(`SELECT DISTINCT t.attempt_id || '#committed' id
-        FROM turn_attempts t JOIN mesh_local_records l ON l.mesh_id=t.mesh_id AND l.task_id=t.task_id
-        AND (json_extract(l.payload_json,'$.attemptId')=t.attempt_id OR l.event_id=t.attempt_id || '#committed'
-            OR (json_extract(l.payload_json,'$.attemptId') IS NULL AND l.session_id=t.session_id AND l.at_ms=t.terminal_at AND l.kind='task_' || t.terminal_outcome
-                AND (SELECT COUNT(*) FROM turn_attempts x WHERE x.mesh_id=t.mesh_id AND x.task_id=t.task_id AND x.session_id=t.session_id AND x.terminal_at=t.terminal_at AND x.terminal_outcome=t.terminal_outcome)=1))
-        WHERE t.mesh_id=? AND t.task_id=? AND l.event_id IN (${ids.map(() => "?").join(",")})`).all(meshId, entityId, ...ids).map((r) => r.id) : [];
-      const taskViews = kind === "task" && hasTurns ? readTurnTerminalViews(meshId, { db: db2, taskId: entityId, sinceMs: since, tail: 16, excludeIds: [...ids, ...receiptAliases], oldestFirst: true }) : [];
-      const exclude = ids.length ? ` AND event_id NOT IN (${ids.map(() => "?").join(",")})` : "";
-      const filter = kind === "task" ? "task_id=? AND kind IN ('task_completed','task_failed','task_cancelled')" : "json_extract(payload_json,'$.missionId')=? AND kind IN ('mission_status_changed','mission_created') AND COALESCE(json_extract(payload_json,'$.toStatus'),json_extract(payload_json,'$.status')) IN ('completed','abandoned')";
-      const migrationFilter = kind === "task" && hasTurns ? ` AND NOT EXISTS (SELECT 1 FROM turn_attempts t WHERE t.mesh_id=mesh_local_records.mesh_id
-            AND t.task_id=mesh_local_records.task_id AND t.terminal_outcome IS NOT NULL
-            AND (t.attempt_id=json_extract(payload_json,'$.attemptId') OR event_id=t.attempt_id || '#committed'
-                OR (json_extract(payload_json,'$.attemptId') IS NULL AND t.session_id=mesh_local_records.session_id AND t.terminal_at=mesh_local_records.at_ms AND kind='task_' || t.terminal_outcome
-                    AND (SELECT COUNT(*) FROM turn_attempts x WHERE x.mesh_id=t.mesh_id AND x.task_id=t.task_id AND x.session_id=t.session_id AND x.terminal_at=t.terminal_at AND x.terminal_outcome=t.terminal_outcome)=1)))` : "";
-      const rows = db2.prepare(`SELECT event_id,mesh_id,task_id,session_id,node_id,kind,at_ms,
-        json_extract(payload_json,'$.missionId') mission_id, COALESCE(json_extract(payload_json,'$.toStatus'),json_extract(payload_json,'$.status')) mission_outcome FROM mesh_local_records WHERE mesh_id=? AND ${filter} AND at_ms>=?${migrationFilter}${exclude} ORDER BY at_ms,event_id LIMIT 16`).all(meshId, entityId, since, ...ids);
-      const legacy = rows.map((r) => ({
-        eventId: r.event_id,
-        meshId: r.mesh_id,
-        taskId: r.task_id ?? null,
-        missionId: r.mission_id ?? null,
-        sessionId: r.session_id ?? null,
-        nodeId: r.node_id ?? null,
-        kind: r.kind,
-        at: r.at_ms,
-        sourceMeshId: r.mesh_id,
-        ...kind === "task" ? { strength: "unknown", evidenceLevel: "weak" } : {},
-        outcome: kind === "task" ? r.kind.slice(5) : r.mission_outcome
-      }));
-      const durable2 = taskViews.map((v) => ({
-        eventId: v.id,
-        meshId,
-        taskId: v.taskId ?? null,
-        missionId: null,
-        sessionId: v.sessionId ?? null,
-        nodeId: v.nodeId ?? null,
-        kind: v.kind,
-        at: Date.parse(v.timestamp),
-        sourceMeshId: meshId,
-        outcome: String(v.payload.outcome),
-        attemptId: String(v.payload.attemptId),
-        strength: String(v.payload.strength ?? "unknown"),
-        evidenceLevel: ["genuine", "tool_report", "operator"].includes(String(v.payload.strength)) ? "strong" : "weak"
-      }));
-      return [...new Map([...legacy, ...durable2].map((e) => [e.eventId, e])).values()].sort((a, b) => a.at - b.at || a.eventId.localeCompare(b.eventId)).slice(0, 16);
+    function selected(ctx, args) {
+      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
     }
-    async function deliverTerminalEvents(events, watch6, submit, store3, opts = {}) {
-      const recorded = new Set(store3.receipts(watch6.watch_id));
-      for (const event of events) {
-        if (recorded.has(event.eventId)) continue;
-        const id4 = `assistant-terminal:${watch6.watch_id}:${event.eventId}`;
-        const existing = store3.intent(watch6.watch_id, event.eventId);
-        if (existing) {
-          if (!await opts.confirm?.(existing)) {
-            if (opts.recipient && opts.recipient !== existing.recipient_session_id) await opts.uncertain?.(existing);
-            break;
-          }
-        } else {
-          const intent = store3.beginDelivery(watch6.watch_id, event.eventId, opts.recipient ?? watch6.recipient);
-          if (!await submit(id4, `[ADHDev task/mission terminal] ${JSON.stringify({ watchId: watch6.watch_id, ...event, deliveryToken: intent.token })}`)) break;
-        }
-        store3.acknowledge(watch6.watch_id, event.eventId);
-        recorded.add(event.eventId);
+    function validGrant(grant, selfId, hostId, meshId, identity4, secret) {
+      if (!grant || typeof grant !== "object" || typeof secret !== "string" || !secret.trim()) return false;
+      if (!daemonIdsEquivalent4(str11(grant.target), selfId) || !daemonIdsEquivalent4(str11(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
+      const now = Date.now();
+      if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str11(grant.sig))) return false;
+      const key5 = (0, import_node_crypto55.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto55.createHmac)("sha256", key5).update(`${grant.target}
+${grant.host}
+${grant.meshId}
+${grant.identity}
+${grant.exp}`).digest("hex");
+      return (0, import_node_crypto55.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+    }
+    function authorizeHost(ctx, args, identity4) {
+      const hostId = str11(args?.hostDaemonId);
+      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent4(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+      const old = readMeshHostRecord(args.meshId);
+      if (old && !daemonIdsEquivalent4(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
+      const cfg = loadConfig();
+      if (args?.grant !== void 0) {
+        if (!validGrant(args.grant, str11(ctx.deps.statusInstanceId), hostId, args.meshId, identity4, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+        return old;
       }
+      const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent4(h, hostId)) || Boolean(old && daemonIdsEquivalent4(old.hostDaemonId, hostId));
+      if (!allowed) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+      return old;
     }
-    var import_crypto37;
-    var TERMINAL_WATCH_TTL_MS;
-    var TERMINAL_WATCH_MAX;
-    var TERMINAL_WATCH_SCHEMA;
-    var TerminalWatchStore;
-    var init_terminal_watch = __esm2({
-      "src/assistant/terminal-watch.ts"() {
+    async function prepare(ctx, args) {
+      const mesh = getMesh(str11(args?.meshId));
+      if (!mesh) throw new AttachFailure("PROJECT_NOT_FOUND", "registration", "Use a project registered on the authenticated source daemon.");
+      const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
+      if (!host.canOwnCoordinator || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("PROJECT_HOST_REQUIRED", "registration", "Request attachment through the registered project host.");
+      const remote = githubRemote(mesh.repoRemoteUrl);
+      if (!remote || remote.identity !== str11(mesh.repoIdentity).toLowerCase()) throw new AttachFailure("LOCAL_ONLY_PROJECT", "registration", "Register a verified GitHub-backed project first; local-only projects cannot attach across machines.");
+      const self = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, ctx.deps.statusInstanceId));
+      if (!self) throw new AttachFailure("SOURCE_CHECKOUT_REQUIRED", "registration", "The project host needs its registered source checkout for remote identity verification.");
+      const origin = githubRemote(await git4(self.workspace, ["remote", "get-url", "origin"]));
+      if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
+      return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
+    }
+    var import_node_crypto55;
+    var str11;
+    var fail4;
+    var attachRemoteProject;
+    var remoteProjectHandlers;
+    var remoteProjectSpecs;
+    var init_remote_project_attach = __esm2({
+      "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_crypto37 = require("crypto");
-        init_mesh_local_records();
-        TERMINAL_WATCH_TTL_MS = 24 * 60 * 6e4;
-        TERMINAL_WATCH_MAX = 32;
-        TERMINAL_WATCH_SCHEMA = `
-CREATE TABLE IF NOT EXISTS assistant_terminal_watches (
- watch_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL,
- recipient TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS assistant_terminal_receipts (
- watch_id TEXT NOT NULL, event_id TEXT NOT NULL, delivered_at INTEGER NOT NULL, PRIMARY KEY(watch_id,event_id));
-CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
- watch_id TEXT NOT NULL, event_id TEXT NOT NULL, recipient_session_id TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, PRIMARY KEY(watch_id,event_id));`;
-        TerminalWatchStore = class {
-          constructor(db2) {
-            this.db = db2;
-            db2.exec(TERMINAL_WATCH_SCHEMA);
+        import_node_crypto55 = require("crypto");
+        init_dist();
+        init_config();
+        init_mesh_config();
+        init_mesh_config_host_pairing();
+        init_mesh_host_memory();
+        init_mesh_host_ownership();
+        init_remote_project_checkout();
+        str11 = (v) => typeof v === "string" ? v : "";
+        fail4 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
+        attachRemoteProject = async (ctx, args) => {
+          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
+          try {
+            await prepare(ctx, args);
+          } catch (e) {
+            return refusal(e);
           }
-          subscribe(meshId, kind, entityId, recipient, now = Date.now()) {
-            this.prune(now);
-            const watchId = (0, import_crypto37.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
-            const existing = this.get(watchId);
-            if (existing) return { success: true, watchId, expiresAt: existing.expires_at, duplicate: true };
-            const count = this.db.prepare("SELECT COUNT(*) n FROM assistant_terminal_watches WHERE expires_at > ?").get(now);
-            if (count.n >= TERMINAL_WATCH_MAX) return { success: false, code: "terminal_watch_capacity" };
-            this.db.prepare("INSERT INTO assistant_terminal_watches VALUES (?,?,?,?,?,?,?)").run(watchId, meshId, kind, entityId, recipient, now, now + TERMINAL_WATCH_TTL_MS);
-            return { success: true, watchId, expiresAt: now + TERMINAL_WATCH_TTL_MS, duplicate: false };
+          if (!ctx.deps.attachRemoteProject) return fail4("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
+          const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
+          if (res && res.code === "PROJECT_ATTACH_DISABLED") {
+            const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
+            const stage = str11(res.stage).trim() || (role === "source" ? "prepare" : "checkout");
+            const daemonId = str11(res.daemonId).trim() || (role === "source" ? str11(ctx.deps.statusInstanceId) : str11(args.targetDaemonId));
+            const machineName = str11(res.machineName).trim() || (role === "source" ? loadConfig().machineNickname?.trim() || daemonId : daemonId);
+            const hint = formatProjectAttachDisabledHint({ stage, role, daemonId, machineName });
+            return {
+              ...res,
+              success: false,
+              attached: false,
+              code: "PROJECT_ATTACH_DISABLED",
+              stage,
+              role,
+              daemonId,
+              machineName,
+              setting: "allowRemoteProjectAttach",
+              error: str11(res.error).includes("allowRemoteProjectAttach") ? res.error : hint,
+              action: str11(res.action).includes("allowRemoteProjectAttach") ? res.action : hint,
+              hint: str11(res.hint).includes("allowRemoteProjectAttach") ? res.hint : hint
+            };
           }
-          get(id4) {
-            return this.db.prepare("SELECT * FROM assistant_terminal_watches WHERE watch_id=?").get(id4);
+          return res;
+        };
+        remoteProjectHandlers = {
+          attach_remote_project: attachRemoteProject,
+          remote_project_attach_settings: async (ctx, args) => {
+            const hasToggleArg = args?.enabled !== void 0 || args?.allowRemoteProjectAttach !== void 0;
+            const action2 = args?.action === void 0 ? hasToggleArg ? "set" : "get" : str11(args.action);
+            if (action2 === "get") {
+              const cfg = loadConfig();
+              const enabled2 = cfg.allowRemoteProjectAttach === true;
+              return { success: true, enabled: enabled2, allowRemoteProjectAttach: enabled2, daemonId: str11(ctx.deps.statusInstanceId) };
+            }
+            if (action2 !== "set") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected action get or set." };
+            const rawEnabled = args?.enabled !== void 0 ? args.enabled : args?.allowRemoteProjectAttach;
+            if (typeof rawEnabled !== "boolean") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected boolean enabled." };
+            const updated = updateConfig({ allowRemoteProjectAttach: rawEnabled });
+            const enabled = updated.allowRemoteProjectAttach === true;
+            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str11(ctx.deps.statusInstanceId) };
+          },
+          remote_project_prepare: async (ctx, args) => {
+            try {
+              const { mesh, remote } = await prepare(ctx, args);
+              return { success: true, meshId: mesh.id, ...remote, hostDaemonId: ctx.deps.statusInstanceId };
+            } catch (e) {
+              return refusal(e);
+            }
+          },
+          remote_project_checkout: async (ctx, args) => {
+            try {
+              selected(ctx, args);
+              const remote = githubRemote(args?.url);
+              if (!remote || remote.identity !== args?.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str11(args?.meshId))) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "repository_access", "Only canonical verified GitHub projects are supported.");
+              authorizeHost(ctx, args, remote.identity);
+              const checkout = await checkoutRemote(args.meshId, remote);
+              return { success: true, ...checkout, meshId: args.meshId, identity: remote.identity, targetDaemonId: ctx.deps.statusInstanceId, stage: "checkout", attached: false };
+            } catch (e) {
+              return refusal(e);
+            }
+          },
+          remote_project_register: async (ctx, args) => {
+            try {
+              const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
+              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.targetDaemonId)) || !str11(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
+              const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
+              if (existing) return { success: true, nodeId: existing.id, attached: true };
+              if (hostSynthesized) {
+                const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
+                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
+              }
+              const result = await ctx.execute("add_mesh_node", { meshId: mesh.id, workspace: args.workspace, repoRoot: args.workspace, daemonId: args.targetDaemonId }, "internal", { inProcess: true });
+              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
+            } catch (e) {
+              return refusal(e);
+            }
+          },
+          remote_project_accept: async (ctx, args) => {
+            try {
+              selected(ctx, args);
+              const remote = githubRemote(args.url);
+              if (!remote || remote.identity !== args.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str11(args.meshId)) || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.hostDaemonId))) throw new AttachFailure("ATTACH_SCOPE_MISMATCH", "registration", "Use the authenticated project attachment flow.");
+              const workspace = await managedCheckoutPath(args.meshId, remote.identity);
+              if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
+              const old = authorizeHost(ctx, args, remote.identity);
+              await verifyCheckout(workspace, remote.identity);
+              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail4("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
+              const resources = await pythonResourcePreflight();
+              return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? "ready" : "resource_preflight" };
+            } catch (e) {
+              return refusal(e);
+            }
           }
-          list(recipient, now = Date.now()) {
-            return this.db.prepare("SELECT * FROM assistant_terminal_watches WHERE recipient=? AND expires_at>? ORDER BY created_at,watch_id LIMIT 32").all(recipient, now);
-          }
-          receipts(id4) {
-            return this.db.prepare("SELECT event_id FROM assistant_terminal_receipts WHERE watch_id=? ORDER BY delivered_at,event_id LIMIT 256").all(id4).map((r) => r.event_id);
-          }
-          intent(id4, eventId) {
-            return this.db.prepare("SELECT * FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").get(id4, eventId);
-          }
-          beginDelivery(id4, eventId, sid) {
-            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto37.randomBytes)(24).toString("hex"), Date.now());
-            return this.intent(id4, eventId);
-          }
-          retryDelivery(id4, eventId) {
-            this.db.prepare("DELETE FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").run(id4, eventId);
-          }
-          acknowledge(id4, eventId, now = Date.now()) {
-            this.db.transaction(() => {
-              this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_receipts VALUES (?,?,?)").run(id4, eventId, now);
-              this.retryDelivery(id4, eventId);
-            })();
-          }
-          unsubscribe(id4) {
-            this.db.prepare("UPDATE assistant_terminal_watches SET expires_at=0 WHERE watch_id=?").run(id4);
-          }
-          prune(now) {
-            this.db.transaction(() => {
-              this.db.prepare("DELETE FROM assistant_terminal_inflight WHERE watch_id IN (SELECT watch_id FROM assistant_terminal_watches WHERE created_at < ?)").run(now - 7 * TERMINAL_WATCH_TTL_MS);
-              this.db.prepare("DELETE FROM assistant_terminal_receipts WHERE watch_id IN (SELECT watch_id FROM assistant_terminal_watches WHERE created_at < ?)").run(now - 7 * TERMINAL_WATCH_TTL_MS);
-              this.db.prepare("DELETE FROM assistant_terminal_watches WHERE created_at < ?").run(now - 7 * TERMINAL_WATCH_TTL_MS);
-            })();
-          }
+        };
+        remoteProjectSpecs = {
+          attach_remote_project: { sources: ["ipc", "standalone"] },
+          remote_project_attach_settings: { sources: ["p2p", "ws", "standalone"] },
+          remote_project_prepare: { sources: ["project_attach"] },
+          remote_project_checkout: { sources: ["project_attach"] },
+          remote_project_register: { sources: ["project_attach"] },
+          remote_project_accept: { sources: ["project_attach"] }
         };
       }
     });
@@ -128242,7 +127428,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (/^test-repo$/i.test(id4) || /^scratch\//i.test(id4) || /^local:/i.test(id4)) return true;
       return /^(?:\/private)?\/tmp\//.test(id4) || /^\/var\/folders\//.test(id4) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id4);
     }
-    function readText4(v) {
+    function readText3(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function shortId2(id4) {
@@ -128250,9 +127436,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function meshHostLabel(mesh, selfDaemonId) {
       const host = resolveMeshHostStatus(mesh, { localDaemonId: selfDaemonId });
-      const hostId = readText4(host.hostDaemonId);
-      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText4(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
-      return readText4(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
+      const hostId = readText3(host.hostDaemonId);
+      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
+      return readText3(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
     }
     function coordinatorState(views) {
       if (views.length === 0) return "none";
@@ -128271,23 +127457,23 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       };
       for (const mesh of meshes) {
         for (const node of mesh.nodes ?? []) {
-          const raw = readText4(node.daemonId);
+          const raw = readText3(node.daemonId);
           const { key: key5, self } = keyOf2(raw);
           if (!key5) continue;
           const f = facts.get(key5) ?? { daemonId: raw || null, nick: "", os: "", build: "", self };
-          f.nick ||= readText4(node.machineNickname);
-          f.os ||= readText4(node.reportedPlatform);
-          f.build ||= readText4(node.reportedDaemonBuildVersion);
+          f.nick ||= readText3(node.machineNickname);
+          f.os ||= readText3(node.reportedPlatform);
+          f.build ||= readText3(node.reportedDaemonBuildVersion);
           facts.set(key5, f);
         }
       }
       for (const host of remoteHosts) {
-        const raw = readText4(host.daemonId);
+        const raw = readText3(host.daemonId);
         if (!raw) continue;
         const { key: key5, self } = keyOf2(raw);
         if (!key5 || self) continue;
         const f = facts.get(key5) ?? { daemonId: raw, nick: "", os: "", build: "", self: false };
-        const label2 = readText4(host.label);
+        const label2 = readText3(host.label);
         if (!f.nick && label2 && label2 !== "unknown host") f.nick = label2;
         facts.set(key5, f);
       }
@@ -128306,7 +127492,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     function firstText(sources, pick) {
       for (const x of sources) {
         for (const v of pick(x)) {
-          const t = readText4(v);
+          const t = readText3(v);
           if (t) return t;
         }
       }
@@ -128317,19 +127503,19 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (nick) return nick;
       for (const x of sources) {
         const machine = rec2(x?.machine);
-        const ids = new Set([readText4(machine?.daemonId), readText4(machine?.machineId), readText4(x?.daemonId), readText4(x?.machineId)].filter(Boolean));
+        const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
         for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
-          const t = readText4(v);
+          const t = readText3(v);
           if (t && !ids.has(t)) return t;
         }
       }
       return "";
     }
     function osTag(x) {
-      for (const list2 of [x?.capabilities, x?.capabilityTags]) {
-        if (!Array.isArray(list2)) continue;
-        for (const tag of list2) {
-          const m = /^os=(.+)$/.exec(readText4(tag));
+      for (const list3 of [x?.capabilities, x?.capabilityTags]) {
+        if (!Array.isArray(list3)) continue;
+        for (const tag of list3) {
+          const m = /^os=(.+)$/.exec(readText3(tag));
           if (m && m[1].trim()) return m[1].trim();
         }
       }
@@ -128345,11 +127531,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
       const memberById = /* @__PURE__ */ new Map();
       for (const m of memberNodes) {
-        const id4 = readText4(m?.id) || readText4(m?.nodeId);
+        const id4 = readText3(m?.id) || readText3(m?.nodeId);
         if (id4 && !memberById.has(id4)) memberById.set(id4, m);
       }
       const machines = nodes.map((n) => {
-        const id4 = readText4(n?.id) || readText4(n?.nodeId);
+        const id4 = readText3(n?.id) || readText3(n?.nodeId);
         const local = rec2(routes[id4])?.route === "local";
         const sources = [n, memberById.get(id4)].filter(Boolean);
         return {
@@ -128357,16 +127543,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           label: nodeMachineLabel(sources) || null,
           os: nodePlatform(sources) || null,
           build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec2(rec2(x?.nodeFacts)?.daemonBuild)?.version]) || null,
-          online: local || readText4(n?.machineStatus) === "online",
-          ...readText4(n?.worktreeBranch) ? { branch: readText4(n.worktreeBranch) } : {}
+          online: local || readText3(n?.machineStatus) === "online",
+          ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
         };
       });
       const missionList = Array.isArray(rec2(rec2(view2.missions)?.list)?.missions) ? rec2(rec2(view2.missions).list).missions : [];
-      const activeMissions = missionList.filter((m) => readText4(m?.status) === "active" || readText4(m?.status) === "paused").map((m) => ({ id: readText4(m?.id), title: readText4(m?.title), status: readText4(m?.status) }));
+      const activeMissions = missionList.filter((m) => readText3(m?.status) === "active" || readText3(m?.status) === "paused").map((m) => ({ id: readText3(m?.id), title: readText3(m?.title), status: readText3(m?.status) }));
       const now = extras.now ?? Date.now();
-      const staleMissions = missionList.filter((m) => readText4(m?.status) === "active").filter((m) => !isCarryOverMissionRecord({ title: readText4(m?.title) })).map((m) => {
-        const last = Date.parse(readText4(rec2(m?.tasks)?.lastActivityAt) || readText4(m?.updatedAt) || readText4(m?.createdAt));
-        return { id: readText4(m?.id), title: readText4(m?.title), last };
+      const staleMissions = missionList.filter((m) => readText3(m?.status) === "active").filter((m) => !isCarryOverMissionRecord({ title: readText3(m?.title) })).map((m) => {
+        const last = Date.parse(readText3(rec2(m?.tasks)?.lastActivityAt) || readText3(m?.updatedAt) || readText3(m?.createdAt));
+        return { id: readText3(m?.id), title: readText3(m?.title), last };
       }).filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS).sort((a, b) => a.last - b.last).map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 864e5) }));
       const activeWork = rec2(rec2(view2.activeWork)?.activeWork);
       const heldTasks = (Array.isArray(activeWork?.activeWork) ? activeWork.activeWork : []).filter((task) => task.status === "pending" && task.hold);
@@ -128394,26 +127580,26 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function routingSlot(v) {
       const r = rec2(v);
-      const providerType = readText4(r?.providerType);
+      const providerType = readText3(r?.providerType);
       if (!providerType) return null;
-      const model = readText4(r?.model);
+      const model = readText3(r?.model);
       return { providerType, ...model ? { model } : {} };
     }
     function axisOf(v) {
-      const t = readText4(v);
+      const t = readText3(v);
       return t === "weekly" || t === "session" ? t : void 0;
     }
     function quotaRow(v) {
       const r = rec2(v);
-      const providerType = readText4(r?.providerType);
+      const providerType = readText3(r?.providerType);
       if (!providerType) return null;
       const bonus = rec2(r?.bonus) ?? {};
       const gate = rec2(r?.gate) ?? {};
       const ranking = rec2(r?.ranking);
-      const snapshotStatus = readText4(bonus.snapshotStatus);
-      const failureKind = readText4(bonus.failureKind);
-      const zeroReason = readText4(bonus.zeroReason);
-      const gateReason = readText4(gate.reason);
+      const snapshotStatus = readText3(bonus.snapshotStatus);
+      const failureKind = readText3(bonus.failureKind);
+      const zeroReason = readText3(bonus.zeroReason);
+      const gateReason = readText3(gate.reason);
       const remainingPercent2 = routingNum(ranking?.remainingPercent);
       const axis2 = axisOf(ranking?.axis);
       return {
@@ -128421,7 +127607,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...snapshotStatus ? { snapshotStatus } : {},
         ...failureKind ? { failureKind } : {},
         ...zeroReason ? { zeroReason } : {},
-        gateOutcome: readText4(gate.outcome) || "unknown",
+        gateOutcome: readText3(gate.outcome) || "unknown",
         ...gateReason ? { gateReason } : {},
         bonusValue: routingNum(bonus.value) ?? 0,
         ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
@@ -128430,16 +127616,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function routingNodeRow(v, labelOf) {
       const r = rec2(v);
-      const nodeId = readText4(r?.nodeId);
+      const nodeId = readText3(r?.nodeId);
       if (!nodeId) return null;
       const stages = rec2(r?.stages) ?? {};
       const floor = rec2(stages.difficultyFloor) ?? {};
       const quotaStage = rec2(stages.quota) ?? {};
       const winner = rec2(r?.predictedWinner);
-      const winnerProvider = readText4(winner?.providerType);
-      const winnerModel = readText4(winner?.model);
-      const reason = readText4(r?.reason);
-      const displaced = readText4(quotaStage.displacedFitnessWinner);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      const reason = readText3(r?.reason);
+      const displaced = readText3(quotaStage.displacedFitnessWinner);
       return {
         nodeId,
         machineName: labelOf(nodeId),
@@ -128448,7 +127634,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText4(rec2(e)?.reason);
+          const er = readText3(rec2(e)?.reason);
           return s2 && er ? { ...s2, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q) => !!q),
@@ -128460,11 +127646,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const p = rec2(preview) ?? {};
       const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
       const winner = rec2(p.predictedWinner);
-      const winnerNode = readText4(winner?.nodeId);
-      const winnerProvider = readText4(winner?.providerType);
-      const winnerModel = readText4(winner?.model);
+      const winnerNode = readText3(winner?.nodeId);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
       return {
-        strategy: readText4(p.schedulingStrategy) || "unknown",
+        strategy: readText3(p.schedulingStrategy) || "unknown",
         difficulty,
         predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
@@ -128476,43 +127662,43 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function sessionRows(states, opts = {}) {
       const now = opts.now ?? Date.now();
-      const want = readText4(opts.meshId);
+      const want = readText3(opts.meshId);
       const out = [];
       for (const raw of states) {
         const state2 = rec2(raw);
         if (!state2) continue;
-        const sessionId = readText4(state2.instanceId);
+        const sessionId = readText3(state2.instanceId);
         if (!sessionId) continue;
         const settings2 = rec2(state2.settings) ?? {};
         const launch = rec2(state2.launch);
-        const meshId = readText4(settings2.meshNodeFor) || readText4(settings2.meshCoordinatorFor);
+        const meshId = readText3(settings2.meshNodeFor) || readText3(settings2.meshCoordinatorFor);
         if (want && meshId && meshId !== want) continue;
         const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
         out.push({
           sessionId,
-          provider: readText4(state2.type) || readText4(settings2.providerType),
-          status: readText4(state2.status),
+          provider: readText3(state2.type) || readText3(settings2.providerType),
+          status: readText3(state2.status),
           meshId: meshId || null,
-          nodeId: readText4(settings2.meshNodeId) || null,
+          nodeId: readText3(settings2.meshNodeId) || null,
           ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
           messageCount: countVisibleBubbles(state2.activeChat),
-          workspace: readText4(state2.workspace) || null,
-          isCoordinator: !!readText4(settings2.meshCoordinatorFor),
+          workspace: readText3(state2.workspace) || null,
+          isCoordinator: !!readText3(settings2.meshCoordinatorFor),
           assistant: settings2.assistant === true,
-          spawnedForTaskId: readText4(settings2.autoLaunchedForQueueTaskId) || null,
-          launchedBy: readText4(launch?.launchedBy) || null
+          spawnedForTaskId: readText3(settings2.autoLaunchedForQueueTaskId) || null,
+          launchedBy: readText3(launch?.launchedBy) || null
         });
       }
       return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
     }
     function followerRoutingQuotaRow(v) {
       const r = rec2(v);
-      const providerType = readText4(r?.providerType);
+      const providerType = readText3(r?.providerType);
       if (!providerType) return null;
-      const snapshotStatus = readText4(r?.snapshotStatus);
-      const failureKind = readText4(r?.failureKind);
-      const zeroReason = readText4(r?.zeroReason);
-      const gateReason = readText4(r?.gateReason);
+      const snapshotStatus = readText3(r?.snapshotStatus);
+      const failureKind = readText3(r?.failureKind);
+      const zeroReason = readText3(r?.zeroReason);
+      const gateReason = readText3(r?.gateReason);
       const remainingPercent2 = routingNum(r?.remainingPercent);
       const axis2 = axisOf(r?.axis);
       return {
@@ -128520,7 +127706,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...snapshotStatus ? { snapshotStatus } : {},
         ...failureKind ? { failureKind } : {},
         ...zeroReason ? { zeroReason } : {},
-        gateOutcome: readText4(r?.gateOutcome) || "unknown",
+        gateOutcome: readText3(r?.gateOutcome) || "unknown",
         ...gateReason ? { gateReason } : {},
         bonusValue: routingNum(r?.bonusValue) ?? 0,
         ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
@@ -128529,22 +127715,22 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function followerRoutingNodeRow(v) {
       const r = rec2(v);
-      const nodeId = readText4(r?.nodeId);
+      const nodeId = readText3(r?.nodeId);
       if (!nodeId) return null;
       const winner = rec2(r?.predictedWinner);
-      const winnerProvider = readText4(winner?.providerType);
-      const winnerModel = readText4(winner?.model);
-      const reason = readText4(r?.reason);
-      const displaced = readText4(r?.displacedFitnessWinner);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      const reason = readText3(r?.reason);
+      const displaced = readText3(r?.displacedFitnessWinner);
       return {
         nodeId,
-        machineName: readText4(r?.machineName) || null,
+        machineName: readText3(r?.machineName) || null,
         predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         ...reason ? { reason } : {},
         admitted: (Array.isArray(r?.admitted) ? r.admitted : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(r?.excluded) ? r.excluded : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText4(rec2(e)?.reason);
+          const er = readText3(rec2(e)?.reason);
           return s2 && er ? { providerType: s2.providerType, ...s2.model ? { model: s2.model } : {}, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quota) ? r.quota : []).map(followerRoutingQuotaRow).filter((q) => !!q),
@@ -128553,17 +127739,17 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       };
     }
     function followerStatusView(raw, mesh) {
-      const rawRepo = readText4(mesh.repoRemoteUrl) || readText4(mesh.repoIdentity) || readText4(raw.repo);
+      const rawRepo = readText3(mesh.repoRemoteUrl) || readText3(mesh.repoIdentity) || readText3(raw.repo);
       const machines = (Array.isArray(raw.machines) ? raw.machines : []).map((item) => {
         const m = rec2(item);
-        const node = readText4(m?.node);
+        const node = readText3(m?.node);
         if (!node) return null;
-        const branch = readText4(m?.branch);
+        const branch = readText3(m?.branch);
         return {
           node,
-          label: readText4(m?.label) || null,
-          os: readText4(m?.os) || null,
-          build: readText4(m?.build) || null,
+          label: readText3(m?.label) || null,
+          os: readText3(m?.os) || null,
+          build: readText3(m?.build) || null,
           online: m?.online === true,
           ...branch ? { branch } : {}
         };
@@ -128576,12 +127762,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       } : null;
       const heldTasks = (Array.isArray(raw.heldTasks) ? raw.heldTasks : []).map((item) => {
         const t = rec2(item);
-        const taskId = readText4(t?.taskId);
+        const taskId = readText3(t?.taskId);
         if (!taskId) return null;
         return {
           taskId,
-          title: readText4(t?.title),
-          hold: readText4(t?.hold) || null
+          title: readText3(t?.title),
+          hold: readText3(t?.hold) || null
         };
       }).filter((t) => t !== null);
       const heldReasonsRaw = rec2(raw.heldReasons);
@@ -128593,64 +127779,64 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
       const activeMissions = (Array.isArray(raw.activeMissions) ? raw.activeMissions : []).map((item) => {
         const m = rec2(item);
-        const id4 = readText4(m?.id);
+        const id4 = readText3(m?.id);
         if (!id4) return null;
         return {
           id: id4,
-          title: readText4(m?.title),
-          status: readText4(m?.status)
+          title: readText3(m?.title),
+          status: readText3(m?.status)
         };
       }).filter((m) => m !== null);
       const staleMissions = (Array.isArray(raw.staleMissions) ? raw.staleMissions : []).map((item) => {
         const m = rec2(item);
-        const id4 = readText4(m?.id);
+        const id4 = readText3(m?.id);
         if (!id4) return null;
         return {
           id: id4,
-          title: readText4(m?.title),
+          title: readText3(m?.title),
           idleDays: typeof m?.idleDays === "number" && Number.isFinite(m.idleDays) ? m.idleDays : 0
         };
       }).filter((m) => m !== null);
       const sessions = (Array.isArray(raw.sessions) ? raw.sessions : []).map((item) => {
         const s2 = rec2(item);
         if (!s2) return null;
-        const sessionId = readText4(s2.sessionId);
-        const sessionMeshId = readText4(s2.meshId);
+        const sessionId = readText3(s2.sessionId);
+        const sessionMeshId = readText3(s2.meshId);
         if (!sessionId || sessionMeshId !== mesh.id || s2.assistant === true) return null;
         return {
           sessionId,
-          provider: readText4(s2.provider),
-          status: readText4(s2.status),
+          provider: readText3(s2.provider),
+          status: readText3(s2.status),
           meshId: mesh.id,
-          nodeId: readText4(s2.nodeId) || null,
+          nodeId: readText3(s2.nodeId) || null,
           ageMs: typeof s2.ageMs === "number" && Number.isFinite(s2.ageMs) ? s2.ageMs : null,
           messageCount: typeof s2.messageCount === "number" && Number.isFinite(s2.messageCount) ? s2.messageCount : 0,
           workspace: null,
           isCoordinator: s2.isCoordinator === true,
           assistant: false,
-          spawnedForTaskId: readText4(s2.spawnedForTaskId) || null,
-          launchedBy: readText4(s2.launchedBy) || null
+          spawnedForTaskId: readText3(s2.spawnedForTaskId) || null,
+          launchedBy: readText3(s2.launchedBy) || null
         };
       }).filter((s2) => s2 !== null);
       const rawRouting = rec2(raw.routing);
       const routing = rawRouting ? {
-        strategy: readText4(rawRouting.strategy) || "unknown",
-        difficulty: readText4(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
-        predictedWinner: rec2(rawRouting.predictedWinner) && readText4(rec2(rawRouting.predictedWinner).nodeId) && readText4(rec2(rawRouting.predictedWinner).providerType) ? {
-          nodeId: readText4(rec2(rawRouting.predictedWinner).nodeId),
-          providerType: readText4(rec2(rawRouting.predictedWinner).providerType),
-          ...readText4(rec2(rawRouting.predictedWinner).model) ? { model: readText4(rec2(rawRouting.predictedWinner).model) } : {},
+        strategy: readText3(rawRouting.strategy) || "unknown",
+        difficulty: readText3(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
+        predictedWinner: rec2(rawRouting.predictedWinner) && readText3(rec2(rawRouting.predictedWinner).nodeId) && readText3(rec2(rawRouting.predictedWinner).providerType) ? {
+          nodeId: readText3(rec2(rawRouting.predictedWinner).nodeId),
+          providerType: readText3(rec2(rawRouting.predictedWinner).providerType),
+          ...readText3(rec2(rawRouting.predictedWinner).model) ? { model: readText3(rec2(rawRouting.predictedWinner).model) } : {},
           fitnessScore: routingNum(rec2(rawRouting.predictedWinner).fitnessScore) ?? 0
         } : null,
         perNode: (Array.isArray(rawRouting.perNode) ? rawRouting.perNode : []).map(followerRoutingNodeRow).filter((n) => !!n),
-        ...readText4(rawRouting.error) ? { error: readText4(rawRouting.error) } : {}
+        ...readText3(rawRouting.error) ? { error: readText3(rawRouting.error) } : {}
       } : null;
-      const coord = readText4(raw.coordinator);
+      const coord = readText3(raw.coordinator);
       const coordinator = coord === "idle" || coord === "working" || coord === "waiting" ? coord : "none";
-      const rawCoordinatorSessionId = readText4(raw.coordinatorSessionId);
+      const rawCoordinatorSessionId = readText3(raw.coordinatorSessionId);
       const coordinatorSessionId = coordinator !== "none" && rawCoordinatorSessionId ? rawCoordinatorSessionId : null;
       return {
-        name: readText4(raw.name) || readText4(mesh.name),
+        name: readText3(raw.name) || readText3(mesh.name),
         repo: sanitizeRemoteRepoIdentity(rawRepo),
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
@@ -128668,20 +127854,20 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...staleMissions.length > 0 ? { staleMissions } : {},
         ...routing ? { routing } : {},
         sessions,
-        ...readText4(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
+        ...readText3(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
       };
     }
     function messageText(m) {
       const c = m?.content;
       if (typeof c === "string") return c;
-      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText4(p?.text) ? p.text : "").join("");
+      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText3(p?.text) ? p.text : "").join("");
       return typeof m?.text === "string" ? m.text : "";
     }
     function isVisible(m) {
       if (!m || typeof m !== "object") return false;
-      const role = readText4(m.role).toLowerCase();
+      const role = readText3(m.role).toLowerCase();
       if (role !== "user" && role !== "assistant" && role !== "agent") return false;
-      const kind = readText4(m.kind ?? m.type ?? m.messageKind).toLowerCase();
+      const kind = readText3(m.kind ?? m.type ?? m.messageKind).toLowerCase();
       if (["tool", "tool_call", "tool_result", "terminal", "internal", "control", "debug", "status"].includes(kind)) return false;
       const meta2 = m.meta ?? m.metadata;
       return !(meta2?.internal === true || meta2?.debug === true || meta2?.control === true || meta2?.userVisible === false);
@@ -128693,14 +127879,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         const text4 = messageText(m);
         const truncated = text4.length > maxChars;
         const time = m.timestamp ?? m.receivedAt ?? m.createdAt;
-        const at = typeof time === "number" ? new Date(time).toISOString() : readText4(time) || void 0;
+        const at = typeof time === "number" ? new Date(time).toISOString() : readText3(time) || void 0;
         return {
           messageId: reportMessageId(m),
           totalChars: text4.length,
           complete: !truncated && m.bubbleState !== "streaming" && m.isStreaming !== true && m.meta?.streaming !== true,
           nextOffset: truncated ? maxChars : null,
-          role: readText4(m.role).toLowerCase() === "user" ? "user" : "assistant",
-          kind: readText4(m.kind ?? m.messageKind) || "standard",
+          role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
+          kind: readText3(m.kind ?? m.messageKind) || "standard",
           text: truncated ? `${text4.slice(0, maxChars)}\u2026` : text4,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
@@ -128715,7 +127901,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function reportMessageId(message) {
       const m = message;
-      return (0, import_crypto38.createHash)("sha256").update(JSON.stringify([
+      return (0, import_crypto37.createHash)("sha256").update(JSON.stringify([
         // read_chat stamps presentation ids; chat_history returns native rows.
         // A timestamped native reply must keep one cursor across both lanes.
         m?.timestamp == null && m?.receivedAt == null && m?.createdAt == null ? m?.messageId ?? m?.bubbleId ?? m?.id ?? null : null,
@@ -128725,7 +127911,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         messageText(m)
       ])).digest("hex");
     }
-    var import_crypto38;
+    var import_crypto37;
     var STALE_MISSION_AFTER_MS;
     var PROJECT_STATUS_ROUTING_DIFFICULTY;
     var PROJECT_READ_DEFAULT_TAIL;
@@ -128734,7 +127920,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var init_project_views = __esm2({
       "src/assistant/project-views.ts"() {
         "use strict";
-        import_crypto38 = require("crypto");
+        import_crypto37 = require("crypto");
         init_dist();
         init_mesh_host_ownership();
         STALE_MISSION_AFTER_MS = 3 * 24 * 60 * 6e4;
@@ -128744,105 +127930,131 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         PROJECT_READ_MESSAGE_MAX_CHARS = 4e3;
       }
     });
-    async function pendingTerminalEvents(store3, ports, watch6) {
-      const mesh = ports.listMeshes().find((m) => m.id === watch6.mesh_id);
-      if (!mesh) return [];
-      const receipts = store3.receipts(watch6.watch_id);
-      if (receipts.length >= 256) throw new Error("terminal_watch_receipt_capacity");
-      if (ports.isHostedHere(mesh)) return readTerminalEvents(store3.db, mesh.id, watch6.kind, watch6.entity_id, 0, receipts).map((e) => ({ ...e, sourceDaemonId: ports.selfDaemonId?.() ?? null }));
-      const remote = ports.remoteHost(mesh);
-      if (!remote.reachable) throw new Error(remote.reason ?? "terminal_watch_remote_unreachable");
-      const out = await ports.callHost(remote, "terminal", { kind: watch6.kind, entityId: watch6.entity_id, receipts });
-      if (!out.ok) throw new Error(out.error);
-      const result = out.result.result;
-      if (!Array.isArray(result?.events)) throw new Error("terminal_watch_invalid_remote_events");
-      const normalized = result.events.slice(0, 16).map((raw) => {
-        const r = raw;
-        const id4 = (v) => typeof v === "string" && v.length <= 200 ? v : null;
-        if (!id4(r.eventId) || r.meshId !== remote.hostMeshId || !Number.isFinite(r.at) || !["task_completed", "task_failed", "task_cancelled", "mission_status_changed", "mission_created"].includes(r.kind) || (watch6.kind === "task" ? r.taskId !== watch6.entity_id || !["task_completed", "task_failed", "task_cancelled"].includes(r.kind) : r.missionId !== watch6.entity_id || !["mission_status_changed", "mission_created"].includes(r.kind) || !["completed", "abandoned"].includes(r.outcome ?? ""))) throw new Error("terminal_watch_invalid_remote_identity");
-        return {
-          eventId: r.eventId,
-          meshId: mesh.id,
-          taskId: id4(r.taskId),
-          missionId: id4(r.missionId),
-          sessionId: id4(r.sessionId),
-          nodeId: id4(r.nodeId),
-          kind: r.kind,
-          at: r.at,
-          sourceMeshId: remote.hostMeshId,
-          sourceDaemonId: remote.hostDaemonId,
-          outcome: watch6.kind === "task" ? r.kind.slice(5) : r.outcome,
-          ...id4(r.attemptId) ? { attemptId: r.attemptId } : {},
-          ...["genuine", "weak", "tool_report", "operator", "unknown"].includes(r.strength ?? "") ? { strength: r.strength } : {},
-          evidenceLevel: r.evidenceLevel === "strong" && ["genuine", "tool_report", "operator"].includes(r.strength ?? "") ? "strong" : "weak"
-        };
-      }).filter((e) => !receipts.includes(e.eventId));
-      return [...new Map(normalized.map((e) => [e.eventId, e])).values()].sort((a, b) => a.at - b.at || a.eventId.localeCompare(b.eventId));
+    function pageAttemptReport(body, cursor, source2, completeness = "final_native") {
+      const reportId = reportBodyId(body);
+      if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: "original_report_unavailable", reason: "original_report_identity_mismatch" };
+      if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
+      const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
+      const pageComplete = end === body.length;
+      const sourceComplete = completeness === "final_native" || completeness === "final_adapter";
+      const verified = completeness === "final_native";
+      const page = {
+        success: true,
+        attemptId: cursor.attemptId,
+        coordinatorSessionId: cursor.coordinatorSessionId,
+        reportId,
+        source: source2,
+        text: body.slice(cursor.offset, end),
+        offset: cursor.offset,
+        totalChars: body.length,
+        sourceComplete,
+        complete: pageComplete && sourceComplete,
+        truncated: end < body.length,
+        nextOffset: end < body.length ? end : null
+      };
+      if (verified) return page;
+      return { ...page, verified: false, originalCompleteness: completeness === "final_adapter" ? "final_adapter" : completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
     }
-    async function confirmTerminalDelivery(ports, intent) {
-      const matches = (chat) => (Array.isArray(chat.messages) ? chat.messages : []).some((m) => m?.role === "user" && isVisible(m) && messageText(m).includes("[ADHDev task/mission terminal]") && messageText(m).includes(`"deliveryToken":"${intent.token}"`));
-      try {
-        const chat = await ports.execute("read_chat", { targetSessionId: intent.recipient_session_id, limit: 200 });
-        if (chat.success && matches(chat)) return true;
-        for (let offset = 0; offset < 400; offset += 100) {
-          const history = await ports.execute("chat_history", { targetSessionId: intent.recipient_session_id, offset, limit: 100, excludeRecentCount: 0 });
-          if (!history.success) return false;
-          if (matches(history)) return true;
-          if (history.hasMore !== true) break;
-        }
-        return false;
-      } catch {
-        return false;
+    function parseReportContinuation(args) {
+      if (args.taskId !== void 0) {
+        if (typeof args.taskId !== "string" || !args.taskId || args.taskId.length > 200 || args.attemptId !== void 0 || args.messageId !== void 0 || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0 || args.outputVersion !== void 0 && (!Number.isSafeInteger(args.outputVersion) || Number(args.outputVersion) < 1) || Number(args.offset ?? 0) > 0 && args.outputVersion === void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId))) return "taskId, non-negative offset and stable outputVersion for continuation required";
+        return { taskId: args.taskId, offset: Number(args.offset ?? 0), ...typeof args.outputVersion === "number" ? { outputVersion: args.outputVersion } : {}, ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
       }
+      if (args.attemptId !== void 0) {
+        if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.messageId !== void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId)) || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0) return "attemptId, coordinatorSessionId and non-negative offset required; reportId must be a SHA256 identity";
+        return { attemptId: args.attemptId, coordinatorSessionId: args.coordinatorSessionId, offset: Number(args.offset ?? 0), ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
+      }
+      if (args.messageId === void 0 && args.offset === void 0 && args.coordinatorSessionId === void 0) return null;
+      if (typeof args.messageId !== "string" || !/^[a-f0-9]{64}$/.test(args.messageId) || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || !Number.isSafeInteger(args.offset) || args.offset < 0) return "messageId, coordinatorSessionId and non-negative integer offset required";
+      return { messageId: args.messageId, offset: args.offset, coordinatorSessionId: args.coordinatorSessionId };
     }
-    var TerminalWatchDelivery;
-    var init_terminal_watch_runtime = __esm2({
-      "src/assistant/terminal-watch-runtime.ts"() {
-        "use strict";
-        init_project_views();
-        init_terminal_watch();
-        TerminalWatchDelivery = class {
-          constructor(store3, ports, recipient, ready2, submit) {
-            this.store = store3;
-            this.ports = ports;
-            this.recipient = recipient;
-            this.ready = ready2;
-            this.submit = submit;
-          }
-          running = false;
-          uncertaintyNotices = /* @__PURE__ */ new Map();
-          async tick() {
-            if (this.running) return;
-            const sid = this.recipient();
-            if (!sid || !this.ready(sid)) return;
-            this.running = true;
-            try {
-              const ports = await this.ports();
-              for (const watch6 of this.store.list("assistant")) {
-                if (!this.ready(sid) || this.recipient() !== sid) break;
-                let events;
-                try {
-                  events = await pendingTerminalEvents(this.store, ports, watch6);
-                } catch {
-                  continue;
-                }
-                await deliverTerminalEvents(events, watch6, async (id4, text4) => {
-                  if (!this.ready(sid) || this.recipient() !== sid) return false;
-                  return this.submit(sid, id4, text4);
-                }, this.store, { recipient: sid, confirm: (intent) => confirmTerminalDelivery(ports, intent), uncertain: async (intent) => {
-                  const key5 = JSON.stringify([intent.watch_id, intent.event_id, sid, intent.token]);
-                  for (const [stamp2, at] of this.uncertaintyNotices) if (Date.now() - at >= 24 * 60 * 6e4) this.uncertaintyNotices.delete(stamp2);
-                  if (this.uncertaintyNotices.has(key5) || this.recipient() !== sid || !this.ready(sid)) return;
-                  if (this.uncertaintyNotices.size >= 256) this.uncertaintyNotices.delete(this.uncertaintyNotices.keys().next().value);
-                  const text4 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch6.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
-                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text4)) this.uncertaintyNotices.set(key5, Date.now());
-                } });
-              }
-            } finally {
-              this.running = false;
-            }
-          }
+    async function continueReport(execute, cursor) {
+      const slice = (chat) => {
+        const messages = Array.isArray(chat.messages) ? chat.messages : [];
+        const found = messages.find((m) => isVisible(m) && reportMessageId(m) === cursor.messageId);
+        if (!found) return null;
+        const body = messageText(found);
+        if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
+        const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
+        return {
+          success: true,
+          coordinatorSessionId: cursor.coordinatorSessionId,
+          messageId: cursor.messageId,
+          role: found.role,
+          kind: found.kind ?? found.messageKind ?? "standard",
+          text: body.slice(cursor.offset, end),
+          offset: cursor.offset,
+          totalChars: body.length,
+          truncated: end < body.length,
+          complete: end === body.length,
+          nextOffset: end < body.length ? end : null
         };
+      };
+      const tail = await execute("read_chat", { targetSessionId: cursor.coordinatorSessionId, limit: 200 });
+      if (tail.success) {
+        const page = slice(tail);
+        if (page) return page;
+      }
+      for (let offset = 0; offset < 800; offset += 100) {
+        const history = await execute("chat_history", {
+          targetSessionId: cursor.coordinatorSessionId,
+          offset,
+          limit: 100,
+          excludeRecentCount: 0
+        });
+        if (!history.success) return { success: false, code: "original_report_unavailable", reason: "history_read_failed" };
+        const page = slice(history);
+        if (page) return page;
+        if (history.hasMore !== true) break;
+      }
+      return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
+    }
+    var import_crypto38;
+    var reportBodyId;
+    var init_report_continuation = __esm2({
+      "src/assistant/report-continuation.ts"() {
+        "use strict";
+        import_crypto38 = require("crypto");
+        init_project_views();
+        reportBodyId = (body) => (0, import_crypto38.createHash)("sha256").update(body).digest("hex");
+      }
+    });
+    function readTaskReportPage(db2, meshId, cursor) {
+      const row2 = db2.prepare(`SELECT version,attempt,status,created_at,
+        CASE WHEN length(envelope_json)<=1048576 THEN envelope_json ELSE NULL END envelope_json
+        FROM mesh_task_outputs WHERE mesh_id=? AND task_id=? ${cursor.outputVersion === void 0 ? "" : "AND version=?"} ORDER BY version DESC LIMIT 1`).get(...[meshId, cursor.taskId, ...cursor.outputVersion === void 0 ? [] : [cursor.outputVersion]]);
+      if (!row2) return { success: false, code: "original_report_unavailable", reason: "exact_task_output_not_found" };
+      if (!row2.envelope_json) return { success: false, code: "original_report_unavailable", reason: "task_output_exceeds_recovery_bound" };
+      let envelope;
+      try {
+        envelope = JSON.parse(row2.envelope_json);
+      } catch {
+        return { success: false, code: "original_report_unavailable", reason: "task_output_invalid" };
+      }
+      if (typeof envelope?.final_summary !== "string") return { success: false, code: "original_report_unavailable", reason: "task_output_has_no_original_summary" };
+      const page = pageAttemptReport(envelope.final_summary, { attemptId: String(row2.attempt), coordinatorSessionId: "", offset: cursor.offset, reportId: cursor.reportId }, "mesh_task_outputs");
+      if (!page.success) return page;
+      const { attemptId: _attemptId, coordinatorSessionId: _sessionId, ...result } = page;
+      const sourceComplete = envelope.evidence?.mayBeTruncated === false;
+      return {
+        ...result,
+        meshId,
+        taskId: cursor.taskId,
+        outputVersion: row2.version,
+        attempt: row2.attempt,
+        status: row2.status,
+        createdAt: row2.created_at,
+        sourceComplete,
+        complete: result.complete && sourceComplete,
+        ...sourceComplete ? {} : { originalCompleteness: envelope.evidence?.mayBeTruncated === true ? "truncated_at_source" : "unknown", unavailableReason: "source_does_not_prove_complete_original" },
+        sourceSessionId: typeof envelope.source?.session_id === "string" ? envelope.source.session_id : null,
+        sourceNodeId: typeof envelope.source?.node_id === "string" ? envelope.source.node_id : null
+      };
+    }
+    var init_task_report_continuation = __esm2({
+      "src/assistant/task-report-continuation.ts"() {
+        "use strict";
+        init_report_continuation();
       }
     });
     function copyRenderedCoverage(value) {
@@ -129343,740 +128555,6 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
-    function pageAttemptReport(body, cursor, source2, completeness = "final_native") {
-      const reportId = reportBodyId(body);
-      if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: "original_report_unavailable", reason: "original_report_identity_mismatch" };
-      if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
-      const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
-      const pageComplete = end === body.length;
-      const sourceComplete = completeness === "final_native" || completeness === "final_adapter";
-      const verified = completeness === "final_native";
-      const page = {
-        success: true,
-        attemptId: cursor.attemptId,
-        coordinatorSessionId: cursor.coordinatorSessionId,
-        reportId,
-        source: source2,
-        text: body.slice(cursor.offset, end),
-        offset: cursor.offset,
-        totalChars: body.length,
-        sourceComplete,
-        complete: pageComplete && sourceComplete,
-        truncated: end < body.length,
-        nextOffset: end < body.length ? end : null
-      };
-      if (verified) return page;
-      return { ...page, verified: false, originalCompleteness: completeness === "final_adapter" ? "final_adapter" : completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
-    }
-    function parseReportContinuation(args) {
-      if (args.taskId !== void 0) {
-        if (typeof args.taskId !== "string" || !args.taskId || args.taskId.length > 200 || args.attemptId !== void 0 || args.messageId !== void 0 || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0 || args.outputVersion !== void 0 && (!Number.isSafeInteger(args.outputVersion) || Number(args.outputVersion) < 1) || Number(args.offset ?? 0) > 0 && args.outputVersion === void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId))) return "taskId, non-negative offset and stable outputVersion for continuation required";
-        return { taskId: args.taskId, offset: Number(args.offset ?? 0), ...typeof args.outputVersion === "number" ? { outputVersion: args.outputVersion } : {}, ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
-      }
-      if (args.attemptId !== void 0) {
-        if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.messageId !== void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId)) || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0) return "attemptId, coordinatorSessionId and non-negative offset required; reportId must be a SHA256 identity";
-        return { attemptId: args.attemptId, coordinatorSessionId: args.coordinatorSessionId, offset: Number(args.offset ?? 0), ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
-      }
-      if (args.messageId === void 0 && args.offset === void 0 && args.coordinatorSessionId === void 0) return null;
-      if (typeof args.messageId !== "string" || !/^[a-f0-9]{64}$/.test(args.messageId) || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || !Number.isSafeInteger(args.offset) || args.offset < 0) return "messageId, coordinatorSessionId and non-negative integer offset required";
-      return { messageId: args.messageId, offset: args.offset, coordinatorSessionId: args.coordinatorSessionId };
-    }
-    async function continueReport(execute, cursor) {
-      const slice = (chat) => {
-        const messages = Array.isArray(chat.messages) ? chat.messages : [];
-        const found = messages.find((m) => isVisible(m) && reportMessageId(m) === cursor.messageId);
-        if (!found) return null;
-        const body = messageText(found);
-        if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
-        const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
-        return {
-          success: true,
-          coordinatorSessionId: cursor.coordinatorSessionId,
-          messageId: cursor.messageId,
-          role: found.role,
-          kind: found.kind ?? found.messageKind ?? "standard",
-          text: body.slice(cursor.offset, end),
-          offset: cursor.offset,
-          totalChars: body.length,
-          truncated: end < body.length,
-          complete: end === body.length,
-          nextOffset: end < body.length ? end : null
-        };
-      };
-      const tail = await execute("read_chat", { targetSessionId: cursor.coordinatorSessionId, limit: 200 });
-      if (tail.success) {
-        const page = slice(tail);
-        if (page) return page;
-      }
-      for (let offset = 0; offset < 800; offset += 100) {
-        const history = await execute("chat_history", {
-          targetSessionId: cursor.coordinatorSessionId,
-          offset,
-          limit: 100,
-          excludeRecentCount: 0
-        });
-        if (!history.success) return { success: false, code: "original_report_unavailable", reason: "history_read_failed" };
-        const page = slice(history);
-        if (page) return page;
-        if (history.hasMore !== true) break;
-      }
-      return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
-    }
-    var import_crypto39;
-    var reportBodyId;
-    var init_report_continuation = __esm2({
-      "src/assistant/report-continuation.ts"() {
-        "use strict";
-        import_crypto39 = require("crypto");
-        init_project_views();
-        reportBodyId = (body) => (0, import_crypto39.createHash)("sha256").update(body).digest("hex");
-      }
-    });
-    async function coordinatorReplyReadable(execute, reply) {
-      if (!reply.messageId) return false;
-      const page = await continueReport(execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
-      if (page.success !== true || typeof page.text !== "string") return false;
-      const expected = normalize6(reply.text).trim();
-      return page.complete === true ? normalize6(page.text).trim() === expected : expected.startsWith(normalize6(page.text).trim());
-    }
-    async function latestCoordinatorReference(execute, sessionId) {
-      for (const command of ["read_chat", "chat_history"]) {
-        const read2 = await execute(command, {
-          targetSessionId: sessionId,
-          limit: 100,
-          ...command === "chat_history" ? { offset: 0, excludeRecentCount: 0 } : {}
-        });
-        if (!read2.success || !Array.isArray(read2.messages)) continue;
-        const message = [...read2.messages].reverse().find((m) => isVisible(m) && referenceable(m.role, m.kind, messageText(m)));
-        if (message) return { coordinatorSessionId: sessionId, messageId: reportMessageId(message), offset: 0 };
-      }
-      return null;
-    }
-    function remoteCoordinatorReference(messages, sessionId) {
-      const message = [...messages].reverse().find((m) => isVisible(m) && referenceable(m?.role, m?.kind, typeof m?.text === "string" ? m.text : "") && typeof m.messageId === "string" && /^[a-f0-9]{64}$/.test(m.messageId));
-      return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
-    }
-    var normalize6;
-    var referenceable;
-    var init_relay_transcript_reference = __esm2({
-      "src/assistant/relay-transcript-reference.ts"() {
-        "use strict";
-        init_report_continuation();
-        init_project_views();
-        normalize6 = (text4) => text4.replace(/\r\n?/g, "\n");
-        referenceable = (role, kind, text4) => ["assistant", "agent"].includes(String(role)) && (kind === void 0 || kind === null || kind === "" || kind === "standard") && !!text4.trim();
-      }
-    });
-    function githubRemote(value) {
-      if (typeof value !== "string") return null;
-      const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(value);
-      if (!match || match[2] === "." || match[2] === "..") return null;
-      const identity4 = `github.com/${match[1]}/${match[2]}`.toLowerCase();
-      return { identity: identity4, url: `https://${identity4}.git` };
-    }
-    async function git4(workspace, args) {
-      const isClone = args[0] === "clone";
-      const timeout = isClone ? REMOTE_GIT_CLONE_TIMEOUT_MS : REMOTE_GIT_TIMEOUT_MS;
-      try {
-        const out = await new Promise((resolveOut, rejectOut) => {
-          const child = (0, import_node_child_process21.spawn)("git", ["-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never", "-c", "http.followRedirects=false", "-C", workspace, ...args], {
-            cwd: getConfigDir2(),
-            shell: false,
-            windowsHide: true,
-            detached: process.platform !== "win32",
-            env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" }
-          });
-          let stdout = "", stderr = "", bytes = 0;
-          let error;
-          let stopping;
-          let watchdog;
-          let closeChild;
-          const close3 = new Promise((r) => {
-            closeChild = r;
-          });
-          const waitForClose = async (ms3) => {
-            let timer;
-            try {
-              return await Promise.race([close3.then(() => true), new Promise((r) => {
-                timer = setTimeout(() => r(false), ms3);
-              })]);
-            } finally {
-              if (timer) clearTimeout(timer);
-            }
-          };
-          const signalGroup = (signal) => {
-            if (!child.pid) return;
-            try {
-              process.kill(-child.pid, signal);
-            } catch (e) {
-              if (e?.code !== "ESRCH") throw e;
-            }
-          };
-          const terminate = async () => {
-            try {
-              if (process.platform === "win32" && child.pid) {
-                await new Promise((done, fail8) => {
-                  const deadline = setTimeout(() => fail8(new Error("Tree termination unconfirmed")), 5e3);
-                  (0, import_node_child_process21.execFile)("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5e3 }, (err) => {
-                    clearTimeout(deadline);
-                    if (err) fail8(err);
-                    else done();
-                  });
-                });
-              } else {
-                signalGroup("SIGTERM");
-                await waitForClose(2e3);
-                signalGroup("SIGKILL");
-              }
-              if (!await waitForClose(5e3)) throw new Error("Child close not confirmed");
-            } catch {
-              throw new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "Process termination could not be confirmed. Preserve the checkout and lock; inspect the selected daemon locally.", true);
-            }
-          };
-          const stop = (reason) => {
-            if (stopping) return;
-            error = reason;
-            clearTimeout(wall);
-            if (watchdog) clearTimeout(watchdog);
-            stopping = terminate();
-            void stopping.then(() => rejectOut(error), rejectOut);
-          };
-          const wall = setTimeout(() => stop({ killed: true }), timeout);
-          const armWatchdog = () => {
-            if (!isClone || stopping) return;
-            if (watchdog) clearTimeout(watchdog);
-            watchdog = setTimeout(() => stop({ killed: true }), REMOTE_GIT_CLONE_WATCHDOG_MS);
-          };
-          const collect = (stream, chunk) => {
-            if (stopping) return;
-            bytes += Buffer.byteLength(chunk);
-            if (bytes > 1024 * 1024) {
-              stop({ code: "ENOBUFS" });
-              return;
-            }
-            if (stream === "stdout") stdout += chunk.toString();
-            else stderr += chunk.toString();
-            armWatchdog();
-          };
-          child.stdout.on("data", (chunk) => collect("stdout", chunk));
-          child.stderr.on("data", (chunk) => collect("stderr", chunk));
-          child.once("error", (e) => {
-            error = e;
-          });
-          child.once("close", (code) => {
-            closeChild();
-            clearTimeout(wall);
-            if (watchdog) clearTimeout(watchdog);
-            if (stopping) return;
-            if (error || code !== 0) rejectOut(error ?? { code, stderr });
-            else resolveOut(stdout);
-          });
-          armWatchdog();
-        });
-        return out.trim();
-      } catch (e) {
-        if (e instanceof AttachFailure) throw e;
-        if (e?.code === "ENOENT") throw new AttachFailure("GIT_UNAVAILABLE", "repository_access", "Install Git on the selected daemon, then explicitly retry.");
-        if (e?.code === "ENOBUFS" || e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw new AttachFailure("ENOBUFS", "repository_access", "Git output exceeded the safety buffer. Inspect the repository on the selected daemon.");
-        if (e?.killed === true) throw new AttachFailure("GIT_TIMEOUT", "repository_access", "Git did not finish in time. Check the selected daemon network and repository size, then explicitly retry.");
-        const auth = /authentication|could not read username|terminal prompts disabled|403|401|repository not found/i.test(String(e?.stderr ?? ""));
-        throw new AttachFailure(auth ? "GIT_AUTH_REQUIRED" : "REPOSITORY_ACCESS_FAILED", "repository_access", "Configure Git access to this private GitHub repository on the selected daemon, then explicitly retry.");
-      }
-    }
-    async function managedCheckoutPath(meshId, identity4) {
-      const config = await (0, import_promises11.realpath)(getConfigDir2());
-      const root = (0, import_node_path28.join)(config, "remote-projects");
-      try {
-        await (0, import_promises11.mkdir)(root);
-      } catch (e) {
-        if (e.code !== "EEXIST") throw e;
-      }
-      if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path28.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key5 = (0, import_node_crypto54.createHash)("sha256").update(`${meshId}\0${identity4}`).digest("hex").slice(0, 24);
-      return (0, import_node_path28.join)(root, key5);
-    }
-    async function verifyCheckout(workspace, identity4) {
-      const info = await (0, import_promises11.lstat)(workspace);
-      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises11.realpath)(workspace) !== (0, import_node_path28.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
-      const root = await git4(workspace, ["rev-parse", "--show-toplevel"]);
-      if (await (0, import_promises11.realpath)(root) !== await (0, import_promises11.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
-      const remote = githubRemote(await git4(workspace, ["remote", "get-url", "origin"]));
-      if (remote?.identity !== identity4) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
-    }
-    async function present(path124) {
-      try {
-        await (0, import_promises11.lstat)(path124);
-        return true;
-      } catch (e) {
-        if (e.code === "ENOENT") return false;
-        throw e;
-      }
-    }
-    function pidAlive2(pid) {
-      if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (e) {
-        return e?.code === "EPERM";
-      }
-    }
-    async function readOwner2(lockPath) {
-      const info = await (0, import_promises11.lstat)(lockPath);
-      if (!info.isFile() || info.isSymbolicLink()) throw recovery();
-      let owner;
-      try {
-        owner = JSON.parse(await (0, import_promises11.readFile)(lockPath, "utf-8"));
-      } catch {
-        throw recovery();
-      }
-      if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.nonce !== "string" || !/^[0-9a-f-]{36}$/.test(owner.nonce)) throw recovery();
-      return owner;
-    }
-    async function guardIsStale(guard2) {
-      let info;
-      try {
-        info = await (0, import_promises11.lstat)(guard2);
-      } catch (e) {
-        if (e?.code === "ENOENT") return false;
-        throw e;
-      }
-      if (info.isSymbolicLink() || !info.isDirectory()) return true;
-      let owner;
-      try {
-        owner = await readOwner2((0, import_node_path28.join)(guard2, "owner"));
-      } catch {
-        owner = void 0;
-      }
-      if (owner && !pidAlive2(owner.pid)) return true;
-      return Date.now() - info.mtimeMs > LOCK_GUARD_STALE_MS;
-    }
-    async function lockMutation(lockPath, action2) {
-      const guard2 = `${lockPath}.guard`;
-      try {
-        await (0, import_promises11.mkdir)(guard2);
-      } catch (e) {
-        if (e.code !== "EEXIST") throw e;
-        if (await guardIsStale(guard2)) throw guardRecovery(guard2);
-        throw busy();
-      }
-      const ownerPath = (0, import_node_path28.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
-      try {
-        await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
-      } catch (e) {
-        await (0, import_promises11.rm)(ownerPath, { force: true }).then(() => (0, import_promises11.rmdir)(guard2)).catch(() => {
-        });
-        throw e;
-      }
-      try {
-        return await action2();
-      } finally {
-        const current4 = await readOwner2(ownerPath);
-        if (current4.nonce !== self.nonce || current4.pid !== self.pid) throw guardRecovery(guard2);
-        await (0, import_promises11.rm)(ownerPath);
-        await (0, import_promises11.rmdir)(guard2);
-      }
-    }
-    async function acquireLock(lockPath) {
-      return lockMutation(lockPath, async () => {
-        if (await present(lockPath)) {
-          const old = await readOwner2(lockPath);
-          if (pidAlive2(old.pid)) throw busy();
-          const current4 = await readOwner2(lockPath);
-          if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
-          await (0, import_promises11.rm)(lockPath);
-        }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
-        await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
-        return owner;
-      });
-    }
-    async function releaseLock(lockPath, owner) {
-      await lockMutation(lockPath, async () => {
-        const current4 = await readOwner2(lockPath);
-        if (current4.nonce !== owner.nonce || current4.pid !== owner.pid) throw recovery();
-        await (0, import_promises11.rm)(lockPath);
-      });
-    }
-    async function completedStaging(staging, meshId, identity4) {
-      const marker2 = `${staging}.complete`;
-      const info = await (0, import_promises11.lstat)(marker2);
-      if (!info.isFile() || info.isSymbolicLink()) throw recovery();
-      const evidence = JSON.parse(await (0, import_promises11.readFile)(marker2, "utf-8"));
-      const dir = await (0, import_promises11.lstat)(staging);
-      if (evidence.meshId !== meshId || evidence.identity !== identity4 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
-      await verifyCheckout(staging, identity4);
-    }
-    async function discardStaleMarker(marker2) {
-      let info;
-      try {
-        info = await (0, import_promises11.lstat)(marker2);
-      } catch (e) {
-        if (e?.code === "ENOENT") return;
-        throw e;
-      }
-      if (!info.isFile() && !info.isSymbolicLink()) throw recovery();
-      await (0, import_promises11.rm)(marker2);
-    }
-    async function renameWithRetry(from, to) {
-      for (let i = 0; ; i++) {
-        try {
-          await (0, import_promises11.rename)(from, to);
-          return;
-        } catch (e) {
-          if (i >= 5 || !["EPERM", "EBUSY", "EACCES"].includes(e?.code)) throw e;
-          await new Promise((r) => setTimeout(r, 200));
-        }
-      }
-    }
-    async function checkoutRemote(meshId, remote) {
-      const workspace = await managedCheckoutPath(meshId, remote.identity);
-      if (inFlight3.has(workspace)) throw new AttachFailure("ATTACH_IN_PROGRESS", "checkout", "Wait for the current attachment result; do not retry repeatedly.");
-      const lockPath = `${workspace}.lock`;
-      inFlight3.add(workspace);
-      let owner;
-      let cleanupSafe = true;
-      try {
-        owner = await acquireLock(lockPath);
-        await git4(getConfigDir2(), ["ls-remote", "--exit-code", remote.url, "HEAD"]);
-        let reused = await present(workspace);
-        if (!reused) {
-          const staging = `${workspace}.pending`;
-          let claimed = false;
-          if (!await present(staging)) await discardStaleMarker(`${staging}.complete`);
-          try {
-            await (0, import_promises11.mkdir)(staging);
-            claimed = true;
-          } catch (e) {
-            if (e?.code !== "EEXIST") throw e;
-          }
-          if (!claimed) {
-            try {
-              await completedStaging(staging, meshId, remote.identity);
-            } catch (e) {
-              if (e instanceof AttachFailure && e.preserveCheckout) throw e;
-              throw new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "A previous checkout is preserved in the .pending directory. Inspect it locally before retrying.");
-            }
-            if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
-            await renameWithRetry(staging, workspace);
-            await (0, import_promises11.rm)(`${staging}.complete`);
-            reused = true;
-          } else {
-            try {
-              await git4(getConfigDir2(), ["clone", "--progress", "--origin", "origin", "--", remote.url, staging]);
-            } catch (e) {
-              if (!(e instanceof AttachFailure && e.preserveCheckout)) await (0, import_promises11.rm)(staging, { recursive: true, force: true }).catch(() => {
-              });
-              throw e;
-            }
-            await verifyCheckout(staging, remote.identity);
-            const dir = await (0, import_promises11.lstat)(staging);
-            await (0, import_promises11.writeFile)(`${staging}.complete`, JSON.stringify({ meshId, identity: remote.identity, nonce: owner.nonce, dev: dir.dev, ino: dir.ino }), { flag: "wx" });
-            if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
-            await renameWithRetry(staging, workspace);
-            await (0, import_promises11.rm)(`${staging}.complete`);
-          }
-        }
-        await verifyCheckout(workspace, remote.identity);
-        return { workspace, reused };
-      } catch (e) {
-        if (e instanceof AttachFailure && e.preserveCheckout) cleanupSafe = false;
-        throw e;
-      } finally {
-        try {
-          if (owner && cleanupSafe) await releaseLock(lockPath, owner);
-        } finally {
-          inFlight3.delete(workspace);
-        }
-      }
-    }
-    async function pythonResourcePreflight() {
-      const commands = process.platform === "win32" ? [["py", ["-3"]], ["python", []], ["python3", []]] : [["python3", []], ["python", []]];
-      for (const [cmd, prefix] of commands) try {
-        await exec5(cmd, [...prefix, "-c", 'import git; print("gitpython-ready")'], {
-          cwd: getConfigDir2(),
-          shell: false,
-          windowsHide: true,
-          timeout: 1e4,
-          maxBuffer: 4096,
-          env: { ...process.env, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1" }
-        });
-        return { ready: true, code: "RESOURCE_READY" };
-      } catch {
-      }
-      return { ready: false, code: "GITPYTHON_UNAVAILABLE", action: "Configure Python and GitPython on the selected machine, then rerun the readiness check. No packages were installed." };
-    }
-    var import_node_child_process21;
-    var import_node_util12;
-    var import_node_crypto54;
-    var import_promises11;
-    var import_node_path28;
-    var exec5;
-    var REMOTE_GIT_TIMEOUT_MS;
-    var REMOTE_GIT_CLONE_TIMEOUT_MS;
-    var REMOTE_GIT_CLONE_WATCHDOG_MS;
-    var AttachFailure;
-    var refusal;
-    var busy;
-    var recovery;
-    var LOCK_GUARD_STALE_MS;
-    var guardRecovery;
-    var inFlight3;
-    var init_remote_project_checkout = __esm2({
-      "src/assistant/remote-project-checkout.ts"() {
-        "use strict";
-        import_node_child_process21 = require("child_process");
-        import_node_util12 = require("util");
-        import_node_crypto54 = require("crypto");
-        import_promises11 = require("fs/promises");
-        import_node_path28 = require("path");
-        init_config();
-        exec5 = (0, import_node_util12.promisify)(import_node_child_process21.execFile);
-        REMOTE_GIT_TIMEOUT_MS = 12e4;
-        REMOTE_GIT_CLONE_TIMEOUT_MS = 18 * 6e4;
-        REMOTE_GIT_CLONE_WATCHDOG_MS = 12e4;
-        AttachFailure = class extends Error {
-          constructor(code, stage, action2, preserveCheckout = false) {
-            super(code);
-            this.code = code;
-            this.stage = stage;
-            this.action = action2;
-            this.preserveCheckout = preserveCheckout;
-          }
-        };
-        refusal = (e) => e instanceof AttachFailure ? { success: false, code: e.code, stage: e.stage, action: e.action, attached: false } : { success: false, code: "ATTACH_FAILED", stage: "checkout", action: "Inspect the selected daemon locally before retrying. Existing files were preserved.", attached: false };
-        busy = () => new AttachFailure("ATTACH_IN_PROGRESS", "checkout", "Wait for the current attachment result; do not retry repeatedly.");
-        recovery = () => new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "Preserve the checkout and lock. Inspect the previous attempt locally before retrying.");
-        LOCK_GUARD_STALE_MS = 6e4;
-        guardRecovery = (guard2) => new AttachFailure(
-          "CHECKOUT_RECOVERY_REQUIRED",
-          "checkout",
-          `A previous attempt was interrupted while holding the lock guard remote-projects/${(0, import_node_path28.basename)(guard2)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`
-        );
-        inFlight3 = /* @__PURE__ */ new Set();
-      }
-    });
-    function formatProjectAttachDisabledHint(info) {
-      const roleLabel = info.role === "source" ? "source" : info.role === "target" ? "target" : "selected";
-      const name = str12(info.machineName).trim();
-      const id4 = str12(info.daemonId).trim();
-      const machineDesc = name && id4 && name !== id4 ? `${name} (${id4})` : name || id4 || "this machine";
-      const stagePart = str12(info.stage).trim() ? ` at stage "${str12(info.stage).trim()}"` : "";
-      return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard \u2192 Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\` enabled.`;
-    }
-    function selected(ctx, args) {
-      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str12(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
-    }
-    function validGrant(grant, selfId, hostId, meshId, identity4, secret) {
-      if (!grant || typeof grant !== "object" || typeof secret !== "string" || !secret.trim()) return false;
-      if (!daemonIdsEquivalent4(str12(grant.target), selfId) || !daemonIdsEquivalent4(str12(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
-      const now = Date.now();
-      if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str12(grant.sig))) return false;
-      const key5 = (0, import_node_crypto55.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto55.createHmac)("sha256", key5).update(`${grant.target}
-${grant.host}
-${grant.meshId}
-${grant.identity}
-${grant.exp}`).digest("hex");
-      return (0, import_node_crypto55.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
-    }
-    function authorizeHost(ctx, args, identity4) {
-      const hostId = str12(args?.hostDaemonId);
-      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent4(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
-      const old = readMeshHostRecord(args.meshId);
-      if (old && !daemonIdsEquivalent4(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
-      const cfg = loadConfig();
-      if (args?.grant !== void 0) {
-        if (!validGrant(args.grant, str12(ctx.deps.statusInstanceId), hostId, args.meshId, identity4, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
-        return old;
-      }
-      const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent4(h, hostId)) || Boolean(old && daemonIdsEquivalent4(old.hostDaemonId, hostId));
-      if (!allowed) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
-      return old;
-    }
-    async function prepare(ctx, args) {
-      const mesh = getMesh(str12(args?.meshId));
-      if (!mesh) throw new AttachFailure("PROJECT_NOT_FOUND", "registration", "Use a project registered on the authenticated source daemon.");
-      const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
-      if (!host.canOwnCoordinator || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("PROJECT_HOST_REQUIRED", "registration", "Request attachment through the registered project host.");
-      const remote = githubRemote(mesh.repoRemoteUrl);
-      if (!remote || remote.identity !== str12(mesh.repoIdentity).toLowerCase()) throw new AttachFailure("LOCAL_ONLY_PROJECT", "registration", "Register a verified GitHub-backed project first; local-only projects cannot attach across machines.");
-      const self = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, ctx.deps.statusInstanceId));
-      if (!self) throw new AttachFailure("SOURCE_CHECKOUT_REQUIRED", "registration", "The project host needs its registered source checkout for remote identity verification.");
-      const origin = githubRemote(await git4(self.workspace, ["remote", "get-url", "origin"]));
-      if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
-      return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
-    }
-    var import_node_crypto55;
-    var str12;
-    var fail4;
-    var attachRemoteProject;
-    var remoteProjectHandlers;
-    var remoteProjectSpecs;
-    var init_remote_project_attach = __esm2({
-      "src/commands/high-family/remote-project-attach.ts"() {
-        "use strict";
-        import_node_crypto55 = require("crypto");
-        init_dist();
-        init_config();
-        init_mesh_config();
-        init_mesh_config_host_pairing();
-        init_mesh_host_memory();
-        init_mesh_host_ownership();
-        init_remote_project_checkout();
-        str12 = (v) => typeof v === "string" ? v : "";
-        fail4 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
-        attachRemoteProject = async (ctx, args) => {
-          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str12(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
-          try {
-            await prepare(ctx, args);
-          } catch (e) {
-            return refusal(e);
-          }
-          if (!ctx.deps.attachRemoteProject) return fail4("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
-          const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
-          if (res && res.code === "PROJECT_ATTACH_DISABLED") {
-            const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
-            const stage = str12(res.stage).trim() || (role === "source" ? "prepare" : "checkout");
-            const daemonId = str12(res.daemonId).trim() || (role === "source" ? str12(ctx.deps.statusInstanceId) : str12(args.targetDaemonId));
-            const machineName = str12(res.machineName).trim() || (role === "source" ? loadConfig().machineNickname?.trim() || daemonId : daemonId);
-            const hint = formatProjectAttachDisabledHint({ stage, role, daemonId, machineName });
-            return {
-              ...res,
-              success: false,
-              attached: false,
-              code: "PROJECT_ATTACH_DISABLED",
-              stage,
-              role,
-              daemonId,
-              machineName,
-              setting: "allowRemoteProjectAttach",
-              error: str12(res.error).includes("allowRemoteProjectAttach") ? res.error : hint,
-              action: str12(res.action).includes("allowRemoteProjectAttach") ? res.action : hint,
-              hint: str12(res.hint).includes("allowRemoteProjectAttach") ? res.hint : hint
-            };
-          }
-          return res;
-        };
-        remoteProjectHandlers = {
-          attach_remote_project: attachRemoteProject,
-          remote_project_attach_settings: async (ctx, args) => {
-            const hasToggleArg = args?.enabled !== void 0 || args?.allowRemoteProjectAttach !== void 0;
-            const action2 = args?.action === void 0 ? hasToggleArg ? "set" : "get" : str12(args.action);
-            if (action2 === "get") {
-              const cfg = loadConfig();
-              const enabled2 = cfg.allowRemoteProjectAttach === true;
-              return { success: true, enabled: enabled2, allowRemoteProjectAttach: enabled2, daemonId: str12(ctx.deps.statusInstanceId) };
-            }
-            if (action2 !== "set") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected action get or set." };
-            const rawEnabled = args?.enabled !== void 0 ? args.enabled : args?.allowRemoteProjectAttach;
-            if (typeof rawEnabled !== "boolean") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected boolean enabled." };
-            const updated = updateConfig({ allowRemoteProjectAttach: rawEnabled });
-            const enabled = updated.allowRemoteProjectAttach === true;
-            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str12(ctx.deps.statusInstanceId) };
-          },
-          remote_project_prepare: async (ctx, args) => {
-            try {
-              const { mesh, remote } = await prepare(ctx, args);
-              return { success: true, meshId: mesh.id, ...remote, hostDaemonId: ctx.deps.statusInstanceId };
-            } catch (e) {
-              return refusal(e);
-            }
-          },
-          remote_project_checkout: async (ctx, args) => {
-            try {
-              selected(ctx, args);
-              const remote = githubRemote(args?.url);
-              if (!remote || remote.identity !== args?.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str12(args?.meshId))) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "repository_access", "Only canonical verified GitHub projects are supported.");
-              authorizeHost(ctx, args, remote.identity);
-              const checkout = await checkoutRemote(args.meshId, remote);
-              return { success: true, ...checkout, meshId: args.meshId, identity: remote.identity, targetDaemonId: ctx.deps.statusInstanceId, stage: "checkout", attached: false };
-            } catch (e) {
-              return refusal(e);
-            }
-          },
-          remote_project_register: async (ctx, args) => {
-            try {
-              const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
-              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str12(args.targetDaemonId)) || !str12(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
-              const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
-              if (existing) return { success: true, nodeId: existing.id, attached: true };
-              if (hostSynthesized) {
-                const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
-                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
-              }
-              const result = await ctx.execute("add_mesh_node", { meshId: mesh.id, workspace: args.workspace, repoRoot: args.workspace, daemonId: args.targetDaemonId }, "internal", { inProcess: true });
-              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
-            } catch (e) {
-              return refusal(e);
-            }
-          },
-          remote_project_accept: async (ctx, args) => {
-            try {
-              selected(ctx, args);
-              const remote = githubRemote(args.url);
-              if (!remote || remote.identity !== args.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str12(args.meshId)) || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str12(args.hostDaemonId))) throw new AttachFailure("ATTACH_SCOPE_MISMATCH", "registration", "Use the authenticated project attachment flow.");
-              const workspace = await managedCheckoutPath(args.meshId, remote.identity);
-              if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
-              const old = authorizeHost(ctx, args, remote.identity);
-              await verifyCheckout(workspace, remote.identity);
-              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail4("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
-              const resources = await pythonResourcePreflight();
-              return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? "ready" : "resource_preflight" };
-            } catch (e) {
-              return refusal(e);
-            }
-          }
-        };
-        remoteProjectSpecs = {
-          attach_remote_project: { sources: ["ipc", "standalone"] },
-          remote_project_attach_settings: { sources: ["p2p", "ws", "standalone"] },
-          remote_project_prepare: { sources: ["project_attach"] },
-          remote_project_checkout: { sources: ["project_attach"] },
-          remote_project_register: { sources: ["project_attach"] },
-          remote_project_accept: { sources: ["project_attach"] }
-        };
-      }
-    });
-    function readTaskReportPage(db2, meshId, cursor) {
-      const row2 = db2.prepare(`SELECT version,attempt,status,created_at,
-        CASE WHEN length(envelope_json)<=1048576 THEN envelope_json ELSE NULL END envelope_json
-        FROM mesh_task_outputs WHERE mesh_id=? AND task_id=? ${cursor.outputVersion === void 0 ? "" : "AND version=?"} ORDER BY version DESC LIMIT 1`).get(...[meshId, cursor.taskId, ...cursor.outputVersion === void 0 ? [] : [cursor.outputVersion]]);
-      if (!row2) return { success: false, code: "original_report_unavailable", reason: "exact_task_output_not_found" };
-      if (!row2.envelope_json) return { success: false, code: "original_report_unavailable", reason: "task_output_exceeds_recovery_bound" };
-      let envelope;
-      try {
-        envelope = JSON.parse(row2.envelope_json);
-      } catch {
-        return { success: false, code: "original_report_unavailable", reason: "task_output_invalid" };
-      }
-      if (typeof envelope?.final_summary !== "string") return { success: false, code: "original_report_unavailable", reason: "task_output_has_no_original_summary" };
-      const page = pageAttemptReport(envelope.final_summary, { attemptId: String(row2.attempt), coordinatorSessionId: "", offset: cursor.offset, reportId: cursor.reportId }, "mesh_task_outputs");
-      if (!page.success) return page;
-      const { attemptId: _attemptId, coordinatorSessionId: _sessionId, ...result } = page;
-      const sourceComplete = envelope.evidence?.mayBeTruncated === false;
-      return {
-        ...result,
-        meshId,
-        taskId: cursor.taskId,
-        outputVersion: row2.version,
-        attempt: row2.attempt,
-        status: row2.status,
-        createdAt: row2.created_at,
-        sourceComplete,
-        complete: result.complete && sourceComplete,
-        ...sourceComplete ? {} : { originalCompleteness: envelope.evidence?.mayBeTruncated === true ? "truncated_at_source" : "unknown", unavailableReason: "source_does_not_prove_complete_original" },
-        sourceSessionId: typeof envelope.source?.session_id === "string" ? envelope.source.session_id : null,
-        sourceNodeId: typeof envelope.source?.node_id === "string" ? envelope.source.node_id : null
-      };
-    }
-    var init_task_report_continuation = __esm2({
-      "src/assistant/task-report-continuation.ts"() {
-        "use strict";
-        init_report_continuation();
-      }
-    });
     function bubbleTimestamp(m) {
       const r = rec3(m);
       if (!r) return null;
@@ -130501,7 +128979,7 @@ ${b.text}`).join("\n\n");
         sourceEvent.event_id,
         hash4(sourceEvent.payload_json)
       ];
-      const store3 = new SqliteAssistantRelayStore(db2);
+      const store4 = new SqliteAssistantRelayStore(db2);
       const provenanceFor = (evidenceRef) => ({
         version: ATTEMPT_EVIDENCE_VERSION,
         attemptId: attempt.attemptId,
@@ -130538,11 +129016,11 @@ ${b.text}`).join("\n\n");
           ...windowEnd > attempt.terminal.at ? [windowEnd] : []
         ]);
         const body = renderNativeReplies(bubbles);
-        store3.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: "final_native", parts });
+        store4.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: "final_native", parts });
         return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
       };
       if (selected2.complete && terminalPresent) return finishNative(selected2.bubbles, "native_window");
-      const durable2 = store3.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
+      const durable2 = store4.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
       if (durable2 && verifiedNativeReportParts(durable2.body, durable2.parts, durable2.evidenceRef, attempt.generation)) return {
         body: durable2.body,
         source: "durable_attempt_capture",
@@ -131292,7 +129770,22 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", "Library", "Applications", "vendor", "target", "dist", "build"]);
       }
     });
-    function str13(v) {
+    var assistant_exports = {};
+    __export2(assistant_exports, {
+      ASSISTANT_PROJECTS_SOURCES: () => ASSISTANT_PROJECTS_SOURCES,
+      assistantProjectHandlers: () => assistantProjectHandlers,
+      assistantProjectSpecs: () => assistantProjectSpecs,
+      coordinatorPorts: () => coordinatorPorts,
+      localArtifactList: () => localArtifactList,
+      localArtifactRead: () => localArtifactRead,
+      localAttemptReport: () => localAttemptReport,
+      localProjectRead: () => localProjectRead,
+      localProjectSend: () => localProjectSend,
+      localProjectStatus: () => localProjectStatus,
+      readTailArg: () => readTailArg,
+      remoteFailure: () => remoteFailure
+    });
+    function str12(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function fail5(code, error = code, extra = {}) {
@@ -131330,7 +129823,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           `${verb} rejected forged provenance or worker credentials on assistant ingress`
         );
       }
-      const boundSid = str13(getAssistantRegistry().read()?.sessionId);
+      const boundSid = str12(getAssistantRegistry().read()?.sessionId);
       const callerSid = readAssistantSessionId(rawArgs);
       if (!boundSid || !callerSid || callerSid !== boundSid) {
         return fail5(
@@ -131552,10 +130045,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const body = followerStatusView(rawBody, {
           id: p.mesh.id,
           name: p.mesh.name,
-          repoIdentity: p.followedRemote.sanitizedRepoIdentity || str13(rawBody.repo)
+          repoIdentity: p.followedRemote.sanitizedRepoIdentity || str12(rawBody.repo)
         });
-        const coordState = str13(body.coordinator) || "none";
-        const statusSessionId = str13(body.coordinatorSessionId) || null;
+        const coordState = str12(body.coordinator) || "none";
+        const statusSessionId = str12(body.coordinatorSessionId) || null;
         const hasAuthoritativeSession = coordState === "none" || statusSessionId !== null;
         if (hasAuthoritativeSession) {
           reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -131573,7 +130066,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!readOut.ok) return;
       const rawRead = remoteBody(readOut);
       if (rawRead.reportCursor !== void 0 || rawRead.attemptId !== void 0 || rawRead.taskId !== void 0) return;
-      const readSessionId = str13(rawRead.coordinatorSessionId) || null;
+      const readSessionId = str12(rawRead.coordinatorSessionId) || null;
       if (rawRead.live === true && readSessionId) {
         const prevState = p.followedRemote.lastObserved?.coordinatorState;
         reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -131582,7 +130075,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           coordinatorMissing: false,
           response: rawRead
         });
-      } else if (str13(rawRead.coordinator) === "none") {
+      } else if (str12(rawRead.coordinator) === "none") {
         reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
           coordinatorSessionId: null,
           coordinatorState: "none",
@@ -131660,7 +130153,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         ...ports.relay.missedReports ? { missedReports: ports.relay.missedReports(meshId) } : {}
       });
       const labels = new Map(
-        (Array.isArray(status.machines) ? status.machines : []).map((m) => [str13(m?.node), m?.label ?? null])
+        (Array.isArray(status.machines) ? status.machines : []).map((m) => [str12(m?.node), m?.label ?? null])
       );
       const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
       const routing = preview ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels) : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: "route_preview_unavailable" };
@@ -131672,7 +130165,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         coordinatorSessionId: liveCoord?.sessionId ?? null,
         routing,
         sessions,
-        ...view2.success ? {} : { statusError: str13(view2.error) || "mesh_status_view failed" }
+        ...view2.success ? {} : { statusError: str12(view2.error) || "mesh_status_view failed" }
       };
     }
     async function localProjectSend(ports, mesh, text4, clientId) {
@@ -131691,13 +130184,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!sent.success) {
         return {
           ok: false,
-          code: str13(sent.reason) || str13(sent.code) || "send_failed",
-          error: str13(sent.error) || "send_failed",
+          code: str12(sent.reason) || str12(sent.code) || "send_failed",
+          error: str12(sent.error) || "send_failed",
           detail: { launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId }
         };
       }
       const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
-      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str13(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str12(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
     }
     function readTailArg(raw) {
       const n = Number(raw);
@@ -131717,7 +130210,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
       if (!sessionId) return { ok: true, result: { coordinator: "none", messages: [] } };
       const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: Math.max(tail * 4, 40) });
-      if (!chat.success) return { ok: false, error: str13(chat.error) || "read_chat failed", coordinatorSessionId: sessionId };
+      if (!chat.success) return { ok: false, error: str12(chat.error) || "read_chat failed", coordinatorSessionId: sessionId };
       return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, sourceComplete: verifiedNativeRead(chat, sessionId), ...compactTranscriptTail(chat, tail) } };
     }
     function expandPath3(raw) {
@@ -131729,18 +130222,18 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return want ? meshes.find((m) => normalizeRepoIdentity(m.repoIdentity ?? "") === want) : void 0;
     }
     function localArtifactList(meshId, args) {
-      const store3 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-      const sessionId = str13(args.sessionId ?? args.session_id) || void 0;
-      const missionId = str13(args.missionId ?? args.mission_id) || void 0;
+      const store4 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+      const sessionId = str12(args.sessionId ?? args.session_id) || void 0;
+      const missionId = str12(args.missionId ?? args.mission_id) || void 0;
       const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
-      const artifacts = store3.listByMesh(meshId, { sessionId, missionId, limit });
+      const artifacts = store4.listByMesh(meshId, { sessionId, missionId, limit });
       return { meshId, artifacts, attachments: artifacts.map(toChatAttachmentMeta) };
     }
     async function localArtifactRead(ports, meshId, args, ctx) {
-      const artifactId = str13(args.artifactId ?? args.artifact_id);
+      const artifactId = str12(args.artifactId ?? args.artifact_id);
       if (!artifactId) return { ok: false, code: "invalid_args", error: "artifactId required" };
-      const store3 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-      const record7 = store3.getById(artifactId);
+      const store4 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+      const record7 = store4.getById(artifactId);
       if (!record7) return { ok: false, code: "artifact_not_found", error: `Artifact '${artifactId}' not found.` };
       if (record7.meshId !== meshId) {
         return { ok: false, code: "cross_mesh_artifact_denied", error: `Artifact '${artifactId}' does not belong to mesh '${meshId}'.` };
@@ -131763,7 +130256,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
           const p2pRes = p2pRaw && typeof p2pRaw === "object" && "result" in p2pRaw && p2pRaw.result && typeof p2pRaw.result === "object" ? p2pRaw.result : p2pRaw;
           if (!p2pRes || p2pRes.success === false) {
-            return { ok: false, code: str13(p2pRes?.code) || "artifact_origin_unreachable", error: str13(p2pRes?.error) || "Failed to read artifact from origin daemon." };
+            return { ok: false, code: str12(p2pRes?.code) || "artifact_origin_unreachable", error: str12(p2pRes?.error) || "Failed to read artifact from origin daemon." };
           }
           const isBase64Image = record7.kind === "image" || p2pRes.encoding === "base64";
           const transportMaxBytes = isBase64Image ? maxBase64EncodedBytes(MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
@@ -131809,7 +130302,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       }
       try {
-        const readRes = store3.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
+        const readRes = store4.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
         return {
           ok: true,
           result: {
@@ -131826,7 +130319,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
         };
       } catch (err) {
-        return { ok: false, code: str13(err?.code) || "artifact_read_failed", error: err instanceof Error ? err.message : String(err) };
+        return { ok: false, code: str12(err?.code) || "artifact_read_failed", error: err instanceof Error ? err.message : String(err) };
       }
     }
     async function localAttemptReport(ports, meshId, sessionId, attemptId) {
@@ -131835,7 +130328,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const runtime2 = MeshRuntimeStore.getInstance();
       return recoverAttemptReport(runtime2.db, runtime2.turnStore().getAttempt(attemptId), meshId, sessionId, ports.execute);
     }
-    var import_crypto40;
+    var import_crypto39;
     var import_fs44;
     var import_os8;
     var import_path43;
@@ -131862,7 +130355,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_mesh_runtime_store();
         init_environment_inventory();
         init_report_continuation();
-        import_crypto40 = require("crypto");
+        import_crypto39 = require("crypto");
         import_fs44 = require("fs");
         import_os8 = require("os");
         import_path43 = require("path");
@@ -131953,7 +130446,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const remoteHosts = [];
           for (const mesh of meshes) {
             const row2 = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id, remoteHosts);
-            const scratch = row2.hosting === "remote" && !str13(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
+            const scratch = row2.hosting === "remote" && !str12(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
             (scratch ? unmanaged : managed).push(row2);
           }
           for (const entry of followedActive) {
@@ -132008,11 +130501,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const body = p.followedRemote ? followerStatusView(rawBody, {
             id: meshId,
             name: p.mesh.name,
-            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str13(rawBody.repo)
+            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str12(rawBody.repo)
           }) : rawBody;
           if (p.followedRemote) {
-            const coordState = str13(body.coordinator) || "none";
-            const statusSessionId = str13(body.coordinatorSessionId) || null;
+            const coordState = str12(body.coordinator) || "none";
+            const statusSessionId = str12(body.coordinatorSessionId) || null;
             const hasAuthoritativeSession = coordState === "none" || statusSessionId !== null;
             reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
               ...hasAuthoritativeSession ? { coordinatorSessionId: coordState === "none" ? null : statusSessionId } : {},
@@ -132022,7 +130515,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
           const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
-          const repo = p.followedRemote ? typeof body.repo === "string" ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str13(rawBody.repo)) : p.mesh.repoIdentity;
+          const repo = p.followedRemote ? typeof body.repo === "string" ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str12(rawBody.repo)) : p.mesh.repoIdentity;
           return wrap(p.slug, meshId, {
             ...body,
             name: p.mesh.name,
@@ -132049,11 +130542,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
           const where = { project: p.slug, meshId };
-          const clientId = str13(args.messageId) || (0, import_crypto40.randomUUID)();
+          const clientId = str12(args.messageId) || (0, import_crypto39.randomUUID)();
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           if (p.remote) {
-            const explicitExpected = str13(args.expectedCoordinatorSessionId);
-            const expectedCoordinatorSessionId = explicitExpected || str13(p.followedRemote?.coordinatorSessionId);
+            const explicitExpected = str12(args.expectedCoordinatorSessionId);
+            const expectedCoordinatorSessionId = explicitExpected || str12(p.followedRemote?.coordinatorSessionId);
             const out = await callRemote(ports, { ...p, remote: p.remote }, "send", {
               text: composed.text,
               clientId,
@@ -132073,8 +130566,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               return remoteFailure(where, p.remote, out, ports, p.followedRemote);
             }
             const body = remoteBody(out);
-            const remoteCursor = str13(body.cursor) || null;
-            const remoteCoordSessionId = str13(body.coordinatorSessionId) || null;
+            const remoteCursor = str12(body.cursor) || null;
+            const remoteCoordSessionId = str12(body.coordinatorSessionId) || null;
             const activeFollowed = p.followedRemote ? verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote, body) : null;
             if (!p.followedRemote || activeFollowed) {
               const prevCoordSessionId = activeFollowed?.coordinatorSessionId ?? null;
@@ -132097,11 +130590,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
             }
             return wrap(p.slug, meshId, {
-              status: str13(body.status) || "accepted",
+              status: str12(body.status) || "accepted",
               ...body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {},
               launched: body.launched === true,
               coordinatorSessionId: remoteCoordSessionId,
-              messageId: str13(body.messageId) || null,
+              messageId: str12(body.messageId) || null,
               host: p.remote.label,
               via: "relay",
               ...attached
@@ -132130,7 +130623,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
             const rawBody = remoteBody(out);
             if (p.followedRemote && !continuation && rawBody.reportCursor === void 0 && rawBody.attemptId === void 0 && rawBody.taskId === void 0) {
-              const readSessionId = str13(rawBody.coordinatorSessionId) || null;
+              const readSessionId = str12(rawBody.coordinatorSessionId) || null;
               if (rawBody.live === true && readSessionId) {
                 const prevState = p.followedRemote.lastObserved?.coordinatorState;
                 reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -132139,7 +130632,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                   coordinatorMissing: false,
                   response: rawBody
                 });
-              } else if (str13(rawBody.coordinator) === "none") {
+              } else if (str12(rawBody.coordinator) === "none") {
                 reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
                   coordinatorSessionId: null,
                   coordinatorState: "none",
@@ -132158,55 +130651,55 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
         projectAdd = assistantVerb(ASSISTANT_VERB2.projectAdd, async (ports, args) => {
-          const raw = str13(args.path);
+          const raw = str12(args.path);
           if (!raw) return fail5("invalid_args", "path required");
           if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail5("invalid_args", "path must be absolute");
           const path124 = (0, import_path43.resolve)(expandPath3(raw));
           if (!(0, import_fs44.existsSync)(path124) || !(0, import_fs44.statSync)(path124).isDirectory()) return fail5("path_not_found", `not a directory: ${path124}`);
           const plan = await ports.execute("plan_mesh_onboarding", { workspace: path124, operation: "auto" });
-          const identity4 = str13(plan?.discovery?.repoIdentity);
+          const identity4 = str12(plan?.discovery?.repoIdentity);
           const meshes = ports.listMeshes();
           const existing = identity4 ? existingProject(meshes, identity4) : void 0;
-          if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str13(plan?.code))) {
+          if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str12(plan?.code))) {
             const mesh = existing ?? meshes.find((m) => (m.nodes ?? []).some((n) => (0, import_path43.resolve)(n.workspace) === path124));
             const slug2 = mesh ? projectSlugs(meshes).get(mesh.id) ?? mesh.id : "";
             return fail5("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity4 || null });
           }
-          if (!plan?.success) return fail5(str13(plan?.code) || "onboarding_plan_failed", str13(plan?.error) || "onboarding plan failed", { action: plan?.action });
+          if (!plan?.success) return fail5(str12(plan?.code) || "onboarding_plan_failed", str12(plan?.error) || "onboarding plan failed", { action: plan?.action });
           const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
           const createStep = steps.find((s2) => s2?.command === "create_mesh");
           const addStep2 = steps.find((s2) => s2?.command === "add_mesh_node");
           if (plan.plan?.kind !== "create_mesh_and_onboard" || !createStep || !addStep2) {
-            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str13(plan.plan?.kind) || "none"}`);
+            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str12(plan.plan?.kind) || "none"}`);
           }
-          const name = str13(args.name) || projectSlugBase(identity4) || str13(createStep.args?.name);
+          const name = str12(args.name) || projectSlugBase(identity4) || str12(createStep.args?.name);
           const created = await ports.execute("create_mesh", { ...createStep.args, name, workspace: path124 });
-          const meshId = str13(created?.mesh?.id);
-          if (!created?.success || !meshId) return fail5("project_create_failed", str13(created?.error) || "create_mesh failed");
+          const meshId = str12(created?.mesh?.id);
+          if (!created?.success || !meshId) return fail5("project_create_failed", str12(created?.error) || "create_mesh failed");
           const selfDaemonId = ports.selfDaemonId();
           const node = await ports.execute("add_mesh_node", {
             ...addStep2.args,
             meshId,
-            workspace: str13(addStep2.args?.workspace) || path124,
+            workspace: str12(addStep2.args?.workspace) || path124,
             ...selfDaemonId ? { daemonId: selfDaemonId } : {}
           });
           if (!node?.success) {
             await ports.execute("delete_mesh", { meshId }).catch(() => void 0);
-            return fail5("project_add_node_failed", str13(node?.error) || "add_mesh_node failed", { rolledBack: true });
+            return fail5("project_add_node_failed", str12(node?.error) || "add_mesh_node failed", { rolledBack: true });
           }
           const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity4) || meshId;
           return wrap(slug, meshId, {
             created: true,
             name,
             repoIdentity: identity4,
-            workspace: str13(node.node?.workspace) || path124,
-            nodeId: str13(node.node?.id) || null,
+            workspace: str12(node.node?.workspace) || path124,
+            nodeId: str12(node.node?.id) || null,
             ...Array.isArray(plan.warnings) && plan.warnings.length ? { warnings: plan.warnings } : {}
           });
         });
         discover = assistantVerb(ASSISTANT_VERB2.discoverRepos, async (ports, args) => {
           const meshes = ports.listMeshes();
-          const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str13(n.workspace)).filter(Boolean));
+          const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str12(n.workspace)).filter(Boolean));
           const roots = Array.isArray(args.roots) && args.roots.length > 0 ? explicitDiscoverRoots(args.roots) : defaultDiscoverRoots(workspaces);
           if (roots.length === 0) return fail5("invalid_args", "roots must be absolute paths");
           const result = discoverRepos({
@@ -132222,8 +130715,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
-          const sessionId = str13(args.sessionId ?? args.session_id) || void 0;
-          const missionId = str13(args.missionId ?? args.mission_id) || void 0;
+          const sessionId = str12(args.sessionId ?? args.session_id) || void 0;
+          const missionId = str12(args.missionId ?? args.mission_id) || void 0;
           const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
@@ -132248,7 +130741,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           return { ...wrap(p.slug, meshId, listed), artifacts: listed.artifacts, attachments: listed.attachments };
         });
         artifactRead = assistantVerb(ASSISTANT_VERB2.artifactRead, async (ports, args, ctx) => {
-          const artifactId = str13(args.artifactId ?? args.artifact_id);
+          const artifactId = str12(args.artifactId ?? args.artifact_id);
           if (!artifactId) return fail5("invalid_args", "artifactId required");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
@@ -132299,6 +130792,1883 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           [ASSISTANT_VERB2.artifactList]: { sources: [...ASSISTANT_TOOL_SOURCES] },
           [ASSISTANT_VERB2.artifactRead]: { sources: [...ASSISTANT_TOOL_SOURCES] }
         });
+      }
+    });
+    function formatDecisionDelivery(itemId, d) {
+      const kind = d.delivery?.kind ?? "answered";
+      if (kind === "undone") return `[owner decision undone ${itemId}]`;
+      const answer2 = describeDecisionAnswer(d);
+      const auto = d.answer?.by === "auto_recommended" ? " (auto-applied: the deadline passed, recommended option)" : "";
+      if (kind === "changed") return `[owner decision changed ${itemId}] \u2192 ${answer2}${auto}`;
+      return `[owner decision ${itemId}] ${truncateMissionText(d.question, QUESTION_ECHO_MAX)} \u2192 ${answer2}${auto}`;
+    }
+    async function deliverDecisionAnswer(meshId, itemId, send, opts) {
+      const nowMs2 = opts?.nowMs ?? Date.now();
+      const items = MeshRuntimeStore.getInstance().missionItems();
+      const item = items.getItem(meshId, itemId);
+      const d = item?.decision;
+      const delivery = d?.delivery;
+      if (!item || !d || !delivery || delivery.state !== "pending") return "skipped";
+      if (opts?.respectRetryDelay && delivery.lastAttemptAt && nowMs2 - Date.parse(delivery.lastAttemptAt) < DECISION_DELIVERY_RETRY_MS) return "skipped";
+      const messageId = delivery.messageId;
+      if (inFlight4.has(messageId)) return "skipped";
+      inFlight4.add(messageId);
+      try {
+        const text4 = formatDecisionDelivery(item.id, d);
+        let result;
+        try {
+          result = await send({ meshId, text: text4, messageId });
+        } catch (e) {
+          result = { ok: false, code: "send_threw", error: e?.message || String(e) };
+        }
+        const fresh = items.getItem(meshId, itemId);
+        const fd = fresh?.decision;
+        if (!fresh || !fd?.delivery || fd.delivery.messageId !== messageId) {
+          return result.ok ? result.duplicate ? "duplicate" : "sent" : "failed";
+        }
+        const attemptIso = new Date(nowMs2).toISOString();
+        const next = result.ok ? { ...fd.delivery, state: "sent", lastAttemptAt: attemptIso } : { ...fd.delivery, state: "pending", lastAttemptAt: attemptIso };
+        items.updateItem(meshId, itemId, { decision: { ...fd, delivery: next } });
+        if (!result.ok) LOG.warn("MissionDecision", `delivery of ${messageId} to mesh ${meshId} failed (${result.code}): ${result.error} \u2014 will retry`);
+        notifyMissionChanged(meshId);
+        return result.ok ? result.duplicate ? "duplicate" : "sent" : "failed";
+      } finally {
+        inFlight4.delete(messageId);
+      }
+    }
+    function pendingDecisionDeliveries(meshId) {
+      return MeshRuntimeStore.getInstance().missionItems().listByKindStates(meshId, "decision", ["open", "answered"]).filter((i) => i.decision?.delivery?.state === "pending").map((i) => i.id);
+    }
+    function createCoordinatorDecisionSender(getPorts) {
+      return async ({ meshId, text: text4, messageId }) => {
+        const mesh = getMesh(meshId);
+        if (!mesh) return { ok: false, code: "mesh_not_hosted", error: `mesh ${meshId} is not configured on this daemon` };
+        const { localProjectSend: localProjectSend2 } = await Promise.resolve().then(() => (init_assistant(), assistant_exports));
+        const sent = await localProjectSend2(await getPorts(), mesh, text4, messageId);
+        if (!sent.ok) return { ok: false, code: sent.code, error: sent.error };
+        return { ok: true, ...sent.status === "duplicate" ? { duplicate: true } : {} };
+      };
+    }
+    function componentsDecisionSender(components) {
+      return createCoordinatorDecisionSender(async () => {
+        const router = components.router;
+        if (!router) throw new Error("command router not ready");
+        const { getAssistantProjectPorts: getAssistantProjectPorts2 } = await Promise.resolve().then(() => (init_assistant_project_ports(), assistant_project_ports_exports));
+        const selfDaemonId = typeof router.deps?.statusInstanceId === "string" ? router.deps.statusInstanceId.trim() : "";
+        return getAssistantProjectPorts2({
+          components: () => components,
+          execute: (cmd, args) => router.execute(cmd, args, "ipc", { inProcess: true }),
+          selfDaemonId,
+          transport: {
+            ...router.deps?.dispatchMeshCommand ? { dispatch: router.deps.dispatchMeshCommand } : {},
+            ...router.deps?.getMeshPeerConnectionStatus ? { peerStatus: router.deps.getMeshPeerConnectionStatus } : {}
+          }
+        });
+      });
+    }
+    async function runDecisionTick(meshId, send, nowMs2 = Date.now()) {
+      const out = { autoApplied: 0, delivered: 0, failed: 0 };
+      try {
+        out.autoApplied = processDecisionDeadlines(meshId, nowMs2).autoApplied.length;
+        for (const itemId of pendingDecisionDeliveries(meshId)) {
+          const r = await deliverDecisionAnswer(meshId, itemId, send, { nowMs: nowMs2, respectRetryDelay: true });
+          if (r === "sent" || r === "duplicate") out.delivered++;
+          else if (r === "failed") out.failed++;
+        }
+      } catch (e) {
+        LOG.warn("MissionDecision", `decision tick failed for mesh ${meshId}: ${e?.message || e}`);
+      }
+      return out;
+    }
+    var DECISION_DELIVERY_RETRY_MS;
+    var QUESTION_ECHO_MAX;
+    var inFlight4;
+    var init_mesh_mission_decision_delivery = __esm2({
+      "src/mesh/mesh-mission-decision-delivery.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_config();
+        init_logger();
+        init_mesh_runtime_store();
+        init_mesh_mission_decisions();
+        init_mesh_mission_change_notifier();
+        DECISION_DELIVERY_RETRY_MS = 15e3;
+        QUESTION_ECHO_MAX = 200;
+        inFlight4 = /* @__PURE__ */ new Set();
+      }
+    });
+    var mesh_housekeeping_tick_exports = {};
+    __export2(mesh_housekeeping_tick_exports, {
+      DISK_RETENTION_INTERVAL_MS: () => DISK_RETENTION_INTERVAL_MS,
+      IDLE_SESSION_REAP_INTERVAL_MS: () => IDLE_SESSION_REAP_INTERVAL_MS,
+      claimPendingQueues: () => claimPendingQueues,
+      hostedMeshes: () => hostedMeshes,
+      runMeshHousekeepingTick: () => runMeshHousekeepingTick,
+      startMeshHousekeeping: () => startMeshHousekeeping
+    });
+    function hostedMeshes(components, meshes = listMeshes()) {
+      const drainDaemonIds = resolveCoordinatorDaemonIds(components);
+      const out = [];
+      for (const mesh of meshes) {
+        const selfIds = resolveCoordinatorSelfIds(mesh, drainDaemonIds);
+        if (daemonHostsMesh(mesh, selfIds)) out.push({ mesh, selfIds });
+      }
+      return out;
+    }
+    async function claimPendingQueues(components, meshes) {
+      let store4;
+      try {
+        store4 = MeshRuntimeStore.getInstance();
+      } catch {
+        return;
+      }
+      for (const { mesh } of hostedMeshes(components, meshes)) {
+        try {
+          if (store4.pendingQueueTaskCount(mesh.id) === 0) continue;
+        } catch {
+        }
+        try {
+          await triggerMeshQueue(components, mesh.id);
+        } catch (e) {
+          LOG.warn("MeshHousekeeping", `Pending-claim trigger failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+      }
+    }
+    async function runMeshHousekeepingTick(components, state2 = {}, nowMs2 = Date.now()) {
+      const meshesSnapshot = listMeshes();
+      const hosted = hostedMeshes(components, meshesSnapshot);
+      let store4;
+      try {
+        store4 = MeshRuntimeStore.getInstance();
+      } catch {
+        store4 = void 0;
+      }
+      if (components.router) {
+        for (const mesh of meshesSnapshot) {
+          try {
+            if (components.router.getCachedInlineMesh(mesh.id)) components.router.getCachedInlineMesh(mesh.id, mesh);
+          } catch (e) {
+            LOG.warn("MeshHousekeeping", `Inline-cache membership merge failed for mesh ${mesh.id}: ${e?.message || e}`);
+          }
+        }
+      }
+      for (const { mesh } of hosted) {
+        try {
+          await runPendingCoordinatorCatchupScan(components, mesh);
+        } catch (e) {
+          LOG.warn("MeshHousekeeping", `Coordinator catch-up scan failed for mesh ${mesh.id}: ${e?.message || e}`);
+        }
+      }
+      if (store4) {
+        for (const { mesh } of hosted) {
+          try {
+            sweepQueueDependencyStalls(mesh.id);
+          } catch (e) {
+            LOG.warn("MeshHousekeeping", `Queue dependency stall sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+          }
+        }
+        for (const { mesh } of hosted) {
+          try {
+            runOrphanedDispatchSweep(components, mesh.id, nowMs2);
+          } catch (e) {
+            LOG.warn("MeshHousekeeping", `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
+          }
+        }
+        const decisionSend = componentsDecisionSender(components);
+        for (const { mesh } of hosted) {
+          await runDecisionTick(mesh.id, decisionSend, nowMs2);
+        }
+      }
+      const diskDue = state2.lastDiskRetentionRunAt === void 0 || nowMs2 - state2.lastDiskRetentionRunAt >= DISK_RETENTION_INTERVAL_MS;
+      if (diskDue) {
+        state2.lastDiskRetentionRunAt = nowMs2;
+        try {
+          runDiskRetentionSweep(nowMs2);
+        } catch (e) {
+          LOG.warn("MeshHousekeeping", `Disk retention sweep failed: ${e?.message || e}`);
+        }
+        pruneMeshRuntimeRetention();
+        for (const { mesh } of hosted) {
+          try {
+            await detectAndSignalOrphanWorktrees(mesh, nowMs2);
+          } catch (e) {
+            LOG.warn("MeshHousekeeping", `Orphan worktree detection failed for mesh ${mesh.id}: ${e?.message || e}`);
+          }
+        }
+        if (components.router && resolveWorktreeNodeRetentionGraceMs() > 0) {
+          const router = components.router;
+          const retentionDeps = {
+            precheckLocalWorktreeRemovable: (args) => router.precheckLocalWorktreeRemovable(args),
+            cleanupLocalWorktreeNode: (args) => router.cleanupLocalWorktreeNode(args),
+            getWorktreeForceCleanupConvergence: (args) => router.getWorktreeForceCleanupConvergence(args),
+            cleanupMeshSessions: (args) => router.cleanupMeshSessions(args),
+            listSessions: async () => {
+              try {
+                return await router.deps.sessionHostControl?.listSessions() ?? [];
+              } catch {
+                return [];
+              }
+            },
+            getCachedInlineMesh: (meshId) => router.getCachedInlineMesh(meshId),
+            removeInlineMeshNode: (meshId, mesh, nodeId) => router.removeInlineMeshNode(meshId, mesh, nodeId),
+            invalidateAggregateMeshStatus: (meshId) => router.invalidateAggregateMeshStatus(meshId)
+          };
+          const tickId = `housekeeping-${nowMs2}`;
+          for (const { mesh } of hosted) {
+            try {
+              await runWorktreeNodeRetentionTick(retentionDeps, { mesh, nowMs: nowMs2, tickId, execute: true, executeMode: "auto" });
+            } catch (e) {
+              LOG.warn("MeshHousekeeping", `Worktree-node retention failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+          }
+        }
+      }
+      try {
+        contractHousekeeping(hosted.map((h) => h.mesh.id), {
+          deposit: depositWorkerMailboxMessage,
+          publishHeld: (note2) => publishHeldHandoffNote(note2, nowMs2)
+        }, nowMs2);
+      } catch (e) {
+        LOG.warn("MeshHousekeeping", `Contract housekeeping failed: ${e?.message || e}`);
+      }
+      if (components.router) {
+        const reapDue = state2.lastIdleSessionReapRunAt === void 0 || nowMs2 - state2.lastIdleSessionReapRunAt >= IDLE_SESSION_REAP_INTERVAL_MS;
+        if (reapDue) {
+          state2.lastIdleSessionReapRunAt = nowMs2;
+          for (const { mesh } of hosted) {
+            try {
+              await runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, nowMs2), { meshId: mesh.id, policy: (() => {
+                const m = getMesh(mesh.id);
+                return m ? resolveMeshPolicy2(m.policy) : void 0;
+              })(), now: nowMs2 });
+            } catch (e) {
+              LOG.warn("MeshHousekeeping", `Idle session reap failed for mesh ${mesh.id}: ${e?.message || e}`);
+            }
+          }
+        }
+      }
+    }
+    function startMeshHousekeeping(components, intervalMs, opts = {}) {
+      const state2 = {};
+      let running = false;
+      const timer = setInterval(() => {
+        if (running) return;
+        running = true;
+        void (async () => {
+          await runMeshHousekeepingTick(components, state2);
+          if (opts.claim) await claimPendingQueues(components);
+        })().catch((e) => LOG.warn("MeshHousekeeping", `Housekeeping tick error: ${e?.message || e}`)).finally(() => {
+          running = false;
+        });
+      }, intervalMs);
+      if (typeof timer.unref === "function") timer.unref();
+      LOG.info("MeshHousekeeping", `Mesh housekeeping started (interval ${intervalMs}ms, local daemon ${readText(getMachineId()) || "unknown"})`);
+      return {
+        stop() {
+          clearInterval(timer);
+          LOG.info("MeshHousekeeping", "Mesh housekeeping stopped");
+        }
+      };
+    }
+    var DISK_RETENTION_INTERVAL_MS;
+    var IDLE_SESSION_REAP_INTERVAL_MS;
+    var init_mesh_housekeeping_tick = __esm2({
+      "src/mesh/mesh-housekeeping-tick.ts"() {
+        "use strict";
+        init_config();
+        init_mesh_config();
+        init_logger();
+        init_repo_mesh_types();
+        init_mesh_runtime_store();
+        init_mesh_events_coordinator();
+        init_mesh_reconcile_identity();
+        init_mesh_disk_retention();
+        init_mesh_runtime_store();
+        init_mesh_worktree_retention();
+        init_mesh_session_lifetime_runtime();
+        init_mesh_idle_session_reaper();
+        init_mesh_retention_config();
+        init_mesh_auto_fast_forward();
+        init_mesh_queue_dependency_notice();
+        init_mesh_orphaned_dispatch_sweep();
+        init_mesh_mission_decision_delivery();
+        init_dist();
+        init_contract_runtime();
+        init_worker_mailbox();
+        init_worker_report();
+        DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1e3;
+        IDLE_SESSION_REAP_INTERVAL_MS = 5 * 60 * 1e3;
+      }
+    });
+    var mesh_notification_status_line_exports = {};
+    __export2(mesh_notification_status_line_exports, {
+      MESH_STATUS_LINE_MAX_CHARS: () => MESH_STATUS_LINE_MAX_CHARS,
+      buildMeshStatusLineForNotification: () => buildMeshStatusLineForNotification,
+      renderMeshStatusLine: () => renderMeshStatusLine
+    });
+    function renderMeshStatusLine(inputs) {
+      const total = inputs.totalActiveCount;
+      if (!Number.isFinite(total) || total <= 0) return null;
+      const parts = [];
+      for (const status of STATUS_RENDER_ORDER) {
+        const count = inputs.statusCounts?.[status] ?? 0;
+        if (count > 0) parts.push(`${count} ${status}`);
+      }
+      const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
+      const entries2 = [];
+      const sorted = inputs.activeWork.filter((record7) => typeof record7?.taskId === "string" && record7.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+      for (const record7 of sorted) {
+        const id4 = record7.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries2.push(`${id4} ${record7.status}`);
+      }
+      if (entries2.length === 0) return clampToBound(head);
+      let line = head;
+      const shown = [];
+      for (let i = 0; i < entries2.length; i++) {
+        const isLast = i === entries2.length - 1;
+        const candidate = [...shown, entries2[i]];
+        const suffix = ` (${candidate.join(", ")}${isLast ? "" : ", ..."})`;
+        if ((head + suffix).length > MESH_STATUS_LINE_MAX_CHARS) break;
+        shown.push(entries2[i]);
+        line = head + suffix;
+      }
+      if (shown.length === 0) return clampToBound(head);
+      return clampToBound(line);
+    }
+    function clampToBound(line) {
+      if (line.length <= MESH_STATUS_LINE_MAX_CHARS) return line;
+      return `${line.slice(0, MESH_STATUS_LINE_MAX_CHARS - 1)}\u2026`;
+    }
+    function buildMeshStatusLineForNotification(meshId, now, nodes) {
+      if (!meshId) return null;
+      try {
+        const built = buildMeshActiveWork({
+          meshId,
+          queue: getQueue(meshId, { status: ["pending", "assigned"] }),
+          directDispatches: getActiveDirectDispatches(meshId),
+          ledgerEntries: readActiveWorkRecords(meshId, [...ACTIVE_WORK_LEDGER_KINDS]),
+          nodes,
+          now: now ?? Date.now()
+        });
+        return renderMeshStatusLine({
+          activeWork: built.activeWork,
+          statusCounts: built.summary.statusCounts,
+          totalActiveCount: built.summary.totalActiveCount
+        });
+      } catch (e) {
+        LOG.debug("MeshReconcile", `Mesh status line build failed for mesh ${meshId}: ${e?.message || e}`);
+        return null;
+      }
+    }
+    var MESH_STATUS_LINE_MAX_CHARS;
+    var TASK_ID_PREFIX_CHARS;
+    var ACTIVE_WORK_LEDGER_KINDS;
+    var STATUS_RENDER_ORDER;
+    var STATUS_ACTIONABILITY_RANK;
+    var init_mesh_notification_status_line = __esm2({
+      "src/mesh/mesh-notification-status-line.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_active_work();
+        init_mesh_work_queue();
+        init_mesh_local_records();
+        MESH_STATUS_LINE_MAX_CHARS = 200;
+        TASK_ID_PREFIX_CHARS = 7;
+        ACTIVE_WORK_LEDGER_KINDS = [
+          "task_dispatched",
+          "task_completed",
+          "task_failed",
+          "task_stalled",
+          "task_approval_needed",
+          "task_approval_resolved",
+          "task_question_pending",
+          "session_stopped"
+        ];
+        STATUS_RENDER_ORDER = [
+          "awaiting_approval",
+          "awaiting_choice",
+          "failed",
+          "generating",
+          "pending",
+          "assigned",
+          "finalizing",
+          "idle"
+        ];
+        STATUS_ACTIONABILITY_RANK = Object.fromEntries(STATUS_RENDER_ORDER.map((status, i) => [status, i]));
+      }
+    });
+    var assistant_project_ports_exports = {};
+    __export2(assistant_project_ports_exports, {
+      SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS: () => SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS,
+      createDefaultProjectPorts: () => createDefaultProjectPorts,
+      getAssistantProjectPorts: () => getAssistantProjectPorts,
+      preloadAssistantProjectReaders: () => preloadAssistantProjectReaders,
+      setAssistantProjectPortsForTests: () => setAssistantProjectPortsForTests,
+      setAssistantRelayHooks: () => setAssistantRelayHooks
+    });
+    function setAssistantRelayHooks(hooks) {
+      relayHooks = hooks ?? {};
+    }
+    function setAssistantProjectPortsForTests(factory) {
+      factoryOverride = factory;
+    }
+    async function getAssistantProjectPorts(ctx) {
+      if (factoryOverride) return factoryOverride(ctx);
+      await preloadAssistantProjectReaders();
+      return createDefaultProjectPorts(ctx);
+    }
+    function readText4(v) {
+      return typeof v === "string" ? v.trim() : "";
+    }
+    function cliInstances(ctx) {
+      return ctx.components().instanceManager.getByCategory("cli");
+    }
+    function createDefaultProjectPorts(ctx) {
+      const svc = getAssistantServices();
+      const lazy = loadMeshReaders();
+      return {
+        selfDaemonId: () => ctx.selfDaemonId,
+        localNodeFacts: () => buildLocalNodeFacts(),
+        coordinatorSessionAuthorized: (meshId, sid) => lazy.listCoordinatorsForMesh(meshId).some((e) => e.sessionId === sid),
+        listMeshes: () => svc.listMeshes(),
+        isHostedHere: (mesh) => svc.isMeshHostedHere ? svc.isMeshHostedHere(mesh) : lazy.hostedMeshes(ctx.components(), [mesh]).length > 0,
+        aliases: () => lazy.assistantAliases(),
+        coordinators: (meshId) => {
+          const components = ctx.components();
+          const started = new Map(lazy.listCoordinatorsForMesh(meshId).map((e) => [e.sessionId, e.startedAt]));
+          const settingsOf = /* @__PURE__ */ new Map();
+          const terminalIds = /* @__PURE__ */ new Set();
+          for (const inst of cliInstances(ctx)) {
+            const state2 = inst.getState?.();
+            const id4 = readText4(state2?.instanceId);
+            if (!id4) continue;
+            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) {
+              terminalIds.add(id4);
+              continue;
+            }
+            if (state2?.settings && typeof state2.settings === "object") settingsOf.set(id4, state2.settings);
+          }
+          return lazy.listLocalCoordinatorSessions(components, meshId).filter((v) => !terminalIds.has(v.sessionId)).map((v) => ({
+            sessionId: v.sessionId,
+            idle: v.idle,
+            modalParked: v.modalParked,
+            managedByAssistant: settingsOf.get(v.sessionId)?.managedByAssistant === true,
+            ...started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}
+          }));
+        },
+        isCoordinatorLive: async (sessionId) => {
+          const id4 = readText4(sessionId);
+          if (!id4) return "dead";
+          let components;
+          try {
+            components = ctx.components();
+          } catch {
+            return "live";
+          }
+          if (!components) return "live";
+          if (components.sessionRegistry?.wasInstanceTerminated?.(id4)) return "dead";
+          const byCat = typeof components.instanceManager?.getByCategory === "function" ? components.instanceManager.getByCategory("cli") : [];
+          const allInstances = Array.isArray(byCat) ? byCat : [];
+          const inst = components.instanceManager?.getInstance?.(id4) ?? allInstances.find((i) => readText4(i?.getState?.()?.instanceId) === id4);
+          if (inst) {
+            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return "dead";
+            const state2 = inst.getState?.();
+            const adapter = inst.adapter ?? (typeof inst.getAdapter === "function" ? inst.getAdapter() : void 0);
+            const runtimeMeta = (typeof adapter?.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : void 0) ?? state2?.runtime;
+            if (runtimeMeta && typeof runtimeMeta === "object" && !isLiveSessionHostRuntimeMetadata(runtimeMeta)) {
+              return "dead";
+            }
+          }
+          const sessionHostControl = components.router?.deps?.sessionHostControl ?? components.sessionHost?.control ?? components.sessionHostControl;
+          if (sessionHostControl && typeof sessionHostControl.listSessions === "function") {
+            const timedOut = /* @__PURE__ */ Symbol("session_host_liveness_timeout");
+            let timer;
+            try {
+              const records = await Promise.race([
+                Promise.resolve().then(() => sessionHostControl.listSessions()),
+                new Promise((resolve66) => {
+                  timer = setTimeout(() => resolve66(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
+                  timer.unref?.();
+                })
+              ]);
+              if (records === timedOut) return "unknown";
+              if (Array.isArray(records)) {
+                const record7 = records.find((r) => readText4(r?.sessionId ?? r?.runtimeId) === id4);
+                if (!record7 || !isLiveSessionHostRuntimeMetadata(record7)) return "dead";
+                return "live";
+              }
+              return "unknown";
+            } catch {
+              return "unknown";
+            } finally {
+              if (timer !== void 0) clearTimeout(timer);
+            }
+          }
+          return "live";
+        },
+        lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
+        queueCounts: (meshId) => {
+          try {
+            const s2 = lazy.getMeshQueueStats(meshId);
+            return { pending: s2.pending, assigned: s2.assigned, failed: s2.failed };
+          } catch {
+            return null;
+          }
+        },
+        activeMissionCount: (meshId) => {
+          try {
+            return lazy.getMeshMissions(meshId, ["active"]).filter((m) => !isCarryOverMissionRecord(m)).length;
+          } catch {
+            return null;
+          }
+        },
+        pendingApprovals: (meshId) => {
+          let n = 0;
+          for (const inst of cliInstances(ctx)) {
+            const state2 = inst.getState?.();
+            const settings2 = state2?.settings ?? {};
+            if (readText4(settings2.meshCoordinatorFor) !== meshId && readText4(settings2.meshNodeFor) !== meshId) continue;
+            if (APPROVAL_STATUSES.has(readText4(state2?.status).toLowerCase())) n++;
+          }
+          return n;
+        },
+        relay: relayHooks,
+        execute: ctx.execute,
+        remoteHost: (mesh) => describeRemoteHost(mesh, ctx.selfDaemonId, ctx.transport ?? {}, lazy.peerHostMeshIds),
+        followedRemoteProjects: () => lazy.assistantRegistry().listFollowedRemoteProjects(),
+        followedRemoteHost: (entry) => describeFollowedRemoteHost(
+          entry,
+          ctx.selfDaemonId,
+          lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId),
+          ctx.transport ?? {}
+        ),
+        updateFollowedRemoteObservation: (key5, patch) => {
+          lazy.assistantRegistry().updateFollowedRemoteProject(key5, patch);
+        },
+        markFollowedRemoteRevoked: (key5, reason) => {
+          const code = readText4(reason) || "host_revoked";
+          lazy.assistantRegistry().updateFollowedRemoteProject(key5, {
+            state: "revoked",
+            revokedAt: Date.now(),
+            revokedReason: code,
+            lastErrorCode: code
+          });
+        },
+        verifyOwnerBinding: () => {
+          const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
+          return v.ok ? { ok: true, bindingRevision: v.receipt?.bindingRevision ?? v.binding?.bindingRevision } : { ok: false, code: v.code, error: v.error };
+        },
+        refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
+        callHost: (target4, op, args) => callRemoteHost(ctx.transport ?? {}, target4, op, args),
+        coordinatorTurns: (sessionId, limit = 5) => {
+          try {
+            const store4 = lazy.turnStore();
+            const open = store4.findOpenAttemptForSession(sessionId);
+            return {
+              open: !!open && open.scope === "plain",
+              committed: store4.listTerminalPlainAttemptsForSession(sessionId, limit).map((a) => ({ attemptId: a.attemptId, outcome: a.terminal?.outcome ?? "completed", at: a.terminal?.at ?? a.acceptedAt }))
+            };
+          } catch {
+            return { open: false, committed: [] };
+          }
+        },
+        meshStatusLine: (meshId) => {
+          try {
+            return lazy.meshStatusLine(meshId);
+          } catch {
+            return null;
+          }
+        },
+        // A2: the SAME daemon-wide `getByCategory('cli')` read the coordinator
+        // view above narrows — taken unnarrowed here on purpose.
+        liveSessionStates: () => cliInstances(ctx).map((inst) => inst.getState?.()).filter((s2) => !!s2),
+        routePreview: async (meshId, difficulty) => {
+          try {
+            const out = await ctx.execute("mesh_route_preview", { meshId, difficulty });
+            const preview = out.success ? out.preview : null;
+            return preview && typeof preview === "object" && !Array.isArray(preview) ? preview : null;
+          } catch {
+            return null;
+          }
+        }
+      };
+    }
+    async function preloadAssistantProjectReaders() {
+      if (readers) return;
+      const [hk, fwd, reg, queue, missions, registry, runtimeStore, statusLine, secrets] = await Promise.all([
+        Promise.resolve().then(() => (init_mesh_housekeeping_tick(), mesh_housekeeping_tick_exports)),
+        Promise.resolve().then(() => (init_mesh_event_forwarding(), mesh_event_forwarding_exports)),
+        Promise.resolve().then(() => (init_coordinator_registry(), coordinator_registry_exports)),
+        Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports)),
+        Promise.resolve().then(() => (init_mesh_missions(), mesh_missions_exports)),
+        Promise.resolve().then(() => (init_assistant_registry(), assistant_registry_exports)),
+        Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports)),
+        Promise.resolve().then(() => (init_mesh_notification_status_line(), mesh_notification_status_line_exports)),
+        Promise.resolve().then(() => (init_mesh_peer_secrets(), mesh_peer_secrets_exports))
+      ]);
+      readers = {
+        hostedMeshes: hk.hostedMeshes,
+        listLocalCoordinatorSessions: fwd.listLocalCoordinatorSessions,
+        listCoordinatorsForMesh: reg.listCoordinatorsForMesh,
+        getMeshQueueStats: queue.getMeshQueueStats,
+        getMeshMissions: missions.getMeshMissions,
+        assistantRegistry: () => registry.getAssistantRegistry(),
+        assistantAliases: () => registry.getAssistantRegistry().reload()?.aliases ?? {},
+        turnStore: () => runtimeStore.MeshRuntimeStore.getInstance().turnStore(),
+        meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
+        peerHostMeshIds: (hostDaemonId) => {
+          try {
+            return secrets.listPeerSecrets().filter((r) => r.role === "member" && daemonIdsEquivalent4(r.peerDaemonId, hostDaemonId)).map((r) => r.meshId);
+          } catch {
+            return [];
+          }
+        }
+      };
+    }
+    function loadMeshReaders() {
+      if (!readers) throw new Error("assistant project readers not loaded (call preloadAssistantProjectReaders first)");
+      return readers;
+    }
+    var relayHooks;
+    var SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS;
+    var factoryOverride;
+    var APPROVAL_STATUSES;
+    var readers;
+    var init_assistant_project_ports = __esm2({
+      "src/assistant/assistant-project-ports.ts"() {
+        "use strict";
+        init_node_facts();
+        init_dist();
+        init_coordinator_lifecycle();
+        init_assistant_services();
+        init_assistant_remote_host();
+        init_member_meshes();
+        relayHooks = {};
+        SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 1500;
+        factoryOverride = null;
+        APPROVAL_STATUSES = /* @__PURE__ */ new Set(["waiting_approval", "waiting_choice"]);
+        readers = null;
+      }
+    });
+    function evaluateReviewTrigger(input, rules = REVIEW_TRIGGER_RULES) {
+      if (input.reviewTurnSetting === false) return { due: false, reason: "disabled" };
+      if (input.mcpOnly) return { due: false, reason: "mcp_only" };
+      if (input.idleSince === null || !Number.isFinite(input.idleSince)) return { due: false, reason: "not_idle" };
+      if (input.now - input.idleSince < rules.minIdleMs) return { due: false, reason: "idle_too_short" };
+      if (input.modalOpen) return { due: false, reason: "modal_open" };
+      if (input.humanInputsSinceLastReview < rules.minHumanInputs) return { due: false, reason: "too_few_inputs" };
+      const reviews = input.reviewAts.filter((t) => Number.isFinite(t));
+      const last = reviews.length ? Math.max(...reviews) : null;
+      if (last !== null && input.now - last < rules.minSinceLastReviewMs) return { due: false, reason: "too_soon" };
+      const inLastDay = reviews.filter((t) => input.now - t < DAY_MS4).length;
+      if (inLastDay >= rules.maxPerDay) return { due: false, reason: "daily_cap" };
+      const q = input.quotaRemainingPct;
+      if (typeof q !== "number" || !Number.isFinite(q) || q < rules.minQuotaRemainingPct) return { due: false, reason: "low_quota" };
+      return { due: true };
+    }
+    function buildReviewInput(now) {
+      return { text: REVIEW_INPUT_TEXT, messageId: `${REVIEW_MESSAGE_ID_PREFIX}${now}`, origin: "assistant", policyMode: "queue" };
+    }
+    function reviewTurnVerbDecision(verb, reviewTurnOpen) {
+      if (!reviewTurnOpen || REVIEW_TURN_VERB_SET.has(verb)) return { allowed: true };
+      return { allowed: false, code: REVIEW_TURN_TOOL_DENIED };
+    }
+    var REVIEW_TRIGGER_RULES;
+    var DAY_MS4;
+    var REVIEW_INPUT_TEXT;
+    var REVIEW_MESSAGE_ID_PREFIX;
+    var REVIEW_TURN_TOOL_DENIED;
+    var REVIEW_TURN_VERB_SET;
+    var init_assistant_review = __esm2({
+      "src/assistant/assistant-review.ts"() {
+        "use strict";
+        init_dist();
+        REVIEW_TRIGGER_RULES = {
+          /** Assistant idle at least this long. */
+          minIdleMs: 10 * 60 * 1e3,
+          /** Human inputs since the last review. */
+          minHumanInputs: 6,
+          /** Since the last review. */
+          minSinceLastReviewMs: 2 * 60 * 60 * 1e3,
+          /** Reviews per rolling 24 h. */
+          maxPerDay: 4,
+          /** Skip below this remaining % of the assistant CLI's tightest quota window. */
+          minQuotaRemainingPct: 20
+        };
+        DAY_MS4 = 24 * 60 * 60 * 1e3;
+        REVIEW_INPUT_TEXT = '[ADHDev review] If the conversation since the last review produced rules, environment facts, user preferences or recurring procedures that the next session will need, save them with memory / skill_manage / project_note. Merge or fix entries that already exist. If there is nothing to save, reply with the single word "nothing". Do not use any other tool.';
+        REVIEW_MESSAGE_ID_PREFIX = "review:";
+        REVIEW_TURN_TOOL_DENIED = "review_turn_tool_denied";
+        REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
+      }
+    });
+    function fail6(code, error, detail = {}) {
+      return { success: false, code, error, ...detail };
+    }
+    function parse(args, write, assistant) {
+      const raw = args === void 0 ? {} : args;
+      if (!isRecord9(raw) || !hasOnlyKeys3(raw, [
+        "action",
+        "role",
+        "project",
+        "provider",
+        "model",
+        "thinkingLevel",
+        ...write ? ["expectedRevision"] : [],
+        ...assistant ? ["assistantSessionId"] : []
+      ])) return null;
+      const action2 = raw.action === void 0 && !write ? "get" : raw.action;
+      if (write ? action2 !== "set" && action2 !== "clear" : action2 !== "get" && action2 !== "check") return null;
+      if (action2 !== "get" && !isLaunchRole(raw.role) || Object.hasOwn(raw, "role") && !isLaunchRole(raw.role)) return null;
+      if (Object.hasOwn(raw, "project") && (raw.role !== "coordinator" || typeof raw.project !== "string" || !raw.project.trim() || raw.project !== raw.project.trim())) return null;
+      if (Object.hasOwn(raw, "assistantSessionId") && (typeof raw.assistantSessionId !== "string" || !raw.assistantSessionId.trim())) return null;
+      const selection = Object.fromEntries(["provider", "model", "thinkingLevel"].filter((key5) => Object.hasOwn(raw, key5)).map((key5) => [key5, raw[key5]]));
+      if (action2 === "set" || action2 === "check") {
+        if (selectionSchemaIssue(selection)) return null;
+      } else if (Object.keys(selection).length) return null;
+      if (write && (!Number.isSafeInteger(raw.expectedRevision) || raw.expectedRevision < 0)) return null;
+      return {
+        action: action2,
+        ...isLaunchRole(raw.role) ? { role: raw.role } : {},
+        ...typeof raw.project === "string" ? { project: raw.project } : {},
+        ...action2 === "set" || action2 === "check" ? { selection } : {},
+        ...write ? { expectedRevision: raw.expectedRevision } : {},
+        ...typeof raw.assistantSessionId === "string" ? { sessionId: raw.assistantSessionId } : {}
+      };
+    }
+    function diskError(stored) {
+      if (stored.status === "ok" && isLaunchDefaultsDocument(stored.document)) return null;
+      return stored.status === "missing" ? fail6("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail6(
+        "launch_default_unavailable",
+        "Launch defaults cannot be read.",
+        { reason: stored.status === "ok" ? "launch_defaults_schema_invalid" : stored.reason }
+      );
+    }
+    function projectState(ports, ref2) {
+      if (!ports.projects) return { ok: false, code: "project_storage_unavailable" };
+      const read2 = ports.projects.read(ref2);
+      if (!read2.ok) return read2;
+      const state2 = read2.state;
+      if (!isRecord9(state2) || typeof state2.projectId !== "string" || !state2.projectId.trim() || !Number.isSafeInteger(state2.revision) || state2.revision < 0 || state2.entry !== null && (!isRecord9(state2.entry) || state2.entry.revision !== state2.revision || !isLaunchDefaultsDocument({ version: 1, revision: state2.revision, coordinator: state2.entry, history: [] }))) {
+        return { ok: false, code: "project_storage_unavailable" };
+      }
+      return read2;
+    }
+    function previousRestriction(ports, previous) {
+      const live = ports.currentAssistantToolRestriction?.();
+      const prior = previous ? ports.validation.getProvider(ports.validation.resolveAlias(previous.provider))?.assistant.toolRestriction : void 0;
+      return live === "enforced" || prior === "enforced" ? "enforced" : live ?? prior;
+    }
+    function persistenceFailure(result) {
+      return fail6(result.code, result.reason, {
+        reason: result.reason,
+        committed: result.committed,
+        ...result.actualRevision !== void 0 ? { actualRevision: result.actualRevision } : {},
+        ...result.document ? { documentRevision: result.document.revision } : {},
+        ...result.validation ? result.validation.issue : {}
+      });
+    }
+    function createLaunchDefaultsHandlers(ports) {
+      const run4 = async (args, write2, assistant) => {
+        const input = parse(args, write2, assistant);
+        if (!input) return fail6("invalid_args", "Invalid launch defaults request.");
+        let origin = "owner";
+        if (assistant) {
+          const authority = ports.assistantContext?.(input.sessionId);
+          if (authority?.reviewTurnOpen || authority?.origin === "review") {
+            return fail6("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
+          }
+          origin = authority?.origin === "human" || authority?.origin === "review_tainted" ? authority.origin : "relay";
+        }
+        const stored = ports.store.read();
+        const unavailable3 = diskError(stored);
+        if (unavailable3 && !(stored.status === "missing" && !input.project && (input.action === "get" || write2 || input.action === "check"))) return unavailable3;
+        let project;
+        if (input.project) {
+          const read3 = projectState(ports, input.project);
+          if (!read3.ok) return fail6(read3.code, read3.code);
+          project = read3.state;
+        }
+        if (input.action === "get") {
+          const roles = {};
+          for (const role2 of input.role ? [input.role] : ["assistant", "coordinator"]) {
+            const effective = resolveLaunchSelection({
+              role: role2,
+              stored,
+              ...project?.entry ? { hostCoordinatorLaunch: {
+                projectId: project.projectId,
+                revision: project.revision,
+                selection: pickSelection(project.entry)
+              } } : {}
+            }, ports.validation);
+            roles[role2] = { stored: stored.status === "ok" ? stored.document[role2] ?? null : null, effective };
+          }
+          return {
+            success: true,
+            result: "get",
+            documentRevision: stored.status === "ok" ? stored.document.revision : 0,
+            roles,
+            ...project ? { project } : {}
+          };
+        }
+        const role = input.role;
+        const previous = project ? project.entry : stored.status === "ok" ? stored.document[role] ?? null : null;
+        const restriction = role === "assistant" && input.selection && (assistant || input.action === "check") ? previousRestriction(ports, previous) : void 0;
+        let selection = null;
+        let warnings = [];
+        let lowersToolLock = false;
+        if (input.selection) {
+          const validated = validateLaunchDefault(role, input.selection, ports.validation, restriction);
+          if (!validated.ok) return fail6("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
+          selection = validated.selection;
+          warnings = validated.warnings;
+          lowersToolLock = validated.lowersToolLock;
+          if (input.action === "check") return {
+            success: true,
+            result: "check",
+            role,
+            selection,
+            warnings,
+            toolRestriction: validated.toolRestriction,
+            lowersToolLock
+          };
+        }
+        const revision = project?.revision ?? (stored.status === "ok" ? stored.document.revision : 0);
+        if (input.expectedRevision !== revision) return fail6("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
+        const providerChange = assistant && role === "assistant" && selection !== null && (!previous || ports.validation.resolveAlias(previous.provider) !== selection.provider);
+        if (assistant && (mustStage(origin) || providerChange && lowersToolLock)) {
+          if (!ports.stage) return fail6("staging_unavailable", "Owner Inbox staging is unavailable.");
+          let stagedId;
+          try {
+            stagedId = ports.stage({
+              kind: "launch_defaults",
+              role,
+              selection,
+              previous,
+              expectedRevision: revision,
+              origin,
+              ...project ? { project: project.projectId } : {},
+              ...input.sessionId ? { callerSessionId: input.sessionId } : {}
+            });
+          } catch {
+            return fail6("staging_failed", "Could not stage launch defaults.");
+          }
+          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail6("staging_failed", "Invalid owner Inbox proposal identifier.");
+          return {
+            success: true,
+            result: "staged",
+            role,
+            stagedId,
+            previous,
+            selection,
+            expectedRevision: revision,
+            warnings,
+            note: NEXT_LAUNCH
+          };
+        }
+        if (project) {
+          const projectId = project.projectId;
+          return ports.projects.withWriteLock(() => {
+            const fresh = projectState(ports, projectId);
+            if (!fresh.ok) return fail6(fresh.code, fresh.code);
+            if (fresh.state.projectId !== projectId) return fail6("project_storage_unavailable", "Host project identity changed.");
+            if (fresh.state.revision !== input.expectedRevision) return fail6("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
+            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail6("store_unavailable", "Project revision exhausted.");
+            if (selection) {
+              const checked = validateLaunchDefault(role, selection, ports.validation);
+              if (!checked.ok) return fail6("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
+              warnings = checked.warnings;
+            }
+            const nextRevision = fresh.state.revision + 1;
+            const entry = selection ? {
+              ...selection,
+              revision: nextRevision,
+              setBy: assistant ? "assistant" : "owner",
+              setAt: Date.now()
+            } : null;
+            const outcome = ports.projects.replace({ projectId, revision: nextRevision, entry });
+            if (!outcome.ok) return fail6("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
+            return {
+              success: true,
+              result: "applied",
+              role,
+              scope: "project",
+              projectId,
+              entry,
+              previous: fresh.state.entry,
+              revision: nextRevision,
+              warnings,
+              durable: true,
+              note: NEXT_LAUNCH
+            };
+          });
+        }
+        const result = ports.store.write({
+          role,
+          selection,
+          expectedRevision: input.expectedRevision,
+          by: assistant ? "assistant" : "owner",
+          origin,
+          previousToolRestriction: restriction
+        });
+        if (!result.ok) return persistenceFailure(result);
+        return {
+          success: true,
+          result: "applied",
+          role,
+          scope: "global",
+          entry: result.document[role] ?? null,
+          previous: result.previous,
+          revision: result.document.revision,
+          warnings: result.warnings,
+          durable: result.durable,
+          note: NEXT_LAUNCH
+        };
+      };
+      const guarded = async (args, write2, assistant) => {
+        try {
+          return await run4(args, write2, assistant);
+        } catch (error) {
+          if (error instanceof MeshConfigStrictLockError) return fail6(error.code, error.message, {
+            committed: false,
+            ...error.lockPath ? { reason: `${error.code === "store_busy" ? "write_lock_held" : "write_lock_unavailable"}: ${error.lockPath}` } : {}
+          });
+          if (error instanceof LaunchDefaultsCatalogError) return fail6("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
+          return fail6("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
+        }
+      };
+      const read2 = (args, assistant) => guarded(args, false, assistant);
+      const write = (args, assistant) => guarded(args, true, assistant);
+      return {
+        launch_defaults_get: (_context, args) => read2(args, false),
+        launch_defaults_set: (_context, args) => write(args, false),
+        assistant_launch_defaults: (_context, args) => read2(args, true),
+        assistant_launch_defaults_set: (_context, args) => write(args, true)
+      };
+    }
+    function pickSelection(entry) {
+      return {
+        provider: entry.provider,
+        ...entry.model !== void 0 ? { model: entry.model } : {},
+        ...entry.thinkingLevel !== void 0 ? { thinkingLevel: entry.thinkingLevel } : {}
+      };
+    }
+    function productionHandler(name) {
+      return async (ctx, args) => ({ ...await createLaunchDefaultsHandlers(getLaunchDefaultsCommandPorts(ctx))[name](ctx, args) });
+    }
+    var launchDefaultsCommandSources;
+    var NEXT_LAUNCH;
+    var launchDefaultsSpecs;
+    var init_launch_defaults2 = __esm2({
+      "src/commands/high-family/launch-defaults.ts"() {
+        "use strict";
+        init_store_guards();
+        init_command_registry();
+        init_mesh_config_store();
+        init_ports();
+        init_launch_defaults();
+        launchDefaultsCommandSources = {
+          launch_defaults_get: COMMAND_SOURCES,
+          launch_defaults_set: ["p2p", "ws", "standalone"],
+          assistant_launch_defaults: ["ipc", "standalone"],
+          assistant_launch_defaults_set: ["ipc", "standalone"]
+        };
+        NEXT_LAUNCH = "Applies to the next launch; running sessions are unchanged.";
+        launchDefaultsSpecs = defineCommandSpecs("high", {
+          launch_defaults_get: productionHandler("launch_defaults_get"),
+          launch_defaults_set: productionHandler("launch_defaults_set"),
+          assistant_launch_defaults: productionHandler("assistant_launch_defaults"),
+          assistant_launch_defaults_set: productionHandler("assistant_launch_defaults_set")
+        }, {
+          launch_defaults_get: { sources: launchDefaultsCommandSources.launch_defaults_get, meshSender: "authenticated_peer" },
+          launch_defaults_set: { sources: launchDefaultsCommandSources.launch_defaults_set, invalidates: ["daemon.metadata"] },
+          assistant_launch_defaults: { sources: launchDefaultsCommandSources.assistant_launch_defaults },
+          assistant_launch_defaults_set: { sources: launchDefaultsCommandSources.assistant_launch_defaults_set, invalidates: ["daemon.metadata"] }
+        }, { stripTransportMetadata: true });
+      }
+    });
+    async function projectPortsFor(ctx) {
+      return getAssistantProjectPorts({
+        components: ctx.components,
+        execute: (cmd, args) => ctx.execute(cmd, args, "ipc", { inProcess: true }),
+        selfDaemonId: str13(ctx.deps?.statusInstanceId),
+        transport: {
+          ...ctx.deps?.dispatchMeshCommand ? { dispatch: ctx.deps.dispatchMeshCommand } : {},
+          ...ctx.deps?.getMeshPeerConnectionStatus ? { peerStatus: ctx.deps.getMeshPeerConnectionStatus } : {}
+        }
+      });
+    }
+    function noteTextRefusal(text4) {
+      if (!text4) return null;
+      if (detectCredential(text4)) return { result: "note_secret_rejected" };
+      const f = scanWriteContent(text4);
+      if (!f) return null;
+      return { result: f.kind === "hidden_chars" ? "note_hidden_chars_rejected" : "note_injection_rejected", pattern: f.pattern };
+    }
+    function creditReview(svc, reviewTurnId, result, kind) {
+      if (!reviewTurnId || result !== "applied") return;
+      try {
+        svc.reviewMetrics?.creditReviewWrite(reviewTurnId, kind, Date.now());
+      } catch {
+      }
+    }
+    function str13(v) {
+      return typeof v === "string" ? v.trim() : "";
+    }
+    function rawStr(v) {
+      return typeof v === "string" ? v : void 0;
+    }
+    function respond(outcome, extra = {}) {
+      const success = OK_RESULTS.has(outcome.result);
+      return { success, ...success ? {} : { code: outcome.result }, ...extra, ...outcome };
+    }
+    function invalidArgs(error) {
+      return { success: false, code: "invalid_args", error };
+    }
+    function readAssistantSessionId(args) {
+      return str13(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG2]);
+    }
+    function assistantToolGate(verb, args, svc = getAssistantServices()) {
+      const sid = readAssistantSessionId(args);
+      const decision = reviewTurnVerbDecision(verb, !!sid && svc.inputLog.isReviewTurnOpen(sid));
+      if (decision.allowed) return null;
+      return { success: false, code: decision.code, error: `${verb} is not available during the review turn` };
+    }
+    async function resolveNoteProject(ctx, svc, ref2) {
+      const r = resolveAssistantProject(ref2, svc.listMeshes());
+      if (!r.ok) {
+        const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
+        return { ok: false, result: { success: false, code: r.code, error: r.code, ...detail } };
+      }
+      let hosted;
+      if (svc.isMeshHostedHere) {
+        hosted = svc.isMeshHostedHere(r.mesh);
+      } else {
+        try {
+          const components = ctx.components();
+          const { hostedMeshes: hostedMeshes2 } = await Promise.resolve().then(() => (init_mesh_housekeeping_tick(), mesh_housekeeping_tick_exports));
+          hosted = hostedMeshes2(components, [r.mesh]).length > 0;
+        } catch (e) {
+          if (isDaemonComponentsNotReady(e)) return { ok: false, result: componentsNotReadyResult(e) };
+          throw e;
+        }
+      }
+      if (!hosted) {
+        try {
+          const ports = await projectPortsFor(ctx);
+          return { ok: true, mesh: r.mesh, slug: r.slug, remote: { host: ports.remoteHost(r.mesh), ports } };
+        } catch (e) {
+          if (isDaemonComponentsNotReady(e)) return { ok: false, result: componentsNotReadyResult(e) };
+          throw e;
+        }
+      }
+      return { ok: true, mesh: r.mesh, slug: r.slug };
+    }
+    async function applyRemoteNote(project, op, origin, callerSessionId) {
+      const remote = project.remote;
+      const out = remote.host.reachable ? await remote.ports.callHost(remote.host, "note", { ...op, origin, ...callerSessionId ? { callerSessionId } : {} }) : { ok: false, kind: "unreachable", code: "project_unreachable", reason: remote.host.reason ?? "relay_failed", error: "host unreachable" };
+      if (out.ok) {
+        const r = out.result;
+        return {
+          result: typeof r.result === "string" ? r.result : "applied",
+          ...typeof r.noteId === "string" ? { noteId: r.noteId } : {},
+          ...typeof r.id === "string" ? { id: r.id } : {},
+          ...typeof r.matched === "number" ? { matched: r.matched } : {},
+          ...typeof r.count === "number" ? { count: r.count } : {},
+          ...Array.isArray(r.notes) ? { notes: r.notes } : {},
+          ...r.note && typeof r.note === "object" ? { note: r.note } : {},
+          ...typeof r.text === "string" ? { text: r.text } : {},
+          ...typeof r.scope === "string" ? { scope: r.scope } : {},
+          ...typeof r.pinned === "boolean" ? { pinned: r.pinned } : {},
+          ...r.category !== void 0 ? { category: r.category } : {},
+          ...typeof r.createdAt === "string" ? { createdAt: r.createdAt } : {},
+          ...typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {},
+          ...typeof r.expired === "boolean" ? { expired: r.expired } : {},
+          host: remote.host.label,
+          via: "relay"
+        };
+      }
+      if (out.kind === "unreachable") return { result: "project_unreachable", reason: out.reason, host: remote.host.label, error: out.error };
+      return { result: out.code, host: remote.host.label, error: out.error };
+    }
+    function parseNoteOp(args) {
+      const action2 = str13(args?.action);
+      const text4 = str13(args?.text);
+      if (action2 === "record") {
+        if (!text4) return "text required for record";
+        const category = str13(args?.category);
+        if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
+          return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
+        }
+        return { action: action2, text: text4, ...category ? { category } : {} };
+      }
+      if (action2 === "forget") {
+        const noteId = str13(args?.note_id) || str13(args?.noteId);
+        if (!noteId && !text4) return "note_id or text required for forget";
+        return { action: action2, ...noteId ? { noteId } : {}, ...text4 ? { text: text4 } : {} };
+      }
+      if (action2 === "list") {
+        return { action: action2 };
+      }
+      if (action2 === "read") {
+        const noteId = str13(args?.note_id) || str13(args?.noteId);
+        if (!noteId) return "note_id required for read";
+        return { action: action2, noteId };
+      }
+      return "action must be record, forget, list or read";
+    }
+    async function applyNote(svc, meshId, op, origin, callerSessionId) {
+      if (op.action === "record") {
+        const entry2 = await svc.operatingNotes.record(meshId, {
+          text: op.text,
+          ...op.category ? { category: op.category } : {},
+          sourceCoordinator: origin === "owner" ? "assistant:owner" : "assistant",
+          ...callerSessionId ? { callerSessionId } : {}
+        });
+        return { result: "applied", noteId: entry2.id };
+      }
+      if (op.action === "forget") {
+        const r = await svc.operatingNotes.forget(meshId, { ...op.noteId ? { noteId: op.noteId } : {}, ...op.text ? { text: op.text } : {}, reason: "assistant" });
+        return { result: "applied", matched: r.matched };
+      }
+      const {
+        readOperatingNotes: readOperatingNotes2,
+        readOperatingNoteById: readOperatingNoteById2,
+        resolveNoteExpiry: resolveNoteExpiry2,
+        previewOperatingNoteText: previewOperatingNoteText2,
+        resolveOperatingNoteScope: resolveOperatingNoteScope2
+      } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+      const nowMs2 = Date.now();
+      if (op.action === "list") {
+        const entries2 = svc.operatingNotes.list ? await svc.operatingNotes.list(meshId, { tail: 100 }) : readOperatingNotes2(meshId, { tail: 100 });
+        const notes = entries2.map((e) => {
+          const p2 = e.payload || {};
+          const text5 = typeof p2.text === "string" ? p2.text : "";
+          const createdAt2 = typeof p2.createdAt === "string" ? p2.createdAt : e.timestamp;
+          const pinned2 = p2.pinned === true;
+          const category2 = typeof p2.category === "string" ? p2.category : void 0;
+          const sourceCoordinator2 = typeof p2.sourceCoordinator === "string" ? p2.sourceCoordinator : void 0;
+          const explicitExpiry2 = typeof p2.expiresAt === "string" ? p2.expiresAt : void 0;
+          const lifetime2 = resolveNoteExpiry2({ category: category2, pinned: pinned2, createdAt: createdAt2, ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {} }, nowMs2);
+          const { preview, truncated } = previewOperatingNoteText2(text5);
+          const scope2 = resolveOperatingNoteScope2({ pinned: pinned2, sourceCoordinator: sourceCoordinator2 }, "project");
+          return {
+            id: e.id,
+            noteId: e.id,
+            scope: scope2,
+            pinned: pinned2,
+            category: category2 ?? null,
+            createdAt: createdAt2,
+            updatedAt: createdAt2,
+            preview,
+            truncated,
+            expired: lifetime2.expired,
+            ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {},
+            ...lifetime2.effectiveExpiresAt ? { effectiveExpiresAt: lifetime2.effectiveExpiresAt } : {},
+            ...typeof p2.subjectKey === "string" ? { subjectKey: p2.subjectKey } : {},
+            ...sourceCoordinator2 ? { sourceCoordinator: sourceCoordinator2 } : {}
+          };
+        });
+        return { result: "list", count: notes.length, notes };
+      }
+      const entry = svc.operatingNotes.read ? await svc.operatingNotes.read(meshId, op.noteId) : readOperatingNoteById2(meshId, op.noteId);
+      if (!entry) {
+        return {
+          result: "note_not_found",
+          noteId: op.noteId,
+          error: `No live operating note matched note_id '${op.noteId}'.`
+        };
+      }
+      const p = entry.payload || {};
+      const text4 = typeof p.text === "string" ? p.text : "";
+      const createdAt = typeof p.createdAt === "string" ? p.createdAt : entry.timestamp;
+      const pinned = p.pinned === true;
+      const category = typeof p.category === "string" ? p.category : void 0;
+      const sourceCoordinator = typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0;
+      const explicitExpiry = typeof p.expiresAt === "string" ? p.expiresAt : void 0;
+      const lifetime = resolveNoteExpiry2({ category, pinned, createdAt, ...explicitExpiry ? { expiresAt: explicitExpiry } : {} }, nowMs2);
+      const scope = resolveOperatingNoteScope2({ pinned, sourceCoordinator }, "project");
+      const detail = {
+        id: entry.id,
+        noteId: entry.id,
+        scope,
+        text: text4,
+        pinned,
+        category: category ?? null,
+        createdAt,
+        updatedAt: createdAt,
+        expired: lifetime.expired,
+        ...explicitExpiry ? { expiresAt: explicitExpiry } : {},
+        ...lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {},
+        ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {},
+        ...typeof p.supersedes === "string" ? { supersedes: p.supersedes } : {},
+        ...sourceCoordinator ? { sourceCoordinator } : {}
+      };
+      return {
+        result: "ok",
+        ...detail,
+        note: detail
+      };
+    }
+    function parseMemoryOp(args) {
+      const action2 = str13(args?.action);
+      const target4 = str13(args?.target);
+      if (target4 !== "memory" && target4 !== "user") return "target must be memory or user";
+      const text4 = rawStr(args?.text);
+      const match = rawStr(args?.match);
+      if (action2 === "add") return { action: action2, target: target4, content: text4 ?? "" };
+      if (action2 === "replace") return { action: action2, target: target4, match: match ?? "", content: text4 ?? "" };
+      if (action2 === "remove") return { action: action2, target: target4, match: match ?? "" };
+      return "action must be add, replace or remove";
+    }
+    function parseSkillOp(args) {
+      const action2 = str13(args?.action);
+      const name = str13(args?.name);
+      if (action2 === "create") {
+        const project = str13(args?.project);
+        return { action: action2, name, description: rawStr(args?.description) ?? "", body: rawStr(args?.body) ?? "", ...project ? { project } : {} };
+      }
+      if (action2 === "patch") {
+        const op = { action: action2, name };
+        for (const k of ["old", "new", "file", "description"]) {
+          const v = rawStr(args?.[k]);
+          if (v !== void 0) op[k] = v;
+        }
+        return op;
+      }
+      if (action2 === "archive") return { action: action2, name };
+      return "action must be create, patch or archive";
+    }
+    async function resolveStagedOne(ctx, svc, id4, decision) {
+      if (id4.startsWith("ldf-")) {
+        if (!svc.launchDefaults) return { success: false, code: "staging_unavailable" };
+        return svc.launchDefaults.resolve(id4, decision, async (proposal, documentRevision) => {
+          const ports = getLaunchDefaultsCommandPorts(ctx);
+          if (proposal.project) {
+            const stored = ports.store.read();
+            if (stored.status !== "ok") return {
+              success: false,
+              code: "launch_default_unavailable",
+              error: "Global launch-default setup cannot be read."
+            };
+            if (stored.document.revision !== documentRevision) return {
+              success: false,
+              code: "revision_conflict",
+              error: "Global launch-default generation changed.",
+              actualRevision: stored.document.revision,
+              committed: false
+            };
+          }
+          return createLaunchDefaultsHandlers(ports).launch_defaults_set(ctx, {
+            action: proposal.selection === null ? "clear" : "set",
+            role: proposal.role,
+            expectedRevision: proposal.expectedRevision,
+            ...proposal.project ? { project: proposal.project } : {},
+            ...proposal.selection
+          });
+        });
+      }
+      if (id4.startsWith("driver-activation-")) {
+        if (!svc.driverStaging || !svc.driverActivations) return { success: false, code: "staging_unavailable" };
+        return svc.driverStaging.resolve(
+          id4,
+          decision,
+          svc.driverActivations,
+          (type2) => readInstalledDriver(ctx.deps.providerLoader, type2)
+        );
+      }
+      if (id4.startsWith("mem-")) {
+        const reviewTurnId = decision === "apply" ? svc.memory.listStaged().find((r) => r.id === id4)?.reviewTurnId : void 0;
+        const out = svc.memory.resolveStaged(id4, decision);
+        creditReview(svc, reviewTurnId, out.result, "approved");
+        return respond(out);
+      }
+      if (id4.startsWith("skl-")) {
+        const reviewTurnId = decision === "apply" ? svc.skills.listStaged().find((r) => r.id === id4)?.reviewTurnId : void 0;
+        const out = svc.skills.resolveStaged(id4, decision);
+        creditReview(svc, reviewTurnId, out.result, "approved");
+        return respond(out);
+      }
+      if (id4.startsWith("note-")) return resolveStagedNote(ctx, svc, id4, decision);
+      return respond({ result: "staged_not_found" });
+    }
+    async function resolveReviewBatch(ctx, svc, reviewTurnId, decision) {
+      const ids = [
+        ...svc.memory.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
+        ...svc.skills.listStaged().filter((r) => r.reviewTurnId === reviewTurnId),
+        ...svc.notes.list().filter((r) => r.reviewTurnId === reviewTurnId)
+      ].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((r) => r.id);
+      if (!ids.length) return respond({ result: "staged_not_found" }, { reviewTurnId });
+      const results = [];
+      for (const id4 of ids) {
+        const r = await resolveStagedOne(ctx, svc, id4, decision);
+        results.push({ id: id4, ...r });
+      }
+      const failed = results.filter((r) => r.success !== true).length;
+      return {
+        success: failed === 0,
+        ...failed ? { code: "staged_batch_partial" } : {},
+        result: failed ? "staged_batch_partial" : decision === "apply" ? "applied" : "discarded",
+        reviewTurnId,
+        resolved: results.length - failed,
+        failed,
+        results
+      };
+    }
+    async function resolveStagedNote(ctx, svc, id4, decision) {
+      const rec5 = svc.notes.read(id4);
+      if (!rec5) return respond({ result: "staged_not_found" });
+      if (decision === "discard") {
+        svc.notes.remove(id4);
+        return respond({ result: "discarded" });
+      }
+      const project = await resolveNoteProject(ctx, svc, rec5.meshId);
+      if (!project.ok) return project.result;
+      const wrap2 = { project: project.slug, meshId: project.mesh.id };
+      const refusal2 = noteTextRefusal(rec5.op.text);
+      if (refusal2) return respond(refusal2, wrap2);
+      if (project.remote) {
+        const remote = await applyRemoteNote(project, rec5.op, "owner", rec5.callerSessionId);
+        if (remote.result !== "applied") return respond(remote, wrap2);
+        svc.notes.remove(id4);
+        creditReview(svc, rec5.reviewTurnId, remote.result, "approved");
+        return respond(remote, wrap2);
+      }
+      const applied = await applyNote(svc, rec5.meshId, rec5.op, "owner", rec5.callerSessionId);
+      svc.notes.remove(id4);
+      creditReview(svc, rec5.reviewTurnId, applied.result, "approved");
+      return respond(applied, wrap2);
+    }
+    function applyMemoryLimitsUpdate(svc, args) {
+      const hasMemory = args !== null && typeof args === "object" && args.memory !== void 0;
+      const hasUser = args !== null && typeof args === "object" && args.user !== void 0;
+      if (!hasMemory && !hasUser) {
+        return invalidArgs("memory or user limit required");
+      }
+      if (hasMemory && (typeof args.memory !== "number" || !Number.isFinite(args.memory))) {
+        return invalidArgs("memory limit must be a finite number");
+      }
+      if (hasUser && (typeof args.user !== "number" || !Number.isFinite(args.user))) {
+        return invalidArgs("user limit must be a finite number");
+      }
+      const patch = {
+        ...hasMemory ? { memory: Math.round(args.memory) } : {},
+        ...hasUser ? { user: Math.round(args.user) } : {}
+      };
+      const rangeErr = svc.memory.validateBudgets(patch);
+      if (rangeErr) {
+        return {
+          success: false,
+          ...rangeErr
+        };
+      }
+      svc.memory.setBudgets(patch);
+      try {
+        getAssistantRegistry().reload();
+      } catch {
+      }
+      const status = svc.memory.status();
+      return { success: true, result: "applied", limits: status.budgets, ...status };
+    }
+    var ASSISTANT_TOOL_SOURCES;
+    var ASSISTANT_OWNER_SOURCES;
+    var ASSISTANT_MEMORY_LIMITS_COMMAND;
+    var OK_RESULTS;
+    var assistantStoreHandlers;
+    var assistantStoreSpecs;
+    var init_assistant_store = __esm2({
+      "src/commands/high-family/assistant-store.ts"() {
+        "use strict";
+        init_drivers();
+        init_command_args();
+        init_dist();
+        init_command_registry();
+        init_daemon_components_port();
+        init_assistant_services();
+        init_assistant_project_ports();
+        init_assistant_review();
+        init_assistant_projects();
+        init_note_staging();
+        init_store_guards();
+        init_hermes_import();
+        init_assistant_registry();
+        init_launch_defaults2();
+        init_installed_driver();
+        init_ports();
+        ASSISTANT_TOOL_SOURCES = ["ipc", "standalone"];
+        ASSISTANT_OWNER_SOURCES = ["p2p", "ws", "standalone"];
+        ASSISTANT_MEMORY_LIMITS_COMMAND = "assistant_memory_limits";
+        OK_RESULTS = /* @__PURE__ */ new Set(["applied", "staged", "memory_duplicate", "ok", "list", "discarded"]);
+        assistantStoreHandlers = {
+          [ASSISTANT_VERB2.memory]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const gate = assistantToolGate(ASSISTANT_VERB2.memory, args, svc);
+            if (gate) return gate;
+            const op = parseMemoryOp(args);
+            if (typeof op === "string") return invalidArgs(op);
+            const w = svc.inputLog.writeContext(readAssistantSessionId(args));
+            const out = svc.memory.apply(op, w.origin, { reviewTurnId: w.reviewTurnId });
+            creditReview(svc, w.reviewTurnId, out.result, "applied");
+            return respond(out);
+          },
+          [ASSISTANT_VERB2.skillView]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const gate = assistantToolGate(ASSISTANT_VERB2.skillView, args, svc);
+            if (gate) return gate;
+            const name = str13(args?.name);
+            if (!name) return invalidArgs("name required");
+            const file = rawStr(args?.file);
+            return respond(svc.skills.view(name, file !== void 0 ? { file } : {}));
+          },
+          [ASSISTANT_VERB2.skillManage]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const gate = assistantToolGate(ASSISTANT_VERB2.skillManage, args, svc);
+            if (gate) return gate;
+            const op = parseSkillOp(args);
+            if (typeof op === "string") return invalidArgs(op);
+            const w = svc.inputLog.writeContext(readAssistantSessionId(args));
+            const out = svc.skills.manage(op, w.origin, { sessionId: w.sessionId, turnId: w.turnId, ...w.reviewTurnId ? { reviewTurnId: w.reviewTurnId } : {} });
+            creditReview(svc, w.reviewTurnId, out.result, "applied");
+            return respond(out);
+          },
+          [ASSISTANT_VERB2.projectNote]: async (ctx, args) => {
+            const svc = getAssistantServices();
+            const gate = assistantToolGate(ASSISTANT_VERB2.projectNote, args, svc);
+            if (gate) return gate;
+            const op = parseNoteOp(args);
+            if (typeof op === "string") return invalidArgs(op);
+            const project = await resolveNoteProject(ctx, svc, args?.project);
+            if (!project.ok) return project.result;
+            const wrap2 = { project: project.slug, meshId: project.mesh.id };
+            const sid = readAssistantSessionId(args);
+            if (op.action === "list" || op.action === "read") {
+              if (project.remote) return respond(await applyRemoteNote(project, op, "human", sid || void 0), wrap2);
+              return respond(await applyNote(svc, project.mesh.id, op, "human", sid || void 0), wrap2);
+            }
+            const refusal2 = noteTextRefusal(op.text);
+            if (refusal2) return respond(refusal2, wrap2);
+            const { origin, reviewTurnId } = svc.inputLog.writeContext(sid);
+            if (mustStage(origin) || isReviewOrigin(origin)) {
+              const stagedId = svc.notes.write({
+                origin,
+                meshId: project.mesh.id,
+                project: project.slug,
+                ...sid ? { callerSessionId: sid } : {},
+                op,
+                ...reviewTurnId ? { reviewTurnId } : {}
+              });
+              return respond({ result: "staged", stagedId }, wrap2);
+            }
+            if (project.remote) return respond(await applyRemoteNote(project, op, origin === "owner" ? "owner" : "human", sid || void 0), wrap2);
+            return respond(await applyNote(svc, project.mesh.id, op, origin, sid || void 0), wrap2);
+          },
+          // ── owner verbs ─────────────────────────────────────────────────────────
+          [ASSISTANT_VERB2.stagedResolve]: async (ctx, args) => {
+            const svc = getAssistantServices();
+            const action2 = str13(args?.action) || "resolve";
+            if (action2 === "list") {
+              let driverActions = [];
+              if (typeof ctx.deps?.providerLoader?.getByCategory === "function") {
+                const drivers = getDriverService(ctx);
+                await drivers.list().catch(() => {
+                });
+                driverActions = drivers.stagedActions();
+              }
+              return {
+                success: true,
+                memory: svc.memory.listStaged(),
+                skills: svc.skills.listStaged(),
+                notes: svc.notes.list(),
+                launchDefaults: svc.launchDefaults?.list() ?? [],
+                driverActivations: svc.driverStaging?.list() ?? [],
+                driverActions,
+                memoryStatus: svc.memory.status()
+              };
+            }
+            if (action2 !== "resolve") return invalidArgs("action must be list or resolve");
+            const id4 = str13(args?.id);
+            const reviewTurnId = str13(args?.reviewTurnId);
+            const decision = str13(args?.decision);
+            if (!id4 && !reviewTurnId) return invalidArgs("id or reviewTurnId required");
+            if (id4 && reviewTurnId) return invalidArgs("pass id or reviewTurnId, not both");
+            if (id4.startsWith("ldf-")) {
+              if (Object.keys(args ?? {}).some((key5) => !["action", "id", "decision", "_interactionId", "_meshSenderDaemonId", "_commandSource"].includes(key5))) {
+                return invalidArgs("Launch-default resolution accepts only id and decision.");
+              }
+              if (decision !== "apply" && decision !== "discard" && decision !== "reject") return invalidArgs("decision must be apply, discard or reject");
+              return resolveStagedOne(ctx, svc, id4, decision === "reject" ? "discard" : decision);
+            }
+            if (decision !== "apply" && decision !== "discard") return invalidArgs("decision must be apply or discard");
+            if (id4.startsWith("driver-action-")) {
+              const source2 = readCommandSource(args);
+              if (source2 !== "p2p" && source2 !== "ws" && source2 !== "standalone") return { success: false, code: "COMMAND_SOURCE_REJECTED" };
+              return getDriverService(ctx).resolveAction(id4, decision, source2);
+            }
+            if (reviewTurnId) return resolveReviewBatch(ctx, svc, reviewTurnId, decision);
+            return resolveStagedOne(ctx, svc, id4, decision);
+          },
+          [ASSISTANT_VERB2.storeAdmin]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const target4 = str13(args?.target);
+            const action2 = str13(args?.action);
+            if (target4 === "skill") {
+              const name = str13(args?.name);
+              if (!name) return invalidArgs("name required");
+              if (action2 === "pin") return respond(svc.skills.pin(name));
+              if (action2 === "unpin") return respond(svc.skills.unpin(name));
+              if (action2 === "clear_review") return respond(svc.skills.clearReviewLock(name));
+              if (action2 === "restore") return respond(svc.skills.restore(name));
+              return invalidArgs("skill action must be pin, unpin, clear_review or restore");
+            }
+            if (target4 === "memory") {
+              if (action2 === "get_limits") {
+                return { success: true, result: "ok", ...svc.memory.status() };
+              }
+              if (action2 === "set_limits") {
+                return applyMemoryLimitsUpdate(svc, args);
+              }
+              if (action2 !== "remove") return invalidArgs("memory action must be remove, get_limits or set_limits");
+              const file = str13(args?.file);
+              if (file !== "memory" && file !== "user") return invalidArgs("file must be memory or user");
+              return respond(svc.memory.apply({ action: "remove", target: file, match: rawStr(args?.match) ?? "" }, "owner"));
+            }
+            return invalidArgs("target must be skill or memory");
+          },
+          [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const rawAction = str13(args?.action);
+            const hasBudgetField = args !== null && typeof args === "object" && ("memory" in args || "user" in args);
+            const action2 = rawAction || (hasBudgetField ? "set" : "get");
+            if (action2 === "get") {
+              return { success: true, result: "ok", ...svc.memory.status() };
+            }
+            if (action2 === "set") {
+              return applyMemoryLimitsUpdate(svc, args);
+            }
+            return invalidArgs("action must be get or set");
+          },
+          [ASSISTANT_VERB2.importSkills]: async (ctx, args) => {
+            const svc = getAssistantServices();
+            if (str13(args?.action) === "scan") return { success: true, result: "scan", scan: scanHermesHome(svc.hermesHome) };
+            const req = {
+              hermesHome: svc.hermesHome,
+              dryRun: args?.dryRun !== false,
+              ...Array.isArray(args?.skills) ? { skills: args.skills.filter((s2) => typeof s2 === "string") } : {},
+              ...Array.isArray(args?.memory) ? { memory: args.memory } : {}
+            };
+            const result = importFromHermes(req, { skills: svc.skills, memory: svc.memory });
+            const notes = [];
+            for (const n of result.operatingNotes) {
+              const project = await resolveNoteProject(ctx, svc, n.project);
+              if (!project.ok) {
+                notes.push({ id: n.id, project: n.project, result: project.result.code });
+                continue;
+              }
+              const refusal2 = noteTextRefusal(n.text);
+              if (refusal2) {
+                notes.push({ id: n.id, project: project.slug, ...refusal2 });
+                continue;
+              }
+              if (result.dryRun) {
+                notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, result: "would_record" });
+                continue;
+              }
+              const applied = project.remote ? await applyRemoteNote(project, { action: "record", text: n.text }, "owner") : await applyNote(svc, project.mesh.id, { action: "record", text: n.text }, "owner");
+              notes.push({ id: n.id, project: project.slug, meshId: project.mesh.id, ...applied });
+            }
+            return { success: true, ...result, operatingNoteResults: notes };
+          }
+        };
+        assistantStoreSpecs = defineCommandSpecs("high", assistantStoreHandlers, {
+          [ASSISTANT_VERB2.memory]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+          [ASSISTANT_VERB2.skillView]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+          [ASSISTANT_VERB2.skillManage]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+          [ASSISTANT_VERB2.projectNote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+          [ASSISTANT_VERB2.stagedResolve]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+          [ASSISTANT_VERB2.storeAdmin]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+          [ASSISTANT_MEMORY_LIMITS_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+          [ASSISTANT_VERB2.importSkills]: { sources: [...ASSISTANT_OWNER_SOURCES] }
+        });
+      }
+    });
+    function terminalRetryIdentity(intent) {
+      return (0, import_crypto40.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
+    }
+    function readTerminalEvents(db2, meshId, kind, entityId, since, receipts) {
+      const ids = receipts.slice(0, 256);
+      const hasTurns = !!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turn_attempts'").get();
+      const receiptAliases = kind === "task" && hasTurns && ids.length ? db2.prepare(`SELECT DISTINCT t.attempt_id || '#committed' id
+        FROM turn_attempts t JOIN mesh_local_records l ON l.mesh_id=t.mesh_id AND l.task_id=t.task_id
+        AND (json_extract(l.payload_json,'$.attemptId')=t.attempt_id OR l.event_id=t.attempt_id || '#committed'
+            OR (json_extract(l.payload_json,'$.attemptId') IS NULL AND l.session_id=t.session_id AND l.at_ms=t.terminal_at AND l.kind='task_' || t.terminal_outcome
+                AND (SELECT COUNT(*) FROM turn_attempts x WHERE x.mesh_id=t.mesh_id AND x.task_id=t.task_id AND x.session_id=t.session_id AND x.terminal_at=t.terminal_at AND x.terminal_outcome=t.terminal_outcome)=1))
+        WHERE t.mesh_id=? AND t.task_id=? AND l.event_id IN (${ids.map(() => "?").join(",")})`).all(meshId, entityId, ...ids).map((r) => r.id) : [];
+      const taskViews = kind === "task" && hasTurns ? readTurnTerminalViews(meshId, { db: db2, taskId: entityId, sinceMs: since, tail: 16, excludeIds: [...ids, ...receiptAliases], oldestFirst: true }) : [];
+      const exclude = ids.length ? ` AND event_id NOT IN (${ids.map(() => "?").join(",")})` : "";
+      const filter = kind === "task" ? "task_id=? AND kind IN ('task_completed','task_failed','task_cancelled')" : "json_extract(payload_json,'$.missionId')=? AND kind IN ('mission_status_changed','mission_created') AND COALESCE(json_extract(payload_json,'$.toStatus'),json_extract(payload_json,'$.status')) IN ('completed','abandoned')";
+      const migrationFilter = kind === "task" && hasTurns ? ` AND NOT EXISTS (SELECT 1 FROM turn_attempts t WHERE t.mesh_id=mesh_local_records.mesh_id
+            AND t.task_id=mesh_local_records.task_id AND t.terminal_outcome IS NOT NULL
+            AND (t.attempt_id=json_extract(payload_json,'$.attemptId') OR event_id=t.attempt_id || '#committed'
+                OR (json_extract(payload_json,'$.attemptId') IS NULL AND t.session_id=mesh_local_records.session_id AND t.terminal_at=mesh_local_records.at_ms AND kind='task_' || t.terminal_outcome
+                    AND (SELECT COUNT(*) FROM turn_attempts x WHERE x.mesh_id=t.mesh_id AND x.task_id=t.task_id AND x.session_id=t.session_id AND x.terminal_at=t.terminal_at AND x.terminal_outcome=t.terminal_outcome)=1)))` : "";
+      const rows = db2.prepare(`SELECT event_id,mesh_id,task_id,session_id,node_id,kind,at_ms,
+        json_extract(payload_json,'$.missionId') mission_id, COALESCE(json_extract(payload_json,'$.toStatus'),json_extract(payload_json,'$.status')) mission_outcome FROM mesh_local_records WHERE mesh_id=? AND ${filter} AND at_ms>=?${migrationFilter}${exclude} ORDER BY at_ms,event_id LIMIT 16`).all(meshId, entityId, since, ...ids);
+      const legacy = rows.map((r) => ({
+        eventId: r.event_id,
+        meshId: r.mesh_id,
+        taskId: r.task_id ?? null,
+        missionId: r.mission_id ?? null,
+        sessionId: r.session_id ?? null,
+        nodeId: r.node_id ?? null,
+        kind: r.kind,
+        at: r.at_ms,
+        sourceMeshId: r.mesh_id,
+        ...kind === "task" ? { strength: "unknown", evidenceLevel: "weak" } : {},
+        outcome: kind === "task" ? r.kind.slice(5) : r.mission_outcome
+      }));
+      const durable2 = taskViews.map((v) => ({
+        eventId: v.id,
+        meshId,
+        taskId: v.taskId ?? null,
+        missionId: null,
+        sessionId: v.sessionId ?? null,
+        nodeId: v.nodeId ?? null,
+        kind: v.kind,
+        at: Date.parse(v.timestamp),
+        sourceMeshId: meshId,
+        outcome: String(v.payload.outcome),
+        attemptId: String(v.payload.attemptId),
+        strength: String(v.payload.strength ?? "unknown"),
+        evidenceLevel: ["genuine", "tool_report", "operator"].includes(String(v.payload.strength)) ? "strong" : "weak"
+      }));
+      return [...new Map([...legacy, ...durable2].map((e) => [e.eventId, e])).values()].sort((a, b) => a.at - b.at || a.eventId.localeCompare(b.eventId)).slice(0, 16);
+    }
+    async function deliverTerminalEvents(events, watch6, submit, store4, opts = {}) {
+      const recorded = new Set(store4.receipts(watch6.watch_id));
+      for (const event of events) {
+        if (recorded.has(event.eventId)) continue;
+        const id4 = `assistant-terminal:${watch6.watch_id}:${event.eventId}`;
+        const existing = store4.intent(watch6.watch_id, event.eventId);
+        if (existing) {
+          if (!await opts.confirm?.(existing)) {
+            if (opts.recipient && opts.recipient !== existing.recipient_session_id) await opts.uncertain?.(existing);
+            break;
+          }
+        } else {
+          const intent = store4.beginDelivery(watch6.watch_id, event.eventId, opts.recipient ?? watch6.recipient);
+          if (!await submit(id4, `[ADHDev task/mission terminal] ${JSON.stringify({ watchId: watch6.watch_id, ...event, deliveryToken: intent.token })}`)) break;
+        }
+        store4.acknowledge(watch6.watch_id, event.eventId);
+        recorded.add(event.eventId);
+      }
+    }
+    var import_crypto40;
+    var TERMINAL_WATCH_TTL_MS;
+    var TERMINAL_WATCH_MAX;
+    var TERMINAL_WATCH_SCHEMA;
+    var TerminalWatchStore;
+    var init_terminal_watch = __esm2({
+      "src/assistant/terminal-watch.ts"() {
+        "use strict";
+        import_crypto40 = require("crypto");
+        init_mesh_local_records();
+        TERMINAL_WATCH_TTL_MS = 24 * 60 * 6e4;
+        TERMINAL_WATCH_MAX = 32;
+        TERMINAL_WATCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS assistant_terminal_watches (
+ watch_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, kind TEXT NOT NULL, entity_id TEXT NOT NULL,
+ recipient TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS assistant_terminal_receipts (
+ watch_id TEXT NOT NULL, event_id TEXT NOT NULL, delivered_at INTEGER NOT NULL, PRIMARY KEY(watch_id,event_id));
+CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
+ watch_id TEXT NOT NULL, event_id TEXT NOT NULL, recipient_session_id TEXT NOT NULL, token TEXT NOT NULL, started_at INTEGER NOT NULL, PRIMARY KEY(watch_id,event_id));`;
+        TerminalWatchStore = class {
+          constructor(db2) {
+            this.db = db2;
+            db2.exec(TERMINAL_WATCH_SCHEMA);
+          }
+          subscribe(meshId, kind, entityId, recipient, now = Date.now()) {
+            this.prune(now);
+            const watchId = (0, import_crypto40.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
+            const existing = this.get(watchId);
+            if (existing) return { success: true, watchId, expiresAt: existing.expires_at, duplicate: true };
+            const count = this.db.prepare("SELECT COUNT(*) n FROM assistant_terminal_watches WHERE expires_at > ?").get(now);
+            if (count.n >= TERMINAL_WATCH_MAX) return { success: false, code: "terminal_watch_capacity" };
+            this.db.prepare("INSERT INTO assistant_terminal_watches VALUES (?,?,?,?,?,?,?)").run(watchId, meshId, kind, entityId, recipient, now, now + TERMINAL_WATCH_TTL_MS);
+            return { success: true, watchId, expiresAt: now + TERMINAL_WATCH_TTL_MS, duplicate: false };
+          }
+          get(id4) {
+            return this.db.prepare("SELECT * FROM assistant_terminal_watches WHERE watch_id=?").get(id4);
+          }
+          list(recipient, now = Date.now()) {
+            return this.db.prepare("SELECT * FROM assistant_terminal_watches WHERE recipient=? AND expires_at>? ORDER BY created_at,watch_id LIMIT 32").all(recipient, now);
+          }
+          receipts(id4) {
+            return this.db.prepare("SELECT event_id FROM assistant_terminal_receipts WHERE watch_id=? ORDER BY delivered_at,event_id LIMIT 256").all(id4).map((r) => r.event_id);
+          }
+          intent(id4, eventId) {
+            return this.db.prepare("SELECT * FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").get(id4, eventId);
+          }
+          beginDelivery(id4, eventId, sid) {
+            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto40.randomBytes)(24).toString("hex"), Date.now());
+            return this.intent(id4, eventId);
+          }
+          retryDelivery(id4, eventId) {
+            this.db.prepare("DELETE FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").run(id4, eventId);
+          }
+          acknowledge(id4, eventId, now = Date.now()) {
+            this.db.transaction(() => {
+              this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_receipts VALUES (?,?,?)").run(id4, eventId, now);
+              this.retryDelivery(id4, eventId);
+            })();
+          }
+          unsubscribe(id4) {
+            this.db.prepare("UPDATE assistant_terminal_watches SET expires_at=0 WHERE watch_id=?").run(id4);
+          }
+          prune(now) {
+            this.db.transaction(() => {
+              this.db.prepare("DELETE FROM assistant_terminal_inflight WHERE watch_id IN (SELECT watch_id FROM assistant_terminal_watches WHERE created_at < ?)").run(now - 7 * TERMINAL_WATCH_TTL_MS);
+              this.db.prepare("DELETE FROM assistant_terminal_receipts WHERE watch_id IN (SELECT watch_id FROM assistant_terminal_watches WHERE created_at < ?)").run(now - 7 * TERMINAL_WATCH_TTL_MS);
+              this.db.prepare("DELETE FROM assistant_terminal_watches WHERE created_at < ?").run(now - 7 * TERMINAL_WATCH_TTL_MS);
+            })();
+          }
+        };
+      }
+    });
+    async function pendingTerminalEvents(store4, ports, watch6) {
+      const mesh = ports.listMeshes().find((m) => m.id === watch6.mesh_id);
+      if (!mesh) return [];
+      const receipts = store4.receipts(watch6.watch_id);
+      if (receipts.length >= 256) throw new Error("terminal_watch_receipt_capacity");
+      if (ports.isHostedHere(mesh)) return readTerminalEvents(store4.db, mesh.id, watch6.kind, watch6.entity_id, 0, receipts).map((e) => ({ ...e, sourceDaemonId: ports.selfDaemonId?.() ?? null }));
+      const remote = ports.remoteHost(mesh);
+      if (!remote.reachable) throw new Error(remote.reason ?? "terminal_watch_remote_unreachable");
+      const out = await ports.callHost(remote, "terminal", { kind: watch6.kind, entityId: watch6.entity_id, receipts });
+      if (!out.ok) throw new Error(out.error);
+      const result = out.result.result;
+      if (!Array.isArray(result?.events)) throw new Error("terminal_watch_invalid_remote_events");
+      const normalized = result.events.slice(0, 16).map((raw) => {
+        const r = raw;
+        const id4 = (v) => typeof v === "string" && v.length <= 200 ? v : null;
+        if (!id4(r.eventId) || r.meshId !== remote.hostMeshId || !Number.isFinite(r.at) || !["task_completed", "task_failed", "task_cancelled", "mission_status_changed", "mission_created"].includes(r.kind) || (watch6.kind === "task" ? r.taskId !== watch6.entity_id || !["task_completed", "task_failed", "task_cancelled"].includes(r.kind) : r.missionId !== watch6.entity_id || !["mission_status_changed", "mission_created"].includes(r.kind) || !["completed", "abandoned"].includes(r.outcome ?? ""))) throw new Error("terminal_watch_invalid_remote_identity");
+        return {
+          eventId: r.eventId,
+          meshId: mesh.id,
+          taskId: id4(r.taskId),
+          missionId: id4(r.missionId),
+          sessionId: id4(r.sessionId),
+          nodeId: id4(r.nodeId),
+          kind: r.kind,
+          at: r.at,
+          sourceMeshId: remote.hostMeshId,
+          sourceDaemonId: remote.hostDaemonId,
+          outcome: watch6.kind === "task" ? r.kind.slice(5) : r.outcome,
+          ...id4(r.attemptId) ? { attemptId: r.attemptId } : {},
+          ...["genuine", "weak", "tool_report", "operator", "unknown"].includes(r.strength ?? "") ? { strength: r.strength } : {},
+          evidenceLevel: r.evidenceLevel === "strong" && ["genuine", "tool_report", "operator"].includes(r.strength ?? "") ? "strong" : "weak"
+        };
+      }).filter((e) => !receipts.includes(e.eventId));
+      return [...new Map(normalized.map((e) => [e.eventId, e])).values()].sort((a, b) => a.at - b.at || a.eventId.localeCompare(b.eventId));
+    }
+    async function confirmTerminalDelivery(ports, intent) {
+      const matches = (chat) => (Array.isArray(chat.messages) ? chat.messages : []).some((m) => m?.role === "user" && isVisible(m) && messageText(m).includes("[ADHDev task/mission terminal]") && messageText(m).includes(`"deliveryToken":"${intent.token}"`));
+      try {
+        const chat = await ports.execute("read_chat", { targetSessionId: intent.recipient_session_id, limit: 200 });
+        if (chat.success && matches(chat)) return true;
+        for (let offset = 0; offset < 400; offset += 100) {
+          const history = await ports.execute("chat_history", { targetSessionId: intent.recipient_session_id, offset, limit: 100, excludeRecentCount: 0 });
+          if (!history.success) return false;
+          if (matches(history)) return true;
+          if (history.hasMore !== true) break;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    }
+    var TerminalWatchDelivery;
+    var init_terminal_watch_runtime = __esm2({
+      "src/assistant/terminal-watch-runtime.ts"() {
+        "use strict";
+        init_project_views();
+        init_terminal_watch();
+        TerminalWatchDelivery = class {
+          constructor(store4, ports, recipient, ready2, submit) {
+            this.store = store4;
+            this.ports = ports;
+            this.recipient = recipient;
+            this.ready = ready2;
+            this.submit = submit;
+          }
+          running = false;
+          uncertaintyNotices = /* @__PURE__ */ new Map();
+          async tick() {
+            if (this.running) return;
+            const sid = this.recipient();
+            if (!sid || !this.ready(sid)) return;
+            this.running = true;
+            try {
+              const ports = await this.ports();
+              for (const watch6 of this.store.list("assistant")) {
+                if (!this.ready(sid) || this.recipient() !== sid) break;
+                let events;
+                try {
+                  events = await pendingTerminalEvents(this.store, ports, watch6);
+                } catch {
+                  continue;
+                }
+                await deliverTerminalEvents(events, watch6, async (id4, text4) => {
+                  if (!this.ready(sid) || this.recipient() !== sid) return false;
+                  return this.submit(sid, id4, text4);
+                }, this.store, { recipient: sid, confirm: (intent) => confirmTerminalDelivery(ports, intent), uncertain: async (intent) => {
+                  const key5 = JSON.stringify([intent.watch_id, intent.event_id, sid, intent.token]);
+                  for (const [stamp2, at] of this.uncertaintyNotices) if (Date.now() - at >= 24 * 60 * 6e4) this.uncertaintyNotices.delete(stamp2);
+                  if (this.uncertaintyNotices.has(key5) || this.recipient() !== sid || !this.ready(sid)) return;
+                  if (this.uncertaintyNotices.size >= 256) this.uncertaintyNotices.delete(this.uncertaintyNotices.keys().next().value);
+                  const text4 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch6.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
+                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text4)) this.uncertaintyNotices.set(key5, Date.now());
+                } });
+              }
+            } finally {
+              this.running = false;
+            }
+          }
+        };
+      }
+    });
+    async function coordinatorReplyReadable(execute, reply) {
+      if (!reply.messageId) return false;
+      const page = await continueReport(execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
+      if (page.success !== true || typeof page.text !== "string") return false;
+      const expected = normalize6(reply.text).trim();
+      return page.complete === true ? normalize6(page.text).trim() === expected : expected.startsWith(normalize6(page.text).trim());
+    }
+    async function latestCoordinatorReference(execute, sessionId) {
+      for (const command of ["read_chat", "chat_history"]) {
+        const read2 = await execute(command, {
+          targetSessionId: sessionId,
+          limit: 100,
+          ...command === "chat_history" ? { offset: 0, excludeRecentCount: 0 } : {}
+        });
+        if (!read2.success || !Array.isArray(read2.messages)) continue;
+        const message = [...read2.messages].reverse().find((m) => isVisible(m) && referenceable(m.role, m.kind, messageText(m)));
+        if (message) return { coordinatorSessionId: sessionId, messageId: reportMessageId(message), offset: 0 };
+      }
+      return null;
+    }
+    function remoteCoordinatorReference(messages, sessionId) {
+      const message = [...messages].reverse().find((m) => isVisible(m) && referenceable(m?.role, m?.kind, typeof m?.text === "string" ? m.text : "") && typeof m.messageId === "string" && /^[a-f0-9]{64}$/.test(m.messageId));
+      return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
+    }
+    var normalize6;
+    var referenceable;
+    var init_relay_transcript_reference = __esm2({
+      "src/assistant/relay-transcript-reference.ts"() {
+        "use strict";
+        init_report_continuation();
+        init_project_views();
+        normalize6 = (text4) => text4.replace(/\r\n?/g, "\n");
+        referenceable = (role, kind, text4) => ["assistant", "agent"].includes(String(role)) && (kind === void 0 || kind === null || kind === "" || kind === "standard") && !!text4.trim();
       }
     });
     var NativeScanCheckpoints;
@@ -132457,8 +132827,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           reply.nativeTurnProof ? [reply.nativeTurnProof.nativeSessionId, reply.nativeTurnProof.turnId, reply.messageId] : reply.attemptId ?? Math.floor(reply.messageAt / 6e4)
         );
         RelayGapTracker = class {
-          constructor(store3, now) {
-            this.store = store3;
+          constructor(store4, now) {
+            this.store = store4;
             this.now = now;
           }
           notified(reply, recipient) {
@@ -132521,8 +132891,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_assistant_relay_format();
         replyKey = (r) => receiptKey(r.meshId, r.sessionId, r.messageId);
         RelayDeliveryPolicy = class {
-          constructor(store3, now) {
-            this.store = store3;
+          constructor(store4, now) {
+            this.store = store4;
             this.now = now;
           }
           probes = /* @__PURE__ */ new Map();
@@ -132568,8 +132938,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             const pending = this.probes.get(key5);
             if (pending) return pending;
-            const run4 = Promise.resolve().then(probe).catch(() => void 0).then((answer) => {
-              const v = answer === void 0 ? "unknown" : answer ? "readable" : "unreadable";
+            const run4 = Promise.resolve().then(probe).catch(() => void 0).then((answer2) => {
+              const v = answer2 === void 0 ? "unknown" : answer2 ? "readable" : "unreadable";
               this.store.writeReceipt(key5, JSON.stringify({ at: this.now(), v, ...v === "unknown" ? { n: (cached5?.v === "unknown" ? cached5.n ?? 1 : 0) + 1 } : {} }), this.now(), "readability");
               return v;
             }).finally(() => this.probes.delete(key5));
@@ -134041,7 +134411,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const code = typeof reason === "string" ? reason.trim() : "";
       return !REVOCATION_REFUSAL_CODES.has(code);
     }
-    function str14(v) {
+    function str15(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function workOf(v) {
@@ -134142,7 +134512,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             } catch {
               stale = [];
             }
-            const keyOf2 = (s2) => str14(s2.key) || str14(s2.target.followerAccess?.followedKey) || (s2.target.hostDaemonId ? followedRemoteProjectKey(s2.target.hostDaemonId, s2.meshId) : s2.meshId);
+            const keyOf2 = (s2) => str15(s2.key) || str15(s2.target.followerAccess?.followedKey) || (s2.target.hostDaemonId ? followedRemoteProjectKey(s2.target.hostDaemonId, s2.meshId) : s2.meshId);
             const live = new Set(stale.map(keyOf2));
             for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
             for (const entry of stale) {
@@ -134200,8 +134570,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             st.signaled = false;
             st.nextAt = 0;
             const r = out.result;
-            const sessionId = str14(r.coordinatorSessionId);
-            const newCursor = str14(r.cursor) || null;
+            const sessionId = str15(r.coordinatorSessionId);
+            const newCursor = str15(r.cursor) || null;
             const commits = Array.isArray(r.commits) ? r.commits : [];
             const sessionChanged = Boolean(st.coordinatorSessionId && sessionId && st.coordinatorSessionId !== sessionId);
             const cursorGap = Boolean(st.cursor && !sessionChanged && r.cursorFound !== true && newCursor && newCursor !== st.cursor);
@@ -134224,8 +134594,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             const ageLimit = !st.cursor || r.cursorFound !== true ? this.now() - lastSendAt + COMMIT_AGE_SLACK_MS : null;
             const valid = commits.map((c) => ({
-              attemptId: str14(c?.attemptId),
-              outcome: str14(c?.outcome) || "completed",
+              attemptId: str15(c?.attemptId),
+              outcome: str15(c?.outcome) || "completed",
               ageMs: typeof c?.ageMs === "number" && Number.isFinite(c.ageMs) ? c.ageMs : null
             })).filter((c) => c.attemptId && (ageLimit === null || c.ageMs !== null && c.ageMs <= ageLimit));
             valid.forEach((c, i) => {
@@ -134257,7 +134627,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    function str15(v) {
+    function str16(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function finiteNumber(v) {
@@ -134279,8 +134649,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function rebuildFollowerWakeRateLimitFromStore(now = Date.now()) {
       const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
       try {
-        const store3 = MeshRuntimeStore.getInstance();
-        ensureAssistantRelaySchema(store3.db);
+        const store4 = MeshRuntimeStore.getInstance();
+        ensureAssistantRelaySchema(store4.db);
         const receiptsByKey = /* @__PURE__ */ new Map();
         const auditsByKey = /* @__PURE__ */ new Map();
         const normByKey = /* @__PURE__ */ new Map();
@@ -134292,11 +134662,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         let receiptSeq = 0;
         let auditSeq = 0;
         try {
-          const normRows = store3.db.prepare(
+          const normRows = store4.db.prepare(
             "SELECT receipt_key, value FROM assistant_relay_receipts WHERE kind = ?"
           ).all(FOLLOWER_WAKE_QUOTA_NORM_KIND);
           for (const row2 of normRows) {
-            const k = str15(row2.receipt_key);
+            const k = str16(row2.receipt_key);
             if (!k) continue;
             try {
               const parsed = JSON.parse(String(row2.value ?? "{}"));
@@ -134306,8 +134676,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (origAt === void 0 || origRowAt === void 0 || firstNormAt === void 0) continue;
               normByKey.set(k, {
                 targetKind: parsed.targetKind === "audit" ? "audit" : "receipt",
-                targetId: str15(parsed.targetId),
-                wakeId: str15(parsed.wakeId),
+                targetId: str16(parsed.targetId),
+                wakeId: str16(parsed.wakeId),
                 originalAtMs: origAt,
                 originalRowAtMs: origRowAt,
                 ...finiteNumber(parsed.originalValueAtMs) !== void 0 ? { originalValueAtMs: finiteNumber(parsed.originalValueAtMs) } : {},
@@ -134319,22 +134689,22 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             } catch {
             }
           }
-          const receiptRows = store3.db.prepare(
+          const receiptRows = store4.db.prepare(
             "SELECT receipt_key, value, at_ms FROM assistant_relay_receipts WHERE kind = ? ORDER BY at_ms ASC"
           ).all(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND);
           for (const row2 of receiptRows) {
             receiptSeq += 1;
-            const persistedReceiptKey = str15(row2.receipt_key);
+            const persistedReceiptKey = str16(row2.receipt_key);
             const receiptKey2 = persistedReceiptKey || `receipt-row-${receiptSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:receipt:${receiptKey2}`;
             const priorNorm = normByKey.get(normKey);
             const rowAtMs = Number(row2.at_ms);
             try {
               const parsed = JSON.parse(String(row2.value ?? "{}"));
-              const meshId = str15(parsed.meshId);
-              const sender = str15(parsed.sender);
-              const wakeId = str15(parsed.wakeId) || receiptKey2;
-              const status = str15(parsed.status) === "charged" ? "charged" : "reserved";
+              const meshId = str16(parsed.meshId);
+              const sender = str16(parsed.sender);
+              const wakeId = str16(parsed.wakeId) || receiptKey2;
+              const status = str16(parsed.status) === "charged" ? "charged" : "reserved";
               const rawAt = Number(parsed.atMs);
               const hasRowAt = Number.isFinite(rowAtMs);
               const hasRawAt = Number.isFinite(rawAt);
@@ -134412,12 +134782,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 byWake = /* @__PURE__ */ new Map();
                 receiptsByKey.set(key5, byWake);
               }
-              let list2 = byWake.get(wakeId);
-              if (!list2) {
-                list2 = [];
-                byWake.set(wakeId, list2);
+              let list3 = byWake.get(wakeId);
+              if (!list3) {
+                list3 = [];
+                byWake.set(wakeId, list3);
               }
-              list2.push({
+              list3.push({
                 receiptKey: receiptKey2,
                 wakeId,
                 atMs: effectiveAtMs,
@@ -134440,7 +134810,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
         try {
           const auditBounds = /* @__PURE__ */ new Map();
-          const boundRows = store3.db.prepare(
+          const boundRows = store4.db.prepare(
             "SELECT event_id, at_ms, value FROM assistant_follower_wake_audit_bounds"
           ).all();
           for (const bound of boundRows) {
@@ -134454,17 +134824,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               invalidAuditBounds.push(bound.event_id);
             }
           }
-          const auditRows = store3.db.prepare(
+          const auditRows = store4.db.prepare(
             "SELECT event_id, mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC"
           ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND);
           for (const row2 of auditRows) {
             auditSeq += 1;
-            const persistedEventId = str15(row2.event_id);
+            const persistedEventId = str16(row2.event_id);
             const eventId = persistedEventId || `audit-row-${auditSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:audit:${eventId}`;
             const priorBound = auditBounds.get(eventId);
             const priorNorm = priorBound?.norm ?? normByKey.get(normKey);
-            const meshId = str15(row2.mesh_id);
+            const meshId = str16(row2.mesh_id);
             const rowAtMs = Number(row2.at_ms);
             let sender = "";
             let wakeId = eventId;
@@ -134474,8 +134844,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             let parsed = {};
             try {
               parsed = JSON.parse(String(row2.payload_json ?? "{}"));
-              sender = str15(parsed.senderDaemonId) || str15(parsed.activeDaemonId);
-              wakeId = str15(parsed.wakeId) || eventId;
+              sender = str16(parsed.senderDaemonId) || str16(parsed.activeDaemonId);
+              wakeId = str16(parsed.wakeId) || eventId;
               payloadWakeAt = Number(parsed.wakeAtMs);
               payloadAt = Number(parsed.atMs);
               hasExplicitWakeAt = Number.isFinite(payloadWakeAt);
@@ -134561,12 +134931,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               byWake = /* @__PURE__ */ new Map();
               auditsByKey.set(key5, byWake);
             }
-            let list2 = byWake.get(wakeId);
-            if (!list2) {
-              list2 = [];
-              byWake.set(wakeId, list2);
+            let list3 = byWake.get(wakeId);
+            if (!list3) {
+              list3 = [];
+              byWake.set(wakeId, list3);
             }
-            list2.push({
+            list3.push({
               eventId,
               wakeId,
               atMs: effectiveAtMs,
@@ -134583,36 +134953,36 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
         let repairTransactionFailed = false;
         try {
-          const applyRepairs = store3.db.transaction(() => {
+          const applyRepairs = store4.db.transaction(() => {
             for (const eventId of invalidAuditBounds) {
-              store3.db.prepare("DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id = ?").run(eventId);
+              store4.db.prepare("DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id = ?").run(eventId);
             }
             for (const r of pendingReceiptRepairs) {
               if (r.repairedValue !== void 0) {
-                store3.db.prepare(
+                store4.db.prepare(
                   "UPDATE assistant_relay_receipts SET at_ms = ?, value = ? WHERE receipt_key = ?"
                 ).run(r.atMs, r.repairedValue, r.receiptKey);
               } else {
-                store3.db.prepare(
+                store4.db.prepare(
                   "UPDATE assistant_relay_receipts SET at_ms = ? WHERE receipt_key = ?"
                 ).run(r.atMs, r.receiptKey);
               }
             }
             for (const a of pendingAuditBounds) {
-              store3.db.prepare(`
+              store4.db.prepare(`
                         INSERT INTO assistant_follower_wake_audit_bounds (event_id, at_ms, value) VALUES (?, ?, ?)
                         ON CONFLICT(event_id) DO UPDATE SET at_ms = MIN(at_ms, excluded.at_ms)
                     `).run(a.eventId, a.atMs, a.valueJson);
             }
             for (const n of pendingNormInserts) {
-              store3.db.prepare(
+              store4.db.prepare(
                 "INSERT OR IGNORE INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)"
               ).run(n.normKey, n.valueJson, n.atMs, FOLLOWER_WAKE_QUOTA_NORM_KIND);
             }
             for (const eventId of expiredAuditBounds) {
-              store3.db.prepare("DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id = ?").run(eventId);
+              store4.db.prepare("DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id = ?").run(eventId);
             }
-            store3.db.prepare(`DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id IN (
+            store4.db.prepare(`DELETE FROM assistant_follower_wake_audit_bounds WHERE event_id IN (
                     SELECT b.event_id FROM assistant_follower_wake_audit_bounds b
                     WHERE b.at_ms < ? AND NOT EXISTS (SELECT 1 FROM turn_events e WHERE e.event_id = b.event_id)
                     LIMIT ?
@@ -134763,7 +135133,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             followerWakeRecords.delete(key5);
           }
         }
-        followerWakeHydratedStore = repairTransactionFailed ? null : store3;
+        followerWakeHydratedStore = repairTransactionFailed ? null : store4;
       } catch {
       }
     }
@@ -135077,13 +135447,13 @@ ${defangRelayBody(text4)}`;
         followerSendReceipts = /* @__PURE__ */ new Map();
       }
     });
-    function str16(v) {
+    function str17(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function record4(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
     }
-    function fail6(code, error = code, extra = {}) {
+    function fail7(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     async function withMeshRemoteAccessMutex(meshId, fn) {
@@ -135137,7 +135507,7 @@ ${defangRelayBody(text4)}`;
           statusLine
         };
       }
-      const after = str16(args.afterAttemptId);
+      const after = str17(args.afterAttemptId);
       const idx = after ? turns.committed.findIndex((c) => c.attemptId === after) : -1;
       const fresh = idx >= 0 ? turns.committed.slice(0, idx) : turns.committed;
       const now = Date.now();
@@ -135158,21 +135528,21 @@ ${defangRelayBody(text4)}`;
     }
     async function note(meshId, args) {
       const op = parseNoteOp(args);
-      if (typeof op === "string") return fail6("invalid_args", op);
-      const callerSessionId = str16(args.callerSessionId);
+      if (typeof op === "string") return fail7("invalid_args", op);
+      const callerSessionId = str17(args.callerSessionId);
       if (op.action === "list" || op.action === "read") {
         const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
         if (out.result === "note_not_found") {
-          return fail6("note_not_found", String(out.error || "note_not_found"), {
+          return fail7("note_not_found", String(out.error || "note_not_found"), {
             ...typeof out.noteId === "string" ? { noteId: out.noteId } : {}
           });
         }
         return { success: true, ...out };
       }
-      const origin = str16(args.origin);
-      if (origin !== "human" && origin !== "owner") return fail6("invalid_args", "origin must be human or owner");
+      const origin = str17(args.origin);
+      if (origin !== "human" && origin !== "owner") return fail7("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
-      if (refusal2) return fail6(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
+      if (refusal2) return fail7(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
       const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || void 0);
       return { success: true, ...applied };
     }
@@ -135193,7 +135563,7 @@ ${defangRelayBody(text4)}`;
         const msg = e instanceof Error ? e.message : String(e);
         return {
           ok: false,
-          result: fail6(
+          result: fail7(
             "host_unavailable_transient",
             `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`
           )
@@ -135206,35 +135576,35 @@ ${defangRelayBody(text4)}`;
         if (!strictRead.ok) return strictRead;
         mesh = strictRead.mesh;
       }
-      if (!mesh) return { ok: false, result: fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
-      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh) return { ok: false, result: fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
+      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const self = ports.selfDaemonId();
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       if (self && !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail6("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
       if (!sender || !daemonIdsEquivalent4(acl.activeDaemonId, sender)) {
-        return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
-      const claimedSlot = str16(followerClaim?.accountSlot) || str16(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      const claimedSlot = str17(followerClaim?.accountSlot) || str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail6("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail7("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -135243,21 +135613,21 @@ ${defangRelayBody(text4)}`;
       if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead !== true) {
         return {
           ok: false,
-          result: fail6("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+          result: fail7("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
             bindingRevision: acl.bindingRevision,
             grantRevision: acl.grantRevision
           })
         };
       }
       if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
-        return { ok: false, result: fail6("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
+        return { ok: false, result: fail7("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
       }
       return { ok: true, acl };
     }
     function isMissingOrDeadCoordinatorRuntime(sent) {
-      const code = str16(sent.reason) || str16(sent.code);
+      const code = str17(sent.reason) || str17(sent.code);
       if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) return true;
-      const err = str16(sent.error).toLowerCase();
+      const err = str17(sent.error).toLowerCase();
       return err.includes("cli instance not found") || err.includes("no live session") || err.includes("session has ended") || err.includes("session not found") || err.includes("instance not found") || err.includes("not running") || err.includes("process exited") || err.includes("runtime not found for session") || err.includes("unknown session");
     }
     async function classifyCoordinatorRuntimeLivenessForFollower(ports, target4) {
@@ -135286,46 +135656,46 @@ ${defangRelayBody(text4)}`;
       return "live";
     }
     function verifyRemoteFollowerBindingForWake(ports, mesh, meshId, sender, args) {
-      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       const self = ports.selfDaemonId();
       if (!self || !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail6("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
-      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
+      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
       const canonSender = canonicalDaemonId2(sender);
       if (!canonSender || daemonIdsEquivalent4(canonSender, self) || !daemonIdsEquivalent4(acl.activeDaemonId, canonSender)) {
-        return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
-      const localBindingErr = str16(followerClaim?.localBindingError);
-      if (localBindingErr) return { ok: false, result: fail6(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
-      const claimedSlot = str16(followerClaim?.accountSlot) || str16(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
-      const claimedActiveDaemonId = str16(followerClaim?.activeDaemonId);
+      const localBindingErr = str17(followerClaim?.localBindingError);
+      if (localBindingErr) return { ok: false, result: fail7(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
+      const claimedSlot = str17(followerClaim?.accountSlot) || str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      const claimedActiveDaemonId = str17(followerClaim?.activeDaemonId);
       if (claimedActiveDaemonId && !daemonIdsEquivalent4(claimedActiveDaemonId, acl.activeDaemonId)) {
-        return { ok: false, result: fail6("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
-      const claimedHostDaemonId = str16(followerClaim?.hostDaemonId);
+      const claimedHostDaemonId = str17(followerClaim?.hostDaemonId);
       if (claimedHostDaemonId && !daemonIdsEquivalent4(claimedHostDaemonId, acl.hostDaemonId)) {
-        return { ok: false, result: fail6("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail7("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail6("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail7("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -135335,11 +135705,11 @@ ${defangRelayBody(text4)}`;
     }
     async function followerProjectSend(ports, meshId, sender, args) {
       const text4 = typeof args.text === "string" ? args.text : "";
-      if (!text4.trim()) return fail6("invalid_args", "text required");
-      if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
-      const clientId = str16(args.clientId);
-      if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
-      const expectedCoordinatorSessionId = str16(args.expectedCoordinatorSessionId);
+      if (!text4.trim()) return fail7("invalid_args", "text required");
+      if (text4.length > REMOTE_SEND_MAX_CHARS) return fail7("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+      const clientId = str17(args.clientId);
+      if (!clientId || clientId.length > 200) return fail7("invalid_args", "clientId required (at most 200 characters)");
+      const expectedCoordinatorSessionId = str17(args.expectedCoordinatorSessionId);
       const bodyHash = (0, import_crypto42.createHash)("sha256").update(text4, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
       const deadSessionIds = /* @__PURE__ */ new Set();
@@ -135368,9 +135738,9 @@ ${defangRelayBody(text4)}`;
         }
       }
       if (prior) {
-        if (prior.bodyHash !== bodyHash) return fail6("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
+        if (prior.bodyHash !== bodyHash) return fail7("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
         if (!live || prior.coordinatorSessionId !== live.sessionId) {
-          return fail6("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
+          return fail7("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
             originalCoordinatorSessionId: prior.coordinatorSessionId,
             currentCoordinatorSessionId: live?.sessionId ?? null
           });
@@ -135411,14 +135781,14 @@ ${defangRelayBody(text4)}`;
           const diskOrPortMesh = meshRead.ok ? meshRead.mesh : void 0;
           const wakeCheck = meshRead.ok ? verifyFollowerAcl(ports, diskOrPortMesh, meshId, sender, "send", args) : meshRead;
           if (!wakeCheck.ok) {
-            const reason = str16(wakeCheck.result.code) || "remote_access_denied";
+            const reason = str17(wakeCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: wakeCheck.result };
           }
           acl = wakeCheck.acl;
           const bindingCheck = verifyRemoteFollowerBindingForWake(ports, diskOrPortMesh, meshId, sender, args);
           if (!bindingCheck.ok) {
-            const reason = str16(bindingCheck.result.code) || "remote_access_denied";
+            const reason = str17(bindingCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: bindingCheck.result };
           }
@@ -135427,7 +135797,7 @@ ${defangRelayBody(text4)}`;
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail6("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+              result: fail7("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                 bindingRevision: acl.bindingRevision,
                 grantRevision: acl.grantRevision
               })
@@ -135439,7 +135809,7 @@ ${defangRelayBody(text4)}`;
               recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
               return {
                 ok: false,
-                result: fail6(
+                result: fail7(
                   "wake_rate_limited",
                   reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                   { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -135462,25 +135832,25 @@ ${defangRelayBody(text4)}`;
               const wakeCheck = meshRead.ok ? verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args) : meshRead;
               if (!wakeCheck.ok) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                const reason = str16(wakeCheck.result.code) || "remote_access_denied";
+                const reason = str17(wakeCheck.result.code) || "remote_access_denied";
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
                 preLaunchDeniedResult = wakeCheck.result;
-                return { success: false, code: reason, error: str16(wakeCheck.result.error) || reason };
+                return { success: false, code: reason, error: str17(wakeCheck.result.error) || reason };
               }
               acl = wakeCheck.acl;
               const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
               if (!bindingCheck.ok) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                const reason = str16(bindingCheck.result.code) || "remote_access_denied";
+                const reason = str17(bindingCheck.result.code) || "remote_access_denied";
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
                 preLaunchDeniedResult = bindingCheck.result;
-                return { success: false, code: reason, error: str16(bindingCheck.result.error) || reason };
+                return { success: false, code: reason, error: str17(bindingCheck.result.error) || reason };
               }
               acl = bindingCheck.acl;
               if (acl.allowCoordinatorLaunch === false) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
-                preLaunchDeniedResult = fail6("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+                preLaunchDeniedResult = fail7("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                   bindingRevision: acl.bindingRevision,
                   grantRevision: acl.grantRevision
                 });
@@ -135490,7 +135860,7 @@ ${defangRelayBody(text4)}`;
                 const reserved = reserveFollowerWakeSlot(meshId, sender, checkNow);
                 if (!reserved.ok) {
                   recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
-                  preLaunchDeniedResult = fail6(
+                  preLaunchDeniedResult = fail7(
                     "wake_rate_limited",
                     reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                     { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -135537,11 +135907,11 @@ ${defangRelayBody(text4)}`;
           }
           if (preLaunchDeniedResult) return { ok: false, result: preLaunchDeniedResult };
           if (!coord.ok) {
-            const failReason = str16(coord.code) || "launch_failed";
+            const failReason = str17(coord.code) || "launch_failed";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
-              result: fail6("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
+              result: fail7("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
             };
           }
           if (coord.launched) {
@@ -135551,14 +135921,14 @@ ${defangRelayBody(text4)}`;
           const postWakeMesh = meshRead.ok ? meshRead.mesh : void 0;
           const postWakeCheck = meshRead.ok ? verifyFollowerAcl(ports, postWakeMesh, meshId, sender, "send", args) : meshRead;
           if (!postWakeCheck.ok) {
-            const reason = str16(postWakeCheck.result.code) || "remote_access_denied";
+            const reason = str17(postWakeCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postWakeCheck.result };
           }
           acl = postWakeCheck.acl;
           const postBindingCheck = verifyRemoteFollowerBindingForWake(ports, postWakeMesh, meshId, sender, args);
           if (!postBindingCheck.ok) {
-            const reason = str16(postBindingCheck.result.code) || "remote_access_denied";
+            const reason = str17(postBindingCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postBindingCheck.result };
           }
@@ -135567,7 +135937,7 @@ ${defangRelayBody(text4)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail6("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
+              result: fail7("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
             };
           }
           return {
@@ -135580,7 +135950,7 @@ ${defangRelayBody(text4)}`;
       };
       if (live) {
         if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-          return fail6("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
+          return fail7("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
             expectedCoordinatorSessionId,
             currentCoordinatorSessionId: live.sessionId
           });
@@ -135611,7 +135981,7 @@ ${defangRelayBody(text4)}`;
           const recheck = meshRead.ok ? verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args) : meshRead;
           if (!recheck.ok) {
             if (isLaunched) {
-              const reason = str16(recheck.result.code) || "remote_access_denied";
+              const reason = str17(recheck.result.code) || "remote_access_denied";
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             }
             return { ok: false, result: recheck.result };
@@ -135620,14 +135990,14 @@ ${defangRelayBody(text4)}`;
           if (isLaunched) {
             const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
             if (!bindingCheck.ok) {
-              const reason = str16(bindingCheck.result.code) || "remote_access_denied";
+              const reason = str17(bindingCheck.result.code) || "remote_access_denied";
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
               return { ok: false, result: bindingCheck.result };
             }
             acl = bindingCheck.acl;
             if (acl.allowCoordinatorLaunch === false) {
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
-              return { ok: false, result: fail6("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
+              return { ok: false, result: fail7("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
             }
           }
           const cursor3 = ports.coordinatorTurns(target4.sessionId, 1).committed[0]?.attemptId ?? null;
@@ -135660,7 +136030,7 @@ ${defangRelayBody(text4)}`;
       }
       const { sent, cursor, messageId } = sendAttempt;
       if (!sent.success) {
-        return fail6(str16(sent.reason) || str16(sent.code) || "send_failed", str16(sent.error) || "send_failed", {
+        return fail7(str17(sent.reason) || str17(sent.code) || "send_failed", str17(sent.error) || "send_failed", {
           launched,
           coordinatorSessionId: live.sessionId,
           messageId
@@ -135675,7 +136045,7 @@ ${defangRelayBody(text4)}`;
           messageId,
           cursor,
           recordedAt: receiptAt,
-          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str16(sent.deliveryNote) } : {}
+          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str17(sent.deliveryNote) } : {}
         }, receiptAt);
       });
       return {
@@ -135706,43 +136076,43 @@ ${defangRelayBody(text4)}`;
             return followerProjectSend(ports, meshId, sender, args);
           }
           const text4 = typeof args.text === "string" ? args.text : "";
-          if (!text4.trim()) return fail6("invalid_args", "text required");
-          if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
-          const clientId = str16(args.clientId);
-          if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
+          if (!text4.trim()) return fail7("invalid_args", "text required");
+          if (text4.length > REMOTE_SEND_MAX_CHARS) return fail7("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          const clientId = str17(args.clientId);
+          if (!clientId || clientId.length > 200) return fail7("invalid_args", "clientId required (at most 200 characters)");
           const sent = await localProjectSend(ports, mesh, text4, clientId);
-          if (!sent.ok) return fail6(sent.code, sent.error, sent.detail);
+          if (!sent.ok) return fail7(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
         }
         case "read": {
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail6("invalid_args", continuation);
+          if (typeof continuation === "string") return fail7("invalid_args", continuation);
           const r = await localProjectRead(ports, meshId, readTailArg(args.tail), continuation);
-          return r.ok ? { success: true, result: r.result } : fail6("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
+          return r.ok ? { success: true, result: r.result } : fail7("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
         }
         case "report": {
-          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail6("invalid_args");
+          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail7("invalid_args");
           return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
         case "artifact_list":
           return { success: true, result: localArtifactList(meshId, args) };
         case "artifact_read": {
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          return read2.ok ? { success: true, result: read2.result } : fail6(read2.code, read2.error);
+          return read2.ok ? { success: true, result: read2.result } : fail7(read2.code, read2.error);
         }
         case "inventory":
-          if (isFollower) return fail6("remote_op_forbidden", "inventory is not permitted for remote followers");
+          if (isFollower) return fail7("remote_op_forbidden", "inventory is not permitted for remote followers");
           return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : void 0) };
         case "terminal": {
-          if (isFollower) return fail6("remote_op_forbidden", "terminal is not permitted for remote followers");
-          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail6("invalid_args");
+          if (isFollower) return fail7("remote_op_forbidden", "terminal is not permitted for remote followers");
+          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail7("invalid_args");
           return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind, args.entityId, 0, args.receipts) } };
         }
         case "poll":
           return poll(ports, meshId, args);
         case "note":
-          if (isFollower) return fail6("remote_op_forbidden", "note is not permitted for remote followers");
+          if (isFollower) return fail7("remote_op_forbidden", "note is not permitted for remote followers");
           return note(meshId, args);
       }
     }
@@ -135796,16 +136166,16 @@ ${defangRelayBody(text4)}`;
         ]);
         assistantRemoteProject = async (ctx, rawArgs) => {
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
-          const meshId = str16(args.meshId);
-          const op = str16(args.op);
-          if (!meshId) return fail6("invalid_args", "meshId required");
-          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail6("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
+          const meshId = str17(args.meshId);
+          const op = str17(args.op);
+          if (!meshId) return fail7("invalid_args", "meshId required");
+          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail7("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
           try {
             const ports = await projectPortsFor(ctx);
             const meshRead = readHostMeshStrict(ports, meshId);
             if (!meshRead.ok) return meshRead.result;
             const mesh = meshRead.mesh;
-            if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+            if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
             const sender = readMeshSender(args);
             const self = ports.selfDaemonId();
             const onRoster = isSenderOnWorkerRoster(mesh, self, sender);
@@ -135814,7 +136184,7 @@ ${defangRelayBody(text4)}`;
               const verified = verifyFollowerAcl(ports, mesh, meshId, sender, op, args);
               if (!verified.ok) return verified.result;
             } else if (op !== "inventory" && !ports.isHostedHere(mesh)) {
-              return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
             }
             if (op === "send" || op === "note") {
               const who = sender && self && daemonIdsEquivalent4(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
@@ -135827,12 +136197,12 @@ ${defangRelayBody(text4)}`;
           }
         };
         assistantRemoteProjectCatalog = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail6("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail7("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail6("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail7("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             const now = Date.now();
             const hostedMeshes2 = ports.listMeshes().filter((m) => ports.isHostedHere(m));
             const projects2 = hostedMeshes2.map((m) => {
@@ -135872,25 +136242,25 @@ ${defangRelayBody(text4)}`;
           }
         };
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail6("owner_ingress_required", "Remote project access changes require verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail7("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
-          const action2 = str16(args.action) || "get";
-          const meshId = str16(args.meshId);
-          if (!meshId) return fail6("invalid_args", "meshId required");
+          const action2 = str17(args.action) || "get";
+          const meshId = str17(args.meshId);
+          if (!meshId) return fail7("invalid_args", "meshId required");
           if (action2 !== "grant" && action2 !== "revoke" && action2 !== "get" && action2 !== "set_policy") {
-            return fail6("invalid_args", "action must be grant, revoke, set_policy, or get");
+            return fail7("invalid_args", "action must be grant, revoke, set_policy, or get");
           }
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail6("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail7("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             if (action2 === "get") {
               const mesh = ports.listMeshes().find((m) => m.id === meshId);
-              if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-              if (!ports.isHostedHere(mesh)) return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+              if (!ports.isHostedHere(mesh)) return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
               if (mesh.assistantRemoteAccess !== void 0 && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
-                return fail6("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                return fail7("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
               }
               return { success: true, action: "get", access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
             }
@@ -135898,10 +136268,10 @@ ${defangRelayBody(text4)}`;
               try {
                 return withStrictMeshConfigWriteLock(() => {
                   const config = readMeshConfigFromDisk();
-                  if (!config) return fail6("project_storage_unavailable", "meshes.json is unavailable");
+                  if (!config) return fail7("project_storage_unavailable", "meshes.json is unavailable");
                   const mesh = config.meshes.find((m) => m.id === meshId);
-                  if (!mesh) return fail6("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-                  if (!ports.isHostedHere(mesh)) return fail6("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+                  if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+                  if (!ports.isHostedHere(mesh)) return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
                   const rawAcl = mesh.assistantRemoteAccess;
                   const existing = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
                   const rawGrantRev = typeof record4(rawAcl)?.grantRevision === "number" && Number.isInteger(record4(rawAcl).grantRevision) && record4(rawAcl).grantRevision > 0 ? record4(rawAcl).grantRevision : 0;
@@ -135910,11 +136280,11 @@ ${defangRelayBody(text4)}`;
                   if (action2 === "set_policy") {
                     const hasLaunchToggle = typeof args.allowCoordinatorLaunch === "boolean";
                     const hasArtifactToggle = typeof args.allowArtifactRead === "boolean";
-                    if (!hasLaunchToggle && !hasArtifactToggle) return fail6("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
-                    if (rawAcl !== void 0 && !existing) return fail6("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                    if (!existing) return fail6("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
+                    if (!hasLaunchToggle && !hasArtifactToggle) return fail7("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
+                    if (rawAcl !== void 0 && !existing) return fail7("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                    if (!existing) return fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                     if (existing.status !== "active") {
-                      return fail6("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+                      return fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
                         grantRevision: existing.grantRevision,
                         bindingRevision: existing.bindingRevision
                       });
@@ -135927,21 +136297,21 @@ ${defangRelayBody(text4)}`;
                     mesh.assistantRemoteAccess = updated;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail6("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail7("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(updated.allowCoordinatorLaunch)}, allowArtifactRead=${String(updated.allowArtifactRead)}, grantRev=${updated.grantRevision})`);
                     return { success: true, action: "set_policy", access: updated };
                   }
                   if (action2 === "grant") {
-                    const rawActiveDaemonId = str16(args.activeDaemonId);
+                    const rawActiveDaemonId = str17(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
-                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail6("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail6("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
-                    const slot = str16(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail6("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail7("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail7("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                    const slot = str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail7("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
-                    if (bindingRevision === null) return fail6("invalid_args", "bindingRevision must be a positive integer");
+                    if (bindingRevision === null) return fail7("invalid_args", "bindingRevision must be a positive integer");
                     if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                      return fail6("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
+                      return fail7("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
@@ -135962,12 +136332,12 @@ ${defangRelayBody(text4)}`;
                     mesh.assistantRemoteAccess = binding;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail6("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail7("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Granted remote assistant access on mesh ${meshId} to ${activeDaemonId.slice(0, 24)} (bindingRev=${bindingRevision}, grantRev=${nextGrantRevision2})`);
                     return { success: true, action: "grant", access: binding };
                   }
                   const nextGrantRevision = baseGrantRevision + 1;
-                  const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId2(str16(args.activeDaemonId)) ?? (str16(args.activeDaemonId) || "revoked"));
+                  const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId2(str17(args.activeDaemonId)) ?? (str17(args.activeDaemonId) || "revoked"));
                   const revokedBindingRevision = existing?.bindingRevision ?? 1;
                   const tombstone = {
                     hostDaemonId,
@@ -135986,12 +136356,12 @@ ${defangRelayBody(text4)}`;
                   mesh.assistantRemoteAccess = tombstone;
                   mesh.updatedAt = new Date(now).toISOString();
                   const saved = saveMeshConfigDurable(config);
-                  if (!saved.ok) return fail6("persistence_failed", saved.reason);
+                  if (!saved.ok) return fail7("persistence_failed", saved.reason);
                   LOG.info("Assistant", `Revoked remote assistant access on mesh ${meshId} (grantRev=${nextGrantRevision})`);
                   return { success: true, action: "revoke", access: tombstone };
                 });
               } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) return fail6(err.code, err.message);
+                if (err instanceof MeshConfigStrictLockError) return fail7(err.code, err.message);
                 throw err;
               }
             });
@@ -136022,17 +136392,17 @@ ${defangRelayBody(text4)}`;
     function instanceReady(inst) {
       if (!inst) return false;
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return false;
-      const status = str17(inst.getState?.()?.status).toLowerCase();
+      const status = str18(inst.getState?.()?.status).toLowerCase();
       return SESSION_STATUS_CLASS[status] === "ready";
     }
     function instanceModalOpen(inst) {
       if (!inst) return false;
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return true;
       const state2 = inst.getState?.();
-      const status = str17(state2?.status).toLowerCase();
+      const status = str18(state2?.status).toLowerCase();
       return SESSION_STATUS_CLASS[status] === "blocked" || !!state2?.activeChat?.activeModal;
     }
-    function str17(v) {
+    function str18(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function getAssistantRuntime() {
@@ -136055,17 +136425,17 @@ ${defangRelayBody(text4)}`;
       }
     }
     function buildAssistantRelayPorts(components, deps) {
-      const { registry, store: store3, metrics: metrics2 } = deps;
+      const { registry, store: store4, metrics: metrics2 } = deps;
       const svc = getAssistantServices();
       const projectPorts = () => getAssistantProjectPorts({
         components: () => components,
-        selfDaemonId: str17(components.statusInstanceId),
+        selfDaemonId: str18(components.statusInstanceId),
         execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
         transport: { dispatch: components.dispatchMeshCommand, peerStatus: components.getMeshPeerConnectionStatus }
       });
       return {
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: "assistant.relay" }),
-        coordinatorMeshOf: (sessionId) => str17(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
+        coordinatorMeshOf: (sessionId) => str18(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed")?.slug ?? null,
         rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
           const ports = await projectPorts();
@@ -136159,7 +136529,7 @@ ${defangRelayBody(text4)}`;
           createdAt: Date.now()
         }),
         inputLog: svc.inputLog,
-        store: store3,
+        store: store4,
         onRelayDelivered: (meshIds, at) => {
           registry.markFirstRelay(at);
           for (const m of meshIds) metrics2?.bump("relays", m, at);
@@ -136171,7 +136541,7 @@ ${defangRelayBody(text4)}`;
     function wireAssistantRuntime(components, opts = {}) {
       const registry = opts.registry ?? getAssistantRegistry();
       const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
-      const { store: store3, metrics: metrics2 } = opened;
+      const { store: store4, metrics: metrics2 } = opened;
       rebuildFollowerWakeRateLimitFromStore();
       let sawCaller = false;
       let mcpRecipient = null;
@@ -136179,7 +136549,7 @@ ${defangRelayBody(text4)}`;
       let terminalWatchStore = null;
       const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
         registry,
-        store: store3,
+        store: store4,
         metrics: metrics2,
         sawCaller: () => sawCaller,
         onReviewDelivered: (sid, messageId, at) => review?.onDelivered(sid, messageId, at),
@@ -136228,13 +136598,13 @@ ${defangRelayBody(text4)}`;
         modalOpen: (sid) => instanceModalOpen(instanceOf(components, sid)),
         digestHour: () => registry.read()?.digestHour,
         lastDigestAt: () => registry.read()?.lastDigestAt ?? null,
-        followsProjects: () => store3.openThreads().length > 0,
+        followsProjects: () => store4.openThreads().length > 0,
         relayBusy: () => relay.hasPendingInput(),
         enqueue: (input) => relay.enqueueInput(input),
         recordDigest: (at) => registry.recordDigest(at)
       });
       setAssistantMemberMeshSource({
-        selfDaemonId: () => str17(components.statusInstanceId),
+        selfDaemonId: () => str18(components.statusInstanceId),
         inlineMeshes: () => {
           const cache3 = components.router?.inlineMeshCache;
           return cache3 instanceof Map ? [...cache3.values()] : [];
@@ -136245,7 +136615,7 @@ ${defangRelayBody(text4)}`;
         projectPorts ??= await getAssistantProjectPorts({
           components: () => components,
           execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
-          selfDaemonId: str17(components.statusInstanceId),
+          selfDaemonId: str18(components.statusInstanceId),
           transport: {
             ...components.dispatchMeshCommand ? { dispatch: components.dispatchMeshCommand } : {},
             ...components.getMeshPeerConnectionStatus ? { peerStatus: components.getMeshPeerConnectionStatus } : {}
@@ -136254,7 +136624,7 @@ ${defangRelayBody(text4)}`;
         return projectPorts;
       };
       const remotePoller = new AssistantRemoteRelayPoller({
-        openThreads: () => store3.openThreads().map((t) => ({
+        openThreads: () => store4.openThreads().map((t) => ({
           meshId: t.meshId,
           lastSendAt: t.lastSendAt,
           ...t.lastCursor !== void 0 ? { lastCursor: t.lastCursor } : {},
@@ -136292,16 +136662,16 @@ ${defangRelayBody(text4)}`;
             lastErrorCode: void 0
           });
           relay.openThread(stale.meshId);
-          store3.setThreadCursor?.(stale.meshId, cur, sid, { reset: true });
+          store4.setThreadCursor?.(stale.meshId, cur, sid, { reset: true });
           remotePoller.noteSent(stale.meshId, cur, sid, { reset: true });
         },
         onAccessRefused: (meshId, code) => {
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
-          if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str17(code) || "host_refused" });
+          if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str18(code) || "host_refused" });
         },
         relay,
         onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2, opts2) => {
-          store3.setThreadCursor?.(meshId, cursor, coordinatorSessionId, opts2);
+          store4.setThreadCursor?.(meshId, cursor, coordinatorSessionId, opts2);
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
           if (followed) {
             const nextCoordinatorSessionId = coordinatorSessionId !== void 0 ? coordinatorSessionId !== null ? coordinatorSessionId : observed2 && observed2.coordinatorMissing === false ? followed.coordinatorSessionId ?? null : null : observed2?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null;
@@ -136329,7 +136699,7 @@ ${defangRelayBody(text4)}`;
         onAccessRevoked: (keyOrMeshId, code) => {
           const followed = registry.getFollowedRemoteProject(keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.key === keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "followed") ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "revoked");
           if (followed) {
-            const reason = str17(code) || "host_revoked";
+            const reason = str18(code) || "host_revoked";
             registry.updateFollowedRemoteProject(followed.key, {
               state: "revoked",
               revokedAt: Date.now(),
@@ -136445,7 +136815,7 @@ ${defangRelayBody(text4)}`;
         closeThread: (meshId, closeOpts) => {
           relay.closeThread(meshId, closeOpts);
         },
-        isThreadOpen: (meshId) => store3.isThreadOpen(meshId),
+        isThreadOpen: (meshId) => store4.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
         assistantSessionId: () => liveSessionId() ?? mcpRecipient,
         recordProjectRead: (result, caller) => {
@@ -136458,7 +136828,7 @@ ${defangRelayBody(text4)}`;
       const runtime2 = {
         registry,
         relay,
-        store: store3,
+        store: store4,
         metrics: metrics2,
         review: reviewScheduler,
         remotePoller,
@@ -140488,7 +140858,7 @@ ${tail}` : ""
     function createTurnLedger(deps) {
       const confirmedStops = /* @__PURE__ */ new Set();
       const confirmedRecoveries = /* @__PURE__ */ new Map();
-      const store3 = deps.store ?? new TurnStore(deps.db);
+      const store4 = deps.store ?? new TurnStore(deps.db);
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
       const log = deps.log ?? DEFAULT_LOG;
@@ -140510,7 +140880,7 @@ ${tail}` : ""
       const txn = (fn) => deps.db.transaction(fn).immediate();
       function settleWriterStop(request, receipt) {
         const r = receipt;
-        const current4 = store3.getAttempt(request.attemptId);
+        const current4 = store4.getAttempt(request.attemptId);
         if (!r || r.success !== true || r.quiescent !== true || typeof r.incarnation !== "string" || !r.incarnation || current4?.state !== "stopping" || current4.generation !== request.generation || current4.sessionId !== request.sessionId || current4.data.writerStop?.requestId !== request.stopRequestId || current4.meshId !== request.meshId || current4.taskId !== request.taskId || !pinnedMeshNodeIdMatches(current4.nodeId, request.nodeId) || current4.providerType !== request.providerType || current4.dispatchNonce !== request.dispatchNonce || !(0, import_node_util15.isDeepStrictEqual)(
           [r.stopRequestId, r.attemptId, r.generation, r.sessionId, r.meshId, r.taskId, r.nodeId, r.dispatchNonce, r.providerType, r.ownerDaemonId],
           [request.stopRequestId, request.attemptId, request.generation, request.sessionId, request.meshId, request.taskId, request.nodeId, request.dispatchNonce, request.providerType, request.ownerDaemonId]
@@ -140535,11 +140905,11 @@ ${tail}` : ""
         }
       }
       function resolveAttempt(evidence) {
-        if (evidence.attemptRef) return store3.getAttempt(evidence.attemptRef.attemptId);
-        if (evidence.kind === "dispatch_accepted") return store3.getAttempt(`${evidence.scope}:${evidence.eventId}`);
-        if (evidence.kind === "hold_expired") return store3.getAttempt(holdAttemptId(evidence.holdId));
-        if (evidence.taskId) return store3.findLatestAttemptForTask(null, evidence.taskId);
-        return store3.findOpenAttemptForSession(evidence.sessionId);
+        if (evidence.attemptRef) return store4.getAttempt(evidence.attemptRef.attemptId);
+        if (evidence.kind === "dispatch_accepted") return store4.getAttempt(`${evidence.scope}:${evidence.eventId}`);
+        if (evidence.kind === "hold_expired") return store4.getAttempt(holdAttemptId(evidence.holdId));
+        if (evidence.taskId) return store4.findLatestAttemptForTask(null, evidence.taskId);
+        return store4.findOpenAttemptForSession(evidence.sessionId);
       }
       function evidenceRow(evidence, result, nowMs2, opts, publish) {
         const attempt = result.attempt;
@@ -140579,7 +140949,7 @@ ${tail}` : ""
         const report = attempt?.data.report;
         if (!attempt?.terminal || evidence.kind === "worker_report" || !report || report.generation !== attempt.generation) return void 0;
         if (attempt.terminal.reason !== "worker_reported") return void 0;
-        const local = store3.getEvent(report.eventId)?.payload.local;
+        const local = store4.getEvent(report.eventId)?.payload.local;
         const envelope = local && typeof local === "object" ? local.envelope : void 0;
         return envelope && typeof envelope === "object" ? envelope : void 0;
       }
@@ -140602,7 +140972,7 @@ ${tail}` : ""
       }
       function applyStep(evidence, attempt, opts, nowMs2, nested = false) {
         const steps = [];
-        const holds = attempt ? store3.activeHolds(attempt.attemptId) : [];
+        const holds = attempt ? store4.activeHolds(attempt.attemptId) : [];
         let triggerBackgroundWorkProbe = false;
         if (attempt && attempt.scope !== "plain" && (evidence.kind === "turn_end" || evidence.kind === "transcript_final") && !(evidence.kind === "turn_end" && (evidence.providerFailure || evidence.nativeOutcome === "failed")) && !(evidence.kind === "transcript_final" && evidence.nativeMarker?.outcome === "failed")) {
           const released = deps.backgroundWorkReleased?.(attempt.attemptId, attempt.generation) === true;
@@ -140663,7 +141033,7 @@ ${tail}` : ""
         if (nested) result = { ...result, effects: result.effects.filter((e) => e.kind !== "cancel_dispatch") };
         const moved = !!attempt && !!result.attempt && result.verdict === "applied" && !result.attempt.terminal && result.attempt.sessionId !== attempt.sessionId;
         if ((opened || moved) && result.attempt && !nested) {
-          const conflicting = store3.findOpenAttemptForSession(result.attempt.sessionId);
+          const conflicting = store4.findOpenAttemptForSession(result.attempt.sessionId);
           if (conflicting && conflicting.attemptId !== result.attempt.attemptId) {
             if (conflicting.scope === "plain") {
               const supersede = {
@@ -140685,10 +141055,10 @@ ${tail}` : ""
         }
         const next = result.attempt;
         if (result.verdict === "applied" && next) {
-          store3.upsertAttempt(next, nowMs2);
-          store3.syncHolds(next.attemptId, result.holds, nowMs2);
+          store4.upsertAttempt(next, nowMs2);
+          store4.syncHolds(next.attemptId, result.holds, nowMs2);
         }
-        const inserted = store3.recordEvidence(evidenceRow(evidence, {
+        const inserted = store4.recordEvidence(evidenceRow(evidence, {
           verdict: result.verdict,
           ...result.rule ? { rule: result.rule } : {},
           ...result.rejection ? { rejection: result.rejection } : {},
@@ -140706,7 +141076,7 @@ ${tail}` : ""
           return steps;
         }
         for (const row2 of effectEventRows({ evidence, attempt: subject, effects: result.effects, nowMs: nowMs2, observedBy: evidence.observedBy })) {
-          if (!store3.insertEvent(row2)) {
+          if (!store4.insertEvent(row2)) {
             if (row2.kind === "committed") throw new Error(`turn-ledger invariant: second commit for ${subject.attemptId} g${row2.generation}`);
           }
         }
@@ -140718,12 +141088,12 @@ ${tail}` : ""
       function forward(evidence, owner, nowMs2, opts) {
         const ref2 = evidence.attemptRef;
         if (!ref2) {
-          txn(() => store3.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs2, opts)));
+          txn(() => store4.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs2, opts)));
           counters4.rejected++;
           return { verdict: "rejected", rejection: "no_attempt", attempt: null, effects: [] };
         }
         const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref2.attemptId, generation: ref2.generation, ownerDaemonId: owner.daemonId });
-        txn(() => store3.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs2, opts, { meshId: owner.meshId, entry })));
+        txn(() => store4.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs2, opts, { meshId: owner.meshId, entry })));
         counters4.forwarded++;
         if (autoFlush) afterBridgeCommit(deps.db, () => {
           void flushPublish();
@@ -140737,7 +141107,7 @@ ${tail}` : ""
           log.error(`turn-ledger: refused malformed evidence (${String(evidence?.kind)}) \u2014 fails the mesh-shared content guard`);
           return { verdict: "rejected", rejection: "invalid_evidence", attempt: null, effects: [] };
         }
-        if (store3.hasEvent(evidence.eventId)) {
+        if (store4.hasEvent(evidence.eventId)) {
           counters4.duplicates++;
           return { verdict: "duplicate", attempt: null, effects: [] };
         }
@@ -140785,7 +141155,7 @@ ${tail}` : ""
           if (isPublishableAttempt(step.result.attempt)) publish = true;
           for (const effect of step.result.effects) {
             if (effect.kind !== "reevaluate" || !effect.evidenceId) continue;
-            const held = store3.getEvent(effect.evidenceId)?.payload.evidence;
+            const held = store4.getEvent(effect.evidenceId)?.payload.evidence;
             const again = isTurnEvidence(held) ? forceLiveFalse(held, `${effect.evidenceId}#reeval:${step.evidence.eventId}`) : null;
             if (again) observe(again, opts);
           }
@@ -140816,7 +141186,7 @@ ${tail}` : ""
           ...notice.targetSessionId ? { targetSessionId: notice.targetSessionId } : {},
           ...notice.taskId ? { taskId: notice.taskId } : {}
         };
-        const inserted = txn(() => store3.insertEvent({
+        const inserted = txn(() => store4.insertEvent({
           eventId,
           meshId: notice.meshId,
           attemptId: notice.attemptId ?? null,
@@ -140845,7 +141215,7 @@ ${tail}` : ""
       }
       function claimDelivery(input) {
         const nowMs2 = now();
-        return txn(() => store3.insertEvent({
+        return txn(() => store4.insertEvent({
           eventId: deliveryClaimId(input.meshId, input.writer, input.seq),
           meshId: input.meshId ?? null,
           attemptId: null,
@@ -140876,13 +141246,13 @@ ${tail}` : ""
         const report = { published: 0, failed: 0, pending: 0 };
         const publisher = deps.publisher;
         if (!publisher) {
-          report.pending = store3.countPendingPublish();
+          report.pending = store4.countPendingPublish();
           return report;
         }
         const blocked = /* @__PURE__ */ new Set();
         for (; ; ) {
           flushAgain = false;
-          const rows = store3.pendingPublish(PUBLISH_BATCH);
+          const rows = store4.pendingPublish(PUBLISH_BATCH);
           let progressed = 0;
           for (const row2 of rows) {
             const target4 = publishable(row2);
@@ -140893,7 +141263,7 @@ ${tail}` : ""
             if (blocked.has(target4.meshId)) continue;
             try {
               const id4 = await publisher.publish(target4.meshId, target4.entry, target4.ref ? { ref: target4.ref } : void 0);
-              store3.markPublished(row2.eventId, id4.writer, id4.seq);
+              store4.markPublished(row2.eventId, id4.writer, id4.seq);
               report.published++;
               counters4.published++;
               progressed++;
@@ -140906,7 +141276,7 @@ ${tail}` : ""
           }
           if (!flushAgain && (rows.length < PUBLISH_BATCH || progressed === 0)) break;
         }
-        report.pending = store3.countPendingPublish();
+        report.pending = store4.countPendingPublish();
         return report;
       }
       function flushPublish() {
@@ -140963,12 +141333,12 @@ ${tail}` : ""
           return recovery2.recover(input.grant, input.peer);
         },
         maintenanceInventory: () => ({ flushing: flushing !== null, flushAgain }),
-        store: store3,
+        store: store4,
         selfDaemonId: deps.selfDaemonId,
         incarnationStartedAt,
         observe,
         async resumeStoppingWriters(attemptId) {
-          for (const a of store3.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
+          for (const a of store4.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
             if (attemptId && a.attemptId !== attemptId || a.state !== "stopping" || !a.data.writerStop) continue;
             const request = {
               attemptId: a.attemptId,
@@ -140994,24 +141364,24 @@ ${tail}` : ""
         },
         notifyMeshEvent,
         claimDelivery,
-        isTerminal: (attemptId) => store3.isTerminal(attemptId),
-        getAttempt: (attemptId) => store3.getAttempt(attemptId),
-        openAttemptForSession: (sessionId) => store3.findOpenAttemptForSession(sessionId),
-        sessionIdFor: (attemptId) => store3.sessionIdForAttempt(attemptId),
-        expiredHoldEvidence: (nowMs2 = now()) => expireHolds(store3.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
+        isTerminal: (attemptId) => store4.isTerminal(attemptId),
+        getAttempt: (attemptId) => store4.getAttempt(attemptId),
+        openAttemptForSession: (sessionId) => store4.findOpenAttemptForSession(sessionId),
+        sessionIdFor: (attemptId) => store4.sessionIdForAttempt(attemptId),
+        expiredHoldEvidence: (nowMs2 = now()) => expireHolds(store4.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
           observedBy: deps.selfDaemonId,
-          sessionIdFor: (attemptId) => store3.sessionIdForAttempt(attemptId)
+          sessionIdFor: (attemptId) => store4.sessionIdForAttempt(attemptId)
         }),
         sweepExpiredHolds(nowMs2 = now()) {
-          return expireHolds(store3.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
+          return expireHolds(store4.dueHolds(nowMs2, 500, deps.selfDaemonId), nowMs2, {
             observedBy: deps.selfDaemonId,
-            sessionIdFor: (attemptId) => store3.sessionIdForAttempt(attemptId)
+            sessionIdFor: (attemptId) => store4.sessionIdForAttempt(attemptId)
           }).map((evidence) => observe(evidence));
         },
-        nextHoldDeadline: (afterMs) => store3.nextHoldDeadline(deps.selfDaemonId, afterMs),
+        nextHoldDeadline: (afterMs) => store4.nextHoldDeadline(deps.selfDaemonId, afterMs),
         flushPublish,
         republishPending: flushPublish,
-        pendingPublishCount: (olderThanMs) => store3.countPendingPublish(olderThanMs),
+        pendingPublishCount: (olderThanMs) => store4.countPendingPublish(olderThanMs),
         counters: () => ({ ...counters4 })
       };
     }
@@ -141063,10 +141433,10 @@ ${tail}` : ""
       }
     }
     function createMeshRuntimeTurnLedger(options) {
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       return createTurnLedger({
-        db: store3.db,
-        store: store3.turnStore(),
+        db: store4.db,
+        store: store4.turnStore(),
         selfDaemonId: options.selfDaemonId,
         policy: options.policy ?? resolveTurnPolicy(process.env),
         host: meshRuntimeTxnHost,
@@ -141150,18 +141520,18 @@ ${tail}` : ""
       }
     }
     function selectProbeTargets(input) {
-      const { store: store3, selfDaemonId, nowMs: nowMs2, policy } = input;
+      const { store: store4, selfDaemonId, nowMs: nowMs2, policy } = input;
       const forced = input.forced ?? /* @__PURE__ */ new Set();
-      const open = store3.listOpenAttempts().filter((a) => daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId));
+      const open = store4.listOpenAttempts().filter((a) => daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId));
       if (open.length === 0) return [];
       const lastProbe = /* @__PURE__ */ new Map();
-      for (const row2 of store3.db.prepare("SELECT attempt_id, last_probe_at FROM turn_attempts WHERE terminal_outcome IS NULL").all()) {
+      for (const row2 of store4.db.prepare("SELECT attempt_id, last_probe_at FROM turn_attempts WHERE terminal_outcome IS NULL").all()) {
         lastProbe.set(row2.attempt_id, row2.last_probe_at);
       }
       const holdsByAttempt = /* @__PURE__ */ new Map();
-      for (const row2 of store3.db.prepare(`SELECT attempt_id, reason FROM turn_holds WHERE status = 'active'`).all()) {
-        const list2 = holdsByAttempt.get(row2.attempt_id);
-        if (list2) list2.push(row2.reason);
+      for (const row2 of store4.db.prepare(`SELECT attempt_id, reason FROM turn_holds WHERE status = 'active'`).all()) {
+        const list3 = holdsByAttempt.get(row2.attempt_id);
+        if (list3) list3.push(row2.reason);
         else holdsByAttempt.set(row2.attempt_id, [row2.reason]);
       }
       const due = [];
@@ -141216,7 +141586,7 @@ ${tail}` : ""
     }
     function createTurnScheduler(deps) {
       const ledger = deps.ledger;
-      const store3 = deps.store ?? ledger.store;
+      const store4 = deps.store ?? ledger.store;
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const selfDaemonId = deps.selfDaemonId ?? ledger.selfDaemonId;
       const log = deps.log ?? NOOP_LOG2;
@@ -141228,7 +141598,7 @@ ${tail}` : ""
       let lastPruneAt = null;
       let lastStopInspectAt = -Infinity;
       let stopInspectionPending = false;
-      let inFlight4 = null;
+      let inFlight5 = null;
       let again = false;
       let wake = null;
       let offBus = null;
@@ -141281,7 +141651,7 @@ ${tail}` : ""
         }
         const at = now();
         const readCurrent = () => {
-          const latest2 = store3.getAttempt(attempt.attemptId);
+          const latest2 = store4.getAttempt(attempt.attemptId);
           return latest2 && !latest2.terminal && latest2.state !== "stopping" && latest2.generation === attempt.generation && sessionIdsEquivalent(latest2.sessionId, attempt.sessionId) && latest2.data.livenessSessionCut?.revision === attempt.data.livenessSessionCut?.revision ? latest2 : null;
         };
         const current4 = readCurrent();
@@ -141358,7 +141728,7 @@ ${tail}` : ""
         if (!readCurrent()) return;
         observeAll(evidence);
         try {
-          store3.markProbed(current4.attemptId, at);
+          store4.markProbed(current4.attemptId, at);
         } catch (error) {
           log.warn(`turn-scheduler: markProbed ${current4.attemptId} failed: ${describe3(error)}`);
         }
@@ -141377,8 +141747,8 @@ ${tail}` : ""
           log.warn(`turn-scheduler: publish-lag check failed: ${describe3(error)}`);
         }
         try {
-          const ceilinged = new Set(store3.db.prepare(`SELECT attempt_id FROM turn_holds WHERE status = 'active' AND reason = 'hard_ceiling'`).all().map((r) => r.attempt_id));
-          const missing = store3.listOpenAttempts().filter((a) => a.scope !== "plain" && daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
+          const ceilinged = new Set(store4.db.prepare(`SELECT attempt_id FROM turn_holds WHERE status = 'active' AND reason = 'hard_ceiling'`).all().map((r) => r.attempt_id));
+          const missing = store4.listOpenAttempts().filter((a) => a.scope !== "plain" && daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
           report.missingCeiling = missing.length;
           if (missing.length > 0) {
             warnThrottled("missing_ceiling", missing.length, at, `turn-scheduler: invariant \u2014 ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => a.attemptId).join(", ")}) \u2014 nothing bounds them`);
@@ -141414,7 +141784,7 @@ ${tail}` : ""
           }
           let targets = [];
           try {
-            targets = selectProbeTargets({ store: store3, selfDaemonId, nowMs: now(), policy, forced: force });
+            targets = selectProbeTargets({ store: store4, selfDaemonId, nowMs: now(), policy, forced: force });
           } catch (error) {
             log.error(`turn-scheduler: probe target query failed: ${describe3(error)}`);
           }
@@ -141444,8 +141814,8 @@ ${tail}` : ""
         if (lastPruneAt === null || pruneAt - lastPruneAt >= PLAIN_ATTEMPT_PRUNE_INTERVAL_MS) {
           lastPruneAt = pruneAt;
           try {
-            report.pruned = store3.pruneTerminalPlainAttempts(PLAIN_ATTEMPT_RETENTION_MS, pruneAt).attempts;
-            const samples = store3.pruneTerminalLivenessSamples(PLAIN_ATTEMPT_RETENTION_MS, pruneAt, selfDaemonId);
+            report.pruned = store4.pruneTerminalPlainAttempts(PLAIN_ATTEMPT_RETENTION_MS, pruneAt).attempts;
+            const samples = store4.pruneTerminalLivenessSamples(PLAIN_ATTEMPT_RETENTION_MS, pruneAt, selfDaemonId);
             if (samples > 0) log.info(`turn-scheduler: pruned ${samples} redundant terminal liveness sample(s) older than 7 d`);
             if (report.pruned > 0) log.info(`turn-scheduler: pruned ${report.pruned} terminal plain attempt(s) older than 7 d`);
           } catch (error) {
@@ -141455,18 +141825,18 @@ ${tail}` : ""
         return report;
       }
       function tick2() {
-        if (inFlight4) {
+        if (inFlight5) {
           again = true;
-          return inFlight4;
+          return inFlight5;
         }
-        inFlight4 = runTick().finally(() => {
-          inFlight4 = null;
+        inFlight5 = runTick().finally(() => {
+          inFlight5 = null;
           if (again && !stopped) {
             again = false;
             wake?.();
           }
         });
-        return inFlight4;
+        return inFlight5;
       }
       if (deps.bus) {
         offBus = deps.bus.on("terminated", (event) => {
@@ -141481,7 +141851,7 @@ ${tail}` : ""
         }, { name: "turn-scheduler" });
       }
       return {
-        maintenanceInventory: () => ({ inFlight: inFlight4 !== null || stopInspectionPending, forced: [...forced].sort(), stopped }),
+        maintenanceInventory: () => ({ inFlight: inFlight5 !== null || stopInspectionPending, forced: [...forced].sort(), stopped }),
         tick: tick2,
         requestProbe(attemptId) {
           forced.add(attemptId);
@@ -143024,17 +143394,17 @@ ${tail}` : ""
     }
     function wireTurnLedger(components, opts = {}) {
       const rt = components.seqscribe ?? null;
-      const store3 = MeshRuntimeStore.getInstance();
+      const store4 = MeshRuntimeStore.getInstance();
       const selfDaemonId = selfDaemonIdFor(components);
       const selfDaemonIds = () => {
         return expandDaemonIdForms([selfDaemonId, ...resolveCoordinatorDrainDaemonIds(components)]);
       };
       if (opts.runMigration !== false) {
         try {
-          const report = store3.runTurnLedgerMigrationV1({
+          const report = store4.runTurnLedgerMigrationV1({
             ownerDaemonId: selfDaemonId,
             beforeFold: () => {
-              const jsonl = importLegacyPendingEventsJsonl(store3.db, getLedgerDir());
+              const jsonl = importLegacyPendingEventsJsonl(store4.db, getLedgerDir());
               if (jsonl.filesScanned > 0) {
                 LOG.info("TurnLedger", `legacy pending-events JSONL: imported ${jsonl.eventsImported} event(s) from ${jsonl.filesScanned} file(s) (removed ${jsonl.filesRemoved}, retained ${jsonl.filesRetained}, skipped ${jsonl.linesSkipped} line(s))`);
               }
@@ -143045,12 +143415,12 @@ ${tail}` : ""
           LOG.error("TurnLedger", `turn-ledger migration v1 failed: ${error instanceof Error ? error.message : String(error)} \u2014 the next boot resumes it`);
         }
         try {
-          LOG.info("TurnLedger", formatTurnLedgerMigrationV2Line(store3.runTurnLedgerMigrationV2({})));
+          LOG.info("TurnLedger", formatTurnLedgerMigrationV2Line(store4.runTurnLedgerMigrationV2({})));
         } catch (error) {
           LOG.error("TurnLedger", `turn-ledger migration v2 failed: ${error instanceof Error ? error.message : String(error)} \u2014 the next boot resumes it`);
         }
         try {
-          LOG.info("TurnLedger", formatTurnLedgerMigrationV3Line(store3.runTurnLedgerMigrationV3({})));
+          LOG.info("TurnLedger", formatTurnLedgerMigrationV3Line(store4.runTurnLedgerMigrationV3({})));
         } catch (error) {
           LOG.error("TurnLedger", `turn-ledger migration v3 failed: ${error instanceof Error ? error.message : String(error)} \u2014 the next boot resumes it`);
         }
@@ -143160,7 +143530,7 @@ ${tail}` : ""
         counters: () => ({ ...counters4, ...consumer?.counters() ?? {} })
       };
       bindMeshNoticeRuntime(notices);
-      const index = new MeshTopicIndex(store3.db);
+      const index = new MeshTopicIndex(store4.db);
       setActiveTurnLedgerForIpc(ledger, {
         index,
         ownWriter: () => rt?.node.writerId ?? null,
@@ -143419,8 +143789,8 @@ ${tail}` : ""
     }
     function installWorkerSessionBindPersistence(components) {
       try {
-        const store3 = new SqliteWorkerSessionBindStore(MeshRuntimeStore.getInstance().db);
-        setWorkerSessionBindPersistence(store3, (sessionId) => {
+        const store4 = new SqliteWorkerSessionBindStore(MeshRuntimeStore.getInstance().db);
+        setWorkerSessionBindPersistence(store4, (sessionId) => {
           if (components.sessionRegistry.has(sessionId)) return true;
           try {
             return !!components.instanceManager.getInstance(sessionId);
@@ -147452,7 +147822,7 @@ ${tail}` : ""
       let serverOriginGrantPublicKey;
       let serverKeyRotation;
       let serverKeyRotationChain;
-      const fail8 = (code, notifyPeer) => {
+      const fail9 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -147481,28 +147851,28 @@ ${tail}` : ""
         },
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail8("bad_frame", false);
+          if (state2 === "done") return fail9("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail8(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail8(parsed.code, false);
-          if (state2 === "idle") return fail8("bad_frame", true);
+          if (isParseError(parsed)) return fail9(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail9(parsed.code, false);
+          if (state2 === "idle") return fail9("bad_frame", true);
           if (state2 === "awaiting_challenge") {
-            if (parsed.kind !== "mesh_challenge") return fail8("bad_frame", true);
+            if (parsed.kind !== "mesh_challenge") return fail9("bad_frame", true);
             if (opts.serverDaemonIdExpected && canon(opts.serverDaemonIdExpected) !== canon(parsed.daemonId)) {
-              return fail8("bad_proof", true);
+              return fail9("bad_proof", true);
             }
             const peerHasCap = hasOriginGrantCap(parsed.caps);
             const peerSentKeyMaterial = Boolean(
               parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
             );
             if (peerSentKeyMaterial && !peerHasCap) {
-              return fail8("bad_proof", true);
+              return fail9("bad_proof", true);
             }
             if (localHasOriginGrantCap && peerHasCap && !parsed.originGrantPublicKey) {
-              return fail8("bad_proof", true);
+              return fail9("bad_proof", true);
             }
             if (localHasOriginGrantCap && !peerHasCap && hasCapableNonceSentinel(parsed.nonce, opts.secret, "server", opts.meshId, parsed.daemonId)) {
-              return fail8("bad_proof", true);
+              return fail9("bad_proof", true);
             }
             negotiatedOriginGrant = localHasOriginGrantCap && peerHasCap;
             const inputs = negotiatedOriginGrant ? {
@@ -147528,7 +147898,7 @@ ${tail}` : ""
               clientDaemonId: opts.daemonId,
               serverDaemonId: parsed.daemonId
             };
-            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail8("bad_proof", true);
+            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail9("bad_proof", true);
             if (negotiatedOriginGrant && parsed.originGrantPublicKey) {
               if (!canAcceptPeerOriginGrantPublicKey(
                 opts.meshId,
@@ -147539,7 +147909,7 @@ ${tail}` : ""
                   rotationChain: parsed.keyRotationChain
                 }
               )) {
-                return fail8("bad_proof", true);
+                return fail9("bad_proof", true);
               }
               serverCaps = parsed.caps;
               serverOriginGrantPublicKey = parsed.originGrantPublicKey;
@@ -147561,11 +147931,11 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_ok") return fail8("bad_frame", true);
-          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail8("bad_frame", true);
+          if (parsed.kind !== "mesh_ok") return fail9("bad_frame", true);
+          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail9("bad_frame", true);
           if (!negotiatedOriginGrant) {
             if (parsed.originGrantPublicKey !== void 0 || parsed.keyRotation !== void 0 || parsed.keyRotationChain !== void 0 || parsed.proof !== void 0 || hasOriginGrantCap(parsed.caps)) {
-              return fail8("bad_proof", true);
+              return fail9("bad_proof", true);
             }
             state2 = "done";
             step = {
@@ -147576,16 +147946,16 @@ ${tail}` : ""
             return step;
           }
           if (!hasOriginGrantCap(parsed.caps) || !capsEquivalent(parsed.caps, serverCaps)) {
-            return fail8("bad_proof", true);
+            return fail9("bad_proof", true);
           }
           if (!originGrantPublicKeysEqual(serverOriginGrantPublicKey, parsed.originGrantPublicKey)) {
-            return fail8("bad_proof", true);
+            return fail9("bad_proof", true);
           }
           if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
-            return fail8("bad_proof", true);
+            return fail9("bad_proof", true);
           }
           if (parsed.keyRotationChain && !rotationChainsEquivalent(parsed.keyRotationChain, serverKeyRotationChain)) {
-            return fail8("bad_proof", true);
+            return fail9("bad_proof", true);
           }
           const okInputs = {
             secret: opts.secret,
@@ -147604,7 +147974,7 @@ ${tail}` : ""
             serverKeyRotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
           };
           if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
-            return fail8("bad_proof", true);
+            return fail9("bad_proof", true);
           }
           const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
           const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : void 0;
@@ -147618,7 +147988,7 @@ ${tail}` : ""
                 rotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
               }
             );
-            if (!recorded) return fail8("bad_proof", true);
+            if (!recorded) return fail9("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -147648,7 +148018,7 @@ ${tail}` : ""
       let clientOriginGrantPublicKey;
       let clientKeyRotation;
       let clientKeyRotationChain;
-      const fail8 = (code, notifyPeer) => {
+      const fail9 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -147662,12 +148032,12 @@ ${tail}` : ""
       return {
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail8("bad_frame", false);
+          if (state2 === "done") return fail9("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail8(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail8(parsed.code, false);
+          if (isParseError(parsed)) return fail9(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail9(parsed.code, false);
           if (state2 === "awaiting_hello") {
-            if (parsed.kind !== "mesh_hello") return fail8("bad_frame", true);
+            if (parsed.kind !== "mesh_hello") return fail9("bad_frame", true);
             const canonicalPeer = canon(parsed.daemonId);
             const secret = opts.resolveSecret(parsed.meshId, canonicalPeer);
             const serverNonce = localHasOriginGrantCap && secret ? mintCapableHandshakeNonce(secret, "server", parsed.meshId, opts.localDaemonId) : mintHandshakeNonce();
@@ -147677,15 +148047,15 @@ ${tail}` : ""
             );
             if (localHasOriginGrantCap) {
               if (clientSentKeyMaterial && !clientHasCap) {
-                if (secret === null || secret === "") return fail8("unknown_peer", true);
-                return fail8("bad_proof", true);
+                if (secret === null || secret === "") return fail9("unknown_peer", true);
+                return fail9("bad_proof", true);
               }
               if (clientHasCap && !parsed.originGrantPublicKey) {
-                if (secret === null || secret === "") return fail8("unknown_peer", true);
-                return fail8("bad_proof", true);
+                if (secret === null || secret === "") return fail9("unknown_peer", true);
+                return fail9("bad_proof", true);
               }
               if (!clientHasCap && secret && hasCapableNonceSentinel(parsed.nonce, secret, "client", parsed.meshId, parsed.daemonId)) {
-                return fail8("bad_proof", true);
+                return fail9("bad_proof", true);
               }
             }
             negotiatedOriginGrant = Boolean(
@@ -147719,7 +148089,7 @@ ${tail}` : ""
             const okProof = negotiatedOriginGrant ? computeOkProof(inputs) : void 0;
             if (secret === null || secret === "") {
               proofsEqual(serverProof, clientProof);
-              return fail8("unknown_peer", true);
+              return fail9("unknown_peer", true);
             }
             expectedClientProof = clientProof;
             expectedOkProof = okProof;
@@ -147745,8 +148115,8 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_proof") return fail8("bad_frame", true);
-          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail8("bad_proof", true);
+          if (parsed.kind !== "mesh_proof") return fail9("bad_frame", true);
+          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail9("bad_proof", true);
           const validClientPubKey = negotiatedOriginGrant && clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
           if (validClientPubKey) {
             const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
@@ -147758,7 +148128,7 @@ ${tail}` : ""
                 rotationChain: clientKeyRotationChain
               }
             );
-            if (!recorded) return fail8("bad_proof", true);
+            if (!recorded) return fail9("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -148761,7 +149131,7 @@ ${tail}` : ""
       let uses = 0;
       let revoked = false;
       const server = (0, import_node_http.createServer)(async (req, res) => {
-        const refuse3 = (status) => {
+        const refuse4 = (status) => {
           res.writeHead(status);
           res.end(JSON.stringify({ success: false, code: "operator_recovery_refused" }));
         };
@@ -148772,21 +149142,21 @@ ${tail}` : ""
         }
         if (!valid) {
           revoked = true;
-          refuse3(403);
+          refuse4(403);
           return;
         }
         if (req.method !== "POST" || req.url !== "/api/v1/command" || req.headers.origin || req.headers["x-adhdev-mcp"]) {
-          refuse3(403);
+          refuse4(403);
           return;
         }
         const raw = req.headers.cookie;
         const expected = `adhdev_operator_recovery=${token}`;
         if (typeof raw !== "string" || Buffer.byteLength(raw) !== Buffer.byteLength(expected) || !(0, import_node_crypto222.timingSafeEqual)(Buffer.from(raw), Buffer.from(expected))) {
-          refuse3(401);
+          refuse4(401);
           return;
         }
         if (uses >= 2) {
-          refuse3(403);
+          refuse4(403);
           return;
         }
         uses++;
@@ -148817,7 +149187,7 @@ ${tail}` : ""
           res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
           res.end(JSON.stringify(result));
         } catch {
-          refuse3(403);
+          refuse4(403);
         }
       });
       server.requestTimeout = 5e3;
@@ -149549,11 +149919,11 @@ CONSUMED:${nonceHash}`);
       const nodeIds = [...new Set(memberNodes.map((n) => readText(n?.id)).filter(Boolean))];
       const compact2 = args.compact !== false;
       const missionsRead = async () => {
-        const list2 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose", ...args.structured ? { structured: true } : {} }));
-        if (compact2 || list2.success === false) return { list: list2 };
-        const ids = (Array.isArray(list2.missions) ? list2.missions : []).map((m) => String(m?.id)).filter(Boolean);
+        const list3 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose", ...args.structured ? { structured: true } : {} }));
+        if (compact2 || list3.success === false) return { list: list3 };
+        const ids = (Array.isArray(list3.missions) ? list3.missions : []).map((m) => String(m?.id)).filter(Boolean);
         const stats = ids.length > 0 ? await settle(() => execute("task_stats_query", { v, meshId, missionIds: ids })) : null;
-        return { list: list2, ...stats ? { stats } : {} };
+        return { list: list3, ...stats ? { stats } : {} };
       };
       const relatedRepoGit = {};
       const relatedReads = async () => {
@@ -152519,9 +152889,9 @@ ${marker2}`,
       return blocking;
     }
     function readUpgradeOptions(args) {
-      const str20 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
-      const channel = str20(args?.channel) ?? str20(args?.updatePolicy?.channel);
-      const npmTag = str20(args?.npmTag);
+      const str21 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const channel = str21(args?.channel) ?? str21(args?.updatePolicy?.channel);
+      const npmTag = str21(args?.npmTag);
       return {
         ...args?.allowDowngrade === true ? { allowDowngrade: true } : {},
         ...channel ? { channel } : {},
@@ -152884,12 +153254,12 @@ ${marker2}`,
         const client = new import_session_host_core13.SessionHostClient({ endpoint: endpoint2 });
         try {
           await client.connect();
-          const list2 = async () => {
+          const list3 = async () => {
             const reply = await client.request({ type: "list_sessions", payload: {} });
             if (!reply.success || !Array.isArray(reply.result)) throw new Error("maintenance_complete_inventory_required");
             return reply.result;
           };
-          const records = await list2(), inventory = retainedRuntimeInventory(records, state2);
+          const records = await list3(), inventory = retainedRuntimeInventory(records, state2);
           if (digest2(inventory) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
           for (const record7 of records) {
             if (record7.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record7.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
@@ -152908,7 +153278,7 @@ ${marker2}`,
             if (!reply.result?.attachedClients?.some((c) => c.clientId === clientId && c.readOnly === true) || JSON.stringify(reply.result.writeOwner) !== JSON.stringify(r.writeOwner)) throw new Error("maintenance_readonly_attach_required");
             if (!reply.success || !reply.result || digest2(retainedRuntimeInventory([reply.result], state2)[0]) !== digest2(inventory.find((x) => x.runtimeId === r.sessionId))) throw new Error("maintenance_observation_attach_drift");
           }
-          if (digest2(retainedRuntimeInventory(await list2(), state2)) !== digest2(inventory)) throw new Error("maintenance_retained_inventory_drift");
+          if (digest2(retainedRuntimeInventory(await list3(), state2)) !== digest2(inventory)) throw new Error("maintenance_retained_inventory_drift");
           const finalEndpoint = await host.deps.verifiedRetainedEndpoint();
           if (finalEndpoint.path !== endpoint2.path) throw new Error("maintenance_retained_endpoint_drift");
           if (digest2(retainedRuntimeInventory(records, state2)) !== digest2(inventory)) throw new Error("maintenance_coordinator_binding_drift");
@@ -153443,10 +153813,10 @@ ${marker2}`,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha6(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto31.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer2 = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto31.createHmac)("sha256", key5).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha6(fs49.readFileSync(pin.path)) !== pin.sha256 || sha6(fs49.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha6(fs49.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
-        const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto31.timingSafeEqual)((0, import_node_crypto31.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        const r = answer2?.reply;
+        if (!answer2?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer2.mac ?? "") || !(0, import_node_crypto31.timingSafeEqual)((0, import_node_crypto31.createHmac)("sha256", key5).update(JSON.stringify(r)).digest(), Buffer.from(answer2.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -153865,11 +154235,11 @@ ${marker2}`,
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
                 const mainPages = titleFilteredPages.filter((t) => this.isMainPageUrl(t.url));
-                const list2 = mainPages.length > 0 ? mainPages : titleFilteredPages.length > 0 ? titleFilteredPages : pages;
-                this.log(`[CDP] pages(${list2.length}): ${list2.map((t) => `"${t.title}"`).join(", ")}`);
+                const list3 = mainPages.length > 0 ? mainPages : titleFilteredPages.length > 0 ? titleFilteredPages : pages;
+                this.log(`[CDP] pages(${list3.length}): ${list3.map((t) => `"${t.title}"`).join(", ")}`);
                 const previousTargetId = this._targetId;
                 const selected2 = resolveCdpPageTarget({
-                  pages: list2,
+                  pages: list3,
                   pinnedTargetId: previousTargetId,
                   previousPageTitle: this._pageTitle
                 });
@@ -153887,8 +154257,8 @@ ${marker2}`,
                   resolve66(null);
                   return;
                 }
-                this._pageTitle = list2[0]?.title || "";
-                resolve66(list2[0]);
+                this._pageTitle = list3[0]?.title || "";
+                resolve66(list3[0]);
               } catch {
                 resolve66(null);
               }
@@ -157795,10 +158165,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       const snippet2 = promptSnippet(text4);
       if (!id4 || !snippet2) return;
-      const list2 = promptsByInstance.get(id4) ?? [];
-      if (list2[list2.length - 1] !== snippet2) list2.push(snippet2);
-      if (list2.length > MAX_PROMPTS_PER_SESSION) list2.splice(0, list2.length - MAX_PROMPTS_PER_SESSION);
-      promptsByInstance.set(id4, list2);
+      const list3 = promptsByInstance.get(id4) ?? [];
+      if (list3[list3.length - 1] !== snippet2) list3.push(snippet2);
+      if (list3.length > MAX_PROMPTS_PER_SESSION) list3.splice(0, list3.length - MAX_PROMPTS_PER_SESSION);
+      promptsByInstance.set(id4, list3);
     }
     function sentPromptSnippets(instanceId) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
@@ -160388,15 +160758,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           current4.push(byte);
         } else {
           if (current4.length >= MIN_PRINTABLE_RUN) {
-            const str20 = Buffer.from(current4).toString("utf-8").trim();
-            if (str20) strings.push(str20);
+            const str21 = Buffer.from(current4).toString("utf-8").trim();
+            if (str21) strings.push(str21);
           }
           current4 = [];
         }
       }
       if (current4.length >= MIN_PRINTABLE_RUN) {
-        const str20 = Buffer.from(current4).toString("utf-8").trim();
-        if (str20) strings.push(str20);
+        const str21 = Buffer.from(current4).toString("utf-8").trim();
+        if (str21) strings.push(str21);
       }
       return strings;
     }
@@ -160495,9 +160865,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function extractModelAnswer(payload) {
       const inner = firstLenField(payload, 20);
       if (!inner) return "";
-      const answer = firstLenField(inner, 1) ?? firstLenField(inner, 8);
-      if (!answer || !looksLikeText(answer)) return "";
-      return stripAnswerMarker(answer.toString("utf-8")).trim();
+      const answer2 = firstLenField(inner, 1) ?? firstLenField(inner, 8);
+      if (!answer2 || !looksLikeText(answer2)) return "";
+      return stripAnswerMarker(answer2.toString("utf-8")).trim();
     }
     function extractUserPrompt(payload) {
       const inner = firstLenField(payload, 19);
@@ -162921,9 +163291,9 @@ ${output}` : "";
       }
       return null;
     }
-    function collectSyncTargetTypes(upstreamDir, store3, channel) {
+    function collectSyncTargetTypes(upstreamDir, store4, channel) {
       const targets = /* @__PURE__ */ new Set();
-      const { pointers } = store3.listPointers(channel);
+      const { pointers } = store4.listPointers(channel);
       for (const type2 of pointers.keys()) targets.add(type2);
       const scan = (dir) => {
         let entries2;
@@ -163023,9 +163393,9 @@ ${output}` : "";
     var INPUT_DETERMINED_BLOCKS = /* @__PURE__ */ new Set(["DAEMON_VERSION_UNSUPPORTED", "CLI_VERSION_UNSUPPORTED"]);
     var CHANNEL_ACTIVATION_RECHECK_MS = 5e3;
     var ProviderChannelSync = class {
-      constructor(host, store3, opts) {
+      constructor(host, store4, opts) {
         this.host = host;
-        this.store = store3;
+        this.store = store4;
         this.opts = opts;
       }
       /** Active verified-channel object dirs, refreshed by loadVerifiedChannelActivations(). */
@@ -163067,9 +163437,9 @@ ${output}` : "";
       get daemonVersion() {
         return this.opts.daemonVersion;
       }
-      runtime(store3) {
+      runtime(store4) {
         return new ProviderChannelRuntime({
-          store: store3,
+          store: store4,
           registryBaseUrl: this.opts.registryBaseUrl,
           providerTarballUrl: this.opts.providerTarballUrl,
           logFn: this.opts.logFn,
@@ -168918,7 +169288,7 @@ ${output}` : "";
         log("warn", `submit(${messageId}) receipt unverified; preserving delivery/dedupe: ${error?.message ?? error}`);
       }
       const settled = /* @__PURE__ */ new Map();
-      const inFlight4 = /* @__PURE__ */ new Map();
+      const inFlight5 = /* @__PURE__ */ new Map();
       const parkedText = /* @__PURE__ */ new Map();
       function remember(msg, kind) {
         const messageId = msg.messageId;
@@ -168946,7 +169316,7 @@ ${output}` : "";
         }
         parkedText.set(msg.messageId, { sessionId: msg.sessionId, text: msg.input.textFallback.trim() });
       }
-      function refuse3(reason, extra) {
+      function refuse4(reason, extra) {
         const message = extra?.message ?? REFUSAL_MESSAGES[reason];
         return {
           kind: "refused",
@@ -168967,16 +169337,16 @@ ${output}` : "";
           if (target4.buildBody) {
             const body = target4.buildBody(input);
             if (body && body.text.trim()) return body;
-            return refuse3("unsupported_input", { message: "No input to send." });
+            return refuse4("unsupported_input", { message: "No input to send." });
           }
           if (hasNonTextParts(input)) {
-            return refuse3("unsupported_input", { message: `${target4.label || "This session"} only supports text input.` });
+            return refuse4("unsupported_input", { message: `${target4.label || "This session"} only supports text input.` });
           }
           const text4 = input.textFallback;
-          if (!text4 || !text4.trim()) return refuse3("unsupported_input", { message: "No input to send." });
+          if (!text4 || !text4.trim()) return refuse4("unsupported_input", { message: "No input to send." });
           return { text: text4 };
         } catch (e) {
-          return refuse3("unsupported_input", { message: e?.message || String(e) });
+          return refuse4("unsupported_input", { message: e?.message || String(e) });
         }
       }
       async function writeAndReport(target4, msg, body, opts, noticeObserver) {
@@ -169030,7 +169400,7 @@ ${output}` : "";
       }
       async function splitWrite(target4, msg, parked, input = msg.input, noticeObserver) {
         if (typeof target4.sendMessageDuringGeneration !== "function") {
-          return refuse3("not_supported", { restored: true });
+          return refuse4("not_supported", { restored: true });
         }
         let body;
         let claimed = null;
@@ -169085,10 +169455,10 @@ ${output}` : "";
         }
         const reason = splitWriteRefusal(outcome.reason);
         log("info", `submit(${msg.messageId}) send_now refused ${outcome.reason} (session ${msg.sessionId}, promoted=${parked}, restored=${restored})`);
-        return refuse3(reason, { restored });
+        return refuse4(reason, { restored });
       }
       async function interruptThenWrite(target4, msg, parked, input = msg.input, noticeObserver) {
-        if (typeof target4.interruptTurn !== "function") return refuse3("interrupt_not_implemented");
+        if (typeof target4.interruptTurn !== "function") return refuse4("interrupt_not_implemented");
         let fresh = null;
         if (!parked) {
           const built = freshBody(target4, msg, input);
@@ -169099,7 +169469,7 @@ ${output}` : "";
         const interrupted = await target4.interruptTurn();
         if (!interrupted.ok) {
           log("warn", `submit(${msg.messageId}) interrupt refused: ${interrupted.reason}`);
-          return refuse3(interruptRefusal(interrupted.reason), { message: interrupted.message, restored: true });
+          return refuse4(interruptRefusal(interrupted.reason), { message: interrupted.message, restored: true });
         }
         const claimed = parked ? target4.claimQueuedSend?.(msg.messageId) ?? null : null;
         if (parked && !claimed) {
@@ -169123,7 +169493,7 @@ ${output}` : "";
           });
           if (!wentIdle && terminalStatus !== null) {
             log("warn", `submit(${msg.messageId}) session reported '${String(terminalStatus)}' after the stop key \u2014 NOT delivered`);
-            return refuse3("session_exited", { restored: false });
+            return refuse4("session_exited", { restored: false });
           }
           if (!wentIdle) {
             let restored = !claimed;
@@ -169136,7 +169506,7 @@ ${output}` : "";
               }
             }
             log("warn", `submit(${msg.messageId}) interrupt sent but no idle within ${timeoutMs}ms (restored=${restored})`);
-            return refuse3("idle_timeout", { restored });
+            return refuse4("idle_timeout", { restored });
           }
           return await writeAndReport(target4, msg, body, {
             fresh: !parked,
@@ -169175,9 +169545,9 @@ ${output}` : "";
           target4 = await resolveTarget();
         } catch (e) {
           log("error", `submit(${msg.messageId}) resolveSession threw: ${e?.message ?? e}`);
-          return refuse3("internal_error");
+          return refuse4("internal_error");
         }
-        if (!target4) return refuse3("no_target");
+        if (!target4) return refuse4("no_target");
         const cls = classify(target4);
         const parked = target4.hasQueuedSend?.(msg.messageId) === true;
         const prior = settledKind(msg.messageId);
@@ -169188,12 +169558,12 @@ ${output}` : "";
         }
         const strategy = BUSY_DECISION[msg.policy.mode][cls];
         if (typeof strategy === "object") {
-          return refuse3(strategy.refuse, parked ? { restored: true } : void 0);
+          return refuse4(strategy.refuse, parked ? { restored: true } : void 0);
         }
         let input = msg.input;
         if (!parked && prepareInput) {
           const prepared = prepareInput();
-          if ("refusal" in prepared) return refuse3("unsupported_input", { message: prepared.refusal });
+          if ("refusal" in prepared) return refuse4("unsupported_input", { message: prepared.refusal });
           input = prepared;
         }
         if (strategy === "split_write") return splitWrite(target4, msg, parked, input, noticeObserver);
@@ -169229,7 +169599,7 @@ ${output}` : "";
               sessionSettings: settingsForHold
             });
             if (!isContinuation) {
-              return refuse3(NEW_WORK_HELD_CODE2, {
+              return refuse4(NEW_WORK_HELD_CODE2, {
                 message: formatNewWorkHeldMessage({
                   holdId: activeHold.hold.holdId || "active",
                   revision: activeHold.hold.revision,
@@ -169244,24 +169614,24 @@ ${output}` : "";
         return run4(msg, resolveTarget, prepareInput, noticeObserver);
       }
       async function submitOwned(msg, prepareInput, noticeObserver) {
-        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse3("internal_error", { message: "messageId required" });
-        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse3("no_target");
-        const pending = inFlight4.get(msg.messageId);
+        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse4("internal_error", { message: "messageId required" });
+        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse4("no_target");
+        const pending = inFlight5.get(msg.messageId);
         if (pending) {
           await pending.catch(() => void 0);
           try {
             if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
           } catch (error) {
-            if (error.message === "Outgoing message identity conflict") return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+            if (error.message === "Outgoing message identity conflict") return refuse4("internal_error", { message: "Outgoing message identity conflict" });
             receiptFailure(msg.messageId, error);
           }
           return { kind: "duplicate", of: msg.messageId };
         }
         const promise = withMaintenanceAdmission(() => runAdmitted(msg, prepareInput, noticeObserver)).catch((e) => {
           log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
-          return refuse3("internal_error", { message: e?.message || String(e) });
+          return refuse4("internal_error", { message: e?.message || String(e) });
         });
-        inFlight4.set(msg.messageId, promise);
+        inFlight5.set(msg.messageId, promise);
         try {
           const outcome = await promise;
           if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg, outcome.kind);
@@ -169280,7 +169650,7 @@ ${output}` : "";
           }
           return outcome;
         } finally {
-          inFlight4.delete(msg.messageId);
+          inFlight5.delete(msg.messageId);
           freshOutgoing.delete(msg.messageId);
         }
       }
@@ -170211,20 +170581,20 @@ ${output}` : "";
     function readExactTargetButton(args, offered) {
       const hasButton = args?.button !== void 0 || args?.buttonText !== void 0;
       if (!hasButton && args?.buttonIndex === void 0) return { ok: true, button: null };
-      const refuse3 = (code, error) => ({ ok: false, code, error });
-      if (!hasButton) return refuse3("approval_button_required", "An exact provider button label is required with buttonIndex");
+      const refuse4 = (code, error) => ({ ok: false, code, error });
+      if (!hasButton) return refuse4("approval_button_required", "An exact provider button label is required with buttonIndex");
       if (args?.button !== void 0 && args?.buttonText !== void 0 && args.button !== args.buttonText) {
-        return refuse3("approval_button_mismatch", "button and buttonText disagree");
+        return refuse4("approval_button_mismatch", "button and buttonText disagree");
       }
       const label2 = args?.button !== void 0 ? args.button : args.buttonText;
-      if (typeof label2 !== "string" || !label2.trim()) return refuse3("approval_button_required", "An exact provider button label is required");
+      if (typeof label2 !== "string" || !label2.trim()) return refuse4("approval_button_required", "An exact provider button label is required");
       const index = offered.indexOf(label2.slice(0, 120));
-      if (index < 0) return refuse3("approval_button_not_offered", "The button is not one of this permission request's provider buttons");
+      if (index < 0) return refuse4("approval_button_not_offered", "The button is not one of this permission request's provider buttons");
       if (args?.buttonIndex !== void 0 && (!Number.isInteger(args.buttonIndex) || offered[args.buttonIndex] !== label2.slice(0, 120))) {
-        return refuse3("approval_button_mismatch", "buttonIndex does not name the requested button");
+        return refuse4("approval_button_mismatch", "buttonIndex does not name the requested button");
       }
       if (isNegativeApprovalLabel(label2) !== (args?.action === "reject")) {
-        return refuse3("approval_button_action_mismatch", "The button does not match the requested approve/reject action");
+        return refuse4("approval_button_action_mismatch", "The button does not match the requested approve/reject action");
       }
       return { ok: true, button: label2 };
     }
@@ -172795,12 +173165,12 @@ ${output}` : "";
       ".svn",
       ".adhdev-transfer-staging"
     ]);
-    function hasUnpairedSurrogate(str20) {
-      for (let i = 0; i < str20.length; i++) {
-        const code = str20.charCodeAt(i);
+    function hasUnpairedSurrogate(str21) {
+      for (let i = 0; i < str21.length; i++) {
+        const code = str21.charCodeAt(i);
         if (code >= 55296 && code <= 56319) {
-          if (i + 1 >= str20.length) return true;
-          const low = str20.charCodeAt(i + 1);
+          if (i + 1 >= str21.length) return true;
+          const low = str21.charCodeAt(i + 1);
           if (low < 56320 || low > 57343) return true;
           i++;
         } else if (code >= 56320 && code <= 57343) {
@@ -173800,9 +174170,9 @@ ${output}` : "";
       const root = openRoot(opts.rootPath);
       const files = [];
       try {
-        const list2 = selectionFiles(selection);
-        for (let i = 0; i < list2.length; i++) {
-          const entry = list2[i];
+        const list3 = selectionFiles(selection);
+        for (let i = 0; i < list3.length; i++) {
+          const entry = list3[i];
           if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
           let src;
           try {
@@ -176497,20 +176867,20 @@ ${output}` : "";
     }
     async function reconcileMeshHolder(host, args) {
       const mc = args.meshContext, op = args.holderReconcile;
-      const refuse3 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
-      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse3("identity_required");
+      const refuse4 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
+      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse4("identity_required");
       const instance = host.deps.getInstanceManager()?.getInstance(args.targetSessionId);
-      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse3("holder_unavailable");
-      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse3("native_attach_ack_unavailable");
+      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse4("holder_unavailable");
+      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse4("native_attach_ack_unavailable");
       const launch = host.deps.getSessionRegistry?.()?.get(args.targetSessionId)?.launch;
-      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse3("protected_or_stopping_holder");
+      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse4("protected_or_stopping_holder");
       const db2 = journal(true), identity4 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
       const row2 = db2.prepare("SELECT * FROM mesh_holder_attaches WHERE operation_id=?").get(op.operationId);
-      if (row2 && row2.identity_json !== identity4) return refuse3("operation_identity_changed");
+      if (row2 && row2.identity_json !== identity4) return refuse4("operation_identity_changed");
       recoverHolderAttachRollback(instance);
       const state2 = instance.getState(), s2 = state2.settings;
-      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse3("holder_not_currently_working");
-      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse3("foreign_or_stale_holder");
+      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse4("holder_not_currently_working");
+      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse4("foreign_or_stale_holder");
       const current4 = () => {
         const v = instance.getState().settings;
         return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
@@ -176525,14 +176895,14 @@ ${output}` : "";
       const proof = () => ({ success: true, attached: true, operationId: op.operationId, sessionId: args.targetSessionId, ...mc });
       if (op.phase === "prepare") {
         if (row2) {
-          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse3("prepare_no_longer_current");
+          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse4("prepare_no_longer_current");
           if (row2.boot_nonce !== BOOT && !current4() && await verify3(JSON.parse(row2.prepared_json))) {
             instance.attachMeshAssignment({ ...mc, meshId: mc.meshId });
             db2.prepare("UPDATE mesh_holder_attaches SET prepared_json=?,boot_nonce=? WHERE operation_id=?").run(JSON.stringify(instance.captureMeshAssignment()), BOOT, op.operationId);
           }
           const snapshot = instance.captureMeshAssignment();
           const owns = row2.boot_nonce !== BOOT || JSON.stringify(snapshot) === row2.prepared_json;
-          return current4() && owns && await verify3(snapshot) ? proof() : refuse3("native_attach_unconfirmed");
+          return current4() && owns && await verify3(snapshot) ? proof() : refuse4("native_attach_unconfirmed");
         }
         const before = instance.captureMeshAssignment();
         let prepared;
@@ -176551,19 +176921,19 @@ ${output}` : "";
             instance.restoreMeshAssignment(before);
             if (prepared) db2.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(await verify3(before) ? "rolled_back" : "rollback_pending", op.operationId);
           }
-          return refuse3("holder_attach_failed_checkpoint_pending");
+          return refuse4("holder_attach_failed_checkpoint_pending");
         }
       }
-      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current4() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse3("late_claim_changed");
+      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current4() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse4("late_claim_changed");
       if (op.phase === "rollback") {
-        if (row2.phase === "committed") return refuse3("already_committed");
+        if (row2.phase === "committed") return refuse4("already_committed");
         const before = JSON.parse(row2.snapshot_json);
         instance.restoreMeshAssignment(before);
         const confirmed = await verify3(before);
         db2.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(confirmed ? "rolled_back" : "rollback_pending", op.operationId);
         return { success: confirmed, rolledBack: confirmed };
       }
-      if (!await verify3(instance.captureMeshAssignment())) return refuse3("native_attach_unconfirmed");
+      if (!await verify3(instance.captureMeshAssignment())) return refuse4("native_attach_unconfirmed");
       db2.prepare("UPDATE mesh_holder_attaches SET phase='committed' WHERE operation_id=?").run(op.operationId);
       return { success: true, committed: true };
     }
@@ -176684,7 +177054,7 @@ ${output}` : "";
       };
     }
     async function refuseInvalidReport(ctx, args, errors) {
-      const answer = { success: false, error: "invalid_report", validationErrors: errors };
+      const answer2 = { success: false, error: "invalid_report", validationErrors: errors };
       try {
         const { recordRefusedWorkerReport: recordRefusedWorkerReport2, recordRefusedWorkerReportForIdentity: recordRefusedWorkerReportForIdentity2, safeRefusalFields: safeRefusalFields2, hasLocalWorkerIdentity: hasLocalWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
         const credential = { token: args?.token, bind: args?.bind };
@@ -176703,7 +177073,7 @@ ${output}` : "";
               ...deliveryId ? { deliveryId } : {},
               ...typeof args?.reportedAtMs === "number" ? { reportedAtMs: args.reportedAtMs } : {}
             }, "report refusal");
-            return { ...answer, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
+            return { ...answer2, ...owner.receipt ? { receipt: owner.receipt } : { receiptPending: true }, ...owner.error === "worker_protocol_unsupported" || owner.error === "forward_failed" ? { provenanceError: owner.error } : {} };
           }
         }
         if (prepared && daemonIdsEquivalent4(prepared.ownerDaemonId, ctx.deps.statusInstanceId ?? "")) {
@@ -176724,7 +177094,7 @@ ${output}` : "";
               { fields, summaryLength },
               { generation: prepared.generation, deliveryId: prepared.deliveryId, reportedAtMs: prepared.reportedAtMs }
             );
-            return receipt2?.recorded ? { ...answer, receipt: receipt2 } : { success: false, error: "storage_failed", receiptPending: true };
+            return receipt2?.recorded ? { ...answer2, receipt: receipt2 } : { success: false, error: "storage_failed", receiptPending: true };
           });
           return { ...handled, success: false };
         }
@@ -176740,9 +177110,9 @@ ${output}` : "";
           "invalid_report",
           `${where}; fields=${safeRefusalFields2(fields).join(",")}; summaryLength=${summaryLength ?? "-"}${deliveryId ? `; delivery=${deliveryId}` : ""}`
         );
-        return receipt ? { ...answer, receipt } : answer;
+        return receipt ? { ...answer2, receipt } : answer2;
       } catch {
-        return args?.prepared ? { ...answer, receiptPending: true, provenanceError: "storage_failed" } : answer;
+        return args?.prepared ? { ...answer2, receiptPending: true, provenanceError: "storage_failed" } : answer2;
       }
     }
     function toProgressResponse(result) {
@@ -176772,9 +177142,9 @@ ${output}` : "";
       }
       return first;
     }
-    function onlyUnknownStructuredFieldErrors(answer) {
-      if (answer.error !== "invalid_report" || !Array.isArray(answer.validationErrors) || answer.validationErrors.length === 0) return false;
-      return answer.validationErrors.every((e) => (e?.field === "decisionsNeeded" || e?.field === "commits") && /unknown field/.test(String(e?.message)));
+    function onlyUnknownStructuredFieldErrors(answer2) {
+      if (answer2.error !== "invalid_report" || !Array.isArray(answer2.validationErrors) || answer2.validationErrors.length === 0) return false;
+      return answer2.validationErrors.every((e) => (e?.field === "decisionsNeeded" || e?.field === "commits") && /unknown field/.test(String(e?.message)));
     }
     async function forwardToOwner(ctx, remote, command, payload, what) {
       const dispatch2 = ctx?.deps?.dispatchMeshCommand;
@@ -176835,15 +177205,15 @@ ${output}` : "";
           hint: "Nothing was recorded \u2014 call again."
         };
       }
-      const answer = unwrapMeshRelayResult(raw, { command, peerDaemonId: remote.ownerDaemonId });
-      if (answer.error === "relay_result_malformed") {
-        return { ...answer, hint: "Nothing was recorded \u2014 call again." };
+      const answer2 = unwrapMeshRelayResult(raw, { command, peerDaemonId: remote.ownerDaemonId });
+      if (answer2.error === "relay_result_malformed") {
+        return { ...answer2, hint: "Nothing was recorded \u2014 call again." };
       }
-      const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer.success === true ? "accepted" : `refused (${String(answer.error)}${typeof answer.detail === "string" && answer.detail ? ` \u2014 ${answer.detail}` : ""})`}`;
-      if (answer.success === true) LOG.info("WorkerReport", line);
+      const line = `Forwarded ${what} for session ${remote.sessionId} (task ${remote.taskId ?? "?"} attempt ${remote.attemptId ?? "?"}) to owner ${remote.ownerDaemonId.slice(0, 16)} \u2192 ${answer2.success === true ? "accepted" : `refused (${String(answer2.error)}${typeof answer2.detail === "string" && answer2.detail ? ` \u2014 ${answer2.detail}` : ""})`}`;
+      if (answer2.success === true) LOG.info("WorkerReport", line);
       else LOG.warn("WorkerReport", line);
-      if (answer.success !== true && (String(answer.error).includes("request failed decode") || String(answer.error).startsWith("Unknown command:"))) return { ...answer, error: "worker_protocol_unsupported", detail: "Owner has not admitted this worker protocol; retry is retained." };
-      return answer;
+      if (answer2.success !== true && (String(answer2.error).includes("request failed decode") || String(answer2.error).startsWith("Unknown command:"))) return { ...answer2, error: "worker_protocol_unsupported", detail: "Owner has not admitted this worker protocol; retry is retained." };
+      return answer2;
     }
     var CLAIM_KEYS = ["meshId", "taskId", "attemptId", "sessionId", "nodeId", "generation"];
     var FORWARD_KEYS = /* @__PURE__ */ new Set([...CLAIM_KEYS, "report", "deliveryId", "reportedAtMs"]);
@@ -177265,10 +177635,10 @@ ${output}` : "";
       worker_bridge_control: async (ctx, args) => {
         const policy = args?.policy;
         if (policy?.frozen === false) return { success: false, error: "bridge_reopen_native_supervisor_authority_unavailable" };
-        const store3 = MeshRuntimeStore.getInstance();
-        ensureBridgeSchema(store3.db);
+        const store4 = MeshRuntimeStore.getInstance();
+        ensureBridgeSchema(store4.db);
         try {
-          setBridgePolicy(store3.db, policy);
+          setBridgePolicy(store4.db, policy);
           return { success: true, frozen: policy.frozen, rolloutId: policy.rolloutId };
         } catch {
           return { success: false, error: "invalid_bridge_policy" };
@@ -177339,8 +177709,8 @@ ${output}` : "";
             return { success: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
           }
           const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
-          const store3 = MeshRuntimeStore2.getInstance();
-          const entry = store3.findQueueEntryById(meshId, taskId);
+          const store4 = MeshRuntimeStore2.getInstance();
+          const entry = store4.findQueueEntryById(meshId, taskId);
           const { depositWorkerMailboxMessage: depositWorkerMailboxMessage2, pruneWorkerMailboxes: pruneWorkerMailboxes2 } = await Promise.resolve().then(() => (init_worker_mailbox(), worker_mailbox_exports));
           if (!entry) {
             const worker = findLocalWorkerOfRemoteTask(_ctx, meshId, taskId);
@@ -177351,7 +177721,7 @@ ${output}` : "";
                 detail: `no local queue row for task ${taskId} on mesh ${meshId}, and no live worker session on this daemon is assigned it \u2014 this daemon may not own or have reconciled it`
               };
             }
-            const dropped = pruneWorkerMailboxes2((m, t) => !!store3.findQueueEntryById(m, t) || !!findLocalWorkerOfRemoteTask(_ctx, m, t));
+            const dropped = pruneWorkerMailboxes2((m, t) => !!store4.findQueueEntryById(m, t) || !!findLocalWorkerOfRemoteTask(_ctx, m, t));
             if (dropped > 0) LOG.info("WorkerMailbox", `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
             LOG.info("WorkerMailbox", `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
           }
@@ -177711,8 +178081,8 @@ ${output}` : "";
       ensure_transcript_subscription: async (ctx, args) => {
         const key5 = readKeyArgs(args);
         if (!key5) return { success: false, error: "ownerDaemonId and rawSessionId required" };
-        const store3 = ctx.deps.getTranscriptReplicaStore?.();
-        if (!store3) return { success: true, ready: false, reason: NO_NODE };
+        const store4 = ctx.deps.getTranscriptReplicaStore?.();
+        if (!store4) return { success: true, ready: false, reason: NO_NODE };
         const resolvePeer = ctx.deps.resolveTranscriptPeer;
         if (!resolvePeer) return { success: true, ready: false, reason: IPC_UNAVAILABLE };
         let peer;
@@ -177722,16 +178092,16 @@ ${output}` : "";
           return { success: true, ready: false, reason: IPC_UNAVAILABLE };
         }
         if (!peer) return { success: true, ready: false, reason: IPC_UNAVAILABLE };
-        const result = store3.ensureSubscription(key5, peer);
+        const result = store4.ensureSubscription(key5, peer);
         if (!result.ok) return { success: true, ready: false, reason: result.reason };
         return { success: true, ready: true, alreadySubscribed: result.alreadySubscribed };
       },
       read_transcript_replica: async (ctx, args) => {
         const key5 = readKeyArgs(args);
         if (!key5) return { success: false, error: "ownerDaemonId and rawSessionId required" };
-        const store3 = ctx.deps.getTranscriptReplicaStore?.();
-        if (!store3) return { success: true, available: false, reason: NO_NODE };
-        const read2 = store3.getReplica(key5);
+        const store4 = ctx.deps.getTranscriptReplicaStore?.();
+        if (!store4) return { success: true, available: false, reason: NO_NODE };
+        const read2 = store4.getReplica(key5);
         if (!read2.available) return { success: true, available: false, reason: read2.reason };
         return read2.stale ? { success: true, available: true, view: read2.view, identity: read2.identity, stale: true } : { success: true, available: true, view: read2.view, identity: read2.identity };
       },
@@ -178377,8 +178747,8 @@ ${output}` : "";
       try {
         await ctx.getMeshForCommand(meshId, args.inlineMesh);
         const router = ctx.components().router;
-        const store3 = MeshRuntimeStore.getInstance();
-        return store3.transaction(() => withStrictMeshConfigWriteLock(() => {
+        const store4 = MeshRuntimeStore.getInstance();
+        return store4.transaction(() => withStrictMeshConfigWriteLock(() => {
           const config = readMeshConfigFromDisk();
           const mesh = config?.meshes.find((m) => m.id === meshId);
           requireProof(mesh, "source_parent_durable_mesh_required");
@@ -178398,8 +178768,8 @@ ${output}` : "";
           validateLink(mesh, node, parent, ctx.deps.statusInstanceId || "");
           requireProof(alreadyAttached || !mesh.nodes.some((n) => n.id === current4), "source_parent_existing_binding");
           requireProof(!router.runningRefineBatchJobs.has(meshId) && ![...router.runningRefineJobs.keys()].some((k) => k.startsWith(`${meshId}:`)) && router.refineBaseLeases.size === 0, "source_parent_refinery_active");
-          const rows = store3.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
-          rows.push(...store3.getQueueEntries(meshId, ["pending"]).filter((t) => pendingLaunchReservation(t)));
+          const rows = store4.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
+          rows.push(...store4.getQueueEntries(meshId, ["pending"]).filter((t) => pendingLaunchReservation(t)));
           requireProof(!rows.some((t) => [t.assignedNodeId, t.targetNodeId, t.ownershipScope?.nodeId, t.reviewInputScope?.nodeId, t.autoLaunch?.nodeId].some((id4) => id4 && [node, parent].some((n) => n.id === id4))), "source_parent_active_lease");
           if (alreadyAttached) return { success: true, changed: false, nodeId: node.id, parentNodeId: parent.id };
           if (args.write !== true) return { success: true, dryRun: true, changed: false, nodeId: node.id, expectedOldParentId: current4, parentNodeId: parent.id };
@@ -182747,38 +183117,38 @@ ${ptyResult.output.slice(-2e3)}`);
       await ports.refreshMemberMeshes?.();
       const project = resolveAssistantProject(args.project, ports.listMeshes(), ports.aliases());
       if (!project.ok) return { success: false, code: project.code };
-      const store3 = new TerminalWatchStore(MeshRuntimeStore.getInstance().db);
+      const store4 = new TerminalWatchStore(MeshRuntimeStore.getInstance().db);
       if (args.action === "subscribe") {
         if (!["task", "mission"].includes(args.kind) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200) return { success: false, code: "invalid_args" };
-        return { ...store3.subscribe(project.mesh.id, args.kind, args.entityId, "assistant"), meshId: project.mesh.id };
+        return { ...store4.subscribe(project.mesh.id, args.kind, args.entityId, "assistant"), meshId: project.mesh.id };
       }
-      if (args.action === "list") return { success: true, watches: store3.list("assistant").filter((w) => w.mesh_id === project.mesh.id) };
-      const owned = typeof args.watchId === "string" ? store3.get(args.watchId) : void 0;
+      if (args.action === "list") return { success: true, watches: store4.list("assistant").filter((w) => w.mesh_id === project.mesh.id) };
+      const owned = typeof args.watchId === "string" ? store4.get(args.watchId) : void 0;
       if (!owned || owned.recipient !== "assistant" || owned.mesh_id !== project.mesh.id || owned.expires_at <= Date.now()) return { success: false, code: "terminal_watch_not_found" };
       if (args.action === "acknowledge") {
         if (typeof args.eventId !== "string" || typeof args.deliveryToken !== "string") return { success: false, code: "invalid_args" };
-        const intent = store3.intent(owned.watch_id, args.eventId);
-        if (!intent && store3.receipts(owned.watch_id).includes(args.eventId)) return { success: true, duplicate: true };
+        const intent = store4.intent(owned.watch_id, args.eventId);
+        if (!intent && store4.receipts(owned.watch_id).includes(args.eventId)) return { success: true, duplicate: true };
         if (!intent || intent.token !== args.deliveryToken || intent.recipient_session_id !== recipient) return { success: false, code: "terminal_receipt_token_mismatch" };
-        store3.acknowledge(owned.watch_id, args.eventId);
+        store4.acknowledge(owned.watch_id, args.eventId);
         return { success: true };
       }
       if (args.action === "retry_delivery") {
-        if (typeof args.eventId !== "string" || !store3.intent(owned.watch_id, args.eventId)) return { success: false, code: "terminal_delivery_intent_not_found" };
-        if (args.retryIdentity !== terminalRetryIdentity(store3.intent(owned.watch_id, args.eventId))) return { success: false, code: "terminal_delivery_intent_changed" };
-        store3.retryDelivery(owned.watch_id, args.eventId);
+        if (typeof args.eventId !== "string" || !store4.intent(owned.watch_id, args.eventId)) return { success: false, code: "terminal_delivery_intent_not_found" };
+        if (args.retryIdentity !== terminalRetryIdentity(store4.intent(owned.watch_id, args.eventId))) return { success: false, code: "terminal_delivery_intent_changed" };
+        store4.retryDelivery(owned.watch_id, args.eventId);
         return { success: true, warning: "Delivery was unconfirmed; retry retains the same event identity and may repeat a notice." };
       }
       if (args.action === "unsubscribe") {
-        store3.unsubscribe(owned.watch_id);
+        store4.unsubscribe(owned.watch_id);
         return { success: true };
       }
       if (args.action === "pending") {
         try {
-          return { success: true, watchId: owned.watch_id, events: (await pendingTerminalEvents(store3, ports, owned)).map((event) => ({
+          return { success: true, watchId: owned.watch_id, events: (await pendingTerminalEvents(store4, ports, owned)).map((event) => ({
             ...event,
-            deliveryState: store3.intent(owned.watch_id, event.eventId) ? "unconfirmed_native_delivery" : "pending",
-            ...store3.intent(owned.watch_id, event.eventId) ? { originalRecipient: store3.intent(owned.watch_id, event.eventId).recipient_session_id, startedAt: store3.intent(owned.watch_id, event.eventId).started_at, retryAction: "retry_delivery", retryIdentity: terminalRetryIdentity(store3.intent(owned.watch_id, event.eventId)) } : {}
+            deliveryState: store4.intent(owned.watch_id, event.eventId) ? "unconfirmed_native_delivery" : "pending",
+            ...store4.intent(owned.watch_id, event.eventId) ? { originalRecipient: store4.intent(owned.watch_id, event.eventId).recipient_session_id, startedAt: store4.intent(owned.watch_id, event.eventId).started_at, retryAction: "retry_delivery", retryIdentity: terminalRetryIdentity(store4.intent(owned.watch_id, event.eventId)) } : {}
           })) };
         } catch (e) {
           return { success: false, code: "terminal_watch_unavailable", error: e.message };
@@ -182787,6 +183157,118 @@ ${ptyResult.output.slice(-2e3)}`);
       return { success: false, code: "invalid_args" };
     };
     var assistantWatchSpecs = defineCommandSpecs("high", { [ASSISTANT_VERB2.watch]: watch2 }, { [ASSISTANT_VERB2.watch]: { sources: [...ASSISTANT_TOOL_SOURCES] } });
+    init_command_registry();
+    init_command_args();
+    init_mcp_command_ingress();
+    init_router_internal_args();
+    init_assistant_registry();
+    init_assistant_store();
+    init_mesh_mission_decisions();
+    init_mesh_mission_decision_delivery();
+    init_mesh_housekeeping_tick();
+    init_logger();
+    var MISSION_DECISION_ANSWER = "mission_decision_answer";
+    var MISSION_DECISIONS_LIST = "mission_decisions_list";
+    var MISSION_DECISION_ANSWER_SOURCES = ["p2p", "standalone", "ext", "ipc"];
+    var MISSION_DECISIONS_LIST_SOURCES = ["p2p", "standalone", "ext", "ipc"];
+    var RECENT_ANSWER_WINDOW_MS = 24 * 60 * 60 * 1e3;
+    function str14(v) {
+      return typeof v === "string" ? v.trim() : "";
+    }
+    function refuse3(error) {
+      return { ok: false, code: "decision_answer_not_allowed", error };
+    }
+    function classifyDecisionCaller(rawArgs) {
+      const source2 = str14(rawArgs[COMMAND_SOURCE_ARG]);
+      const requestedVia = str14(rawArgs.via);
+      if (rawArgs.bind !== void 0 || rawArgs.token !== void 0 || rawArgs.mcpSessionCredential !== void 0) {
+        return refuse3("worker/session credentials cannot answer owner decisions");
+      }
+      const mcp = readAuthenticatedMcpCommand(rawArgs, MISSION_DECISION_ANSWER);
+      if (mcp.present) {
+        const scope = mcp.valid ? readAuthenticatedMcpScope(rawArgs, MISSION_DECISION_ANSWER) : null;
+        const assistantSid = str14(getAssistantRegistry().read()?.sessionId);
+        if (scope && !scope.isCoordinator && scope.sessionId && assistantSid && scope.sessionId === assistantSid) {
+          if (requestedVia && requestedVia !== "assistant") return refuse3(`assistant callers must use via 'assistant'`);
+          return { ok: true, actor: { by: "owner", via: "assistant" } };
+        }
+        return refuse3("coordinator and worker credentials cannot answer owner decisions \u2014 only the owner (or the assistant on the owner's words) can");
+      }
+      if (source2 === "ipc") {
+        if (requestedVia && requestedVia !== "cli") return refuse3(`a local CLI caller must use via 'cli'`);
+        return { ok: true, actor: { by: "owner", via: "cli" } };
+      }
+      if (source2 === "p2p" || source2 === "standalone" || source2 === "ext") {
+        const via = requestedVia || "dashboard";
+        if (via !== "dashboard" && via !== "push") return refuse3(`via '${requestedVia}' is not accepted from the ${source2} transport`);
+        return { ok: true, actor: { by: "owner", via } };
+      }
+      return refuse3(`source '${source2 || "unknown"}' cannot answer owner decisions`);
+    }
+    var answer = async (ctx, rawArgs) => {
+      const raw = rawArgs ?? {};
+      const caller = classifyDecisionCaller(raw);
+      if (!caller.ok) return { success: false, code: caller.code, error: caller.error };
+      const args = stripRouterInternalArgs(raw);
+      const meshId = str14(args.meshId);
+      const itemId = str14(args.itemId);
+      if (!meshId || !itemId) return { success: false, code: "invalid_args", error: "meshId and itemId are required" };
+      const result = answerMissionDecision({
+        meshId,
+        itemId,
+        ...str14(args.missionId) ? { missionId: str14(args.missionId) } : {},
+        ...typeof args.optionId === "string" ? { optionId: args.optionId } : {},
+        ...typeof args.text === "string" ? { text: args.text } : {},
+        ...typeof args.interpretedFrom === "string" ? { interpretedFrom: args.interpretedFrom } : {},
+        ...args.undo === true ? { undo: true } : {}
+      }, caller.actor);
+      if (!result.ok) {
+        return { success: false, code: result.code, error: result.error, ...result.validOptions ? { validOptions: result.validOptions } : {} };
+      }
+      let deliveryState = result.delivery?.state;
+      if (result.delivery) {
+        try {
+          const sender = createCoordinatorDecisionSender(() => projectPortsFor(ctx));
+          const attempt = await deliverDecisionAnswer(meshId, itemId, sender);
+          if (attempt === "sent" || attempt === "duplicate") deliveryState = "sent";
+        } catch (e) {
+          LOG.warn("MissionDecision", `immediate delivery of ${itemId} failed, left pending: ${e?.message || e}`);
+        }
+      }
+      return {
+        success: true,
+        action: result.action,
+        meshId: result.meshId,
+        missionId: result.missionId,
+        itemId: result.itemId,
+        revision: result.revision,
+        ...result.answer ? { answer: result.answer } : {},
+        ...deliveryState ? { delivery: deliveryState } : {}
+      };
+    };
+    var list = async (ctx, rawArgs) => {
+      const args = stripRouterInternalArgs(rawArgs ?? {});
+      const wanted = str14(args.meshId);
+      let meshIds;
+      if (wanted) meshIds = [wanted];
+      else {
+        try {
+          meshIds = hostedMeshes(ctx.components()).map((h) => h.mesh.id);
+        } catch {
+          meshIds = [];
+        }
+      }
+      const decisions = meshIds.flatMap((id4) => buildOwnerDecisions(id4));
+      const recentlyAnswered = args.includeAnswered === true ? meshIds.flatMap((id4) => listRecentlyAnswered(id4, Date.now() - RECENT_ANSWER_WINDOW_MS)) : void 0;
+      return { success: true, ownerDecisions: decisions, ...recentlyAnswered ? { recentlyAnswered } : {} };
+    };
+    var missionDecisionSpecs = defineCommandSpecs("high", {
+      [MISSION_DECISION_ANSWER]: answer,
+      [MISSION_DECISIONS_LIST]: list
+    }, {
+      [MISSION_DECISION_ANSWER]: { sources: [...MISSION_DECISION_ANSWER_SOURCES] },
+      [MISSION_DECISIONS_LIST]: { sources: [...MISSION_DECISIONS_LIST_SOURCES] }
+    });
     var import_node_os9 = require("os");
     init_dist();
     init_command_registry();
@@ -182852,7 +183334,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant_projects();
     init_mesh_runtime_store();
     init_assistant_relay_sqlite_store();
-    function str18(v) {
+    function str19(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function isPositiveSafeInt2(v) {
@@ -182876,13 +183358,13 @@ ${ptyResult.output.slice(-2e3)}`);
         return /* @__PURE__ */ new Map();
       }
     }
-    var list = async () => {
+    var list2 = async () => {
       const runtime2 = await runtimeOrNull();
       const registry = runtime2?.registry ?? getAssistantRegistry();
-      const store3 = runtime2?.store ?? fallbackRelayStore();
+      const store4 = runtime2?.store ?? fallbackRelayStore();
       const followedRemoteProjects = registry.listFollowedRemoteProjects();
       const ownerBinding = registry.ownerBinding() ?? null;
-      if (!store3) {
+      if (!store4) {
         return { success: true, threads: [], followedRemoteProjects, ownerBinding };
       }
       const slugs = slugsNow();
@@ -182893,7 +183375,7 @@ ${ptyResult.output.slice(-2e3)}`);
           return [];
         }
       })();
-      const threads = store3.openThreads().map((t) => {
+      const threads = store4.openThreads().map((t) => {
         const localMesh = meshes.find((m) => m.id === t.meshId);
         const activeFollowed = followedRemoteProjects.filter((f) => f.meshId === t.meshId && f.state === "followed");
         const followed = !localMesh ? activeFollowed.find((f) => t.coordinatorSessionId && f.coordinatorSessionId === t.coordinatorSessionId) ?? activeFollowed[0] ?? followedRemoteProjects.find((f) => f.meshId === t.meshId) : void 0;
@@ -182926,13 +183408,13 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
       const key5 = typeof args?.key === "string" ? args.key.trim() : "";
-      const hostDaemonId = canonicalDaemonId2(str18(args?.hostDaemonId));
+      const hostDaemonId = canonicalDaemonId2(str19(args?.hostDaemonId));
       if ((!meshId || meshId.length > 200) && !key5) {
         return { success: false, code: "invalid_args", error: "meshId required" };
       }
       const runtime2 = await runtimeOrNull();
       const registry = runtime2?.registry ?? getAssistantRegistry();
-      const store3 = runtime2?.store ?? fallbackRelayStore();
+      const store4 = runtime2?.store ?? fallbackRelayStore();
       const lookupKey = key5 || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : "");
       const meshMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
       const followed = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : meshMatches.find((f) => f.state === "followed") ?? meshMatches[0] ?? null;
@@ -182940,7 +183422,7 @@ ${ptyResult.output.slice(-2e3)}`);
         registry.updateFollowedRemoteProject(followed.key, { state: "unfollowed", unfollowedAt: Date.now() });
       }
       const targetMeshId = followed?.meshId || meshId;
-      if (!runtime2 && !store3 && !followed) {
+      if (!runtime2 && !store4 && !followed) {
         return { success: false, code: "assistant_unavailable" };
       }
       const remainingActiveSameMesh = followed ? registry.listFollowedRemoteProjects().find((f) => f.key !== followed.key && f.meshId === targetMeshId && f.state === "followed") : void 0;
@@ -182951,7 +183433,7 @@ ${ptyResult.output.slice(-2e3)}`);
           runtime2.store.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
           runtime2.remotePoller.noteSent(targetMeshId, nextCursor, nextCoordSid, { reset: true });
         } else {
-          store3?.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+          store4?.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
           try {
             const ports = await projectPortsFor(_ctx);
             ports.relay.remoteSent?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
@@ -182960,7 +183442,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         return { success: true, closed: false, ...followed ? { unfollowedKey: followed.key } : {} };
       }
-      const closed = runtime2 ? runtime2.relay.closeThread(targetMeshId, { suppressPending: true }) : store3 ? (store3.closeThread(targetMeshId, Date.now()), true) : Boolean(followed);
+      const closed = runtime2 ? runtime2.relay.closeThread(targetMeshId, { suppressPending: true }) : store4 ? (store4.closeThread(targetMeshId, Date.now()), true) : Boolean(followed);
       return { success: true, closed, ...followed ? { unfollowedKey: followed.key } : {} };
     };
     var remoteFollow = async (ctx, args) => {
@@ -182971,11 +183453,11 @@ ${ptyResult.output.slice(-2e3)}`);
           error: "Remote project follow management requires authenticated owner ingress."
         };
       }
-      const action2 = str18(args?.action);
+      const action2 = str19(args?.action);
       const runtime2 = await runtimeOrNull();
       const registry = runtime2?.registry ?? getAssistantRegistry();
-      const store3 = runtime2?.store ?? fallbackRelayStore();
-      const selfDaemonId = canonicalDaemonId2(str18(ctx.deps?.statusInstanceId)) ?? str18(ctx.deps?.statusInstanceId);
+      const store4 = runtime2?.store ?? fallbackRelayStore();
+      const selfDaemonId = canonicalDaemonId2(str19(ctx.deps?.statusInstanceId)) ?? str19(ctx.deps?.statusInstanceId);
       if (action2 === "ensure_binding" || action2 === "reconcile_binding") {
         if (!selfDaemonId) {
           return { success: false, code: "daemon_id_missing", error: "Local assistant daemonId is unavailable." };
@@ -183005,8 +183487,8 @@ ${ptyResult.output.slice(-2e3)}`);
               runtime2.store.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
               runtime2.remotePoller.noteSent(entry.meshId, cur, sid, { reset: true });
             } else {
-              store3?.openThread(entry.meshId, Date.now());
-              store3?.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
+              store4?.openThread(entry.meshId, Date.now());
+              store4?.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
               ports?.relay.openThread?.(entry.meshId);
               ports?.relay.remoteSent?.(entry.meshId, cur, sid, { reset: true });
             }
@@ -183019,8 +183501,8 @@ ${ptyResult.output.slice(-2e3)}`);
         };
       }
       if (action2 === "follow") {
-        const hostDaemonId = canonicalDaemonId2(str18(args?.hostDaemonId));
-        const meshId = str18(args?.meshId);
+        const hostDaemonId = canonicalDaemonId2(str19(args?.hostDaemonId));
+        const meshId = str19(args?.meshId);
         const grantRevision = Number(args?.grantRevision);
         if (!hostDaemonId || !meshId || !isPositiveSafeInt2(grantRevision)) {
           return {
@@ -183055,10 +183537,10 @@ ${ptyResult.output.slice(-2e3)}`);
             error: `Requested bindingRevision (${String(args.bindingRevision)}) does not match local ownerBinding (${bindingCheck.receipt.bindingRevision}).`
           };
         }
-        const hostLabel = str18(args?.hostLabel) || hostDaemonId;
-        const name = str18(args?.name) || meshId;
-        const sanitizedRepoIdentity = sanitizeRemoteRepoIdentity(str18(args?.sanitizedRepoIdentity));
-        const slug = str18(args?.slug) || projectSlugBase(sanitizedRepoIdentity ?? void 0) || projectSlugBase(name) || meshId.toLowerCase();
+        const hostLabel = str19(args?.hostLabel) || hostDaemonId;
+        const name = str19(args?.name) || meshId;
+        const sanitizedRepoIdentity = sanitizeRemoteRepoIdentity(str19(args?.sanitizedRepoIdentity));
+        const slug = str19(args?.slug) || projectSlugBase(sanitizedRepoIdentity ?? void 0) || projectSlugBase(name) || meshId.toLowerCase();
         const ports = await projectPortsFor(ctx);
         const target4 = {
           label: hostLabel,
@@ -183109,8 +183591,8 @@ ${ptyResult.output.slice(-2e3)}`);
           runtime2.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
           runtime2.remotePoller.noteSent(meshId, initialCursor, coordinatorSessionId, { reset: true });
         } else {
-          store3?.openThread(meshId, Date.now());
-          store3?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
+          store4?.openThread(meshId, Date.now());
+          store4?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
           ports.relay.openThread?.(meshId);
           ports.relay.remoteSent?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
         }
@@ -183123,9 +183605,9 @@ ${ptyResult.output.slice(-2e3)}`);
         };
       }
       if (action2 === "unfollow" || action2 === "mark_revoked") {
-        const keyArg = str18(args?.key);
-        const hostDaemonId = canonicalDaemonId2(str18(args?.hostDaemonId));
-        const meshId = str18(args?.meshId);
+        const keyArg = str19(args?.key);
+        const hostDaemonId = canonicalDaemonId2(str19(args?.hostDaemonId));
+        const meshId = str19(args?.meshId);
         const lookupKey = keyArg || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : "");
         const allMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
         const existing = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : allMatches.find((f) => f.state === "followed") ?? allMatches[0] ?? null;
@@ -183150,7 +183632,7 @@ ${ptyResult.output.slice(-2e3)}`);
             runtime2.store.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
             runtime2.remotePoller.noteSent(existing.meshId, nextCursor, nextCoordSid, { reset: true });
           } else {
-            store3?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+            store4?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
             try {
               const ports = await projectPortsFor(ctx);
               ports.relay.remoteSent?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
@@ -183160,7 +183642,7 @@ ${ptyResult.output.slice(-2e3)}`);
         } else if (runtime2) {
           runtime2.relay.closeThread(existing.meshId, { suppressPending: true });
         } else {
-          store3?.closeThread(existing.meshId, now);
+          store4?.closeThread(existing.meshId, now);
           try {
             const ports = await projectPortsFor(ctx);
             ports.relay.closeThread?.(existing.meshId, { suppressPending: true });
@@ -183180,7 +183662,7 @@ ${ptyResult.output.slice(-2e3)}`);
       };
     };
     var assistantThreadSpecs = defineCommandSpecs("high", {
-      [ASSISTANT_VERB2.threads]: list,
+      [ASSISTANT_VERB2.threads]: list2,
       [ASSISTANT_VERB2.threadClose]: close2,
       [ASSISTANT_REMOTE_FOLLOW_COMMAND]: remoteFollow
     }, {
@@ -184005,15 +184487,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_project_views();
     init_assistant_launch_plan();
     var LAUNCH_ASSISTANT_SOURCES = ASSISTANT_PROJECTS_SOURCES;
-    function str19(v) {
+    function str20(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail7(code, error = code, extra = {}) {
+    function fail8(code, error = code, extra = {}) {
       LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
     async function promptProjects(ctx) {
-      const selfDaemonId = str19(ctx.deps?.statusInstanceId);
+      const selfDaemonId = str20(ctx.deps?.statusInstanceId);
       const ports = await getAssistantProjectPorts({
         components: ctx.components,
         execute: (cmd, a) => ctx.execute(cmd, a, "ipc", { inProcess: true }),
@@ -184059,7 +184541,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var launchAssistantOnce = async (ctx, args, fence) => {
       const registry = getAssistantRegistry();
       const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
-      if (fence.aborted) return fail7("assistant_launch_timeout");
+      if (fence.aborted) return fail8("assistant_launch_timeout");
       if (admission) {
         if (admission.success) {
           const { getAssistantRuntime: getAssistantRuntime3 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -184091,9 +184573,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         sessionId: assistantSessionKey,
         declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path
       });
-      if (!mcp.ok) return fail7(mcp.code, mcp.error, { cliType });
+      if (!mcp.ok) return fail8(mcp.code, mcp.error, { cliType });
       const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
-      if (!approval.ok) return fail7(approval.code, approval.error, { cliType });
+      if (!approval.ok) return fail8(approval.code, approval.error, { cliType });
       let projects2;
       try {
         projects2 = await promptProjects(ctx);
@@ -184101,15 +184583,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
       }
-      if (fence.aborted) return fail7("assistant_launch_timeout");
-      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail7("assistant_restore_pending");
+      if (fence.aborted) return fail8("assistant_launch_timeout");
+      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail8("assistant_restore_pending");
       const svc = getAssistantServices();
       const prompt = buildAssistantSystemPrompt({ projects: projects2, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: /* @__PURE__ */ new Date() });
-      if (!prompt.withinLimit) return fail7("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
+      if (!prompt.withinLimit) return fail8("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
       try {
         ensurePrivateAssistantWorkspace(configDir, workspace);
       } catch (e) {
-        return fail7("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
+        return fail8("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
       }
       if (mcp.privateHome) {
         try {
@@ -184117,7 +184599,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
           if (prepared.failed.length) LOG.warn("Assistant", `[${cliType}] private HOME imports failed: ${prepared.failed.join(", ")}`);
         } catch (e) {
-          return fail7("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
+          return fail8("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
         }
       }
       try {
@@ -184129,7 +184611,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           });
         }
       } catch (e) {
-        return fail7("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
+        return fail8("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
       }
       const cliArgs = [];
       const { ensureMcpSessionCredential: ensureMcpSessionCredential2 } = await Promise.resolve().then(() => (init_mcp_command_ingress(), mcp_command_ingress_exports));
@@ -184145,7 +184627,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
       const injection = applyMeshCoordinatorSystemPromptInjection2(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
-      if (injection.error) return fail7(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
+      if (injection.error) return fail8(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
       const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
       if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a) => typeof a === "string" && !!a.trim()));
       cliArgs.push(...mcp.cliArgs);
@@ -184154,11 +184636,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       try {
         if (fence.aborted) {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail7("assistant_launch_timeout");
+          return fail8("assistant_launch_timeout");
         }
         if (ctx.deps.cliManager.hostedRestoreState !== "ready") {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail7("assistant_restore_pending");
+          return fail8("assistant_restore_pending");
         }
         registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
@@ -184184,7 +184666,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         fence.aborted = true;
         launched = { success: true, sessionId: assistantSessionKey };
       }
-      const sessionId = str19(launched?.sessionId) || str19(launched?.id);
+      const sessionId = str20(launched?.sessionId) || str20(launched?.id);
       void scheduleInjectionCleanup2(injection, {
         launched: launched?.success === true && !!sessionId && !fence.aborted,
         isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, sessionId),
@@ -184233,13 +184715,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
-        if (bindingConflict && !fence.aborted) return fail7("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
-        return fail7(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
+        if (bindingConflict && !fence.aborted) return fail8("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
+        return fail8(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
-        return fail7(str19(launched?.code) || "assistant_launch_failed", str19(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
+        return fail8(str20(launched?.code) || "assistant_launch_failed", str20(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail7("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
+      if (!mayBind()) return fail8("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -184260,7 +184742,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         } catch (stopError) {
           LOG.warn("Assistant", `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
         }
-        return fail7("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
+        return fail8("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
       }
       svc.inputLog.begin(sessionId);
       runtime2?.activate("launch");
@@ -184280,9 +184762,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
       const failures = assistantCleanupFailures.get(registry);
       if (failures?.size) {
-        if (!forced) return fail7("assistant_launch_cleanup_pending");
+        if (!forced) return fail8("assistant_launch_cleanup_pending");
         for (const [id4, failure7] of failures) {
-          if (!await failure7.cleanup()) return fail7("assistant_launch_cleanup_pending");
+          if (!await failure7.cleanup()) return fail8("assistant_launch_cleanup_pending");
           failure7.fence.cleanupPending = false;
           failure7.fence.onCleanupAcknowledged?.();
           failures.delete(id4);
@@ -184291,7 +184773,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let pending = assistantStarts.get(registry);
       const meta2 = assistantStartMeta.get(registry);
       if (pending && meta2 && forced && Date.now() - meta2.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
-        if (!meta2.fence.cancelBeforeSpawn()) return fail7("assistant_launch_cancellation_pending");
+        if (!meta2.fence.cancelBeforeSpawn()) return fail8("assistant_launch_cancellation_pending");
         LOG.warn("Assistant", "owner_force cancelled a launch before spawning after the hard ceiling");
         assistantGenerations.delete(registry);
         meta2.clear();
@@ -184305,7 +184787,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const lockPath = (0, import_path44.join)(lockDir, ".assistant-launch.lock");
       const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
-      if (!lock.ok) return fail7(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
+      if (!lock.ok) return fail8(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
       const fence = new AssistantLaunchFence();
       assistantGenerations.set(registry, fence);
       let timer;
@@ -184326,7 +184808,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         timer = setTimeout(() => {
           fence.aborted = true;
           if (!fence.dispatched) clear();
-          resolve66(fail7("assistant_launch_timeout"));
+          resolve66(fail8("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
       });
@@ -184349,7 +184831,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const caller = readAssistantSessionId(args);
       const live = runtime2.liveSessionId();
       if (live && caller !== live) {
-        return fail7("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
+        return fail8("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
       }
       return { success: true, assistantEvents: await runtime2.pull(caller || null) };
     };
@@ -187105,6 +187587,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           ...assistantActionSpecs,
           ...assistantThreadSpecs,
           ...assistantWatchSpecs,
+          ...missionDecisionSpecs,
           ...assistantRemoteSpecs,
           ...assistantLaunchSpecs,
           ...launchDefaultsSpecs,
@@ -191019,10 +191502,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
     }
     function buildCloudStatusReportPayload(sessions, p2p, timestamp2, seqscribe) {
-      const list2 = Array.isArray(sessions) ? sessions : [];
+      const list3 = Array.isArray(sessions) ? sessions : [];
       const seqscribeSummary = buildCloudSeqscribeSummary(seqscribe);
       return {
-        sessions: list2.map((raw) => {
+        sessions: list3.map((raw) => {
           const session = raw || {};
           return {
             id: session.id,
@@ -192678,13 +193161,13 @@ trust_level = "trusted"
           }
         }
         const existing = parsed[key5];
-        const list2 = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
-        if (list2.includes(real2)) {
+        const list3 = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
+        if (list3.includes(real2)) {
           LOG.debug("pre-launch-trust", `[${settingsPath}] ${real2} already trusted \u2014 no change`);
           return null;
         }
-        list2.push(real2);
-        parsed[key5] = list2;
+        list3.push(real2);
+        parsed[key5] = list3;
         fs113.mkdirSync(path111.dirname(settingsPath), { recursive: true });
         fs113.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
 `, "utf8");
@@ -195340,12 +195823,12 @@ ${text4}` : text4;
       if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
       if (prompt.questions.length !== 1) throw new Error("kimi built-in selector prompt must have exactly one question");
       const question = prompt.questions[0];
-      const answer = response.answers[question.questionId];
-      if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-      if (answer.freeformText?.trim()) throw new Error("kimi built-in selector has no freeform input");
-      if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-      const target4 = question.options.findIndex((o) => o.label === answer.selectedLabels[0]);
-      if (target4 < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+      const answer2 = response.answers[question.questionId];
+      if (!answer2) throw new Error(`Missing answer for ${question.questionId}`);
+      if (answer2.freeformText?.trim()) throw new Error("kimi built-in selector has no freeform input");
+      if (answer2.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+      const target4 = question.options.findIndex((o) => o.label === answer2.selectedLabels[0]);
+      if (target4 < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer2.selectedLabels[0]}`);
       let cursor = 0;
       for (const line of (screenText ?? "").split("\n")) {
         if (!line.trim().startsWith("\u276F")) continue;
@@ -196272,8 +196755,8 @@ ${text4}` : text4;
             host.driver.dispatch({ kind: "pty_write", data: step });
             await new Promise((resolve66) => setTimeout(resolve66, 180));
           }
-          const answer = response.answers[question.questionId];
-          const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
+          const answer2 = response.answers[question.questionId];
+          const singleSelectDigitOnly = !question.multiSelect && (answer2?.selectedLabels.length ?? 0) === 1 && !answer2?.freeformText?.trim();
           if (singleSelectDigitOnly && !question.options.some((o) => o.preview)) {
             const screenText = readClaudeTuiSnapshotForAnswer(host);
             const focused = readFocusedClaudeTuiQuestion(screenText);
@@ -196619,13 +197102,13 @@ ${text4}` : text4;
       }
       for (let i = 0; i < prompt.questions.length; i++) {
         const question = prompt.questions[i];
-        const answer = response.answers[question.questionId];
-        if (!answer) {
+        const answer2 = response.answers[question.questionId];
+        if (!answer2) {
           throw new Error(`Missing answer for ${question.questionId}`);
         }
         buildAntigravityQuestionKeystrokes(
           question,
-          answer,
+          answer2,
           i === 0 ? extractScreenKeystrokeOptions(initialScreen) : { currentCursorRow: 1, writingIn: false, currentlyCheckedRows: [] }
         );
       }
@@ -196644,8 +197127,8 @@ ${text4}` : text4;
             );
           }
           const question = prompt.questions[i];
-          const answer = response.answers[question.questionId];
-          const hasFreeform = (answer.freeformText?.trim() ?? "").length > 0;
+          const answer2 = response.answers[question.questionId];
+          const hasFreeform = (answer2.freeformText?.trim() ?? "").length > 0;
           if (activeScreen.writingIn && !question.multiSelect && !hasFreeform) {
             host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
             activeScreen = await waitForAntigravityWriteInExit(
@@ -196656,7 +197139,7 @@ ${text4}` : text4;
           }
           const keys2 = buildAntigravityQuestionKeystrokes(
             question,
-            answer,
+            answer2,
             extractScreenKeystrokeOptions(activeScreen)
           );
           host.driver.dispatch({ kind: "pty_write", data: keys2 });
@@ -198446,9 +198929,9 @@ ${text4}` : text4;
         if (Object.keys(response.answers).some((id4) => !prompt.questions.some((q) => q.questionId === id4))) throw new Error("Unknown question id");
         const answers = /* @__PURE__ */ Object.create(null);
         for (const q of prompt.questions) {
-          const answer = response.answers[q.questionId];
-          const labels = answer?.selectedLabels ?? [];
-          const free = answer?.freeformText?.trim();
+          const answer2 = response.answers[q.questionId];
+          const labels = answer2?.selectedLabels ?? [];
+          const free = answer2?.freeformText?.trim();
           if (free && free.length > 64e3) throw new Error("Codex answer exceeds the supported input limit");
           if (labels.length > 1 || new Set(labels).size !== labels.length || labels.some((label2) => !q.options.some((o) => o.label === label2)) || free && !q.allowFreeform || free && labels.length) throw new Error("Invalid Codex answer");
           if (!labels.length && !free && q.required && response.action !== "dismiss") throw new Error("Required Codex answer missing");
@@ -199174,9 +199657,9 @@ ${JSON.stringify(replies)}
       const boundRaw = Number(env2.ADHDEV_TX_BUSY_LEASE_BOUND_MS);
       const boundMs = Number.isFinite(boundRaw) && boundRaw > 0 ? Math.floor(boundRaw) : BUSY_LEASE_BOUND_MS;
       const listRaw = env2.ADHDEV_TX_BUSY_LEASE_PROVIDERS;
-      const list2 = (typeof listRaw === "string" ? listRaw : DEFAULT_CANARY_PROVIDERS.join(",")).split(",").map((s2) => s2.trim()).filter(Boolean);
+      const list3 = (typeof listRaw === "string" ? listRaw : DEFAULT_CANARY_PROVIDERS.join(",")).split(",").map((s2) => s2.trim()).filter(Boolean);
       const type2 = (providerType ?? "").trim();
-      return { enabled: type2.length > 0 && list2.includes(type2), boundMs };
+      return { enabled: type2.length > 0 && list3.includes(type2), boundMs };
     }
     init_chat_history();
     init_logger();
@@ -203500,24 +203983,24 @@ ${buttons.join("\n")}`;
     };
     init_logger();
     async function drainInFlightSubmits(adapters, timeoutMs) {
-      const inFlight4 = [];
+      const inFlight5 = [];
       for (const [key5, adapter] of adapters) {
         try {
           if (typeof adapter.hasInFlightSubmit === "function" && adapter.hasInFlightSubmit()) {
-            inFlight4.push({ key: key5, adapter });
+            inFlight5.push({ key: key5, adapter });
           }
         } catch {
         }
       }
-      if (inFlight4.length === 0) return { clean: true, waitedMs: 0, pendingKeys: [] };
+      if (inFlight5.length === 0) return { clean: true, waitedMs: 0, pendingKeys: [] };
       const startedAt = Date.now();
-      LOG.info("CLI", `Shutdown submit-drain gate: waiting up to ${timeoutMs}ms for ${inFlight4.length} in-flight submit(s) [${inFlight4.map((e) => e.key).join(", ")}]`);
-      await Promise.all(inFlight4.map(({ key: key5, adapter }) => (typeof adapter.whenSubmitDrained === "function" ? adapter.whenSubmitDrained(timeoutMs) : Promise.resolve(true)).catch((e) => {
+      LOG.info("CLI", `Shutdown submit-drain gate: waiting up to ${timeoutMs}ms for ${inFlight5.length} in-flight submit(s) [${inFlight5.map((e) => e.key).join(", ")}]`);
+      await Promise.all(inFlight5.map(({ key: key5, adapter }) => (typeof adapter.whenSubmitDrained === "function" ? adapter.whenSubmitDrained(timeoutMs) : Promise.resolve(true)).catch((e) => {
         LOG.warn("CLI", `Submit-drain wait failed for ${key5}: ${e?.message || e}`);
         return false;
       })));
       const waitedMs = Date.now() - startedAt;
-      const pendingKeys = inFlight4.filter(({ adapter }) => {
+      const pendingKeys = inFlight5.filter(({ adapter }) => {
         try {
           return typeof adapter.hasInFlightSubmit === "function" && adapter.hasInFlightSubmit();
         } catch {
@@ -204737,11 +205220,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (!current4 || current4.entry.meshId !== plan.entry.meshId) refuseCoordinatorRestore("coordinator identity changed during attach");
       registerMeshCoordinator(current4.entry);
     }
-    async function verifyCoordinatorRecoveryInventory(plan, record7, owner, list2) {
-      if (!list2) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
+    async function verifyCoordinatorRecoveryInventory(plan, record7, owner, list3) {
+      if (!list3) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
       let inventory;
       try {
-        inventory = await list2();
+        inventory = await list3();
       } catch {
         refuseCoordinatorRestore("coordinator recovery inventory unavailable");
       }
@@ -212790,6 +213273,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return { ok: true };
       }
       const credential = workerCredential;
+      if (MCP_ATTRIBUTED_COMMANDS.has(command)) {
+        attachAuthenticatedMcpCommand(args, command, () => false, null);
+        return { ok: true };
+      }
       if (!isWorkerMcpDaemonVerb(command)) return { ok: true };
       let live = false;
       try {
@@ -213166,11 +213653,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         byGroup.set(group, [...byGroup.get(group) ?? [], bucket2]);
       }
       if (byGroup.size < 2) return [];
-      const pick = (list2, minutes) => {
-        const hits = list2.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+      const pick = (list3, minutes) => {
+        const hits = list3.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
         return hits.length ? hits.reduce((w, b) => b.usedPercent > w.usedPercent ? b : w) : null;
       };
-      return [...byGroup].map(([group, list2]) => ({ group, session: pick(list2, 300), weekly: pick(list2, 10080) }));
+      return [...byGroup].map(([group, list3]) => ({ group, session: pick(list3, 300), weekly: pick(list3, 10080) }));
     }
     function printQuota(name, quota) {
       console.log();
@@ -215537,10 +216024,10 @@ ${notice.notice}${supersededHint}`;
           return;
         }
         const key5 = frameKey(at.epoch, at.frame);
-        let list2 = this.pending.get(key5);
-        if (!list2) {
-          list2 = [];
-          this.pending.set(key5, list2);
+        let list3 = this.pending.get(key5);
+        if (!list3) {
+          list3 = [];
+          this.pending.set(key5, list3);
           while (this.pending.size > PENDING_FRAMES_MAX) {
             const oldest = this.pending.keys().next().value;
             this.pendingRows -= this.pending.get(oldest).length;
@@ -215548,7 +216035,7 @@ ${notice.notice}${supersededHint}`;
             this.counters.tornFramesDropped++;
           }
         }
-        list2.push(row2);
+        list3.push(row2);
         this.pendingRows += 1;
         if (this.pendingRows > PENDING_ROWS_MAX) {
           this.pending.clear();
@@ -215578,11 +216065,11 @@ ${notice.notice}${supersededHint}`;
         }
         const key5 = frameKey(commit2.epoch, commit2.frame);
         const rows = (this.pending.get(key5) ?? []).filter((r) => r.writer === commit2.writer);
-        for (const [k, list2] of Array.from(this.pending)) {
+        for (const [k, list3] of Array.from(this.pending)) {
           const [epoch, frameText] = k.split("\0");
           if (epoch !== commit2.epoch || Number(frameText) <= commit2.frame) {
             if (k !== key5) this.counters.tornFramesDropped++;
-            this.pendingRows -= list2.length;
+            this.pendingRows -= list3.length;
             this.pending.delete(k);
           }
         }
@@ -217926,23 +218413,23 @@ ${notice.notice}${supersededHint}`;
           }
         }
       };
-      let inFlight4 = null;
+      let inFlight5 = null;
       const ensure2 = () => {
-        if (inFlight4) return inFlight4;
+        if (inFlight5) return inFlight5;
         const operation = opts.ensureReady().then(async (endpoint2) => {
           const nextIdentity = identityOf2(endpoint2);
           const sameEndpoint = endpoint2.kind === current4.kind && endpoint2.path === current4.path;
           const changed = !sameEndpoint || identity4 !== void 0 && nextIdentity !== void 0 && identity4 !== nextIdentity;
           current4 = endpoint2;
           identity4 = nextIdentity ?? (sameEndpoint ? identity4 : void 0);
-          if (inFlight4 === operation) inFlight4 = null;
+          if (inFlight5 === operation) inFlight5 = null;
           if (changed) await notifyHostReplaced();
           return endpoint2;
         }).finally(() => {
-          if (inFlight4 === operation) inFlight4 = null;
+          if (inFlight5 === operation) inFlight5 = null;
         });
-        inFlight4 = operation;
-        return inFlight4;
+        inFlight5 = operation;
+        return inFlight5;
       };
       const onEvent = (event) => {
         if (!maintenanceHeld()) opts.onHostEvent?.(event);

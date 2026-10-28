@@ -16,6 +16,15 @@ const ARTIFACT_COMMANDS = new Set([
     'assistant_artifact_list', 'assistant_artifact_read',
 ]);
 
+/**
+ * Commands that are not artifact verbs but must still SEE whether an MCP session
+ * (coordinator / worker / assistant) is behind the call. The capability records
+ * the presented credential even when the command otherwise runs as plain `ipc`,
+ * so a handler can refuse MCP-origin callers (owner-decision answers: a
+ * coordinator or worker must never answer its own question).
+ */
+export const MCP_ATTRIBUTED_COMMANDS: ReadonlySet<string> = new Set(['mission_decision_answer']);
+
 export interface AuthenticatedMcpScope {
     readonly sessionId?: string;
     readonly meshId?: string;
@@ -202,7 +211,9 @@ function resolveBoundMcpScope(
         return { validScope: false };
     }
 
-    const isAssistantCmd = command === 'assistant_artifact_list' || command === 'assistant_artifact_read';
+    const isAssistantCmd = command === 'assistant_artifact_list' || command === 'assistant_artifact_read'
+        // attribution-only verb: resolve the session-bound principal; the handler decides who may pass
+        || MCP_ATTRIBUTED_COMMANDS.has(command);
     if (isAssistantCmd) {
         if (!boundSessionId || scopeObj.isCoordinator === true || hasWorkerCredentialFields(args)) {
             return { validScope: false };
@@ -259,7 +270,7 @@ function argumentsKey(args: Record<string, unknown>): string {
     // The host adds only this correlation id. Every authority/file/operation
     // field remains bound; JSON serialization or spread does not copy the map.
     const sessionAlias = typeof args.sessionId === 'string' ? args.sessionId.trim() : undefined;
-    return JSON.stringify(Object.keys(args).filter(key => key !== '_interactionId'
+    return JSON.stringify(Object.keys(args).filter(key => key !== '_interactionId' && key !== '_commandSource' // router-stamped (command-args.ts COMMAND_SOURCE_ARG)
         && !(key === 'targetSessionId' && sessionAlias && args[key] === sessionAlias)).sort()
         .map(key => [key, args[key]]));
 }
@@ -271,7 +282,7 @@ export function attachAuthenticatedMcpCommand<T extends Record<string, unknown>>
     verifyCurrent: () => boolean,
     scope: AuthenticatedMcpScope | string | null,
 ): T {
-    if (!ARTIFACT_COMMANDS.has(command) || typeof verifyCurrent !== 'function') return args;
+    if (!(ARTIFACT_COMMANDS.has(command) || MCP_ATTRIBUTED_COMMANDS.has(command)) || typeof verifyCurrent !== 'function') return args;
     let live = false;
     try { live = verifyCurrent() === true; } catch { /* fail closed */ }
     const bound = resolveBoundMcpScope(args, command, scope);
