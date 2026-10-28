@@ -48,25 +48,62 @@ const track = (abs) => {
   if (MANIFEST) { try { fs.appendFileSync(MANIFEST, abs + '\n'); } catch { /* best effort */ } }
 };
 
+// Shape of a name a tracker/mkdtemp produced: a trailing run of >=6 alphanumerics
+// after a separator (or the whole name, for mkdtemp with an empty prefix).
+const SWEEP_NAME = /(?:^|[-_.])[A-Za-z0-9]{6,}$/;
+
+const isSymlink = (p) => { try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; } };
+const tmpRoots = () => {
+  const roots = new Set([path.resolve(os.tmpdir())]);
+  try { roots.add(fs.realpathSync(os.tmpdir())); } catch { /* ignore */ }
+  return roots;
+};
+
 /**
- * Runner-side sweep: remove every path listed in `manifestPath` and the manifest
- * itself. Returns how many listed directories still existed (i.e. leaked past the
- * in-process cleanup).
+ * Safety predicate for the RUN-LEVEL sweep, which deletes paths read from a file:
+ * the entry must be absolute, a DIRECT child of the temp dir (either spelling —
+ * macOS /var vs /private/var), have a randomised-looking basename, and not be a
+ * symlink. Returns null when safe, else a short reason.
+ */
+export function unsafeSweepReason(entry) {
+  if (typeof entry !== 'string' || !path.isAbsolute(entry)) return 'not absolute';
+  const abs = path.resolve(entry);
+  if (!([...tmpRoots()].some((r) => path.dirname(abs) === r))) return 'not a direct child of the temp dir';
+  if (!SWEEP_NAME.test(path.basename(abs))) return 'name is not randomised';
+  if (isSymlink(abs)) return 'is a symlink';
+  return null;
+}
+
+/**
+ * Runner-side sweep: remove every SAFE path listed in `manifestPath` (see
+ * unsafeSweepReason; unsafe lines are skipped with a warning) and the manifest
+ * itself. The manifest must be a regular file, not a symlink. Returns how many
+ * listed directories still existed (i.e. leaked past the in-process cleanup).
  */
 export function sweepTempManifest(manifestPath) {
   let leaked = 0;
   let lines = [];
-  try { lines = fs.readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean); } catch { /* none */ }
+  try {
+    const st = fs.lstatSync(manifestPath);
+    if (!st.isFile()) throw new Error('manifest is not a regular file');
+    lines = fs.readFileSync(manifestPath, 'utf8').split('\n').filter(Boolean);
+  } catch { /* none */ }
   for (const dir of new Set(lines)) {
+    const why = unsafeSweepReason(dir);
+    if (why) { console.warn(`[tmp-leak-guard] skipping manifest entry ${JSON.stringify(dir)}: ${why}`); continue; }
     try { if (fs.existsSync(dir)) leaked += 1; fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* best effort */ }
   }
-  try { fs.rmSync(manifestPath, { force: true }); } catch { /* ignore */ }
+  try { if (!isSymlink(manifestPath)) fs.rmSync(manifestPath, { force: true }); } catch { /* ignore */ }
   return leaked;
 }
 
 /** Remove every tracked dir now (vitest setup files call this from `afterAll`). */
 export function removeTrackedTempDirs() {
   for (const dir of created) {
+    // In-process entries were created by this process, but still never follow a
+    // symlink swapped in later or touch anything outside the temp dir.
+    const abs = path.resolve(dir);
+    if (![...tmpRoots()].some((r) => abs.startsWith(r + path.sep)) || isSymlink(abs)) continue;
     try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch { /* best effort */ }
   }
   // Entries are KEPT: late writers (store close, flush timers) can re-create a
