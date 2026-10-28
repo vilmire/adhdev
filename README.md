@@ -10,7 +10,7 @@
 [![CI](https://github.com/vilmire/adhdev/actions/workflows/ci.yml/badge.svg)](https://github.com/vilmire/adhdev/actions)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — Claude Code, Codex, Kimi, Cursor CLI, Antigravity CLI side by side, across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
+AI coding agents have become long-running background workers. ADHDev is the control plane for them: launch, watch, approve, and steer agent sessions from a web or mobile dashboard — Claude Code, Codex, Kimi, Cursor CLI, Antigravity CLI, Grok CLI, OpenCode side by side, across every machine you own — and hand off convergence to an unattended pipeline that merges finished work into `main`.
 
 **Parallel agents without the collisions.** Every task runs in its own git worktree; the Refinery gates, verifies, and rebases finished work onto main, merging only if main hasn't moved — no merge-day hangover.
 
@@ -87,11 +87,30 @@ Your agents run locally; you watch and drive them from any browser. The dashboar
   </tr>
 </table>
 
+Sessions can also put files into the chat as **artifacts** — Markdown, images, diffs, JSON and text from the workspace, previewed inline and opened, copied or downloaded on demand. Files never leave the registered workspace.
+
+### 🛡️ Approvals that stay narrow
+- **Auto-approve presses only the one-time option.** With auto-approve on, the daemon answers a worker's permission prompt with a single "yes" — never "always", "don't ask again", or a session- or project-wide grant.
+- **The agent's own buttons, in the Inbox.** A pending request shows the provider's real choices, narrowest first, with standing grants last and marked.
+- **Delegated workers ask their coordinator first.** A worker's permission request goes to the coordinator; you get the push only if it is still unanswered after a minute.
+- **Only a live prompt counts.** Approval text an agent merely prints, quotes or has scrolled away is never taken for a real prompt, and a choice for a request that has since changed is refused instead of answered.
+
+### 🧑‍💼 An assistant that follows your projects
+Start an assistant from the dashboard and give it the projects you care about. It relays each project's reports and notices to you, sums up once a day what finished, what is blocked and what needs you (09:00 local time by default), and flags missions that have gone quiet for three days. When it needs a decision it offers a few options as buttons you can tap; every action it takes on your behalf waits for your pick. It works with any assistant CLI, remembers your last few requests across restarts, and — once you allow it on the other machine — can follow a project hosted on another of your machines without checking it out locally.
+
 ### 🔺 Multi-perspective review
 For a read-only investigation that matters — a bug RCA, a design review, an audit — ask the coordinator for a second opinion: it sends the same question to 2–3 workers on different providers, waits for their reports, and lays out where they agree, where they disagree, and which claims only one of them made. High agreement is not the same as being right — the same model with the same context repeats the same mistake — so the disagreements are the part worth reading.
 
 ### 🔐 P2P transport (trust, not a paywall)
 Chat, commands, screenshots, and remote input travel over an encrypted WebRTC data channel directly between your dashboard and your daemon. The server handles sign-in, signaling and lightweight metadata, plus one deliberate exception: on the cloud edition it receives the approval prompt (the command and button labels) to build the push notification, and the push shows up to 80 characters of it. Chat, terminal output and your code don't sit on someone else's box. It's a trust property of the design, not an upsell.
+
+When a network forces a dashboard connection through a TURN relay, ADHDev keeps looking for a direct path in the background and switches over only after the new path is verified and the dashboard has moved to it, so the switch doesn't cut the session.
+
+### 📁 Move a project between your own machines (cloud edition)
+Send a project folder from one of your machines to another over a dedicated direct connection. File bytes never go through the cloud server or a relay. Both machines confirm the same file list, secrets (`.env*`, keys, cloud credentials, shell history and the like) are always left out, and the files land in a new folder under a registered project only after every byte is verified; nothing existing is overwritten.
+
+### 🧪 Let workers drive a browser
+Workers can drive a local browser through a Playwright MCP driver to check the UI they just built. A driver needs approval before it is activated (trusted low-risk packages can be approved automatically), and every call is checked against the worker's own credentials.
 
 <p align="center">
   <img src="docs/assets/readme/landing-mobile-resume-demo-poster.jpg" alt="ADHDev on a phone: reading an agent's answer and typing the next instruction to it" width="320" />
@@ -178,6 +197,7 @@ Everything runs on your machine as a local daemon with an embedded dashboard —
 ```bash
 curl -fsSL https://adhf.dev/install | sh      # macOS / Linux
 irm https://adhf.dev/install.ps1 | iex         # Windows (PowerShell)
+brew tap vilmire/adhdev && brew install adhdev # macOS / Linux via Homebrew (bundles Node.js)
 adhdev setup                                   # sign in, then open https://adhf.dev
 ```
 
@@ -336,11 +356,14 @@ The engine is open source. What the cloud adds is a **reach layer**: accounts, m
 | Every provider (CLI / IDE / extension) | ✅ | ✅ |
 | Repo Mesh, Refinery, worktree nodes | ✅ **single-machine mesh runs fully local** | ✅ |
 | Mesh **across machines** | ❌ (no cross-machine relay) | ✅ |
+| Assistant (relays, daily summary, one-tap answers) | ✅ | ✅ |
+| Assistant following projects on your other machines | ❌ | ✅ |
+| Project file transfer between your machines | ❌ | ✅ |
 | Push notifications (approval / completion / error) | ❌ | ✅ |
 | Hosted REST API + API keys | ❌ (local API only) | ✅ |
 | Price | free, no quotas | Free / Pro / Ultra |
 
-If you only drive one machine and stay on your own network, self-hosted gives you everything except push notifications and the cross-machine mesh — no quotas. The cloud exists for the moment you add a second machine or want to reach your agents from outside the house.
+If you only drive one machine and stay on your own network, self-hosted gives you everything except push notifications and the features that span machines (the cross-machine mesh, following or moving projects between machines) — no quotas. The cloud exists for the moment you add a second machine or want to reach your agents from outside the house.
 
 ---
 
