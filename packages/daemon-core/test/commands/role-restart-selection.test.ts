@@ -11,6 +11,7 @@ import { SessionRegistry } from '../../src/sessions/registry.js';
 import { resolveRoleLaunch, roleLaunchProvenance } from '../../src/launch-defaults/consumer.js';
 import { validateLaunchDefault } from '../../src/launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../../src/launch-defaults/ports.js';
+import * as cliDetector from '../../src/detection/cli-detector.js';
 import type { PtySpawnOptions } from '../../src/cli-adapters/pty-transport.js';
 
 let dir: string, prior: string | undefined, loader: FixtureLoader, manager: DaemonCliManager;
@@ -124,10 +125,16 @@ describe('role restarts replay recorded launch selection', () => {
         expect(raw).not.toHaveBeenCalled(); expect(deps.sessionHostControl.restartSession).toHaveBeenCalledWith(id);
     });
     it.each(['model', 'thinkingLevel'] as const)('role launch fails when the detected version cannot apply %s', async axis => {
+        // This case exercises a detected version's manifest, not shell-probe availability.
+        // Detection may legitimately return an installed CLI without a version; in that
+        // case the version-only resolve mock below would leave both axes supported.
+        vi.spyOn(cliDetector, 'detectCLI').mockResolvedValue({ id: 'claude-cli', displayName: 'fixture',
+            icon: '', command: join(dir, 'fixture-cli'), installed: true, version: '1.4.0' });
         const base = loader.resolve('claude-cli')!; const resolve = loader.resolve.bind(loader);
         vi.spyOn(loader, 'resolve').mockImplementation((type, opts) => opts?.version
             ? { ...base, ...(axis === 'model' ? { modelLaunchArgs: undefined } : { thinkingLaunchArgs: undefined }) } : resolve(type, opts));
         await expect(startRole('assistant')).rejects.toThrow(axis === 'model' ? 'model_unsupported' : 'thinking_unsupported');
+        expect(loader.resolve).toHaveBeenCalledWith('claude-cli', { version: '1.4.0' });
         expect(spawns).toHaveLength(0);
     });
     it.each([['CLI', 'model'], ['CLI', 'thinkingLevel'], ['hosted', 'model'], ['hosted', 'thinkingLevel']] as const)('%s restart validates the detected version %s before any stop/restart effect', async (path, axis) => {
