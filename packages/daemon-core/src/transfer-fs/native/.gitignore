@@ -1,0 +1,11 @@
+# Local cmake-js build output (per-machine, never committed).
+build/
+
+# Optional local denylist for scripts/host-path-scan.mjs (personal hostnames etc.).
+.host-path-denylist
+
+# Track only the three canonical N-API prebuilt triplets.
+prebuilt/*
+!prebuilt/darwin-arm64-node137/
+!prebuilt/linux-x64-node137/
+!prebuilt/win32-x64-node137/

@@ -19,6 +19,7 @@ import { workerPeerContextHandlers } from '../../src/commands/low-family/worker-
 import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcript-replica.js'
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
 import { maintenanceHoldSpecs } from '../../src/commands/low-family/maintenance-hold.js'
+import { projectTransferSpecs } from '../../src/commands/low-family/project-transfer.js'
 import { cooperativeMaintenanceSpecs } from '../../src/commands/low-family/cooperative-maintenance.js'
 
 // RF-ROUTER LOW family: the command registry must carry exactly the low-family
@@ -125,6 +126,14 @@ const COOPERATIVE_MAINTENANCE_CMDS = [
   'cooperative_maintenance_status',
 ]
 
+// Project file transfer (low-family/project-transfer.ts): 8 owner commands
+// (p2p + standalone) + the daemon<->daemon `project_transfer_peer` (mesh).
+const PROJECT_TRANSFER_CMDS = [
+  'project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create',
+  'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
+  'project_transfer_list', 'project_transfer_status', 'project_transfer_peer',
+]
+
 const NEW_WORK_HOLD_CMDS = [
   'maintenance_new_work_hold_set',
   'maintenance_new_work_hold_extend',
@@ -139,14 +148,14 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 115 LOW family commands once, no overlap', () => {
+  it('registers all 124 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
-      ...CONTRACT_CMDS,
+      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS,
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
@@ -160,8 +169,9 @@ describe('low-family registry', () => {
     // file layer removed 2026-10-08) + content-free worker_report_refusal_forwarded = 85; strict B adds six = 91;
     // + 7 cooperative-maintenance actor/collection commands (rc13 cooperative
     // old-entry drain, 2026-10-14) + queue_revise + 10 hold commands/aliases = 109;
-    // + 6 contract-versioning Cut A commands = 115.
-    expect(all).toHaveLength(115)
+    // + 6 contract-versioning Cut A commands = 115; + 9 project file transfer
+    // commands (8 owner + 1 mesh peer, 2026-10-28) = 124.
+    expect(all).toHaveLength(124)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -185,6 +195,7 @@ describe('low-family registry', () => {
     expect(Object.keys(transcriptReplicaHandlers)).toEqual(TRANSCRIPT_REPLICA_CMDS)
     expect(Object.keys(turnLedgerIpcHandlers)).toEqual(TURN_LEDGER_IPC_CMDS)
     expect(maintenanceHoldSpecs.map(spec => spec.name)).toEqual(NEW_WORK_HOLD_CMDS)
+    expect(projectTransferSpecs.map(spec => spec.name)).toEqual(PROJECT_TRANSFER_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -209,7 +220,7 @@ describe('low-family registry', () => {
       // cooperative-maintenance.ts exports the already-built spec ARRAY
       // (defineCommandSpecs returns CommandSpec[]), not a name→handler map, so
       // its names come off .name rather than Object.keys.
-      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name))
+      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name), projectTransferSpecs.map((spec) => spec.name))
 
     expect(new Set(union).size).toBe(union.length)
     expect(lowFamilyNames().sort()).toEqual([...union].sort())

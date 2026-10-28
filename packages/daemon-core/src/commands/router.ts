@@ -38,6 +38,7 @@ import { specProviderDevSpecs } from './low-family/spec-providerdev.js';
 import { refineConfigSpecs } from './low-family/refine-config.js';
 import { diagnosticsSpecs } from './low-family/diagnostics.js';
 import { statusMetaSpecs } from './low-family/status-meta.js';
+import { projectTransferSpecs } from './low-family/project-transfer.js';
 import { coordinatorPromptSpecs } from './low-family/coordinator-prompt.js';
 import { notificationSpecs } from './low-family/notification.js';
 import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
@@ -285,6 +286,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...refineConfigSpecs,
             ...diagnosticsSpecs,
             ...statusMetaSpecs,
+            ...projectTransferSpecs,
             ...coordinatorPromptSpecs,
             ...notificationSpecs,
             ...daemonLifecycleSpecs,

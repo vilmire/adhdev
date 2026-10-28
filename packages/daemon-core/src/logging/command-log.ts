@@ -47,15 +47,19 @@ export interface CommandLogEntry {
 }
 
 // ─── Sensitive field masking ─────────────────
-const CONTENT_KEYS = new Set(['content', 'message', 'text']);
+// project_transfer_peer: SDP / ICE / one-time link key / manifests never reach the command log (IG02).
+const CONTENT_KEYS = new Set(['content', 'message', 'text', 'sdp', 'candidate', 'linkKeyB64', 'signal', 'selection']);
 const MAX_MASK_DEPTH = 8;
 
-function isSensitiveArgKey(key: string): boolean {
-    return CONTENT_KEYS.has(key) || isCredentialKey(key);
+// project_transfer_* owner commands: selected paths, folder names and published names are user file names.
+const TRANSFER_PATH_KEYS = new Set(['selected', 'path', 'finalName', 'publishedName']);
+
+function isSensitiveArgKey(key: string, cmd = ''): boolean {
+    return CONTENT_KEYS.has(key) || isCredentialKey(key) || (cmd.startsWith('project_transfer') && TRANSFER_PATH_KEYS.has(key));
 }
 
-function maskCommandLogValue(value: unknown, keyHint = '', depth = 0): unknown {
-    if (isSensitiveArgKey(keyHint) || containsCredentialValue(value)) {
+function maskCommandLogValue(value: unknown, keyHint = '', depth = 0, cmd = ''): unknown {
+    if (isSensitiveArgKey(keyHint, cmd) || containsCredentialValue(value)) {
         return typeof value === 'string'
             ? `[${value.length} chars]`
             : '[masked]';
@@ -65,26 +69,26 @@ function maskCommandLogValue(value: unknown, keyHint = '', depth = 0): unknown {
     }
     if (Array.isArray(value)) {
         if (depth >= MAX_MASK_DEPTH) return '[MaxDepth]';
-        return value.map((item) => maskCommandLogValue(item, '', depth + 1));
+        return value.map((item) => maskCommandLogValue(item, '', depth + 1, cmd));
     }
     if (typeof value === 'object' && value !== null) {
         if (depth >= MAX_MASK_DEPTH) return '[MaxDepth]';
         const nested: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-            nested[k] = maskCommandLogValue(v, k, depth + 1);
+            nested[k] = maskCommandLogValue(v, k, depth + 1, cmd);
         }
         return nested;
     }
     return value;
 }
 
-export function maskCommandLogArgs(args: any): Record<string, unknown> | undefined {
+export function maskCommandLogArgs(args: any, cmd = ''): Record<string, unknown> | undefined {
     if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined;
-    return maskCommandLogValue(args, '', 0) as Record<string, unknown>;
+    return maskCommandLogValue(args, '', 0, cmd) as Record<string, unknown>;
 }
 
-function maskArgs(args: any): Record<string, unknown> | undefined {
-    return maskCommandLogArgs(args);
+function maskArgs(args: any, cmd = ''): Record<string, unknown> | undefined {
+    return maskCommandLogArgs(args, cmd);
 }
 
 // ─── File management ─────────────────────────
@@ -179,7 +183,7 @@ export function logCommand(entry: CommandLogEntry): void {
             src: entry.source,
             ...(entry.peerId ? { peer: entry.peerId } : {}),
             ...(entry.interactionId ? { interactionId: entry.interactionId } : {}),
-            ...(entry.args ? { args: maskArgs(entry.args) } : {}),
+            ...(entry.args ? { args: maskArgs(entry.args, entry.cmd) } : {}),
             ...(entry.success !== undefined ? { ok: entry.success } : {}),
             ...(entry.error ? { err: redactCredentialString(entry.error) } : {}),
             ...(entry.durationMs !== undefined ? { ms: entry.durationMs } : {}),
@@ -207,7 +211,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
                     source: parsed.src,
                     peerId: parsed.peer,
                     interactionId: parsed.interactionId,
-                    args: parsed.args ? maskArgs(parsed.args) : undefined,
+                    args: parsed.args ? maskArgs(parsed.args, String(parsed.cmd ?? '')) : undefined,
                     success: parsed.ok,
                     error: typeof parsed.err === 'string' ? redactCredentialString(parsed.err) : parsed.err,
                     durationMs: parsed.ms,

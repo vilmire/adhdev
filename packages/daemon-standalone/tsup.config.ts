@@ -9,6 +9,8 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   sourcemap: true,
+  // transfer-fs native helper: ship the committed prebuilts next to the bundle (loader looks in dist/native).
+  onSuccess: 'node ../daemon-core/scripts/copy-transfer-fs-prebuilt.mjs dist/native',
   // Bundle daemon-core and ESM-only runtime deps into the published CJS CLI.
   // Leaving chalk external makes the standalone bin crash with require(esm)
   // before even `adhdev-standalone --help` can render from a fresh install.
