@@ -8,7 +8,9 @@
  */
 
 import { LOG, installGlobalInterceptor } from '../../logging/logger.js';
-import { loadConfig } from '../../config/config.js';
+import { loadConfig, getConfigDir } from '../../config/config.js';
+import { reclaimStaleLegacyMeshConfigLock } from '../../config/mesh-config-legacy-lock.js';
+import { join } from 'path';
 import { applyDaemonEnvOverrides } from '../../config/env-overrides.js';
 import { clearUpgradeFailureNotice, readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
 import { compareVersions } from '../../providers/provider-loader-support.js';
@@ -67,6 +69,10 @@ export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage
     if (envOverridesApplied.length > 0) {
         LOG.info('EnvOverrides', `Applied ${envOverridesApplied.length} persisted env override(s) from config.json: ${envOverridesApplied.join(', ')}`);
     }
+
+    // Once per start, before any mesh write: drop an abandoned (old, empty) legacy
+    // meshes.json.lock left by a crashed older daemon. Fresh locks stay respected.
+    try { reclaimStaleLegacyMeshConfigLock(join(getConfigDir(), 'meshes.json')); } catch { /* best-effort */ }
 
     // Post-restart rollback visibility: a notice still present at boot means the
     // LAST upgrade attempt failed and this daemon runs the previous version. The
