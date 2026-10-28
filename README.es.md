@@ -24,14 +24,14 @@ Sitio web: **[adhf.dev](https://adhf.dev)** · Documentación: **[docs.adhf.dev]
 
 **El ciclo:** describes una tarea en el chat → el coordinador la registra, la etiqueta y la encola → una máquina libre la toma en un worktree nuevo → deciden las pruebas propias de tu repositorio → se rebasa sobre `main` y se fusiona solo si `main` no se ha movido, y el worktree desaparece. Tu teléfono solo vibró si algo necesitaba aprobación.
 
-ADHDev se construye así. En el monorepo privado donde se desarrolla ADHDev — este motor se publica desde él como submódulo — aproximadamente uno de cada seis commits de `main` es un commit `Auto-merge via Refinery`: trabajo que un agente terminó, que las pruebas propias del repositorio aprobaron y que el Refinery integró sin que una persona ejecutara `git merge`. Ese historial vive en el monorepo upstream, así que el registro de este espejo público no mostrará esos commits de fusión.
+ADHDev se construye así. En el monorepo privado donde se desarrolla ADHDev — este motor se publica desde él como submódulo — aproximadamente uno de cada seis commits de `main` es un commit `Auto-merge branch '…' via Refinery`: trabajo que un agente terminó, que las pruebas propias del repositorio aprobaron y que el Refinery integró sin que una persona ejecutara `git merge`. Ese historial vive en el monorepo upstream, así que el registro de este espejo público no mostrará esos commits de fusión.
 
 ---
 
 ## Por qué ADHDev
 
 ### 🕸️ Repo Mesh — paralelismo real entre varias máquinas
-(Un mesh de una sola máquina se ejecuta totalmente en local; extenderlo a varias máquinas requiere la edición cloud.) Encola tareas con dependencias y deja que un coordinador las despache a cualquier nodo con capacidad libre — tu portátil, un equipo de sobremesa, una máquina de compilación. Es orquestación real entre varias máquinas sobre un mesh P2P, **no** SSH a un único host. Cada tarea se ejecuta en su propio worktree, así que los agentes nunca se pisan. El motor de mesh y Refinery se incluye en este repositorio; el despacho entre máquinas funciona en la edición cloud.
+(En autoalojado, un mesh puede abarcar máquinas que se alcanzan directamente — misma red o Tailscale — emparejadas desde la pantalla del mesh con una dirección y un código de un solo uso, sin necesidad de cuenta. La edición cloud añade alcance más allá de tu propia red.) Encola tareas con dependencias y deja que un coordinador las despache a cualquier nodo con capacidad libre — tu portátil, un equipo de sobremesa, una máquina de compilación. Es orquestación real entre varias máquinas sobre un mesh P2P, **no** SSH a un único host. Cada tarea se ejecuta en su propio worktree, así que los agentes nunca se pisan. El motor de mesh y Refinery se incluye en este repositorio, con el emparejamiento directo entre máquinas; la edición cloud lleva el mismo mesh a través de internet por P2P.
 
 Un mesh está vinculado a un repositorio git y se encarga de las piezas móviles que de otro modo coordinarías a mano:
 
@@ -95,8 +95,8 @@ Las sesiones también pueden poner archivos en el chat como **artefactos** — M
 - **Los trabajadores delegados preguntan primero a su coordinador.** La solicitud de permiso de un trabajador va al coordinador; recibes la notificación push solo si sigue sin respuesta pasado un minuto.
 - **Solo cuenta un aviso activo.** El texto de aprobación que un agente simplemente imprime, cita o que ya se desplazó fuera de pantalla nunca se toma por un aviso real, y una elección para una solicitud que ha cambiado entretanto se rechaza en lugar de responderse.
 
-### 🧑‍💼 Un asistente que sigue tus proyectos
-Inicia un asistente desde el panel y dale los proyectos que te importan. Te transmite los informes y avisos de cada proyecto, resume una vez al día qué terminó, qué está bloqueado y qué necesita de ti (a las 09:00 hora local por defecto), y señala las misiones que llevan tres días en silencio. Cuando necesita una decisión, ofrece algunas opciones como botones que puedes tocar; cada acción que realiza en tu nombre espera tu elección. Funciona con cualquier CLI de asistente, recuerda tus últimas solicitudes tras los reinicios y — una vez que lo permites en la otra máquina — puede seguir un proyecto alojado en otra de tus máquinas sin tener que hacer checkout en local.
+### 🧑‍💼 Un solo chat de asistente para todos tus proyectos
+Inicia el asistente desde la cabecera del panel y elige el CLI con el que se ejecuta. Dile qué hacer en cualquier proyecto: inicia el coordinador de ese proyecto si hace falta, transmite tus palabras y trae el resultado de vuelta al mismo chat, en el idioma en que escribes. Guarda notas breves sobre tu entorno y tus preferencias (con límites de tamaño y aprobación para las escrituras que siguen la salida de un proyecto), te transmite los informes y avisos de cada proyecto, resume una vez al día qué terminó, qué está bloqueado y qué necesita de ti (a las 09:00 hora local por defecto), y señala las misiones que llevan tres días en silencio. Cuando necesita una decisión, ofrece algunas opciones como botones que puedes tocar, y las respuestas que daría a los avisos de permisos, o los cambios de ajustes que propone, solo se envían cuando las eliges en su panel. Funciona con cualquier CLI de asistente, recuerda tus últimas solicitudes tras los reinicios y — una vez que lo permites en la otra máquina — puede seguir un proyecto alojado en otra de tus máquinas (autoalojado emparejado, o en la edición cloud) sin tener que hacer checkout en local.
 
 ### 🔺 Revisión desde varias perspectivas
 Para una investigación de solo lectura que importa — un RCA de un bug, una revisión de diseño, una auditoría — pide una segunda opinión al coordinador: envía la misma pregunta a 2–3 trabajadores de proveedores distintos, espera sus informes y presenta dónde coinciden, dónde discrepan y qué afirmaciones hizo solo uno de ellos. Un acuerdo alto no es lo mismo que tener razón — el mismo modelo con el mismo contexto repite el mismo error — así que las discrepancias son la parte que vale la pena leer.
@@ -172,7 +172,7 @@ Cuatro propiedades que dan forma a todo lo demás:
 
 ## Instalación
 
-**Requisitos:** Node.js 20 o superior (se recomienda 22 LTS; en Windows usa 22.x — consulta la nota más abajo), git, y al menos un agente de programación ya instalado y autenticado — ADHDev maneja los CLI que ya usas.
+**Requisitos:** Node.js 22 LTS (los instaladores de una línea exigen 22 o superior y lo instalan si falta; en Windows usa 22.x — consulta la nota más abajo), git, y al menos un agente de programación ya instalado y autenticado — ADHDev maneja los CLI que ya usas.
 
 **Recomendado — el CLI `adhdev`:**
 
@@ -208,7 +208,7 @@ adhdev standalone --host 0.0.0.0  # permite otros dispositivos de la misma LAN
 adhdev standalone --port 8080     # puerto personalizado
 adhdev standalone --token mysecret # autenticación por token para scripts / acceso de operador
 adhdev standalone --no-open       # no abre el navegador automáticamente
-adhdev standalone --dev           # activa la API de DevServer (:19280) para depurar y probar proveedores
+adhdev standalone --dev           # activa los endpoints locales de DevServer (:19280) para depurar y probar proveedores
 adhdev-standalone --public <dir>  # (paquete standalone) sirve una compilación propia del panel web
 ```
 
@@ -228,7 +228,7 @@ Documentación autoalojada de referencia:
 2. **Lanza una sesión.** Elige un proveedor (por ejemplo Claude Code), elige un directorio de trabajo y arráncalo. Ya tienes una sesión de agente real que puedes manejar desde el chat *o* ver como un terminal en bruto — alterna entre los dos.
 3. **Envía trabajo y aléjate.** Escribe una tarea. Cuando el agente llegue a un aviso de permiso, aparecerá como una aprobación en la bandeja de actividad del panel en lugar de bloquear un terminal que no estás mirando. (Las notificaciones push al teléfono para esas aprobaciones son una función cloud.)
 4. **Pega una captura de pantalla en el chat** cuando una descripción no baste — pasa directamente al contexto del agente.
-5. **Prueba el mesh en una sola máquina.** Abre `/mesh`, crea un mesh vinculado a tu repositorio y clona un nodo worktree. Encola una tarea para él y observa el libro mayor: despacho → finalización → Refinery → rebase y fusión en `main`. Todo esto funciona autoalojado; solo cruzar a una *segunda máquina* requiere la edición cloud.
+5. **Prueba el mesh en una sola máquina.** Abre `/mesh`, crea un mesh vinculado a tu repositorio y clona un nodo worktree. Encola una tarea para él y observa el libro mayor: despacho → finalización → Refinery → rebase y fusión en `main`. Todo esto funciona autoalojado. Para añadir una segunda máquina en la misma red o Tailscale, empareja desde la pantalla del mesh con su dirección y un código de un solo uso; solo llegar a máquinas fuera de tu propia red requiere la edición cloud.
 
 ¿Atascado? La [guía de configuración del autoalojamiento](docs/self-hosted/setup.md) cubre los puertos, la exposición en LAN y los problemas de detección de proveedores.
 
@@ -345,25 +345,25 @@ npm run dev:web
 
 ## OSS frente a Cloud
 
-El motor es de código abierto. Lo que añade la nube es una **capa de alcance**: cuentas, más de una máquina, acceso remoto por todo internet y notificaciones push.
+El motor es de código abierto. Lo que añade la nube es una **capa de alcance**: cuentas, máquinas en cualquier lugar en vez de solo las que alcanzas directamente, acceso remoto por todo internet y notificaciones push.
 
 | | OSS (autoalojado) | Cloud ([adhf.dev](https://adhf.dev)) |
 | --- | :--: | :--: |
 | Panel | `localhost:3847` | `adhf.dev`, cualquier navegador o teléfono |
 | Cuenta necesaria | ❌ sin autenticación | OAuth (GitHub / Google) |
-| Máquinas | **1** | 1 / 2 / 5 según el plan |
-| Alcance | localhost, o tu LAN con `--host` | **en cualquier lugar** (P2P WebRTC + TURN para redes restringidas) |
+| Máquinas | la máquina en la que ejecutas, más las que emparejas directamente (misma red / Tailscale) | 1 / 2 / 5 según el plan, en cualquier lugar |
+| Alcance | localhost, o tu LAN / Tailscale con `--host` | **en cualquier lugar** (P2P WebRTC + TURN para redes restringidas) |
 | Todos los proveedores (CLI / IDE / extensión) | ✅ | ✅ |
-| Repo Mesh, Refinery, nodos worktree | ✅ **el mesh de una sola máquina se ejecuta totalmente en local** | ✅ |
-| Mesh **entre máquinas** | ❌ (sin relé entre máquinas) | ✅ |
+| Repo Mesh, Refinery, nodos worktree | ✅ **se ejecuta totalmente en local** | ✅ |
+| Mesh **entre máquinas** | ✅ emparejamiento directo en una red alcanzable (dirección + código de un solo uso) | ✅ en cualquier lugar (P2P + TURN) |
 | Asistente (transmisiones, resumen diario, respuestas con un toque) | ✅ | ✅ |
-| Asistente que sigue proyectos en tus otras máquinas | ❌ | ✅ |
+| Asistente que sigue proyectos en tus otras máquinas | ✅ máquinas emparejadas | ✅ |
 | Transferencia de archivos de proyecto entre tus máquinas | ❌ | ✅ |
 | Notificaciones push (aprobación / finalización / error) | ❌ | ✅ |
 | API REST alojada + claves de API | ❌ (solo API local) | ✅ |
 | Precio | gratis, sin cuotas | Free / Pro / Ultra |
 
-Si solo manejas una máquina y te quedas en tu propia red, el autoalojamiento te da todo salvo las notificaciones push y las funciones que abarcan varias máquinas (el mesh entre máquinas, seguir o mover proyectos entre máquinas) — sin cuotas. La nube existe para el momento en que añades una segunda máquina o quieres llegar a tus agentes desde fuera de casa.
+Si tus máquinas están en una misma red (o una misma Tailscale), el autoalojamiento te da todo salvo las notificaciones push, la API alojada y la transferencia de archivos de proyecto — sin cuotas. La nube existe para el momento en que una máquina queda fuera de esa red o quieres llegar a tus agentes desde fuera de casa.
 
 ---
 

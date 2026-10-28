@@ -24,14 +24,14 @@ Website: **[adhf.dev](https://adhf.dev)** · Docs: **[docs.adhf.dev](https://doc
 
 **The loop:** describe a task in chat → the coordinator files it, tags it, queues it → an idle machine claims it into a fresh worktree → your repo's own gates decide → rebased onto `main` and merged only if `main` hasn't moved, worktree gone. Your phone only buzzed if something needed approving.
 
-ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — roughly one in six `main` commits is an `Auto-merge via Refinery` commit: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
+ADHDev is built that way. In the private monorepo where ADHDev is developed — this engine is published from it as a submodule — roughly one in six `main` commits is an `Auto-merge branch '…' via Refinery` commit: work that an agent finished, the repo's own gates approved, and Refinery landed without a human running `git merge`. That history lives in the upstream monorepo, so this public mirror's own log won't show those merge commits.
 
 ---
 
 ## Why ADHDev
 
 ### 🕸️ Repo Mesh — true multi-machine parallelism
-(A single-machine mesh runs fully local; spreading it across machines needs the cloud edition.) Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo; cross-machine dispatch runs on the cloud edition.
+(Self-hosted, a mesh can span machines that reach each other directly — same network or Tailscale — paired from the mesh screen with an address and a one-time code, no account needed. The cloud edition adds reach beyond your own network.) Enqueue tasks with dependencies and let a coordinator dispatch them to whichever node has spare capacity — your laptop, a desktop, a build box. This is genuine multi-machine orchestration over a P2P mesh, **not** SSH into one host. Each task runs in its own worktree so agents never step on each other. The mesh and Refinery engine ships in this repo, including direct machine-to-machine pairing; the cloud edition carries the same mesh across the internet over P2P.
 
 A mesh is bound to one git repository and owns the moving parts you'd otherwise coordinate by hand:
 
@@ -95,8 +95,8 @@ Sessions can also put files into the chat as **artifacts** — Markdown, images,
 - **Delegated workers ask their coordinator first.** A worker's permission request goes to the coordinator; you get the push only if it is still unanswered after a minute.
 - **Only a live prompt counts.** Approval text an agent merely prints, quotes or has scrolled away is never taken for a real prompt, and a choice for a request that has since changed is refused instead of answered.
 
-### 🧑‍💼 An assistant that follows your projects
-Start an assistant from the dashboard and give it the projects you care about. It relays each project's reports and notices to you, sums up once a day what finished, what is blocked and what needs you (09:00 local time by default), and flags missions that have gone quiet for three days. When it needs a decision it offers a few options as buttons you can tap; every action it takes on your behalf waits for your pick. It works with any assistant CLI, remembers your last few requests across restarts, and — once you allow it on the other machine — can follow a project hosted on another of your machines without checking it out locally.
+### 🧑‍💼 One assistant chat for all your projects
+Start the assistant from the dashboard header and pick the CLI it runs on. Tell it what to do in any project: it starts that project's coordinator if needed, passes your words on, and brings the result back into the same chat, in the language you write in. It keeps short notes about your environment and preferences (with size limits and approval for writes that follow project output), relays each project's reports and notices to you, sums up once a day what finished, what is blocked and what needs you (09:00 local time by default), and flags missions that have gone quiet for three days. When it needs a decision it offers a few options as buttons you can tap, and answers it would give to permission prompts, or setting changes it proposes, go out only when you pick them in its panel. It works with any assistant CLI, remembers your last few requests across restarts, and — once you allow it on the other machine — can follow a project hosted on another of your machines (paired self-hosted, or on the cloud edition) without checking it out locally.
 
 ### 🔺 Multi-perspective review
 For a read-only investigation that matters — a bug RCA, a design review, an audit — ask the coordinator for a second opinion: it sends the same question to 2–3 workers on different providers, waits for their reports, and lays out where they agree, where they disagree, and which claims only one of them made. High agreement is not the same as being right — the same model with the same context repeats the same mistake — so the disagreements are the part worth reading.
@@ -172,7 +172,7 @@ Four properties that shape everything else:
 
 ## Install
 
-**Requirements:** Node.js 20 or newer (22 LTS recommended; on Windows use 22.x — see the note below), git, and at least one coding agent already installed and authenticated — ADHDev drives the CLIs you already use.
+**Requirements:** Node.js 22 LTS (the one-line installers require 22+ and install it if missing; on Windows use 22.x — see the note below), git, and at least one coding agent already installed and authenticated — ADHDev drives the CLIs you already use.
 
 **Recommended — the `adhdev` CLI:**
 
@@ -208,7 +208,7 @@ adhdev standalone --host 0.0.0.0  # allow other devices on the same LAN
 adhdev standalone --port 8080     # custom port
 adhdev standalone --token mysecret # token auth for scripts / operator access
 adhdev standalone --no-open       # don't auto-open the browser
-adhdev standalone --dev           # enable the DevServer API (:19280) to debug and test providers
+adhdev standalone --dev           # enable the local DevServer endpoints (:19280) to debug and test providers
 adhdev-standalone --public <dir>  # (standalone package) serve a custom web dashboard build
 ```
 
@@ -228,7 +228,7 @@ Canonical self-hosted docs:
 2. **Launch a session.** Pick a provider (say Claude Code), pick a working directory, and start it. You now have a real agent session you can drive from chat *or* watch as a raw terminal — toggle between the two.
 3. **Send work and walk away.** Type a task. When the agent hits a permission prompt, it shows up as an approval in the dashboard's activity inbox instead of blocking a terminal you're not looking at. (Push-to-phone for those approvals is a cloud feature.)
 4. **Paste a screenshot into the chat** when a description isn't enough — it goes into the agent's context directly.
-5. **Try the mesh on one machine.** Open `/mesh`, create a mesh bound to your repo, and clone a worktree node. Queue a task to it and watch the ledger: dispatch → completion → Refinery → rebase and merge into `main`. This all works self-hosted; only crossing to a *second machine* needs the cloud edition.
+5. **Try the mesh on one machine.** Open `/mesh`, create a mesh bound to your repo, and clone a worktree node. Queue a task to it and watch the ledger: dispatch → completion → Refinery → rebase and merge into `main`. This all works self-hosted. To add a second machine on the same network or Tailscale, pair it from the mesh screen with its address and a one-time code; only reaching machines outside your own network needs the cloud edition.
 
 Stuck? The [self-hosted setup guide](docs/self-hosted/setup.md) covers ports, LAN exposure, and provider detection problems.
 
@@ -345,25 +345,25 @@ npm run dev:web
 
 ## OSS vs Cloud
 
-The engine is open source. What the cloud adds is a **reach layer**: accounts, more than one machine, internet-wide remote access, and push.
+The engine is open source. What the cloud adds is a **reach layer**: accounts, machines anywhere instead of only those you can reach directly, internet-wide remote access, and push.
 
 | | OSS (self-hosted) | Cloud ([adhf.dev](https://adhf.dev)) |
 | --- | :--: | :--: |
 | Dashboard | `localhost:3847` | `adhf.dev`, any browser or phone |
 | Account required | ❌ no auth | OAuth (GitHub / Google) |
-| Machines | **1** | 1 / 2 / 5 by plan |
-| Reach | localhost, or your LAN with `--host` | **anywhere** (P2P WebRTC + TURN for locked-down networks) |
+| Machines | the machine you run on, plus machines you pair directly (same network / Tailscale) | 1 / 2 / 5 by plan, anywhere |
+| Reach | localhost, or your LAN / Tailscale with `--host` | **anywhere** (P2P WebRTC + TURN for locked-down networks) |
 | Every provider (CLI / IDE / extension) | ✅ | ✅ |
-| Repo Mesh, Refinery, worktree nodes | ✅ **single-machine mesh runs fully local** | ✅ |
-| Mesh **across machines** | ❌ (no cross-machine relay) | ✅ |
+| Repo Mesh, Refinery, worktree nodes | ✅ **runs fully local** | ✅ |
+| Mesh **across machines** | ✅ direct pairing on a reachable network (address + one-time code) | ✅ anywhere (P2P + TURN) |
 | Assistant (relays, daily summary, one-tap answers) | ✅ | ✅ |
-| Assistant following projects on your other machines | ❌ | ✅ |
+| Assistant following projects on your other machines | ✅ paired machines | ✅ |
 | Project file transfer between your machines | ❌ | ✅ |
 | Push notifications (approval / completion / error) | ❌ | ✅ |
 | Hosted REST API + API keys | ❌ (local API only) | ✅ |
 | Price | free, no quotas | Free / Pro / Ultra |
 
-If you only drive one machine and stay on your own network, self-hosted gives you everything except push notifications and the features that span machines (the cross-machine mesh, following or moving projects between machines) — no quotas. The cloud exists for the moment you add a second machine or want to reach your agents from outside the house.
+If your machines are on one network (or one Tailscale), self-hosted gives you everything except push notifications, the hosted API and project file transfer — no quotas. The cloud exists for the moment a machine is outside that network or you want to reach your agents from outside the house.
 
 ---
 
