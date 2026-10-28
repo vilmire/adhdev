@@ -6,6 +6,7 @@ import MeshGraphView from './MeshGraphView'
 import { MeshGraphEdgeLegend } from './meshGraphEdgeLegend'
 import MeshBlueprintView from './MeshBlueprintView'
 import MeshOverviewCards from './MeshOverviewCards'
+import MeshArtifactsTab from './MeshArtifactsTab'
 import { queueTaskStatusLabel } from './meshOverviewPrimitives'
 import { MeshHelpPanel, MeshHelpToggle } from './MeshHelpPanel'
 import { getMeshGraphTheme, type MeshGraphTheme } from './meshGraphTheme'
@@ -18,7 +19,7 @@ import { MeshStatusTab, MeshMachineQuotaCard, MeshNodeRuntimeChips } from './Mes
 import { SettingsTabBar } from '../ui/SettingsTabs'
 import { PopoverButton, Tooltip } from '../ui/InfoTip'
 import { TechnicalDetails } from '../ui/TechnicalDetails'
-import { IconDashboard, IconLayers, IconMesh, IconHelp, IconWrench, IconSpinner } from '../Icons'
+import { IconClipboard, IconDashboard, IconLayers, IconMesh, IconHelp, IconWrench, IconSpinner } from '../Icons'
 import { eventManager } from '../../managers/EventManager'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
 import { requestOpenSessionChat } from '../../utils/session-nav'
@@ -83,17 +84,18 @@ type DetailSelection =
     | { kind: 'queue'; taskId: string }
 
 /**
- * Three tabs: Overview (approvals, missions, activity, nodes), Tasks (the
- * blueprint) and Map (topology + per-node detail; per-machine runtime and the
- * protocol/build internals live behind its Diagnostics panel).
+ * Four tabs: Overview (approvals, missions, activity, nodes), Tasks (the
+ * blueprint), Artifacts (files workers produced, grouped by mission/task, with
+ * which tasks consumed them) and Map (topology + per-node detail; per-machine
+ * runtime and the protocol/build internals live behind its Diagnostics panel).
  */
-export type MeshSurfaceTab = 'overview' | 'tasks' | 'map'
+export type MeshSurfaceTab = 'overview' | 'tasks' | 'artifacts' | 'map'
 
-export const MESH_SURFACE_TABS: readonly MeshSurfaceTab[] = ['overview', 'tasks', 'map']
+export const MESH_SURFACE_TABS: readonly MeshSurfaceTab[] = ['overview', 'tasks', 'artifacts', 'map']
 
 /** Maps retired tab ids (status / notes / graph) onto the current three. */
 export function normalizeMeshSurfaceTab(tab: string | null | undefined): MeshSurfaceTab {
-    if (tab === 'tasks' || tab === 'map' || tab === 'overview') return tab
+    if (tab === 'tasks' || tab === 'artifacts' || tab === 'map' || tab === 'overview') return tab
     if (tab === 'graph' || tab === 'status') return 'map'
     return 'overview'
 }
@@ -161,6 +163,7 @@ export function MeshSurfaceTabControls({
                 tabs={[
                     { key: 'overview', label: t('mesh.obs.tabOverview'), icon: <IconDashboard size={14} /> },
                     { key: 'tasks', label: t('mesh.obs.tabTasks'), icon: <IconLayers size={14} /> },
+                    { key: 'artifacts', label: t('mesh.obs.tabArtifacts'), icon: <IconClipboard size={14} /> },
                     { key: 'map', label: t('mesh.obs.tabMap'), icon: <IconMesh size={14} /> },
                 ]}
             />
@@ -226,6 +229,11 @@ export default function MeshObservabilitySurface({
     const [taskDagMounted, setTaskDagMounted] = useState(false)
     useEffect(() => {
         if (activeTab === 'tasks') setTaskDagMounted(true)
+    }, [activeTab])
+    // Artifacts tab: nothing is fetched until it has been opened once.
+    const [artifactsMounted, setArtifactsMounted] = useState(false)
+    useEffect(() => {
+        if (activeTab === 'artifacts') setArtifactsMounted(true)
     }, [activeTab])
     // Queue rows for the task DAG — the status snapshot carries raw queue entries
     // (dependsOn included) under queue.tasks.
@@ -586,6 +594,20 @@ export default function MeshObservabilitySurface({
                         <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm text-text-muted">{t('mesh.obs.loadingGraph')}</div>
                     )}
                 </div>
+            </div>
+
+            {/* ── Artifacts tab: mesh-wide worker outputs (lazy: loads on first visit) ── */}
+            <div id="mesh-surface-panel-artifacts" role="tabpanel" aria-labelledby="mesh-surface-tab-artifacts" className={`${activeTab === 'artifacts' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>
+                {artifactsMounted && (
+                    <MeshArtifactsTab
+                        status={canonicalStatus}
+                        daemonId={daemonId}
+                        sendDaemonCommand={sendDaemonCommand}
+                        active={activeTab === 'artifacts'}
+                        refreshToken={refreshToken}
+                        onOpenTask={() => setActiveTab('tasks')}
+                    />
+                )}
             </div>
 
             {/* ── Map tab: topology + node side panel + Diagnostics (lazily mounted) ── */}

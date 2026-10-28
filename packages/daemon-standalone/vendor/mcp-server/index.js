@@ -32174,7 +32174,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
       interceptorInstalled = true;
-      const stripAnsi3 = (str18) => str18.replace(/\x1B\[[0-9;]*m/g, "");
+      const stripAnsi3 = (str19) => str19.replace(/\x1B\[[0-9;]*m/g, "");
       const isDaemonLogLine = (msg) => /\[(DBG|INF|WRN|ERR)\]/.test(msg);
       console.log = (...args) => {
         origConsoleLog(...args);
@@ -54384,10 +54384,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       return hex;
     }
-    function utf8ToBytes(str18) {
-      if (typeof str18 !== "string")
+    function utf8ToBytes(str19) {
+      if (typeof str19 !== "string")
         throw new Error("string expected");
-      return new Uint8Array(new TextEncoder().encode(str18));
+      return new Uint8Array(new TextEncoder().encode(str19));
     }
     function toBytes(data) {
       if (typeof data === "string")
@@ -102421,12 +102421,12 @@ ${result.stderr}`, result.code);
         );
       }
     }
-    function isPlausibleDecodedText(str18) {
-      if (!str18 || str18.length < 6) return false;
-      const len = Math.min(str18.length, 512);
+    function isPlausibleDecodedText(str19) {
+      if (!str19 || str19.length < 6) return false;
+      const len = Math.min(str19.length, 512);
       let asciiPrintable = 0;
       for (let i = 0; i < len; i++) {
-        const code = str18.charCodeAt(i);
+        const code = str19.charCodeAt(i);
         if (code === 65533) return false;
         if (code >= 0 && code <= 8 || code === 11 || code === 12 || code >= 14 && code <= 31 || code >= 127 && code <= 159) {
           return false;
@@ -107887,7 +107887,7 @@ ${body}`;
       const r = raw;
       const base = newSkillState(ORIGINS.includes(r.origin) ? r.origin : "owner", fallbackIso);
       const num2 = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
-      const str18 = (v) => typeof v === "string" ? v : null;
+      const str19 = (v) => typeof v === "string" ? v : null;
       const counters4 = (v) => {
         const out = {};
         if (v && typeof v === "object") {
@@ -107899,12 +107899,12 @@ ${body}`;
         ...base,
         status: STATUSES.includes(r.status) ? r.status : "active",
         pinned: r.pinned === true,
-        createdAt: str18(r.createdAt) ?? fallbackIso,
-        statusChangedAt: str18(r.statusChangedAt) ?? str18(r.createdAt) ?? fallbackIso,
+        createdAt: str19(r.createdAt) ?? fallbackIso,
+        statusChangedAt: str19(r.statusChangedAt) ?? str19(r.createdAt) ?? fallbackIso,
         viewCount: num2(r.viewCount),
-        lastViewedAt: str18(r.lastViewedAt),
+        lastViewedAt: str19(r.lastViewedAt),
         patchCount: num2(r.patchCount),
-        lastPatchedAt: str18(r.lastPatchedAt),
+        lastPatchedAt: str19(r.lastPatchedAt),
         patchesSinceReview: num2(r.patchesSinceReview),
         sessionPatches: counters4(r.sessionPatches),
         turnPatches: counters4(r.turnPatches)
@@ -108478,14 +108478,14 @@ ${body}`;
         for (const [name, u] of Object.entries(raw ?? {})) {
           if (!u || typeof u !== "object") continue;
           const num2 = (v) => typeof v === "number" ? v : void 0;
-          const str18 = (v) => typeof v === "string" ? v : void 0;
+          const str19 = (v) => typeof v === "string" ? v : void 0;
           out.set(name, {
-            state: str18(u.state),
+            state: str19(u.state),
             pinned: u.pinned === true,
             viewCount: num2(u.view_count),
             patchCount: num2(u.patch_count),
-            createdAt: str18(u.created_at),
-            lastUsedAt: str18(u.last_used_at)
+            createdAt: str19(u.created_at),
+            lastUsedAt: str19(u.last_used_at)
           });
         }
       } catch {
@@ -118967,6 +118967,66 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         };
       }
     });
+    function str8(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function isOwnerMeshListRequest(args, ownerTrusted) {
+      if (!ownerTrusted || !args) return false;
+      if (!str8(args.meshId)) return false;
+      if (str8(args.sessionId) || str8(args.targetSessionId) || str8(args.callerSessionId)) return false;
+      return !hasWorkerCredentialInput(args);
+    }
+    function parseCursor(raw) {
+      const text4 = str8(raw);
+      if (!text4) return null;
+      const sep23 = text4.indexOf(":");
+      if (sep23 <= 0) return null;
+      const createdAt = Number(text4.slice(0, sep23));
+      const artifactId = text4.slice(sep23 + 1);
+      if (!Number.isFinite(createdAt) || !artifactId) return null;
+      return { createdAt, artifactId };
+    }
+    function encodeCursor2(record7) {
+      return `${record7.createdAt}:${record7.artifactId}`;
+    }
+    function handleOwnerMeshArtifactList(ctx, args) {
+      const meshId = str8(args.meshId);
+      const missionId = str8(args.missionId);
+      const kind = str8(args.kind);
+      if (kind && !ARTIFACT_KINDS.includes(kind)) {
+        return { success: false, code: "invalid_kind", error: `Unsupported artifact kind "${kind}" (invalid_kind)` };
+      }
+      const rawLimit = args.limit;
+      const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MAX_ARTIFACTS_PER_MESH) : OWNER_MESH_LIST_DEFAULT_LIMIT;
+      const cursor = parseCursor(args.cursor);
+      const store2 = getArtifactStore(ctx);
+      let records = store2.listByMesh(meshId, { ...missionId ? { missionId } : {} });
+      if (kind) records = records.filter((rec5) => rec5.kind === kind);
+      if (cursor) {
+        const at = records.findIndex((rec5) => rec5.artifactId === cursor.artifactId);
+        records = at >= 0 ? records.slice(0, at) : records.filter((rec5) => rec5.createdAt < cursor.createdAt);
+      }
+      const hasMore = records.length > limit;
+      const page = hasMore ? records.slice(records.length - limit) : records;
+      return {
+        success: true,
+        meshId,
+        artifacts: page,
+        attachments: page.map((record7) => toChatAttachmentMeta(record7)),
+        hasMore,
+        nextCursor: hasMore && page.length > 0 ? encodeCursor2(page[0]) : null
+      };
+    }
+    var OWNER_MESH_LIST_DEFAULT_LIMIT;
+    var init_artifact_list_scope = __esm2({
+      "src/commands/med-family/artifact-list-scope.ts"() {
+        "use strict";
+        init_artifacts();
+        init_artifact_command_ingress();
+        init_artifact_runtime();
+        OWNER_MESH_LIST_DEFAULT_LIMIT = 100;
+      }
+    });
     var artifacts_exports = {};
     __export2(artifacts_exports, {
       artifactHandlers: () => artifactHandlers,
@@ -119655,6 +119715,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_transcript_publisher();
         init_artifact_sharing();
         init_artifact_runtime();
+        init_artifact_list_scope();
         init_artifact_runtime();
         registrationStateByStore = /* @__PURE__ */ new WeakMap();
         nextArtifactRegistrationSeq = 0;
@@ -119814,6 +119875,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         handleArtifactList = async (ctx, args) => {
           const ingress = verifyArtifactCommandIngress(args, "list");
           if (!ingress.ok) return ingress.result;
+          if (isOwnerMeshListRequest(ingress.recordArgs, ingress.ownerTrusted)) {
+            try {
+              const ownerResult = handleOwnerMeshArtifactList(ctx, ingress.recordArgs);
+              const recheck = verifyArtifactCommandIngress(args, "list");
+              return recheck.ok && recheck.ownerTrusted ? ownerResult : recheck.ok ? { success: false, code: "COMMAND_SOURCE_REJECTED", error: "Artifact owner authority changed" } : recheck.result;
+            } catch (err) {
+              return handleArtifactError(err);
+            }
+          }
           const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, "list", ingress.ownerTrusted);
           if (!auth.ok) return auth.result;
           const currentIngress = verifyArtifactCommandIngress(args, "list");
@@ -123994,19 +124064,19 @@ ${asText(streams.stderr)}
         meshLocks = /* @__PURE__ */ new Map();
       }
     });
-    function str8(v) {
+    function str9(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function shortId(id4) {
       return id4.length > 16 ? `${id4.slice(0, 16)}\u2026` : id4;
     }
     function resolveHostMeshId(mesh, hostDaemonId, peerHostMeshIds) {
-      const persisted = str8(mesh.meshHost?.hostMeshId);
+      const persisted = str9(mesh.meshHost?.hostMeshId);
       if (persisted) return persisted;
       if (!hostDaemonId) return mesh.id;
       let ids = [];
       try {
-        ids = [...new Set(peerHostMeshIds(hostDaemonId).map(str8).filter(Boolean))];
+        ids = [...new Set(peerHostMeshIds(hostDaemonId).map(str9).filter(Boolean))];
       } catch {
         ids = [];
       }
@@ -124015,10 +124085,10 @@ ${asText(streams.stderr)}
     }
     function describeRemoteHost(mesh, selfDaemonId, transport, peerHostMeshIds = () => []) {
       const status = resolveMeshHostStatus(mesh, selfDaemonId ? { localDaemonId: selfDaemonId } : void 0);
-      const rawHost = str8(status.hostDaemonId);
+      const rawHost = str9(status.hostDaemonId);
       const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent4(rawHost, selfDaemonId)) ? rawHost : null;
-      const node = hostDaemonId ? (mesh.nodes ?? []).find((n) => daemonIdsEquivalent4(str8(n.daemonId), hostDaemonId) || !!status.hostNodeId && n.id === status.hostNodeId) : void 0;
-      const label2 = str8(node?.machineNickname) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
+      const node = hostDaemonId ? (mesh.nodes ?? []).find((n) => daemonIdsEquivalent4(str9(n.daemonId), hostDaemonId) || !!status.hostNodeId && n.id === status.hostNodeId) : void 0;
+      const label2 = str9(node?.machineNickname) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
       const hostMeshId = resolveHostMeshId(mesh, hostDaemonId, peerHostMeshIds);
       const base = { label: label2, hostDaemonId, hostMeshId };
       if (!hostDaemonId) return { ...base, reachable: false, reason: "host_unknown" };
@@ -124035,10 +124105,10 @@ ${asText(streams.stderr)}
       return { ...base, reachable: true };
     }
     function describeFollowedRemoteHost(entry, selfDaemonId, ownerBindingVerification, transport) {
-      const rawHost = str8(entry.hostDaemonId);
+      const rawHost = str9(entry.hostDaemonId);
       const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent4(rawHost, selfDaemonId)) ? rawHost : null;
-      const label2 = str8(entry.hostLabel) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
-      const hostMeshId = str8(entry.meshId);
+      const label2 = str9(entry.hostLabel) || (hostDaemonId ? shortId(canonicalDaemonId2(hostDaemonId) ?? hostDaemonId) : "unknown host");
+      const hostMeshId = str9(entry.meshId);
       const verifiedRevision = ownerBindingVerification.ok ? ownerBindingVerification.receipt?.bindingRevision ?? ownerBindingVerification.binding?.bindingRevision : void 0;
       const localBindingError = !ownerBindingVerification.ok ? { code: ownerBindingVerification.code, error: ownerBindingVerification.error } : verifiedRevision !== void 0 && verifiedRevision !== entry.bindingRevision ? {
         code: "local_owner_binding_mismatch",
@@ -124123,11 +124193,11 @@ ${asText(streams.stderr)}
       const answer = findMeshRelayAnswer(raw);
       if (!answer) return unreachable("relay_failed", "the host answered with a malformed relay result");
       if (answer.success === true) return { ok: true, result: answer };
-      const transportCode = str8(answer.code);
+      const transportCode = str9(answer.code);
       if (/^p2p_/.test(transportCode) && transportCode !== "mesh_logic_or_provider_failure") {
-        return unreachable(transportCode === "p2p_daemon_offline" ? "host_offline" : transportCode === "p2p_timeout" ? "relay_timeout" : "relay_failed", str8(answer.error) || transportCode);
+        return unreachable(transportCode === "p2p_daemon_offline" ? "host_offline" : transportCode === "p2p_timeout" ? "relay_timeout" : "relay_failed", str9(answer.error) || transportCode);
       }
-      const detail = str8(answer.detail);
+      const detail = str9(answer.detail);
       const detailMatch = FOLLOWER_REFUSAL_DETAIL_RE.exec(detail);
       if (detailMatch) {
         const specificCode = detailMatch[1];
@@ -124135,7 +124205,7 @@ ${asText(streams.stderr)}
           ok: false,
           kind: "refused",
           code: specificCode,
-          error: detail || str8(answer.error) || specificCode,
+          error: detail || str9(answer.error) || specificCode,
           result: answer
         };
       }
@@ -124144,11 +124214,11 @@ ${asText(streams.stderr)}
           ok: false,
           kind: "refused",
           code: "remote_access_denied",
-          error: detail || str8(answer.error) || "remote_access_denied",
+          error: detail || str9(answer.error) || "remote_access_denied",
           result: answer
         };
       }
-      const error = str8(answer.error);
+      const error = str9(answer.error);
       const code = transportCode || (/^unknown command/i.test(error) ? "host_unsupported" : error) || "host_refused";
       return { ok: false, kind: "refused", code, error: error || code, result: answer };
     }
@@ -125886,7 +125956,7 @@ ${asText(streams.stderr)}
       return getAssistantProjectPorts({
         components: ctx.components,
         execute: (cmd, args) => ctx.execute(cmd, args, "ipc", { inProcess: true }),
-        selfDaemonId: str9(ctx.deps?.statusInstanceId),
+        selfDaemonId: str10(ctx.deps?.statusInstanceId),
         transport: {
           ...ctx.deps?.dispatchMeshCommand ? { dispatch: ctx.deps.dispatchMeshCommand } : {},
           ...ctx.deps?.getMeshPeerConnectionStatus ? { peerStatus: ctx.deps.getMeshPeerConnectionStatus } : {}
@@ -125907,7 +125977,7 @@ ${asText(streams.stderr)}
       } catch {
       }
     }
-    function str9(v) {
+    function str10(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function rawStr(v) {
@@ -125921,7 +125991,7 @@ ${asText(streams.stderr)}
       return { success: false, code: "invalid_args", error };
     }
     function readAssistantSessionId(args) {
-      return str9(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG2]);
+      return str10(readOptionalRecord2(args)?.[ASSISTANT_SESSION_ID_ARG2]);
     }
     function assistantToolGate(verb, args, svc = getAssistantServices()) {
       const sid = readAssistantSessionId(args);
@@ -125987,18 +126057,18 @@ ${asText(streams.stderr)}
       return { result: out.code, host: remote.host.label, error: out.error };
     }
     function parseNoteOp(args) {
-      const action2 = str9(args?.action);
-      const text4 = str9(args?.text);
+      const action2 = str10(args?.action);
+      const text4 = str10(args?.text);
       if (action2 === "record") {
         if (!text4) return "text required for record";
-        const category = str9(args?.category);
+        const category = str10(args?.category);
         if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
           return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
         }
         return { action: action2, text: text4, ...category ? { category } : {} };
       }
       if (action2 === "forget") {
-        const noteId = str9(args?.note_id) || str9(args?.noteId);
+        const noteId = str10(args?.note_id) || str10(args?.noteId);
         if (!noteId && !text4) return "note_id or text required for forget";
         return { action: action2, ...noteId ? { noteId } : {}, ...text4 ? { text: text4 } : {} };
       }
@@ -126006,7 +126076,7 @@ ${asText(streams.stderr)}
         return { action: action2 };
       }
       if (action2 === "read") {
-        const noteId = str9(args?.note_id) || str9(args?.noteId);
+        const noteId = str10(args?.note_id) || str10(args?.noteId);
         if (!noteId) return "note_id required for read";
         return { action: action2, noteId };
       }
@@ -126106,8 +126176,8 @@ ${asText(streams.stderr)}
       };
     }
     function parseMemoryOp(args) {
-      const action2 = str9(args?.action);
-      const target4 = str9(args?.target);
+      const action2 = str10(args?.action);
+      const target4 = str10(args?.target);
       if (target4 !== "memory" && target4 !== "user") return "target must be memory or user";
       const text4 = rawStr(args?.text);
       const match = rawStr(args?.match);
@@ -126117,10 +126187,10 @@ ${asText(streams.stderr)}
       return "action must be add, replace or remove";
     }
     function parseSkillOp(args) {
-      const action2 = str9(args?.action);
-      const name = str9(args?.name);
+      const action2 = str10(args?.action);
+      const name = str10(args?.name);
       if (action2 === "create") {
-        const project = str9(args?.project);
+        const project = str10(args?.project);
         return { action: action2, name, description: rawStr(args?.description) ?? "", body: rawStr(args?.body) ?? "", ...project ? { project } : {} };
       }
       if (action2 === "patch") {
@@ -126310,7 +126380,7 @@ ${asText(streams.stderr)}
             const svc = getAssistantServices();
             const gate = assistantToolGate(ASSISTANT_VERB2.skillView, args, svc);
             if (gate) return gate;
-            const name = str9(args?.name);
+            const name = str10(args?.name);
             if (!name) return invalidArgs("name required");
             const file = rawStr(args?.file);
             return respond(svc.skills.view(name, file !== void 0 ? { file } : {}));
@@ -126360,7 +126430,7 @@ ${asText(streams.stderr)}
           // ── owner verbs ─────────────────────────────────────────────────────────
           [ASSISTANT_VERB2.stagedResolve]: async (ctx, args) => {
             const svc = getAssistantServices();
-            const action2 = str9(args?.action) || "resolve";
+            const action2 = str10(args?.action) || "resolve";
             if (action2 === "list") {
               let driverActions = [];
               if (typeof ctx.deps?.providerLoader?.getByCategory === "function") {
@@ -126381,9 +126451,9 @@ ${asText(streams.stderr)}
               };
             }
             if (action2 !== "resolve") return invalidArgs("action must be list or resolve");
-            const id4 = str9(args?.id);
-            const reviewTurnId = str9(args?.reviewTurnId);
-            const decision = str9(args?.decision);
+            const id4 = str10(args?.id);
+            const reviewTurnId = str10(args?.reviewTurnId);
+            const decision = str10(args?.decision);
             if (!id4 && !reviewTurnId) return invalidArgs("id or reviewTurnId required");
             if (id4 && reviewTurnId) return invalidArgs("pass id or reviewTurnId, not both");
             if (id4.startsWith("ldf-")) {
@@ -126404,10 +126474,10 @@ ${asText(streams.stderr)}
           },
           [ASSISTANT_VERB2.storeAdmin]: async (_ctx, args) => {
             const svc = getAssistantServices();
-            const target4 = str9(args?.target);
-            const action2 = str9(args?.action);
+            const target4 = str10(args?.target);
+            const action2 = str10(args?.action);
             if (target4 === "skill") {
-              const name = str9(args?.name);
+              const name = str10(args?.name);
               if (!name) return invalidArgs("name required");
               if (action2 === "pin") return respond(svc.skills.pin(name));
               if (action2 === "unpin") return respond(svc.skills.unpin(name));
@@ -126423,7 +126493,7 @@ ${asText(streams.stderr)}
                 return applyMemoryLimitsUpdate(svc, args);
               }
               if (action2 !== "remove") return invalidArgs("memory action must be remove, get_limits or set_limits");
-              const file = str9(args?.file);
+              const file = str10(args?.file);
               if (file !== "memory" && file !== "user") return invalidArgs("file must be memory or user");
               return respond(svc.memory.apply({ action: "remove", target: file, match: rawStr(args?.match) ?? "" }, "owner"));
             }
@@ -126431,7 +126501,7 @@ ${asText(streams.stderr)}
           },
           [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
             const svc = getAssistantServices();
-            const rawAction = str9(args?.action);
+            const rawAction = str10(args?.action);
             const hasBudgetField = args !== null && typeof args === "object" && ("memory" in args || "user" in args);
             const action2 = rawAction || (hasBudgetField ? "set" : "get");
             if (action2 === "get") {
@@ -126444,7 +126514,7 @@ ${asText(streams.stderr)}
           },
           [ASSISTANT_VERB2.importSkills]: async (ctx, args) => {
             const svc = getAssistantServices();
-            if (str9(args?.action) === "scan") return { success: true, result: "scan", scan: scanHermesHome(svc.hermesHome) };
+            if (str10(args?.action) === "scan") return { success: true, result: "scan", scan: scanHermesHome(svc.hermesHome) };
             const req = {
               hermesHome: svc.hermesHome,
               dryRun: args?.dryRun !== false,
@@ -128273,20 +128343,20 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     });
     function formatProjectAttachDisabledHint(info) {
       const roleLabel = info.role === "source" ? "source" : info.role === "target" ? "target" : "selected";
-      const name = str10(info.machineName).trim();
-      const id4 = str10(info.daemonId).trim();
+      const name = str11(info.machineName).trim();
+      const id4 = str11(info.daemonId).trim();
       const machineDesc = name && id4 && name !== id4 ? `${name} (${id4})` : name || id4 || "this machine";
-      const stagePart = str10(info.stage).trim() ? ` at stage "${str10(info.stage).trim()}"` : "";
+      const stagePart = str11(info.stage).trim() ? ` at stage "${str11(info.stage).trim()}"` : "";
       return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard \u2192 Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\` enabled.`;
     }
     function selected(ctx, args) {
-      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
+      if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
     }
     function validGrant(grant, selfId, hostId, meshId, identity4, secret) {
       if (!grant || typeof grant !== "object" || typeof secret !== "string" || !secret.trim()) return false;
-      if (!daemonIdsEquivalent4(str10(grant.target), selfId) || !daemonIdsEquivalent4(str10(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
+      if (!daemonIdsEquivalent4(str11(grant.target), selfId) || !daemonIdsEquivalent4(str11(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
       const now = Date.now();
-      if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str10(grant.sig))) return false;
+      if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str11(grant.sig))) return false;
       const key5 = (0, import_node_crypto55.createHash)("sha256").update(secret).digest("hex");
       const expected = (0, import_node_crypto55.createHmac)("sha256", key5).update(`${grant.target}
 ${grant.host}
@@ -128296,13 +128366,13 @@ ${grant.exp}`).digest("hex");
       return (0, import_node_crypto55.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity4) {
-      const hostId = str10(args?.hostDaemonId);
+      const hostId = str11(args?.hostDaemonId);
       if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent4(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
       const old = readMeshHostRecord(args.meshId);
       if (old && !daemonIdsEquivalent4(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
       const cfg = loadConfig();
       if (args?.grant !== void 0) {
-        if (!validGrant(args.grant, str10(ctx.deps.statusInstanceId), hostId, args.meshId, identity4, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+        if (!validGrant(args.grant, str11(ctx.deps.statusInstanceId), hostId, args.meshId, identity4, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
         return old;
       }
       const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent4(h, hostId)) || Boolean(old && daemonIdsEquivalent4(old.hostDaemonId, hostId));
@@ -128310,12 +128380,12 @@ ${grant.exp}`).digest("hex");
       return old;
     }
     async function prepare(ctx, args) {
-      const mesh = getMesh(str10(args?.meshId));
+      const mesh = getMesh(str11(args?.meshId));
       if (!mesh) throw new AttachFailure("PROJECT_NOT_FOUND", "registration", "Use a project registered on the authenticated source daemon.");
       const host = resolveMeshHostStatus(mesh, { localDaemonId: ctx.deps.statusInstanceId });
       if (!host.canOwnCoordinator || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("PROJECT_HOST_REQUIRED", "registration", "Request attachment through the registered project host.");
       const remote = githubRemote(mesh.repoRemoteUrl);
-      if (!remote || remote.identity !== str10(mesh.repoIdentity).toLowerCase()) throw new AttachFailure("LOCAL_ONLY_PROJECT", "registration", "Register a verified GitHub-backed project first; local-only projects cannot attach across machines.");
+      if (!remote || remote.identity !== str11(mesh.repoIdentity).toLowerCase()) throw new AttachFailure("LOCAL_ONLY_PROJECT", "registration", "Register a verified GitHub-backed project first; local-only projects cannot attach across machines.");
       const self = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, ctx.deps.statusInstanceId));
       if (!self) throw new AttachFailure("SOURCE_CHECKOUT_REQUIRED", "registration", "The project host needs its registered source checkout for remote identity verification.");
       const origin = githubRemote(await git4(self.workspace, ["remote", "get-url", "origin"]));
@@ -128323,7 +128393,7 @@ ${grant.exp}`).digest("hex");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
     var import_node_crypto55;
-    var str10;
+    var str11;
     var fail4;
     var attachRemoteProject;
     var remoteProjectHandlers;
@@ -128339,10 +128409,10 @@ ${grant.exp}`).digest("hex");
         init_mesh_host_memory();
         init_mesh_host_ownership();
         init_remote_project_checkout();
-        str10 = (v) => typeof v === "string" ? v : "";
+        str11 = (v) => typeof v === "string" ? v : "";
         fail4 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
         attachRemoteProject = async (ctx, args) => {
-          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
+          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
           try {
             await prepare(ctx, args);
           } catch (e) {
@@ -128352,9 +128422,9 @@ ${grant.exp}`).digest("hex");
           const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
           if (res && res.code === "PROJECT_ATTACH_DISABLED") {
             const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
-            const stage = str10(res.stage).trim() || (role === "source" ? "prepare" : "checkout");
-            const daemonId = str10(res.daemonId).trim() || (role === "source" ? str10(ctx.deps.statusInstanceId) : str10(args.targetDaemonId));
-            const machineName = str10(res.machineName).trim() || (role === "source" ? loadConfig().machineNickname?.trim() || daemonId : daemonId);
+            const stage = str11(res.stage).trim() || (role === "source" ? "prepare" : "checkout");
+            const daemonId = str11(res.daemonId).trim() || (role === "source" ? str11(ctx.deps.statusInstanceId) : str11(args.targetDaemonId));
+            const machineName = str11(res.machineName).trim() || (role === "source" ? loadConfig().machineNickname?.trim() || daemonId : daemonId);
             const hint = formatProjectAttachDisabledHint({ stage, role, daemonId, machineName });
             return {
               ...res,
@@ -128366,9 +128436,9 @@ ${grant.exp}`).digest("hex");
               daemonId,
               machineName,
               setting: "allowRemoteProjectAttach",
-              error: str10(res.error).includes("allowRemoteProjectAttach") ? res.error : hint,
-              action: str10(res.action).includes("allowRemoteProjectAttach") ? res.action : hint,
-              hint: str10(res.hint).includes("allowRemoteProjectAttach") ? res.hint : hint
+              error: str11(res.error).includes("allowRemoteProjectAttach") ? res.error : hint,
+              action: str11(res.action).includes("allowRemoteProjectAttach") ? res.action : hint,
+              hint: str11(res.hint).includes("allowRemoteProjectAttach") ? res.hint : hint
             };
           }
           return res;
@@ -128377,18 +128447,18 @@ ${grant.exp}`).digest("hex");
           attach_remote_project: attachRemoteProject,
           remote_project_attach_settings: async (ctx, args) => {
             const hasToggleArg = args?.enabled !== void 0 || args?.allowRemoteProjectAttach !== void 0;
-            const action2 = args?.action === void 0 ? hasToggleArg ? "set" : "get" : str10(args.action);
+            const action2 = args?.action === void 0 ? hasToggleArg ? "set" : "get" : str11(args.action);
             if (action2 === "get") {
               const cfg = loadConfig();
               const enabled2 = cfg.allowRemoteProjectAttach === true;
-              return { success: true, enabled: enabled2, allowRemoteProjectAttach: enabled2, daemonId: str10(ctx.deps.statusInstanceId) };
+              return { success: true, enabled: enabled2, allowRemoteProjectAttach: enabled2, daemonId: str11(ctx.deps.statusInstanceId) };
             }
             if (action2 !== "set") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected action get or set." };
             const rawEnabled = args?.enabled !== void 0 ? args.enabled : args?.allowRemoteProjectAttach;
             if (typeof rawEnabled !== "boolean") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected boolean enabled." };
             const updated = updateConfig({ allowRemoteProjectAttach: rawEnabled });
             const enabled = updated.allowRemoteProjectAttach === true;
-            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str10(ctx.deps.statusInstanceId) };
+            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str11(ctx.deps.statusInstanceId) };
           },
           remote_project_prepare: async (ctx, args) => {
             try {
@@ -128402,7 +128472,7 @@ ${grant.exp}`).digest("hex");
             try {
               selected(ctx, args);
               const remote = githubRemote(args?.url);
-              if (!remote || remote.identity !== args?.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str10(args?.meshId))) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "repository_access", "Only canonical verified GitHub projects are supported.");
+              if (!remote || remote.identity !== args?.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str11(args?.meshId))) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "repository_access", "Only canonical verified GitHub projects are supported.");
               authorizeHost(ctx, args, remote.identity);
               const checkout = await checkoutRemote(args.meshId, remote);
               return { success: true, ...checkout, meshId: args.meshId, identity: remote.identity, targetDaemonId: ctx.deps.statusInstanceId, stage: "checkout", attached: false };
@@ -128413,7 +128483,7 @@ ${grant.exp}`).digest("hex");
           remote_project_register: async (ctx, args) => {
             try {
               const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
-              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args.targetDaemonId)) || !str10(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
+              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.targetDaemonId)) || !str11(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
               const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
               if (existing) return { success: true, nodeId: existing.id, attached: true };
               if (hostSynthesized) {
@@ -128430,7 +128500,7 @@ ${grant.exp}`).digest("hex");
             try {
               selected(ctx, args);
               const remote = githubRemote(args.url);
-              if (!remote || remote.identity !== args.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str10(args.meshId)) || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str10(args.hostDaemonId))) throw new AttachFailure("ATTACH_SCOPE_MISMATCH", "registration", "Use the authenticated project attachment flow.");
+              if (!remote || remote.identity !== args.identity || !/^mesh_[a-zA-Z0-9_-]+$/.test(str11(args.meshId)) || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.hostDaemonId))) throw new AttachFailure("ATTACH_SCOPE_MISMATCH", "registration", "Use the authenticated project attachment flow.");
               const workspace = await managedCheckoutPath(args.meshId, remote.identity);
               if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
               const old = authorizeHost(ctx, args, remote.identity);
@@ -129706,7 +129776,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", "Library", "Applications", "vendor", "target", "dist", "build"]);
       }
     });
-    function str11(v) {
+    function str12(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function fail5(code, error = code, extra = {}) {
@@ -129744,7 +129814,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           `${verb} rejected forged provenance or worker credentials on assistant ingress`
         );
       }
-      const boundSid = str11(getAssistantRegistry().read()?.sessionId);
+      const boundSid = str12(getAssistantRegistry().read()?.sessionId);
       const callerSid = readAssistantSessionId(rawArgs);
       if (!boundSid || !callerSid || callerSid !== boundSid) {
         return fail5(
@@ -129966,10 +130036,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const body = followerStatusView(rawBody, {
           id: p.mesh.id,
           name: p.mesh.name,
-          repoIdentity: p.followedRemote.sanitizedRepoIdentity || str11(rawBody.repo)
+          repoIdentity: p.followedRemote.sanitizedRepoIdentity || str12(rawBody.repo)
         });
-        const coordState = str11(body.coordinator) || "none";
-        const statusSessionId = str11(body.coordinatorSessionId) || null;
+        const coordState = str12(body.coordinator) || "none";
+        const statusSessionId = str12(body.coordinatorSessionId) || null;
         const hasAuthoritativeSession = coordState === "none" || statusSessionId !== null;
         if (hasAuthoritativeSession) {
           reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -129987,7 +130057,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!readOut.ok) return;
       const rawRead = remoteBody(readOut);
       if (rawRead.reportCursor !== void 0 || rawRead.attemptId !== void 0 || rawRead.taskId !== void 0) return;
-      const readSessionId = str11(rawRead.coordinatorSessionId) || null;
+      const readSessionId = str12(rawRead.coordinatorSessionId) || null;
       if (rawRead.live === true && readSessionId) {
         const prevState = p.followedRemote.lastObserved?.coordinatorState;
         reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -129996,7 +130066,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           coordinatorMissing: false,
           response: rawRead
         });
-      } else if (str11(rawRead.coordinator) === "none") {
+      } else if (str12(rawRead.coordinator) === "none") {
         reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
           coordinatorSessionId: null,
           coordinatorState: "none",
@@ -130074,7 +130144,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         ...ports.relay.missedReports ? { missedReports: ports.relay.missedReports(meshId) } : {}
       });
       const labels = new Map(
-        (Array.isArray(status.machines) ? status.machines : []).map((m) => [str11(m?.node), m?.label ?? null])
+        (Array.isArray(status.machines) ? status.machines : []).map((m) => [str12(m?.node), m?.label ?? null])
       );
       const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
       const routing = preview ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels) : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: "route_preview_unavailable" };
@@ -130086,7 +130156,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         coordinatorSessionId: liveCoord?.sessionId ?? null,
         routing,
         sessions,
-        ...view2.success ? {} : { statusError: str11(view2.error) || "mesh_status_view failed" }
+        ...view2.success ? {} : { statusError: str12(view2.error) || "mesh_status_view failed" }
       };
     }
     async function localProjectSend(ports, mesh, text4, clientId) {
@@ -130105,13 +130175,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!sent.success) {
         return {
           ok: false,
-          code: str11(sent.reason) || str11(sent.code) || "send_failed",
-          error: str11(sent.error) || "send_failed",
+          code: str12(sent.reason) || str12(sent.code) || "send_failed",
+          error: str12(sent.error) || "send_failed",
           detail: { launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId }
         };
       }
       const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
-      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str11(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str12(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
     }
     function readTailArg(raw) {
       const n = Number(raw);
@@ -130131,7 +130201,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
       if (!sessionId) return { ok: true, result: { coordinator: "none", messages: [] } };
       const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: Math.max(tail * 4, 40) });
-      if (!chat.success) return { ok: false, error: str11(chat.error) || "read_chat failed", coordinatorSessionId: sessionId };
+      if (!chat.success) return { ok: false, error: str12(chat.error) || "read_chat failed", coordinatorSessionId: sessionId };
       return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, sourceComplete: verifiedNativeRead(chat, sessionId), ...compactTranscriptTail(chat, tail) } };
     }
     function expandPath3(raw) {
@@ -130144,14 +130214,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     function localArtifactList(meshId, args) {
       const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-      const sessionId = str11(args.sessionId ?? args.session_id) || void 0;
-      const missionId = str11(args.missionId ?? args.mission_id) || void 0;
+      const sessionId = str12(args.sessionId ?? args.session_id) || void 0;
+      const missionId = str12(args.missionId ?? args.mission_id) || void 0;
       const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
       const artifacts = store2.listByMesh(meshId, { sessionId, missionId, limit });
       return { meshId, artifacts, attachments: artifacts.map(toChatAttachmentMeta) };
     }
     async function localArtifactRead(ports, meshId, args, ctx) {
-      const artifactId = str11(args.artifactId ?? args.artifact_id);
+      const artifactId = str12(args.artifactId ?? args.artifact_id);
       if (!artifactId) return { ok: false, code: "invalid_args", error: "artifactId required" };
       const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
       const record7 = store2.getById(artifactId);
@@ -130177,7 +130247,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
           const p2pRes = p2pRaw && typeof p2pRaw === "object" && "result" in p2pRaw && p2pRaw.result && typeof p2pRaw.result === "object" ? p2pRaw.result : p2pRaw;
           if (!p2pRes || p2pRes.success === false) {
-            return { ok: false, code: str11(p2pRes?.code) || "artifact_origin_unreachable", error: str11(p2pRes?.error) || "Failed to read artifact from origin daemon." };
+            return { ok: false, code: str12(p2pRes?.code) || "artifact_origin_unreachable", error: str12(p2pRes?.error) || "Failed to read artifact from origin daemon." };
           }
           const isBase64Image = record7.kind === "image" || p2pRes.encoding === "base64";
           const transportMaxBytes = isBase64Image ? maxBase64EncodedBytes(MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
@@ -130240,7 +130310,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
         };
       } catch (err) {
-        return { ok: false, code: str11(err?.code) || "artifact_read_failed", error: err instanceof Error ? err.message : String(err) };
+        return { ok: false, code: str12(err?.code) || "artifact_read_failed", error: err instanceof Error ? err.message : String(err) };
       }
     }
     async function localAttemptReport(ports, meshId, sessionId, attemptId) {
@@ -130367,7 +130437,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const remoteHosts = [];
           for (const mesh of meshes) {
             const row2 = projectRow(ports, mesh, slugs.get(mesh.id) ?? mesh.id, remoteHosts);
-            const scratch = row2.hosting === "remote" && !str11(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
+            const scratch = row2.hosting === "remote" && !str12(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
             (scratch ? unmanaged : managed).push(row2);
           }
           for (const entry of followedActive) {
@@ -130422,11 +130492,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const body = p.followedRemote ? followerStatusView(rawBody, {
             id: meshId,
             name: p.mesh.name,
-            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str11(rawBody.repo)
+            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str12(rawBody.repo)
           }) : rawBody;
           if (p.followedRemote) {
-            const coordState = str11(body.coordinator) || "none";
-            const statusSessionId = str11(body.coordinatorSessionId) || null;
+            const coordState = str12(body.coordinator) || "none";
+            const statusSessionId = str12(body.coordinatorSessionId) || null;
             const hasAuthoritativeSession = coordState === "none" || statusSessionId !== null;
             reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
               ...hasAuthoritativeSession ? { coordinatorSessionId: coordState === "none" ? null : statusSessionId } : {},
@@ -130436,7 +130506,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
           const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
-          const repo = p.followedRemote ? typeof body.repo === "string" ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str11(rawBody.repo)) : p.mesh.repoIdentity;
+          const repo = p.followedRemote ? typeof body.repo === "string" ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str12(rawBody.repo)) : p.mesh.repoIdentity;
           return wrap(p.slug, meshId, {
             ...body,
             name: p.mesh.name,
@@ -130463,11 +130533,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
           const where = { project: p.slug, meshId };
-          const clientId = str11(args.messageId) || (0, import_crypto38.randomUUID)();
+          const clientId = str12(args.messageId) || (0, import_crypto38.randomUUID)();
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           if (p.remote) {
-            const explicitExpected = str11(args.expectedCoordinatorSessionId);
-            const expectedCoordinatorSessionId = explicitExpected || str11(p.followedRemote?.coordinatorSessionId);
+            const explicitExpected = str12(args.expectedCoordinatorSessionId);
+            const expectedCoordinatorSessionId = explicitExpected || str12(p.followedRemote?.coordinatorSessionId);
             const out = await callRemote(ports, { ...p, remote: p.remote }, "send", {
               text: composed.text,
               clientId,
@@ -130487,8 +130557,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               return remoteFailure(where, p.remote, out, ports, p.followedRemote);
             }
             const body = remoteBody(out);
-            const remoteCursor = str11(body.cursor) || null;
-            const remoteCoordSessionId = str11(body.coordinatorSessionId) || null;
+            const remoteCursor = str12(body.cursor) || null;
+            const remoteCoordSessionId = str12(body.coordinatorSessionId) || null;
             const activeFollowed = p.followedRemote ? verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote, body) : null;
             if (!p.followedRemote || activeFollowed) {
               const prevCoordSessionId = activeFollowed?.coordinatorSessionId ?? null;
@@ -130511,11 +130581,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
             }
             return wrap(p.slug, meshId, {
-              status: str11(body.status) || "accepted",
+              status: str12(body.status) || "accepted",
               ...body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {},
               launched: body.launched === true,
               coordinatorSessionId: remoteCoordSessionId,
-              messageId: str11(body.messageId) || null,
+              messageId: str12(body.messageId) || null,
               host: p.remote.label,
               via: "relay",
               ...attached
@@ -130544,7 +130614,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
             const rawBody = remoteBody(out);
             if (p.followedRemote && !continuation && rawBody.reportCursor === void 0 && rawBody.attemptId === void 0 && rawBody.taskId === void 0) {
-              const readSessionId = str11(rawBody.coordinatorSessionId) || null;
+              const readSessionId = str12(rawBody.coordinatorSessionId) || null;
               if (rawBody.live === true && readSessionId) {
                 const prevState = p.followedRemote.lastObserved?.coordinatorState;
                 reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
@@ -130553,7 +130623,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                   coordinatorMissing: false,
                   response: rawBody
                 });
-              } else if (str11(rawBody.coordinator) === "none") {
+              } else if (str12(rawBody.coordinator) === "none") {
                 reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
                   coordinatorSessionId: null,
                   coordinatorState: "none",
@@ -130572,55 +130642,55 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
         projectAdd = assistantVerb(ASSISTANT_VERB2.projectAdd, async (ports, args) => {
-          const raw = str11(args.path);
+          const raw = str12(args.path);
           if (!raw) return fail5("invalid_args", "path required");
           if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail5("invalid_args", "path must be absolute");
           const path124 = (0, import_path43.resolve)(expandPath3(raw));
           if (!(0, import_fs44.existsSync)(path124) || !(0, import_fs44.statSync)(path124).isDirectory()) return fail5("path_not_found", `not a directory: ${path124}`);
           const plan = await ports.execute("plan_mesh_onboarding", { workspace: path124, operation: "auto" });
-          const identity4 = str11(plan?.discovery?.repoIdentity);
+          const identity4 = str12(plan?.discovery?.repoIdentity);
           const meshes = ports.listMeshes();
           const existing = identity4 ? existingProject(meshes, identity4) : void 0;
-          if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str11(plan?.code))) {
+          if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str12(plan?.code))) {
             const mesh = existing ?? meshes.find((m) => (m.nodes ?? []).some((n) => (0, import_path43.resolve)(n.workspace) === path124));
             const slug2 = mesh ? projectSlugs(meshes).get(mesh.id) ?? mesh.id : "";
             return fail5("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity4 || null });
           }
-          if (!plan?.success) return fail5(str11(plan?.code) || "onboarding_plan_failed", str11(plan?.error) || "onboarding plan failed", { action: plan?.action });
+          if (!plan?.success) return fail5(str12(plan?.code) || "onboarding_plan_failed", str12(plan?.error) || "onboarding plan failed", { action: plan?.action });
           const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
           const createStep = steps.find((s2) => s2?.command === "create_mesh");
           const addStep2 = steps.find((s2) => s2?.command === "add_mesh_node");
           if (plan.plan?.kind !== "create_mesh_and_onboard" || !createStep || !addStep2) {
-            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str11(plan.plan?.kind) || "none"}`);
+            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str12(plan.plan?.kind) || "none"}`);
           }
-          const name = str11(args.name) || projectSlugBase(identity4) || str11(createStep.args?.name);
+          const name = str12(args.name) || projectSlugBase(identity4) || str12(createStep.args?.name);
           const created = await ports.execute("create_mesh", { ...createStep.args, name, workspace: path124 });
-          const meshId = str11(created?.mesh?.id);
-          if (!created?.success || !meshId) return fail5("project_create_failed", str11(created?.error) || "create_mesh failed");
+          const meshId = str12(created?.mesh?.id);
+          if (!created?.success || !meshId) return fail5("project_create_failed", str12(created?.error) || "create_mesh failed");
           const selfDaemonId = ports.selfDaemonId();
           const node = await ports.execute("add_mesh_node", {
             ...addStep2.args,
             meshId,
-            workspace: str11(addStep2.args?.workspace) || path124,
+            workspace: str12(addStep2.args?.workspace) || path124,
             ...selfDaemonId ? { daemonId: selfDaemonId } : {}
           });
           if (!node?.success) {
             await ports.execute("delete_mesh", { meshId }).catch(() => void 0);
-            return fail5("project_add_node_failed", str11(node?.error) || "add_mesh_node failed", { rolledBack: true });
+            return fail5("project_add_node_failed", str12(node?.error) || "add_mesh_node failed", { rolledBack: true });
           }
           const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity4) || meshId;
           return wrap(slug, meshId, {
             created: true,
             name,
             repoIdentity: identity4,
-            workspace: str11(node.node?.workspace) || path124,
-            nodeId: str11(node.node?.id) || null,
+            workspace: str12(node.node?.workspace) || path124,
+            nodeId: str12(node.node?.id) || null,
             ...Array.isArray(plan.warnings) && plan.warnings.length ? { warnings: plan.warnings } : {}
           });
         });
         discover = assistantVerb(ASSISTANT_VERB2.discoverRepos, async (ports, args) => {
           const meshes = ports.listMeshes();
-          const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str11(n.workspace)).filter(Boolean));
+          const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str12(n.workspace)).filter(Boolean));
           const roots = Array.isArray(args.roots) && args.roots.length > 0 ? explicitDiscoverRoots(args.roots) : defaultDiscoverRoots(workspaces);
           if (roots.length === 0) return fail5("invalid_args", "roots must be absolute paths");
           const result = discoverRepos({
@@ -130636,8 +130706,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
-          const sessionId = str11(args.sessionId ?? args.session_id) || void 0;
-          const missionId = str11(args.missionId ?? args.mission_id) || void 0;
+          const sessionId = str12(args.sessionId ?? args.session_id) || void 0;
+          const missionId = str12(args.missionId ?? args.mission_id) || void 0;
           const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
@@ -130662,7 +130732,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           return { ...wrap(p.slug, meshId, listed), artifacts: listed.artifacts, attachments: listed.attachments };
         });
         artifactRead = assistantVerb(ASSISTANT_VERB2.artifactRead, async (ports, args, ctx) => {
-          const artifactId = str11(args.artifactId ?? args.artifact_id);
+          const artifactId = str12(args.artifactId ?? args.artifact_id);
           if (!artifactId) return fail5("invalid_args", "artifactId required");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
@@ -132455,7 +132525,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const code = typeof reason === "string" ? reason.trim() : "";
       return !REVOCATION_REFUSAL_CODES.has(code);
     }
-    function str12(v) {
+    function str13(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function workOf(v) {
@@ -132556,7 +132626,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             } catch {
               stale = [];
             }
-            const keyOf2 = (s2) => str12(s2.key) || str12(s2.target.followerAccess?.followedKey) || (s2.target.hostDaemonId ? followedRemoteProjectKey(s2.target.hostDaemonId, s2.meshId) : s2.meshId);
+            const keyOf2 = (s2) => str13(s2.key) || str13(s2.target.followerAccess?.followedKey) || (s2.target.hostDaemonId ? followedRemoteProjectKey(s2.target.hostDaemonId, s2.meshId) : s2.meshId);
             const live = new Set(stale.map(keyOf2));
             for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
             for (const entry of stale) {
@@ -132614,8 +132684,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             st.signaled = false;
             st.nextAt = 0;
             const r = out.result;
-            const sessionId = str12(r.coordinatorSessionId);
-            const newCursor = str12(r.cursor) || null;
+            const sessionId = str13(r.coordinatorSessionId);
+            const newCursor = str13(r.cursor) || null;
             const commits = Array.isArray(r.commits) ? r.commits : [];
             const sessionChanged = Boolean(st.coordinatorSessionId && sessionId && st.coordinatorSessionId !== sessionId);
             const cursorGap = Boolean(st.cursor && !sessionChanged && r.cursorFound !== true && newCursor && newCursor !== st.cursor);
@@ -132638,8 +132708,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             const ageLimit = !st.cursor || r.cursorFound !== true ? this.now() - lastSendAt + COMMIT_AGE_SLACK_MS : null;
             const valid = commits.map((c) => ({
-              attemptId: str12(c?.attemptId),
-              outcome: str12(c?.outcome) || "completed",
+              attemptId: str13(c?.attemptId),
+              outcome: str13(c?.outcome) || "completed",
               ageMs: typeof c?.ageMs === "number" && Number.isFinite(c.ageMs) ? c.ageMs : null
             })).filter((c) => c.attemptId && (ageLimit === null || c.ageMs !== null && c.ageMs <= ageLimit));
             valid.forEach((c, i) => {
@@ -132671,7 +132741,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    function str13(v) {
+    function str14(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function finiteNumber(v) {
@@ -132710,7 +132780,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             "SELECT receipt_key, value FROM assistant_relay_receipts WHERE kind = ?"
           ).all(FOLLOWER_WAKE_QUOTA_NORM_KIND);
           for (const row2 of normRows) {
-            const k = str13(row2.receipt_key);
+            const k = str14(row2.receipt_key);
             if (!k) continue;
             try {
               const parsed = JSON.parse(String(row2.value ?? "{}"));
@@ -132720,8 +132790,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (origAt === void 0 || origRowAt === void 0 || firstNormAt === void 0) continue;
               normByKey.set(k, {
                 targetKind: parsed.targetKind === "audit" ? "audit" : "receipt",
-                targetId: str13(parsed.targetId),
-                wakeId: str13(parsed.wakeId),
+                targetId: str14(parsed.targetId),
+                wakeId: str14(parsed.wakeId),
                 originalAtMs: origAt,
                 originalRowAtMs: origRowAt,
                 ...finiteNumber(parsed.originalValueAtMs) !== void 0 ? { originalValueAtMs: finiteNumber(parsed.originalValueAtMs) } : {},
@@ -132738,17 +132808,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           ).all(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND);
           for (const row2 of receiptRows) {
             receiptSeq += 1;
-            const persistedReceiptKey = str13(row2.receipt_key);
+            const persistedReceiptKey = str14(row2.receipt_key);
             const receiptKey2 = persistedReceiptKey || `receipt-row-${receiptSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:receipt:${receiptKey2}`;
             const priorNorm = normByKey.get(normKey);
             const rowAtMs = Number(row2.at_ms);
             try {
               const parsed = JSON.parse(String(row2.value ?? "{}"));
-              const meshId = str13(parsed.meshId);
-              const sender = str13(parsed.sender);
-              const wakeId = str13(parsed.wakeId) || receiptKey2;
-              const status = str13(parsed.status) === "charged" ? "charged" : "reserved";
+              const meshId = str14(parsed.meshId);
+              const sender = str14(parsed.sender);
+              const wakeId = str14(parsed.wakeId) || receiptKey2;
+              const status = str14(parsed.status) === "charged" ? "charged" : "reserved";
               const rawAt = Number(parsed.atMs);
               const hasRowAt = Number.isFinite(rowAtMs);
               const hasRawAt = Number.isFinite(rawAt);
@@ -132873,12 +132943,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND);
           for (const row2 of auditRows) {
             auditSeq += 1;
-            const persistedEventId = str13(row2.event_id);
+            const persistedEventId = str14(row2.event_id);
             const eventId = persistedEventId || `audit-row-${auditSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:audit:${eventId}`;
             const priorBound = auditBounds.get(eventId);
             const priorNorm = priorBound?.norm ?? normByKey.get(normKey);
-            const meshId = str13(row2.mesh_id);
+            const meshId = str14(row2.mesh_id);
             const rowAtMs = Number(row2.at_ms);
             let sender = "";
             let wakeId = eventId;
@@ -132888,8 +132958,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             let parsed = {};
             try {
               parsed = JSON.parse(String(row2.payload_json ?? "{}"));
-              sender = str13(parsed.senderDaemonId) || str13(parsed.activeDaemonId);
-              wakeId = str13(parsed.wakeId) || eventId;
+              sender = str14(parsed.senderDaemonId) || str14(parsed.activeDaemonId);
+              wakeId = str14(parsed.wakeId) || eventId;
               payloadWakeAt = Number(parsed.wakeAtMs);
               payloadAt = Number(parsed.atMs);
               hasExplicitWakeAt = Number.isFinite(payloadWakeAt);
@@ -133491,7 +133561,7 @@ ${defangRelayBody(text4)}`;
         followerSendReceipts = /* @__PURE__ */ new Map();
       }
     });
-    function str14(v) {
+    function str15(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function record4(v) {
@@ -133551,7 +133621,7 @@ ${defangRelayBody(text4)}`;
           statusLine
         };
       }
-      const after = str14(args.afterAttemptId);
+      const after = str15(args.afterAttemptId);
       const idx = after ? turns.committed.findIndex((c) => c.attemptId === after) : -1;
       const fresh = idx >= 0 ? turns.committed.slice(0, idx) : turns.committed;
       const now = Date.now();
@@ -133573,7 +133643,7 @@ ${defangRelayBody(text4)}`;
     async function note(meshId, args) {
       const op = parseNoteOp(args);
       if (typeof op === "string") return fail6("invalid_args", op);
-      const callerSessionId = str14(args.callerSessionId);
+      const callerSessionId = str15(args.callerSessionId);
       if (op.action === "list" || op.action === "read") {
         const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
         if (out.result === "note_not_found") {
@@ -133583,7 +133653,7 @@ ${defangRelayBody(text4)}`;
         }
         return { success: true, ...out };
       }
-      const origin = str14(args.origin);
+      const origin = str15(args.origin);
       if (origin !== "human" && origin !== "owner") return fail6("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
       if (refusal2) return fail6(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
@@ -133641,7 +133711,7 @@ ${defangRelayBody(text4)}`;
         return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
-      const claimedSlot = str14(followerClaim?.accountSlot) || str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+      const claimedSlot = str15(followerClaim?.accountSlot) || str15(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
       if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
@@ -133669,9 +133739,9 @@ ${defangRelayBody(text4)}`;
       return { ok: true, acl };
     }
     function isMissingOrDeadCoordinatorRuntime(sent) {
-      const code = str14(sent.reason) || str14(sent.code);
+      const code = str15(sent.reason) || str15(sent.code);
       if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) return true;
-      const err = str14(sent.error).toLowerCase();
+      const err = str15(sent.error).toLowerCase();
       return err.includes("cli instance not found") || err.includes("no live session") || err.includes("session has ended") || err.includes("session not found") || err.includes("instance not found") || err.includes("not running") || err.includes("process exited") || err.includes("runtime not found for session") || err.includes("unknown session");
     }
     async function classifyCoordinatorRuntimeLivenessForFollower(ports, target4) {
@@ -133722,15 +133792,15 @@ ${defangRelayBody(text4)}`;
         return { ok: false, result: fail6("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
-      const localBindingErr = str14(followerClaim?.localBindingError);
+      const localBindingErr = str15(followerClaim?.localBindingError);
       if (localBindingErr) return { ok: false, result: fail6(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
-      const claimedSlot = str14(followerClaim?.accountSlot) || str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+      const claimedSlot = str15(followerClaim?.accountSlot) || str15(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
       if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail6("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
-      const claimedActiveDaemonId = str14(followerClaim?.activeDaemonId);
+      const claimedActiveDaemonId = str15(followerClaim?.activeDaemonId);
       if (claimedActiveDaemonId && !daemonIdsEquivalent4(claimedActiveDaemonId, acl.activeDaemonId)) {
         return { ok: false, result: fail6("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
-      const claimedHostDaemonId = str14(followerClaim?.hostDaemonId);
+      const claimedHostDaemonId = str15(followerClaim?.hostDaemonId);
       if (claimedHostDaemonId && !daemonIdsEquivalent4(claimedHostDaemonId, acl.hostDaemonId)) {
         return { ok: false, result: fail6("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
@@ -133751,9 +133821,9 @@ ${defangRelayBody(text4)}`;
       const text4 = typeof args.text === "string" ? args.text : "";
       if (!text4.trim()) return fail6("invalid_args", "text required");
       if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
-      const clientId = str14(args.clientId);
+      const clientId = str15(args.clientId);
       if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
-      const expectedCoordinatorSessionId = str14(args.expectedCoordinatorSessionId);
+      const expectedCoordinatorSessionId = str15(args.expectedCoordinatorSessionId);
       const bodyHash = (0, import_crypto40.createHash)("sha256").update(text4, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
       const deadSessionIds = /* @__PURE__ */ new Set();
@@ -133825,14 +133895,14 @@ ${defangRelayBody(text4)}`;
           const diskOrPortMesh = meshRead.ok ? meshRead.mesh : void 0;
           const wakeCheck = meshRead.ok ? verifyFollowerAcl(ports, diskOrPortMesh, meshId, sender, "send", args) : meshRead;
           if (!wakeCheck.ok) {
-            const reason = str14(wakeCheck.result.code) || "remote_access_denied";
+            const reason = str15(wakeCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: wakeCheck.result };
           }
           acl = wakeCheck.acl;
           const bindingCheck = verifyRemoteFollowerBindingForWake(ports, diskOrPortMesh, meshId, sender, args);
           if (!bindingCheck.ok) {
-            const reason = str14(bindingCheck.result.code) || "remote_access_denied";
+            const reason = str15(bindingCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: bindingCheck.result };
           }
@@ -133876,19 +133946,19 @@ ${defangRelayBody(text4)}`;
               const wakeCheck = meshRead.ok ? verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args) : meshRead;
               if (!wakeCheck.ok) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                const reason = str14(wakeCheck.result.code) || "remote_access_denied";
+                const reason = str15(wakeCheck.result.code) || "remote_access_denied";
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
                 preLaunchDeniedResult = wakeCheck.result;
-                return { success: false, code: reason, error: str14(wakeCheck.result.error) || reason };
+                return { success: false, code: reason, error: str15(wakeCheck.result.error) || reason };
               }
               acl = wakeCheck.acl;
               const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
               if (!bindingCheck.ok) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
-                const reason = str14(bindingCheck.result.code) || "remote_access_denied";
+                const reason = str15(bindingCheck.result.code) || "remote_access_denied";
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
                 preLaunchDeniedResult = bindingCheck.result;
-                return { success: false, code: reason, error: str14(bindingCheck.result.error) || reason };
+                return { success: false, code: reason, error: str15(bindingCheck.result.error) || reason };
               }
               acl = bindingCheck.acl;
               if (acl.allowCoordinatorLaunch === false) {
@@ -133951,7 +134021,7 @@ ${defangRelayBody(text4)}`;
           }
           if (preLaunchDeniedResult) return { ok: false, result: preLaunchDeniedResult };
           if (!coord.ok) {
-            const failReason = str14(coord.code) || "launch_failed";
+            const failReason = str15(coord.code) || "launch_failed";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
@@ -133965,14 +134035,14 @@ ${defangRelayBody(text4)}`;
           const postWakeMesh = meshRead.ok ? meshRead.mesh : void 0;
           const postWakeCheck = meshRead.ok ? verifyFollowerAcl(ports, postWakeMesh, meshId, sender, "send", args) : meshRead;
           if (!postWakeCheck.ok) {
-            const reason = str14(postWakeCheck.result.code) || "remote_access_denied";
+            const reason = str15(postWakeCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postWakeCheck.result };
           }
           acl = postWakeCheck.acl;
           const postBindingCheck = verifyRemoteFollowerBindingForWake(ports, postWakeMesh, meshId, sender, args);
           if (!postBindingCheck.ok) {
-            const reason = str14(postBindingCheck.result.code) || "remote_access_denied";
+            const reason = str15(postBindingCheck.result.code) || "remote_access_denied";
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postBindingCheck.result };
           }
@@ -134025,7 +134095,7 @@ ${defangRelayBody(text4)}`;
           const recheck = meshRead.ok ? verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args) : meshRead;
           if (!recheck.ok) {
             if (isLaunched) {
-              const reason = str14(recheck.result.code) || "remote_access_denied";
+              const reason = str15(recheck.result.code) || "remote_access_denied";
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             }
             return { ok: false, result: recheck.result };
@@ -134034,7 +134104,7 @@ ${defangRelayBody(text4)}`;
           if (isLaunched) {
             const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
             if (!bindingCheck.ok) {
-              const reason = str14(bindingCheck.result.code) || "remote_access_denied";
+              const reason = str15(bindingCheck.result.code) || "remote_access_denied";
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
               return { ok: false, result: bindingCheck.result };
             }
@@ -134074,7 +134144,7 @@ ${defangRelayBody(text4)}`;
       }
       const { sent, cursor, messageId } = sendAttempt;
       if (!sent.success) {
-        return fail6(str14(sent.reason) || str14(sent.code) || "send_failed", str14(sent.error) || "send_failed", {
+        return fail6(str15(sent.reason) || str15(sent.code) || "send_failed", str15(sent.error) || "send_failed", {
           launched,
           coordinatorSessionId: live.sessionId,
           messageId
@@ -134089,7 +134159,7 @@ ${defangRelayBody(text4)}`;
           messageId,
           cursor,
           recordedAt: receiptAt,
-          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str14(sent.deliveryNote) } : {}
+          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str15(sent.deliveryNote) } : {}
         }, receiptAt);
       });
       return {
@@ -134122,7 +134192,7 @@ ${defangRelayBody(text4)}`;
           const text4 = typeof args.text === "string" ? args.text : "";
           if (!text4.trim()) return fail6("invalid_args", "text required");
           if (text4.length > REMOTE_SEND_MAX_CHARS) return fail6("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
-          const clientId = str14(args.clientId);
+          const clientId = str15(args.clientId);
           if (!clientId || clientId.length > 200) return fail6("invalid_args", "clientId required (at most 200 characters)");
           const sent = await localProjectSend(ports, mesh, text4, clientId);
           if (!sent.ok) return fail6(sent.code, sent.error, sent.detail);
@@ -134210,8 +134280,8 @@ ${defangRelayBody(text4)}`;
         ]);
         assistantRemoteProject = async (ctx, rawArgs) => {
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
-          const meshId = str14(args.meshId);
-          const op = str14(args.op);
+          const meshId = str15(args.meshId);
+          const op = str15(args.op);
           if (!meshId) return fail6("invalid_args", "meshId required");
           if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail6("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
           try {
@@ -134288,8 +134358,8 @@ ${defangRelayBody(text4)}`;
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
           if (!isTrustedOwnerIngress(rawArgs)) return fail6("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
-          const action2 = str14(args.action) || "get";
-          const meshId = str14(args.meshId);
+          const action2 = str15(args.action) || "get";
+          const meshId = str15(args.meshId);
           if (!meshId) return fail6("invalid_args", "meshId required");
           if (action2 !== "grant" && action2 !== "revoke" && action2 !== "get" && action2 !== "set_policy") {
             return fail6("invalid_args", "action must be grant, revoke, set_policy, or get");
@@ -134346,11 +134416,11 @@ ${defangRelayBody(text4)}`;
                     return { success: true, action: "set_policy", access: updated };
                   }
                   if (action2 === "grant") {
-                    const rawActiveDaemonId = str14(args.activeDaemonId);
+                    const rawActiveDaemonId = str15(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
                     if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail6("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
                     if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail6("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
-                    const slot = str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+                    const slot = str15(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
                     if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail6("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
                     if (bindingRevision === null) return fail6("invalid_args", "bindingRevision must be a positive integer");
@@ -134381,7 +134451,7 @@ ${defangRelayBody(text4)}`;
                     return { success: true, action: "grant", access: binding };
                   }
                   const nextGrantRevision = baseGrantRevision + 1;
-                  const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId2(str14(args.activeDaemonId)) ?? (str14(args.activeDaemonId) || "revoked"));
+                  const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId2(str15(args.activeDaemonId)) ?? (str15(args.activeDaemonId) || "revoked"));
                   const revokedBindingRevision = existing?.bindingRevision ?? 1;
                   const tombstone = {
                     hostDaemonId,
@@ -134436,17 +134506,17 @@ ${defangRelayBody(text4)}`;
     function instanceReady(inst) {
       if (!inst) return false;
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return false;
-      const status = str15(inst.getState?.()?.status).toLowerCase();
+      const status = str16(inst.getState?.()?.status).toLowerCase();
       return SESSION_STATUS_CLASS[status] === "ready";
     }
     function instanceModalOpen(inst) {
       if (!inst) return false;
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return true;
       const state2 = inst.getState?.();
-      const status = str15(state2?.status).toLowerCase();
+      const status = str16(state2?.status).toLowerCase();
       return SESSION_STATUS_CLASS[status] === "blocked" || !!state2?.activeChat?.activeModal;
     }
-    function str15(v) {
+    function str16(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function getAssistantRuntime() {
@@ -134473,13 +134543,13 @@ ${defangRelayBody(text4)}`;
       const svc = getAssistantServices();
       const projectPorts = () => getAssistantProjectPorts({
         components: () => components,
-        selfDaemonId: str15(components.statusInstanceId),
+        selfDaemonId: str16(components.statusInstanceId),
         execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
         transport: { dispatch: components.dispatchMeshCommand, peerStatus: components.getMeshPeerConnectionStatus }
       });
       return {
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: "assistant.relay" }),
-        coordinatorMeshOf: (sessionId) => str15(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
+        coordinatorMeshOf: (sessionId) => str16(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed")?.slug ?? null,
         rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
           const ports = await projectPorts();
@@ -134648,7 +134718,7 @@ ${defangRelayBody(text4)}`;
         recordDigest: (at) => registry.recordDigest(at)
       });
       setAssistantMemberMeshSource({
-        selfDaemonId: () => str15(components.statusInstanceId),
+        selfDaemonId: () => str16(components.statusInstanceId),
         inlineMeshes: () => {
           const cache3 = components.router?.inlineMeshCache;
           return cache3 instanceof Map ? [...cache3.values()] : [];
@@ -134659,7 +134729,7 @@ ${defangRelayBody(text4)}`;
         projectPorts ??= await getAssistantProjectPorts({
           components: () => components,
           execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
-          selfDaemonId: str15(components.statusInstanceId),
+          selfDaemonId: str16(components.statusInstanceId),
           transport: {
             ...components.dispatchMeshCommand ? { dispatch: components.dispatchMeshCommand } : {},
             ...components.getMeshPeerConnectionStatus ? { peerStatus: components.getMeshPeerConnectionStatus } : {}
@@ -134711,7 +134781,7 @@ ${defangRelayBody(text4)}`;
         },
         onAccessRefused: (meshId, code) => {
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
-          if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str15(code) || "host_refused" });
+          if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str16(code) || "host_refused" });
         },
         relay,
         onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2, opts2) => {
@@ -134743,7 +134813,7 @@ ${defangRelayBody(text4)}`;
         onAccessRevoked: (keyOrMeshId, code) => {
           const followed = registry.getFollowedRemoteProject(keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.key === keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "followed") ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "revoked");
           if (followed) {
-            const reason = str15(code) || "host_revoked";
+            const reason = str16(code) || "host_revoked";
             registry.updateFollowedRemoteProject(followed.key, {
               state: "revoked",
               revokedAt: Date.now(),
@@ -150926,9 +150996,9 @@ ${marker2}`,
       return blocking;
     }
     function readUpgradeOptions(args) {
-      const str18 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
-      const channel = str18(args?.channel) ?? str18(args?.updatePolicy?.channel);
-      const npmTag = str18(args?.npmTag);
+      const str19 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const channel = str19(args?.channel) ?? str19(args?.updatePolicy?.channel);
+      const npmTag = str19(args?.npmTag);
       return {
         ...args?.allowDowngrade === true ? { allowDowngrade: true } : {},
         ...channel ? { channel } : {},
@@ -158795,15 +158865,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           current4.push(byte);
         } else {
           if (current4.length >= MIN_PRINTABLE_RUN) {
-            const str18 = Buffer.from(current4).toString("utf-8").trim();
-            if (str18) strings.push(str18);
+            const str19 = Buffer.from(current4).toString("utf-8").trim();
+            if (str19) strings.push(str19);
           }
           current4 = [];
         }
       }
       if (current4.length >= MIN_PRINTABLE_RUN) {
-        const str18 = Buffer.from(current4).toString("utf-8").trim();
-        if (str18) strings.push(str18);
+        const str19 = Buffer.from(current4).toString("utf-8").trim();
+        if (str19) strings.push(str19);
       }
       return strings;
     }
@@ -171202,12 +171272,12 @@ ${output}` : "";
       ".svn",
       ".adhdev-transfer-staging"
     ]);
-    function hasUnpairedSurrogate(str18) {
-      for (let i = 0; i < str18.length; i++) {
-        const code = str18.charCodeAt(i);
+    function hasUnpairedSurrogate(str19) {
+      for (let i = 0; i < str19.length; i++) {
+        const code = str19.charCodeAt(i);
         if (code >= 55296 && code <= 56319) {
-          if (i + 1 >= str18.length) return true;
-          const low = str18.charCodeAt(i + 1);
+          if (i + 1 >= str19.length) return true;
+          const low = str19.charCodeAt(i + 1);
           if (low < 56320 || low > 57343) return true;
           i++;
         } else if (code >= 56320 && code <= 57343) {
@@ -181248,7 +181318,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant_projects();
     init_mesh_runtime_store();
     init_assistant_relay_sqlite_store();
-    function str16(v) {
+    function str17(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function isPositiveSafeInt2(v) {
@@ -181322,7 +181392,7 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
       const key5 = typeof args?.key === "string" ? args.key.trim() : "";
-      const hostDaemonId = canonicalDaemonId2(str16(args?.hostDaemonId));
+      const hostDaemonId = canonicalDaemonId2(str17(args?.hostDaemonId));
       if ((!meshId || meshId.length > 200) && !key5) {
         return { success: false, code: "invalid_args", error: "meshId required" };
       }
@@ -181367,11 +181437,11 @@ ${ptyResult.output.slice(-2e3)}`);
           error: "Remote project follow management requires authenticated owner ingress."
         };
       }
-      const action2 = str16(args?.action);
+      const action2 = str17(args?.action);
       const runtime2 = await runtimeOrNull();
       const registry = runtime2?.registry ?? getAssistantRegistry();
       const store2 = runtime2?.store ?? fallbackRelayStore();
-      const selfDaemonId = canonicalDaemonId2(str16(ctx.deps?.statusInstanceId)) ?? str16(ctx.deps?.statusInstanceId);
+      const selfDaemonId = canonicalDaemonId2(str17(ctx.deps?.statusInstanceId)) ?? str17(ctx.deps?.statusInstanceId);
       if (action2 === "ensure_binding" || action2 === "reconcile_binding") {
         if (!selfDaemonId) {
           return { success: false, code: "daemon_id_missing", error: "Local assistant daemonId is unavailable." };
@@ -181415,8 +181485,8 @@ ${ptyResult.output.slice(-2e3)}`);
         };
       }
       if (action2 === "follow") {
-        const hostDaemonId = canonicalDaemonId2(str16(args?.hostDaemonId));
-        const meshId = str16(args?.meshId);
+        const hostDaemonId = canonicalDaemonId2(str17(args?.hostDaemonId));
+        const meshId = str17(args?.meshId);
         const grantRevision = Number(args?.grantRevision);
         if (!hostDaemonId || !meshId || !isPositiveSafeInt2(grantRevision)) {
           return {
@@ -181451,10 +181521,10 @@ ${ptyResult.output.slice(-2e3)}`);
             error: `Requested bindingRevision (${String(args.bindingRevision)}) does not match local ownerBinding (${bindingCheck.receipt.bindingRevision}).`
           };
         }
-        const hostLabel = str16(args?.hostLabel) || hostDaemonId;
-        const name = str16(args?.name) || meshId;
-        const sanitizedRepoIdentity = sanitizeRemoteRepoIdentity(str16(args?.sanitizedRepoIdentity));
-        const slug = str16(args?.slug) || projectSlugBase(sanitizedRepoIdentity ?? void 0) || projectSlugBase(name) || meshId.toLowerCase();
+        const hostLabel = str17(args?.hostLabel) || hostDaemonId;
+        const name = str17(args?.name) || meshId;
+        const sanitizedRepoIdentity = sanitizeRemoteRepoIdentity(str17(args?.sanitizedRepoIdentity));
+        const slug = str17(args?.slug) || projectSlugBase(sanitizedRepoIdentity ?? void 0) || projectSlugBase(name) || meshId.toLowerCase();
         const ports = await projectPortsFor(ctx);
         const target4 = {
           label: hostLabel,
@@ -181519,9 +181589,9 @@ ${ptyResult.output.slice(-2e3)}`);
         };
       }
       if (action2 === "unfollow" || action2 === "mark_revoked") {
-        const keyArg = str16(args?.key);
-        const hostDaemonId = canonicalDaemonId2(str16(args?.hostDaemonId));
-        const meshId = str16(args?.meshId);
+        const keyArg = str17(args?.key);
+        const hostDaemonId = canonicalDaemonId2(str17(args?.hostDaemonId));
+        const meshId = str17(args?.meshId);
         const lookupKey = keyArg || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : "");
         const allMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
         const existing = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : allMatches.find((f) => f.state === "followed") ?? allMatches[0] ?? null;
@@ -182401,7 +182471,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_project_views();
     init_assistant_launch_plan();
     var LAUNCH_ASSISTANT_SOURCES = ASSISTANT_PROJECTS_SOURCES;
-    function str17(v) {
+    function str18(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function fail7(code, error = code, extra = {}) {
@@ -182409,7 +182479,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return { success: false, code, error, ...extra };
     }
     async function promptProjects(ctx) {
-      const selfDaemonId = str17(ctx.deps?.statusInstanceId);
+      const selfDaemonId = str18(ctx.deps?.statusInstanceId);
       const ports = await getAssistantProjectPorts({
         components: ctx.components,
         execute: (cmd, a) => ctx.execute(cmd, a, "ipc", { inProcess: true }),
@@ -182580,7 +182650,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         fence.aborted = true;
         launched = { success: true, sessionId: assistantSessionKey };
       }
-      const sessionId = str17(launched?.sessionId) || str17(launched?.id);
+      const sessionId = str18(launched?.sessionId) || str18(launched?.id);
       void scheduleInjectionCleanup2(injection, {
         launched: launched?.success === true && !!sessionId && !fence.aborted,
         isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, sessionId),
@@ -182633,7 +182703,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return fail7(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
-        return fail7(str17(launched?.code) || "assistant_launch_failed", str17(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
+        return fail7(str18(launched?.code) || "assistant_launch_failed", str18(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
       if (!mayBind()) return fail7("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);

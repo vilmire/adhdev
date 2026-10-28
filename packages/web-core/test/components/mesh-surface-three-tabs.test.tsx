@@ -1,4 +1,4 @@
-// The mesh live view is three tabs — Overview / Tasks / Map — in the shared
+// The mesh live view is four tabs — Overview / Tasks / Artifacts / Map — in the shared
 // underline tab bar (2026-09-27 simplification). Status folded into the Map
 // tab (per-node runtime in the node panel, internals behind Diagnostics);
 // Notes moved to the mesh settings page.
@@ -31,14 +31,15 @@ function render(): string {
 }
 
 describe('mesh live view — three tabs', () => {
-    it('exposes exactly Overview / Tasks / Map', () => {
-        expect(MESH_SURFACE_TABS).toEqual(['overview', 'tasks', 'map'])
+    it('exposes exactly Overview / Tasks / Artifacts / Map', () => {
+        expect(MESH_SURFACE_TABS).toEqual(['overview', 'tasks', 'artifacts', 'map'])
         const html = render()
         const tabs = [...html.matchAll(/role="tab"[^>]*id="mesh-surface-tab-(\w+)"|id="mesh-surface-tab-(\w+)"[^>]*role="tab"/g)]
             .map(m => m[1] ?? m[2])
-        expect(tabs).toEqual(['overview', 'tasks', 'map'])
+        expect(tabs).toEqual(['overview', 'tasks', 'artifacts', 'map'])
         expect(html).toContain('>Overview<')
         expect(html).toContain('>Tasks<')
+        expect(html).toContain('>Artifacts<')
         expect(html).toContain('>Map<')
         expect(html).not.toContain('>Status<')
         expect(html).not.toContain('>Topology<')
@@ -52,7 +53,7 @@ describe('mesh live view — three tabs', () => {
 
     it('each panel is a labelled tabpanel', () => {
         const html = render()
-        for (const key of ['overview', 'tasks', 'map']) {
+        for (const key of ['overview', 'tasks', 'artifacts', 'map']) {
             expect(html).toContain(`id="mesh-surface-panel-${key}"`)
             expect(html).toContain(`aria-labelledby="mesh-surface-tab-${key}"`)
         }
