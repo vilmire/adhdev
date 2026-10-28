@@ -49,13 +49,15 @@ export interface CommandLogEntry {
 // ─── Sensitive field masking ─────────────────
 // project_transfer_peer: SDP / ICE / one-time link key / manifests never reach the command log (IG02).
 const CONTENT_KEYS = new Set(['content', 'message', 'text', 'sdp', 'candidate', 'linkKeyB64', 'signal', 'selection']);
+// operator recovery: private peer challenge nonces and owner signatures never reach the command log.
+const RECOVERY_CHALLENGE_KEYS = new Set(['nonce', 'signature']);
 const MAX_MASK_DEPTH = 8;
 
 // project_transfer_* owner commands: selected paths, folder names and published names are user file names.
 const TRANSFER_PATH_KEYS = new Set(['selected', 'path', 'finalName', 'publishedName']);
 
 function isSensitiveArgKey(key: string, cmd = ''): boolean {
-    return CONTENT_KEYS.has(key) || isCredentialKey(key) || (cmd.startsWith('project_transfer') && TRANSFER_PATH_KEYS.has(key));
+    return CONTENT_KEYS.has(key) || RECOVERY_CHALLENGE_KEYS.has(key) || isCredentialKey(key) || (cmd.startsWith('project_transfer') && TRANSFER_PATH_KEYS.has(key));
 }
 
 function maskCommandLogValue(value: unknown, keyHint = '', depth = 0, cmd = ''): unknown {

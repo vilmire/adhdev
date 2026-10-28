@@ -1,3 +1,4 @@
+import { assertRecoveryLaunchIdentity } from '@adhdev/session-host-core';
 import { beginAssistantSpawn } from '../assistant/assistant-launch-fence.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
@@ -58,6 +59,7 @@ export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'roleRestartInpu
  * / `launchCli` runs on it.
  */
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
+    assertRecoveryLaunchIdentity({ cliArgs, options });
     assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: 'start_session' });
     assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
     const plan = planSessionStart(host, cliType, workingDir, options);
@@ -268,6 +270,7 @@ async function startCliPtySession(
 
  // ─── Resolve launch options → provider session binding ───
     const sessionBinding = options?.restartBinding ?? resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
+    assertRecoveryLaunchIdentity({ key, sessionBinding, cliArgsWithBrain });
     const resolvedCliArgs = sessionBinding.cliArgs;
 
     // ─── Phase E: launch record ───

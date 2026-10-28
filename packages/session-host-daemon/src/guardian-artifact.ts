@@ -28,7 +28,7 @@ export function resolveGuardianArtifact(pins: GuardianArtifactPins): HostUpgrade
   const bytes = fs.readFileSync(manifestPath);
   if (!/^[a-f0-9]{64}$/.test(pins.manifestSha256) || sha(bytes) !== pins.manifestSha256) throw new Error('guardian_artifact_manifest_pin_mismatch');
   const m = JSON.parse(String(bytes));
-  if (m.schema !== 1 || m.protocol !== 1 || m.platform !== 'darwin' || m.arch !== process.arch || m.version !== pins.version || m.commit !== pins.commit) throw new Error('guardian_artifact_build_mismatch');
+  if (m.schema !== 1 || (m.protocol !== 1 && m.protocol !== 2) || m.platform !== 'darwin' || m.arch !== process.arch || m.version !== pins.version || m.commit !== pins.commit) throw new Error('guardian_artifact_build_mismatch');
   const packageBytes=fs.readFileSync(regular(path.join(root,'package.json')));
   if (sha(packageBytes)!==m.packageJsonSha256 || JSON.parse(String(packageBytes)).version!==pins.version) throw new Error('guardian_artifact_package_version_mismatch');
   const expected = { daemon:pins.daemonEntryPath, cli:pins.cliEntryPath, host:pins.hostEntryPath };
@@ -41,5 +41,5 @@ export function resolveGuardianArtifact(pins: GuardianArtifactPins): HostUpgrade
   if (sha(fs.readFileSync(regular(pins.nodePath))) !== m.nodeSha256) throw new Error('guardian_artifact_node_pin_mismatch');
   const helperStat=fs.lstatSync(path.resolve(root,m.files.helper.path));
   if (helperStat.mode & 0o222) throw new Error('guardian_artifact_helper_writable');
-  return { helperFileIdentity:JSON.stringify([helperStat.dev,helperStat.ino,helperStat.uid,helperStat.mode,helperStat.size]), helperPath:path.resolve(root,m.files.helper.path), helperSha256:m.files.helper.sha256, stateDir:pins.stateDir, helperProtocol:1 };
+  return { helperFileIdentity:JSON.stringify([helperStat.dev,helperStat.ino,helperStat.uid,helperStat.mode,helperStat.size]), helperPath:path.resolve(root,m.files.helper.path), helperSha256:m.files.helper.sha256, stateDir:pins.stateDir, helperProtocol:m.protocol };
 }

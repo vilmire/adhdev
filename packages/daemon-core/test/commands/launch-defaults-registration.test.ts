@@ -10,6 +10,9 @@ import type { ProviderModule } from '../../src/providers/contracts.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 import { saveMeshConfigDurable, withStrictMeshConfigWriteLock } from '../../src/config/mesh-config-store.js';
+import * as meshLock from '../../src/config/mesh-config-write-lock.js';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { getLaunchDefaultsCommandPorts } from '../../src/launch-defaults/ports.js';
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js';
 import { isLaunchDefaultRole } from '../../../mesh-shared/src/index.js';
@@ -21,7 +24,14 @@ vi.mock('fs', async original => {
     return { ...actual, mkdirSync: vi.fn(actual.mkdirSync),
         fsyncSync: vi.fn(actual.fsyncSync), renameSync: vi.fn(actual.renameSync) };
 });
+// The meshes.json write lock is a persistent SQLite mutex; inject faults where it is acquired.
+vi.mock('../../src/config/mesh-config-write-lock.js', async original => {
+    const actual = await original<typeof import('../../src/config/mesh-config-write-lock.js')>();
+    return { ...actual, acquireMeshConfigMutex: vi.fn(actual.acquireMeshConfigMutex) };
+});
 const native = await vi.importActual<typeof import('fs')>('fs');
+const nativeLock = await vi.importActual<typeof import('../../src/config/mesh-config-write-lock.js')>('../../src/config/mesh-config-write-lock.js');
+const sqliteModule = createRequire(import.meta.url).resolve('better-sqlite3');
 const SELF = 'daemon_mach_launch_defaults_self';
 class FixtureProviders extends ProviderRegistry {
     enabled = true;
@@ -83,6 +93,7 @@ beforeEach(async () => {
     dir = fs.mkdtempSync(join(tmpdir(), 'launch-defaults-registration-'));
     process.env.ADHDEV_CONFIG_DIR = dir;
     vi.mocked(meshFs.mkdirSync).mockImplementation(native.mkdirSync);
+    vi.mocked(meshLock.acquireMeshConfigMutex).mockImplementation(nativeLock.acquireMeshConfigMutex);
     vi.mocked(meshFs.fsyncSync).mockImplementation(native.fsyncSync);
     vi.mocked(meshFs.renameSync).mockImplementation(native.renameSync);
     providers = new FixtureProviders();
@@ -307,36 +318,32 @@ describe('real host project persistence and strict CAS', () => {
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ result: 'applied' });
     });
     it('waits briefly for a shared lock that another mesh writer releases', async () => {
-        let contended = 0;
-        vi.mocked(meshFs.mkdirSync).mockImplementation((...args) => {
-            if (String(args[0]) === `${meshPath()}.lock` && contended < 2) {
-                contended++;
-                throw Object.assign(new Error('EEXIST: lock held'), { code: 'EEXIST' });
-            }
-            return native.mkdirSync(...args);
-        });
+        // A peer process holds the real SQLite write lock for a moment, then exits.
+        const holder = spawn(process.execPath, ['-e', `const Database = require(${JSON.stringify(sqliteModule)});
+const db = new Database(${JSON.stringify(`${meshPath()}.write-lock.sqlite`)}); db.exec('BEGIN EXCLUSIVE');
+process.stdout.write('held\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120); db.close();`], { windowsHide: true });
+        await new Promise(resolve => holder.stdout.once('data', resolve));
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ result: 'applied', revision: 1 });
-        expect(contended).toBe(2);
+        await new Promise(resolve => holder.once('exit', resolve));
         expect(fs.existsSync(`${meshPath()}.lock`)).toBe(false);
     });
     it('rereads the CAS token after acquiring the actual host lock', async () => {
         let advanced = false;
-        vi.mocked(meshFs.mkdirSync).mockImplementation((...args) => {
-            if (!advanced && String(args[0]) === `${meshPath()}.lock`) {
+        vi.mocked(meshLock.acquireMeshConfigMutex).mockImplementation((path, timeout) => {
+            if (!advanced) {
                 advanced = true;
                 const changed = meshes();
                 changed.meshes[0].coordinatorLaunch = { version: 1, revision: 1, entry: null };
                 fs.writeFileSync(meshPath(), JSON.stringify(changed));
             }
-            return native.mkdirSync(...args);
+            return nativeLock.acquireMeshConfigMutex(path, timeout);
         });
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p')).toMatchObject({ code: 'revision_conflict', actualRevision: 1 });
         expect(meshes().meshes[0].coordinatorLaunch).toEqual({ version: 1, revision: 1, entry: null });
     });
     it('refuses a failed lock acquisition without executing an unlocked replacement', async () => {
-        vi.mocked(meshFs.mkdirSync).mockImplementation((...args) => {
-            if (String(args[0]) === `${meshPath()}.lock`) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-            return native.mkdirSync(...args);
+        vi.mocked(meshLock.acquireMeshConfigMutex).mockImplementation(path => {
+            throw new nativeLock.MeshConfigStrictLockError('project_storage_unavailable', path);
         });
         const before = meshBytes();
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p'))
@@ -344,9 +351,9 @@ describe('real host project persistence and strict CAS', () => {
         expect(meshBytes()).toEqual(before);
     });
     it('revalidates machine availability inside the actual host lock', async () => {
-        vi.mocked(meshFs.mkdirSync).mockImplementation((...args) => {
-            if (String(args[0]) === `${meshPath()}.lock`) providers.enabled = false;
-            return native.mkdirSync(...args);
+        vi.mocked(meshLock.acquireMeshConfigMutex).mockImplementation((path, timeout) => {
+            providers.enabled = false;
+            return nativeLock.acquireMeshConfigMutex(path, timeout);
         });
         const before = meshBytes();
         expect(await router.execute('launch_defaults_set', projectArgs(), 'p2p'))

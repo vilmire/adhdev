@@ -1038,6 +1038,7 @@ export {
   readMeshDirectDispatchFlag,
   withMeshDirectDispatch,
   issueTrustedOwnerIngressProof,
+  isNondelegatedLocalOwnerIngress,
   isValidTrustedOwnerIngressProof,
   attachTrustedOwnerIngressProof,
   readTrustedOwnerIngressProof,
@@ -1151,3 +1152,4 @@ export type {
 // Project file transfer (owner-to-owner; hosts inject the STUN-only link factory)
 export { ProjectTransferEngine, configureProjectTransfer, getProjectTransferEngine, defaultTransferBaseDir, type TransferHostPorts, type TransferLink, type TransferLinkFactory, type TransferSignal } from './transfer/index.js';
 export { extractSdpFingerprint } from './transfer/protocol.js';
+export type { RecoveryPeerPort } from './mesh/turn-ledger/operator-recovery.js';

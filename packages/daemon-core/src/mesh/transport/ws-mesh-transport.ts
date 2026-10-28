@@ -199,7 +199,7 @@ export class WsMeshTransport extends MeshRpcEndpoint {
     private readonly maxMissedPongs: number;
     private readonly connectTimeoutMs: number;
 
-    private peers = new Map<string, WsPeer>();
+    protected override peers = new Map<string, WsPeer>();
     private links = new Map<string, HostLink>();
     private peerDiagnostics = new Map<string, PeerDiagnostic>();
     private peerLifecycleListeners = new Set<MeshPeerLifecycleListener>();

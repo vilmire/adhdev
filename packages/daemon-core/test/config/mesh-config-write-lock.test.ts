@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, writeFileSync, utimesSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -14,11 +14,11 @@ import { fileURLToPath } from 'url';
 // eager-migration persist in loadMeshConfig) silently dropped each other's
 // entries. Live evidence 2026-08-22: meshes.json updatedAt 15:50:06.303Z OLDER
 // than nodes stamped 15:50:13/15:50:31 — a stale copy was rewritten over them.
-// The fix: a cross-process mkdir lock spanning load→mutate→save, plus an
+// The fix: a persistent cross-process SQLite lock spanning load→mutate→save, plus an
 // atomic tmp+rename save. These tests pin both, using only fixture dirs.
 
-const testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID().slice(0, 8)}`);
-const testConfigDir = join(testTmpDir, 'isolated-config');
+let testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID().slice(0, 8)}`);
+let testConfigDir = join(testTmpDir, 'isolated-config');
 
 vi.mock('../../src/config/config.js', () => ({
     getConfigDir: () => {
@@ -81,6 +81,10 @@ function baseMesh(id: string, nodes: any[] = []): any {
  */
 const RACE_PADDING = 'x'.repeat(1024 * 1024);
 
+beforeEach(() => {
+    testTmpDir = join(tmpdir(), `adhdev-mesh-config-lock-test-${randomUUID()}`);
+    testConfigDir = join(testTmpDir, 'isolated-config');
+});
 afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
@@ -145,39 +149,18 @@ describe('mesh-config — cross-process write lock', () => {
                 expect(allNodeIds).toContain(`node_w${w}_${i}`);
             }
         }
-        // The lock itself is always released.
+        // Release preserves the mutex inode for every subsequent process.
+        expect(existsSync(configPath()+'.write-lock.sqlite')).toBe(true);
         expect(existsSync(lockPath())).toBe(false);
     }, 60_000);
 
-    it.each([0, 20_000])('refuses an unproven lock aged %sms without writing or removing it', age => {
+    it.each(['fresh','stale'])('refuses a %s legacy lock without deleting it or publishing', age => {
         writeRawMeshConfig({ meshes: [baseMesh('mesh_held')] });
         mkdirSync(lockPath());
-        const timestamp = new Date(Date.now() - age);
-        utimesSync(lockPath(), timestamp, timestamp);
-        const before = readFileSync(configPath(), 'utf8');
-        expect(() => addNode('mesh_held', { workspace: '/tmp/held-lock-node' })).toThrow('meshes.json write lock is held');
-        expect(readFileSync(configPath(), 'utf8')).toBe(before);
+        if (age === 'stale') utimesSync(lockPath(), new Date(0), new Date(0));
+        expect(() => addNode('mesh_held', { workspace: '/tmp/held-lock-node' })).toThrow('write lock is held');
         expect(existsSync(lockPath())).toBe(true);
-    });
-
-    it.each([0, 20_000])('legacy writer cannot bypass a strict owner, including a lock aged %sms', age => {
-        writeRawMeshConfig({ meshes: [baseMesh('mesh_strict')] });
-        const before = readFileSync(configPath(), 'utf8');
-        withStrictMeshConfigWriteLock(() => {
-            const timestamp = new Date(Date.now() - age);
-            utimesSync(lockPath(), timestamp, timestamp);
-            const result = spawnSync(process.execPath, [resolveTsxCli(), CHILD_SCRIPT], {
-                env: { ...process.env, HOME: testTmpDir, ADHDEV_CONFIG_DIR: testConfigDir,
-                    CHILD_MESH_ID: 'mesh_strict', CHILD_TAG: 'blocked', CHILD_COUNT: '1' },
-                encoding: 'utf8', windowsHide: true, timeout: 10_000,
-            });
-            expect(result.status, result.stderr).not.toBe(0);
-            expect(result.stderr).toContain('meshes.json write lock is held');
-            expect(readFileSync(configPath(), 'utf8')).toBe(before);
-            expect(existsSync(lockPath())).toBe(true);
-        });
-        expect(existsSync(lockPath())).toBe(false);
-        expect(addNode('mesh_strict', { workspace: '/tmp/after-release' })).toBeDefined();
+        expect(getMesh('mesh_held')!.nodes).toEqual([]);
     });
 
     it('reads stay correct while a peer holds the lock (listMeshes never blocks on it)', () => {

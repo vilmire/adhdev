@@ -33,8 +33,43 @@ import {
     type RpcResponseEnvelope,
 } from './mesh-rpc-protocol.js';
 import type { P2pRelayFailureError } from '../p2p-relay-failure.js';
+import { OPERATOR_RECOVERY_TARGET as recoveryTarget, type RecoveryHostBinding, type RecoveryPhysicalProof } from '@adhdev/session-host-core';
+import type { RecoveryPeerPort } from '../turn-ledger/operator-recovery.js';
 
 export abstract class MeshRpcEndpoint {
+  protected peers = new Map<string, Peer>();
+  public captureRecoveryPeer(targetDaemonId: string, binding: RecoveryHostBinding, fenceDigest: string): RecoveryPeerPort | null {
+    const peer = this.peers.get(targetDaemonId);
+    return peer ? this.boundRecoveryPeer(peer, binding, fenceDigest, () => this.peers.get(targetDaemonId) === peer) : null;
+  }
+
+  /** Captures ONE already-authenticated channel. No dialing, roster learning,
+   * TOFU, or rebinding is permitted for this private proof exchange. */
+  protected boundRecoveryPeer(peer: Peer, binding: RecoveryHostBinding, fenceDigest: string,
+      stillMapped: () => boolean): RecoveryPeerPort | null {
+    // eslint-disable-next-line no-restricted-syntax -- Captured transport map key must be the exact approved cloud instance; standalone is unauthorized.
+    if (peer.daemonId !== recoveryTarget.workerDaemonId || peer.state !== 'connected' || !peer.dc.isOpen()) return null; // canon-ok: captured peer map key is the exact cloud worker transport identity
+    if (!Number.isSafeInteger(peer.authEpoch) || peer.authEpoch < 0 || !Number.isSafeInteger(peer.attempt) ||
+        peer.attempt < 0 || typeof peer.createdAt !== 'string' || !peer.createdAt) return null;
+    const epoch = JSON.stringify([peer.authEpoch, peer.attempt, peer.createdAt, peer.openedAt]);
+    const isCurrent = () => stillMapped() && peer.state === 'connected' && peer.dc.isOpen() &&
+      JSON.stringify([peer.authEpoch, peer.attempt, peer.createdAt, peer.openedAt]) === epoch;
+    return Object.freeze({ peerId: peer.daemonId, connectionEpoch: epoch,
+      binding: Object.freeze({ ...binding }), fenceDigest, isCurrent,
+      requestPhysicalProof: async (nonce: string): Promise<RecoveryPhysicalProof> => {
+        if (!isCurrent()) throw new Error('recovery_authenticated_peer_changed');
+        const reply = await new Promise<unknown>((resolve, reject) => {
+          this.writeRequest(peer, { id: `${this.idNonce}:recovery:${this.idSeq++}`,
+            command: 'mesh_operator_recovery_census', args: { nonce, fenceDigest }, resolve, reject,
+            queuedAt: new Date().toISOString(), resultTimeoutMs: 25_000 });
+        });
+        if (!isCurrent()) throw new Error('recovery_authenticated_peer_changed');
+        const r = reply as { success?: boolean; result?: RecoveryPhysicalProof };
+        if (r?.success !== true || !r.result) throw new Error('recovery_physical_query_refused');
+        return r.result;
+      },
+    });
+  }
 
   // Settled request ids, so a duplicate/late response is a no-op instead of an
   // orphan-log. Bounded by time-bucket rotation so it cannot grow without limit:

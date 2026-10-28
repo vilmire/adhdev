@@ -33,6 +33,9 @@ import { PtySessionRuntime } from './runtime.js';
 import { HostUpgradeLease } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
 import { acquireHostInstanceLock, type HostInstanceLock } from './host-instance-lock.js';
+import { OperatorRecoveryFence } from './operator-recovery-fence.js';
+import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
+import { OperatorRecoveryControl } from './operator-recovery-control.js';
 
 export {
   sessionHostInstanceArg,
@@ -47,7 +50,8 @@ import {
 } from './session-diagnostics.js';
 import {
   buildPayloadFromRecord,
-  buildRecoveredRecord,
+  RuntimeExitWaiters,
+  restorePersistedRuntimeRecords,
   planDuplicatePrune,
 } from './session-lifecycle.js';
 import {
@@ -66,6 +70,7 @@ export class SessionHostServer extends EventEmitter {
   readonly registry = new SessionHostRegistry();
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
+  private readonly recoveryFence: OperatorRecoveryFence;
   private readonly upgradeLease: HostUpgradeLease | null;
   private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
@@ -79,6 +84,10 @@ export class SessionHostServer extends EventEmitter {
   private startupFence: (() => void) | null = null;
   private readonly hasReplacementContext: boolean;
   private restorePending = true;
+  private fullRestoreState: 'pending' | 'ready' | 'failed' = 'pending';
+  private partialRestoreCount = 0;
+  private readonly workerDaemonId: string;
+  private readonly recoveryControl: OperatorRecoveryControl;
   private mutatingRequests = 0;
   private endpointInode: bigint | null = null;
   private ipcServer: net.Server | null = null;
@@ -91,7 +100,7 @@ export class SessionHostServer extends EventEmitter {
   private recentLogs: SessionHostLogEntry[] = [];
   private recentRequests: SessionHostRequestTrace[] = [];
   private recentTransitions: SessionHostRuntimeTransition[] = [];
-  private exitWaiters = new Map<string, Array<(exitCode: number | null) => void>>();
+  private exitWaiters = new RuntimeExitWaiters();
   private lastNoOutputInputWarnAt = new Map<string, number>();
   // Records the most recent explicit stop/delete/restart/prune request per
   // session so the termination diagnostic can attribute the exit to it.
@@ -114,6 +123,7 @@ export class SessionHostServer extends EventEmitter {
     this.upgradeLease = options.upgradeBinding
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.instanceConfigDir = options.instanceConfigDir || null;
+    this.workerDaemonId = options.workerDaemonId || '';
     this.pidFilePath = options.pidFilePath || null;
     this.instanceLockPath = options.instanceLockPath || (this.pidFilePath ? `${this.pidFilePath}.lock` : null);
     this.holdInstanceLockUntilExit = options.holdInstanceLockUntilExit === true;
@@ -126,6 +136,14 @@ export class SessionHostServer extends EventEmitter {
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
     });
+    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir ||
+      path.join(resolveInstanceConfigDir(process.env), 'session-host', options.appName || 'adhdev'));
+    this.recoveryControl = new OperatorRecoveryControl(() => ({
+      upgradeLease: this.upgradeLease, instanceConfigDir: this.instanceConfigDir, endpoint: this.endpoint,
+      workerDaemonId: this.workerDaemonId, restorePending: this.restorePending, fullRestoreState: this.fullRestoreState,
+      partialRestoreCount: this.partialRestoreCount, mutatingRequests: this.mutatingRequests, registry: this.registry,
+      runtimes: this.runtimes, storage: this.storage, recoveryFence: this.recoveryFence,
+    }), options.recoveryOwnerPublicKey);
   }
 
   private isPidAlive(pid: number): boolean {
@@ -359,8 +377,12 @@ export class SessionHostServer extends EventEmitter {
     // Startup callers only need the IPC endpoint to accept connections.
     setTimeout(() => {
       try {
-        if (!this.upgradeLease?.proof().held) this.restorePersistedRuntimes();
+        if (!this.upgradeLease?.proof().held) {
+          this.restorePersistedRuntimes();
+          this.fullRestoreState = this.storage.recoveryInventory().complete ? 'ready' : 'failed';
+        }
       } catch (error: any) {
+        this.fullRestoreState = 'failed';
         this.recordHostLog('error', `session host restore failed: ${error?.message || String(error)}`);
       } finally { this.restorePending = false; }
     }, 0);
@@ -431,7 +453,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   async handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse> {
-    const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session_census', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
+    const readOnly = ['prepare_operator_recovery_fence_v1', 'attest_operator_recovery_v1', 'get_operator_recovery_coverage_v1', 'get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'get_session_census', 'get_session', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -440,6 +462,11 @@ export class SessionHostServer extends EventEmitter {
         counted = true;
       }
       switch (request.type) {
+        case 'prepare_operator_recovery_fence_v1':
+        case 'install_operator_recovery_fence_v1':
+        case 'attest_operator_recovery_v1':
+        case 'get_operator_recovery_coverage_v1':
+          return this.recoveryControl.handle(request);
         case 'get_upgrade_lease':
           if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
           return { success: true, result: this.upgradeLease.proof() };
@@ -452,6 +479,7 @@ export class SessionHostServer extends EventEmitter {
           if (!this.upgradeLease) throw new Error('native_host_upgrade_binding_unavailable');
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case 'create_session': {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -533,6 +561,7 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: record };
         }
         case 'update_session_meta': {
+          this.recoveryFence.assertLaunchAllowed(request.payload as CreateSessionPayload);
           const record = this.registry.updateSessionMeta(
             request.payload.sessionId,
             request.payload.meta || {},
@@ -722,6 +751,10 @@ export class SessionHostServer extends EventEmitter {
     } finally {
       if (counted) this.mutatingRequests--;
     }
+  }
+
+  collectRecoveryCensus(nonce: string, fenceDigest: string) {
+    return this.recoveryControl.collectRecoveryCensus(nonce, fenceDigest);
   }
 
   private requireRuntime(sessionId: string): PtySessionRuntime {
@@ -993,36 +1026,10 @@ export class SessionHostServer extends EventEmitter {
   }
 
   private waitForRuntimeExit(sessionId: string, timeoutMs = 5_000): Promise<number | null> {
-    if (!this.runtimes.has(sessionId)) {
-      return Promise.resolve(this.registry.getSession(sessionId)?.lifecycle === 'failed' ? 1 : 0);
-    }
-    return new Promise<number | null>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        const waiters = this.exitWaiters.get(sessionId) || [];
-        this.exitWaiters.set(sessionId, waiters.filter((waiter) => waiter !== onExit));
-        reject(new Error(`Timed out waiting for runtime ${sessionId} to exit`));
-      }, timeoutMs);
-      const onExit = (exitCode: number | null) => {
-        clearTimeout(timeout);
-        resolve(exitCode);
-      };
-      const waiters = this.exitWaiters.get(sessionId) || [];
-      waiters.push(onExit);
-      this.exitWaiters.set(sessionId, waiters);
-    });
+    return this.exitWaiters.wait(sessionId, timeoutMs, this.runtimes.has(sessionId), this.registry.getSession(sessionId)?.lifecycle);
   }
-
   private resolveExitWaiters(sessionId: string, exitCode: number | null): void {
-    const waiters = this.exitWaiters.get(sessionId);
-    if (!waiters?.length) return;
-    this.exitWaiters.delete(sessionId);
-    for (const waiter of waiters) {
-      try {
-        waiter(exitCode);
-      } catch {
-        // noop
-      }
-    }
+    this.exitWaiters.resolve(sessionId, exitCode);
   }
 
   // Synchronous, best-effort variant for background/periodic persistence
@@ -1067,19 +1074,22 @@ export class SessionHostServer extends EventEmitter {
       throw new Error(`Unknown session: ${sessionId}`);
     }
 
-    if (this.runtimes.has(sessionId)) {
-      this.stopRequests.set(sessionId, 'restart');
-      this.registry.setLifecycle(sessionId, 'stopping');
-      this.persistNow(sessionId);
-      this.recordRuntimeTransition(sessionId, 'restart_requested', 'stopping', undefined, true);
-      this.requireRuntime(sessionId).stop();
-      await this.waitForRuntimeExit(sessionId);
-    }
+    const leaveLaunch = this.recoveryFence.enterLaunch(buildPayloadFromRecord(existing));
+    try {
+      if (this.runtimes.has(sessionId)) {
+        this.stopRequests.set(sessionId, 'restart');
+        this.registry.setLifecycle(sessionId, 'stopping');
+        this.persistNow(sessionId);
+        this.recordRuntimeTransition(sessionId, 'restart_requested', 'stopping', undefined, true);
+        this.requireRuntime(sessionId).stop();
+        await this.waitForRuntimeExit(sessionId);
+      }
 
-    const latest = this.registry.getSession(sessionId) || existing;
-    const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), 'session_resumed');
-    this.recordRuntimeTransition(sessionId, 'restart_completed', restarted.lifecycle, undefined, true);
-    return restarted;
+      const latest = this.registry.getSession(sessionId) || existing;
+      const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), 'session_resumed');
+      this.recordRuntimeTransition(sessionId, 'restart_completed', restarted.lifecycle, undefined, true);
+      return restarted;
+    } finally { leaveLaunch(); }
   }
 
   private async pruneDuplicateSessions(payload?: {
@@ -1126,20 +1136,7 @@ export class SessionHostServer extends EventEmitter {
   }
 
   private restorePersistedRuntimes(): void {
-    const states = this.storage.loadAll();
-    let skippedAutoResumeSessions = 0;
-    for (const persisted of states) {
-      const { recoveredRecord, wasLiveRuntime, hadRecoveryInterest } = buildRecoveredRecord(persisted);
-      this.registry.restoreSession(recoveredRecord, persisted.snapshot);
-      this.storage.save(recoveredRecord, persisted.snapshot);
-      if (wasLiveRuntime && hadRecoveryInterest) {
-        skippedAutoResumeSessions += 1;
-      }
-    }
-
-    if (skippedAutoResumeSessions > 0) {
-      this.recordHostLog('warn', `session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
-    }
+    restorePersistedRuntimeRecords(this.storage, this.registry, message => this.recordHostLog('warn', message));
   }
 
   private async pruneDuplicateRuntime(record: SessionHostRecord): Promise<void> {
@@ -1180,25 +1177,30 @@ export class SessionHostServer extends EventEmitter {
     payload: CreateSessionPayload,
     startEventType: 'session_started' | 'session_resumed',
   ): SessionHostRecord {
-    const runtime = new PtySessionRuntime({
-      sessionId: record.sessionId,
-      payload,
-      onData: (data) => {
-        const { seq } = this.registry.appendOutput(record.sessionId, data);
-        this.schedulePersist(record.sessionId);
-        this.emitEvent({ type: 'session_output', sessionId: record.sessionId, seq, data });
-      },
-      onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal),
-    });
+    // The shared synchronous spawn boundary also covers delayed restart/resume
+    // after an await. Never infer closure from a prior failed ensureReady.
+    const leaveLaunch = this.recoveryFence.enterLaunch(payload);
+    try {
+      const runtime = new PtySessionRuntime({
+        sessionId: record.sessionId,
+        payload,
+        onData: (data) => {
+          const { seq } = this.registry.appendOutput(record.sessionId, data);
+          this.schedulePersist(record.sessionId);
+          this.emitEvent({ type: 'session_output', sessionId: record.sessionId, seq, data });
+        },
+        onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal),
+      });
 
-    this.registry.setLifecycle(record.sessionId, 'starting');
-    const pid = runtime.start();
-    this.runtimes.set(record.sessionId, runtime);
-    const startedRecord = this.registry.markStarted(record.sessionId, pid);
-    this.persistNow(record.sessionId);
-    this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
-    this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
-    return startedRecord;
+      this.registry.setLifecycle(record.sessionId, 'starting');
+      const pid = runtime.start();
+      this.runtimes.set(record.sessionId, runtime);
+      const startedRecord = this.registry.markStarted(record.sessionId, pid);
+      this.persistNow(record.sessionId);
+      this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
+      this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
+      return startedRecord;
+    } finally { leaveLaunch(); }
   }
 
   /**

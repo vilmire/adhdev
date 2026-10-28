@@ -6,8 +6,10 @@
  */
 import { dirname, join } from 'path';
 import { getConfigDir } from './config.js';
-import { mkdirSync, rmSync, rmdirSync, statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
+import { statSync, existsSync, readFileSync, writeFileSync, renameSync, copyFileSync, openSync, closeSync, fsyncSync, unlinkSync } from 'fs';
 import { randomUUID } from 'crypto';
+import { acquireMeshConfigMutex, MeshConfigStrictLockError, type MeshConfigMutex } from './mesh-config-write-lock.js';
+export { MeshConfigStrictLockError } from './mesh-config-write-lock.js';
 import type { LocalMeshConfig, LocalMeshEntry } from '../repo-mesh-types.js';
 import { migratePolicyToSparseOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-policy-resolve.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
@@ -24,114 +26,56 @@ export function getMeshConfigPath(): string {
     return join(getConfigDir(), 'meshes.json');
 }
 
-// ─── Write serialization (lockless read-modify-write fix) ─────────────────
-//
-// Every mutator below is a read-modify-write over the WHOLE meshes.json
-// document, and every save is a whole-file overwrite. Two writers on the same
-// machine interleaving (observed live: clone_mesh_node's addNode against
-// apply_mesh_host_join; and plan_mesh_onboarding's eager-migration persist
-// rewriting a copy loaded BEFORE nodes were added — updatedAt 15:50:06 older
-// than nodes stamped 15:50:13/15:50:31) is a last-writer-wins overwrite that
-// silently drops the other writer's entries. Node-level fixes:
-//   1. every mutator's load→mutate→save span runs under a cross-process
-//      mkdir lock (withMeshConfigWriteLock), so a writer always reads what the
-//      previous writer committed;
-//   2. the save itself is atomic (tmp sibling + rename), so a reader never
-//      sees a torn half-written file.
-// All writers fail closed on contention. A timestamp does not prove a lock
-// owner is dead: a slow Git probe/fsync or paused process can exceed any age
-// threshold. Never steal an unproven lock or continue with an unlocked write.
-// Abandoned locks require owner recovery; reads remain available.
-
+// Every load/mutate/publish span, including recovery's owner/SQL CAS, holds
+// the SAME persistent SQLite mutex. Timeouts refuse; no unlocked fallback.
 const MESH_CONFIG_LOCK_WAIT_MS = 2000;
-const MESH_CONFIG_LOCK_POLL_MS = 25;
-
-// In-process reentrancy: loadMeshConfig's eager-migration persist runs INSIDE
-// mutators that already hold the lock. Node is single-threaded and every
-// writer here is synchronous, so a plain boolean is a correct guard.
-let meshConfigLockHeldInProcess = false;
-
-function sleepBlockingMs(ms: number): void {
-    if (ms <= 0) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function acquireMeshConfigLock(): (() => void) | null {
-    const lockPath = `${getMeshConfigPath()}.lock`;
-    const deadline = Date.now() + MESH_CONFIG_LOCK_WAIT_MS;
-    while (Date.now() <= deadline) {
-        try {
-            mkdirSync(lockPath);
-            return () => {
-                try {
-                    rmSync(lockPath, { recursive: true, force: true });
-                } catch {
-                    // Ignore lock cleanup failures.
-                }
-            };
-        } catch (error: any) {
-            if (error?.code !== 'EEXIST') throw new MeshConfigStrictLockError('project_storage_unavailable', lockPath);
-            sleepBlockingMs(MESH_CONFIG_LOCK_POLL_MS);
-        }
-    }
-    return null;
-}
-
-/**
- * Run a full load→mutate→save span under the cross-process meshes.json lock.
- * Reentrant within this process (see meshConfigLockHeldInProcess). When the
- * lock cannot be acquired, fail closed just like strict transactions. A slow
- * or paused peer still owns its lock; elapsed time grants no write authority.
- */
-export function withMeshConfigWriteLock<T>(fn: () => T): T {
-    if (meshConfigLockHeldInProcess) return fn();
-    const release = acquireMeshConfigLock();
-    if (!release) throw new MeshConfigStrictLockError('store_busy', `${getMeshConfigPath()}.lock`);
-    meshConfigLockHeldInProcess = true;
-    try {
-        return fn();
-    } finally {
-        meshConfigLockHeldInProcess = false;
-        release();
-    }
-}
-
-export class MeshConfigStrictLockError extends Error {
-    constructor(readonly code: 'store_busy' | 'project_storage_unavailable', readonly lockPath?: string) {
-        super(`${code === 'store_busy' ? 'meshes.json write lock is held' : 'meshes.json write lock is unavailable'}${lockPath ? `: ${lockPath}` : ''}`);
-    }
-}
-/** Other mesh writers hold this lock only for one synchronous load→save span,
- * so a short bounded wait clears ordinary contention without wedging the caller. */
 export const STRICT_MESH_CONFIG_LOCK_WAIT_MS = 300;
+let heldMutex: { path: string; mutex: MeshConfigMutex } | undefined;
 let strictMeshWriteDepth = 0;
-/** Same lock as other mesh mutations, but contention that outlasts a short
- * bounded wait fails closed. Never steal stale locks or take the legacy
- * unlocked path. Synchronous transactions only. */
-export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
-    const nested = meshConfigLockHeldInProcess;
-    const lock = `${getMeshConfigPath()}.lock`;
-    if (!nested) {
-        const deadline = Date.now() + STRICT_MESH_CONFIG_LOCK_WAIT_MS;
-        for (;;) {
-            try { mkdirSync(lock, { mode: 0o700 }); break; }
-            catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw new MeshConfigStrictLockError('project_storage_unavailable', lock);
-                if (Date.now() >= deadline) throw new MeshConfigStrictLockError('store_busy', lock);
-                sleepBlockingMs(MESH_CONFIG_LOCK_POLL_MS);
-            }
-        }
-        meshConfigLockHeldInProcess = true;
-    }
-    strictMeshWriteDepth++;
-    try { return operation(); }
+let recoveryOwnershipDepth = 0;
+function assertMeshConfigMutex(): void {
+    if (!heldMutex || heldMutex.path !== getMeshConfigPath()) throw new MeshConfigStrictLockError('project_storage_unavailable');
+    heldMutex.mutex.assertHeld();
+}
+function withConfigMutex<T>(operation: () => T, timeout: number): T {
+    if (heldMutex) { assertMeshConfigMutex(); return operation(); }
+    const path = getMeshConfigPath();
+    const mutex = acquireMeshConfigMutex(path, timeout);
+    heldMutex = { path, mutex };
+    let failed = false;
+    try {
+        const result = operation();
+        // These APIs are synchronous: a promise would release before publish.
+        if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('mesh_config_sync_transaction_required');
+        assertMeshConfigMutex();
+        return result;
+    } catch (e) { failed = true; throw e; }
     finally {
-        strictMeshWriteDepth--;
-        if (!nested) {
-            meshConfigLockHeldInProcess = false;
-            try { rmdirSync(lock); } catch { /* refuse the next write */ }
-        }
+        heldMutex = undefined;
+        try { mutex.release(); } catch (e) { if (!failed) throw e; }
     }
+}
+export function withMeshConfigWriteLock<T>(fn: () => T): T {
+    if (recoveryOwnershipDepth) { assertMeshConfigMutex(); throw new MeshConfigStrictLockError('store_busy'); }
+    return withConfigMutex(fn, MESH_CONFIG_LOCK_WAIT_MS);
+}
+export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
+    return withConfigMutex(() => {
+        strictMeshWriteDepth++;
+        try { return operation(); } finally { strictMeshWriteDepth--; }
+    }, STRICT_MESH_CONFIG_LOCK_WAIT_MS);
+}
+export function inRecoveryMeshOwnershipFence(): boolean {
+    if (recoveryOwnershipDepth) assertMeshConfigMutex();
+    return recoveryOwnershipDepth > 0;
+}
+export function withRecoveryMeshOwnershipFence<T>(operation: () => T): T {
+    if (recoveryOwnershipDepth) { assertMeshConfigMutex(); return operation(); }
+    if (heldMutex) throw new MeshConfigStrictLockError('store_busy');
+    return withStrictMeshConfigWriteLock(() => {
+        recoveryOwnershipDepth++;
+        try { return operation(); } finally { recoveryOwnershipDepth--; }
+    });
 }
 
 /** Durable replace for strict transactions; unrelated saveMeshConfig callers
@@ -139,6 +83,8 @@ export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
 export function saveMeshConfigDurable(config: LocalMeshConfig):
     { ok: true; durable: true } | { ok: false; reason: string; committed: boolean } {
     if (!strictMeshWriteDepth) return { ok: false, reason: 'strict_write_lock_required', committed: false };
+    assertMeshConfigMutex();
+    if (recoveryOwnershipDepth) throw new MeshConfigStrictLockError('store_busy');
     const path = getMeshConfigPath();
     const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
     let committed = false;
@@ -532,6 +478,11 @@ export function normalizeCapabilityTags(value: unknown): string[] | undefined {
 }
 
 export function saveMeshConfig(config: LocalMeshConfig): void {
+    // Protect even direct callers through publication. Read-modify-write callers
+    // must also hold the outer lock, so their snapshot cannot overwrite a peer.
+    if (!heldMutex) return withMeshConfigWriteLock(() => saveMeshConfig(config));
+    assertMeshConfigMutex();
+    if (recoveryOwnershipDepth) throw new MeshConfigStrictLockError('store_busy');
     const path = getMeshConfigPath();
     // Atomic publish: write a per-process tmp sibling, then rename over the
     // target — a concurrent reader never sees a torn, half-written file.

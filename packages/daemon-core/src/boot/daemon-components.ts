@@ -62,6 +62,7 @@ export interface DaemonBootConfig {
     sessionHost: SessionHostBoot;
     /** Cloud-only mesh P2P transport. Absent on standalone. */
     mesh?: {
+    captureRecoveryPeer?: (daemonId: string, binding: import('@adhdev/session-host-core').RecoveryHostBinding, fenceDigest: string) => import('../mesh/turn-ledger/operator-recovery.js').RecoveryPeerPort | null;
         dispatchMeshCommand?: (daemonId: string, command: string, args: Record<string, unknown>) => Promise<any>;
         getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
         /**

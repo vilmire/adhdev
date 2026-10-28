@@ -3,6 +3,10 @@ import type { HostUpgradeBinding } from './upgrade-lease.js';
 import type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 
 export interface SessionHostServerOptions {
+  /** Boot-pipe key only; no request/config-file enrollment. */
+  recoveryOwnerPublicKey?: string;
+  /** Actual parent identity, supplied by trusted boot wiring, never query args. */
+  workerDaemonId?: string;
   endpoint?: SessionHostEndpoint;
   /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
   upgradeBinding?: HostUpgradeBinding;

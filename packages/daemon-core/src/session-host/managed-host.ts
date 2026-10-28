@@ -1,3 +1,5 @@
+import { provisionRecoveryHostChannel, forgetRecoveryHostChannel } from './recovery-owner-channel.js';
+import { loadConfig } from '../config/config.js';
 import { readCooperativeMaintenance, assertMaintenanceLifecycle, verifyRetainedMaintenanceHost } from '../maintenance/cooperative-gate.js';
 import { assertWorkerBridgeLifecycleAdmission } from '../commands/worker-bridge-lifecycle-admission.js';
 import { spawn, type StdioOptions } from 'child_process';
@@ -553,12 +555,21 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         // The host owns IPC/snapshots: keep it normal priority. Only its agent
         // PTY children are lowered in session-host-daemon/runtime.ts.
         assertStart();
+        const recoveryEndpoint = getEndpoint();
+        const recoveryPublicKey = provisionRecoveryHostChannel(recoveryEndpoint);
+        stdio = Array.isArray(stdio) ? [...stdio, 'pipe'] : ['ignore', 'ignore', 'ignore', 'pipe'];
         const child = spawn(nodeExecutable, [entry, 'serve', sessionHostInstanceArg(instance().configDir)], {
             detached: true,
             stdio,
             windowsHide: true,
-            env: buildEnv(process.env),
+            env: { ...buildEnv(process.env), ADHDEV_RECOVERY_BOOT_FD: '3' },
         });
+
+        const recoveryPipe = child.stdio?.[3] as import('node:stream').Writable | null;
+        if (!recoveryPipe) throw new Error('recovery_host_bootstrap_pipe_missing');
+        recoveryPipe.on('error', () => forgetRecoveryHostChannel(recoveryEndpoint, recoveryPublicKey));
+        recoveryPipe.end(JSON.stringify({ publicKey: recoveryPublicKey, workerDaemonId: `daemon_${loadConfig().machineId}` }));
+        child.once('exit', () => forgetRecoveryHostChannel(recoveryEndpoint, recoveryPublicKey));
 
         // Observe the child's death before unref'ing it.
         //

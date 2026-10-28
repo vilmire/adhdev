@@ -72,6 +72,8 @@ import {
 export interface ReduceInput {
     /** Local executor capability, never derived from received evidence fields. */
     stopConfirmed?: boolean;
+    /** Separate private executor admission; never set from remote evidence. */
+    operatorRecoveryConfirmed?: boolean;
     attempt: TurnAttempt | null;
     /** Active holds of this attempt. */
     holds: readonly TurnHold[];
@@ -139,6 +141,7 @@ export function classifyLane(attempt: TurnAttempt | null, evidence: TurnEvidence
 // ─── guards ──────────────────────────────────────────────────────────────
 
 interface GuardCtx {
+    operatorRecoveryConfirmed?: boolean;
     attempt: TurnAttempt | null;
     holds: readonly TurnHold[];
     evidence: TurnEvidence;
@@ -550,7 +553,7 @@ function commit(
     text?: { summary?: SummaryRef; textEventId?: string },
 ): void {
     const attempt = draft.attempt!;
-    if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && (reason === 'hard_ceiling'
+    if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !draft.ctx.operatorRecoveryConfirmed && (reason === 'hard_ceiling'
         || draft.ctx.evidence.kind === 'cancel' || draft.ctx.evidence.kind === 'operator_status'
         || draft.ctx.evidence.kind === 'session_error' || draft.ctx.evidence.kind === 'process_exit')) {
         beginWriterStop(draft, reason);
@@ -563,7 +566,7 @@ function commit(
     const summary = text ? text.summary : summaryOf(ev) ?? held.summary;
     attempt.state = outcome;
     attempt.suspension = null;
-    const source = attempt.data.writerStop?.terminal?.source ?? ev.source;
+    const source = draft.ctx.operatorRecoveryConfirmed ? ev.source : attempt.data.writerStop?.terminal?.source ?? ev.source;
     attempt.terminal = { outcome, reason, source, strength, at: ev.at, ...(summary ? { summary } : {}) };
     draft.effects.push({
         kind: 'commit', attemptId: attempt.attemptId, generation: attempt.generation,
@@ -714,7 +717,11 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         stop.reason = ev.reason;
         stop.terminal = { outcome: 'cancelled', strength: 'genuine', source: ev.source };
     }
-    if (input.stopConfirmed) {
+    if (input.operatorRecoveryConfirmed) {
+        // A truthful operator association and physical absence permit failure
+        // retirement, never success, reclaim, or a forged stop confirmation.
+        commit(draft, 'failed', 'genuine', 'operator_update', {});
+    } else if (input.stopConfirmed) {
         stop.confirmed = true;
         if (stop.terminal) {
             if (stop.terminal.adoptSessionId) {
@@ -737,7 +744,7 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         }
     } else if (ev.kind === 'worker_report') ACTIONS.record_report(draft);
     else draft.effects.push({ kind: 'record', note: 'writer_stop_checkpoint_pending' });
-    return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : 'WR' };
+    return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.operatorRecoveryConfirmed ? 'operator_recovery_settled' : input.stopConfirmed ? 'writer_settled' : 'WR' };
 }
 
 function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAttempt, 'attemptId' | 'scope'>): TurnAttempt {

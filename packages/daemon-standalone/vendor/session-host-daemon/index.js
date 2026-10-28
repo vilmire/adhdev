@@ -6,9 +6,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
+var __export = (target3, all) => {
   for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
+    __defProp(target3, name, { get: all[name], enumerable: true });
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -18,12 +18,12 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+var __toESM = (mod, isNodeMode, target3) => (target3 = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
   // compatible transform (i.e. "__esModule" has not been set), then set
   // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target3, "default", { value: mod, enumerable: true }) : target3,
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
@@ -43,9 +43,9 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 var import_crypto3 = require("crypto");
-var fs10 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
-var import_session_host_core7 = require("@adhdev/session-host-core");
+var fs11 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+var import_session_host_core11 = require("@adhdev/session-host-core");
 
 // src/guardian-artifact.ts
 var fs = __toESM(require("fs"));
@@ -64,7 +64,7 @@ function resolveGuardianArtifact(pins) {
   const bytes = fs.readFileSync(manifestPath);
   if (!/^[a-f0-9]{64}$/.test(pins.manifestSha256) || sha(bytes) !== pins.manifestSha256) throw new Error("guardian_artifact_manifest_pin_mismatch");
   const m = JSON.parse(String(bytes));
-  if (m.schema !== 1 || m.protocol !== 1 || m.platform !== "darwin" || m.arch !== process.arch || m.version !== pins.version || m.commit !== pins.commit) throw new Error("guardian_artifact_build_mismatch");
+  if (m.schema !== 1 || m.protocol !== 1 && m.protocol !== 2 || m.platform !== "darwin" || m.arch !== process.arch || m.version !== pins.version || m.commit !== pins.commit) throw new Error("guardian_artifact_build_mismatch");
   const packageBytes = fs.readFileSync(regular(path.join(root, "package.json")));
   if (sha(packageBytes) !== m.packageJsonSha256 || JSON.parse(String(packageBytes)).version !== pins.version) throw new Error("guardian_artifact_package_version_mismatch");
   const expected = { daemon: pins.daemonEntryPath, cli: pins.cliEntryPath, host: pins.hostEntryPath };
@@ -77,15 +77,15 @@ function resolveGuardianArtifact(pins) {
   if (sha(fs.readFileSync(regular(pins.nodePath))) !== m.nodeSha256) throw new Error("guardian_artifact_node_pin_mismatch");
   const helperStat = fs.lstatSync(path.resolve(root, m.files.helper.path));
   if (helperStat.mode & 146) throw new Error("guardian_artifact_helper_writable");
-  return { helperFileIdentity: JSON.stringify([helperStat.dev, helperStat.ino, helperStat.uid, helperStat.mode, helperStat.size]), helperPath: path.resolve(root, m.files.helper.path), helperSha256: m.files.helper.sha256, stateDir: pins.stateDir, helperProtocol: 1 };
+  return { helperFileIdentity: JSON.stringify([helperStat.dev, helperStat.ino, helperStat.uid, helperStat.mode, helperStat.size]), helperPath: path.resolve(root, m.files.helper.path), helperSha256: m.files.helper.sha256, stateDir: pins.stateDir, helperProtocol: m.protocol };
 }
 
 // src/server.ts
 var import_child_process3 = require("child_process");
 var import_events = require("events");
-var fs8 = __toESM(require("fs"));
+var fs9 = __toESM(require("fs"));
 var net2 = __toESM(require("net"));
-var path7 = __toESM(require("path"));
+var path8 = __toESM(require("path"));
 
 // src/socket-probe.ts
 var fs2 = __toESM(require("fs"));
@@ -143,7 +143,7 @@ function lsofSocketOwnerPids(socketPath) {
 }
 
 // src/server.ts
-var import_session_host_core6 = require("@adhdev/session-host-core");
+var import_session_host_core9 = require("@adhdev/session-host-core");
 
 // src/runtime.ts
 var fs3 = __toESM(require("fs"));
@@ -581,7 +581,7 @@ var HostUpgradeLease = class {
     if (fs4.realpathSync(this.binding.helperPath) !== this.binding.helperPath || digest(fs4.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
       throw new Error("native_host_helper_pin_mismatch");
     }
-    if (this.binding.helperProtocol === 1 && String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--attest"], { stdio: "pipe", windowsHide: true })).trim() !== "adhdev-host-guardian/1") throw new Error("native_host_helper_protocol_mismatch");
+    if (this.binding.helperProtocol && String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--attest"], { stdio: "pipe", windowsHide: true })).trim() !== `adhdev-host-guardian/${this.binding.helperProtocol}`) throw new Error("native_host_helper_protocol_mismatch");
     if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error("native_host_helper_file_identity_changed");
     const lockPath = path2.join(this.binding.stateDir, "instance.lock");
     const priorLock = fs4.existsSync(lockPath);
@@ -669,6 +669,29 @@ var HostUpgradeLease = class {
     this.assertHealthy();
     if (this.state.held) throw new Error("native_host_idle_lease_held");
   }
+  /** Protocol 1 never receives an unadvertised flag (it is a lock filename).
+   * Protocol 2 observation is pinned, bounded and always historically UNKNOWN. */
+  recoveryCoverage() {
+    this.assertHealthy();
+    if (this.binding.helperProtocol !== 2) return { protocol: 1, verdict: "UNKNOWN", reason: "historical_native_attribution_unavailable" };
+    if (digest(fs4.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error("native_host_helper_pin_mismatch");
+    const value = JSON.parse(String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--recovery-native-census-v2"], {
+      stdio: "pipe",
+      timeout: 1e3,
+      maxBuffer: 2048,
+      windowsHide: true
+    })));
+    this.assertHealthy();
+    if (value.protocol !== 2 || value.verdict !== "UNKNOWN" || value.reason !== "historical_native_attribution_unavailable" || ![value.nativeBootSeconds, value.processCount, value.descriptorCount, value.unreadable].every((n) => Number.isSafeInteger(n) && n >= 0)) throw new Error("native_host_recovery_observation_untrusted");
+    return {
+      protocol: 2,
+      verdict: "UNKNOWN",
+      reason: value.reason,
+      processCount: value.processCount,
+      descriptorCount: value.descriptorCount,
+      unreadable: value.unreadable
+    };
+  }
   proof() {
     this.assertHealthy();
     return { bootId: this.bootId, pid: process.pid, endpoint: this.endpoint, epoch: this.state.epoch, held: this.state.held, owner: this.state.owner };
@@ -747,6 +770,53 @@ function pruneSnapshotForPersist(record, snapshot) {
   if (first >= 56320 && first <= 57343) tail = tail.slice(1);
   return { ...snapshot, text: tail, truncated: true };
 }
+var object = (v) => v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
+var shape = (v, keys) => object(v) && Object.keys(v).every((k) => keys.includes(k));
+var nonempty = (v) => typeof v === "string" && v.trim().length > 0;
+var string = (v) => typeof v === "string";
+var finite = (v) => typeof v === "number" && Number.isFinite(v);
+var count = (v) => Number.isSafeInteger(v) && v >= 0;
+var positive = (v) => count(v) && v > 0;
+var optional = (v, key, check) => !Object.hasOwn(v, key) || check(v[key]);
+var lifecycle = (v) => ["starting", "running", "stopping", "stopped", "failed", "interrupted"].includes(v);
+function validTermination(v) {
+  if (!shape(v, ["exitCode", "signal", "reason", "lifecycle", "terminatedAt", "osPid", "previousLifecycle", "lastOutputAt", "requestedStop"]) || !(v.exitCode === null || Number.isInteger(v.exitCode)) || !(v.signal === null || count(v.signal)) || !finite(v.terminatedAt) || !optional(v, "osPid", positive) || !optional(v, "previousLifecycle", lifecycle) || !optional(v, "lastOutputAt", finite) || !optional(v, "requestedStop", (x) => ["stop", "delete", "restart", "prune"].includes(x))) return false;
+  const classified = (0, import_session_host_core2.classifyTermination)(v);
+  return classified.reason === v.reason && classified.lifecycle === v.lifecycle;
+}
+function validRuntimeState(v) {
+  if (!shape(v, ["record", "snapshot", "updatedAt"]) || !finite(v.updatedAt)) return false;
+  const r = v.record, s = v.snapshot;
+  if (!shape(r, [
+    "sessionId",
+    "runtimeKey",
+    "displayName",
+    "workspaceLabel",
+    "transport",
+    "providerType",
+    "category",
+    "workspace",
+    "launchCommand",
+    "osPid",
+    "createdAt",
+    "startedAt",
+    "lastActivityAt",
+    "lifecycle",
+    "surfaceKind",
+    "writeOwner",
+    "attachedClients",
+    "buffer",
+    "meta",
+    "termination",
+    "inputSeq",
+    "inputEpoch"
+  ]) || !["sessionId", "runtimeKey", "providerType", "workspace"].every((k) => nonempty(r[k])) || !string(r.displayName) || !string(r.workspaceLabel) || r.transport !== "pty" || !["cli", "acp", "shell"].includes(r.category) || !lifecycle(r.lifecycle) || !finite(r.createdAt) || !finite(r.lastActivityAt) || !object(r.meta) || !optional(r, "startedAt", finite) || !optional(r, "osPid", positive) || !optional(r, "surfaceKind", (x) => ["live_runtime", "recovery_snapshot", "inactive_record"].includes(x)) || !optional(r, "inputSeq", count) || !optional(r, "inputEpoch", nonempty) || !optional(r, "termination", validTermination)) return false;
+  const c = r.launchCommand, b = r.buffer, w = r.writeOwner;
+  if (!shape(c, ["command", "args", "env", "envMode"]) || !nonempty(c.command) || !Array.isArray(c.args) || !c.args.every(string) || !optional(c, "env", (x) => object(x) && Object.values(x).every(string)) || !optional(c, "envMode", (x) => x === "launch_overrides") || !shape(b, ["scrollbackBytes", "snapshotSeq"]) || !count(b.scrollbackBytes) || !count(b.snapshotSeq)) return false;
+  if (w !== null && (!shape(w, ["clientId", "ownerType", "acquiredAt"]) || !nonempty(w.clientId) || !["agent", "user"].includes(w.ownerType) || !finite(w.acquiredAt))) return false;
+  if (!Array.isArray(r.attachedClients) || !r.attachedClients.every((a) => shape(a, ["clientId", "type", "readOnly", "attachedAt", "lastSeenAt"]) && nonempty(a.clientId) && ["daemon", "web", "local-terminal"].includes(a.type) && typeof a.readOnly === "boolean" && finite(a.attachedAt) && finite(a.lastSeenAt))) return false;
+  return shape(s, ["seq", "text", "truncated", "cols", "rows"]) && count(s.seq) && string(s.text) && typeof s.truncated === "boolean" && optional(s, "cols", positive) && optional(s, "rows", positive);
+}
 var SessionHostStorage = class {
   rootDir;
   runtimesDir;
@@ -781,6 +851,53 @@ var SessionHostStorage = class {
       }
     }
     return states.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+  /** Exhaustive recovery inventory: ordinary boot's tolerant reader is not
+   * evidence. Unknown names, symlinks and malformed records veto completeness. */
+  recoveryInventory() {
+    const incomplete = () => ({ complete: false, states: [], tombstones: [] });
+    try {
+      const states = this.readRecoveryDirectory(this.runtimesDir);
+      const tombstones = this.readRecoveryDirectory(this.tombstonesDir);
+      if (!states.every(validRuntimeState) || !tombstones.every((parsed) => shape(parsed, ["sessionId", "termination", "updatedAt"]) && nonempty(parsed.sessionId) && finite(parsed.updatedAt) && validTermination(parsed.termination))) return incomplete();
+      return { complete: true, states, tombstones };
+    } catch {
+      return incomplete();
+    }
+  }
+  readRecoveryDirectory(dirPath) {
+    let dir;
+    try {
+      dir = fs5.lstatSync(dirPath);
+    } catch (e) {
+      if (e.code === "ENOENT") return [];
+      throw e;
+    }
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new Error("recovery_directory_untrusted");
+    const result = [];
+    const entries = fs5.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^[a-z0-9_-]+\.json$/.test(entry.name)) throw new Error("recovery_entry_untrusted");
+      const full = path3.join(dirPath, entry.name);
+      const fd = fs5.openSync(full, fs5.constants.O_RDONLY | fs5.constants.O_NOFOLLOW);
+      try {
+        const before = fs5.fstatSync(fd, { bigint: true });
+        if (!before.isFile() || before.nlink !== 1n) throw new Error("recovery_inode_untrusted");
+        const parsed = JSON.parse(fs5.readFileSync(fd, "utf8"));
+        const after = fs5.fstatSync(fd, { bigint: true });
+        const current = fs5.lstatSync(full, { bigint: true });
+        const identity = (s) => [s.dev, s.ino, s.ctimeNs, s.mtimeNs, s.size].join(":");
+        if (identity(before) !== identity(after) || identity(after) !== identity(current) || current.isSymbolicLink()) throw new Error("recovery_entry_changed");
+        const id = dirPath === this.runtimesDir ? parsed?.record?.sessionId : parsed?.sessionId;
+        if (typeof id !== "string" || !id || `${id}.json` !== entry.name) throw new Error("recovery_entry_name_mismatch");
+        result.push(parsed);
+      } finally {
+        fs5.closeSync(fd);
+      }
+    }
+    const afterDir = fs5.lstatSync(dirPath);
+    if (!afterDir.isDirectory() || afterDir.isSymbolicLink() || [dir.dev, dir.ino, dir.ctimeMs, dir.mtimeMs].join(":") !== [afterDir.dev, afterDir.ino, afterDir.ctimeMs, afterDir.mtimeMs].join(":")) throw new Error("recovery_directory_changed");
+    return result;
   }
   save(record, snapshot) {
     fs5.mkdirSync(this.runtimesDir, { recursive: true });
@@ -980,16 +1097,292 @@ function acquireHostInstanceLock(options) {
   throw new HostInstanceLockedError(lockPath, "could not acquire after reclaim attempts");
 }
 
-// src/prior-host-identity.ts
-var import_crypto2 = require("crypto");
+// src/operator-recovery-fence.ts
 var fs7 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
+var import_node_crypto3 = require("crypto");
 var import_session_host_core3 = require("@adhdev/session-host-core");
+var digest2 = (s) => (0, import_node_crypto3.createHash)("sha256").update(s).digest("hex");
+var OperatorRecoveryFence = class {
+  constructor(root) {
+    this.root = root;
+    this.file = path5.join(root, "operator-recovery-v1.json");
+    try {
+      this.readRecord();
+    } catch (e) {
+      if (e.code !== "ENOENT") this.poisoned = true;
+    }
+  }
+  file;
+  observedDigest = null;
+  inFlight = 0;
+  poisoned = false;
+  assertLaunchAllowed(payload) {
+    (0, import_session_host_core3.assertRecoveryLaunchIdentity)(payload);
+  }
+  enterLaunch(payload) {
+    this.assertLaunchAllowed(payload);
+    this.inFlight++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        this.inFlight--;
+      }
+    };
+  }
+  install(owner, grant, binding, assertNativeExclusion, targetRuntimePresent) {
+    const assertOwner = owner.reserve(grant, "fence_install");
+    assertNativeExclusion();
+    if (this.inFlight !== 0 || targetRuntimePresent()) throw new Error("operator_recovery_launch_in_flight");
+    if (binding.namespace !== import_session_host_core3.OPERATOR_RECOVERY_TARGET.namespace || binding.workerDaemonId !== import_session_host_core3.OPERATOR_RECOVERY_TARGET.workerDaemonId || !binding.hostBootId || !(0, import_session_host_core3.isRecoveryEndpoint)(binding.endpoint)) {
+      throw new Error("operator_recovery_host_binding");
+    }
+    const state = {
+      protocol: 1,
+      target: import_session_host_core3.recoveryTargetBytes,
+      installedHostBootId: binding.hostBootId,
+      namespace: binding.namespace
+    };
+    const bytes = JSON.stringify(state);
+    fs7.mkdirSync(this.root, { recursive: true, mode: 448 });
+    const directory = fs7.lstatSync(this.root);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || directory.mode & 63) throw new Error("operator_recovery_storage_untrusted");
+    assertOwner();
+    try {
+      const fd = fs7.openSync(this.file, "wx", 384);
+      try {
+        fs7.writeFileSync(fd, bytes);
+        fs7.fsyncSync(fd);
+      } finally {
+        fs7.closeSync(fd);
+      }
+      const dir = fs7.openSync(this.root, "r");
+      try {
+        fs7.fsyncSync(dir);
+      } finally {
+        fs7.closeSync(dir);
+      }
+      this.observedDigest = digest2(bytes);
+      return this.observedDigest;
+    } catch (error) {
+      this.poisoned = true;
+      throw error;
+    }
+  }
+  readRecord() {
+    const root = fs7.lstatSync(this.root);
+    if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== process.getuid?.() || root.mode & 63) throw new Error("operator_recovery_storage_untrusted");
+    const fd = fs7.openSync(this.file, fs7.constants.O_RDONLY | fs7.constants.O_NOFOLLOW);
+    try {
+      const stat2 = fs7.fstatSync(fd);
+      if (stat2.size > 4096 || !stat2.isFile() || stat2.nlink !== 1 || stat2.uid !== process.getuid?.() || stat2.mode & 63) {
+        throw new Error("operator_recovery_storage_untrusted");
+      }
+      const bytes = fs7.readFileSync(fd, "utf8");
+      const state = JSON.parse(bytes);
+      if (state.protocol !== 1 || state.target !== import_session_host_core3.recoveryTargetBytes || state.namespace !== import_session_host_core3.OPERATOR_RECOVERY_TARGET.namespace || (typeof state.installedHostBootId !== "string" || !state.installedHostBootId)) throw new Error("operator_recovery_fence_rollback");
+      return { hash: digest2(bytes), state };
+    } finally {
+      fs7.closeSync(fd);
+    }
+  }
+  witness(expectedDigest) {
+    if (this.poisoned || this.inFlight) throw new Error("operator_recovery_fence_unknown");
+    const { hash, state } = this.readRecord();
+    const pinned = expectedDigest ?? this.observedDigest;
+    if (!pinned || hash !== pinned || state.protocol !== 1 || state.target !== import_session_host_core3.recoveryTargetBytes || state.namespace !== import_session_host_core3.OPERATOR_RECOVERY_TARGET.namespace || (typeof state.installedHostBootId !== "string" || !state.installedHostBootId)) throw new Error("operator_recovery_fence_rollback");
+    this.observedDigest = hash;
+    return { digest: hash, installedHostBootId: state.installedHostBootId };
+  }
+};
+
+// src/server.ts
+var import_session_host_core10 = require("@adhdev/session-host-core");
+
+// src/operator-recovery-control.ts
+var import_session_host_core5 = require("@adhdev/session-host-core");
+
+// src/operator-recovery-census.ts
+var import_session_host_core4 = require("@adhdev/session-host-core");
+function readLegacyGuardianCoverage() {
+  return null;
+}
+function evaluateRecoveryCensus(s) {
+  const reply = (verdict, reason) => ({
+    ...s.binding,
+    protocol: 1,
+    verdict,
+    reason,
+    nonce: s.nonce,
+    fenceDigest: s.fenceDigest,
+    sessionId: import_session_host_core4.OPERATOR_RECOVERY_TARGET.sessionId,
+    providerSessionId: import_session_host_core4.OPERATOR_RECOVERY_TARGET.providerSessionId
+  });
+  if (s.binding.namespace !== import_session_host_core4.OPERATOR_RECOVERY_TARGET.namespace || (0, import_session_host_core4.resolveSessionHostIpcKey)(s.instanceConfigDir) !== import_session_host_core4.OPERATOR_RECOVERY_TARGET.namespace || s.binding.workerDaemonId !== import_session_host_core4.OPERATOR_RECOVERY_TARGET.workerDaemonId || !s.binding.hostBootId || !(0, import_session_host_core4.isRecoveryEndpoint)(s.binding.endpoint)) {
+    return reply("UNKNOWN", "native_instance_binding_unproved");
+  }
+  if (!/^[a-f0-9]{64}$/.test(s.nonce) || !/^[a-f0-9]{64}$/.test(s.fenceDigest)) return reply("UNKNOWN", "challenge_or_fence_unproved");
+  if (s.restoreState !== "ready" || s.fullRestoreState !== "ready" || s.partialRestoreCount !== 0 || s.storageCensus !== "complete" || s.inFlightLaunches !== 0) return reply("UNKNOWN", "restore_or_launch_closure_unproved");
+  if (s.targetRuntime === "live") return reply("LIVE", "target_runtime_present");
+  if (s.targetRuntime !== "absent") return reply("UNKNOWN", "runtime_census_unproved");
+  const g = s.guardian;
+  if (!g || g.protocol !== 1 || g.namespace !== s.binding.namespace || g.hostBootId !== s.binding.hostBootId || g.fenceDigest !== s.fenceDigest || g.nonce !== s.nonce || g.sessionId !== import_session_host_core4.OPERATOR_RECOVERY_TARGET.sessionId || g.providerSessionId !== import_session_host_core4.OPERATOR_RECOVERY_TARGET.providerSessionId) return reply("UNKNOWN", "native_guardian_coverage_missing");
+  if (g.descendants === "live" || g.transcriptHandles === "live") return reply("LIVE", "native_writer_present");
+  if (g.historicalLineage !== "complete" || g.descendants !== "absent" || g.transcriptHandles !== "absent" || g.launchAliases !== "closed") return reply("UNKNOWN", "historical_native_coverage_unproved");
+  return reply("ABSENT", "native_dual_uuid_absence");
+}
+
+// src/operator-recovery-control.ts
+var OperatorRecoveryControl = class {
+  constructor(view, publicKey) {
+    this.view = view;
+    const lease = view().upgradeLease;
+    this.owner = publicKey && lease ? new import_session_host_core5.RecoveryOwnerAdmission({
+      publicKey,
+      enrollmentId: "native-parent-boot-pipe",
+      coordinatorBootId: lease.bootId,
+      authEpoch: lease.bootId,
+      verifyCurrent: () => {
+        try {
+          lease.assertHealthy();
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    }) : null;
+  }
+  owner;
+  handle(request) {
+    switch (request.type) {
+      case "prepare_operator_recovery_fence_v1":
+        if (!this.owner) throw new Error("operator_recovery_native_owner_unavailable");
+        return { success: true, result: this.owner.challenge("fence_install") };
+      case "install_operator_recovery_fence_v1": {
+        if (!this.owner) throw new Error("operator_recovery_native_owner_unavailable");
+        const grant = this.owner.authorize(request.payload.message, request.payload.signature);
+        return { success: true, result: { fenceDigest: this.installOperatorRecoveryFence(this.owner, grant) } };
+      }
+      case "attest_operator_recovery_v1":
+        return { success: true, result: this.collectRecoveryCensus(request.payload.nonce, request.payload.fenceDigest) };
+      case "get_operator_recovery_coverage_v1": {
+        if (!/^[a-f0-9]{64}$/.test(request.payload?.nonce)) throw new Error("operator_recovery_nonce_required");
+        let coverage = {
+          protocol: 1,
+          verdict: "UNKNOWN",
+          reason: "native_guardian_coverage_missing"
+        };
+        try {
+          const lease = this.view().upgradeLease;
+          if (lease) coverage = lease.recoveryCoverage();
+        } catch {
+        }
+        return { success: true, result: { ...coverage, nonce: request.payload.nonce } };
+      }
+      default:
+        throw new Error("unsupported_operator_recovery_request");
+    }
+  }
+  /** Used only by the local authenticated owner command. Native exclusion is
+   * checked here, not supplied as a caller's boolean or observation callback. */
+  installOperatorRecoveryFence(owner, grant) {
+    const v = this.view();
+    if (!v.upgradeLease || !v.instanceConfigDir) throw new Error("operator_recovery_native_binding_required");
+    if (v.restorePending || v.fullRestoreState !== "ready" || v.partialRestoreCount !== 0 || !v.storage.recoveryInventory().complete) throw new Error("operator_recovery_full_restore_required");
+    const native = v.upgradeLease.proof();
+    const binding = {
+      namespace: (0, import_session_host_core5.resolveSessionHostIpcKey)(v.instanceConfigDir),
+      endpoint: v.endpoint.path,
+      hostBootId: native.bootId,
+      workerDaemonId: v.workerDaemonId
+    };
+    return v.recoveryFence.install(
+      owner,
+      grant,
+      binding,
+      () => v.upgradeLease.assertMutable(),
+      () => v.registry.listSessions().some((r) => {
+        try {
+          (0, import_session_host_core5.assertRecoveryLaunchIdentity)(r);
+          return false;
+        } catch {
+          return v.runtimes.has(r.sessionId) || ["running", "starting", "stopping"].includes(r.lifecycle);
+        }
+      })
+    );
+  }
+  /** Synchronous observation on the same serialized host loop as final spawn.
+   * The native guardian currently has no historical attribution, so this real
+   * collector cannot produce ABSENT even if all current inventories are empty. */
+  collectRecoveryCensus(nonce, expectedFenceDigest) {
+    const v = this.view();
+    if (!/^[a-f0-9]{64}$/.test(nonce) || !/^[a-f0-9]{64}$/.test(expectedFenceDigest)) throw new Error("operator_recovery_challenge_required");
+    const inventory = v.storage.recoveryInventory();
+    try {
+      v.upgradeLease?.recoveryCoverage();
+    } catch {
+    }
+    let hostBootId = "";
+    let fenceDigest = "";
+    try {
+      v.upgradeLease?.assertHealthy();
+      hostBootId = v.upgradeLease?.proof().bootId || "";
+      fenceDigest = v.recoveryFence.witness(expectedFenceDigest).digest;
+    } catch {
+    }
+    let live = false;
+    let uncertain = !inventory.complete;
+    for (const r of [...v.registry.listSessions(), ...inventory.states.map((s) => s.record)]) {
+      try {
+        (0, import_session_host_core5.assertRecoveryLaunchIdentity)(r);
+      } catch {
+        if (v.runtimes.has(r.sessionId) || ["running", "starting", "stopping"].includes(r.lifecycle)) live = true;
+        else if (!["failed", "stopped", "interrupted"].includes(r.lifecycle)) uncertain = true;
+      }
+    }
+    const tombstoneState = observeRecoveryTombstones(inventory.tombstones, v.runtimes);
+    live ||= tombstoneState === "live";
+    uncertain ||= tombstoneState === "unknown";
+    const namespace = v.instanceConfigDir ? (0, import_session_host_core5.resolveSessionHostIpcKey)(v.instanceConfigDir) : "";
+    return evaluateRecoveryCensus({
+      binding: { namespace, endpoint: v.endpoint.path, hostBootId, workerDaemonId: v.workerDaemonId },
+      instanceConfigDir: v.instanceConfigDir || "/",
+      nonce,
+      fenceDigest,
+      restoreState: v.restorePending ? "pending" : v.fullRestoreState,
+      fullRestoreState: v.fullRestoreState,
+      partialRestoreCount: v.partialRestoreCount,
+      storageCensus: inventory.complete ? "complete" : "unknown",
+      targetRuntime: live ? "live" : uncertain ? "unknown" : "absent",
+      inFlightLaunches: v.mutatingRequests,
+      guardian: readLegacyGuardianCoverage()
+    });
+  }
+};
+function observeRecoveryTombstones(tombstones, runtimes) {
+  let uncertain = false;
+  for (const t of tombstones) {
+    try {
+      (0, import_session_host_core5.assertRecoveryLaunchIdentity)({ sessionId: t.sessionId });
+    } catch {
+      if (runtimes.has(t.sessionId)) return "live";
+      if (t.termination.reason === "unknown") uncertain = true;
+    }
+  }
+  return uncertain ? "unknown" : "absent";
+}
+
+// src/prior-host-identity.ts
+var import_crypto2 = require("crypto");
+var fs8 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var import_session_host_core6 = require("@adhdev/session-host-core");
 var INSTANCE_ARG_PREFIX = "--instance-config-key=";
 function sessionHostInstanceArg(configDir) {
-  const canonical = (0, import_session_host_core3.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: configDir });
-  const digest2 = (0, import_crypto2.createHash)("sha256").update(canonical).digest("hex");
-  return `${INSTANCE_ARG_PREFIX}${digest2}`;
+  const canonical = (0, import_session_host_core6.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: configDir });
+  const digest3 = (0, import_crypto2.createHash)("sha256").update(canonical).digest("hex");
+  return `${INSTANCE_ARG_PREFIX}${digest3}`;
 }
 function isManagedSessionHostCommandLine(commandLine, configDir) {
   if (!commandLine) return false;
@@ -1008,7 +1401,7 @@ function isManagedSessionHostCommandLine(commandLine, configDir) {
     }
     return /^--instance-config-key=[0-9a-f]{64}$/.test(instanceTokens[0]);
   };
-  const execBase = path5.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
+  const execBase = path6.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
   if (execBase === "adhdev-sessiond") {
     const subcommand2 = tokens[1]?.toLowerCase();
     if (subcommand2 && subcommand2 !== "serve" && !subcommand2.startsWith("-")) return false;
@@ -1039,7 +1432,7 @@ function isManagedSessionHostCommandLine(commandLine, configDir) {
   const scriptToken = tokens[idx];
   if (!scriptToken) return false;
   const normalizedScript = scriptToken.replace(/\\/g, "/").toLowerCase();
-  const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path5.basename(normalizedScript) === "adhdev-sessiond";
+  const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path6.basename(normalizedScript) === "adhdev-sessiond";
   if (!isSessionHostEntry) return false;
   const subcommand = tokens[idx + 1]?.toLowerCase();
   if (subcommand && subcommand !== "serve" && !subcommand.startsWith("-")) return false;
@@ -1049,33 +1442,33 @@ function readVerifiedReplacementProvenance(options) {
   const now = options.nowMs ? options.nowMs() : Date.now();
   const provenanceFile = options.provenanceFile ?? options.provenanceFilePath;
   try {
-    if (!provenanceFile || !fs7.existsSync(provenanceFile)) return void 0;
-    const stat2 = fs7.lstatSync(provenanceFile);
+    if (!provenanceFile || !fs8.existsSync(provenanceFile)) return void 0;
+    const stat2 = fs8.lstatSync(provenanceFile);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || (stat2.mode & 63) !== 0) {
       return void 0;
     }
     if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       return void 0;
     }
-    const parsed = JSON.parse(fs7.readFileSync(provenanceFile, "utf8"));
+    const parsed = JSON.parse(fs8.readFileSync(provenanceFile, "utf8"));
     if (!parsed || parsed.schemaVersion !== 1 && parsed.schema !== 1) return void 0;
     if (options.appName !== void 0 && parsed.appName !== void 0 && parsed.appName !== options.appName) {
       return void 0;
     }
-    const canonicalDir = (0, import_session_host_core3.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
-    if (typeof parsed.instanceConfigDir !== "string" || (0, import_session_host_core3.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
+    const canonicalDir = (0, import_session_host_core6.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
+    if (typeof parsed.instanceConfigDir !== "string" || (0, import_session_host_core6.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
       return void 0;
     }
-    if (fs7.existsSync(canonicalDir)) {
-      const provenanceFiles = fs7.readdirSync(canonicalDir).filter((entry) => entry.endsWith("-session-host-replacement.json"));
+    if (fs8.existsSync(canonicalDir)) {
+      const provenanceFiles = fs8.readdirSync(canonicalDir).filter((entry) => entry.endsWith("-session-host-replacement.json"));
       if (provenanceFiles.length > 1) return void 0;
     }
     const expectedKey = sessionHostInstanceArg(canonicalDir);
     if (parsed.instanceConfigKey !== expectedKey) return void 0;
-    const canonicalEndpointDir = fs7.existsSync(path5.dirname(options.endpointPath)) ? fs7.realpathSync(path5.dirname(options.endpointPath)) : path5.resolve(path5.dirname(options.endpointPath));
-    const canonicalEndpointPath = path5.join(canonicalEndpointDir, path5.basename(options.endpointPath));
-    const parsedEndpointDir = typeof parsed.endpointPath === "string" && fs7.existsSync(path5.dirname(parsed.endpointPath)) ? fs7.realpathSync(path5.dirname(parsed.endpointPath)) : typeof parsed.endpointPath === "string" ? path5.resolve(path5.dirname(parsed.endpointPath)) : "";
-    const parsedEndpointPath = typeof parsed.endpointPath === "string" ? path5.join(parsedEndpointDir, path5.basename(parsed.endpointPath)) : "";
+    const canonicalEndpointDir = fs8.existsSync(path6.dirname(options.endpointPath)) ? fs8.realpathSync(path6.dirname(options.endpointPath)) : path6.resolve(path6.dirname(options.endpointPath));
+    const canonicalEndpointPath = path6.join(canonicalEndpointDir, path6.basename(options.endpointPath));
+    const parsedEndpointDir = typeof parsed.endpointPath === "string" && fs8.existsSync(path6.dirname(parsed.endpointPath)) ? fs8.realpathSync(path6.dirname(parsed.endpointPath)) : typeof parsed.endpointPath === "string" ? path6.resolve(path6.dirname(parsed.endpointPath)) : "";
+    const parsedEndpointPath = typeof parsed.endpointPath === "string" ? path6.join(parsedEndpointDir, path6.basename(parsed.endpointPath)) : "";
     if (parsedEndpointPath !== canonicalEndpointPath) return void 0;
     if (typeof parsed.expectedPid !== "number" || !Number.isFinite(parsed.expectedPid) || parsed.expectedPid <= 0) {
       return void 0;
@@ -1107,21 +1500,21 @@ function readVerifiedReplacementProvenance(options) {
       }
       expectedEndpointInode = BigInt(parsed.expectedEndpointInode);
     }
-    const effectiveLeaseStateDir = options.leaseStateDir ?? path5.join(canonicalDir, "session-host");
+    const effectiveLeaseStateDir = options.leaseStateDir ?? path6.join(canonicalDir, "session-host");
     if (effectiveLeaseStateDir) {
-      const leaseFile = path5.join(effectiveLeaseStateDir, "upgrade-lease.json");
-      if (!fs7.existsSync(leaseFile)) return void 0;
-      if (fs7.existsSync(leaseFile)) {
-        const leaseStat = fs7.lstatSync(leaseFile);
+      const leaseFile = path6.join(effectiveLeaseStateDir, "upgrade-lease.json");
+      if (!fs8.existsSync(leaseFile)) return void 0;
+      if (fs8.existsSync(leaseFile)) {
+        const leaseStat = fs8.lstatSync(leaseFile);
         if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || leaseStat.nlink !== 1 || (leaseStat.mode & 63) !== 0) {
           return void 0;
         }
         if (typeof process.getuid === "function" && leaseStat.uid !== process.getuid()) {
           return void 0;
         }
-        const lease = JSON.parse(fs7.readFileSync(leaseFile, "utf8"));
-        const leaseEndpointDir = typeof lease.endpoint === "string" && fs7.existsSync(path5.dirname(lease.endpoint)) ? fs7.realpathSync(path5.dirname(lease.endpoint)) : typeof lease.endpoint === "string" ? path5.resolve(path5.dirname(lease.endpoint)) : "";
-        const leaseEndpointPath = typeof lease.endpoint === "string" ? path5.join(leaseEndpointDir, path5.basename(lease.endpoint)) : "";
+        const lease = JSON.parse(fs8.readFileSync(leaseFile, "utf8"));
+        const leaseEndpointDir = typeof lease.endpoint === "string" && fs8.existsSync(path6.dirname(lease.endpoint)) ? fs8.realpathSync(path6.dirname(lease.endpoint)) : typeof lease.endpoint === "string" ? path6.resolve(path6.dirname(lease.endpoint)) : "";
+        const leaseEndpointPath = typeof lease.endpoint === "string" ? path6.join(leaseEndpointDir, path6.basename(lease.endpoint)) : "";
         if (lease.schema !== 1 || lease.held !== true || leaseEndpointPath !== canonicalEndpointPath || lease.epoch !== parsed.expectedEpoch || lease.owner !== parsed.expectedOwner || typeof lease.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(lease.tokenHash)) {
           return void 0;
         }
@@ -1161,14 +1554,14 @@ function readVerifiedReplacementProvenance(options) {
 }
 
 // src/session-diagnostics.ts
-var path6 = __toESM(require("path"));
-var import_session_host_core4 = require("@adhdev/session-host-core");
+var path7 = __toESM(require("path"));
+var import_session_host_core7 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
 function resolveHostEntryPath() {
   const entry = process.argv[1];
   if (typeof entry !== "string" || !entry.trim()) return void 0;
   try {
-    return path6.resolve(entry);
+    return path7.resolve(entry);
   } catch {
     return entry;
   }
@@ -1230,7 +1623,7 @@ function buildHostDiagnostics(params) {
     // without needing process-inspection privileges. See SessionHostDiagnostics.
     hostEntryPath: resolveHostEntryPath(),
     runtimeCount: params.runtimeCount,
-    supportedRequestTypes: [...import_session_host_core4.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
+    supportedRequestTypes: [...import_session_host_core7.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
     liveRuntimes,
     recoverySnapshots,
@@ -1242,7 +1635,7 @@ function buildHostDiagnostics(params) {
 }
 
 // src/session-lifecycle.ts
-var import_session_host_core5 = require("@adhdev/session-host-core");
+var import_session_host_core8 = require("@adhdev/session-host-core");
 function compareDuplicateCandidates(a, b) {
   const score = (record) => {
     const lifecycleScore = record.lifecycle === "running" ? 4 : record.lifecycle === "starting" ? 3 : record.lifecycle === "stopping" ? 2 : record.lifecycle === "interrupted" ? 1 : 0;
@@ -1306,9 +1699,9 @@ function buildPayloadFromRecord(record) {
     providerType: record.providerType,
     category: record.category,
     workspace: record.workspace,
-    launchCommand: { ...record.launchCommand, env: (0, import_session_host_core5.replayLaunchEnv)(record.launchCommand), envMode: "launch_overrides" },
-    cols: (0, import_session_host_core5.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
-    rows: (0, import_session_host_core5.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
+    launchCommand: { ...record.launchCommand, env: (0, import_session_host_core8.replayLaunchEnv)(record.launchCommand), envMode: "launch_overrides" },
+    cols: (0, import_session_host_core8.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
+    rows: (0, import_session_host_core8.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
     meta: record.meta
   };
 }
@@ -1333,6 +1726,54 @@ function buildRecoveredRecord(persisted) {
     }
   };
   return { recoveredRecord, wasLiveRuntime, hadRecoveryInterest };
+}
+var RuntimeExitWaiters = class {
+  waiters = /* @__PURE__ */ new Map();
+  wait(sessionId, timeoutMs, hasRuntime, lifecycle2) {
+    if (!hasRuntime) {
+      return Promise.resolve(lifecycle2 === "failed" ? 1 : 0);
+    }
+    return new Promise((resolve4, reject) => {
+      const timeout = setTimeout(() => {
+        const waiters2 = this.waiters.get(sessionId) || [];
+        this.waiters.set(sessionId, waiters2.filter((waiter) => waiter !== onExit));
+        reject(new Error(`Timed out waiting for runtime ${sessionId} to exit`));
+      }, timeoutMs);
+      const onExit = (exitCode) => {
+        clearTimeout(timeout);
+        resolve4(exitCode);
+      };
+      const waiters = this.waiters.get(sessionId) || [];
+      waiters.push(onExit);
+      this.waiters.set(sessionId, waiters);
+    });
+  }
+  resolve(sessionId, exitCode) {
+    const waiters = this.waiters.get(sessionId);
+    if (!waiters?.length) return;
+    this.waiters.delete(sessionId);
+    for (const waiter of waiters) {
+      try {
+        waiter(exitCode);
+      } catch {
+      }
+    }
+  }
+};
+function restorePersistedRuntimeRecords(storage, registry, warn) {
+  const states = storage.loadAll();
+  let skippedAutoResumeSessions = 0;
+  for (const persisted of states) {
+    const { recoveredRecord, wasLiveRuntime, hadRecoveryInterest } = buildRecoveredRecord(persisted);
+    registry.restoreSession(recoveredRecord, persisted.snapshot);
+    storage.save(recoveredRecord, persisted.snapshot);
+    if (wasLiveRuntime && hadRecoveryInterest) {
+      skippedAutoResumeSessions += 1;
+    }
+  }
+  if (skippedAutoResumeSessions > 0) {
+    warn(`session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
+  }
 }
 
 // src/session-protocol.ts
@@ -1374,9 +1815,10 @@ function withReplayResyncPreamble(text, sinceSeq) {
 // src/server.ts
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
-  registry = new import_session_host_core6.SessionHostRegistry();
+  registry = new import_session_host_core9.SessionHostRegistry();
   runtimes = /* @__PURE__ */ new Map();
   storage;
+  recoveryFence;
   upgradeLease;
   instanceConfigDir;
   pidFilePath;
@@ -1390,6 +1832,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
   startupFence = null;
   hasReplacementContext;
   restorePending = true;
+  fullRestoreState = "pending";
+  partialRestoreCount = 0;
+  workerDaemonId;
+  recoveryControl;
   mutatingRequests = 0;
   endpointInode = null;
   ipcServer = null;
@@ -1402,7 +1848,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
   recentLogs = [];
   recentRequests = [];
   recentTransitions = [];
-  exitWaiters = /* @__PURE__ */ new Map();
+  exitWaiters = new RuntimeExitWaiters();
   lastNoOutputInputWarnAt = /* @__PURE__ */ new Map();
   // Records the most recent explicit stop/delete/restart/prune request per
   // session so the termination diagnostic can attribute the exit to it.
@@ -1413,15 +1859,16 @@ var SessionHostServer = class extends import_events.EventEmitter {
   stopPromise = null;
   constructor(options = {}) {
     super();
-    this.endpoint = options.endpoint || (0, import_session_host_core6.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
+    this.endpoint = options.endpoint || (0, import_session_host_core9.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
     if (options.upgradeBinding) {
-      const relative3 = options.storageRootDir && path7.relative(options.upgradeBinding.stateDir, options.storageRootDir);
-      if (this.endpoint.kind !== "unix" || !options.storageRootDir || !path7.isAbsolute(options.storageRootDir) || !path7.isAbsolute(options.upgradeBinding.stateDir) || relative3 === ".." || relative3?.startsWith(`..${path7.sep}`) || path7.isAbsolute(relative3 || "")) {
+      const relative3 = options.storageRootDir && path8.relative(options.upgradeBinding.stateDir, options.storageRootDir);
+      if (this.endpoint.kind !== "unix" || !options.storageRootDir || !path8.isAbsolute(options.storageRootDir) || !path8.isAbsolute(options.upgradeBinding.stateDir) || relative3 === ".." || relative3?.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative3 || "")) {
         throw new Error("native_host_instance_storage_binding_required");
       }
     }
     this.upgradeLease = options.upgradeBinding ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.instanceConfigDir = options.instanceConfigDir || null;
+    this.workerDaemonId = options.workerDaemonId || "";
     this.pidFilePath = options.pidFilePath || null;
     this.instanceLockPath = options.instanceLockPath || (this.pidFilePath ? `${this.pidFilePath}.lock` : null);
     this.holdInstanceLockUntilExit = options.holdInstanceLockUntilExit === true;
@@ -1434,6 +1881,21 @@ var SessionHostServer = class extends import_events.EventEmitter {
       appName: options.appName || "adhdev",
       rootDir: options.storageRootDir
     });
+    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir || path8.join((0, import_session_host_core10.resolveInstanceConfigDir)(process.env), "session-host", options.appName || "adhdev"));
+    this.recoveryControl = new OperatorRecoveryControl(() => ({
+      upgradeLease: this.upgradeLease,
+      instanceConfigDir: this.instanceConfigDir,
+      endpoint: this.endpoint,
+      workerDaemonId: this.workerDaemonId,
+      restorePending: this.restorePending,
+      fullRestoreState: this.fullRestoreState,
+      partialRestoreCount: this.partialRestoreCount,
+      mutatingRequests: this.mutatingRequests,
+      registry: this.registry,
+      runtimes: this.runtimes,
+      storage: this.storage,
+      recoveryFence: this.recoveryFence
+    }), options.recoveryOwnerPublicKey);
   }
   isPidAlive(pid) {
     if (!Number.isFinite(pid) || pid <= 0) return false;
@@ -1468,8 +1930,8 @@ var SessionHostServer = class extends import_events.EventEmitter {
   assertNoAutomaticReplacementContext() {
     if (this.isCancelled?.()) throw new Error("session_host_start_cancelled");
     if (this.hasReplacementContext) throw new Error("session_host_live_owner_replacement_unauthorized");
-    if (this.instanceConfigDir && fs8.existsSync(this.instanceConfigDir)) {
-      if (fs8.readdirSync(this.instanceConfigDir).some((name) => name.endsWith("-session-host-replacement.json"))) {
+    if (this.instanceConfigDir && fs9.existsSync(this.instanceConfigDir)) {
+      if (fs9.readdirSync(this.instanceConfigDir).some((name) => name.endsWith("-session-host-replacement.json"))) {
         throw new Error("session_host_live_owner_replacement_unauthorized");
       }
     }
@@ -1480,7 +1942,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     if (this.endpoint.kind !== "unix") return;
     const identity = (file) => {
       try {
-        const stat2 = fs8.lstatSync(file, { bigint: true });
+        const stat2 = fs9.lstatSync(file, { bigint: true });
         return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
       } catch (error) {
         if (error.code === "ENOENT") return "missing";
@@ -1488,12 +1950,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
       }
     };
     const configIdentity = this.instanceConfigDir ? identity(this.instanceConfigDir) : null;
-    const endpointParent = fs8.realpathSync(path7.dirname(this.endpoint.path));
+    const endpointParent = fs9.realpathSync(path8.dirname(this.endpoint.path));
     const initialEndpoint = identity(this.endpoint.path);
     const readPid = () => {
       if (!this.pidFilePath) return "missing";
       try {
-        const raw = fs8.readFileSync(this.pidFilePath, "utf8").trim();
+        const raw = fs9.readFileSync(this.pidFilePath, "utf8").trim();
         if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
           return "corrupt";
         }
@@ -1510,7 +1972,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       this.assertNoAutomaticReplacementContext();
       const currentPid = readPid();
       const [birth, alive] = hasPid(initialPid) ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
-      if (currentPid !== initialPid || birth !== initialBirth || alive || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs8.realpathSync(path7.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
+      if (currentPid !== initialPid || birth !== initialBirth || alive || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs9.realpathSync(path8.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
         throw new Error("session_host_endpoint_changed_during_recovery");
       }
       this.assertNoAutomaticReplacementContext();
@@ -1530,13 +1992,13 @@ var SessionHostServer = class extends import_events.EventEmitter {
         if (owners.length !== 0) throw new Error("session_host_endpoint_changed_during_recovery");
         assertGeneration(initialEndpoint);
       }
-      fs8.unlinkSync(this.endpoint.path);
+      fs9.unlinkSync(this.endpoint.path);
     }
     this.startupFence = () => assertGeneration("missing");
     this.startupFence();
   }
   async start() {
-    (0, import_session_host_core6.validateSessionHostEndpoint)(this.endpoint);
+    (0, import_session_host_core9.validateSessionHostEndpoint)(this.endpoint);
     this.assertNoAutomaticReplacementContext();
     if (this.instanceLockPath && !this.instanceLock) {
       this.instanceLock = acquireHostInstanceLock({
@@ -1553,7 +2015,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
   }
   async startAfterLock() {
-    if (this.upgradeLease && fs8.existsSync(this.endpoint.path)) {
+    if (this.upgradeLease && fs9.existsSync(this.endpoint.path)) {
       throw new Error("native_host_endpoint_owner_unproved");
     }
     await this.evictPriorEndpointOwners();
@@ -1570,7 +2032,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.startupFence?.();
     this.ipcServer = net2.createServer((socket) => {
       this.sockets.add(socket);
-      const parser = (0, import_session_host_core6.createLineParser)((envelope) => {
+      const parser = (0, import_session_host_core9.createLineParser)((envelope) => {
         if (envelope.kind !== "request") return;
         void this.handleIncomingRequest(socket, envelope);
       });
@@ -1622,10 +2084,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     if (this.endpoint.kind === "unix") {
       if (this.upgradeLease) {
-        fs8.chmodSync(this.endpoint.path, 384);
+        fs9.chmodSync(this.endpoint.path, 384);
       }
       try {
-        this.endpointInode = fs8.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        this.endpointInode = fs9.lstatSync(this.endpoint.path, { bigint: true }).ino;
       } catch {
         this.endpointInode = null;
       }
@@ -1633,8 +2095,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.recordHostLog("info", `session host endpoint ready: ${this.endpoint.path}`);
     setTimeout(() => {
       try {
-        if (!this.upgradeLease?.proof().held) this.restorePersistedRuntimes();
+        if (!this.upgradeLease?.proof().held) {
+          this.restorePersistedRuntimes();
+          this.fullRestoreState = this.storage.recoveryInventory().complete ? "ready" : "failed";
+        }
       } catch (error) {
+        this.fullRestoreState = "failed";
         this.recordHostLog("error", `session host restore failed: ${error?.message || String(error)}`);
       } finally {
         this.restorePending = false;
@@ -1667,7 +2133,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     let endpointReplaced = false;
     if (this.endpoint.kind === "unix" && this.endpointInode !== null) {
       try {
-        const currentIno = fs8.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        const currentIno = fs9.lstatSync(this.endpoint.path, { bigint: true }).ino;
         endpointReplaced = currentIno !== this.endpointInode;
       } catch {
         endpointReplaced = true;
@@ -1685,8 +2151,8 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     if (this.endpoint.kind === "unix" && !endpointReplaced) {
       try {
-        if (this.endpointInode !== null && fs8.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
-          fs8.unlinkSync(this.endpoint.path);
+        if (this.endpointInode !== null && fs9.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
+          fs9.unlinkSync(this.endpoint.path);
         }
       } catch {
       }
@@ -1699,7 +2165,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.removeAllListeners();
   }
   async handleRequest(request, sourceSocket) {
-    const readOnly = ["get_upgrade_lease", "acquire_upgrade_lease", "release_upgrade_lease", "get_host_diagnostics", "get_session_census", "get_session", "list_sessions", "get_snapshot", "get_terminal_snapshot"].includes(request.type);
+    const readOnly = ["prepare_operator_recovery_fence_v1", "attest_operator_recovery_v1", "get_operator_recovery_coverage_v1", "get_upgrade_lease", "acquire_upgrade_lease", "release_upgrade_lease", "get_host_diagnostics", "get_session_census", "get_session", "list_sessions", "get_snapshot", "get_terminal_snapshot"].includes(request.type);
     let counted = false;
     try {
       if (!readOnly) {
@@ -1708,6 +2174,11 @@ var SessionHostServer = class extends import_events.EventEmitter {
         counted = true;
       }
       switch (request.type) {
+        case "prepare_operator_recovery_fence_v1":
+        case "install_operator_recovery_fence_v1":
+        case "attest_operator_recovery_v1":
+        case "get_operator_recovery_coverage_v1":
+          return this.recoveryControl.handle(request);
         case "get_upgrade_lease":
           if (!this.upgradeLease) throw new Error("native_host_upgrade_binding_unavailable");
           return { success: true, result: this.upgradeLease.proof() };
@@ -1721,6 +2192,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
           if (!this.upgradeLease) throw new Error("native_host_upgrade_binding_unavailable");
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case "create_session": {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.createSession(request.payload);
           if (sourceSocket) {
             this.subscribeSocketToSession(sourceSocket, record.sessionId);
@@ -1798,6 +2270,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
           return { success: true, result: record };
         }
         case "update_session_meta": {
+          this.recoveryFence.assertLaunchAllowed(request.payload);
           const record = this.registry.updateSessionMeta(
             request.payload.sessionId,
             request.payload.meta || {},
@@ -1976,6 +2449,9 @@ var SessionHostServer = class extends import_events.EventEmitter {
       if (counted) this.mutatingRequests--;
     }
   }
+  collectRecoveryCensus(nonce, fenceDigest) {
+    return this.recoveryControl.collectRecoveryCensus(nonce, fenceDigest);
+  }
   requireRuntime(sessionId) {
     const runtime = this.runtimes.get(sessionId);
     if (!runtime) throw new Error(`Runtime not found for session: ${sessionId}`);
@@ -2038,7 +2514,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       durationMs: Math.max(0, Date.now() - startedAt),
       error: response.success ? void 0 : response.error
     });
-    this.writeEnvelopeSafely(socket, (0, import_session_host_core6.createResponseEnvelope)(envelope.requestId, response));
+    this.writeEnvelopeSafely(socket, (0, import_session_host_core9.createResponseEnvelope)(envelope.requestId, response));
   }
   writeEnvelopeSafely(socket, envelope) {
     if (socket.destroyed || !socket.writable || socket.writableEnded) {
@@ -2080,7 +2556,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
   persistNow(sessionId, allowTerminal = false) {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
-    if (!allowTerminal && (0, import_session_host_core6.isTerminalRecord)(record)) return;
+    if (!allowTerminal && (0, import_session_host_core9.isTerminalRecord)(record)) return;
     const snapshot = this.getSnapshot(sessionId);
     try {
       this.storage.save(record, snapshot);
@@ -2174,12 +2650,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
       );
     }, 250);
   }
-  recordRuntimeTransition(sessionId, action, lifecycle, detail, success = true, error) {
+  recordRuntimeTransition(sessionId, action, lifecycle2, detail, success = true, error) {
     const transition = {
       timestamp: Date.now(),
       sessionId,
       action,
-      lifecycle,
+      lifecycle: lifecycle2,
       detail,
       success,
       error
@@ -2188,34 +2664,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.emitEvent({ type: "runtime_transition", transition });
   }
   waitForRuntimeExit(sessionId, timeoutMs = 5e3) {
-    if (!this.runtimes.has(sessionId)) {
-      return Promise.resolve(this.registry.getSession(sessionId)?.lifecycle === "failed" ? 1 : 0);
-    }
-    return new Promise((resolve4, reject) => {
-      const timeout = setTimeout(() => {
-        const waiters2 = this.exitWaiters.get(sessionId) || [];
-        this.exitWaiters.set(sessionId, waiters2.filter((waiter) => waiter !== onExit));
-        reject(new Error(`Timed out waiting for runtime ${sessionId} to exit`));
-      }, timeoutMs);
-      const onExit = (exitCode) => {
-        clearTimeout(timeout);
-        resolve4(exitCode);
-      };
-      const waiters = this.exitWaiters.get(sessionId) || [];
-      waiters.push(onExit);
-      this.exitWaiters.set(sessionId, waiters);
-    });
+    return this.exitWaiters.wait(sessionId, timeoutMs, this.runtimes.has(sessionId), this.registry.getSession(sessionId)?.lifecycle);
   }
   resolveExitWaiters(sessionId, exitCode) {
-    const waiters = this.exitWaiters.get(sessionId);
-    if (!waiters?.length) return;
-    this.exitWaiters.delete(sessionId);
-    for (const waiter of waiters) {
-      try {
-        waiter(exitCode);
-      } catch {
-      }
-    }
+    this.exitWaiters.resolve(sessionId, exitCode);
   }
   // Synchronous, best-effort variant for background/periodic persistence
   // (persistNow, called from many sync contexts). Uses getSnapshotTextSync()
@@ -2251,18 +2703,23 @@ var SessionHostServer = class extends import_events.EventEmitter {
     if (!existing) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
-    if (this.runtimes.has(sessionId)) {
-      this.stopRequests.set(sessionId, "restart");
-      this.registry.setLifecycle(sessionId, "stopping");
-      this.persistNow(sessionId);
-      this.recordRuntimeTransition(sessionId, "restart_requested", "stopping", void 0, true);
-      this.requireRuntime(sessionId).stop();
-      await this.waitForRuntimeExit(sessionId);
+    const leaveLaunch = this.recoveryFence.enterLaunch(buildPayloadFromRecord(existing));
+    try {
+      if (this.runtimes.has(sessionId)) {
+        this.stopRequests.set(sessionId, "restart");
+        this.registry.setLifecycle(sessionId, "stopping");
+        this.persistNow(sessionId);
+        this.recordRuntimeTransition(sessionId, "restart_requested", "stopping", void 0, true);
+        this.requireRuntime(sessionId).stop();
+        await this.waitForRuntimeExit(sessionId);
+      }
+      const latest = this.registry.getSession(sessionId) || existing;
+      const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), "session_resumed");
+      this.recordRuntimeTransition(sessionId, "restart_completed", restarted.lifecycle, void 0, true);
+      return restarted;
+    } finally {
+      leaveLaunch();
     }
-    const latest = this.registry.getSession(sessionId) || existing;
-    const restarted = this.startRuntime(latest, buildPayloadFromRecord(latest), "session_resumed");
-    this.recordRuntimeTransition(sessionId, "restart_completed", restarted.lifecycle, void 0, true);
-    return restarted;
   }
   async pruneDuplicateSessions(payload) {
     const providerFilter = typeof payload?.providerType === "string" ? payload.providerType.trim() : "";
@@ -2299,19 +2756,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     };
   }
   restorePersistedRuntimes() {
-    const states = this.storage.loadAll();
-    let skippedAutoResumeSessions = 0;
-    for (const persisted of states) {
-      const { recoveredRecord, wasLiveRuntime, hadRecoveryInterest } = buildRecoveredRecord(persisted);
-      this.registry.restoreSession(recoveredRecord, persisted.snapshot);
-      this.storage.save(recoveredRecord, persisted.snapshot);
-      if (wasLiveRuntime && hadRecoveryInterest) {
-        skippedAutoResumeSessions += 1;
-      }
-    }
-    if (skippedAutoResumeSessions > 0) {
-      this.recordHostLog("warn", `session host restored ${skippedAutoResumeSessions} live runtime snapshot(s) without auto-resume`);
-    }
+    restorePersistedRuntimeRecords(this.storage, this.registry, (message) => this.recordHostLog("warn", message));
   }
   async pruneDuplicateRuntime(record) {
     const providerSessionId = typeof record.meta?.providerSessionId === "string" ? String(record.meta.providerSessionId) : void 0;
@@ -2342,24 +2787,29 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.stopRequests.delete(record.sessionId);
   }
   startRuntime(record, payload, startEventType) {
-    const runtime = new PtySessionRuntime({
-      sessionId: record.sessionId,
-      payload,
-      onData: (data) => {
-        const { seq } = this.registry.appendOutput(record.sessionId, data);
-        this.schedulePersist(record.sessionId);
-        this.emitEvent({ type: "session_output", sessionId: record.sessionId, seq, data });
-      },
-      onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal)
-    });
-    this.registry.setLifecycle(record.sessionId, "starting");
-    const pid = runtime.start();
-    this.runtimes.set(record.sessionId, runtime);
-    const startedRecord = this.registry.markStarted(record.sessionId, pid);
-    this.persistNow(record.sessionId);
-    this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
-    this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
-    return startedRecord;
+    const leaveLaunch = this.recoveryFence.enterLaunch(payload);
+    try {
+      const runtime = new PtySessionRuntime({
+        sessionId: record.sessionId,
+        payload,
+        onData: (data) => {
+          const { seq } = this.registry.appendOutput(record.sessionId, data);
+          this.schedulePersist(record.sessionId);
+          this.emitEvent({ type: "session_output", sessionId: record.sessionId, seq, data });
+        },
+        onExit: (exitCode, signal) => this.handleRuntimeExit(record, exitCode, signal)
+      });
+      this.registry.setLifecycle(record.sessionId, "starting");
+      const pid = runtime.start();
+      this.runtimes.set(record.sessionId, runtime);
+      const startedRecord = this.registry.markStarted(record.sessionId, pid);
+      this.persistNow(record.sessionId);
+      this.emitEvent({ type: startEventType, sessionId: record.sessionId, pid });
+      this.recordRuntimeTransition(record.sessionId, startEventType, startedRecord.lifecycle, `pid=${pid}`, true);
+      return startedRecord;
+    } finally {
+      leaveLaunch();
+    }
   }
   /**
    * Handle a PTY termination: classify the (exitCode, signal) pair, stamp the
@@ -2368,7 +2818,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
    */
   handleRuntimeExit(record, exitCode, signal) {
     const priorRecord = this.registry.getSession(record.sessionId);
-    const termination = (0, import_session_host_core6.classifyTermination)({
+    const termination = (0, import_session_host_core9.classifyTermination)({
       exitCode,
       signal,
       osPid: priorRecord?.osPid,
@@ -2417,7 +2867,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     );
     setTimeout(() => {
       const current = this.registry.getSession(record.sessionId);
-      if (current && !(0, import_session_host_core6.isTerminalRecord)(current)) return;
+      if (current && !(0, import_session_host_core9.isTerminalRecord)(current)) return;
       this.registry.deleteSession(record.sessionId);
       this.storage.remove(record.sessionId);
     }, 5e3).unref?.();
@@ -2426,12 +2876,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
 };
 
 // src/threadpool-watchdog.ts
-var fs9 = __toESM(require("fs"));
+var fs10 = __toESM(require("fs"));
 var os2 = __toESM(require("os"));
 var THREADPOOL_WATCHDOG_INTERVAL_MS = 15e3;
 var THREADPOOL_WATCHDOG_STALL_MS = 12e4;
 function defaultProbe(done) {
-  fs9.stat(os2.tmpdir(), () => done());
+  fs10.stat(os2.tmpdir(), () => done());
 }
 function startThreadpoolWatchdog(options) {
   const intervalMs = options.intervalMs ?? THREADPOOL_WATCHDOG_INTERVAL_MS;
@@ -2469,7 +2919,7 @@ function startThreadpoolWatchdog(options) {
 }
 function writeStderrLineSync(line) {
   try {
-    fs9.writeSync(2, `${line}
+    fs10.writeSync(2, `${line}
 `);
   } catch {
   }
@@ -2478,43 +2928,43 @@ function writeStderrLineSync(line) {
 // src/index.ts
 var SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || "adhdev";
 var SHUTDOWN_DEADLINE_MS = 1e4;
-var INSTANCE_CONFIG_DIR = (0, import_session_host_core7.resolveInstanceConfigDir)(process.env);
-var INSTANCE_IPC_KEY = (0, import_session_host_core7.resolveSessionHostIpcKey)(INSTANCE_CONFIG_DIR);
+var INSTANCE_CONFIG_DIR = (0, import_session_host_core11.resolveInstanceConfigDir)(process.env);
+var INSTANCE_IPC_KEY = (0, import_session_host_core11.resolveSessionHostIpcKey)(INSTANCE_CONFIG_DIR);
 function getSessionHostEndpoint() {
-  return (0, import_session_host_core7.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
+  return (0, import_session_host_core11.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
 }
 function getSessionHostStorageRoot() {
-  return path8.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
+  return path9.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
 }
 function getSessionHostReplacementProvenanceFile(appName, configDir = INSTANCE_CONFIG_DIR) {
   const dir = configDir;
-  if (!fs10.existsSync(dir)) fs10.mkdirSync(dir, { recursive: true });
-  return path8.join(dir, `${appName}-session-host-replacement.json`);
+  if (!fs11.existsSync(dir)) fs11.mkdirSync(dir, { recursive: true });
+  return path9.join(dir, `${appName}-session-host-replacement.json`);
 }
 function removeSessionHostReplacementProvenance(appName, configDir = INSTANCE_CONFIG_DIR) {
   try {
-    const provenanceFile = path8.join(configDir, `${appName}-session-host-replacement.json`);
-    if (fs10.existsSync(provenanceFile)) {
-      fs10.unlinkSync(provenanceFile);
+    const provenanceFile = path9.join(configDir, `${appName}-session-host-replacement.json`);
+    if (fs11.existsSync(provenanceFile)) {
+      fs11.unlinkSync(provenanceFile);
     }
   } catch {
   }
 }
 function getSessionHostPidFile(appName) {
   const dir = INSTANCE_CONFIG_DIR;
-  if (!fs10.existsSync(dir)) fs10.mkdirSync(dir, { recursive: true });
-  return path8.join(dir, `${appName}-session-host.pid`);
+  if (!fs11.existsSync(dir)) fs11.mkdirSync(dir, { recursive: true });
+  return path9.join(dir, `${appName}-session-host.pid`);
 }
 function writeSessionHostPid(appName) {
-  fs10.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
+  fs11.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
 }
 function removeSessionHostPid(appName) {
   try {
     const pidFile = getSessionHostPidFile(appName);
-    if (!fs10.existsSync(pidFile)) return;
-    const recordedPid = Number.parseInt(fs10.readFileSync(pidFile, "utf8").trim(), 10);
+    if (!fs11.existsSync(pidFile)) return;
+    const recordedPid = Number.parseInt(fs11.readFileSync(pidFile, "utf8").trim(), 10);
     if (Number.isFinite(recordedPid) && recordedPid !== process.pid) return;
-    fs10.unlinkSync(pidFile);
+    fs11.unlinkSync(pidFile);
   } catch {
   }
 }
@@ -2543,14 +2993,25 @@ async function runServer(instanceKeyArgs = []) {
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
-    const stat2 = fs10.lstatSync(pinFile);
-    if (process.platform !== "darwin" || fs10.realpathSync(pinFile) !== pinFile || !stat2.isFile() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("guardian_launch_pins_untrusted");
-    const pins = JSON.parse(fs10.readFileSync(pinFile, "utf8"));
-    if (pins.nodePath !== fs10.realpathSync(process.execPath) || pins.hostEntryPath !== fs10.realpathSync(process.argv[1]) || pins.stateDir !== path8.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
+    const stat2 = fs11.lstatSync(pinFile);
+    if (process.platform !== "darwin" || fs11.realpathSync(pinFile) !== pinFile || !stat2.isFile() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("guardian_launch_pins_untrusted");
+    const pins = JSON.parse(fs11.readFileSync(pinFile, "utf8"));
+    if (pins.nodePath !== fs11.realpathSync(process.execPath) || pins.hostEntryPath !== fs11.realpathSync(process.argv[1]) || pins.stateDir !== path9.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
     upgradeBinding = resolveGuardianArtifact(pins);
   }
   const endpoint = getSessionHostEndpoint();
+  let recoveryBootstrap;
+  if (process.env.ADHDEV_RECOVERY_BOOT_FD === "3") {
+    delete process.env.ADHDEV_RECOVERY_BOOT_FD;
+    const bytes = fs11.readFileSync(3, "utf8");
+    fs11.closeSync(3);
+    if (bytes.length > 4096) throw new Error("recovery_host_bootstrap_invalid");
+    recoveryBootstrap = JSON.parse(bytes);
+    if (!recoveryBootstrap?.publicKey || !recoveryBootstrap.workerDaemonId) throw new Error("recovery_host_bootstrap_invalid");
+  }
   const server = new SessionHostServer({
+    recoveryOwnerPublicKey: recoveryBootstrap?.publicKey,
+    workerDaemonId: recoveryBootstrap?.workerDaemonId,
     appName: SESSION_HOST_APP_NAME,
     upgradeBinding,
     endpoint,
@@ -2596,7 +3057,7 @@ async function runServer(instanceKeyArgs = []) {
   });
 }
 async function listRuntimes(showAll = false) {
-  const client = new import_session_host_core7.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+  const client = new import_session_host_core11.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   try {
     const response = await client.request({
       type: "list_sessions",
@@ -2615,7 +3076,7 @@ async function listRuntimes(showAll = false) {
       console.log([
         runtime.runtimeKey,
         runtime.lifecycle,
-        (0, import_session_host_core7.formatRuntimeOwner)(runtime),
+        (0, import_session_host_core11.formatRuntimeOwner)(runtime),
         runtime.workspaceLabel,
         runtime.sessionId,
         runtime.displayName
@@ -2626,8 +3087,8 @@ async function listRuntimes(showAll = false) {
     });
   }
 }
-async function attachRuntime(target, readOnly = false, takeover = false) {
-  const client = new import_session_host_core7.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+async function attachRuntime(target3, readOnly = false, takeover = false) {
+  const client = new import_session_host_core11.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   const clientId = `local-terminal-${process.pid}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -2722,7 +3183,7 @@ async function attachRuntime(target, readOnly = false, takeover = false) {
     if (!listResponse.success || !listResponse.result) {
       throw new Error(listResponse.error || "Failed to list runtimes");
     }
-    let runtimeRecord = (0, import_session_host_core7.resolveAttachableRuntimeRecord)(listResponse.result, target);
+    let runtimeRecord = (0, import_session_host_core11.resolveAttachableRuntimeRecord)(listResponse.result, target3);
     runtimeId = runtimeRecord.sessionId;
     if (runtimeRecord.lifecycle === "interrupted" && !readOnly) {
       const resumeResponse = await client.request({
@@ -2853,25 +3314,25 @@ async function main() {
     return;
   }
   if (command === "attach") {
-    const target = positional[0];
-    if (!target) {
+    const target3 = positional[0];
+    if (!target3) {
       throw new Error("runtime target is required: adhdev-sessiond attach <runtimeId|runtimeKey>");
     }
-    await attachRuntime(target, readOnly, takeover);
+    await attachRuntime(target3, readOnly, takeover);
     return;
   }
   if (command === "resume") {
-    const target = positional[0];
-    if (!target) {
+    const target3 = positional[0];
+    if (!target3) {
       throw new Error("runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>");
     }
-    const client = new import_session_host_core7.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+    const client = new import_session_host_core11.SessionHostClient({ endpoint: getSessionHostEndpoint() });
     try {
       const listResponse = await client.request({ type: "list_sessions", payload: {} });
       if (!listResponse.success || !listResponse.result) {
         throw new Error(listResponse.error || "Failed to list runtimes");
       }
-      const runtimeRecord = (0, import_session_host_core7.resolveRuntimeRecord)(listResponse.result, target);
+      const runtimeRecord = (0, import_session_host_core11.resolveRuntimeRecord)(listResponse.result, target3);
       const resumeResponse = await client.request({
         type: "resume_session",
         payload: {

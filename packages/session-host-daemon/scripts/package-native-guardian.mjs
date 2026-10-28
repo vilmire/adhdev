@@ -16,7 +16,7 @@ export function packageNativeGuardian(root, pins) {
   if (pins.platform !== 'darwin' || pins.arch !== process.arch || !/^[a-f0-9]{40}$/.test(pins.commit ?? '') || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(pins.version ?? '')) throw new Error('guardian_package_build_identity_required');
   const packageBytes=readFileSync(regular(root,'package.json'));
   if (JSON.parse(String(packageBytes)).version !== pins.version) throw new Error('guardian_package_version_mismatch');
-  const manifest = { packageJsonSha256:sha(packageBytes), schema:1, protocol:1, platform:'darwin', arch:process.arch, version:pins.version, commit:pins.commit, files:{} };
+  const manifest = { packageJsonSha256:sha(packageBytes), schema:1, protocol:2, platform:'darwin', arch:process.arch, version:pins.version, commit:pins.commit, files:{} };
   for (const kind of ['daemon','cli','host']) {
     const entry = pins.files?.[kind]; const file = regular(root, entry?.path);
     const bytes = sha(readFileSync(file));
@@ -42,7 +42,7 @@ export function packageNativeGuardian(root, pins) {
   execFileSync(compiler, ['-Wall','-Wextra','-Werror',source,'-o',helper], {stdio:'pipe',env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin',TMPDIR:output}});
   chmodSync(helper, 0o555);
   const attestation = String(execFileSync(helper, ['--attest'], {stdio:'pipe'})).trim();
-  if (attestation !== 'adhdev-host-guardian/1') throw new Error('guardian_package_protocol_mismatch');
+  if (attestation !== 'adhdev-host-guardian/2') throw new Error('guardian_package_protocol_mismatch');
   manifest.files.helper = { path:relative(root, helper), sha256:sha(readFileSync(helper)) };
   // Recheck intended payload after compilation; never bind a concurrently replaced build.
   for (const kind of ['daemon','cli','host']) if (sha(readFileSync(regular(root, manifest.files[kind].path))) !== manifest.files[kind].sha256) throw new Error('guardian_package_payload_changed');

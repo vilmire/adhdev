@@ -1,3 +1,5 @@
+export { OPERATOR_RECOVERY_TARGET, recoveryTargetBytes, RecoveryOwnerAdmission, assertRecoveryLaunchIdentity, isRecoveryEndpoint } from './operator-recovery.js';
+export type { RecoveryOwnerOperation, RecoveryOwnerGrant, RecoveryOwnerChallenge, RecoveryOwnerEnrollment, RecoveryHostBinding, RecoveryPhysicalProof } from './operator-recovery.js';
 export type {
   MeshWriterAssignment,
   MeshWriterStopTarget,
