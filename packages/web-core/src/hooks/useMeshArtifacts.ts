@@ -26,6 +26,8 @@ export interface UseMeshArtifactsResult {
     loadMore: () => void
 }
 
+const EMPTY: ChatAttachmentMeta[] = []
+
 function mergeById(older: ChatAttachmentMeta[], current: ChatAttachmentMeta[]): ChatAttachmentMeta[] {
     const seen = new Set(current.map(a => a.artifactId))
     return [...older.filter(a => !seen.has(a.artifactId)), ...current]
@@ -36,7 +38,11 @@ function mergeById(older: ChatAttachmentMeta[], current: ChatAttachmentMeta[]): 
  * first; `loadMore` walks older pages through the daemon's keyset cursor.
  */
 export function useMeshArtifacts({ meshId, hostDaemonId, sendCommand, enabled, refreshToken = 0 }: UseMeshArtifactsOptions): UseMeshArtifactsResult {
-    const [attachments, setAttachments] = useState<ChatAttachmentMeta[]>([])
+    // The list carries the scope (host+mesh) it was loaded for, so a different mesh's
+    // artifacts are never rendered — not even for one frame before the reset effect runs.
+    const scope = `${hostDaemonId ?? ''}|${meshId ?? ''}`
+    const [data, setData] = useState<{ scope: string; list: ChatAttachmentMeta[] }>({ scope, list: [] })
+    const attachments = data.scope === scope ? data.list : EMPTY
     const [loading, setLoading] = useState(false)
     const [loadingMore, setLoadingMore] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -66,6 +72,17 @@ export function useMeshArtifacts({ meshId, hostDaemonId, sendCommand, enabled, r
     }, [hostDaemonId, meshId, sendCommand])
 
     useEffect(() => {
+        // Mesh/host switched: drop the previous list, errors and any in-flight page.
+        seqRef.current += 1
+        cursorRef.current = null
+        setData({ scope, list: [] })
+        setError(null)
+        setHasMore(false)
+        setLoading(false)
+        setLoadingMore(false)
+    }, [scope])
+
+    useEffect(() => {
         if (!enabled || !meshId || !hostDaemonId || !sendCommand) return
         const seq = ++seqRef.current
         setLoading(true)
@@ -73,7 +90,7 @@ export function useMeshArtifacts({ meshId, hostDaemonId, sendCommand, enabled, r
         request(null).then(page => {
             if (seqRef.current !== seq) return
             cursorRef.current = page.nextCursor
-            setAttachments(page.list)
+            setData({ scope, list: page.list })
             setHasMore(page.hasMore)
         }).catch(err => {
             if (seqRef.current !== seq) return
@@ -81,7 +98,7 @@ export function useMeshArtifacts({ meshId, hostDaemonId, sendCommand, enabled, r
         }).finally(() => {
             if (seqRef.current === seq) setLoading(false)
         })
-    }, [enabled, hostDaemonId, meshId, nonce, refreshToken, request, sendCommand])
+    }, [enabled, hostDaemonId, meshId, nonce, refreshToken, request, scope, sendCommand])
 
     const loadMore = useCallback(() => {
         const cursor = cursorRef.current
@@ -91,12 +108,12 @@ export function useMeshArtifacts({ meshId, hostDaemonId, sendCommand, enabled, r
         request(cursor).then(page => {
             if (seqRef.current !== seq) return
             cursorRef.current = page.nextCursor
-            setAttachments(current => mergeById(page.list, current))
+            setData(current => (current.scope === scope ? { scope, list: mergeById(page.list, current.list) } : current))
             setHasMore(page.hasMore)
         }).catch(err => {
             if (seqRef.current === seq) setError(err instanceof Error ? err.message : String(err))
         }).finally(() => setLoadingMore(false))
-    }, [loadingMore, request])
+    }, [loadingMore, request, scope])
 
     const refresh = useCallback(() => setNonce(n => n + 1), [])
     return { attachments, loading, loadingMore, error, hasMore, refresh, loadMore }

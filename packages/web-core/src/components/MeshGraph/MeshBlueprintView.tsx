@@ -84,7 +84,7 @@ interface RoutePreviewNode {
 const slotLabel = routePreviewSlotLabel
 
 
-export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage, refreshToken }: {
+export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonCommand, emptyMessage, refreshToken, focusTask }: {
     tasks: RepoMeshQueueTask[]
     status: RepoMeshStatus
     daemonId?: string | null
@@ -92,6 +92,8 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
     emptyMessage?: string
     /** Bumped by the host's single Refresh control — reruns the route preview. */
     refreshToken?: number
+    /** Open this task's detail panel (e.g. from the Artifacts tab); `nonce` re-triggers the same id. */
+    focusTask?: { taskId: string; nonce: number } | null
 }) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -178,6 +180,15 @@ export default function MeshBlueprintView({ tasks, status, daemonId, sendDaemonC
 
     /** Shared by List rows and Graph nodes — one open-task behaviour. */
     const openQueueTask = useCallback((task: RepoMeshQueueTask) => setDetail({ kind: 'queue', task }), [setDetail])
+
+    const lastFocusNonce = useRef<number | null>(null)
+    useEffect(() => {
+        if (!focusTask || lastFocusNonce.current === focusTask.nonce) return
+        const task = tasks.find(candidate => candidate.id === focusTask.taskId)
+        if (!task) return
+        lastFocusNonce.current = focusTask.nonce
+        openQueueTask(task)
+    }, [focusTask, tasks, openQueueTask])
 
     const openMission = useCallback((missionId: string) => {
         const mission = ((status as RepoMeshStatus).missions ?? []).find(candidate => candidate.id === missionId)

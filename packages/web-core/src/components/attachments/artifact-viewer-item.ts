@@ -28,11 +28,14 @@ export function toArtifactViewerItem(payload: ArtifactResolvedPayload): Artifact
     }
 }
 
+export const DOWNLOAD_REVOKE_DELAY_MS = 30_000
+
 /** Save the item through a transient object URL anchor. Returns false when unavailable. */
 export function downloadArtifactViewerItem(item: ArtifactViewerItem): boolean {
     if (typeof document === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return false
     const blob = item.blob ?? new Blob([item.text ?? ''], { type: item.mime || 'text/plain' })
     const url = URL.createObjectURL(blob)
+    let started = false
     try {
         const anchor = document.createElement('a')
         anchor.href = url
@@ -42,9 +45,13 @@ export function downloadArtifactViewerItem(item: ArtifactViewerItem): boolean {
         document.body.appendChild(anchor)
         anchor.click()
         document.body.removeChild(anchor)
+        started = true
         return true
     } finally {
-        URL.revokeObjectURL(url)
+        // Revoking right after click() can cancel the download in Safari/Firefox, so a
+        // started download keeps its URL for a while; a failed one is released now.
+        if (started) setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_REVOKE_DELAY_MS)
+        else URL.revokeObjectURL(url)
     }
 }
 

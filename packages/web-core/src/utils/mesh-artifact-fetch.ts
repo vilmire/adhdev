@@ -27,13 +27,15 @@ export async function fetchMeshArtifactPayload(opts: {
     hostDaemonId: string
     attachment: ChatAttachmentMeta
     origin?: string | null
+    /** False bypasses the shared payload LRU (thumbnails use their own small cache). Default true. */
+    useSharedCache?: boolean
 }): Promise<ArtifactResolvedPayload> {
     const { sendCommand, hostDaemonId, attachment } = opts
     const sessionId = (attachment.originSessionId ?? '').trim()
     if (!hostDaemonId || !sessionId) {
         throw new MeshArtifactFetchError('Session context is required to fetch this artifact.', 'missing_session_context')
     }
-    const cacheKey = buildArtifactCacheKey({
+    const cacheKey = opts.useSharedCache === false ? null : buildArtifactCacheKey({
         origin: opts.origin ?? undefined,
         daemonId: hostDaemonId,
         sessionId,

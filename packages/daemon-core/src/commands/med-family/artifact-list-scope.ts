@@ -89,7 +89,16 @@ export function handleOwnerMeshArtifactList(
     if (kind) records = records.filter((rec) => rec.kind === (kind as ArtifactKind));
     if (cursor) {
         const at = records.findIndex((rec) => rec.artifactId === cursor.artifactId);
-        records = at >= 0 ? records.slice(0, at) : records.filter((rec) => rec.createdAt < cursor.createdAt);
+        // Cursor record deleted between pages: fall back to the (createdAt, artifactId)
+        // tuple so same-millisecond siblings are not skipped wholesale.
+        records =
+            at >= 0
+                ? records.slice(0, at)
+                : records.filter(
+                      (rec) =>
+                          rec.createdAt < cursor.createdAt ||
+                          (rec.createdAt === cursor.createdAt && rec.artifactId < cursor.artifactId),
+                  );
     }
     const hasMore = records.length > limit;
     const page = hasMore ? records.slice(records.length - limit) : records;

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { ArtifactKind, ChatAttachmentMeta, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useMeshArtifacts } from '../../hooks/useMeshArtifacts'
 import { fetchMeshArtifactPayload, type MeshArtifactSendCommand } from '../../utils/mesh-artifact-fetch'
+import { enqueueThumbnail } from '../../utils/mesh-artifact-thumbnail'
 import { formatBytes } from '../../utils/daemon-utils'
 import { formatAbsoluteTime, formatRelativeTimeLocalized } from '../../utils/time'
 import { RefreshButton } from '../ui/RefreshButton'
@@ -11,7 +12,9 @@ import { getArtifactKindLabel } from '../attachments/artifact-i18n'
 import { toArtifactViewerItem, type ArtifactViewerItem } from '../attachments/artifact-viewer-item'
 import { Badge } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import {
+    artifactPreviewLine,
     buildMeshArtifactsView,
+    shortMeshRefId,
     type MeshArtifactItem,
     type MeshArtifactKindFilter,
 } from './meshArtifactsModel'
@@ -39,33 +42,62 @@ function ArtifactThumb({ attachment, hostDaemonId, sendCommand }: {
     sendCommand: MeshArtifactSendCommand
 }) {
     const ref = useRef<HTMLDivElement>(null)
+    const attachmentRef = useRef(attachment)
+    attachmentRef.current = attachment
     const [src, setSrc] = useState<string | null>(null)
+    const [loaded, setLoaded] = useState(false)
     const eligible = attachment.kind === 'image' && attachment.sizeBytes <= THUMBNAIL_MAX_BYTES
+    const { artifactId, sha256 } = attachment
+    // Keyed on the artifact's identity (not the attachment object, which is new after
+    // every refresh/loadMore) so a refresh neither refetches nor leaves a revoked URL.
     useEffect(() => {
+        setSrc(null)
+        setLoaded(false)
         if (!eligible || typeof IntersectionObserver === 'undefined' || !ref.current) return
         let cancelled = false
         let url: string | null = null
+        let cancelQueued: (() => void) | null = null
+        const show = (blob: Blob) => {
+            if (cancelled || typeof URL.createObjectURL !== 'function') return
+            url = URL.createObjectURL(blob)
+            setSrc(url)
+        }
         const observer = new IntersectionObserver(entries => {
-            if (!entries.some(e => e.isIntersecting)) return
-            observer.disconnect()
-            fetchMeshArtifactPayload({ sendCommand, hostDaemonId, attachment }).then(payload => {
-                if (cancelled || typeof URL.createObjectURL !== 'function') return
+            const hit = entries[entries.length - 1]
+            if (!hit) return
+            if (!hit.isIntersecting) {
+                // Scrolled out before its turn: leave the queue (no fetch for it).
+                cancelQueued?.()
+                cancelQueued = null
+                return
+            }
+            if (cancelQueued || url) return
+            const key = `${hostDaemonId}|${artifactId}|${sha256 ?? ''}`
+            const queued = enqueueThumbnail(key, async () => {
+                const payload = await fetchMeshArtifactPayload({ sendCommand, hostDaemonId, attachment: attachmentRef.current, useSharedCache: false })
                 const copy = new Uint8Array(payload.bytes.byteLength)
                 copy.set(payload.bytes)
-                url = URL.createObjectURL(new Blob([copy.buffer], { type: payload.mime }))
-                setSrc(url)
-            }).catch(() => { /* the glyph stays; open the viewer for the real error */ })
+                return new Blob([copy.buffer], { type: payload.mime })
+            })
+            cancelQueued = queued.cancel
+            queued.promise.then(blob => {
+                cancelQueued = null
+                if (blob) show(blob)
+            }).catch(() => { cancelQueued = null /* the glyph stays; open the viewer for the real error */ })
         }, { rootMargin: '120px' })
         observer.observe(ref.current)
         return () => {
             cancelled = true
+            cancelQueued?.()
             observer.disconnect()
             if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
+            setSrc(null)
         }
-    }, [attachment, eligible, hostDaemonId, sendCommand])
+    }, [artifactId, sha256, eligible, hostDaemonId, sendCommand])
     return (
-        <div ref={ref} className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary text-3xs font-bold text-text-muted" aria-hidden="true">
-            {src ? <img src={src} alt="" className="h-full w-full object-cover" data-testid="mesh-artifact-thumb" /> : KIND_GLYPH[attachment.kind]}
+        <div ref={ref} className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border-subtle bg-bg-secondary text-3xs font-bold text-text-muted" aria-hidden="true">
+            {!loaded && KIND_GLYPH[attachment.kind]}
+            {src && <img src={src} alt="" onLoad={() => setLoaded(true)} className={`absolute inset-0 h-full w-full object-cover ${loaded ? '' : 'opacity-0'}`} data-testid="mesh-artifact-thumb" />}
         </div>
     )
 }
@@ -93,18 +125,22 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
         [attachments, kind, query, status.missions, tasks],
     )
 
+    const openSeqRef = useRef(0)
     const openAt = useCallback(async (index: number) => {
         const target = view.ordered[index]
         if (!target || !daemonId || !sendDaemonCommand) return
+        const seq = ++openSeqRef.current
         setOpening(true)
         setOpenError(null)
         try {
             const payload = await fetchMeshArtifactPayload({ sendCommand: sendDaemonCommand, hostDaemonId: daemonId, attachment: target.attachment })
+            // Rapid clicks: only the latest request may open the viewer.
+            if (openSeqRef.current !== seq) return
             setViewer({ artifactId: target.attachment.artifactId, item: toArtifactViewerItem(payload) })
         } catch (err) {
-            setOpenError(err instanceof Error ? err.message : String(err))
+            if (openSeqRef.current === seq) setOpenError(err instanceof Error ? err.message : String(err))
         } finally {
-            setOpening(false)
+            if (openSeqRef.current === seq) setOpening(false)
         }
     }, [daemonId, sendDaemonCommand, view.ordered])
 
@@ -116,6 +152,16 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
     }, [opening, openAt, view.ordered.length, viewerIndex])
 
     const kindLabel = (k: MeshArtifactKindFilter) => (k === 'all' ? t('mesh.obs.artifactsKindAll') : getArtifactKindLabel(t, i18n.language, k))
+    const roleLabel = (role: string) => {
+        switch (role) {
+            case 'worker': return t('mesh.obs.artifactsRoleWorker')
+            case 'coordinator': return t('mesh.obs.artifactsRoleCoordinator')
+            case 'assistant': return t('mesh.obs.artifactsRoleAssistant')
+            case 'user': return t('mesh.obs.artifactsRoleUser')
+            case 'session': return t('mesh.obs.artifactsRoleSession')
+            default: return role
+        }
+    }
     const noHost = !daemonId || !sendDaemonCommand
     const filtered = kind !== 'all' || query.trim() !== ''
 
@@ -123,8 +169,15 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
         const att = item.attachment
         const title = att.title || att.filename
         const index = view.ordered.indexOf(item)
+        const preview = artifactPreviewLine(att.kind, att.previewText)
         return (
-            <li key={att.artifactId} className="flex items-start gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 p-2" data-testid="mesh-artifact-row" data-artifact-id={att.artifactId}>
+            <li
+                key={att.artifactId}
+                onClick={event => { if (!(event.target as HTMLElement).closest('button, a')) void openAt(index) }}
+                className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border-subtle bg-bg-secondary/40 p-2 transition-colors hover:border-border-default hover:bg-bg-secondary focus-within:border-accent"
+                data-testid="mesh-artifact-row"
+                data-artifact-id={att.artifactId}
+            >
                 {daemonId && sendDaemonCommand
                     ? <ArtifactThumb attachment={att} hostDaemonId={daemonId} sendCommand={sendDaemonCommand} />
                     : <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border-subtle text-3xs font-bold text-text-muted" aria-hidden="true">{KIND_GLYPH[att.kind]}</div>}
@@ -144,7 +197,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                         <span>{formatBytes(att.sizeBytes)}</span>
                         <time title={formatAbsoluteTime(att.createdAt, { locale: i18n.language })}>{formatRelativeTimeLocalized(att.createdAt, { locale: i18n.language })}</time>
                     </div>
-                    {att.previewText && <p className="mt-0.5 truncate text-2xs text-text-secondary">{att.previewText.split('\n').find(l => l.trim()) ?? ''}</p>}
+                    {preview && <p className="mt-0.5 truncate text-2xs text-text-secondary" data-testid="mesh-artifact-preview">{preview}</p>}
                     {item.usedBy.length > 0 && (
                         <div className="mt-1 flex flex-wrap items-center gap-1" data-testid="mesh-artifact-used-by">
                             <span className="text-3xs font-medium text-text-muted">{t('mesh.obs.artifactsUsedBy')}</span>
@@ -152,12 +205,12 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                                 <button
                                     key={ref.taskId}
                                     type="button"
-                                    onClick={() => onOpenTask?.(ref.taskId)}
+                                    onClick={event => { event.stopPropagation(); onOpenTask?.(ref.taskId) }}
                                     disabled={!onOpenTask}
-                                    title={ref.title}
+                                    title={ref.title || ref.taskId}
                                     className="max-w-[16rem] truncate rounded-full border border-border-subtle px-2 py-0.5 text-3xs text-text-secondary hover:border-border-default hover:text-text-primary disabled:cursor-default"
                                 >
-                                    {ref.title}
+                                    {ref.title || t('mesh.obs.artifactsTaskShort', { id: shortMeshRefId(ref.taskId) })}
                                 </button>
                             ))}
                         </div>
@@ -209,14 +262,14 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                 view.missions.map(mission => (
                     <section key={mission.missionId ?? 'none'} className="flex flex-col gap-2" data-testid="mesh-artifact-mission" data-mission-id={mission.missionId ?? ''}>
                         <h3 className="flex items-center gap-2 text-xs font-semibold text-text-primary">
-                            <span className="truncate">{mission.missionId ? mission.title : t('mesh.obs.artifactsUnassigned')}</span>
+                            <span className="truncate">{mission.missionId ? (mission.title || t('mesh.obs.artifactsMissionShort', { id: shortMeshRefId(mission.missionId) })) : t('mesh.obs.artifactsUnassigned')}</span>
                             <Badge label={t('mesh.obs.artifactsCount', { count: mission.count })} />
                         </h3>
                         {mission.tasks.map(group => (
                             <div key={group.taskId ?? 'none'} className="flex flex-col gap-1.5 pl-2" data-testid="mesh-artifact-task" data-task-id={group.taskId ?? ''}>
                                 <div className="flex flex-wrap items-center gap-1.5 text-2xs text-text-secondary">
-                                    <span className="min-w-0 truncate font-medium">{group.taskId ? group.title : t('mesh.obs.artifactsNoTask')}</span>
-                                    {group.producerRole && <Badge label={group.producerRole} tone="info" />}
+                                    <span className="min-w-0 truncate font-medium">{group.taskId ? (group.title || t('mesh.obs.artifactsTaskShort', { id: shortMeshRefId(group.taskId) })) : t('mesh.obs.artifactsNoTask')}</span>
+                                    {group.producerRole && <Badge label={roleLabel(group.producerRole)} tone="info" />}
                                     {group.sessionId && <span className="text-3xs text-text-muted" title={group.sessionId}>{t('mesh.obs.artifactsSession', { id: group.sessionId.slice(0, 8) })}</span>}
                                 </div>
                                 <ul className="flex flex-col gap-1.5">{group.items.map(renderItem)}</ul>

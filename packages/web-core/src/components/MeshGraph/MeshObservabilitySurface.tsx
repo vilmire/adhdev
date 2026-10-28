@@ -93,7 +93,7 @@ export type MeshSurfaceTab = 'overview' | 'tasks' | 'artifacts' | 'map'
 
 export const MESH_SURFACE_TABS: readonly MeshSurfaceTab[] = ['overview', 'tasks', 'artifacts', 'map']
 
-/** Maps retired tab ids (status / notes / graph) onto the current three. */
+/** Maps retired tab ids (status / notes / graph) onto the current four (overview / tasks / artifacts / map). */
 export function normalizeMeshSurfaceTab(tab: string | null | undefined): MeshSurfaceTab {
     if (tab === 'tasks' || tab === 'artifacts' || tab === 'map' || tab === 'overview') return tab
     if (tab === 'graph' || tab === 'status') return 'map'
@@ -230,6 +230,8 @@ export default function MeshObservabilitySurface({
     useEffect(() => {
         if (activeTab === 'tasks') setTaskDagMounted(true)
     }, [activeTab])
+    // "Used by" chip on an artifact → Tasks tab with that task's detail opened.
+    const [focusTask, setFocusTask] = useState<{ taskId: string; nonce: number } | null>(null)
     // Artifacts tab: nothing is fetched until it has been opened once.
     const [artifactsMounted, setArtifactsMounted] = useState(false)
     useEffect(() => {
@@ -588,6 +590,7 @@ export default function MeshObservabilitySurface({
                                 daemonId={daemonId}
                                 sendDaemonCommand={sendDaemonCommand}
                                 refreshToken={refreshToken}
+                                focusTask={focusTask}
                             />
                         </div>
                     ) : (
@@ -605,7 +608,7 @@ export default function MeshObservabilitySurface({
                         sendDaemonCommand={sendDaemonCommand}
                         active={activeTab === 'artifacts'}
                         refreshToken={refreshToken}
-                        onOpenTask={() => setActiveTab('tasks')}
+                        onOpenTask={taskId => { setFocusTask(current => ({ taskId, nonce: (current?.nonce ?? 0) + 1 })); setActiveTab('tasks') }}
                     />
                 )}
             </div>

@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ArtifactFullscreenViewer from '../../src/components/attachments/ArtifactFullscreenViewer'
-import type { ArtifactViewerItem } from '../../src/components/attachments/artifact-viewer-item'
+import { downloadArtifactViewerItem, DOWNLOAD_REVOKE_DELAY_MS, type ArtifactViewerItem } from '../../src/components/attachments/artifact-viewer-item'
 import {
     ARTIFACT_VIEWER_PAYLOAD,
     ARTIFACT_VIEWER_READY,
@@ -89,6 +89,66 @@ describe('ArtifactFullscreenViewer', () => {
         expect(toc!.querySelectorAll('li').length).toBe(3)
         await render(<ArtifactFullscreenViewer item={item({ text: '# A\n\n## B\n' })} onClose={() => {}} />)
         expect(document.querySelector('[data-testid="artifact-toc"]')).toBeNull()
+    })
+})
+
+describe('viewer review fixes', () => {
+    it('starts with the contents panel closed on a narrow viewport (toggle still works)', async () => {
+        const orig = window.matchMedia
+        window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as any
+        try {
+            await render(<ArtifactFullscreenViewer item={item()} onClose={() => {}} />)
+            expect(document.querySelector('[data-testid="artifact-toc"]')).toBeNull()
+            await act(async () => { (document.querySelector('[data-testid="artifact-toc-toggle"]') as HTMLElement).click() })
+            expect(document.querySelector('[data-testid="artifact-toc"]')).not.toBeNull()
+        } finally {
+            window.matchMedia = orig
+        }
+    })
+
+    it('arrow keys navigate, except inside a horizontal scroller that can still scroll that way', async () => {
+        const onNavigate = vi.fn()
+        await render(<ArtifactFullscreenViewer item={item()} onClose={() => {}} position={{ index: 1, total: 3 }} onNavigate={onNavigate} />)
+        const scroller = document.createElement('div')
+        scroller.style.overflowX = 'auto'
+        Object.defineProperty(scroller, 'scrollWidth', { value: 500, configurable: true })
+        Object.defineProperty(scroller, 'clientWidth', { value: 100, configurable: true })
+        scroller.scrollLeft = 0
+        document.querySelector('[data-testid="artifact-fullscreen-content"]')!.appendChild(scroller)
+        const press = (key: string) => act(async () => { scroller.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+        await press('ArrowRight') // can still scroll right -> no navigation
+        expect(onNavigate).not.toHaveBeenCalled()
+        await press('ArrowLeft') // already at the left edge -> navigate
+        expect(onNavigate).toHaveBeenCalledWith(-1)
+    })
+
+    it('copy and contents are icon buttons with accessible names and tooltips', async () => {
+        await render(<ArtifactFullscreenViewer item={item()} onClose={() => {}} />)
+        for (const id of ['artifact-fullscreen-copy', 'artifact-toc-toggle']) {
+            const el = document.querySelector(`[data-testid="${id}"]`) as HTMLElement
+            expect(el.getAttribute('aria-label')).toBeTruthy()
+            expect(el.getAttribute('title')).toBeTruthy()
+            expect(el.querySelector('svg')).not.toBeNull()
+        }
+    })
+
+    it('download revokes its object URL only after a delay', async () => {
+        vi.useFakeTimers()
+        const create = vi.fn(() => 'blob:dl')
+        const revoke = vi.fn()
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+        const o = [URL.createObjectURL, URL.revokeObjectURL]
+        URL.createObjectURL = create as any
+        URL.revokeObjectURL = revoke as any
+        try {
+            expect(downloadArtifactViewerItem(item())).toBe(true)
+            expect(revoke).not.toHaveBeenCalled()
+            vi.advanceTimersByTime(DOWNLOAD_REVOKE_DELAY_MS)
+            expect(revoke).toHaveBeenCalledWith('blob:dl')
+        } finally {
+            URL.createObjectURL = o[0]!
+            URL.revokeObjectURL = o[1]!
+        }
     })
 })
 

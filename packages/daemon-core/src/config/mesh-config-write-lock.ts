@@ -52,7 +52,7 @@ const incarnations = new Map<string, string>();
 // Paths whose mutex THIS process currently holds; never re-pinned while held.
 const heldPaths = new Set<string>();
 /** Test-only: drops pins and warn-once state (production re-pins on its own). */
-export function __resetMeshConfigMutexIncarnationsForTests(): void { incarnations.clear(); warnedReasons.clear(); }
+export function __resetMeshConfigMutexIncarnationsForTests(): void { incarnations.clear(); warnedReasons.clear(); heldPaths.clear(); }
 // ctime is deliberately excluded: chmod/xattrs (Spotlight, Time Machine, quarantine, AV)
 // change it on a healthy install. dev+ino+birthtime still detect replacement.
 function identity(s: BigIntStats): string {
@@ -87,7 +87,9 @@ export function acquireMeshConfigMutex(configPath: string, timeout: number): Mes
         try { fd = openSync(path, flags, 0o600); }
         catch (e) {
             if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-            mkdirSync(dirname(path), { recursive: true }); // config dir was removed/replaced
+            // Intentional convenience: the config dir was removed/replaced at runtime, so
+            // recreate it and keep writes working instead of failing until restart.
+            mkdirSync(dirname(path), { recursive: true });
             fd = openSync(path, flags, 0o600);
         }
         const pinned = identity(fstatSync(fd, { bigint: true }));

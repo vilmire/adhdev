@@ -36,6 +36,25 @@ export interface ArtifactFullscreenViewerProps {
     popOutPayload?: ArtifactResolvedPayload | ArtifactViewerItem
 }
 
+/** md breakpoint: the contents panel starts open only when there is room beside the text. */
+function isWideViewport(): boolean {
+    if (typeof window === 'undefined') return true
+    if (typeof window.matchMedia === 'function') return window.matchMedia('(min-width: 768px)').matches
+    return window.innerWidth >= 768
+}
+
+/** True when `el` or an ancestor below `root` is a horizontal scroller that can still move in `dir`. */
+export function canScrollHorizontally(el: Element | null, root: Element | null, dir: -1 | 1): boolean {
+    for (let node: Element | null = el; node && node !== root?.parentElement; node = node.parentElement) {
+        const h = node as HTMLElement
+        if (h.scrollWidth <= h.clientWidth) continue
+        const overflowX = typeof getComputedStyle === 'function' ? getComputedStyle(h).overflowX : ''
+        if (overflowX !== 'auto' && overflowX !== 'scroll') continue
+        if (dir < 0 ? h.scrollLeft > 0 : h.scrollLeft + h.clientWidth < h.scrollWidth - 1) return true
+    }
+    return false
+}
+
 const btn = 'inline-flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-border-subtle bg-bg-secondary px-2.5 text-xs font-semibold text-text-secondary hover:border-border-default hover:text-text-primary disabled:opacity-40'
 
 function ToolbarButton({ label, onClick, disabled, testId, children }: {
@@ -55,19 +74,26 @@ function ToolbarButton({ label, onClick, disabled, testId, children }: {
 function ViewerCopyButton({ value, label }: { value: string; label: string }) {
     const { t } = useTranslation('common')
     const [copied, setCopied] = useState(false)
+    const shown = copied ? t('common.copied') : label
     return (
         <button
             type="button"
             data-testid="artifact-fullscreen-copy"
-            aria-label={label}
-            className={`${btn} text-2xs`}
+            aria-label={shown}
+            title={shown}
+            className={btn}
             onClick={async () => {
                 if (!(await writeClipboard(value))) return
                 setCopied(true)
                 setTimeout(() => setCopied(false), 1500)
             }}
         >
-            <span aria-live="polite">{copied ? t('common.copied') : label}</span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                {copied
+                    ? <path d="M3 8.5l3.5 3.5L13 4.5" />
+                    : (<><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2" /></>)}
+            </svg>
+            <span className="sr-only" aria-live="polite">{shown}</span>
         </button>
     )
 }
@@ -91,7 +117,7 @@ export function ArtifactFullscreenViewer({
     const [textScale, setTextScale] = useState(1)
     const [zoom, setZoom] = useState(100)
     const [popOutBlocked, setPopOutBlocked] = useState(false)
-    const [tocOpen, setTocOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768)
+    const [tocOpen, setTocOpen] = useState(isWideViewport)
 
     // Capture the opener once so focus can return to it on close.
     if (openerRef.current === null && typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -143,6 +169,8 @@ export function ArtifactFullscreenViewer({
             if (onNavigate && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
                 const target = event.target as HTMLElement | null
                 if (target && /^(input|textarea|select)$/i.test(target.tagName)) return
+                // Let wide diff/code scroll sideways instead of switching artifacts.
+                if (canScrollHorizontally(target, dialogRef.current, event.key === 'ArrowLeft' ? -1 : 1)) return
                 event.preventDefault()
                 onNavigate(event.key === 'ArrowLeft' ? -1 : 1)
                 return
@@ -224,7 +252,7 @@ export function ArtifactFullscreenViewer({
                         )}
                     </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto">
                     {onNavigate && position && position.total > 1 && (
                         <>
                             <ToolbarButton label={tr('artifact.previous')} onClick={() => onNavigate(-1)} disabled={position.index <= 0} testId="artifact-fullscreen-prev">‹</ToolbarButton>
@@ -245,7 +273,10 @@ export function ArtifactFullscreenViewer({
                         </>
                     )}
                     {showToc && (
-                        <ToolbarButton label={tr('artifact.toc')} onClick={() => setTocOpen((o) => !o)} testId="artifact-toc-toggle">☰</ToolbarButton>
+                        <button type="button" onClick={() => setTocOpen((o) => !o)} aria-label={tr('artifact.toc')} aria-expanded={tocOpen} title={tr('artifact.toc')} data-testid="artifact-toc-toggle" className={`${btn} gap-1.5`}>
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" /></svg>
+                            <span className="max-sm:sr-only">{tr('artifact.toc')}</span>
+                        </button>
                     )}
                     {!isImage && copyText && <ViewerCopyButton value={copyText} label={tr('artifact.copyContent')} />}
                     <ToolbarButton label={tr('artifact.download')} onClick={() => { downloadArtifactViewerItem(item) }} testId="artifact-fullscreen-download">⬇</ToolbarButton>
@@ -262,9 +293,9 @@ export function ArtifactFullscreenViewer({
                     {tr('artifact.popoutBlocked')}
                 </div>
             )}
-            <div className="flex min-h-0 flex-1">
+            <div className="relative flex min-h-0 flex-1">
                 {showToc && tocOpen && (
-                    <nav aria-label={tr('artifact.toc')} data-testid="artifact-toc" className="w-56 shrink-0 overflow-auto border-r border-border-subtle p-3 text-2xs max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10 max-md:mt-14 max-md:bg-bg-primary max-md:shadow-xl">
+                    <nav aria-label={tr('artifact.toc')} data-testid="artifact-toc" className="w-56 shrink-0 overflow-auto border-r border-border-subtle p-3 text-2xs max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-10 max-md:bg-bg-primary max-md:shadow-xl">
                         <div className="mb-2 font-semibold text-text-muted">{tr('artifact.toc')}</div>
                         <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
                             {headings.map((h, i) => (

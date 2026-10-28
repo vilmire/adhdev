@@ -5,9 +5,10 @@ import React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildMeshArtifactsView } from '../../src/components/MeshGraph/meshArtifactsModel'
+import { artifactPreviewLine, buildMeshArtifactsView, shortMeshRefId } from '../../src/components/MeshGraph/meshArtifactsModel'
 import MeshArtifactsTab from '../../src/components/MeshGraph/MeshArtifactsTab'
-import { clearArtifactReadCache } from '../../src/hooks/useArtifactRead'
+import { clearArtifactReadCache, getCachedArtifactPayload, buildArtifactCacheKey } from '../../src/hooks/useArtifactRead'
+import { clearThumbnailState, THUMBNAIL_MAX_CONCURRENT } from '../../src/utils/mesh-artifact-thumbnail'
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -53,6 +54,35 @@ describe('buildMeshArtifactsView', () => {
         expect(buildMeshArtifactsView({ attachments: data, tasks, missions, kind: 'json', query: '' }).ordered.map(i => i.attachment.artifactId)).toEqual(['a2'])
         expect(buildMeshArtifactsView({ attachments: data, tasks, missions, kind: 'all', query: 'QUARTERLY' }).ordered.map(i => i.attachment.artifactId)).toEqual(['a1'])
         expect(buildMeshArtifactsView({ attachments: data, tasks, missions, kind: 'all', query: 'a2.json' }).ordered.map(i => i.attachment.artifactId)).toEqual(['a2'])
+    })
+})
+
+describe('labels and previews', () => {
+    it('never yields a bare prefix: short ids strip known prefixes', () => {
+        expect(shortMeshRefId('mission_abcdef1234567890')).toBe('34567890')
+        expect(shortMeshRefId('mesh_queue:task_betaa1b2c3d4')).toBe('a1b2c3d4')
+        expect(shortMeshRefId('task_ab')).toBe('ab')
+        const view = buildMeshArtifactsView({
+            attachments: [att('x1', { taskId: 'task_zzzz', missionId: 'mission_zzzz' })], tasks: [], missions: [], kind: 'all', query: '',
+        })
+        // Titles stay empty (UI renders a localized "Task …id" fallback), never "#task_zz".
+        expect(view.missions[0]!.title).toBe('')
+        expect(view.missions[0]!.tasks[0]!.title).toBe('')
+    })
+
+    it('prefers mission and task titles from mesh data', () => {
+        const view = buildMeshArtifactsView({ attachments: data, tasks, missions, kind: 'all', query: '' })
+        expect(view.missions[0]!.title).toBe('Report mission')
+        expect(view.missions[0]!.tasks[0]!.title).toBe('Write the report')
+    })
+
+    it('summarises diff, json and text previews', () => {
+        const diff = 'diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1,2 @@\n-old\n+new\n+newer'
+        expect(artifactPreviewLine('diff', diff)).toBe('+2 −1 · src/app.ts')
+        expect(artifactPreviewLine('json', '{"status":"ok","items":[1]}')).toBe('{ status, items }')
+        expect(artifactPreviewLine('json', '{"status":"ok","ite')).toBe('{"status":"ok","ite')
+        expect(artifactPreviewLine('markdown', '#\n\n# Real title\nbody')).toBe('Real title')
+        expect(artifactPreviewLine('text', '\n  hello  \nworld')).toBe('hello')
     })
 })
 
@@ -133,5 +163,154 @@ describe('MeshArtifactsTab', () => {
         await flush()
         expect(document.querySelector('[data-testid="artifact-fullscreen-position"]')?.textContent).toBe('2/4')
         expect(send).toHaveBeenCalledWith('host-daemon', 'artifact_fetch', expect.objectContaining({ artifactId: 'a2' }))
+    })
+
+    it('localizes the producer role badge and shows readable group headers', async () => {
+        await mount(makeSend())
+        const first = container.querySelector('[data-testid="mesh-artifact-task"]')!
+        expect(first.textContent).toContain('worker')
+        const heads = [...container.querySelectorAll('h3, [data-testid="mesh-artifact-task"] > div:first-child')].map(n => n.textContent)
+        expect(heads.join('|')).not.toMatch(/#mission_|#task_/)
+    })
+
+    it('shows a change summary preview and opens from a click anywhere on the row', async () => {
+        const send = makeSend()
+        await mount(send)
+        const row = container.querySelectorAll('[data-testid="mesh-artifact-row"]')[0] as HTMLElement
+        expect(row.querySelector('[data-testid="mesh-artifact-preview"]')?.textContent).toBe('quarterly numbers')
+        await act(async () => { row.click() })
+        await flush()
+        expect(document.querySelector('[data-testid="artifact-fullscreen-viewer"]')).not.toBeNull()
+        expect(send).toHaveBeenCalledWith('host-daemon', 'artifact_fetch', expect.objectContaining({ artifactId: 'a1' }))
+    })
+
+    it('rapid clicks open only the latest artifact', async () => {
+        const resolvers = new Map<string, () => void>()
+        const base = makeSend()
+        const send = vi.fn(async (d: string, type: string, payload: any) => {
+            if (type === 'artifact_fetch') await new Promise<void>(res => resolvers.set(payload.artifactId, res))
+            return base(d, type, payload)
+        })
+        await mount(send as any)
+        const buttons = container.querySelectorAll('[data-testid="mesh-artifact-open"]')
+        await act(async () => { (buttons[0] as HTMLButtonElement).click(); (buttons[1] as HTMLButtonElement).click() })
+        await act(async () => { resolvers.get('a2')!(); await new Promise(r => setTimeout(r, 0)) })
+        await act(async () => { resolvers.get('a1')!(); await new Promise(r => setTimeout(r, 0)) })
+        expect(document.querySelector('[data-testid="artifact-fullscreen-title"]')?.textContent).toBe('Data')
+    })
+
+    it('mesh switch clears the previous mesh list immediately', async () => {
+        const send = makeSend()
+        await mount(send)
+        expect(container.querySelectorAll('[data-testid="mesh-artifact-row"]').length).toBe(4)
+        const pending = new Promise(() => {})
+        const slow = vi.fn(async () => pending)
+        await act(async () => {
+            root.render(React.createElement(MeshArtifactsTab, {
+                status: { meshId: 'mesh-2', nodes: [], queue: { tasks: [] }, missions: [] } as any,
+                daemonId: 'host-daemon', sendDaemonCommand: slow as any, active: true,
+            }))
+        })
+        expect(container.querySelectorAll('[data-testid="mesh-artifact-row"]').length).toBe(0)
+    })
+
+    describe('thumbnails', () => {
+        const OrigIO = (globalThis as any).IntersectionObserver
+        let observers: Array<{ cb: (e: any[]) => void; el: Element; disconnected: boolean }> = []
+        const origCreate = URL.createObjectURL
+        const origRevoke = URL.revokeObjectURL
+        let created = 0
+        beforeEach(() => {
+            clearThumbnailState()
+            observers = []
+            created = 0
+            ;(globalThis as any).IntersectionObserver = class {
+                rec: any
+                constructor(cb: any) { this.rec = { cb, el: null, disconnected: false }; observers.push(this.rec) }
+                observe(el: Element) { this.rec.el = el }
+                disconnect() { this.rec.disconnected = true }
+            }
+            URL.createObjectURL = vi.fn(() => `blob:t${++created}`) as any
+            URL.revokeObjectURL = vi.fn() as any
+        })
+        afterEach(() => {
+            ;(globalThis as any).IntersectionObserver = OrigIO
+            URL.createObjectURL = origCreate
+            URL.revokeObjectURL = origRevoke
+        })
+        const imgs = Array.from({ length: 6 }, (_, i) => att(`img${i}`, {
+            kind: 'image', mime: 'image/png', filename: `i${i}.png`, title: `Img ${i}`, taskId: undefined, missionId: undefined, createdAt: 9000 - i,
+        }))
+        function imageSend(gate: { open: boolean; waiters: Array<() => void> }) {
+            let active = 0
+            let peak = 0
+            const fn = vi.fn(async (_d: string, type: string, payload: any) => {
+                if (type === 'artifact_list') return { success: true, attachments: imgs, hasMore: false, nextCursor: null }
+                active += 1; peak = Math.max(peak, active)
+                await new Promise<void>(res => gate.waiters.push(res))
+                active -= 1
+                const found = imgs.find(d => d.artifactId === payload.artifactId)!
+                return {
+                    success: true, artifactId: found.artifactId, sessionId: payload.sessionId, kind: 'image', mime: 'image/png',
+                    filename: found.filename, title: found.title, sizeBytes: 3, sha256: found.sha256, registeredSha256: found.sha256,
+                    sha256Changed: false, hashChanged: false, encoding: 'base64', content: 'AAEC', createdAt: 1, updatedAt: 1,
+                }
+            })
+            return Object.assign(fn, { peak: () => peak })
+        }
+        const mountImgs = async (send: any, token = 0) => {
+            await act(async () => {
+                root.render(React.createElement(MeshArtifactsTab, {
+                    status: { meshId: 'mesh-1', nodes: [], queue: { tasks: [] }, missions: [] } as any,
+                    daemonId: 'host-daemon', sendDaemonCommand: send, active: true, refreshToken: token,
+                }))
+            })
+            await flush()
+        }
+        const reveal = async () => { await act(async () => { observers.filter(o => !o.disconnected && o.el).forEach(o => o.cb([{ isIntersecting: true }])) }) }
+
+        it('limits concurrent thumbnail fetches and keeps them out of the shared chat cache', async () => {
+            const gate = { open: false, waiters: [] as Array<() => void> }
+            const send = imageSend(gate)
+            await mountImgs(send)
+            await reveal()
+            const fetches = () => send.mock.calls.filter(c => c[1] === 'artifact_fetch').length
+            expect(fetches()).toBe(THUMBNAIL_MAX_CONCURRENT)
+            // Finish one at a time; the queue feeds the rest.
+            for (let i = 0; i < 6; i++) {
+                await act(async () => { gate.waiters.shift()?.(); await new Promise(r => setTimeout(r, 0)) })
+            }
+            expect(fetches()).toBe(6)
+            expect(send.peak()).toBeLessThanOrEqual(THUMBNAIL_MAX_CONCURRENT)
+            const key = buildArtifactCacheKey({ daemonId: 'host-daemon', sessionId: 'sess-1', meshCoordinatorDaemonId: 'host-daemon', artifactId: 'img0', sha256: 'sha-img0', updatedAt: 1000 })
+            expect(key && getCachedArtifactPayload(key)).toBeFalsy()
+        })
+
+        it('does not fetch rows that scrolled away before their turn', async () => {
+            const gate = { open: false, waiters: [] as Array<() => void> }
+            const send = imageSend(gate)
+            await mountImgs(send)
+            await reveal()
+            // Rows 3-5 are queued; scroll them out of view.
+            await act(async () => { observers.slice(3).forEach(o => o.cb([{ isIntersecting: false }])) })
+            for (let i = 0; i < 6; i++) await act(async () => { gate.waiters.shift()?.(); await new Promise(r => setTimeout(r, 0)) })
+            expect(send.mock.calls.filter(c => c[1] === 'artifact_fetch').length).toBe(3)
+        })
+
+        it('keeps thumbnails valid across a refresh (no revoked object URL left in src)', async () => {
+            const gate = { open: false, waiters: [] as Array<() => void> }
+            const send = imageSend(gate)
+            await mountImgs(send)
+            await reveal()
+            for (let i = 0; i < 6; i++) await act(async () => { gate.waiters.shift()?.(); await new Promise(r => setTimeout(r, 0)) })
+            const before = container.querySelectorAll('[data-testid="mesh-artifact-thumb"]').length
+            expect(before).toBeGreaterThan(0)
+            const revokedBefore = (URL.revokeObjectURL as any).mock.calls.length
+            await mountImgs(send, 1) // refreshToken bump -> new attachment objects
+            const srcs = [...container.querySelectorAll('[data-testid="mesh-artifact-thumb"]')].map(i => i.getAttribute('src'))
+            const revoked = new Set((URL.revokeObjectURL as any).mock.calls.map((c: any[]) => c[0]))
+            for (const src of srcs) expect(revoked.has(src)).toBe(false)
+            expect((URL.revokeObjectURL as any).mock.calls.length).toBe(revokedBefore)
+        })
     })
 })
