@@ -8,6 +8,8 @@ export default defineConfig({
     // minimum so timeout-path tests resolve fast instead of waiting the real
     // cross-machine budget. See helpers/setup-env.ts for the full rationale.
     setupFiles: ['./test/helpers/setup-env.ts'],
+    // Run-level sweep of temp dirs that outlived a killed/skipped/failed-to-load test file.
+    globalSetup: ['./test/helpers/global-tmp-guard.ts'],
     // Many suites spawn real `git` subprocesses (mesh status/refine fixtures build
     // temp repos with several commits + submodules). On win32 process spawn and the
     // surrounding fs work are markedly slower than on macOS/Linux, so the vitest

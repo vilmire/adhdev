@@ -16,7 +16,7 @@
     "bundle:vendor": "node ./scripts/vendor-runtime-deps.mjs",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test test/*.test.ts && vitest run",
+    "test": "node --import ../../scripts/test-tmp-guard.mjs --import tsx --test test/*.test.ts && vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepublishOnly": "cd ../.. && npm run build -w packages/session-host-daemon && npm run build -w packages/mcp-server && npm run build -w packages/daemon-core && npm run build -w packages/web-standalone && cd packages/daemon-standalone && npm run bundle:web && npm run bundle:vendor && npm run build"
   },

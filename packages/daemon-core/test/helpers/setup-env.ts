@@ -1,4 +1,7 @@
 import { afterAll, afterEach } from 'vitest'
+// Installs the mkdtemp wrapper that removes every temp dir a test file created.
+// MUST come before any other mkdtemp in this file so those dirs are tracked too.
+import './tmp-leak-guard'
 
 // Vitest global setup: shrink the production-sized mesh P2P probe windows for the
 // test environment.

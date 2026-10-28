@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.vitest.ts'],
+    setupFiles: ['./test/setup-tmp-guard.ts'],
   },
 });

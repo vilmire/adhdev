@@ -36,6 +36,7 @@ import { GIT_HEAVY_SUITES } from './vitest.git-suites.mts';
 const SHARED = {
   environment: 'node' as const,
   setupFiles: ['./test/helpers/setup-env.ts'],
+  globalSetup: ['./test/helpers/global-tmp-guard.ts'],
   testTimeout: 30_000,
   hookTimeout: 30_000,
   coverage: { enabled: false },

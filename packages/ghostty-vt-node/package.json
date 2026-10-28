@@ -18,7 +18,7 @@
     "build": "node ./scripts/build-or-use-prebuilt.mjs",
     "rebuild": "cmake-js rebuild",
     "clean": "cmake-js clean",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --import ../../scripts/test-tmp-guard.mjs --test test/*.test.mjs",
     "check:prebuilts": "node scripts/check-prebuilts.mjs"
   },
   "author": "vilmire",

@@ -19,7 +19,7 @@
     "build": "tsup",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "test": "node --import tsx --import ./test/setup-env.ts --test test/*.test.ts",
+    "test": "node --import ../../scripts/test-tmp-guard.mjs --import tsx --import ./test/setup-env.ts --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "package:native:guardian": "node scripts/package-native-guardian.mjs"
   },

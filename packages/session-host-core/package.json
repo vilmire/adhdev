@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import ../../scripts/test-tmp-guard.mjs --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "files": [

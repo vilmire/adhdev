@@ -30,11 +30,19 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // Resolved while ADHDEV_CONFIG_DIR still points at this test's dir (the socket
+  // name hashes it).
+  const endpointPath = makeHost().endpoint.path
   if (originalConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
   else process.env.ADHDEV_CONFIG_DIR = originalConfigDir
   resetProcessInstanceContextForTests()
   for (const fn of cleanups.splice(0)) { try { fn() } catch { /* best effort */ } }
   fs.rmSync(configDir, { recursive: true, force: true })
+  // The endpoint is a unix socket FILE directly under os.tmpdir() (its name hashes
+  // appName + the config dir captured in endpointPath). Every test here SIGKILLs the
+  // child that bound it, which leaves the file behind; remove it so the suite does
+  // not leak one per test.
+  try { fs.rmSync(endpointPath, { force: true }) } catch { /* best effort */ }
 })
 
 function makeHost() {
