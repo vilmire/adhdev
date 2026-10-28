@@ -16,6 +16,19 @@ export type ArtifactTranslationKey =
     | 'artifact.zoomIn'
     | 'artifact.zoomOut'
     | 'artifact.zoomReset'
+    | 'artifact.expand'
+    | 'artifact.closeViewer'
+    | 'artifact.textSmaller'
+    | 'artifact.textLarger'
+    | 'artifact.textReset'
+    | 'artifact.openInNewWindow'
+    | 'artifact.toc'
+    | 'artifact.previous'
+    | 'artifact.next'
+    | 'artifact.popoutWaiting'
+    | 'artifact.popoutNoPayload'
+    | 'artifact.popoutBlocked'
+    | 'artifact.fit'
     | 'artifact.hashChangedWarning'
     | 'artifact.hashChangedDetail'
     | 'artifact.invalidJsonNotice'
@@ -49,6 +62,19 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.zoomIn': 'Zoom in',
         'artifact.zoomOut': 'Zoom out',
         'artifact.zoomReset': 'Reset zoom',
+        'artifact.expand': 'Expand',
+        'artifact.closeViewer': 'Close viewer',
+        'artifact.textSmaller': 'Smaller text',
+        'artifact.textLarger': 'Larger text',
+        'artifact.textReset': 'Reset text size',
+        'artifact.openInNewWindow': 'Open in new window',
+        'artifact.toc': 'Contents',
+        'artifact.previous': 'Previous artifact',
+        'artifact.next': 'Next artifact',
+        'artifact.popoutWaiting': 'Waiting for artifact…',
+        'artifact.popoutNoPayload': 'Open this artifact again from the dashboard.',
+        'artifact.popoutBlocked': 'The new window was blocked. Allow pop-ups for this site and try again.',
+        'artifact.fit': 'Fit',
         'artifact.hashChangedWarning': 'File modified since registration',
         'artifact.hashChangedDetail': 'The workspace file SHA-256 hash changed after this artifact was registered.',
         'artifact.invalidJsonNotice': 'Malformed JSON — showing raw text',
@@ -79,6 +105,19 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.zoomIn': '확대',
         'artifact.zoomOut': '축소',
         'artifact.zoomReset': '원래 크기',
+        'artifact.expand': '확대 보기',
+        'artifact.closeViewer': '뷰어 닫기',
+        'artifact.textSmaller': '글자 작게',
+        'artifact.textLarger': '글자 크게',
+        'artifact.textReset': '글자 크기 초기화',
+        'artifact.openInNewWindow': '새 창에서 열기',
+        'artifact.toc': '목차',
+        'artifact.previous': '이전 산출물',
+        'artifact.next': '다음 산출물',
+        'artifact.popoutWaiting': '산출물을 기다리는 중…',
+        'artifact.popoutNoPayload': '대시보드에서 이 산출물을 다시 열어 주세요.',
+        'artifact.popoutBlocked': '새 창이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.',
+        'artifact.fit': '맞춤',
         'artifact.hashChangedWarning': '등록 이후 파일이 변경됨',
         'artifact.hashChangedDetail': '이 산출물이 등록된 이후 작업 공간 파일의 SHA-256 해시가 변경되었습니다.',
         'artifact.invalidJsonNotice': '유효하지 않은 JSON — 원문 텍스트로 표시합니다',
@@ -109,6 +148,19 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.zoomIn': '拡大',
         'artifact.zoomOut': '縮小',
         'artifact.zoomReset': 'リセット',
+        'artifact.expand': '拡大表示',
+        'artifact.closeViewer': 'ビューアを閉じる',
+        'artifact.textSmaller': '文字を小さく',
+        'artifact.textLarger': '文字を大きく',
+        'artifact.textReset': '文字サイズをリセット',
+        'artifact.openInNewWindow': '新しいウィンドウで開く',
+        'artifact.toc': '目次',
+        'artifact.previous': '前のアーティファクト',
+        'artifact.next': '次のアーティファクト',
+        'artifact.popoutWaiting': 'アーティファクトを待機中…',
+        'artifact.popoutNoPayload': 'ダッシュボードからこのアーティファクトをもう一度開いてください。',
+        'artifact.popoutBlocked': '新しいウィンドウがブロックされました。このサイトのポップアップを許可して再試行してください。',
+        'artifact.fit': '全体表示',
         'artifact.hashChangedWarning': '登録後にファイルが変更されました',
         'artifact.hashChangedDetail': 'このアーティファクトの登録後にワークスペースファイルの SHA-256 ハッシュが変更されました。',
         'artifact.invalidJsonNotice': '不正な JSON — 生テキストを表示しています',
@@ -139,6 +191,19 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.zoomIn': '放大',
         'artifact.zoomOut': '缩小',
         'artifact.zoomReset': '重置缩放',
+        'artifact.expand': '展开查看',
+        'artifact.closeViewer': '关闭查看器',
+        'artifact.textSmaller': '缩小文字',
+        'artifact.textLarger': '放大文字',
+        'artifact.textReset': '重置文字大小',
+        'artifact.openInNewWindow': '在新窗口中打开',
+        'artifact.toc': '目录',
+        'artifact.previous': '上一个产物',
+        'artifact.next': '下一个产物',
+        'artifact.popoutWaiting': '正在等待产物…',
+        'artifact.popoutNoPayload': '请从仪表板重新打开此产物。',
+        'artifact.popoutBlocked': '新窗口被拦截。请允许此网站的弹出窗口后重试。',
+        'artifact.fit': '适应',
         'artifact.hashChangedWarning': '文件在注册后已更改',
         'artifact.hashChangedDetail': '此产物注册后，工作区文件的 SHA-256 哈希值已发生更改。',
         'artifact.invalidJsonNotice': 'JSON 格式无效 — 显示原始文本',
@@ -169,6 +234,19 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.zoomIn': 'Acercar',
         'artifact.zoomOut': 'Alejar',
         'artifact.zoomReset': 'Restablecer zoom',
+        'artifact.expand': 'Ampliar',
+        'artifact.closeViewer': 'Cerrar visor',
+        'artifact.textSmaller': 'Texto más pequeño',
+        'artifact.textLarger': 'Texto más grande',
+        'artifact.textReset': 'Restablecer tamaño de texto',
+        'artifact.openInNewWindow': 'Abrir en una ventana nueva',
+        'artifact.toc': 'Contenido',
+        'artifact.previous': 'Artefacto anterior',
+        'artifact.next': 'Artefacto siguiente',
+        'artifact.popoutWaiting': 'Esperando el artefacto…',
+        'artifact.popoutNoPayload': 'Vuelve a abrir este artefacto desde el panel.',
+        'artifact.popoutBlocked': 'Se bloqueó la ventana nueva. Permite las ventanas emergentes de este sitio e inténtalo de nuevo.',
+        'artifact.fit': 'Ajustar',
         'artifact.hashChangedWarning': 'Archivo modificado tras el registro',
         'artifact.hashChangedDetail': 'El hash SHA-256 del archivo en el espacio de trabajo cambió después de registrar este artefacto.',
         'artifact.invalidJsonNotice': 'JSON no válido — mostrando texto sin formato',

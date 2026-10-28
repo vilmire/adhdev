@@ -57,9 +57,13 @@ export function formatArtifactJson(raw: string): { formatted: string; valid: boo
 export interface ArtifactContentRendererProps {
     payload: ArtifactResolvedPayload
     objectUrl: string | null
+    /** `inline` (default) caps text in a small scroll box; `fullscreen` lets it fill the viewer. */
+    variant?: 'inline' | 'fullscreen'
 }
 
-export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentRendererProps) {
+export function ArtifactContentRenderer({ payload, objectUrl, variant = 'inline' }: ArtifactContentRendererProps) {
+    const fullscreen = variant === 'fullscreen'
+    const boxMax = fullscreen ? '' : 'max-h-96 overflow-auto'
     const { t, i18n } = useTranslation('common')
     const [zoom, setZoom] = useState(100)
     const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -298,10 +302,12 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
     if (kind === 'markdown') {
         return (
             <div className="flex flex-col gap-2" data-artifact-renderer="markdown">
-                <div className="flex items-center justify-end">
-                    <CopyButton value={text} label={copyLabel} />
-                </div>
-                <div className="chat-markdown max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/50 p-3 text-xs text-text-primary">
+                {!fullscreen && (
+                    <div className="flex items-center justify-end">
+                        <CopyButton value={text} label={copyLabel} />
+                    </div>
+                )}
+                <div className={`chat-markdown ${boxMax} rounded-lg border border-border-subtle bg-bg-primary/50 p-3 ${fullscreen ? 'mx-auto w-full max-w-[88ch] text-sm leading-relaxed sm:p-6' : 'text-xs'} text-text-primary`}>
                     {text ? (
                         <ChatMarkdownBody
                             content={text}
@@ -321,10 +327,12 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
         const lines = text ? text.replace(/\r\n/g, '\n').split('\n') : []
         return (
             <div className="flex flex-col gap-2" data-artifact-renderer="diff">
-                <div className="flex items-center justify-end">
-                    <CopyButton value={text} label={copyLabel} />
-                </div>
-                <div className="max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/60 py-1 font-mono text-2xs">
+                {!fullscreen && (
+                    <div className="flex items-center justify-end">
+                        <CopyButton value={text} label={copyLabel} />
+                    </div>
+                )}
+                <div className={`${boxMax} rounded-lg border border-border-subtle bg-bg-primary/60 py-1 font-mono ${fullscreen ? 'text-xs' : 'text-2xs'}`}>
                     {lines.length === 0 ? (
                         <div className="px-3 py-2 text-text-muted">{emptyLabel}</div>
                     ) : (
@@ -364,9 +372,9 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                     ) : (
                         <span />
                     )}
-                    <CopyButton value={formatted} label={copyLabel} />
+                    {!fullscreen && <CopyButton value={formatted} label={copyLabel} />}
                 </div>
-                <pre className="max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono text-2xs leading-relaxed text-text-primary">
+                <pre className={`${boxMax} rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono ${fullscreen ? 'text-xs' : 'text-2xs'} leading-relaxed text-text-primary`}>
                     <code>{formatted || emptyLabel}</code>
                 </pre>
             </div>
@@ -376,10 +384,12 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
     // Default / 'text' renderer
     return (
         <div className="flex flex-col gap-2" data-artifact-renderer="text">
-            <div className="flex items-center justify-end">
-                <CopyButton value={text} label={copyLabel} />
-            </div>
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono text-2xs leading-relaxed text-text-primary">
+            {!fullscreen && (
+                <div className="flex items-center justify-end">
+                    <CopyButton value={text} label={copyLabel} />
+                </div>
+            )}
+            <pre className={`${boxMax} whitespace-pre-wrap break-words rounded-lg border border-border-subtle bg-bg-primary/60 p-3 font-mono ${fullscreen ? 'text-xs' : 'text-2xs'} leading-relaxed text-text-primary`}>
                 {text || emptyLabel}
             </pre>
         </div>

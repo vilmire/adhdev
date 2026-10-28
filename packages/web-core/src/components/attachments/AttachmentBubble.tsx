@@ -4,12 +4,15 @@ import type { ChatAttachmentMeta } from '@adhdev/daemon-core'
 import {
     clampArtifactPreviewText,
     useArtifactRead,
+    type ArtifactResolvedPayload,
     type FetchArtifactCommandFn,
 } from '../../hooks/useArtifactRead'
 import { formatBytes } from '../../utils/daemon-utils'
 import { formatTime } from '../ChatMessageList/chatMessageHelpers'
 import { CopyButton } from '../ui/TechnicalDetails'
 import { ArtifactContentRenderer } from './ArtifactContentRenderers'
+import ArtifactFullscreenViewer from './ArtifactFullscreenViewer'
+import { toArtifactViewerItem, type ArtifactViewerItem } from './artifact-viewer-item'
 import { getArtifactErrorCopy, getArtifactKindLabel, trArtifact } from './artifact-i18n'
 
 export { formatBytes }
@@ -39,6 +42,8 @@ export function AttachmentBubble({
 }: AttachmentBubbleProps) {
     const { t, i18n } = useTranslation('common')
     const [downloading, setDownloading] = useState(false)
+    const [expanded, setExpanded] = useState<{ item: ArtifactViewerItem; payload: ArtifactResolvedPayload } | null>(null)
+    const [expanding, setExpanding] = useState(false)
 
     const {
         status,
@@ -51,6 +56,7 @@ export function AttachmentBubble({
         sha256Changed,
         openViewer,
         toggleViewer,
+        fetchArtifactContent,
         downloadArtifact,
     } = useArtifactRead({
         attachment,
@@ -80,6 +86,19 @@ export function AttachmentBubble({
     const hashWarningDetail = trArtifact(t, i18n.language, 'artifact.hashChangedDetail')
 
     const copyValue = data?.textContent ?? (previewText || attachment.filename || displayTitle)
+
+    const expandLabel = trArtifact(t, i18n.language, 'artifact.expand')
+
+    const handleExpand = async () => {
+        if (expanding) return
+        setExpanding(true)
+        try {
+            const payload = data ?? await fetchArtifactContent({ open: false })
+            if (payload) setExpanded({ item: toArtifactViewerItem(payload), payload })
+        } finally {
+            setExpanding(false)
+        }
+    }
 
     const handleDownload = async () => {
         if (downloading) return
@@ -160,6 +179,17 @@ export function AttachmentBubble({
                         </button>
                         <button
                             type="button"
+                            onClick={() => { void handleExpand() }}
+                            disabled={expanding}
+                            data-testid="artifact-expand-button"
+                            aria-label={expandLabel}
+                            title={expandLabel}
+                            className="inline-flex min-h-[26px] shrink-0 items-center rounded-md border border-border-subtle bg-transparent px-2 py-0.5 text-3xs font-medium text-text-secondary transition-colors hover:border-border-default hover:text-text-primary disabled:opacity-50"
+                        >
+                            {expandLabel}
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => {
                                 void toggleViewer()
                             }}
@@ -235,6 +265,13 @@ export function AttachmentBubble({
                     </div>
                 )}
             </div>
+            {expanded && (
+                <ArtifactFullscreenViewer
+                    item={expanded.item}
+                    popOutPayload={expanded.item}
+                    onClose={() => setExpanded(null)}
+                />
+            )}
         </div>
     )
 }
