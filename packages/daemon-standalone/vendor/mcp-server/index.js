@@ -119094,9 +119094,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (kind) records = records.filter((rec5) => rec5.kind === kind);
       if (cursor) {
         const at = records.findIndex((rec5) => rec5.artifactId === cursor.artifactId);
-        records = at >= 0 ? records.slice(0, at) : records.filter(
-          (rec5) => rec5.createdAt < cursor.createdAt || rec5.createdAt === cursor.createdAt && rec5.artifactId < cursor.artifactId
-        );
+        records = at >= 0 ? records.slice(0, at) : records.filter((rec5) => rec5.createdAt <= cursor.createdAt);
       }
       const hasMore = records.length > limit;
       const page = hasMore ? records.slice(records.length - limit) : records;
