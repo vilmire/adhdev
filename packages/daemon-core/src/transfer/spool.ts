@@ -19,8 +19,14 @@ const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 export function requireFreeDisk(dir: string, needBytes: number): void {
   try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const s = fs.statfsSync(dir);
+    // Never create the directory (it may be a user workspace): measure the nearest existing ancestor.
+    let probe = path.resolve(dir);
+    while (!fs.existsSync(probe)) {
+      const up = path.dirname(probe);
+      if (up === probe) break;
+      probe = up;
+    }
+    const s = fs.statfsSync(probe);
     const free = Number(s.bavail) * Number(s.bsize);
     if (free < needBytes + TRANSFER_LIMITS.diskMarginBytes) {
       throw new ManifestError('DISK_SPACE_EXHAUSTED', 'not enough free disk space');

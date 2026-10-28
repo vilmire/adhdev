@@ -8,7 +8,7 @@ export function configureProjectTransfer(ports: TransferHostPorts): ProjectTrans
   if (engine) { engine.shutdown(); clearInterval(sweepTimer); }
   ensureBaseDir(ports.baseDir);
   engine = new ProjectTransferEngine(ports);
-  sweepTimer = setInterval(() => engine?.sweep(), 60 * 60_000);
+  sweepTimer = setInterval(() => engine?.sweep(), 60_000);
   sweepTimer.unref?.();
   return engine;
 }

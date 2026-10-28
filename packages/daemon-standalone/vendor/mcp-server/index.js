@@ -32400,7 +32400,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return env2;
     }
     function runGit2(cwd, args, { input, env: env2, onStdout } = {}) {
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         const child = (0, import_node_child_process3.spawn)("git", ["--no-replace-objects", "-C", cwd, ...args], {
           cwd,
           env: gitEnv(env2),
@@ -32434,7 +32434,7 @@ ${renderWorkerProtocolFooter2(input)}`;
                 return reject(e);
               }
             }
-            return resolve62(stdout);
+            return resolve63(stdout);
           }
           reject(new Error(`git ${args.slice(0, 3).join(" ")} exited ${code}: ${Buffer.concat(err).toString("utf-8").trim().slice(0, 500)}`));
         });
@@ -32806,8 +32806,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
       return {
         read(name) {
-          return new Promise((resolve62, reject) => {
-            waiter = { resolve: resolve62, reject };
+          return new Promise((resolve63, reject) => {
+            waiter = { resolve: resolve63, reject };
             if (dead) return settle2();
             child.stdin.write(`${name}
 `);
@@ -34517,7 +34517,7 @@ ${tail}`;
       const { execFile: execFile13 } = await import("child_process");
       const run4 = async (args, input) => {
         let child;
-        const result = new Promise((resolve62, reject) => {
+        const result = new Promise((resolve63, reject) => {
           child = execFile13(GIT, args, {
             cwd: submodulePath,
             encoding: "utf8",
@@ -34525,7 +34525,7 @@ ${tail}`;
             windowsHide: true,
             env: realGitEnv(),
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-          }, (error, stdout) => error ? reject(error) : resolve62(String(stdout || "")));
+          }, (error, stdout) => error ? reject(error) : resolve63(String(stdout || "")));
           child.stdin?.on("error", () => {
           });
           child.stdin?.end(input);
@@ -35411,19 +35411,19 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return null;
     }
     function execAsync(cmd, timeoutMs = 5e3) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const child = (0, import_child_process4.exec)(cmd, {
           encoding: "utf-8",
           timeout: timeoutMs,
           ...process.platform === "win32" ? { windowsHide: true } : {}
         }, (err, stdout) => {
           if (err || !stdout?.trim()) {
-            resolve62(null);
+            resolve63(null);
           } else {
-            resolve62(stdout.trim());
+            resolve63(stdout.trim());
           }
         });
-        child.on("error", () => resolve62(null));
+        child.on("error", () => resolve63(null));
       });
     }
     async function resolveVersion(candidates) {
@@ -35670,8 +35670,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       try {
         const timedResult = await Promise.race([
           inFlight4.then((items) => ({ timedOut: false, items })),
-          new Promise((resolve62) => {
-            timer = setTimeout(() => resolve62({ timedOut: true }), budgetMs);
+          new Promise((resolve63) => {
+            timer = setTimeout(() => resolve63({ timedOut: true }), budgetMs);
           })
         ]);
         if (!timedResult.timedOut) {
@@ -36249,13 +36249,13 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return path9.join(getConfigDir2(), "version-history.json");
     }
     async function runCommand(cmd, timeout = 1e4) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error, stdout) => {
-          if (error) return resolve62(null);
-          resolve62(stdout.trim());
+          if (error) return resolve63(null);
+          resolve63(stdout.trim());
         });
       });
     }
@@ -36646,7 +36646,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform10}").`;
     }
     function runCredStoreCommand(deps, command, args) {
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         let child;
         try {
           child = deps.spawn(command, args, { env: deps.env });
@@ -36683,7 +36683,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         });
         child.on("error", (err) => finish(() => reject(err)));
         child.on("exit", (code) => {
-          finish(() => resolve62({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
+          finish(() => resolve63({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
         child.stdin.end();
       });
@@ -38359,7 +38359,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchCodexQuotaFromAppServer(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         let child;
         try {
           child = deps.spawn(
@@ -38369,7 +38369,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve62(
+          resolve63(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
               collectorScope: "background-collector",
@@ -38405,7 +38405,7 @@ child.on('exit', () => process.exit(0));
           } catch {
           }
           void killHandle;
-          resolve62(quota);
+          resolve63(quota);
         };
         const handleLine = (line) => {
           let message;
@@ -38701,7 +38701,7 @@ child.on('exit', () => process.exit(0));
       }
     }
     function runKeychainRead(deps, service) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         let child;
         try {
           child = deps.spawn(
@@ -38710,7 +38710,7 @@ child.on('exit', () => process.exit(0));
             { env: deps.env }
           );
         } catch {
-          resolve62(null);
+          resolve63(null);
           return;
         }
         let settled = false;
@@ -38719,7 +38719,7 @@ child.on('exit', () => process.exit(0));
           if (settled) return;
           settled = true;
           deps.clearTimeout(timer);
-          resolve62(value);
+          resolve63(value);
         };
         const timer = deps.setTimeout(() => {
           try {
@@ -39613,7 +39613,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchOpencodeUsage(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         let child;
         try {
           child = deps.spawn(
@@ -39623,7 +39623,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve62(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
+          resolve63(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
             source: SOURCE3,
             failureKind: "cli-unavailable"
           }));
@@ -39640,7 +39640,7 @@ child.on('exit', () => process.exit(0));
             child.kill();
           } catch {
           }
-          resolve62(quota);
+          resolve63(quota);
         };
         const timeoutHandle = deps.setTimeout(() => {
           finish(quotaFailure("opencode", "error", `opencode stats timed out after ${TIMEOUT_MS}ms`, {
@@ -53193,7 +53193,7 @@ ${line}`;
       const waiters = /* @__PURE__ */ new Set();
       return {
         wait(meshId, untilMs, signal) {
-          return new Promise((resolve62, reject) => {
+          return new Promise((resolve63, reject) => {
             if (signal.aborted) {
               reject(signal.reason ?? new Error("aborted"));
               return;
@@ -53208,7 +53208,7 @@ ${line}`;
                 waiters.delete(waiter);
                 timers.clearTimeout(handle);
                 signal.removeEventListener("abort", onAbort);
-                resolve62(v);
+                resolve63(v);
               }
             };
             const onAbort = () => {
@@ -53832,8 +53832,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return {
         acquire() {
           if (held < max && waiters.length === 0) return Promise.resolve(grant());
-          return new Promise((resolve62) => {
-            waiters.push(resolve62);
+          return new Promise((resolve63) => {
+            waiters.push(resolve63);
           });
         },
         inflight: () => held,
@@ -55668,7 +55668,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const through = this.deps.store.maxRowid(topic);
               if (this.deps.store.cursorGet(name, topic) >= through)
                 return Promise.resolve({ throughRowid: through });
-              return new Promise((resolve62, reject) => c.waiters.push({ through, resolve: resolve62, reject }));
+              return new Promise((resolve63, reject) => c.waiters.push({ through, resolve: resolve63, reject }));
             } catch (e) {
               return Promise.reject(e);
             }
@@ -57033,7 +57033,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve62, reject) => {
+            return new Promise((resolve63, reject) => {
               this.push({
                 t: "append",
                 topic,
@@ -57043,7 +57043,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 causal: o?.causal,
                 causalProvider: o?.causalProvider,
                 ref: o?.ref,
-                resolve: resolve62,
+                resolve: resolve63,
                 reject
               });
             });
@@ -57053,8 +57053,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
             validateEntry(entry, this.constants);
             this.topics.get(entry.topic);
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "external", entry, via, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "external", entry, via, resolve: resolve63, reject });
             });
           }
           // §6.4 fork path ② (HAVE contradiction) is detected outside the queue but the
@@ -57062,8 +57062,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           sealStream(topic, writer) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "seal", topic, writer, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "seal", topic, writer, resolve: resolve63, reject });
             });
           }
           setOnApplied(hook) {
@@ -57086,15 +57086,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           applyCert(cert) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "cert", cert, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "cert", cert, resolve: resolve63, reject });
             });
           }
           applyDirective(directive) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "directive", directive, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "directive", directive, resolve: resolve63, reject });
             });
           }
           // §7.8 snapshot adoption: stream heads jump to the cut (chains continue from
@@ -57102,8 +57102,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptSnapshotCut(topic, cut) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "adopt", topic, cut, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "adopt", topic, cut, resolve: resolve63, reject });
             });
           }
           // C7-7 writer-row GC. Local housekeeping only — no signed authority, no
@@ -57122,8 +57122,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (entry.policy.replication === "full-sync") {
               return Promise.reject(misuse(`retireTopic: full-sync topics are not GC-eligible (${topic})`));
             }
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "retireTopic", topic, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "retireTopic", topic, resolve: resolve63, reject });
             });
           }
           // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
@@ -57157,13 +57157,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
               return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
             }
-            return new Promise((resolve62, reject) => {
+            return new Promise((resolve63, reject) => {
               this.push({
                 t: "pruneTopic",
                 topic,
                 olderThanMs: o.olderThanMs,
                 keepNewest: o.keepNewest,
-                resolve: resolve62,
+                resolve: resolve63,
                 reject
               });
             });
@@ -57199,14 +57199,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve62, reject) => {
+            return new Promise((resolve63, reject) => {
               this.push({
                 t: "pruneSuperseded",
                 topic,
                 uptoRowid: o.uptoRowid,
                 maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
                 supersedeOtherWriters: o.supersedeOtherWriters === true,
-                resolve: resolve62,
+                resolve: resolve63,
                 reject
               });
             });
@@ -57235,13 +57235,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve62, reject) => {
+            return new Promise((resolve63, reject) => {
               this.push({
                 t: "pruneAcked",
                 topic,
                 o,
                 maxRows: Math.min(o.maxRows ?? ACKED_PRUNE_DEFAULT_MAX_ROWS, ACKED_PRUNE_MAX_ROWS_CAP),
-                resolve: resolve62,
+                resolve: resolve63,
                 reject
               });
             });
@@ -57249,8 +57249,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptFloor(topic, writer, seq2, chain) {
             if (this.closed)
               return Promise.reject(new SeqscribeError("ERR_MISUSE", "node is closed"));
-            return new Promise((resolve62, reject) => {
-              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve62, reject });
+            return new Promise((resolve63, reject) => {
+              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve63, reject });
             });
           }
           // This node's retention floor for a stream (rows ≤ seq are not held), or null.
@@ -65233,7 +65233,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         let done = false;
         let poll2;
         let responseTimer;
@@ -65283,7 +65283,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (typeof poll2.unref === "function") poll2.unref();
         }
         work.then(
-          (val) => settle2(() => resolve62(val)),
+          (val) => settle2(() => resolve63(val)),
           (err) => settle2(() => reject(err))
         );
       });
@@ -66796,7 +66796,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const connection = args.getConnection?.(args.daemonId);
           if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
           if (connection) args.onConnection?.(connection);
-          await new Promise((resolve62) => setTimeout(resolve62, 250 * 2 ** (attempt - 1)));
+          await new Promise((resolve63) => setTimeout(resolve63, 250 * 2 ** (attempt - 1)));
         }
         try {
           const remoteGit = await probeRemoteMeshGitStatus({
@@ -76223,7 +76223,7 @@ ${includeRefs[0]}`;
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve62) => setTimeout(resolve62, ms3)));
+      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve63) => setTimeout(resolve63, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready2 = false;
@@ -81875,7 +81875,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
       while (Date.now() < deadline) {
         if (adapter.isReady() || adapter.currentStatus === "idle") return;
-        await new Promise((resolve62) => setTimeout(resolve62, LOCAL_LAUNCH_READY_POLL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, LOCAL_LAUNCH_READY_POLL_MS));
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
@@ -82420,7 +82420,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       trackInFlightAutoLaunch(meshId, autoLaunchPromise);
       autoLaunchStarted = await Promise.race([
         autoLaunchPromise,
-        new Promise((resolve62) => setImmediate(() => resolve62(false)))
+        new Promise((resolve63) => setImmediate(() => resolve63(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId, {
         idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy2(mesh.policy).delegatedSessionIdleTtlMinutes)
@@ -89498,8 +89498,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           try {
             const settled = await Promise.race([
               pending,
-              new Promise((resolve62) => {
-                timer = setTimeout(() => resolve62("timeout"), maxWaitMs);
+              new Promise((resolve63) => {
+                timer = setTimeout(() => resolve63("timeout"), maxWaitMs);
                 timer.unref?.();
               })
             ]);
@@ -90553,7 +90553,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
-          const resolve62 = (queries, buckets, bucketKind, output) => {
+          const resolve63 = (queries, buckets, bucketKind, output) => {
             for (const [key5, bucketQueries] of queries) {
               const terminals = buckets.get(key5)?.[bucketKind];
               if (!terminals?.length) continue;
@@ -90569,9 +90569,9 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
               }
             }
           };
-          resolve62(taskQueries, taskBuckets, "real", realByDispatch);
-          resolve62(sessionQueries, sessionBuckets, "real", realByDispatch);
-          resolve62(nodeQueries, nodeBuckets, "real", realByDispatch);
+          resolve63(taskQueries, taskBuckets, "real", realByDispatch);
+          resolve63(sessionQueries, sessionBuckets, "real", realByDispatch);
+          resolve63(nodeQueries, nodeBuckets, "real", realByDispatch);
           const resolveLatestApproval = (queries, buckets) => {
             for (const [key5, bucketQueries] of queries) {
               const transitions = buckets.get(key5)?.approval;
@@ -101442,7 +101442,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
       const started = deps.now();
-      const result = await new Promise((resolve62) => {
+      const result = await new Promise((resolve63) => {
         let stdout = "";
         let stderr = "";
         let settled = false;
@@ -101451,7 +101451,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve62(value);
+          resolve63(value);
         };
         let child;
         try {
@@ -105104,7 +105104,7 @@ ${result.stderr}`, result.code);
               throw new Error("sessionId is required to publish artifact bubble");
             }
             while (this.inFlight.has(sessionId)) {
-              await new Promise((resolve62) => setImmediate(resolve62));
+              await new Promise((resolve63) => setImmediate(resolve63));
             }
             if (!this.admitSession(sessionId)) {
               this.counters.publishFailed++;
@@ -109297,8 +109297,8 @@ ${body}`;
           try {
             const raw = await Promise.race([
               dispatch2(readText(m.meshHost.hostDaemonId), "get_mesh", { meshId: m.id, membershipOnly: true }),
-              new Promise((resolve62) => {
-                timer = setTimeout(() => resolve62(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
+              new Promise((resolve63) => {
+                timer = setTimeout(() => resolve63(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
                 timer.unref?.();
               })
             ]);
@@ -112122,14 +112122,14 @@ ${detail.join("\n")}` : stripped;
           whenSubmitDrained(timeoutMs) {
             if (!this.hasInFlightSubmit()) return Promise.resolve(true);
             const deadline = Date.now() + Math.max(0, timeoutMs);
-            return new Promise((resolve62) => {
+            return new Promise((resolve63) => {
               const poll2 = () => {
                 if (!this.hasInFlightSubmit()) {
-                  resolve62(true);
+                  resolve63(true);
                   return;
                 }
                 if (Date.now() >= deadline) {
-                  resolve62(false);
+                  resolve63(false);
                   return;
                 }
                 setTimeout(poll2, 100);
@@ -119747,10 +119747,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     });
     function listProcessesPs() {
       if (process.platform === "win32") return Promise.resolve([]);
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         (0, import_node_child_process18.execFile)("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", windowsHide: true, timeout: 1e4, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
           if (error || typeof stdout !== "string") {
-            resolve62([]);
+            resolve63([]);
             return;
           }
           const rows = [];
@@ -119758,7 +119758,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
             if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
           }
-          resolve62(rows);
+          resolve63(rows);
         });
       });
     }
@@ -119767,11 +119767,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     }
     function waitForExit(child, ms3) {
       if (exited(child)) return Promise.resolve(true);
-      return new Promise((resolve62) => {
-        const timer = setTimeout(() => resolve62(exited(child)), ms3);
+      return new Promise((resolve63) => {
+        const timer = setTimeout(() => resolve63(exited(child)), ms3);
         child.once("exit", () => {
           clearTimeout(timer);
-          resolve62(true);
+          resolve63(true);
         });
       });
     }
@@ -121429,7 +121429,7 @@ ${asText(streams.stderr)}
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...control?.env || {}, ...candidate.env || {} },
         ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       };
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         let timer;
         let idleTimedOut = false;
         let childRef;
@@ -121469,7 +121469,7 @@ ${asText(streams.stderr)}
             reject(err);
             return;
           }
-          resolve62({ stdout, stderr });
+          resolve63({ stdout, stderr });
         });
         execOptions.timeout = idleTimeoutMs;
         childRef = child;
@@ -122395,7 +122395,7 @@ ${asText(streams.stderr)}
       const maxWaitMs = Math.max(minSettleMs, opts.maxWaitMs ?? INJECTION_CLEANUP_MAX_WAIT_MS);
       const pollMs = opts.pollMs ?? INJECTION_CLEANUP_POLL_MS;
       const startedAt = Date.now();
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const tick2 = () => {
           const elapsed = Date.now() - startedAt;
           let ready2 = true;
@@ -122408,7 +122408,7 @@ ${asText(streams.stderr)}
           }
           if (ready2 || elapsed >= maxWaitMs) {
             removeInjectionFiles(effect, ready2 ? "session ready" : `session not ready after ${maxWaitMs}ms`, opts.label);
-            resolve62();
+            resolve63();
             return;
           }
           const t2 = setTimeout(tick2, pollMs);
@@ -122567,7 +122567,7 @@ ${asText(streams.stderr)}
           };
           async send(message) {
             if (this.closed || !this.child.stdin?.writable) throw new DriverMcpError("connection_closed", "Driver stdio is closed");
-            await new Promise((resolve62, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve62()));
+            await new Promise((resolve63, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve63()));
           }
           async close() {
             if (this.closed) return;
@@ -122664,8 +122664,8 @@ ${asText(streams.stderr)}
                 detached: process.platform !== "win32"
               });
               this.child = child;
-              this.exited = new Promise((resolve62) => child.once("close", () => {
-                resolve62();
+              this.exited = new Promise((resolve63) => child.once("close", () => {
+                resolve63();
                 if (this.child === child && !this.stopping && this.state !== "stopped") this.fail(new DriverMcpError("connection_closed", "Driver process exited"));
               }));
               child.on("error", (error) => this.fail(error));
@@ -122769,13 +122769,13 @@ ${asText(streams.stderr)}
                 try {
                   if (process.platform !== "win32" && child.pid) process.kill(-child.pid, name);
                   else if (child.pid) {
-                    await new Promise((resolve62) => {
+                    await new Promise((resolve63) => {
                       const killer = hiddenSpawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
                       killer.once("error", () => {
                         child.kill(name);
-                        resolve62();
+                        resolve63();
                       });
-                      killer.once("close", () => resolve62());
+                      killer.once("close", () => resolve63());
                     });
                   } else child.kill(name);
                 } catch {
@@ -122784,8 +122784,8 @@ ${asText(streams.stderr)}
               const wait = async (ms3) => {
                 let timer;
                 try {
-                  await Promise.race([this.exited, new Promise((resolve62) => {
-                    timer = setTimeout(resolve62, ms3);
+                  await Promise.race([this.exited, new Promise((resolve63) => {
+                    timer = setTimeout(resolve63, ms3);
                   })]);
                 } finally {
                   clearTimeout(timer);
@@ -124844,8 +124844,8 @@ ${asText(streams.stderr)}
             try {
               const records = await Promise.race([
                 Promise.resolve().then(() => sessionHostControl.listSessions()),
-                new Promise((resolve62) => {
-                  timer = setTimeout(() => resolve62(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
+                new Promise((resolve63) => {
+                  timer = setTimeout(() => resolve63(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
                   timer.unref?.();
                 })
               ]);
@@ -128150,8 +128150,8 @@ ${b.text}`).join("\n\n");
         try {
           return await Promise.race([
             Promise.resolve().then(() => execute(command, args)),
-            new Promise((resolve62) => {
-              timer = setTimeout(() => resolve62(null), remaining);
+            new Promise((resolve63) => {
+              timer = setTimeout(() => resolve63(null), remaining);
             })
           ]);
         } catch {
@@ -130705,9 +130705,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.attemptBodies.clear();
             this.attemptMeta.clear();
             this.attemptBodyAt.clear();
-            for (const [timer, resolve62] of this.pendingTimers) {
+            for (const [timer, resolve63] of this.pendingTimers) {
               this.clock.clearTimeout(timer);
-              resolve62();
+              resolve63();
             }
             this.pendingTimers.clear();
             this.renderedCoverage.clear();
@@ -131140,8 +131140,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /** A stopped relay resolves its waits too; late I/O cannot repopulate caches. */
           async bounded(read2, ms3, fallback) {
             let timer;
-            const timeout = new Promise((resolve62) => {
-              const finish = () => resolve62(fallback);
+            const timeout = new Promise((resolve63) => {
+              const finish = () => resolve63(fallback);
               timer = this.clock.setTimeout(finish, ms3);
               this.pendingTimers.set(timer, finish);
             });
@@ -132966,8 +132966,8 @@ ${defangRelayBody(text4)}`;
     async function withMeshRemoteAccessMutex(meshId, fn) {
       const prev = meshRemoteAccessQueues.get(meshId) ?? Promise.resolve();
       let release2;
-      const gate = new Promise((resolve62) => {
-        release2 = resolve62;
+      const gate = new Promise((resolve63) => {
+        release2 = resolve63;
       });
       const next = prev.then(() => gate, () => gate);
       meshRemoteAccessQueues.set(meshId, next);
@@ -135491,8 +135491,8 @@ ${defangRelayBody(text4)}`;
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
         LOG.info("Mesh", `[Refinery] ${label2} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
-        await new Promise((resolve62) => {
-          waitQueue.push(resolve62);
+        await new Promise((resolve63) => {
+          waitQueue.push(resolve63);
         });
         LOG.info("Mesh", `[Refinery] ${label2} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
@@ -138866,8 +138866,8 @@ ${tail}` : ""
         try {
           read2 = await Promise.race([
             probe.reader.read(attempt, location, target.holds),
-            new Promise((resolve62) => {
-              deadline = setTimeout(() => resolve62({ presence: "unknown" }), endProbeGraceMs(policy));
+            new Promise((resolve63) => {
+              deadline = setTimeout(() => resolve63({ presence: "unknown" }), endProbeGraceMs(policy));
             })
           ]);
         } catch (error) {
@@ -145369,7 +145369,7 @@ ${tail}` : ""
       return null;
     }
     function performMeshHandshake(socket, side, opts, timeoutMs = MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS) {
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         let settled = false;
         const send = (frame2) => {
           if (socket.readyState !== WS_OPEN2) return;
@@ -145429,7 +145429,7 @@ ${tail}` : ""
           if (settled) return;
           settled = true;
           detach();
-          resolve62(result);
+          resolve63(result);
         };
         const settleFail = (code, detail) => {
           if (settled) return;
@@ -145671,10 +145671,10 @@ ${tail}` : ""
         }
         const peer = this.getOrCreatePeer(target, "initiator", "demand");
         peer.lastCommandAt = (/* @__PURE__ */ new Date()).toISOString();
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           const id4 = `${this.idNonce}:${this.idSeq++}`;
           const resultTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : resultTimeoutForCommand(command);
-          const pending = { id: id4, command, args, resolve: resolve62, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
+          const pending = { id: id4, command, args, resolve: resolve63, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
           if (peer.state === "connected" && peer.dc.isOpen()) {
             this.writeRequest(peer, pending);
             return;
@@ -146911,7 +146911,7 @@ ${tail}` : ""
       for (; ; ) {
         if (isConnectedMeshPeer(getConnectionStatus(daemonId))) return true;
         if (Date.now() >= deadline) return false;
-        await new Promise((resolve62) => setTimeout(resolve62, RECONNECT_POLL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, RECONNECT_POLL_MS));
       }
     }
     async function dispatchMeshOneshotWithAckRetry(dispatch2, opts) {
@@ -147278,7 +147278,7 @@ ${tail}` : ""
       while (Date.now() - start < timeoutMs) {
         try {
           process.kill(pid, 0);
-          await new Promise((resolve62) => setTimeout(resolve62, 250));
+          await new Promise((resolve63) => setTimeout(resolve63, 250));
         } catch {
           return true;
         }
@@ -147381,17 +147381,17 @@ ${tail}` : ""
     }
     var DEFAULT_HEALTH_TIMEOUT_MS = 12e4;
     function fetchLocalJson(port, pathname) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const req = http.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
           let body = "";
           res.setEncoding("utf8");
           res.on("data", (chunk) => {
             body += chunk;
           });
-          res.on("end", () => resolve62({ ok: res.statusCode === 200, body }));
+          res.on("end", () => resolve63({ ok: res.statusCode === 200, body }));
         });
         req.on("timeout", () => req.destroy());
-        req.on("error", () => resolve62({ ok: false, body: "" }));
+        req.on("error", () => resolve63({ ok: false, body: "" }));
       });
     }
     async function fetchLocalHealth(port) {
@@ -147866,7 +147866,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
               loggedVersionPending = true;
               options.log(`Health gate: replacement reports version ${version2} (want ${targetVersion}) at ${elapsedMs}ms`);
             }
-            await new Promise((resolve62) => setTimeout(resolve62, 500));
+            await new Promise((resolve63) => setTimeout(resolve63, 500));
           }
           options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
           return false;
@@ -148863,7 +148863,7 @@ ${marker2}`,
           });
           return "reinstall";
         },
-        sleep: (ms3) => new Promise((resolve62) => setTimeout(resolve62, ms3)),
+        sleep: (ms3) => new Promise((resolve63) => setTimeout(resolve63, ms3)),
         now: () => Date.now(),
         log
       };
@@ -149278,7 +149278,7 @@ ${marker2}`,
             appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || "lock"}); clearing holders + staging and retrying after backoff`);
             await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
             cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
-            await new Promise((resolve62) => setTimeout(resolve62, attempt * 1500));
+            await new Promise((resolve63) => setTimeout(resolve63, attempt * 1500));
             continue;
           }
           if (isRetriableInstallLockError(error)) {
@@ -149321,7 +149321,7 @@ ${marker2}`,
         }
       }
       if (process.platform === "win32") {
-        await new Promise((resolve62) => setTimeout(resolve62, 500));
+        await new Promise((resolve63) => setTimeout(resolve63, 500));
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         appendUpgradeLog("Post-install staging cleanup complete");
       }
@@ -150353,14 +150353,14 @@ ${marker2}`,
       });
       const records = readRecords3();
       if (new Set(records.map((r) => r.pid)).size !== records.length) throw new Error("maintenance_mcp_pid_incarnation_ambiguous");
-      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity3) => new Promise((resolve62) => {
+      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity3) => new Promise((resolve63) => {
         const name = `${root}:${key3(identity3)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
         const nonce = (0, import_node_crypto25.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
-          resolve62({ identity: identity3, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
+          resolve63({ identity: identity3, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
-        waiting.set(name, { identity: identity3, nonce, epoch: state2.epoch, resolve: resolve62, timer });
+        waiting.set(name, { identity: identity3, nonce, epoch: state2.epoch, resolve: resolve63, timer });
       })));
       if (sha5(fs45.readdirSync(dir).sort()) !== sha5(names) || sha5(readRecords3()) !== membershipDigest) throw new Error("maintenance_mcp_membership_changed");
       return { observed: members.every((m) => m.observed), reason: members.some((m) => !m.observed) ? "mcp_incarnation_unreachable" : void 0, membershipDigest, members, nativeCensusRequired: true };
@@ -150976,7 +150976,7 @@ ${marker2}`,
       * Returns multiple entries if multiple IDE windows are open on same port
       */
       static listAllTargets(port) {
-        return new Promise((resolve62) => {
+        return new Promise((resolve63) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -150992,16 +150992,16 @@ ${marker2}`,
                   (t) => !isNonMain(t.title || "") && t.url?.includes("workbench.html") && !t.url?.includes("agent")
                 );
                 const fallbackPages = pages.filter((t) => !isNonMain(t.title || ""));
-                resolve62(mainPages.length > 0 ? mainPages : fallbackPages);
+                resolve63(mainPages.length > 0 ? mainPages : fallbackPages);
               } catch {
-                resolve62([]);
+                resolve63([]);
               }
             });
           });
-          req.on("error", () => resolve62([]));
+          req.on("error", () => resolve63([]));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve62([]);
+            resolve63([]);
           });
         });
       }
@@ -151041,7 +151041,7 @@ ${marker2}`,
         }
       }
       findTargetOnPort(port) {
-        return new Promise((resolve62) => {
+        return new Promise((resolve63) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -151052,7 +151052,7 @@ ${marker2}`,
                   (t) => (t.type === "page" || t.type === "browser" || t.type === "Page") && t.webSocketDebuggerUrl
                 );
                 if (pages.length === 0) {
-                  resolve62(targets.find((t) => t.webSocketDebuggerUrl) || null);
+                  resolve63(targets.find((t) => t.webSocketDebuggerUrl) || null);
                   return;
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
@@ -151071,25 +151071,25 @@ ${marker2}`,
                     this._targetId = selected2.target.id;
                   }
                   this._pageTitle = selected2.target.title || "";
-                  resolve62(selected2.target);
+                  resolve63(selected2.target);
                   return;
                 }
                 if (previousTargetId) {
                   this.log(`[CDP] Target ${previousTargetId} not found in page list`);
-                  resolve62(null);
+                  resolve63(null);
                   return;
                 }
                 this._pageTitle = list2[0]?.title || "";
-                resolve62(list2[0]);
+                resolve63(list2[0]);
               } catch {
-                resolve62(null);
+                resolve63(null);
               }
             });
           });
-          req.on("error", () => resolve62(null));
+          req.on("error", () => resolve63(null));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve62(null);
+            resolve63(null);
           });
         });
       }
@@ -151100,7 +151100,7 @@ ${marker2}`,
         this.extensionProviders = providers;
       }
       connectToTarget(wsUrl) {
-        return new Promise((resolve62) => {
+        return new Promise((resolve63) => {
           this.ws = new import_ws3.default(wsUrl);
           this.ws.on("open", async () => {
             this._connected = true;
@@ -151110,17 +151110,17 @@ ${marker2}`,
             }
             this.connectBrowserWs().catch(() => {
             });
-            resolve62(true);
+            resolve63(true);
           });
           this.ws.on("message", (data) => {
             try {
               const msg = JSON.parse(data.toString());
               if (msg.id && this.pending.has(msg.id)) {
-                const { resolve: resolve63, reject } = this.pending.get(msg.id);
+                const { resolve: resolve64, reject } = this.pending.get(msg.id);
                 this.pending.delete(msg.id);
                 this.failureCount = 0;
                 if (msg.error) reject(new Error(msg.error.message));
-                else resolve63(msg.result);
+                else resolve64(msg.result);
               } else if (msg.method === "Runtime.executionContextCreated") {
                 this.contexts.add(msg.params.context.id);
               } else if (msg.method === "Runtime.executionContextDestroyed") {
@@ -151143,7 +151143,7 @@ ${marker2}`,
           this.ws.on("error", (err) => {
             this.log(`[CDP] WebSocket error: ${err.message}`);
             this._connected = false;
-            resolve62(false);
+            resolve63(false);
           });
         });
       }
@@ -151157,7 +151157,7 @@ ${marker2}`,
             return;
           }
           this.log(`[CDP] Connecting browser WS for target discovery...`);
-          await new Promise((resolve62, reject) => {
+          await new Promise((resolve63, reject) => {
             this.browserWs = new import_ws3.default(browserWsUrl);
             this.browserWs.on("open", async () => {
               this._browserConnected = true;
@@ -151167,16 +151167,16 @@ ${marker2}`,
               } catch (e) {
                 this.log(`[CDP] setDiscoverTargets failed: ${e.message}`);
               }
-              resolve62();
+              resolve63();
             });
             this.browserWs.on("message", (data) => {
               try {
                 const msg = JSON.parse(data.toString());
                 if (msg.id && this.browserPending.has(msg.id)) {
-                  const { resolve: resolve63, reject: reject2 } = this.browserPending.get(msg.id);
+                  const { resolve: resolve64, reject: reject2 } = this.browserPending.get(msg.id);
                   this.browserPending.delete(msg.id);
                   if (msg.error) reject2(new Error(msg.error.message));
-                  else resolve63(msg.result);
+                  else resolve64(msg.result);
                 }
               } catch {
               }
@@ -151196,31 +151196,31 @@ ${marker2}`,
         }
       }
       getBrowserWsUrl() {
-        return new Promise((resolve62) => {
+        return new Promise((resolve63) => {
           const req = http2.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
             res.on("end", () => {
               try {
                 const info = JSON.parse(data);
-                resolve62(info.webSocketDebuggerUrl || null);
+                resolve63(info.webSocketDebuggerUrl || null);
               } catch {
-                resolve62(null);
+                resolve63(null);
               }
             });
           });
-          req.on("error", () => resolve62(null));
+          req.on("error", () => resolve63(null));
           req.setTimeout(3e3, () => {
             req.destroy();
-            resolve62(null);
+            resolve63(null);
           });
         });
       }
       sendBrowser(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           if (!this.browserWs || !this._browserConnected) return reject(new Error("Browser WS not connected"));
           const id4 = this.browserMsgId++;
-          this.browserPending.set(id4, { resolve: resolve62, reject });
+          this.browserPending.set(id4, { resolve: resolve63, reject });
           this.browserWs.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.browserPending.has(id4)) {
@@ -151260,11 +151260,11 @@ ${marker2}`,
       }
       // ─── CDP Protocol ────────────────────────────────────────
       sendInternal(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           if (!this.ws || !this._connected) return reject(new Error("CDP not connected"));
           if (this.ws.readyState !== import_ws3.default.OPEN) return reject(new Error("WebSocket not open"));
           const id4 = this.msgId++;
-          this.pending.set(id4, { resolve: resolve62, reject });
+          this.pending.set(id4, { resolve: resolve63, reject });
           this.ws.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.pending.has(id4)) {
@@ -151513,7 +151513,7 @@ ${marker2}`,
         const browserWs = this.browserWs;
         let msgId = this.browserMsgId;
         const sendWs = (method, params = {}, sessionId) => {
-          return new Promise((resolve62, reject) => {
+          return new Promise((resolve63, reject) => {
             const mid = msgId++;
             this.browserMsgId = msgId;
             const handler = (raw) => {
@@ -151522,7 +151522,7 @@ ${marker2}`,
                 if (msg.id === mid) {
                   browserWs.removeListener("message", handler);
                   if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                  else resolve62(msg.result);
+                  else resolve63(msg.result);
                 }
               } catch {
               }
@@ -151723,14 +151723,14 @@ ${marker2}`,
         if (!ws || ws.readyState !== import_ws3.default.OPEN) {
           throw new Error("CDP not connected");
         }
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           const id4 = getNextId();
           pendingMap.set(id4, {
             resolve: (result) => {
               if (result?.result?.subtype === "error") {
                 reject(new Error(result.result.description));
               } else {
-                resolve62(result?.result?.value);
+                resolve63(result?.result?.value);
               }
             },
             reject
@@ -151762,10 +151762,10 @@ ${marker2}`,
           throw new Error("CDP not connected");
         }
         const sendViaSession = (method, params = {}) => {
-          return new Promise((resolve62, reject) => {
+          return new Promise((resolve63, reject) => {
             const pendingMap = this._browserConnected ? this.browserPending : this.pending;
             const id4 = this._browserConnected ? this.browserMsgId++ : this.msgId++;
-            pendingMap.set(id4, { resolve: resolve62, reject });
+            pendingMap.set(id4, { resolve: resolve63, reject });
             ws.send(JSON.stringify({ id: id4, sessionId, method, params }));
             setTimeout(() => {
               if (pendingMap.has(id4)) {
@@ -153396,8 +153396,8 @@ ${marker2}`,
           if ((0, import_fs28.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os49 === "win32") {
-          const { dirname: dirname63 } = await import("path");
-          const appDir = dirname63(appPath);
+          const { dirname: dirname64 } = await import("path");
+          const appDir = dirname64(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -156062,7 +156062,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const run4 = async () => {
         let step;
         do {
-          await new Promise((resolve62) => setImmediate(resolve62));
+          await new Promise((resolve63) => setImmediate(resolve63));
           step = advanceJsonlWork(work);
         } while (!step?.done);
         return step.value;
@@ -159654,7 +159654,7 @@ ${output}` : "";
       return e?.message || String(e);
     }
     function delay(ms3) {
-      return new Promise((resolve62) => setTimeout(resolve62, ms3));
+      return new Promise((resolve63) => setTimeout(resolve63, ms3));
     }
     var ProviderChannelRuntime = class {
       store;
@@ -160025,7 +160025,7 @@ ${output}` : "";
     }
     function defaultFetchJson(url) {
       const https = require("https");
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", Accept: "application/json" }, timeout: 15e3 }, (res) => {
           if (res.statusCode !== 200) {
             reject(new Error(`HTTP ${res.statusCode}`));
@@ -160035,7 +160035,7 @@ ${output}` : "";
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             try {
-              resolve62(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+              resolve63(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
             } catch (e) {
               reject(e);
             }
@@ -160051,7 +160051,7 @@ ${output}` : "";
     function defaultDownloadFile(url, destPath) {
       const https = require("https");
       const http4 = require("http");
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         const doRequest = (reqUrl, redirectCount = 0) => {
           if (redirectCount > 5) {
             reject(new Error("Too many redirects"));
@@ -160071,7 +160071,7 @@ ${output}` : "";
             res.pipe(ws);
             ws.on("finish", () => {
               ws.close();
-              resolve62();
+              resolve63();
             });
             ws.on("error", reject);
           });
@@ -162153,7 +162153,7 @@ ${output}` : "";
     var PS_TIMEOUT_MS = 3e3;
     function findRunningMacAppPids(appPaths, spawnImpl = import_child_process13.spawn) {
       if (!appPaths.some((p) => normalizeMacAppPath(p))) return Promise.resolve([]);
-      return new Promise((resolve62, reject) => {
+      return new Promise((resolve63, reject) => {
         const child = spawnImpl("ps", ["axww", "-o", "pid=,args="], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
         const pids = [];
         const take = (completed) => {
@@ -162168,7 +162168,7 @@ ${output}` : "";
           clearTimeout(timer);
           if (error) return reject(error);
           if (line) take(line);
-          resolve62(pids);
+          resolve63(pids);
         };
         const timer = setTimeout(() => {
           child.kill();
@@ -162230,10 +162230,10 @@ ${output}` : "";
     }
     init_logger();
     async function execQuiet(command, options = {}) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         (0, import_child_process14.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
-          if (error) return resolve62("");
-          resolve62(stdout.toString());
+          if (error) return resolve63("");
+          resolve63(stdout.toString());
         });
       });
     }
@@ -162315,17 +162315,17 @@ ${output}` : "";
       throw new Error("No free port found");
     }
     function checkPortFree(port) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const server = net.createServer();
         server.unref();
-        server.on("error", () => resolve62(false));
+        server.on("error", () => resolve63(false));
         server.listen(port, "127.0.0.1", () => {
-          server.close(() => resolve62(true));
+          server.close(() => resolve63(true));
         });
       });
     }
     async function isCdpActive(port) {
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const req = require("http").get(`http://127.0.0.1:${port}/json/version`, {
           timeout: 2e3
         }, (res) => {
@@ -162334,16 +162334,16 @@ ${output}` : "";
           res.on("end", () => {
             try {
               const info = JSON.parse(data);
-              resolve62(!!info["WebKit-Version"] || !!info["Browser"]);
+              resolve63(!!info["WebKit-Version"] || !!info["Browser"]);
             } catch {
-              resolve62(false);
+              resolve63(false);
             }
           });
         });
-        req.on("error", () => resolve62(false));
+        req.on("error", () => resolve63(false));
         req.on("timeout", () => {
           req.destroy();
-          resolve62(false);
+          resolve63(false);
         });
       });
     }
@@ -165886,7 +165886,7 @@ ${output}` : "";
       }
     }
     function sleep(ms3) {
-      return new Promise((resolve62) => setTimeout(resolve62, ms3));
+      return new Promise((resolve63) => setTimeout(resolve63, ms3));
     }
     async function waitForIdleAfterInterrupt(target, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -166628,7 +166628,7 @@ ${output}` : "";
     async function getStableExtensionBaseline(h) {
       const first = await readExtensionChatState(h);
       if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
-      await new Promise((resolve62) => setTimeout(resolve62, 150));
+      await new Promise((resolve63) => setTimeout(resolve63, 150));
       const second = await readExtensionChatState(h);
       return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
     }
@@ -166636,7 +166636,7 @@ ${output}` : "";
       const beforeCount = getStateMessageCount(before);
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve62) => setTimeout(resolve62, 250));
+        await new Promise((resolve63) => setTimeout(resolve63, 250));
         const state2 = await readExtensionChatState(h);
         if (state2?.status === "waiting_approval") return true;
         const afterCount = getStateMessageCount(state2);
@@ -168382,7 +168382,7 @@ ${output}` : "";
             const enterCount = cliCommand.enterCount || 1;
             await adapter.writeRaw(cliCommand.text + "\r");
             for (let i = 1; i < enterCount; i += 1) {
-              await new Promise((resolve62) => setTimeout(resolve62, 50));
+              await new Promise((resolve63) => setTimeout(resolve63, 50));
               await adapter.writeRaw("\r");
             }
           }
@@ -169392,11 +169392,12 @@ ${output}` : "";
     var MAX_DAYS = 7;
     var CONTENT_KEYS = /* @__PURE__ */ new Set(["content", "message", "text", "sdp", "candidate", "linkKeyB64", "signal", "selection"]);
     var MAX_MASK_DEPTH = 8;
-    function isSensitiveArgKey(key5) {
-      return CONTENT_KEYS.has(key5) || isCredentialKey(key5);
+    var TRANSFER_PATH_KEYS = /* @__PURE__ */ new Set(["selected", "path", "finalName", "publishedName"]);
+    function isSensitiveArgKey(key5, cmd = "") {
+      return CONTENT_KEYS.has(key5) || isCredentialKey(key5) || cmd.startsWith("project_transfer") && TRANSFER_PATH_KEYS.has(key5);
     }
-    function maskCommandLogValue(value, keyHint = "", depth = 0) {
-      if (isSensitiveArgKey(keyHint) || containsCredentialValue(value)) {
+    function maskCommandLogValue(value, keyHint = "", depth = 0, cmd = "") {
+      if (isSensitiveArgKey(keyHint, cmd) || containsCredentialValue(value)) {
         return typeof value === "string" ? `[${value.length} chars]` : "[masked]";
       }
       if (typeof value === "string") {
@@ -169404,24 +169405,24 @@ ${output}` : "";
       }
       if (Array.isArray(value)) {
         if (depth >= MAX_MASK_DEPTH) return "[MaxDepth]";
-        return value.map((item) => maskCommandLogValue(item, "", depth + 1));
+        return value.map((item) => maskCommandLogValue(item, "", depth + 1, cmd));
       }
       if (typeof value === "object" && value !== null) {
         if (depth >= MAX_MASK_DEPTH) return "[MaxDepth]";
         const nested = {};
         for (const [k, v] of Object.entries(value)) {
-          nested[k] = maskCommandLogValue(v, k, depth + 1);
+          nested[k] = maskCommandLogValue(v, k, depth + 1, cmd);
         }
         return nested;
       }
       return value;
     }
-    function maskCommandLogArgs(args) {
+    function maskCommandLogArgs(args, cmd = "") {
       if (!args || typeof args !== "object" || Array.isArray(args)) return void 0;
-      return maskCommandLogValue(args, "", 0);
+      return maskCommandLogValue(args, "", 0, cmd);
     }
-    function maskArgs(args) {
-      return maskCommandLogArgs(args);
+    function maskArgs(args, cmd = "") {
+      return maskCommandLogArgs(args, cmd);
     }
     function getDateStr2() {
       return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -169502,7 +169503,7 @@ ${output}` : "";
           src: entry.source,
           ...entry.peerId ? { peer: entry.peerId } : {},
           ...entry.interactionId ? { interactionId: entry.interactionId } : {},
-          ...entry.args ? { args: maskArgs(entry.args) } : {},
+          ...entry.args ? { args: maskArgs(entry.args, entry.cmd) } : {},
           ...entry.success !== void 0 ? { ok: entry.success } : {},
           ...entry.error ? { err: redactCredentialString(entry.error) } : {},
           ...entry.durationMs !== void 0 ? { ms: entry.durationMs } : {}
@@ -169526,7 +169527,7 @@ ${output}` : "";
               source: parsed.src,
               peerId: parsed.peer,
               interactionId: parsed.interactionId,
-              args: parsed.args ? maskArgs(parsed.args) : void 0,
+              args: parsed.args ? maskArgs(parsed.args, String(parsed.cmd ?? "")) : void 0,
               success: parsed.ok,
               error: typeof parsed.err === "string" ? redactCredentialString(parsed.err) : parsed.err,
               durationMs: parsed.ms
@@ -170310,6 +170311,116 @@ ${output}` : "";
     });
     var MAX_FRAME_PAYLOAD_BYTES = TRANSFER_LIMITS.maxFrameBytes - TRANSFER_LIMITS.frameHeaderBytes;
     var import_node_crypto39 = require("crypto");
+    var EXCLUDED_DIRS = /* @__PURE__ */ new Set([
+      ".git",
+      ".hg",
+      ".svn",
+      ".ssh",
+      ".gnupg",
+      ".aws",
+      ".azure",
+      ".gcloud",
+      ".kube",
+      ".docker",
+      ".password-store",
+      ".terraform",
+      ".adhdev",
+      ".adhdev-transfer-staging",
+      ".wrangler",
+      ".vercel",
+      ".netlify"
+    ]);
+    var EXCLUDED_DIR_PAIRS = [
+      [".config", "gh"],
+      [".config", "gcloud"],
+      [".config", "rclone"],
+      [".cargo", "credentials"],
+      [".cargo", "credentials.toml"],
+      [".m2", "settings.xml"]
+    ];
+    var EXCLUDED_NAMES = /* @__PURE__ */ new Set([
+      ".npmrc",
+      ".pypirc",
+      ".netrc",
+      "_netrc",
+      ".envrc",
+      ".git-credentials",
+      ".pgpass",
+      ".my.cnf",
+      ".dockercfg",
+      ".htpasswd",
+      ".vault-token",
+      ".boto",
+      ".s3cfg",
+      "credentials",
+      "credentials.json",
+      "kubeconfig",
+      "auth.json",
+      "tokens.json",
+      "token",
+      "secrets.json",
+      "secrets.yml",
+      "secrets.yaml",
+      "wallet.dat",
+      ".dev.vars",
+      ".yarnrc.yml",
+      ".env",
+      "application_default_credentials.json",
+      ".yarnrc",
+      "gradle.properties",
+      ".terraformrc",
+      ".sentryclirc",
+      "rclone.conf",
+      ".bash_history",
+      ".zsh_history",
+      ".python_history",
+      ".node_repl_history",
+      ".psql_history",
+      ".mysql_history",
+      ".lesshst",
+      "login data",
+      "cookies",
+      "web data",
+      "logins.json",
+      "key4.db",
+      "cookies.sqlite"
+    ]);
+    var EXCLUDED_PATTERNS = [
+      { rule: "env-file", re: /^\.env\..+$/ },
+      { rule: "env-file", re: /^.+\.env$/ },
+      { rule: "dev-vars", re: /^\.dev\.vars\..+$/ },
+      { rule: "ssh-key", re: /^id_(rsa|dsa|ecdsa|ed25519)/ },
+      { rule: "key-material", re: /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg|asc|p8|pkcs12|jceks|ovpn|keychain|keychain-db)$/ },
+      { rule: "cloud-credential", re: /^firebase-adminsdk.*\.json$/ },
+      { rule: "cloud-credential", re: /credentials?[^/]*\.(json|toml|ya?ml)$/ },
+      { rule: "terraform-config", re: /\.tfrc$/ },
+      { rule: "terraform-state", re: /\.(tfstate|tfvars)(\..*)?$/ },
+      { rule: "cloud-credential", re: /^(client_secret|service-?account).*\.json$/ },
+      { rule: "secret-file", re: /(\.secrets?$|^secrets?\.)/ },
+      { rule: "kubeconfig", re: /\.kubeconfig$/ },
+      { rule: "mobileprovision", re: /\.mobileprovision$/ }
+    ];
+    var PRIVATE_KEY_HEAD = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/;
+    var SECRET_SNIFF_BYTES = 4096;
+    function matchSecretPath(relPath) {
+      const segments = relPath.split("/").filter(Boolean).map((s2) => s2.toLowerCase());
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (EXCLUDED_DIRS.has(seg)) return `dir:${seg}`;
+        for (const [a, b] of EXCLUDED_DIR_PAIRS) {
+          if (seg === a && segments[i + 1] === b) return `dir:${a}/${b}`;
+        }
+      }
+      const name = segments[segments.length - 1];
+      if (!name) return null;
+      if (EXCLUDED_NAMES.has(name)) return `name:${name}`;
+      for (const p of EXCLUDED_PATTERNS) if (p.re.test(name)) return p.rule;
+      return null;
+    }
+    function sniffSecretContent(head) {
+      const text4 = Buffer.from(head.subarray(0, SECRET_SNIFF_BYTES)).toString("latin1");
+      return PRIVATE_KEY_HEAD.test(text4) ? "private-key-content" : null;
+    }
     var ManifestError = class extends Error {
       constructor(code, message) {
         super(message);
@@ -170386,6 +170497,7 @@ ${output}` : "";
         } catch (err) {
           throw new ManifestError("PATH_REJECTED", `entry path rejected: ${err.message}`);
         }
+        if (matchSecretPath(e.path) !== null) throw new ManifestError("SECRET_PATH_REJECTED", "entry path matches a secret exclusion rule");
         const key5 = e.path.normalize("NFC").toLowerCase();
         if (seen2.has(key5)) throw new ManifestError("CASE_COLLISION", "case-insensitive duplicate path");
         seen2.set(key5, e.kind);
@@ -170428,6 +170540,7 @@ ${output}` : "";
       const sorted = [...c.files].sort((a, b) => byteCompare(a.path, b.path));
       sorted.forEach((f, i) => {
         const w = want[i];
+        if (matchSecretPath(f.path) !== null) throw new ManifestError("SECRET_PATH_REJECTED", "content path matches a secret exclusion rule");
         if (f.path !== w.path || f.size !== w.size) throw new ManifestError("SOURCE_CHANGED", "file differs from approved selection");
         if (!SHA256_HEX.test(f.sha256) || !Array.isArray(f.blockHashes) || f.blockHashes.length !== blockCount(f.size) || !f.blockHashes.every((h) => SHA256_HEX.test(h))) {
           throw new ManifestError("MANIFEST_INVALID", "bad file hashes");
@@ -170496,21 +170609,310 @@ ${output}` : "";
       throw new FrameError("PROTOCOL_ERROR", "bad json payload");
     }
     function extractSdpFingerprint(sdp) {
-      const m = /^a=fingerprint:\s*(\S+)\s+([0-9A-Fa-f:]+)\s*$/m.exec(sdp);
-      return m ? `${m[1].toLowerCase()} ${m[2].toUpperCase()}` : null;
+      const found = /* @__PURE__ */ new Set();
+      for (const m of sdp.matchAll(/^a=fingerprint:\s*(\S+)\s+([0-9A-Fa-f:]+)\s*$/gm)) found.add(`${m[1].toLowerCase()} ${m[2].toUpperCase()}`);
+      return found.size === 1 ? [...found][0] : null;
     }
-    function computeBindingTag(linkKey, transferId, linkGen, fpA, fpB) {
+    function sdpHasRelayCandidate(sdp) {
+      return /^a=candidate:.*\btyp relay\b/im.test(sdp);
+    }
+    function computeBindingTag(linkKey, transferId, linkGen, fpA, fpB, role) {
       const [lo, hi] = [fpA, fpB].sort();
-      return (0, import_node_crypto40.createHmac)("sha256", linkKey).update(`adhdev-file/1|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
+      return (0, import_node_crypto40.createHmac)("sha256", linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
     }
     function bindingTagsEqual(a, b) {
       const x = Buffer.from(a, "hex");
       const y = Buffer.from(b, "hex");
       return x.length === 32 && x.length === y.length && (0, import_node_crypto40.timingSafeEqual)(x, y);
     }
+    var import_node_crypto422 = require("crypto");
+    var fs85 = __toESM2(require("fs"));
+    var path95 = __toESM2(require("path"));
     var import_node_crypto41 = require("crypto");
+    var fs84 = __toESM2(require("fs"));
+    var path94 = __toESM2(require("path"));
     var fs83 = __toESM2(require("fs"));
     var path93 = __toESM2(require("path"));
+    function safeClose(h) {
+      if (h === null) return;
+      try {
+        close(h);
+      } catch {
+      }
+    }
+    function classifyOpenError(err) {
+      const reason = err?.reason;
+      if (reason === "SYMLINK_OR_REPARSE_REJECTED") return "link";
+      if (reason === "HARDLINK_REJECTED") return "hardlink";
+      if (err?.code === "ENOENT") return "vanished";
+      return "unreadable";
+    }
+    function openSourceFile(rootHandle, relPath) {
+      const chain = resolveParentDirHandle(rootHandle, relPath, { createDirs: false });
+      let handle = null;
+      try {
+        handle = openFileRead(chain.parentHandle, chain.leafName);
+        const identity3 = getIdentity(handle);
+        if (identity3.isDirectory || identity3.isReparsePoint) {
+          throw new TransferFsError("SYMLINK_OR_REPARSE_REJECTED", "not a regular file", "ELOOP");
+        }
+        if (identity3.linkCount > 1) throw new TransferFsError("HARDLINK_REJECTED", "hardlinked file", "EMLINK");
+        const h = handle;
+        return {
+          handle: h,
+          identity: identity3,
+          release() {
+            safeClose(h);
+            for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose(chain.intermediateHandles[i]);
+          }
+        };
+      } catch (err) {
+        safeClose(handle);
+        for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose(chain.intermediateHandles[i]);
+        throw err;
+      }
+    }
+    function browseDirectory(rootPath, relDir) {
+      const root = openRoot(rootPath);
+      try {
+        const abs = relDir ? path93.join(rootPath, ...relDir.split("/")) : rootPath;
+        let dirHandle = null;
+        const held = [];
+        try {
+          if (relDir) {
+            for (const seg of splitPortableRelativePath(relDir)) {
+              dirHandle = walkDir(dirHandle ?? root, seg);
+              held.push(dirHandle);
+            }
+          }
+          const names = fs83.readdirSync(abs).sort();
+          const out = [];
+          for (const name of names.slice(0, 5e3)) {
+            const rel = relDir ? `${relDir}/${name}` : name;
+            const secret = matchSecretPath(rel);
+            let kind = "other";
+            let size;
+            try {
+              const dh = walkDir(dirHandle ?? root, name, { allowProtectedMetadata: true });
+              close(dh);
+              kind = "dir";
+            } catch {
+              try {
+                const fh = openFileRead(dirHandle ?? root, name, { allowProtectedMetadata: true });
+                try {
+                  size = Number(getIdentity(fh).size);
+                  kind = "file";
+                } finally {
+                  safeClose(fh);
+                }
+              } catch {
+                kind = "other";
+              }
+            }
+            out.push({ name, kind, ...size !== void 0 ? { size } : {}, ...secret ? { excluded: `secret:${secret}` } : kind === "other" ? { excluded: "link-or-special" } : {} });
+          }
+          return out;
+        } finally {
+          for (let i = held.length - 1; i >= 0; i--) safeClose(held[i]);
+        }
+      } finally {
+        safeClose(root);
+      }
+    }
+    function scanSelection(rootPath, selected2) {
+      const root = openRoot(rootPath);
+      const entries2 = /* @__PURE__ */ new Map();
+      const excluded = [];
+      let totalBytes = 0;
+      const addDirChain = (rel) => {
+        const segs = rel.split("/");
+        for (let i = 1; i <= segs.length; i++) {
+          const p = segs.slice(0, i).join("/");
+          if (!entries2.has(p)) entries2.set(p, { path: p, kind: "dir" });
+        }
+      };
+      const bump = () => {
+        if (entries2.size > TRANSFER_LIMITS.maxEntries) throw new ManifestError("LIMIT_EXCEEDED", `more than ${TRANSFER_LIMITS.maxEntries} entries`);
+      };
+      const visit = (rel, depth) => {
+        if (depth > 64) {
+          excluded.push({ path: rel, reason: "too-deep" });
+          return;
+        }
+        const secret = matchSecretPath(rel);
+        if (secret) {
+          excluded.push({ path: rel, reason: `secret:${secret}` });
+          return;
+        }
+        try {
+          splitPortableRelativePath(rel);
+        } catch {
+          excluded.push({ path: rel, reason: "unportable_name" });
+          return;
+        }
+        let chain;
+        try {
+          chain = resolveParentDirHandle(root, rel, { createDirs: false });
+        } catch (err) {
+          excluded.push({ path: rel, reason: classifyOpenError(err) });
+          return;
+        }
+        try {
+          let dirHandle = null;
+          try {
+            dirHandle = walkDir(chain.parentHandle, chain.leafName);
+          } catch {
+          }
+          if (dirHandle !== null) {
+            try {
+              addDirChain(rel);
+              bump();
+              const abs = path93.join(rootPath, ...rel.split("/"));
+              let names = [];
+              try {
+                names = fs83.readdirSync(abs).sort();
+              } catch {
+                names = [];
+              }
+              for (const n of names) visit(`${rel}/${n}`, depth + 1);
+            } finally {
+              safeClose(dirHandle);
+            }
+            return;
+          }
+          let fh = null;
+          try {
+            fh = openFileRead(chain.parentHandle, chain.leafName);
+            const id4 = getIdentity(fh);
+            if (id4.isDirectory || id4.isReparsePoint) {
+              excluded.push({ path: rel, reason: "link" });
+              return;
+            }
+            if (id4.linkCount > 1) {
+              excluded.push({ path: rel, reason: "hardlink" });
+              return;
+            }
+            const size = Number(id4.size);
+            if (size > TRANSFER_LIMITS.maxFileBytes) throw new ManifestError("LIMIT_EXCEEDED", "file exceeds per-file limit");
+            if (size > 0) {
+              const head = Buffer.alloc(Math.min(size, SECRET_SNIFF_BYTES));
+              const n = readHandle(fh, head, 0, head.length, 0);
+              const sniff = sniffSecretContent(head.subarray(0, n));
+              if (sniff) {
+                excluded.push({ path: rel, reason: `secret:${sniff}` });
+                return;
+              }
+            }
+            const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+            if (parent) addDirChain(parent);
+            entries2.set(rel, { path: rel, kind: "file", size });
+            totalBytes += size;
+            if (totalBytes > TRANSFER_LIMITS.maxTransferBytes) throw new ManifestError("LIMIT_EXCEEDED", "transfer exceeds total size limit");
+            bump();
+          } catch (err) {
+            if (err instanceof ManifestError) throw err;
+            excluded.push({ path: rel, reason: classifyOpenError(err) });
+          } finally {
+            safeClose(fh);
+          }
+        } finally {
+          for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose(chain.intermediateHandles[i]);
+        }
+      };
+      try {
+        for (const rel of selected2) visit(rel, 0);
+      } finally {
+        safeClose(root);
+      }
+      return { entries: [...entries2.values()], excluded };
+    }
+    function spoolFilePath(spoolDir, fileIndex) {
+      return path94.join(spoolDir, `f${fileIndex}`);
+    }
+    var tick = () => new Promise((r) => setImmediate(r));
+    function requireFreeDisk(dir, needBytes) {
+      try {
+        let probe = path94.resolve(dir);
+        while (!fs84.existsSync(probe)) {
+          const up = path94.dirname(probe);
+          if (up === probe) break;
+          probe = up;
+        }
+        const s2 = fs84.statfsSync(probe);
+        const free = Number(s2.bavail) * Number(s2.bsize);
+        if (free < needBytes + TRANSFER_LIMITS.diskMarginBytes) {
+          throw new ManifestError("DISK_SPACE_EXHAUSTED", "not enough free disk space");
+        }
+      } catch (err) {
+        if (err instanceof ManifestError) throw err;
+      }
+    }
+    async function freezeSelection(opts) {
+      const { selection, spoolDir } = opts;
+      requireFreeDisk(spoolDir, selectionTotalBytes(selection));
+      fs84.mkdirSync(spoolDir, { recursive: true, mode: 448 });
+      fs84.chmodSync(spoolDir, 448);
+      const root = openRoot(opts.rootPath);
+      const files = [];
+      try {
+        const list2 = selectionFiles(selection);
+        for (let i = 0; i < list2.length; i++) {
+          const entry = list2[i];
+          if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
+          let src;
+          try {
+            src = openSourceFile(root, entry.path);
+          } catch {
+            throw new ManifestError("SOURCE_CHANGED", "a selected file is no longer readable as a regular file");
+          }
+          const out = fs84.openSync(spoolFilePath(spoolDir, i), "wx", 384);
+          try {
+            if (Number(src.identity.size) !== entry.size) throw new ManifestError("SOURCE_CHANGED", "file size changed since preview");
+            const whole = (0, import_node_crypto41.createHash)("sha256");
+            const blockHashes = [];
+            const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
+            let done = 0;
+            while (done < entry.size) {
+              const want = Math.min(buf.length, entry.size - done);
+              let got = 0;
+              while (got < want) {
+                const n = readHandle(src.handle, buf, got, want - got, done + got);
+                if (n <= 0) throw new ManifestError("SOURCE_CHANGED", "file shrank while freezing");
+                got += n;
+              }
+              if (done === 0) {
+                const secret = sniffSecretContent(buf.subarray(0, Math.min(got, SECRET_SNIFF_BYTES)));
+                if (secret) throw new ManifestError("SOURCE_CHANGED", "file now matches a secret rule");
+              }
+              fs84.writeSync(out, buf, 0, got);
+              whole.update(buf.subarray(0, got));
+              blockHashes.push((0, import_node_crypto41.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
+              done += got;
+              await tick();
+            }
+            fs84.fsyncSync(out);
+            const after = getIdentity(src.handle);
+            if (after.size !== src.identity.size || after.fileId !== src.identity.fileId || after.volumeId !== src.identity.volumeId) {
+              throw new ManifestError("SOURCE_CHANGED", "file changed while freezing");
+            }
+            files.push({ path: entry.path, size: entry.size, sha256: whole.digest("hex"), blockHashes });
+          } finally {
+            fs84.closeSync(out);
+            src.release();
+          }
+        }
+      } catch (err) {
+        fs84.rmSync(spoolDir, { recursive: true, force: true });
+        throw err;
+      } finally {
+        try {
+          close(root);
+        } catch {
+        }
+      }
+      for (const f of files) if (f.blockHashes.length !== blockCount(f.size)) throw new ManifestError("SOURCE_CHANGED", "internal block accounting");
+      return { v: 1, transferId: selection.transferId, selectionDigest: selectionDigest(selection), files };
+    }
     var STAGING_DIR_NAME = ".adhdev-transfer-staging";
     var ReceiverError = class extends Error {
       constructor(code, message) {
@@ -170519,7 +170921,7 @@ ${output}` : "";
         this.name = "ReceiverError";
       }
     };
-    function safeClose(h) {
+    function safeClose2(h) {
       if (h === null || h === void 0) return;
       try {
         close(h);
@@ -170544,7 +170946,7 @@ ${output}` : "";
       blocksDone = [];
       nextFile = 0;
       get stagePath() {
-        return path93.join(this.rootPath, STAGING_DIR_NAME, this.selection.transferId);
+        return path95.join(this.rootPath, STAGING_DIR_NAME, this.selection.transferId);
       }
       /** Prepare staging; returns per-file validated (re-hashed) block counts to resume from. */
       init(claimedBlocks = []) {
@@ -170592,7 +170994,7 @@ ${output}` : "";
             held.push(h);
           }
         } finally {
-          for (const x of held.reverse()) safeClose(x);
+          for (const x of held.reverse()) safeClose2(x);
         }
       }
       /** Re-hash a retained prefix against the authenticated manifest; returns the count of valid leading blocks. */
@@ -170617,14 +171019,14 @@ ${output}` : "";
               if (n <= 0) break;
               got += n;
             }
-            if (got !== len || (0, import_node_crypto41.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
+            if (got !== len || (0, import_node_crypto422.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
             ok = b + 1;
           }
         } catch {
           ok = 0;
         } finally {
-          safeClose(fh);
-          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          safeClose2(fh);
+          for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
         }
         if (ok === 0) this.dropFile(i);
         return ok;
@@ -170638,7 +171040,7 @@ ${output}` : "";
           } catch {
           }
         } finally {
-          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
         }
       }
       /** Move to the first incomplete file, creating zero-byte files on the way. */
@@ -170659,12 +171061,12 @@ ${output}` : "";
               try {
                 const h = createExcl(chain.parentHandle, chain.leafName);
                 fullFsync(h);
-                safeClose(h);
+                safeClose2(h);
               } catch (err) {
                 if (err.code !== "EEXIST") throw err;
               }
             } finally {
-              for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+              for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
             }
             this.nextFile++;
             continue;
@@ -170676,12 +171078,12 @@ ${output}` : "";
       fileExists(i) {
         const chain = resolveParentDirHandle(this.stageH, this.files[i].path, { createDirs: false });
         try {
-          safeClose(openFileRead(chain.parentHandle, chain.leafName));
+          safeClose2(openFileRead(chain.parentHandle, chain.leafName));
           return true;
         } catch {
           return false;
         } finally {
-          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
         }
       }
       openCurrent(i) {
@@ -170705,7 +171107,7 @@ ${output}` : "";
               }
               writeHandle(handle, buf, 0, len, b * TRANSFER_LIMITS.blockBytes);
             }
-            safeClose(src);
+            safeClose2(src);
             unlinkAt(chain.parentHandle, chain.leafName, false);
             renameAtExcl(chain.parentHandle, tmp, chain.parentHandle, chain.leafName, { allowProtectedMetadata: true });
           } else {
@@ -170716,16 +171118,16 @@ ${output}` : "";
             handle = createExcl(chain.parentHandle, chain.leafName);
           }
         } catch (err) {
-          for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+          for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
           throw err;
         }
-        const whole = (0, import_node_crypto41.createHash)("sha256");
-        this.cur = { index: i, parentChain: chain, handle, blockHash: (0, import_node_crypto41.createHash)("sha256"), whole, blockFill: 0 };
+        const whole = (0, import_node_crypto422.createHash)("sha256");
+        this.cur = { index: i, parentChain: chain, handle, blockHash: (0, import_node_crypto422.createHash)("sha256"), whole, blockFill: 0 };
       }
       closeCur() {
         if (!this.cur) return;
-        safeClose(this.cur.handle);
-        for (const h of this.cur.parentChain.intermediateHandles.slice().reverse()) safeClose(h);
+        safeClose2(this.cur.handle);
+        for (const h of this.cur.parentChain.intermediateHandles.slice().reverse()) safeClose2(h);
         this.cur = null;
       }
       get bytesDone() {
@@ -170747,6 +171149,13 @@ ${output}` : "";
         const blockStart = this.blocksDone[c.index] * TRANSFER_LIMITS.blockBytes;
         const blockLen = Math.min(TRANSFER_LIMITS.blockBytes, f.size - blockStart);
         if (c.blockFill + payload.length > blockLen) throw new ReceiverError("PROTOCOL_ERROR", "data past block end");
+        if (c.blockFill === 0) {
+          try {
+            requireFreeDisk(this.stagePath, blockLen);
+          } catch {
+            throw new ReceiverError("DISK_SPACE_EXHAUSTED", "not enough free disk space");
+          }
+        }
         writeHandle(c.handle, payload, 0, payload.length, offset);
         c.blockHash.update(payload);
         c.whole.update(payload);
@@ -170768,7 +171177,7 @@ ${output}` : "";
         if (got !== f.blockHashes[b] || got !== senderHashHex) throw new ReceiverError("HASH_MISMATCH", `block ${b} of file ${c.index} failed verification`);
         fullFsync(c.handle);
         this.blocksDone[c.index] = b + 1;
-        c.blockHash = (0, import_node_crypto41.createHash)("sha256");
+        c.blockHash = (0, import_node_crypto422.createHash)("sha256");
         c.blockFill = 0;
         this.onCheckpoint?.(c.index, b + 1, this.bytesDone);
         const fileDone = b + 1 >= blockCount(f.size);
@@ -170783,10 +171192,10 @@ ${output}` : "";
         const expected = /* @__PURE__ */ new Set([""]);
         for (const e of this.selection.entries) expected.add(e.path);
         const walk = (rel) => {
-          for (const n of fs83.readdirSync(path93.join(this.stagePath, ...rel ? rel.split("/") : []))) {
+          for (const n of fs85.readdirSync(path95.join(this.stagePath, ...rel ? rel.split("/") : []))) {
             const r = rel ? `${rel}/${n}` : n;
             if (!expected.has(r)) throw new ReceiverError("VERIFY_FAILED", "unexpected entry in staging");
-            const st = fs83.lstatSync(path93.join(this.stagePath, ...r.split("/")));
+            const st = fs85.lstatSync(path95.join(this.stagePath, ...r.split("/")));
             if (st.isDirectory()) walk(r);
             else if (!st.isFile()) throw new ReceiverError("VERIFY_FAILED", "non-regular entry in staging");
           }
@@ -170799,18 +171208,21 @@ ${output}` : "";
             fh = openFileRead(chain.parentHandle, chain.leafName);
             const id4 = getIdentity(fh);
             if (Number(id4.size) !== f.size) throw new ReceiverError("VERIFY_FAILED", "size mismatch");
-            const h = (0, import_node_crypto41.createHash)("sha256");
+            const h = (0, import_node_crypto422.createHash)("sha256");
             const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
             for (let o = 0; o < f.size; ) {
               const n = readHandle(fh, buf, 0, Math.min(buf.length, f.size - o), o);
               if (n <= 0) throw new ReceiverError("VERIFY_FAILED", "short read");
+              if (o === 0 && sniffSecretContent(buf.subarray(0, Math.min(n, SECRET_SNIFF_BYTES)))) {
+                throw new ReceiverError("SECRET_CONTENT_REJECTED", "received file looks like secret key material");
+              }
               h.update(buf.subarray(0, n));
               o += n;
             }
             if (h.digest("hex") !== f.sha256) throw new ReceiverError("HASH_MISMATCH", "file hash mismatch");
           } finally {
-            safeClose(fh);
-            for (const h of chain.intermediateHandles.reverse()) safeClose(h);
+            safeClose2(fh);
+            for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
           }
         }
       }
@@ -170867,13 +171279,13 @@ ${output}` : "";
         try {
           let names = [];
           try {
-            names = fs83.readdirSync(abs);
+            names = fs85.readdirSync(abs);
           } catch {
             names = [];
           }
-          for (const n of names) this.removeTree(dh, n, path93.join(abs, n));
+          for (const n of names) this.removeTree(dh, n, path95.join(abs, n));
         } finally {
-          safeClose(dh);
+          safeClose2(dh);
         }
         try {
           unlinkAt(parent, name, true, { allowProtectedMetadata: true });
@@ -170882,11 +171294,11 @@ ${output}` : "";
       }
       dispose() {
         this.closeCur();
-        safeClose(this.stageH);
+        safeClose2(this.stageH);
         this.stageH = null;
-        safeClose(this.stagingParentH);
+        safeClose2(this.stagingParentH);
         this.stagingParentH = null;
-        safeClose(this.rootH);
+        safeClose2(this.rootH);
         this.rootH = null;
       }
     };
@@ -170908,17 +171320,17 @@ ${output}` : "";
             return;
           }
           try {
-            for (const n of fs83.readdirSync(abs)) rm3(dh, n, path93.join(abs, n));
+            for (const n of fs85.readdirSync(abs)) rm3(dh, n, path95.join(abs, n));
           } finally {
-            safeClose(dh);
+            safeClose2(dh);
           }
           try {
             unlinkAt(p, name, true, { allowProtectedMetadata: true });
           } catch {
           }
         };
-        rm3(parent, transferId, path93.join(rootPath, STAGING_DIR_NAME, transferId));
-        safeClose(parent);
+        rm3(parent, transferId, path95.join(rootPath, STAGING_DIR_NAME, transferId));
+        safeClose2(parent);
         parent = null;
         try {
           unlinkAt(root, STAGING_DIR_NAME, true, { allowProtectedMetadata: true });
@@ -170926,367 +171338,9 @@ ${output}` : "";
         }
       } catch {
       } finally {
-        safeClose(parent);
-        safeClose(root);
-      }
-    }
-    var import_node_crypto422 = require("crypto");
-    var fs85 = __toESM2(require("fs"));
-    var path95 = __toESM2(require("path"));
-    var EXCLUDED_DIRS = /* @__PURE__ */ new Set([
-      ".git",
-      ".hg",
-      ".svn",
-      ".ssh",
-      ".gnupg",
-      ".aws",
-      ".azure",
-      ".gcloud",
-      ".kube",
-      ".docker",
-      ".password-store",
-      ".terraform",
-      ".adhdev",
-      ".adhdev-transfer-staging"
-    ]);
-    var EXCLUDED_DIR_PAIRS = [[".config", "gh"], [".config", "gcloud"]];
-    var EXCLUDED_NAMES = /* @__PURE__ */ new Set([
-      ".npmrc",
-      ".pypirc",
-      ".netrc",
-      "_netrc",
-      ".envrc",
-      ".git-credentials",
-      ".pgpass",
-      ".my.cnf",
-      ".dockercfg",
-      ".htpasswd",
-      ".vault-token",
-      ".boto",
-      ".s3cfg",
-      "credentials",
-      "credentials.json",
-      "kubeconfig",
-      "auth.json",
-      "tokens.json",
-      "token",
-      "secrets.json",
-      "secrets.yml",
-      "secrets.yaml",
-      "wallet.dat",
-      ".dev.vars",
-      ".yarnrc.yml",
-      ".env"
-    ]);
-    var EXCLUDED_PATTERNS = [
-      { rule: "env-file", re: /^\.env\..+$/ },
-      { rule: "env-file", re: /^.+\.env$/ },
-      { rule: "dev-vars", re: /^\.dev\.vars\..+$/ },
-      { rule: "ssh-key", re: /^id_(rsa|dsa|ecdsa|ed25519)/ },
-      { rule: "key-material", re: /\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk|gpg|asc)$/ },
-      { rule: "terraform-state", re: /\.(tfstate|tfvars)(\..*)?$/ },
-      { rule: "cloud-credential", re: /^(client_secret|service-?account).*\.json$/ },
-      { rule: "secret-file", re: /(\.secrets?$|^secrets?\.)/ },
-      { rule: "kubeconfig", re: /\.kubeconfig$/ },
-      { rule: "mobileprovision", re: /\.mobileprovision$/ }
-    ];
-    var PRIVATE_KEY_HEAD = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
-    var SECRET_SNIFF_BYTES = 4096;
-    function matchSecretPath(relPath) {
-      const segments = relPath.split("/").filter(Boolean).map((s2) => s2.toLowerCase());
-      for (let i = 0; i < segments.length; i++) {
-        const seg = segments[i];
-        if (EXCLUDED_DIRS.has(seg)) return `dir:${seg}`;
-        for (const [a, b] of EXCLUDED_DIR_PAIRS) {
-          if (seg === a && segments[i + 1] === b) return `dir:${a}/${b}`;
-        }
-      }
-      const name = segments[segments.length - 1];
-      if (!name) return null;
-      if (EXCLUDED_NAMES.has(name)) return `name:${name}`;
-      for (const p of EXCLUDED_PATTERNS) if (p.re.test(name)) return p.rule;
-      return null;
-    }
-    function sniffSecretContent(head) {
-      const text4 = Buffer.from(head.subarray(0, SECRET_SNIFF_BYTES)).toString("latin1");
-      return PRIVATE_KEY_HEAD.test(text4) ? "private-key-content" : null;
-    }
-    var fs84 = __toESM2(require("fs"));
-    var path94 = __toESM2(require("path"));
-    function safeClose2(h) {
-      if (h === null) return;
-      try {
-        close(h);
-      } catch {
-      }
-    }
-    function classifyOpenError(err) {
-      const reason = err?.reason;
-      if (reason === "SYMLINK_OR_REPARSE_REJECTED") return "link";
-      if (reason === "HARDLINK_REJECTED") return "hardlink";
-      if (err?.code === "ENOENT") return "vanished";
-      return "unreadable";
-    }
-    function openSourceFile(rootHandle, relPath) {
-      const chain = resolveParentDirHandle(rootHandle, relPath, { createDirs: false });
-      let handle = null;
-      try {
-        handle = openFileRead(chain.parentHandle, chain.leafName);
-        const identity3 = getIdentity(handle);
-        if (identity3.isDirectory || identity3.isReparsePoint) {
-          throw new TransferFsError("SYMLINK_OR_REPARSE_REJECTED", "not a regular file", "ELOOP");
-        }
-        if (identity3.linkCount > 1) throw new TransferFsError("HARDLINK_REJECTED", "hardlinked file", "EMLINK");
-        const h = handle;
-        return {
-          handle: h,
-          identity: identity3,
-          release() {
-            safeClose2(h);
-            for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
-          }
-        };
-      } catch (err) {
-        safeClose2(handle);
-        for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
-        throw err;
-      }
-    }
-    function browseDirectory(rootPath, relDir) {
-      const root = openRoot(rootPath);
-      try {
-        const abs = relDir ? path94.join(rootPath, ...relDir.split("/")) : rootPath;
-        let dirHandle = null;
-        const held = [];
-        try {
-          if (relDir) {
-            for (const seg of splitPortableRelativePath(relDir)) {
-              dirHandle = walkDir(dirHandle ?? root, seg);
-              held.push(dirHandle);
-            }
-          }
-          const names = fs84.readdirSync(abs).sort();
-          const out = [];
-          for (const name of names.slice(0, 5e3)) {
-            const rel = relDir ? `${relDir}/${name}` : name;
-            const secret = matchSecretPath(rel);
-            let kind = "other";
-            let size;
-            try {
-              const dh = walkDir(dirHandle ?? root, name, { allowProtectedMetadata: true });
-              close(dh);
-              kind = "dir";
-            } catch {
-              try {
-                const fh = openFileRead(dirHandle ?? root, name, { allowProtectedMetadata: true });
-                try {
-                  size = Number(getIdentity(fh).size);
-                  kind = "file";
-                } finally {
-                  safeClose2(fh);
-                }
-              } catch {
-                kind = "other";
-              }
-            }
-            out.push({ name, kind, ...size !== void 0 ? { size } : {}, ...secret ? { excluded: `secret:${secret}` } : kind === "other" ? { excluded: "link-or-special" } : {} });
-          }
-          return out;
-        } finally {
-          for (let i = held.length - 1; i >= 0; i--) safeClose2(held[i]);
-        }
-      } finally {
+        safeClose2(parent);
         safeClose2(root);
       }
-    }
-    function scanSelection(rootPath, selected2) {
-      const root = openRoot(rootPath);
-      const entries2 = /* @__PURE__ */ new Map();
-      const excluded = [];
-      let totalBytes = 0;
-      const addDirChain = (rel) => {
-        const segs = rel.split("/");
-        for (let i = 1; i <= segs.length; i++) {
-          const p = segs.slice(0, i).join("/");
-          if (!entries2.has(p)) entries2.set(p, { path: p, kind: "dir" });
-        }
-      };
-      const bump = () => {
-        if (entries2.size > TRANSFER_LIMITS.maxEntries) throw new ManifestError("LIMIT_EXCEEDED", `more than ${TRANSFER_LIMITS.maxEntries} entries`);
-      };
-      const visit = (rel, depth) => {
-        if (depth > 64) {
-          excluded.push({ path: rel, reason: "too-deep" });
-          return;
-        }
-        const secret = matchSecretPath(rel);
-        if (secret) {
-          excluded.push({ path: rel, reason: `secret:${secret}` });
-          return;
-        }
-        try {
-          splitPortableRelativePath(rel);
-        } catch {
-          excluded.push({ path: rel, reason: "unportable_name" });
-          return;
-        }
-        let chain;
-        try {
-          chain = resolveParentDirHandle(root, rel, { createDirs: false });
-        } catch (err) {
-          excluded.push({ path: rel, reason: classifyOpenError(err) });
-          return;
-        }
-        try {
-          let dirHandle = null;
-          try {
-            dirHandle = walkDir(chain.parentHandle, chain.leafName);
-          } catch {
-          }
-          if (dirHandle !== null) {
-            try {
-              addDirChain(rel);
-              bump();
-              const abs = path94.join(rootPath, ...rel.split("/"));
-              let names = [];
-              try {
-                names = fs84.readdirSync(abs).sort();
-              } catch {
-                names = [];
-              }
-              for (const n of names) visit(`${rel}/${n}`, depth + 1);
-            } finally {
-              safeClose2(dirHandle);
-            }
-            return;
-          }
-          let fh = null;
-          try {
-            fh = openFileRead(chain.parentHandle, chain.leafName);
-            const id4 = getIdentity(fh);
-            if (id4.isDirectory || id4.isReparsePoint) {
-              excluded.push({ path: rel, reason: "link" });
-              return;
-            }
-            if (id4.linkCount > 1) {
-              excluded.push({ path: rel, reason: "hardlink" });
-              return;
-            }
-            const size = Number(id4.size);
-            if (size > TRANSFER_LIMITS.maxFileBytes) throw new ManifestError("LIMIT_EXCEEDED", "file exceeds per-file limit");
-            if (size > 0) {
-              const head = Buffer.alloc(Math.min(size, SECRET_SNIFF_BYTES));
-              const n = readHandle(fh, head, 0, head.length, 0);
-              const sniff = sniffSecretContent(head.subarray(0, n));
-              if (sniff) {
-                excluded.push({ path: rel, reason: `secret:${sniff}` });
-                return;
-              }
-            }
-            const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-            if (parent) addDirChain(parent);
-            entries2.set(rel, { path: rel, kind: "file", size });
-            totalBytes += size;
-            if (totalBytes > TRANSFER_LIMITS.maxTransferBytes) throw new ManifestError("LIMIT_EXCEEDED", "transfer exceeds total size limit");
-            bump();
-          } catch (err) {
-            if (err instanceof ManifestError) throw err;
-            excluded.push({ path: rel, reason: classifyOpenError(err) });
-          } finally {
-            safeClose2(fh);
-          }
-        } finally {
-          for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose2(chain.intermediateHandles[i]);
-        }
-      };
-      try {
-        for (const rel of selected2) visit(rel, 0);
-      } finally {
-        safeClose2(root);
-      }
-      return { entries: [...entries2.values()], excluded };
-    }
-    function spoolFilePath(spoolDir, fileIndex) {
-      return path95.join(spoolDir, `f${fileIndex}`);
-    }
-    var tick = () => new Promise((r) => setImmediate(r));
-    function requireFreeDisk(dir, needBytes) {
-      try {
-        fs85.mkdirSync(dir, { recursive: true, mode: 448 });
-        const s2 = fs85.statfsSync(dir);
-        const free = Number(s2.bavail) * Number(s2.bsize);
-        if (free < needBytes + TRANSFER_LIMITS.diskMarginBytes) {
-          throw new ManifestError("DISK_SPACE_EXHAUSTED", "not enough free disk space");
-        }
-      } catch (err) {
-        if (err instanceof ManifestError) throw err;
-      }
-    }
-    async function freezeSelection(opts) {
-      const { selection, spoolDir } = opts;
-      requireFreeDisk(spoolDir, selectionTotalBytes(selection));
-      fs85.mkdirSync(spoolDir, { recursive: true, mode: 448 });
-      fs85.chmodSync(spoolDir, 448);
-      const root = openRoot(opts.rootPath);
-      const files = [];
-      try {
-        const list2 = selectionFiles(selection);
-        for (let i = 0; i < list2.length; i++) {
-          const entry = list2[i];
-          if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
-          let src;
-          try {
-            src = openSourceFile(root, entry.path);
-          } catch {
-            throw new ManifestError("SOURCE_CHANGED", "a selected file is no longer readable as a regular file");
-          }
-          const out = fs85.openSync(spoolFilePath(spoolDir, i), "wx", 384);
-          try {
-            if (Number(src.identity.size) !== entry.size) throw new ManifestError("SOURCE_CHANGED", "file size changed since preview");
-            const whole = (0, import_node_crypto422.createHash)("sha256");
-            const blockHashes = [];
-            const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
-            let done = 0;
-            while (done < entry.size) {
-              const want = Math.min(buf.length, entry.size - done);
-              let got = 0;
-              while (got < want) {
-                const n = readHandle(src.handle, buf, got, want - got, done + got);
-                if (n <= 0) throw new ManifestError("SOURCE_CHANGED", "file shrank while freezing");
-                got += n;
-              }
-              if (done === 0) {
-                const secret = sniffSecretContent(buf.subarray(0, Math.min(got, SECRET_SNIFF_BYTES)));
-                if (secret) throw new ManifestError("SOURCE_CHANGED", "file now matches a secret rule");
-              }
-              fs85.writeSync(out, buf, 0, got);
-              whole.update(buf.subarray(0, got));
-              blockHashes.push((0, import_node_crypto422.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
-              done += got;
-              await tick();
-            }
-            fs85.fsyncSync(out);
-            const after = getIdentity(src.handle);
-            if (after.size !== src.identity.size || after.fileId !== src.identity.fileId || after.volumeId !== src.identity.volumeId) {
-              throw new ManifestError("SOURCE_CHANGED", "file changed while freezing");
-            }
-            files.push({ path: entry.path, size: entry.size, sha256: whole.digest("hex"), blockHashes });
-          } finally {
-            fs85.closeSync(out);
-            src.release();
-          }
-        }
-      } catch (err) {
-        fs85.rmSync(spoolDir, { recursive: true, force: true });
-        throw err;
-      } finally {
-        try {
-          close(root);
-        } catch {
-        }
-      }
-      for (const f of files) if (f.blockHashes.length !== blockCount(f.size)) throw new ManifestError("SOURCE_CHANGED", "internal block accounting");
-      return { v: 1, transferId: selection.transferId, selectionDigest: selectionDigest(selection), files };
     }
     var SessionError = class extends Error {
       constructor(code, message) {
@@ -171296,6 +171350,7 @@ ${output}` : "";
       }
     };
     var IDLE_TIMEOUT_MS = 6e4;
+    var HELLO_DEADLINE_MS = TRANSFER_LIMITS.linkConnectTimeoutMs + 15e3;
     var BaseSession = class {
       constructor(link, transferId, linkGen, linkKey, roleName) {
         this.link = link;
@@ -171303,15 +171358,17 @@ ${output}` : "";
         this.linkGen = linkGen;
         this.linkKey = linkKey;
         this.roleName = roleName;
-        this.promise = new Promise((resolve62, reject) => {
-          this.settle = { resolve: resolve62, reject };
+        this.promise = new Promise((resolve63, reject) => {
+          this.settle = { resolve: resolve63, reject };
         });
         this.promise.catch(() => {
         });
         link.onMessage((d) => this.onRaw(d));
-        link.onClose((reason) => this.fail(new SessionError("LINK_LOST", `link closed: ${reason}`)));
+        link.onClose((reason) => this.fail(reason === "DIRECT_UNAVAILABLE" ? new SessionError("DIRECT_UNAVAILABLE", "link is not a direct (non-relayed) path") : new SessionError("LINK_LOST", `link closed: ${reason}`)));
         link.onOpen(() => this.sendHello());
         this.touch();
+        this.helloTimer = setTimeout(() => this.fail(new SessionError("LINK_LOST", "hello deadline exceeded")), HELLO_DEADLINE_MS);
+        this.helloTimer.unref?.();
       }
       outSeq = 0;
       inSeq = -1;
@@ -171320,6 +171377,7 @@ ${output}` : "";
       settle;
       promise;
       idle;
+      helloTimer;
       touch() {
         clearTimeout(this.idle);
         this.idle = setTimeout(() => this.fail(new SessionError("LINK_LOST", "link idle timeout")), IDLE_TIMEOUT_MS);
@@ -171329,12 +171387,14 @@ ${output}` : "";
         if (this.done) return;
         this.done = true;
         clearTimeout(this.idle);
+        clearTimeout(this.helloTimer);
         this.settle.resolve();
       }
       fail(err) {
         if (this.done) return;
         this.done = true;
         clearTimeout(this.idle);
+        clearTimeout(this.helloTimer);
         this.settle.reject(err);
       }
       abort(code) {
@@ -171355,12 +171415,11 @@ ${output}` : "";
           this.abort("BINDING_MISMATCH");
           return;
         }
-        const tag = computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote);
+        const tag = computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote, this.roleName);
         this.sendFrame(1, 0, 0, jsonPayload({ tag, role: this.roleName }));
       }
       onRaw(data) {
         if (this.done) return;
-        this.touch();
         let frame2;
         try {
           frame2 = decodeFrame(data);
@@ -171368,6 +171427,7 @@ ${output}` : "";
           if (frame2.seq <= this.inSeq) return;
           if (frame2.seq !== this.inSeq + 1) throw new FrameError("PROTOCOL_ERROR", "sequence gap");
           this.inSeq = frame2.seq;
+          this.touch();
           if (frame2.type === 8) {
             this.fail(new SessionError(String(parseJsonPayload(frame2.payload).code ?? "PEER_ABORT"), "peer aborted"));
             return;
@@ -171376,19 +171436,22 @@ ${output}` : "";
             if (frame2.type !== 1) throw new FrameError("PROTOCOL_ERROR", "expected HELLO");
             const local = this.link.localFingerprint();
             const remote = this.link.remoteFingerprint();
-            const peerTag = String(parseJsonPayload(frame2.payload).tag ?? "");
-            if (!local || !remote || !bindingTagsEqual(peerTag, computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote))) {
+            const hello = parseJsonPayload(frame2.payload);
+            const peerTag = String(hello.tag ?? "");
+            const peerRole = this.roleName === "sender" ? "receiver" : "sender";
+            if (hello.role !== peerRole || !local || !remote || !bindingTagsEqual(peerTag, computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote, peerRole))) {
               this.abort("BINDING_MISMATCH");
               return;
             }
             this.helloOk = true;
+            clearTimeout(this.helloTimer);
             this.onHelloOk();
             return;
           }
           this.onFrame(frame2);
         } catch (err) {
           if (err instanceof FrameError) this.abort("PROTOCOL_ERROR");
-          else if (err instanceof ReceiverError) this.abort(err.code === "HASH_MISMATCH" ? "HASH_MISMATCH" : "PROTOCOL_ERROR");
+          else if (err instanceof ReceiverError) this.abort(err.code === "HASH_MISMATCH" || err.code === "DISK_SPACE_EXHAUSTED" ? err.code : "PROTOCOL_ERROR");
           else this.abort("IO_ERROR");
         }
       }
@@ -171658,6 +171721,7 @@ ${output}` : "";
         return { staleTempIds };
       }
     };
+    var MAX_OPEN_TRANSFERS = 10;
     var fail2 = (code, detail) => ({ ok: false, code, ...detail ? { detail } : {} });
     var ProjectTransferEngine = class {
       constructor(ports) {
@@ -171708,12 +171772,18 @@ ${output}` : "";
       onAuthorityChanged() {
         for (const rec5 of this.records.values()) {
           if (TERMINAL_STATES.has(rec5.state) || !rec5.localApproval) continue;
-          if (this.authorizationProblem(rec5)) this.terminate(rec5, "revoked", "REVOKED", true);
+          const problem = this.authorizationProblem(rec5);
+          if (problem) this.endForProblem(rec5, problem);
         }
+      }
+      endForProblem(rec5, problem) {
+        if (problem === "consent-expired") this.terminate(rec5, "expired", "CONSENT_EXPIRED", true);
+        else this.terminate(rec5, "revoked", "REVOKED", true);
       }
       authorizationProblem(rec5) {
         const a = rec5.localApproval;
         if (!a) return null;
+        if (this.now() - a.at > TRANSFER_RETENTION_MS.consent) return "consent-expired";
         if (a.ownerAuthGeneration !== this.ports.ownerAuthGeneration()) return "owner-auth-changed";
         if (a.restartEpoch !== this.restartEpoch) return "restart";
         if (!this.ports.isPeerAuthorized(rec5.peerDaemonId)) return "peer-unauthorized";
@@ -171824,7 +171894,7 @@ ${output}` : "";
         const self = this.ports.selfDaemonId();
         if (!input.targetDaemonId || daemonIdsEquivalent4(input.targetDaemonId, self)) return fail2("INVALID_TARGET", "target must be another of your machines");
         if (!this.ports.isPeerAuthorized(input.targetDaemonId)) return fail2("PEER_UNAUTHORIZED");
-        if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= 10) return fail2("TOO_MANY_TRANSFERS");
+        if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail2("TOO_MANY_TRANSFERS");
         let finalName;
         try {
           finalName = validateFinalName(input.finalName);
@@ -171939,8 +172009,8 @@ ${output}` : "";
       guard(rec5) {
         const problem = this.authorizationProblem(rec5);
         if (problem) {
-          this.terminate(rec5, "revoked", "REVOKED", true);
-          throw new SessionError("REVOKED", problem);
+          this.endForProblem(rec5, problem);
+          throw new SessionError(problem === "consent-expired" ? "CONSENT_EXPIRED" : "REVOKED", problem);
         }
       }
       async startSource(rec5, run4) {
@@ -171997,7 +172067,8 @@ ${output}` : "";
             clearInterval(run4.watchdog);
             return;
           }
-          if (this.authorizationProblem(rec5)) this.terminate(rec5, "revoked", "REVOKED", true);
+          const problem = this.authorizationProblem(rec5);
+          if (problem) this.endForProblem(rec5, problem);
         }, 2e3);
         run4.watchdog.unref?.();
       }
@@ -172064,6 +172135,7 @@ ${output}` : "";
         const unsupported = this.requireSupport();
         if (unsupported) return unsupported;
         if (this.records.has(id4)) return fail2("DUPLICATE");
+        if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail2("TOO_MANY_TRANSFERS");
         const selection = validateSelectionManifest(args.selection);
         const self = this.ports.selfDaemonId();
         if (selection.transferId !== id4 || !daemonIdsEquivalent4(selection.sourceDaemonId, sender) || !daemonIdsEquivalent4(selection.targetDaemonId, self)) return fail2("PEER_UNAUTHORIZED");
@@ -172171,13 +172243,26 @@ ${output}` : "";
         const s2 = args.signal;
         if (!s2 || !["offer", "answer", "candidate"].includes(s2.kind)) return fail2("PROTOCOL_ERROR");
         if (typeof s2.candidate === "string" && / typ relay\b/.test(s2.candidate)) return fail2("RELAY_CANDIDATE_REFUSED");
+        if (s2.kind !== "candidate") {
+          if (typeof s2.sdp !== "string") return fail2("PROTOCOL_ERROR");
+          if (sdpHasRelayCandidate(s2.sdp)) return fail2("RELAY_CANDIDATE_REFUSED");
+          if (!extractSdpFingerprint(s2.sdp)) return fail2("SDP_FINGERPRINT_INVALID");
+        }
         run4.link.signalIn(s2);
         return { ok: true };
       }
       onPeerState(rec5, args) {
         if (rec5.role !== "source") return { ok: true };
         if (args.state === "completed") {
-          if (typeof args.publishedName === "string") rec5.publishedName = args.publishedName;
+          if (rec5.state !== "verifying" && rec5.state !== "transferring") return fail2("PROTOCOL_ERROR");
+          if (!rec5.content || rec5.content.files.some((f, i) => (rec5.blocksDone[i] ?? 0) < blockCount(f.size))) return fail2("PROTOCOL_ERROR");
+          if (typeof args.publishedName === "string") {
+            try {
+              rec5.publishedName = validateFinalName(args.publishedName);
+            } catch {
+              return fail2("PROTOCOL_ERROR");
+            }
+          }
           this.completeRecord(rec5);
         } else if (args.state === "failed") {
           this.terminate(rec5, "failed", String(args.code ?? "TARGET_FAILED"), false);
@@ -172188,6 +172273,7 @@ ${output}` : "";
         try {
           this.setState(rec5, "verifying");
           run4.receiver.verifyAll();
+          this.guard(rec5);
           this.setState(rec5, "publishing");
           rec5.publishedName = run4.receiver.publish(rec5.selection.finalName);
           run4.receiver.dispose();
@@ -172239,7 +172325,7 @@ ${output}` : "";
       }
       ensureBaseDir(ports.baseDir);
       engine = new ProjectTransferEngine(ports);
-      sweepTimer = setInterval(() => engine?.sweep(), 60 * 6e4);
+      sweepTimer = setInterval(() => engine?.sweep(), 6e4);
       sweepTimer.unref?.();
       return engine;
     }
@@ -176194,7 +176280,7 @@ ${output}` : "";
           const setupPromise = finishWorktreeSetup();
           const setupResult = setupWaitMs > 0 ? await Promise.race([
             setupPromise.then((value) => ({ completed: true, value })),
-            new Promise((resolve62) => setTimeout(() => resolve62({ completed: false }), setupWaitMs))
+            new Promise((resolve63) => setTimeout(() => resolve63({ completed: false }), setupWaitMs))
           ]) : { completed: false };
           const bootstrapStartedMs = Date.now();
           const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
@@ -176341,8 +176427,8 @@ ${output}` : "";
           try {
             const raced = await Promise.race([
               pipelinePromise.then((res) => ({ completed: true, res })),
-              new Promise((resolve62) => {
-                budgetTimer = setTimeout(() => resolve62({ completed: false }), syncBudgetMs);
+              new Promise((resolve63) => {
+                budgetTimer = setTimeout(() => resolve63({ completed: false }), syncBudgetMs);
               })
             ]);
             if (raced.completed) {
@@ -176667,7 +176753,7 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { mkdirSync: mkdirSync66, writeFileSync: writeFileSync53 } = await import("fs");
-          const { dirname: dirname63, join: join153 } = await import("path");
+          const { dirname: dirname64, join: join153 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -176707,7 +176793,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync66(dirname63(absolutePath), { recursive: true });
+          mkdirSync66(dirname64(absolutePath), { recursive: true });
           writeFileSync53(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
@@ -176776,8 +176862,8 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync128, readFileSync: readFileSync118, mkdirSync: mkdirSync66, writeFileSync: writeFileSync53 } = await import("fs");
-          const { dirname: dirname63, join: join153 } = await import("path");
+          const { existsSync: existsSync129, readFileSync: readFileSync118, mkdirSync: mkdirSync66, writeFileSync: writeFileSync53 } = await import("fs");
+          const { dirname: dirname64, join: join153 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
@@ -176785,7 +176871,7 @@ ${output}` : "";
           let existedAsYaml = false;
           for (const relative21 of MESH_JSON_CONFIG_LOCATIONS2) {
             const candidate = join153(workspace, relative21);
-            if (!existsSync128(candidate)) continue;
+            if (!existsSync129(candidate)) continue;
             try {
               const text4 = readFileSync118(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text4) : yaml3.load(text4);
@@ -176841,7 +176927,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync66(dirname63(absolutePath), { recursive: true });
+          mkdirSync66(dirname64(absolutePath), { recursive: true });
           writeFileSync53(absolutePath, serialized, "utf-8");
           return {
             success: true,
@@ -177872,7 +177958,7 @@ ${output}` : "";
         return ports.store.withSnapshot((stored) => {
           if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override }, ports.validation);
           if (projectId && !ports.projects) return unavailable3("project_storage_unavailable");
-          const resolve62 = () => {
+          const resolve63 = () => {
             let hasHostInventory = false;
             if (projectId) {
               try {
@@ -177900,7 +177986,7 @@ ${output}` : "";
               } } : {}
             }, ports.validation);
           };
-          return projectId && ports.projects ? ports.projects.withWriteLock(resolve62) : resolve62();
+          return projectId && ports.projects ? ports.projects.withWriteLock(resolve63) : resolve63();
         });
       } catch {
         return unavailable3("launch_snapshot_unavailable");
@@ -178476,8 +178562,8 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync128, readFileSync: readFileSync118, writeFileSync: writeFileSync53, mkdirSync: mkdirSync66 } = await import("fs");
-          const { dirname: dirname63 } = await import("path");
+          const { existsSync: existsSync129, readFileSync: readFileSync118, writeFileSync: writeFileSync53, mkdirSync: mkdirSync66 } = await import("fs");
+          const { dirname: dirname64 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -178505,13 +178591,13 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync66(dirname63(mcpConfigPath), { recursive: true });
+              mkdirSync66(dirname64(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
               return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
             }
-            const hadExistingMcpConfig = existsSync128(mcpConfigPath);
+            const hadExistingMcpConfig = existsSync129(mcpConfigPath);
             let existingMcpConfig = {};
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
@@ -179344,7 +179430,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync128 } = await import("fs");
+          const { existsSync: existsSync129 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -179363,7 +179449,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync128(workspace)) continue;
+            if (!workspace || !existsSync129(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -181177,11 +181263,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       fence.onCleanupAcknowledged = clear;
       assistantStartMeta.set(registry, { startedAt: Date.now(), fence, clear });
-      const timeout = new Promise((resolve62) => {
+      const timeout = new Promise((resolve63) => {
         timer = setTimeout(() => {
           fence.aborted = true;
           if (!fence.dispatched) clear();
-          resolve62(fail7("assistant_launch_timeout"));
+          resolve63(fail7("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
       });
@@ -182586,7 +182672,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs105.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms3) => new Promise((resolve62) => setTimeout(resolve62, ms3));
+      const sleep3 = (ms3) => new Promise((resolve63) => setTimeout(resolve63, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -186267,7 +186353,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const channel = host._ctx.providerLoader?.channel ?? "stable";
       const url = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
       try {
-        const data = await new Promise((resolve62, reject) => {
+        const data = await new Promise((resolve63, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -186277,7 +186363,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve62(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve63(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -186301,7 +186387,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const cfg = loadConfig();
       const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
       function fetchJson(url) {
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -186311,7 +186397,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve62(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve63(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -187119,7 +187205,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(body);
-          const result = await new Promise((resolve62, reject) => {
+          const result = await new Promise((resolve63, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -187131,9 +187217,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve62(JSON.parse(data));
+                  resolve63(JSON.parse(data));
                 } catch {
-                  resolve62({ raw: data });
+                  resolve63({ raw: data });
                 }
               });
             });
@@ -187151,15 +187237,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
-          const result = await new Promise((resolve62, reject) => {
+          const result = await new Promise((resolve63, reject) => {
             http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve62(JSON.parse(data));
+                  resolve63(JSON.parse(data));
                 } catch {
-                  resolve62({ raw: data });
+                  resolve63({ raw: data });
                 }
               });
             }).on("error", reject);
@@ -187173,7 +187259,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(args || {});
-          const result = await new Promise((resolve62, reject) => {
+          const result = await new Promise((resolve63, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -187185,9 +187271,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve62(JSON.parse(data));
+                  resolve63(JSON.parse(data));
                 } catch {
-                  resolve62({ raw: data });
+                  resolve63({ raw: data });
                 }
               });
             });
@@ -188111,7 +188197,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         return rows.length ? rows : null;
       },
-      pause: () => new Promise((resolve62) => setTimeout(resolve62, 100))
+      pause: () => new Promise((resolve63) => setTimeout(resolve63, 100))
     };
     var testPorts;
     async function stopExactMeshWriter(host, request, ports = testPorts ?? nativeWriterStopPorts) {
@@ -191046,7 +191132,7 @@ trust_level = "trusted"
     };
     init_evaluator();
     function delay2(ms3) {
-      return new Promise((resolve62) => setTimeout(resolve62, ms3));
+      return new Promise((resolve63) => setTimeout(resolve63, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action2) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -192542,7 +192628,7 @@ ${text4}` : text4;
       let screenText = readClaudeTuiSnapshotForAnswer(host);
       let focused = readFocusedClaudeTuiQuestion(screenText);
       while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-        await new Promise((resolve62) => setTimeout(resolve62, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
         focused = readFocusedClaudeTuiQuestion(screenText);
       }
@@ -192593,7 +192679,7 @@ ${text4}` : text4;
         if (review) return screenText;
         if (directSubmitted) return null;
         if (Date.now() >= deadline) return screenText;
-        await new Promise((resolve62) => setTimeout(resolve62, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
       }
     }
@@ -192629,7 +192715,7 @@ ${text4}` : text4;
       let screenText = host.driver.snapshot();
       const deadline = Date.now() + CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
       while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-        await new Promise((resolve62) => setTimeout(resolve62, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = host.driver.snapshot();
       }
       return screenText;
@@ -192640,13 +192726,13 @@ ${text4}` : text4;
       for (let index = 1; index < headers.length; index += 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "	" });
-        await new Promise((resolve62) => setTimeout(resolve62, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         pages.push({ screenText: await snapshotSettledClaudeTuiPage(host), header: headers[index] });
       }
       for (let index = headers.length - 1; index > 0; index -= 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "\x1B[Z" });
-        await new Promise((resolve62) => setTimeout(resolve62, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         const reread = await snapshotSettledClaudeTuiPage(host);
         const landed = pages[index - 1];
         if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
@@ -192701,7 +192787,7 @@ ${text4}` : text4;
               break questionLoop;
             }
             host.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve62) => setTimeout(resolve62, 180));
+            await new Promise((resolve63) => setTimeout(resolve63, 180));
           }
           const answer = response.answers[question.questionId];
           const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
@@ -192712,7 +192798,7 @@ ${text4}` : text4;
               previewLayoutAnswer = true;
               LOG.info("SpecAdapter", `[${host.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
               host.driver.dispatch({ kind: "pty_write", data: "\r" });
-              await new Promise((resolve62) => setTimeout(resolve62, 180));
+              await new Promise((resolve63) => setTimeout(resolve63, 180));
             }
           }
         }
@@ -192728,7 +192814,7 @@ ${text4}` : text4;
             throw new Error("Claude TUI active interactive prompt changed before review submission");
           }
           host.driver.dispatch({ kind: "pty_write", data: "\r" });
-          await new Promise((resolve62) => setTimeout(resolve62, 180));
+          await new Promise((resolve63) => setTimeout(resolve63, 180));
         }
       } else {
         host.driver.dispatch({ kind: "pty_write", data: `${buildClaudeInteractiveToolResult(response)}
@@ -192919,7 +193005,7 @@ ${text4}` : text4;
             );
           }
         }
-        await new Promise((resolve62) => setTimeout(resolve62, CAROUSEL_STEP_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
       throw new Error(
         `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}; partial/unconfirmed carousel advancement \u2014 stopped remaining keystrokes.`
@@ -192949,7 +193035,7 @@ ${text4}` : text4;
             return screen;
           }
         }
-        await new Promise((resolve62) => setTimeout(resolve62, CAROUSEL_STEP_POLL_INTERVAL_MS));
+        await new Promise((resolve63) => setTimeout(resolve63, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
       throw new Error(
         `Timed out waiting for Antigravity Write-in editor to return to options on Question ${expectedQuestionIndex1Based}; stopped remaining keystrokes.`
@@ -194054,7 +194140,7 @@ ${text4}` : text4;
           const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX) ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot()) : buildKimiInteractiveTuiAnswerSteps(prompt, response);
           for (const step of steps) {
             this.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve62) => setTimeout(resolve62, 180));
+            await new Promise((resolve63) => setTimeout(resolve63, 180));
           }
           this.activeInteractivePrompt = null;
           this.notifyChange("prompt_cleared");
@@ -194623,13 +194709,13 @@ ${text4}` : text4;
       }
       request(method, params) {
         const id4 = `adhdev:${this.generation}:${(0, import_node_crypto60.randomUUID)()}`;
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
             reject(new Error(`Codex ${method} timed out`));
             if (["initialize", "thread/start", "turn/start", "turn/steer", "turn/interrupt"].includes(method)) this.stop("timeout");
           }, 15e3);
-          this.pending.set(id4, { resolve: resolve62, reject, timer });
+          this.pending.set(id4, { resolve: resolve63, reject, timer });
           try {
             this.write({ id: id4, method, params });
           } catch (error) {
@@ -195630,7 +195716,7 @@ ${JSON.stringify(replies)}
         if (status === "stopped") {
           throw new Error("CLI runtime stopped before it became ready");
         }
-        await new Promise((resolve62) => setTimeout(resolve62, pollMs));
+        await new Promise((resolve63) => setTimeout(resolve63, pollMs));
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
@@ -198603,7 +198689,7 @@ ${buttons.join("\n")}`;
         const enterCount = cliCommand.enterCount || 1;
         await host.adapter.writeRaw(cliCommand.text + "\r");
         for (let i = 1; i < enterCount; i += 1) {
-          await new Promise((resolve62) => setTimeout(resolve62, 50));
+          await new Promise((resolve63) => setTimeout(resolve63, 50));
           await host.adapter.writeRaw("\r");
         }
       }
@@ -202506,7 +202592,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const beforeCount = this.messageCount(before);
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
-          await new Promise((resolve62) => setTimeout(resolve62, 250));
+          await new Promise((resolve63) => setTimeout(resolve63, 250));
           let state2;
           try {
             state2 = await this.readChat(evaluate);
@@ -202528,7 +202614,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
           return first;
         }
-        await new Promise((resolve62) => setTimeout(resolve62, 150));
+        await new Promise((resolve63) => setTimeout(resolve63, 150));
         const second = await this.readChat(evaluate);
         return this.messageCount(second) >= this.messageCount(first) ? second : first;
       }
@@ -202679,7 +202765,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           if (typeof data.error === "string" && data.error.trim()) return false;
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          await new Promise((resolve62) => setTimeout(resolve62, 250));
+          await new Promise((resolve63) => setTimeout(resolve63, 250));
           const state2 = await this.readChat(evaluate);
           const title = this.getStateTitle(state2);
           if (this.titlesMatch(title, sessionId)) return true;
@@ -205398,7 +205484,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { target, instance, adapter };
     }
     function sleep2(ms3) {
-      return new Promise((resolve62) => setTimeout(resolve62, ms3));
+      return new Promise((resolve63) => setTimeout(resolve63, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -206239,15 +206325,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             this.json(res, 500, { error: e.message });
           }
         });
-        return new Promise((resolve62, reject) => {
+        return new Promise((resolve63, reject) => {
           this.server.listen(port, "127.0.0.1", () => {
             this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve62();
+            resolve63();
           });
           this.server.on("error", (e) => {
             if (e.code === "EADDRINUSE") {
               this.log(`Port ${port} in use, skipping dev server`);
-              resolve62();
+              resolve63();
             } else {
               reject(e);
             }
@@ -206331,20 +206417,20 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           child.stderr?.on("data", (d) => {
             stderr += d.toString().slice(0, 2e3);
           });
-          await new Promise((resolve62) => {
+          await new Promise((resolve63) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve62();
+              resolve63();
             }, 3e3);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve62();
+              resolve63();
             });
             child.stdout?.once("data", () => {
               setTimeout(() => {
                 child.kill();
                 clearTimeout(timer);
-                resolve62();
+                resolve63();
               }, 500);
             });
           });
@@ -206881,14 +206967,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         res.end(JSON.stringify(data, null, 2));
       }
       async readBody(req) {
-        return new Promise((resolve62) => {
+        return new Promise((resolve63) => {
           let body = "";
           req.on("data", (chunk) => body += chunk);
           req.on("end", () => {
             try {
-              resolve62(JSON.parse(body));
+              resolve63(JSON.parse(body));
             } catch {
-              resolve62({});
+              resolve63({});
             }
           });
         });
@@ -207572,12 +207658,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           while (!this.closed) {
             if (attempt > 0) {
               const delayMs = Math.min(50 * Math.pow(2, Math.min(attempt - 1, 4)), 500);
-              await new Promise((resolve62) => {
-                this.reconnectWake = resolve62;
+              await new Promise((resolve63) => {
+                this.reconnectWake = resolve63;
                 this.reconnectTimer = setTimeout(() => {
                   this.reconnectTimer = null;
                   this.reconnectWake = null;
-                  resolve62();
+                  resolve63();
                 }, delayMs);
                 this.reconnectTimer.unref?.();
               });
@@ -208111,7 +208197,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const delay3 = options.canConnectRetryDelayMs ?? options.verifyRetryDelayMs ?? 150;
       for (let attempt = 0; attempt <= retries2 && remaining() > 0; attempt++) {
         if (attempt > 0) {
-          await new Promise((resolve62) => setTimeout(resolve62, Math.min(remaining(), 250, delay3 * 2 ** (attempt - 1))));
+          await new Promise((resolve63) => setTimeout(resolve63, Math.min(remaining(), 250, delay3 * 2 ** (attempt - 1))));
           if (remaining() <= 0) break;
         }
         const result = await probeHost(
@@ -208156,7 +208242,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             return endpoint;
           }
           lastError = result.error;
-          await new Promise((resolve62) => setTimeout(resolve62, Math.min(STARTUP_POLL_MS, remaining())));
+          await new Promise((resolve63) => setTimeout(resolve63, Math.min(STARTUP_POLL_MS, remaining())));
         }
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
       })();
@@ -208814,10 +208900,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             const buffer = Buffer.from(await res.arrayBuffer());
             const fs126 = await import("fs");
             fs126.writeFileSync(vsixPath, buffer);
-            return new Promise((resolve62) => {
+            return new Promise((resolve63) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error, _stdout, stderr) => {
-                resolve62({
+                resolve63({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
                   success: !error,
@@ -208830,11 +208916,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (e) {
         }
       }
-      return new Promise((resolve62) => {
+      return new Promise((resolve63) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
         hiddenExec(cmd, { timeout: 6e4 }, (error, stdout, stderr) => {
           if (error) {
-            resolve62({
+            resolve63({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: false,
@@ -208842,7 +208928,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               error: stderr || error.message
             });
           } else {
-            resolve62({
+            resolve63({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: true,
@@ -209179,7 +209265,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
-      await new Promise((resolve62, reject) => {
+      await new Promise((resolve63, reject) => {
         const onError = (error) => {
           httpServer?.off("listening", onListening);
           reject(error);
@@ -209187,7 +209273,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const onListening = () => {
           httpServer?.off("error", onError);
           listening = true;
-          resolve62();
+          resolve63();
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
@@ -209214,12 +209300,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
           clients.clear();
-          await new Promise((resolve62) => {
+          await new Promise((resolve63) => {
             if (!httpServer) {
-              resolve62();
+              resolve63();
               return;
             }
-            httpServer.close(() => resolve62());
+            httpServer.close(() => resolve63());
           });
           httpServer = null;
           wss = null;
@@ -210231,7 +210317,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
     function yieldToEventLoop() {
-      return new Promise((resolve62) => setImmediate(resolve62));
+      return new Promise((resolve63) => setImmediate(resolve63));
     }
     function errText2(error) {
       return error instanceof Error ? error.message : String(error);
@@ -210761,7 +210847,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { ...runtimeCounters };
     }
     function yieldToEventLoop2() {
-      return new Promise((resolve62) => setImmediate(resolve62));
+      return new Promise((resolve63) => setImmediate(resolve63));
     }
     var CHAT_SCAN_PAGE_ROWS = 2e3;
     function scanAllLatestPerKey(node, topic, options = {}) {

@@ -12,11 +12,12 @@ import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getBindingInfo, probeRoot, TransferFsError } from '../transfer-fs/index.js';
 import { TRANSFER_LIMITS, TRANSFER_RETENTION_MS } from './limits.js';
 import {
-  ManifestError, isTransferId, selectionDigest, selectionTotalBytes, validateContentManifest,
+  ManifestError, blockCount, isTransferId, selectionDigest, selectionTotalBytes, validateContentManifest,
   validateFinalName, validateSelectionManifest, type SelectionManifest,
 } from './manifest.js';
 import type { TransferLink, TransferLinkFactory, TransferSignal } from './link.js';
 import { ReceiverSession, SenderSession, SessionError } from './link-session.js';
+import { extractSdpFingerprint, sdpHasRelayCandidate } from './protocol.js';
 import { TransferRateLimiter } from './rate-limit.js';
 import { TransferReceiver, removeStagingFor } from './receiver.js';
 import { freezeSelection, requireFreeDisk } from './spool.js';
@@ -54,6 +55,9 @@ interface RunCtx {
   cancelled: boolean;
   starting: boolean;
 }
+
+/** Non-terminal transfer records a daemon keeps (owner-created and peer-offered alike). */
+const MAX_OPEN_TRANSFERS = 10;
 
 const fail = (code: string, detail?: string): TransferFailure => ({ ok: false, code, ...(detail ? { detail } : {}) });
 
@@ -106,13 +110,20 @@ export class ProjectTransferEngine {
   onAuthorityChanged(): void {
     for (const rec of this.records.values()) {
       if (TERMINAL_STATES.has(rec.state) || !rec.localApproval) continue;
-      if (this.authorizationProblem(rec)) this.terminate(rec, 'revoked', 'REVOKED', true);
+      const problem = this.authorizationProblem(rec);
+      if (problem) this.endForProblem(rec, problem);
     }
+  }
+
+  private endForProblem(rec: TransferRecord, problem: string): void {
+    if (problem === 'consent-expired') this.terminate(rec, 'expired', 'CONSENT_EXPIRED', true);
+    else this.terminate(rec, 'revoked', 'REVOKED', true);
   }
 
   private authorizationProblem(rec: TransferRecord): string | null {
     const a = rec.localApproval;
     if (!a) return null;
+    if (this.now() - a.at > TRANSFER_RETENTION_MS.consent) return 'consent-expired';
     if (a.ownerAuthGeneration !== this.ports.ownerAuthGeneration()) return 'owner-auth-changed';
     if (a.restartEpoch !== this.restartEpoch) return 'restart';
     if (!this.ports.isPeerAuthorized(rec.peerDaemonId)) return 'peer-unauthorized';
@@ -210,7 +221,7 @@ export class ProjectTransferEngine {
     const self = this.ports.selfDaemonId();
     if (!input.targetDaemonId || daemonIdsEquivalent(input.targetDaemonId, self)) return fail('INVALID_TARGET', 'target must be another of your machines');
     if (!this.ports.isPeerAuthorized(input.targetDaemonId)) return fail('PEER_UNAUTHORIZED');
-    if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= 10) return fail('TOO_MANY_TRANSFERS');
+    if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail('TOO_MANY_TRANSFERS');
     let finalName: string;
     try { finalName = validateFinalName(input.finalName); } catch (e) { return fail((e as ManifestError).code ?? 'INVALID_FINAL_NAME', (e as Error).message); }
     if (!Array.isArray(input.selected) || input.selected.length === 0 || input.selected.length > TRANSFER_LIMITS.maxEntries) return fail('MANIFEST_INVALID', 'selection required');
@@ -294,7 +305,7 @@ export class ProjectTransferEngine {
 
   private guard(rec: TransferRecord): void {
     const problem = this.authorizationProblem(rec);
-    if (problem) { this.terminate(rec, 'revoked', 'REVOKED', true); throw new SessionError('REVOKED', problem); }
+    if (problem) { this.endForProblem(rec, problem); throw new SessionError(problem === 'consent-expired' ? 'CONSENT_EXPIRED' : 'REVOKED', problem); }
   }
 
   private async startSource(rec: TransferRecord, run: RunCtx): Promise<void> {
@@ -343,7 +354,8 @@ export class ProjectTransferEngine {
     clearInterval(run.watchdog);
     run.watchdog = setInterval(() => {
       if (TERMINAL_STATES.has(rec.state)) { clearInterval(run.watchdog); return; }
-      if (this.authorizationProblem(rec)) this.terminate(rec, 'revoked', 'REVOKED', true);
+      const problem = this.authorizationProblem(rec);
+      if (problem) this.endForProblem(rec, problem);
     }, 2000);
     run.watchdog.unref?.();
   }
@@ -401,6 +413,7 @@ export class ProjectTransferEngine {
     const unsupported = this.requireSupport();
     if (unsupported) return unsupported;
     if (this.records.has(id)) return fail('DUPLICATE');
+    if ([...this.records.values()].filter((r) => !TERMINAL_STATES.has(r.state)).length >= MAX_OPEN_TRANSFERS) return fail('TOO_MANY_TRANSFERS');
     const selection = validateSelectionManifest(args.selection);
     const self = this.ports.selfDaemonId();
     if (selection.transferId !== id || !daemonIdsEquivalent(selection.sourceDaemonId, sender) || !daemonIdsEquivalent(selection.targetDaemonId, self)) return fail('PEER_UNAUTHORIZED');
@@ -474,14 +487,25 @@ export class ProjectTransferEngine {
     const s = args.signal as TransferSignal;
     if (!s || !['offer', 'answer', 'candidate'].includes(s.kind)) return fail('PROTOCOL_ERROR');
     if (typeof s.candidate === 'string' && / typ relay\b/.test(s.candidate)) return fail('RELAY_CANDIDATE_REFUSED');
+    if (s.kind !== 'candidate') {
+      // A remote SDP may embed candidates and must carry exactly one DTLS fingerprint value.
+      if (typeof s.sdp !== 'string') return fail('PROTOCOL_ERROR');
+      if (sdpHasRelayCandidate(s.sdp)) return fail('RELAY_CANDIDATE_REFUSED');
+      if (!extractSdpFingerprint(s.sdp)) return fail('SDP_FINGERPRINT_INVALID');
+    }
     run.link.signalIn(s);
     return { ok: true };
   }
 
-  private onPeerState(rec: TransferRecord, args: Record<string, any>): { ok: boolean } {
+  private onPeerState(rec: TransferRecord, args: Record<string, any>): { ok: boolean; code?: string } {
     if (rec.role !== 'source') return { ok: true };
     if (args.state === 'completed') {
-      if (typeof args.publishedName === 'string') rec.publishedName = args.publishedName;
+      // Only meaningful once every block was acknowledged (we are verifying); anything earlier is a lie.
+      if (rec.state !== 'verifying' && rec.state !== 'transferring') return fail('PROTOCOL_ERROR');
+      if (!rec.content || rec.content.files.some((f, i) => (rec.blocksDone[i] ?? 0) < blockCount(f.size))) return fail('PROTOCOL_ERROR');
+      if (typeof args.publishedName === 'string') {
+        try { rec.publishedName = validateFinalName(args.publishedName); } catch { return fail('PROTOCOL_ERROR'); }
+      }
       this.completeRecord(rec);
     } else if (args.state === 'failed') {
       this.terminate(rec, 'failed', String(args.code ?? 'TARGET_FAILED'), false);
@@ -493,6 +517,7 @@ export class ProjectTransferEngine {
     try {
       this.setState(rec, 'verifying');
       run.receiver!.verifyAll();
+      this.guard(rec); // consent may have lapsed / authority changed while data was flowing
       this.setState(rec, 'publishing');
       rec.publishedName = run.receiver!.publish(rec.selection.finalName);
       run.receiver!.dispose();

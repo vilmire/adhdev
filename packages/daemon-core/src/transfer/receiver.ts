@@ -11,12 +11,14 @@ import {
   openRoot, probeRoot, readHandle, renameAtExcl, resolveParentDirHandle, unlinkAt, walkDir, writeHandle,
 } from '../transfer-fs/index.js';
 import { TRANSFER_LIMITS } from './limits.js';
+import { requireFreeDisk } from './spool.js';
+import { SECRET_SNIFF_BYTES, sniffSecretContent } from './secret-exclusion.js';
 import { blockCount, type ContentManifest, type SelectionManifest } from './manifest.js';
 
 export const STAGING_DIR_NAME = '.adhdev-transfer-staging';
 
 export class ReceiverError extends Error {
-  constructor(public readonly code: 'HASH_MISMATCH' | 'PROTOCOL_ERROR' | 'PUBLISH_CONFLICT' | 'VERIFY_FAILED', message: string) {
+  constructor(public readonly code: 'HASH_MISMATCH' | 'PROTOCOL_ERROR' | 'PUBLISH_CONFLICT' | 'VERIFY_FAILED' | 'SECRET_CONTENT_REJECTED' | 'DISK_SPACE_EXHAUSTED', message: string) {
     super(message);
     this.name = 'ReceiverError';
   }
@@ -222,6 +224,10 @@ export class TransferReceiver {
     const blockStart = this.blocksDone[c.index]! * TRANSFER_LIMITS.blockBytes;
     const blockLen = Math.min(TRANSFER_LIMITS.blockBytes, f.size - blockStart);
     if (c.blockFill + payload.length > blockLen) throw new ReceiverError('PROTOCOL_ERROR', 'data past block end');
+    if (c.blockFill === 0) {
+      // Free space can shrink during a long transfer: re-check before each block, not only at offer time.
+      try { requireFreeDisk(this.stagePath, blockLen); } catch { throw new ReceiverError('DISK_SPACE_EXHAUSTED', 'not enough free disk space'); }
+    }
     writeHandle(c.handle, payload, 0, payload.length, offset);
     c.blockHash.update(payload);
     c.whole.update(payload);
@@ -277,6 +283,9 @@ export class TransferReceiver {
         for (let o = 0; o < f.size;) {
           const n = readHandle(fh, buf, 0, Math.min(buf.length, f.size - o), o);
           if (n <= 0) throw new ReceiverError('VERIFY_FAILED', 'short read');
+          if (o === 0 && sniffSecretContent(buf.subarray(0, Math.min(n, SECRET_SNIFF_BYTES)))) {
+            throw new ReceiverError('SECRET_CONTENT_REJECTED', 'received file looks like secret key material');
+          }
           h.update(buf.subarray(0, n)); o += n;
         }
         if (h.digest('hex') !== f.sha256) throw new ReceiverError('HASH_MISMATCH', 'file hash mismatch');

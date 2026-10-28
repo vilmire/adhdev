@@ -89,16 +89,26 @@ export function parseJsonPayload(p: Buffer): Record<string, any> {
   throw new FrameError('PROTOCOL_ERROR', 'bad json payload');
 }
 
-/** DTLS fingerprint lines of an SDP (`a=fingerprint:sha-256 AA:BB:...`), normalised. */
+/**
+ * DTLS fingerprint of an SDP (`a=fingerprint:sha-256 AA:BB:...`), normalised. Session- and
+ * media-level repeats of the SAME value are fine; an SDP carrying several distinct
+ * fingerprints is ambiguous about which one DTLS will present, so it yields null.
+ */
 export function extractSdpFingerprint(sdp: string): string | null {
-  const m = /^a=fingerprint:\s*(\S+)\s+([0-9A-Fa-f:]+)\s*$/m.exec(sdp);
-  return m ? `${m[1]!.toLowerCase()} ${m[2]!.toUpperCase()}` : null;
+  const found = new Set<string>();
+  for (const m of sdp.matchAll(/^a=fingerprint:\s*(\S+)\s+([0-9A-Fa-f:]+)\s*$/gm)) found.add(`${m[1]!.toLowerCase()} ${m[2]!.toUpperCase()}`);
+  return found.size === 1 ? [...found][0]! : null;
+}
+
+/** True when an SDP contains a TURN-relayed candidate line (`a=candidate:... typ relay`). */
+export function sdpHasRelayCandidate(sdp: string): boolean {
+  return /^a=candidate:.*\btyp relay\b/im.test(sdp);
 }
 
 /** Channel-binding tag over the one-time link key, transfer, link generation and both DTLS fingerprints. */
-export function computeBindingTag(linkKey: Buffer, transferId: string, linkGen: number, fpA: string, fpB: string): string {
+export function computeBindingTag(linkKey: Buffer, transferId: string, linkGen: number, fpA: string, fpB: string, role: 'sender' | 'receiver'): string {
   const [lo, hi] = [fpA, fpB].sort();
-  return createHmac('sha256', linkKey).update(`adhdev-file/1|${transferId}|${linkGen}|${lo}|${hi}`).digest('hex');
+  return createHmac('sha256', linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest('hex');
 }
 
 export function bindingTagsEqual(a: string, b: string): boolean {

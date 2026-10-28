@@ -24,6 +24,8 @@ export class SessionError extends Error {
 }
 
 const IDLE_TIMEOUT_MS = 60_000;
+/** Connect (30 s) + a margin: no valid HELLO by then means the peer is not who/what we expect. */
+const HELLO_DEADLINE_MS = TRANSFER_LIMITS.linkConnectTimeoutMs + 15_000;
 
 abstract class BaseSession {
   protected outSeq = 0;
@@ -33,6 +35,7 @@ abstract class BaseSession {
   protected settle!: { resolve: () => void; reject: (e: Error) => void };
   protected promise: Promise<void>;
   private idle?: NodeJS.Timeout;
+  private helloTimer?: NodeJS.Timeout;
 
   constructor(
     protected readonly link: TransferLink,
@@ -45,9 +48,13 @@ abstract class BaseSession {
     // A rejection nobody awaited yet must not crash the daemon.
     this.promise.catch(() => {});
     link.onMessage((d) => this.onRaw(d));
-    link.onClose((reason) => this.fail(new SessionError('LINK_LOST', `link closed: ${reason}`)));
+    link.onClose((reason) => this.fail(reason === 'DIRECT_UNAVAILABLE'
+      ? new SessionError('DIRECT_UNAVAILABLE', 'link is not a direct (non-relayed) path')
+      : new SessionError('LINK_LOST', `link closed: ${reason}`)));
     link.onOpen(() => this.sendHello());
     this.touch();
+    this.helloTimer = setTimeout(() => this.fail(new SessionError('LINK_LOST', 'hello deadline exceeded')), HELLO_DEADLINE_MS);
+    this.helloTimer.unref?.();
   }
 
   private touch(): void {
@@ -60,6 +67,7 @@ abstract class BaseSession {
     if (this.done) return;
     this.done = true;
     clearTimeout(this.idle);
+    clearTimeout(this.helloTimer);
     this.settle.resolve();
   }
 
@@ -67,6 +75,7 @@ abstract class BaseSession {
     if (this.done) return;
     this.done = true;
     clearTimeout(this.idle);
+    clearTimeout(this.helloTimer);
     this.settle.reject(err);
   }
 
@@ -84,13 +93,12 @@ abstract class BaseSession {
     const local = this.link.localFingerprint();
     const remote = this.link.remoteFingerprint();
     if (!local || !remote) { this.abort('BINDING_MISMATCH'); return; }
-    const tag = computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote);
+    const tag = computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote, this.roleName);
     this.sendFrame(FrameType.HELLO, 0, 0, jsonPayload({ tag, role: this.roleName }));
   }
 
   private onRaw(data: Uint8Array): void {
     if (this.done) return;
-    this.touch();
     let frame: Frame;
     try {
       frame = decodeFrame(data);
@@ -98,6 +106,7 @@ abstract class BaseSession {
       if (frame.seq <= this.inSeq) return; // duplicate delivery: ignore, never resend
       if (frame.seq !== this.inSeq + 1) throw new FrameError('PROTOCOL_ERROR', 'sequence gap');
       this.inSeq = frame.seq;
+      this.touch(); // only a valid, new-sequence frame proves the peer is alive
       if (frame.type === FrameType.ABORT) {
         this.fail(new SessionError(String(parseJsonPayload(frame.payload).code ?? 'PEER_ABORT'), 'peer aborted'));
         return;
@@ -106,19 +115,23 @@ abstract class BaseSession {
         if (frame.type !== FrameType.HELLO) throw new FrameError('PROTOCOL_ERROR', 'expected HELLO');
         const local = this.link.localFingerprint();
         const remote = this.link.remoteFingerprint();
-        const peerTag = String(parseJsonPayload(frame.payload).tag ?? '');
-        if (!local || !remote || !bindingTagsEqual(peerTag, computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote))) {
+        const hello = parseJsonPayload(frame.payload);
+        const peerTag = String(hello.tag ?? '');
+        const peerRole = this.roleName === 'sender' ? 'receiver' : 'sender';
+        // The tag covers the sender's role, so a HELLO reflected back to its author never verifies.
+        if (hello.role !== peerRole || !local || !remote || !bindingTagsEqual(peerTag, computeBindingTag(this.linkKey, this.transferId, this.linkGen, local, remote, peerRole))) {
           this.abort('BINDING_MISMATCH');
           return;
         }
         this.helloOk = true;
+        clearTimeout(this.helloTimer);
         this.onHelloOk();
         return;
       }
       this.onFrame(frame);
     } catch (err) {
       if (err instanceof FrameError) this.abort('PROTOCOL_ERROR');
-      else if (err instanceof ReceiverError) this.abort(err.code === 'HASH_MISMATCH' ? 'HASH_MISMATCH' : 'PROTOCOL_ERROR');
+      else if (err instanceof ReceiverError) this.abort(err.code === 'HASH_MISMATCH' || err.code === 'DISK_SPACE_EXHAUSTED' ? err.code : 'PROTOCOL_ERROR');
       else this.abort('IO_ERROR');
     }
   }

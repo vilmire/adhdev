@@ -90,11 +90,12 @@ describe('A12 frame codec', () => {
   });
   it('binding tag depends on key, generation and both fingerprints', () => {
     const k = Buffer.alloc(32, 1);
-    const t = computeBindingTag(k, 'x', 1, 'fpA', 'fpB');
-    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 1, 'fpB', 'fpA'))).toBe(true);
-    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 2, 'fpA', 'fpB'))).toBe(false);
-    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 1, 'fpA', 'fpEVIL'))).toBe(false);
-    expect(bindingTagsEqual(t, computeBindingTag(Buffer.alloc(32, 2), 'x', 1, 'fpA', 'fpB'))).toBe(false);
+    const t = computeBindingTag(k, 'x', 1, 'fpA', 'fpB', 'sender');
+    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 1, 'fpB', 'fpA', 'sender'))).toBe(true);
+    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 2, 'fpA', 'fpB', 'sender'))).toBe(false);
+    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 1, 'fpA', 'fpEVIL', 'sender'))).toBe(false);
+    expect(bindingTagsEqual(t, computeBindingTag(k, 'x', 1, 'fpA', 'fpB', 'receiver'))).toBe(false);
+    expect(bindingTagsEqual(t, computeBindingTag(Buffer.alloc(32, 2), 'x', 1, 'fpA', 'fpB', 'sender'))).toBe(false);
     expect(extractSdpFingerprint('v=0\r\na=fingerprint:sha-256 ab:CD\r\n')).toBe('sha-256 AB:CD');
   });
 });

@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { TransferFsError, splitPortableRelativePath } from '../transfer-fs/index.js';
 import { TRANSFER_LIMITS } from './limits.js';
+import { matchSecretPath } from './secret-exclusion.js';
 
 export type ManifestEntryKind = 'file' | 'dir';
 
@@ -145,6 +146,8 @@ export function validateSelectionManifest(raw: unknown): SelectionManifest {
     try { splitPortableRelativePath(e.path); } catch (err) {
       throw new ManifestError('PATH_REJECTED', `entry path rejected: ${(err as Error).message}`);
     }
+    // Receiver-side enforcement: a peer (or a tampered source) can never smuggle a secret path through.
+    if (matchSecretPath(e.path) !== null) throw new ManifestError('SECRET_PATH_REJECTED', 'entry path matches a secret exclusion rule');
     const key = e.path.normalize('NFC').toLowerCase();
     if (seen.has(key)) throw new ManifestError('CASE_COLLISION', 'case-insensitive duplicate path');
     seen.set(key, e.kind);
@@ -192,6 +195,7 @@ export function validateContentManifest(raw: unknown, selection: SelectionManife
   const sorted = [...c.files].sort((a, b) => byteCompare(a.path, b.path));
   sorted.forEach((f, i) => {
     const w = want[i]!;
+    if (matchSecretPath(f.path) !== null) throw new ManifestError('SECRET_PATH_REJECTED', 'content path matches a secret exclusion rule');
     if (f.path !== w.path || f.size !== w.size) throw new ManifestError('SOURCE_CHANGED', 'file differs from approved selection');
     if (!SHA256_HEX.test(f.sha256) || !Array.isArray(f.blockHashes) || f.blockHashes.length !== blockCount(f.size) || !f.blockHashes.every((h) => SHA256_HEX.test(h))) {
       throw new ManifestError('MANIFEST_INVALID', 'bad file hashes');
