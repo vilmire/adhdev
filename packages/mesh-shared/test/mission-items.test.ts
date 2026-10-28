@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
     CARRY_OVER_MISSION_TITLE,
+    LEGACY_CARRY_OVER_MISSION_TITLE,
+    OWNER_ABANDON_CONFIRM_QUESTION,
+    OWNER_ABANDON_CONFIRM_OPTIONS,
     MISSION_LIMITS,
     boundEventPayload,
     deriveItemDedupeKey,
@@ -151,4 +154,14 @@ describe('mission_upsert / mission_list_query wire — mixed-version tolerance (
         expect(decodeMissionUpsertRequest({ v, meshId: 'mesh1', title: '' })).toBeNull()
         expect(decodeMissionUpsertRequest({ v, meshId: 'mesh1', title: '', itemsAdd: 'nope' })).toBeNull()
     })
+  it('stored canonical text is English; the legacy Korean carry-over title still matches (existing DBs), flag first', () => {
+    expect(CARRY_OVER_MISSION_TITLE).toBe('Carry-over — open items from closed missions')
+    expect(isCarryOverMissionTitle(LEGACY_CARRY_OVER_MISSION_TITLE)).toBe(true)
+    expect(isCarryOverMissionRecord({ title: LEGACY_CARRY_OVER_MISSION_TITLE })).toBe(true)
+    expect(isCarryOverMissionRecord({ isCarryOver: true, title: 'anything' })).toBe(true)
+    expect(isCarryOverMissionRecord({ title: 'Some other mission' })).toBe(false)
+    expect(OWNER_ABANDON_CONFIRM_QUESTION).toBe("The coordinator closed this as 'owner abandoned' — correct?")
+    expect([...OWNER_ABANDON_CONFIRM_OPTIONS]).toEqual(['Correct', 'Reopen'])
+  })
+
 })

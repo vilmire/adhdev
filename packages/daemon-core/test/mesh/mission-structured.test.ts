@@ -225,8 +225,8 @@ describe('acceptance #11 — owner_abandoned asks the owner to confirm; reopen r
         const confirm = store().missionItems().getItem(meshId, confirmId)!;
         expect(confirm.kind).toBe('decision');
         expect(confirm.state).toBe('open');
-        expect(confirm.decision!.question).toBe("코디가 '오너 결정으로 중단'이라고 닫음 — 맞나요?");
-        expect(confirm.decision!.options.map(o => o.label)).toEqual(['맞음', '다시 열기']);
+        expect(confirm.decision!.question).toBe("The coordinator closed this as 'owner abandoned' — correct?");
+        expect(confirm.decision!.options.map(o => o.label)).toEqual(['Correct', 'Reopen']);
         expect(confirm.refs[0]).toMatchObject({ kind: 'mission', value: record.id });
         expect(confirm.decision!.answer).toBeUndefined();
         expect(confirm.missionId).toBe(closed.result.movedTo); // lives in the carry-over mission
@@ -353,7 +353,7 @@ describe('limits and folding', () => {
         const open1 = items(m.record.id).filter(i => i.state === 'open');
         expect(open1.length).toBe(MISSION_LIMITS.openItemsPerMission);
         const fold = open1.find(i => i.dedupeKey === 'fold:remaining')!;
-        expect(fold.text).toMatch(/51개 더/); // 250 added: 51 folded so 199 + the fold item = 200
+        expect(fold.text).toMatch(/^51 earlier remaining items folded/); // 250 added: 51 folded so 199 + the fold item = 200
         // the oldest ones were the ones folded; the newest are still there
         expect(open1.some(i => i.text === 'task 249')).toBe(true);
         expect(open1.some(i => i.text === 'task 0')).toBe(false);

@@ -362,7 +362,11 @@ export function boundEventPayload(payload: Record<string, unknown>): string {
 }
 
 /** The carry-over mission's fixed title (design §5.1). */
-export const CARRY_OVER_MISSION_TITLE = '이월 — 닫힌 미션에서 넘어온 항목'
+export const CARRY_OVER_MISSION_TITLE = 'Carry-over — open items from closed missions'
+/** The title earlier builds stored; existing DBs still hold it, so it keeps matching (no rename). */
+export const LEGACY_CARRY_OVER_MISSION_TITLE = '이월 — 닫힌 미션에서 넘어온 항목'
+/** Canonical goal text of a newly created carry-over mission. */
+export const CARRY_OVER_MISSION_GOAL = 'Open items carried over from closed missions, and decisions requested without a mission. Managed automatically — do not close.'
 /**
  * THE one predicate for "is this the auto carry-over mission". The daemon's `is_carry_over`
  * column (`isCarryOver`) is the source of truth; wire views that cannot carry the flag (older
@@ -373,14 +377,16 @@ export function isCarryOverMissionRecord(m: { isCarryOver?: boolean; title?: unk
 }
 /** The carry-over mission's title is fixed (the daemon ignores renames), so a title match identifies it on wire views that carry no flag. */
 export function isCarryOverMissionTitle(title: unknown): boolean {
-    return typeof title === 'string' && title.trim() === CARRY_OVER_MISSION_TITLE
+    if (typeof title !== 'string') return false
+    const t = title.trim()
+    return t === CARRY_OVER_MISSION_TITLE || t === LEGACY_CARRY_OVER_MISSION_TITLE
 }
 
 /** Prefix of the owner-confirmation decision a coordinator's `owner_abandoned` close creates. */
 export const OWNER_ABANDON_CONFIRM_KEY_PREFIX = 'owner-abandon-confirm:'
 
-export const OWNER_ABANDON_CONFIRM_QUESTION = "코디가 '오너 결정으로 중단'이라고 닫음 — 맞나요?"
-export const OWNER_ABANDON_CONFIRM_OPTIONS = ['맞음', '다시 열기'] as const
+export const OWNER_ABANDON_CONFIRM_QUESTION = "The coordinator closed this as 'owner abandoned' — correct?"
+export const OWNER_ABANDON_CONFIRM_OPTIONS = ['Correct', 'Reopen'] as const
 
 /** worker `report_completion.decisions_needed` cap. */
 export const WORKER_DECISIONS_NEEDED_MAX = 3

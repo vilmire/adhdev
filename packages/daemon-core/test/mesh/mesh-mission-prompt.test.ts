@@ -127,7 +127,34 @@ describe('buildMissionPromptSection — structured rendering', () => {
     });
 });
 
+describe('decision deadlines', () => {
+    it('shows when a decision auto-applies or is merely due, compactly', () => {
+        write({ title: 'Due', summary: 's', itemsAdd: [
+            { kind: 'decision', question: 'Auto?', options: [{ label: 'yes' }, { label: 'no' }], recommended: 'a', due_at: '2026-10-30T09:00:00Z', on_due: 'apply_recommended' },
+            { kind: 'decision', question: 'Remind?', options: [{ label: 'yes' }], recommended: 'a', due_at: '2026-11-02T09:00:00Z' },
+            { kind: 'decision', question: 'Plain?', options: [{ label: 'yes' }], due_at: '2026-11-05T09:00:00Z' },
+        ] });
+        const section = buildMissionPromptSection(meshId);
+        expect(section).toContain('Auto? (rec a: yes; auto-applies 10-30)');
+        expect(section).toContain('Remind? (rec a: yes; due 11-02)');
+        expect(section).toContain('Plain? (due 11-05)');
+        const block = section.split('\n').slice(1, -1).join('\n');
+        expect(block.length).toBeLessThanOrEqual(MISSION_BLOCK_CHAR_CAP);
+    });
+});
+
 describe('carry-over mission in the prompt', () => {
+    it('drops the boilerplate Goal line: title + [carry-over] + open items only', () => {
+        const m = write({ title: 'Doomed2', itemsAdd: [{ kind: 'remaining', text: 'left' }] });
+        write({ id: m.record.id, status: 'completed' });
+        const section = buildMissionPromptSection(meshId);
+        const carry = section.split('\n').filter(l => l.includes('[carry-over]') || l.startsWith('  '));
+        expect(section).toContain('[carry-over]');
+        expect(section).not.toMatch(/Goal:/);
+        expect(section).not.toContain('Open items carried over');
+        expect(carry.join('\n')).toContain('Open: 1 remaining');
+    });
+
     it('is omitted while it has no open items and shown (labelled) once it does', () => {
         write({ title: 'Normal mission', summary: 's', itemsAdd: [{ kind: 'remaining', text: 'a' }] });
         // The carry-over mission exists (created by a close) but is empty → not listed.

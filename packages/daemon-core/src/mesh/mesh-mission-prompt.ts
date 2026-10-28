@@ -19,6 +19,7 @@
  */
 import type { MissionItemRecord } from './mesh-mission-items-store.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { getActiveMeshMissionSummaries, type MeshMissionSummary } from './mesh-missions.js';
 import { isCarryOverMissionRecord, truncateMissionText, type MissionDecision } from '@adhdev/mesh-shared';
 
@@ -48,10 +49,18 @@ export function isUnseenAnswer(item: MissionItemRecord): boolean {
     return !d.promptAckedAt || d.promptAckedAt < at;
 }
 
+/** `(rec a: label; auto-applies 10-30)` / `(rec a: label; due 10-30)` / `(due 10-30)` — compact, UTC month-day. */
 function recommendedLabel(d: MissionDecision): string {
-    if (!d.recommended) return '';
-    const opt = d.options.find(o => o.id === d.recommended);
-    return ` (rec ${d.recommended}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ''})`;
+    const parts: string[] = [];
+    if (d.recommended) {
+        const opt = d.options.find(o => o.id === d.recommended);
+        parts.push(`rec ${d.recommended}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ''}`);
+    }
+    if (d.dueAt && /^\d{4}-\d{2}-\d{2}/.test(d.dueAt)) {
+        const md = d.dueAt.slice(5, 10);
+        parts.push(d.onDue === 'apply_recommended' && d.recommended ? `auto-applies ${md}` : `due ${md}`);
+    }
+    return parts.length ? ` (${parts.join('; ')})` : '';
 }
 
 function openDecisionLine(item: MissionItemRecord): string {
@@ -106,9 +115,12 @@ export function renderMissionBlock(input: MissionBlockInput): string {
     const tasks = carryOver || t.total === 0
         ? ''
         : `  Tasks: ${t.total} total — ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled`;
-    const summaryText = m.summary
-        ? m.summary
-        : (m.goal ? m.goal.replace(/\s+/g, ' ').trim() : '');
+    // The carry-over mission's goal is boilerplate — title + [carry-over] + open items only.
+    const summaryText = carryOver
+        ? ''
+        : m.summary
+            ? m.summary
+            : (m.goal ? m.goal.replace(/\s+/g, ' ').trim() : '');
     const summaryLabel = m.summary ? 'Summary' : 'Goal';
     const fixed = header.length + counts.length + tasks.length + 3; // newlines
     // Optional lines need room: never let the summary starve them entirely, never exceed the cap.
@@ -200,5 +212,6 @@ export function acknowledgeAnsweredDecisions(meshId: string, missionId: string, 
         items.updateItem(meshId, item.id, { decision: { ...item.decision, promptAckedAt: nowIso } });
         n += 1;
     }
+    if (n > 0) notifyMissionChanged(meshId);
     return n;
 }

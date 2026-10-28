@@ -23834,6 +23834,7 @@ var require_dist3 = __commonJS({
       CANCEL_REASONS: () => CANCEL_REASONS2,
       CANONICAL_MESH_TOOL_COUNT: () => CANONICAL_MESH_TOOL_COUNT2,
       CANONICAL_MESH_TOOL_NAMES: () => CANONICAL_MESH_TOOL_NAMES2,
+      CARRY_OVER_MISSION_GOAL: () => CARRY_OVER_MISSION_GOAL,
       CARRY_OVER_MISSION_TITLE: () => CARRY_OVER_MISSION_TITLE,
       CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX: () => CLAUDE_TUI_REVIEW_PAGE_NOT_FOCUSED_PREFIX,
       CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX: () => CLAUDE_TUI_REVIEW_UNCONFIRMED_PREFIX,
@@ -23865,6 +23866,7 @@ var require_dist3 = __commonJS({
       LAUNCH_DEFAULT_ERROR_CODES: () => LAUNCH_DEFAULT_ERROR_CODES,
       LAUNCH_DEFAULT_ROLES: () => LAUNCH_DEFAULT_ROLES,
       LAUNCH_DEFAULT_SOURCES: () => LAUNCH_DEFAULT_SOURCES,
+      LEGACY_CARRY_OVER_MISSION_TITLE: () => LEGACY_CARRY_OVER_MISSION_TITLE,
       LIVENESS_RESULTS: () => LIVENESS_RESULTS2,
       MAX_MESH_RECORD_STRING: () => MAX_MESH_RECORD_STRING,
       MAX_OWNED_PATHS: () => MAX_OWNED_PATHS,
@@ -26742,7 +26744,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       return !!m && (m.isCarryOver === true || isCarryOverMissionTitle(m.title));
     }
     function isCarryOverMissionTitle(title) {
-      return typeof title === "string" && title.trim() === CARRY_OVER_MISSION_TITLE;
+      if (typeof title !== "string") return false;
+      const t = title.trim();
+      return t === CARRY_OVER_MISSION_TITLE || t === LEGACY_CARRY_OVER_MISSION_TITLE;
     }
     function normalizeReportCommits(value) {
       if (!Array.isArray(value)) return null;
@@ -27314,6 +27318,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MISSION_DECISION_URGENCIES;
     var MISSION_DECISION_ON_DUE;
     var CARRY_OVER_MISSION_TITLE;
+    var LEGACY_CARRY_OVER_MISSION_TITLE;
+    var CARRY_OVER_MISSION_GOAL;
     var OWNER_ABANDON_CONFIRM_KEY_PREFIX;
     var OWNER_ABANDON_CONFIRM_QUESTION;
     var OWNER_ABANDON_CONFIRM_OPTIONS;
@@ -28406,10 +28412,12 @@ ${renderWorkerProtocolFooter2(input)}`;
         MISSION_DECISION_OPTION_IDS = ["a", "b", "c", "d", "e"];
         MISSION_DECISION_URGENCIES = ["normal", "blocking"];
         MISSION_DECISION_ON_DUE = ["remind", "apply_recommended"];
-        CARRY_OVER_MISSION_TITLE = "\uC774\uC6D4 \u2014 \uB2EB\uD78C \uBBF8\uC158\uC5D0\uC11C \uB118\uC5B4\uC628 \uD56D\uBAA9";
+        CARRY_OVER_MISSION_TITLE = "Carry-over \u2014 open items from closed missions";
+        LEGACY_CARRY_OVER_MISSION_TITLE = "\uC774\uC6D4 \u2014 \uB2EB\uD78C \uBBF8\uC158\uC5D0\uC11C \uB118\uC5B4\uC628 \uD56D\uBAA9";
+        CARRY_OVER_MISSION_GOAL = "Open items carried over from closed missions, and decisions requested without a mission. Managed automatically \u2014 do not close.";
         OWNER_ABANDON_CONFIRM_KEY_PREFIX = "owner-abandon-confirm:";
-        OWNER_ABANDON_CONFIRM_QUESTION = "\uCF54\uB514\uAC00 '\uC624\uB108 \uACB0\uC815\uC73C\uB85C \uC911\uB2E8'\uC774\uB77C\uACE0 \uB2EB\uC74C \u2014 \uB9DE\uB098\uC694?";
-        OWNER_ABANDON_CONFIRM_OPTIONS = ["\uB9DE\uC74C", "\uB2E4\uC2DC \uC5F4\uAE30"];
+        OWNER_ABANDON_CONFIRM_QUESTION = "The coordinator closed this as 'owner abandoned' \u2014 correct?";
+        OWNER_ABANDON_CONFIRM_OPTIONS = ["Correct", "Reopen"];
         WORKER_DECISIONS_NEEDED_MAX = 3;
         WORKER_COMMITS_MAX = 20;
         SHA_RE = /^[0-9a-f]{7,64}$/i;
@@ -37062,19 +37070,19 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
               this.history[type2] = entries2.slice(-MAX_ENTRIES_PER_PROVIDER);
             }
             this.save();
-            for (const listener of this.listeners) {
+            for (const listener2 of this.listeners) {
               try {
-                listener(type2, version2, previousVersion);
+                listener2(type2, version2, previousVersion);
               } catch {
               }
             }
             return true;
           }
           /** Subscribe to newly recorded or changed provider versions in this archive. */
-          onVersionChange(listener) {
-            this.listeners.add(listener);
+          onVersionChange(listener2) {
+            this.listeners.add(listener2);
             return () => {
-              this.listeners.delete(listener);
+              this.listeners.delete(listener2);
             };
           }
           /** Get version history for a provider */
@@ -40700,16 +40708,16 @@ child.on('exit', () => process.exit(0));
     function setAmbientQuotaEnableGate(isEnabled) {
       ambientIsEnabled = isEnabled;
     }
-    function setQuotaCacheChangedListener(listener) {
+    function setQuotaCacheChangedListener(listener2) {
       const previous = quotaCacheChangedListener;
-      quotaCacheChangedListener = listener;
+      quotaCacheChangedListener = listener2;
       return previous;
     }
     function notifyQuotaCacheChanged() {
-      const listener = quotaCacheChangedListener;
-      if (!listener) return;
+      const listener2 = quotaCacheChangedListener;
+      if (!listener2) return;
       try {
-        listener();
+        listener2();
       } catch (e) {
         LOG.warn("Quota", `Quota cache-change listener failed: ${e?.message || e}`);
       }
@@ -57213,17 +57221,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       return set2;
     }
-    function onTopicActivated(node, listener) {
+    function onTopicActivated(node, listener2) {
       const set2 = listenersFor(node);
-      set2.add(listener);
+      set2.add(listener2);
       return () => {
-        set2.delete(listener);
+        set2.delete(listener2);
       };
     }
     function announceTopicActivated(node, topic) {
-      for (const listener of listenersFor(node)) {
+      for (const listener2 of listenersFor(node)) {
         try {
-          listener(topic);
+          listener2(topic);
         } catch (error) {
           warnOnce2(`topic activation listener failed (further failures logged once) topic=${topic}: ${errorMessage(error)}`);
         }
@@ -73091,6 +73099,23 @@ ${body}`;
         MESH_MISSION_LIST_STATUS_LIMIT = 50;
       }
     });
+    function setMissionChangeListener(fn) {
+      listener = fn;
+    }
+    function notifyMissionChanged(meshId) {
+      if (!listener) return;
+      try {
+        listener(meshId);
+      } catch {
+      }
+    }
+    var listener;
+    var init_mesh_mission_change_notifier = __esm2({
+      "src/mesh/mesh-mission-change-notifier.ts"() {
+        "use strict";
+        listener = null;
+      }
+    });
     var mesh_mission_prompt_exports = {};
     __export2(mesh_mission_prompt_exports, {
       MISSION_BLOCK_CHAR_CAP: () => MISSION_BLOCK_CHAR_CAP,
@@ -73112,9 +73137,16 @@ ${body}`;
       return !d.promptAckedAt || d.promptAckedAt < at;
     }
     function recommendedLabel(d) {
-      if (!d.recommended) return "";
-      const opt = d.options.find((o) => o.id === d.recommended);
-      return ` (rec ${d.recommended}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ""})`;
+      const parts = [];
+      if (d.recommended) {
+        const opt = d.options.find((o) => o.id === d.recommended);
+        parts.push(`rec ${d.recommended}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ""}`);
+      }
+      if (d.dueAt && /^\d{4}-\d{2}-\d{2}/.test(d.dueAt)) {
+        const md = d.dueAt.slice(5, 10);
+        parts.push(d.onDue === "apply_recommended" && d.recommended ? `auto-applies ${md}` : `due ${md}`);
+      }
+      return parts.length ? ` (${parts.join("; ")})` : "";
     }
     function openDecisionLine(item) {
       const d = decisionOf(item);
@@ -73147,7 +73179,7 @@ ${body}`;
       const header = `- **${truncateMissionText(m.title, TITLE_MAX)}** (id: \`${m.id}\`)${carryOver ? " [carry-over]" : ""}`;
       const counts = countsLine(input);
       const tasks = carryOver || t.total === 0 ? "" : `  Tasks: ${t.total} total \u2014 ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled`;
-      const summaryText = m.summary ? m.summary : m.goal ? m.goal.replace(/\s+/g, " ").trim() : "";
+      const summaryText = carryOver ? "" : m.summary ? m.summary : m.goal ? m.goal.replace(/\s+/g, " ").trim() : "";
       const summaryLabel = m.summary ? "Summary" : "Goal";
       const fixed = header.length + counts.length + tasks.length + 3;
       const summaryBudget = Math.max(40, Math.min(m.summary ? SUMMARY_MAX : GOAL_FALLBACK_MAX, MISSION_BLOCK_CHAR_CAP - fixed - 40));
@@ -73215,6 +73247,7 @@ ${body}`;
         items.updateItem(meshId, item.id, { decision: { ...item.decision, promptAckedAt: nowIso } });
         n += 1;
       }
+      if (n > 0) notifyMissionChanged(meshId);
       return n;
     }
     var MISSION_BLOCK_CHAR_CAP;
@@ -73230,6 +73263,7 @@ ${body}`;
       "src/mesh/mesh-mission-prompt.ts"() {
         "use strict";
         init_mesh_runtime_store();
+        init_mesh_mission_change_notifier();
         init_mesh_missions();
         init_dist();
         MISSION_BLOCK_CHAR_CAP = 600;
@@ -73263,7 +73297,7 @@ ${body}`;
       if (existing) return existing;
       const id4 = (0, import_crypto15.randomUUID)();
       const s2 = store();
-      s2.upsertMission({ id: id4, meshId, title: CARRY_OVER_MISSION_TITLE, goal: "\uB2EB\uD78C \uBBF8\uC158\uC5D0\uC11C \uB118\uC5B4\uC628 \uC5F4\uB9B0 \uD56D\uBAA9\uACFC \uBBF8\uC158 \uC5C6\uC774 \uC694\uCCAD\uB41C \uACB0\uC815\uC774 \uBAA8\uC774\uB294 \uACF3. \uC790\uB3D9\uC73C\uB85C \uAD00\uB9AC\uB428 \u2014 \uB2EB\uC9C0 \uC54A\uB294\uB2E4.", status: "active" });
+      s2.upsertMission({ id: id4, meshId, title: CARRY_OVER_MISSION_TITLE, goal: CARRY_OVER_MISSION_GOAL, status: "active" });
       items.flagCarryOver(meshId, id4);
       items.appendEvent(meshId, id4, "created", "daemon", { title: CARRY_OVER_MISSION_TITLE, carryOver: true });
       return id4;
@@ -73278,7 +73312,7 @@ ${body}`;
       if (!candidates.length) return 0;
       for (const c of candidates) items.updateItem(meshId, c.id, { state: "dropped" });
       const prevCount = existingFold ? Number(/(\d+)/.exec(existingFold.text)?.[1] ?? 0) : 0;
-      const text4 = `\uC774\uC804 \uB0A8\uC740 \uC77C ${prevCount + candidates.length}\uAC1C \uB354 (\uD55C\uB3C4 ${MISSION_LIMITS2.openItemsPerMission}\uAC1C\uB97C \uB118\uC5B4 \uC811\uD798)`;
+      const text4 = `${prevCount + candidates.length} earlier remaining items folded (limit: ${MISSION_LIMITS2.openItemsPerMission} open items per mission)`;
       if (existingFold) items.updateItem(meshId, existingFold.id, { text: text4 });
       else items.insertItem({ id: newMissionItemId(), missionId, meshId, kind: "remaining", state: "open", text: text4, refs: [], dedupeKey: FOLD_KEY, createdBy: "daemon:fold" });
       items.appendEvent(meshId, missionId, "item_state_changed", "daemon", { folded: candidates.map((c) => c.id), foldItemText: text4 });
@@ -73408,7 +73442,7 @@ ${body}`;
       const carryId = ensureCarryOverMission(meshId);
       const decision = normalizeDecisionInput({
         question: OWNER_ABANDON_CONFIRM_QUESTION,
-        context: `\uBBF8\uC158 "${mission.title}" (${mission.id})${mission.outcomeReason ? ` \u2014 \uC0AC\uC720: ${mission.outcomeReason}` : ""}`,
+        context: `Mission "${mission.title}" (${mission.id})${mission.outcomeReason ? ` \u2014 reason: ${mission.outcomeReason}` : ""}`,
         options: OWNER_ABANDON_CONFIRM_OPTIONS.map((label2) => ({ label: label2 })),
         urgency: "normal"
       }, []);
@@ -73435,7 +73469,7 @@ ${body}`;
       const actor = opts?.actor ?? "coordinator";
       const s2 = store();
       const warnings = [];
-      return s2.transaction(() => {
+      const out = s2.transaction(() => {
         const items = s2.missionItems();
         let missionId = input.id;
         let title = typeof input.title === "string" ? input.title.trim() : "";
@@ -73465,7 +73499,7 @@ ${body}`;
         missionId = base.id;
         const created = !before;
         const itemResults = [];
-        let wrote = false;
+        let wrote = !before || before.title !== base.title || (before.goal ?? "") !== (base.goal ?? "") || before.status !== base.status || JSON.stringify(before.brief ?? null) !== JSON.stringify(base.brief ?? null);
         const summary = normalizeMissionSummary(input.summary);
         if (summary) {
           const prev = items.getStructured(meshId, missionId)?.summary ?? "";
@@ -73550,12 +73584,13 @@ ${body}`;
           items.setStructured(meshId, missionId, { outcome: null, outcomeReason: null });
           wrote = true;
         }
-        void wrote;
-        result.version = created ? items.getStructured(meshId, missionId)?.version ?? 1 : items.bumpVersion(meshId, missionId);
+        result.version = created || !wrote ? items.getStructured(meshId, missionId)?.version ?? 1 : items.bumpVersion(meshId, missionId);
         if (actor === "coordinator" && !created) acknowledgeAnsweredDecisions(meshId, missionId);
         const record7 = getMeshMission(meshId, missionId);
         return { record: record7, result };
       });
+      notifyMissionChanged(meshId);
+      return out;
     }
     function itemToWire(i) {
       return {
@@ -73601,6 +73636,7 @@ ${body}`;
         const hasDecisions = Array.isArray(report.decisionsNeeded) && report.decisionsNeeded.length > 0;
         const evidenceWanted = !!missionId && (report.branchState || report.touchedFiles?.length || report.commits?.length);
         if (!hasDecisions && !evidenceWanted) return out;
+        let changed = false;
         s2.transaction(() => {
           const items = s2.missionItems();
           const mission = missionId ? s2.getMission(meshId, missionId) : null;
@@ -73639,8 +73675,10 @@ ${body}`;
           }
           if (out.decisions.some((d) => !d.deduped && !d.error) || out.evidence.some((e) => !e.deduped && !e.error)) {
             if (out.missionId) items.bumpVersion(meshId, out.missionId);
+            changed = true;
           }
         });
+        if (changed) notifyMissionChanged(meshId);
       } catch (e) {
         LOG.warn("MeshMissions", `worker report \u2192 mission hook failed for task ${taskId}: ${e?.message || e}`);
       }
@@ -73684,11 +73722,16 @@ ${body}`;
         });
         if ("error" in n) return null;
         let itemId;
+        let added = false;
         s2.transaction(() => {
           const r = addNormalizedItem(meshId, missionId, n.item, "daemon:refinery", "daemon");
           itemId = r.id;
-          if (!r.deduped) s2.missionItems().bumpVersion(meshId, missionId);
+          if (!r.deduped) {
+            s2.missionItems().bumpVersion(meshId, missionId);
+            added = true;
+          }
         });
+        if (added) notifyMissionChanged(meshId);
         return { missionId, itemId };
       } catch (e) {
         LOG.warn("MeshMissions", `refine merge \u2192 mission evidence failed: ${e?.message || e}`);
@@ -73708,6 +73751,7 @@ ${body}`;
         init_mesh_mission_items_store();
         init_mesh_missions();
         init_mesh_mission_prompt();
+        init_mesh_mission_change_notifier();
         CLOSED = /* @__PURE__ */ new Set(["completed", "abandoned"]);
         isCarryOverMission = isCarryOverMissionRecord;
       }
@@ -99252,9 +99296,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
     }
     function emit(change) {
-      for (const listener of Array.from(listeners)) {
+      for (const listener2 of Array.from(listeners)) {
         try {
-          listener(change);
+          listener2(change);
         } catch (err) {
           LOG.warn(
             "MeshPeerSecrets",
@@ -99313,10 +99357,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       emit({ kind: "remove", meshId: mesh, peerDaemonId: canonical2, role: removed.role, filePath: path124 });
       return true;
     }
-    function onPeerSecretsChanged(listener) {
-      listeners.add(listener);
+    function onPeerSecretsChanged(listener2) {
+      listeners.add(listener2);
       return () => {
-        listeners.delete(listener);
+        listeners.delete(listener2);
       };
     }
     function resetPeerSecretsWarningsForTest() {
@@ -144873,16 +144917,16 @@ ${tail}` : ""
       getCompactSummary(workspace) {
         return this.cache.get(workspace)?.compactSummary;
       }
-      onUpdate(listener) {
-        this.listeners.add(listener);
+      onUpdate(listener2) {
+        this.listeners.add(listener2);
         return () => {
-          this.listeners.delete(listener);
+          this.listeners.delete(listener2);
         };
       }
-      createSubscription(params, listener) {
+      createSubscription(params, listener2) {
         const normalized = this.normalize(params);
-        const scopedListener = listener ? (update, cacheEntry) => {
-          if (update.workspace === normalized.workspace) listener(update, cacheEntry);
+        const scopedListener = listener2 ? (update, cacheEntry) => {
+          if (update.workspace === normalized.workspace) listener2(update, cacheEntry);
         } : void 0;
         const unsubscribe = scopedListener ? this.onUpdate(scopedListener) : () => void 0;
         return {
@@ -144902,8 +144946,8 @@ ${tail}` : ""
         return `${this.keyPrefix}:${workspace}`;
       }
       emit(update, cacheEntry) {
-        for (const listener of this.listeners) {
-          listener(update, cacheEntry);
+        for (const listener2 of this.listeners) {
+          listener2(update, cacheEntry);
         }
       }
     };
@@ -147949,19 +147993,19 @@ ${tail}` : ""
        * attached; it closes when its last socket goes (or it is torn down). Peers that
        * are already open are replayed to a late subscriber. Returns an unsubscribe.
        */
-      onPeerLifecycle(listener) {
-        this.peerLifecycleListeners.add(listener);
+      onPeerLifecycle(listener2) {
+        this.peerLifecycleListeners.add(listener2);
         for (const peer of this.peers.values()) {
           if (peer.state === "connected") {
             this.announcedOpenPeers.add(peer.daemonId);
             try {
-              listener.onPeerOpen(peer.daemonId, this.connectionHandle(peer));
+              listener2.onPeerOpen(peer.daemonId, this.connectionHandle(peer));
             } catch {
             }
           }
         }
         return () => {
-          this.peerLifecycleListeners.delete(listener);
+          this.peerLifecycleListeners.delete(listener2);
         };
       }
       /**
@@ -148516,18 +148560,18 @@ ${tail}` : ""
         if (this.announcedOpenPeers.has(peer.daemonId)) return;
         this.announcedOpenPeers.add(peer.daemonId);
         const handle = this.connectionHandle(peer);
-        for (const listener of this.peerLifecycleListeners) {
+        for (const listener2 of this.peerLifecycleListeners) {
           try {
-            listener.onPeerOpen(peer.daemonId, handle);
+            listener2.onPeerOpen(peer.daemonId, handle);
           } catch {
           }
         }
       }
       emitPeerClosed(daemonId) {
         if (!this.announcedOpenPeers.delete(daemonId)) return;
-        for (const listener of this.peerLifecycleListeners) {
+        for (const listener2 of this.peerLifecycleListeners) {
           try {
-            listener.onPeerClosed(daemonId);
+            listener2.onPeerClosed(daemonId);
           } catch {
           }
         }
@@ -184371,7 +184415,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function watchWorkspaceGit(workspace, onChange, opts = {}) {
       const dirs = (opts.resolveDirs ?? resolveWorkspaceGitDirs)(workspace);
       if (!dirs) return null;
-      const watch6 = opts.watch ?? ((target4, options, listener) => fs105.watch(target4, options, listener));
+      const watch6 = opts.watch ?? ((target4, options, listener2) => fs105.watch(target4, options, listener2));
       const setTimeoutFn = opts.setTimeoutFn ?? ((fn, ms3) => {
         const handle = setTimeout(fn, ms3);
         handle.unref?.();
@@ -186386,6 +186430,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         ...errors.length ? { errors } : {}
       };
     }
+    init_mesh_mission_change_notifier();
     init_dist();
     init_mesh_work_queue();
     init_mesh_node_identity();
@@ -187229,6 +187274,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           watch: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
           onChange: (meshId) => this.invalidateAggregateMeshStatus(meshId)
         });
+        setMissionChangeListener((meshId) => this.invalidateAggregateMeshStatus(meshId));
       }
       /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */
       async selfHealNodeFromFacts(meshId, nodeId, nodeFacts) {
@@ -191568,10 +191614,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** SUBMIT-UNCONFIRMED-RECLAIM: called synchronously after each output chunk
        *  reached the screen (before any debounce), so a reader sees every frame. */
       screenWriteListeners = /* @__PURE__ */ new Set();
-      onScreenWrite(listener) {
-        this.screenWriteListeners.add(listener);
+      onScreenWrite(listener2) {
+        this.screenWriteListeners.add(listener2);
         return () => {
-          this.screenWriteListeners.delete(listener);
+          this.screenWriteListeners.delete(listener2);
         };
       }
       /** SUBMIT-UNCONFIRMED-RECLAIM: could anyone but this daemon type into the
@@ -191744,9 +191790,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
         this.screen.write(chunk);
         this.screenVersion += 1;
-        for (const listener of this.screenWriteListeners) {
+        for (const listener2 of this.screenWriteListeners) {
           try {
-            listener();
+            listener2();
           } catch {
           }
         }
@@ -193240,10 +193286,10 @@ trust_level = "trusted"
       sends;
       /** REDRAW-NUDGE: input-free false-busy recovery (see redraw-nudge.ts). */
       redrawNudge;
-      subscribe(listener) {
-        this.listeners.add(listener);
+      subscribe(listener2) {
+        this.listeners.add(listener2);
         return () => {
-          this.listeners.delete(listener);
+          this.listeners.delete(listener2);
         };
       }
       start() {
@@ -214928,17 +214974,17 @@ ${notice.notice}${supersededHint}`;
         onActivated: async () => {
           providerLoader.registerToDetector();
           await refreshProviderAvailability();
-          for (const listener of activatedListeners) {
+          for (const listener2 of activatedListeners) {
             try {
-              listener();
+              listener2();
             } catch {
             }
           }
         },
         onStale: () => {
-          for (const listener of staleListeners) {
+          for (const listener2 of staleListeners) {
             try {
-              listener();
+              listener2();
             } catch {
             }
           }
@@ -216594,10 +216640,10 @@ ${notice.notice}${supersededHint}`;
        * uniform across standalone lanes, so "new for one lane" is "new for all").
        * Returns the unsubscribe.
        */
-      onTopicsAvailable(listener) {
-        this.availabilityListeners.add(listener);
+      onTopicsAvailable(listener2) {
+        this.availabilityListeners.add(listener2);
         return () => {
-          this.availabilityListeners.delete(listener);
+          this.availabilityListeners.delete(listener2);
         };
       }
       /** Live lane count (tests / diagnostics). */
@@ -216674,9 +216720,9 @@ ${notice.notice}${supersededHint}`;
       /** Never throws — runs inside a transcript publish / session registration. */
       announceAvailable(topics) {
         if (this.closed || this.availabilityListeners.size === 0) return;
-        for (const listener of [...this.availabilityListeners]) {
+        for (const listener2 of [...this.availabilityListeners]) {
           try {
-            listener(topics);
+            listener2(topics);
           } catch (error) {
             LOG.warn(
               "Seqscribe",
@@ -217873,9 +217919,9 @@ ${notice.notice}${supersededHint}`;
       const replacedListeners = /* @__PURE__ */ new Set();
       const notifyHostReplaced = async () => {
         if (maintenanceHeld()) return;
-        for (const listener of replacedListeners) {
+        for (const listener2 of replacedListeners) {
           try {
-            await listener();
+            await listener2();
           } catch {
           }
         }
@@ -217938,8 +217984,8 @@ ${notice.notice}${supersededHint}`;
           managedByTag: opts.managedBy,
           getBindingOwner: () => ({ namespace: opts.appName ?? resolveSessionHostAppName({ standalone: opts.managedBy === "adhdev-standalone" }), endpoint: `${current4.kind}:${current4.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
           control,
-          onHostReplaced: (listener) => {
-            replacedListeners.add(listener);
+          onHostReplaced: (listener2) => {
+            replacedListeners.add(listener2);
           }
         }),
         stop: () => control.stop()

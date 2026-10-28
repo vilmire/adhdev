@@ -117,6 +117,7 @@ import { resumePendingRefineJobsOnStartup } from './router-refine-resume.js';
 // ─── Worktree / mesh-session cleanup (bodies extracted from this file) ───
 import { bestEffortRemoveWorktreeDir, cleanupLocalWorktreeNode, cleanupMeshSessions, getWorktreeForceCleanupConvergence, isCompletedHostedSession, precheckLocalWorktreeRemovable, recordIntentionalMeshSessionStop, sessionMatchesMeshNode } from './router-worktree-cleanup.js';
 // ─── Aggregate mesh-status cache (bodies extracted from this file) ───
+import { setMissionChangeListener } from '../mesh/mesh-mission-change-notifier.js';
 import { getCachedAggregateMeshStatus, invalidateAggregateMeshStatusForPeer, rememberAggregateMeshStatus } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
@@ -509,6 +510,8 @@ export class DaemonCommandRouter {
             watch: (workspace, onChange, onError) => watchWorkspaceGit(workspace, onChange, { onError }),
             onChange: (meshId) => this.invalidateAggregateMeshStatus(meshId),
         });
+        // Mission writes (coordinator upsert, worker reports, refine evidence) refresh the dashboard live.
+        setMissionChangeListener((meshId) => this.invalidateAggregateMeshStatus(meshId));
     }
 
     /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */

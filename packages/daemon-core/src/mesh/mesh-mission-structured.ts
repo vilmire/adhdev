@@ -13,6 +13,7 @@
  * `answered`/`expired`.
  */
 import {
+    CARRY_OVER_MISSION_GOAL,
     CARRY_OVER_MISSION_TITLE,
     COORDINATOR_SETTABLE_ITEM_STATES,
     MISSION_LIMITS,
@@ -36,6 +37,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { newMissionItemId, type MissionItemRecord, type MissionItemStore } from './mesh-mission-items-store.js';
 import { getMeshMission, upsertMeshMission, type MeshMissionRecord } from './mesh-missions.js';
 import { acknowledgeAnsweredDecisions } from './mesh-mission-prompt.js';
+import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 
 export type MissionWriteActor = 'coordinator' | 'worker' | 'daemon';
 
@@ -98,7 +100,7 @@ export function ensureCarryOverMission(meshId: string): string {
     if (existing) return existing;
     const id = randomUUID();
     const s = store();
-    s.upsertMission({ id, meshId, title: CARRY_OVER_MISSION_TITLE, goal: '닫힌 미션에서 넘어온 열린 항목과 미션 없이 요청된 결정이 모이는 곳. 자동으로 관리됨 — 닫지 않는다.', status: 'active' });
+    s.upsertMission({ id, meshId, title: CARRY_OVER_MISSION_TITLE, goal: CARRY_OVER_MISSION_GOAL, status: 'active' });
     items.flagCarryOver(meshId, id);
     items.appendEvent(meshId, id, 'created', 'daemon', { title: CARRY_OVER_MISSION_TITLE, carryOver: true });
     return id;
@@ -117,7 +119,7 @@ function foldOverflow(items: MissionItemStore, meshId: string, missionId: string
     if (!candidates.length) return 0;
     for (const c of candidates) items.updateItem(meshId, c.id, { state: 'dropped' });
     const prevCount = existingFold ? Number(/(\d+)/.exec(existingFold.text)?.[1] ?? 0) : 0;
-    const text = `이전 남은 일 ${prevCount + candidates.length}개 더 (한도 ${MISSION_LIMITS.openItemsPerMission}개를 넘어 접힘)`;
+    const text = `${prevCount + candidates.length} earlier remaining items folded (limit: ${MISSION_LIMITS.openItemsPerMission} open items per mission)`;
     if (existingFold) items.updateItem(meshId, existingFold.id, { text });
     else items.insertItem({ id: newMissionItemId(), missionId, meshId, kind: 'remaining', state: 'open', text, refs: [], dedupeKey: FOLD_KEY, createdBy: 'daemon:fold' });
     items.appendEvent(meshId, missionId, 'item_state_changed', 'daemon', { folded: candidates.map(c => c.id), foldItemText: text });
@@ -261,7 +263,7 @@ function createOwnerConfirmation(meshId: string, mission: MeshMissionRecord, act
     const carryId = ensureCarryOverMission(meshId);
     const decision = normalizeDecisionInput({
         question: OWNER_ABANDON_CONFIRM_QUESTION,
-        context: `미션 "${mission.title}" (${mission.id})${mission.outcomeReason ? ` — 사유: ${mission.outcomeReason}` : ''}`,
+        context: `Mission "${mission.title}" (${mission.id})${mission.outcomeReason ? ` — reason: ${mission.outcomeReason}` : ''}`,
         options: OWNER_ABANDON_CONFIRM_OPTIONS.map(label => ({ label })),
         urgency: 'normal',
     }, []);
@@ -292,7 +294,7 @@ export function upsertStructuredMission(
     const actor: MissionWriteActor = opts?.actor ?? 'coordinator';
     const s = store();
     const warnings: string[] = [];
-    return s.transaction(() => {
+    const out = s.transaction(() => {
         const items = s.missionItems();
         let missionId: string | undefined = input.id;
         let title = typeof input.title === 'string' ? input.title.trim() : '';
@@ -321,7 +323,12 @@ export function upsertStructuredMission(
         missionId = base.id;
         const created = !before;
         const itemResults: MissionItemResult[] = [];
-        let wrote = false;
+        // A write that changes nothing (e.g. a pure dedupe re-request) must not bump `version`.
+        let wrote = !before
+            || before.title !== base.title
+            || (before.goal ?? '') !== (base.goal ?? '')
+            || before.status !== base.status
+            || JSON.stringify(before.brief ?? null) !== JSON.stringify(base.brief ?? null);
 
         // summary
         const summary = normalizeMissionSummary(input.summary);
@@ -410,9 +417,8 @@ export function upsertStructuredMission(
             wrote = true;
         }
 
-        // Every call is one write: exactly one version bump (last-write-wins, no conflict).
-        void wrote;
-        result.version = created ? (items.getStructured(meshId, missionId)?.version ?? 1) : items.bumpVersion(meshId, missionId);
+        // Every call that changed something is one write: exactly one version bump (last-write-wins, no conflict).
+        result.version = created || !wrote ? (items.getStructured(meshId, missionId)?.version ?? 1) : items.bumpVersion(meshId, missionId);
         // A coordinator write on this mission means it has the mission's state: advance the
         // answered-decision prompt watermark (see mesh-mission-prompt.ts) so each answer is
         // shown once, not on every later prompt build.
@@ -420,6 +426,9 @@ export function upsertStructuredMission(
         const record = getMeshMission(meshId, missionId)!;
         return { record, result };
     });
+    // After the commit: drop the aggregate status cache + wake the mesh.status flush.
+    notifyMissionChanged(meshId);
+    return out;
 }
 
 // ─── read projections ───────────────────────────────────────────────────────
@@ -480,6 +489,7 @@ export function applyWorkerReportToMission(
         const hasDecisions = Array.isArray(report.decisionsNeeded) && report.decisionsNeeded.length > 0;
         const evidenceWanted = !!missionId && (report.branchState || report.touchedFiles?.length || report.commits?.length);
         if (!hasDecisions && !evidenceWanted) return out;
+        let changed = false;
         s.transaction(() => {
             const items = s.missionItems();
             const mission = missionId ? s.getMission(meshId, missionId) : null;
@@ -489,7 +499,7 @@ export function applyWorkerReportToMission(
                 for (const raw of (report.decisionsNeeded as unknown[]).slice(0, 3)) {
                     const n = normalizeMissionItemInput({ ...(raw && typeof raw === 'object' ? raw as object : {}), kind: 'decision' });
                     if ('error' in n) { out.decisions.push({ op: 'add', error: n.error }); continue; }
-                    // The worker's own task is the provenance a card shows ("워커가 요청").
+                    // The worker's own task is the provenance a card shows ("requested by a worker").
                     const taskRef: MissionItemRef = { kind: 'task', value: taskId };
                     n.item.refs = [taskRef, ...n.item.refs].slice(0, MISSION_LIMITS.refs);
                     out.decisions.push(addNormalizedItem(meshId, targetId, n.item, `worker:${taskId}`, 'worker'));
@@ -516,8 +526,10 @@ export function applyWorkerReportToMission(
             }
             if (out.decisions.some(d => !d.deduped && !d.error) || out.evidence.some(e => !e.deduped && !e.error)) {
                 if (out.missionId) items.bumpVersion(meshId, out.missionId);
+                changed = true;
             }
         });
+        if (changed) notifyMissionChanged(meshId);
     } catch (e: any) {
         LOG.warn('MeshMissions', `worker report → mission hook failed for task ${taskId}: ${e?.message || e}`);
     }
@@ -575,11 +587,13 @@ export function attachRefineMergeEvidence(
         });
         if ('error' in n) return null;
         let itemId: string | undefined;
+        let added = false;
         s.transaction(() => {
             const r = addNormalizedItem(meshId, missionId, n.item, 'daemon:refinery', 'daemon');
             itemId = r.id;
-            if (!r.deduped) s.missionItems().bumpVersion(meshId, missionId);
+            if (!r.deduped) { s.missionItems().bumpVersion(meshId, missionId); added = true; }
         });
+        if (added) notifyMissionChanged(meshId);
         return { missionId, itemId };
     } catch (e: any) {
         LOG.warn('MeshMissions', `refine merge → mission evidence failed: ${e?.message || e}`);
