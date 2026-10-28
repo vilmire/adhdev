@@ -470,3 +470,62 @@ describe('shared binding across read_chat / completion / status consumers', () =
         expect(r.messages).toHaveLength(0);
     });
 });
+
+import { resolveJsonlSidecarSourceAsync } from '../../../src/providers/spec/native-history-executor.js';
+import { vi } from 'vitest';
+
+describe('asynchronous status discovery uses the shared sidecar policy', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const asyncResolve = (input: any, isCurrent = () => true) => resolveJsonlSidecarSourceAsync(specSource(), { agentType: 'kimi', ...input }, { isCurrent });
+    it.each(['claimed', 'pinned', 'legacy', 'ambiguous', 'already_claimed', 'stale_reclaimed', 'pre_spawn', 'prompt'])(
+        'matches synchronous path and original outcome for %s', async (kind) => {
+            const now = Date.now();
+            const a = writeSession({ sessionId: SESSION_A, workspace: WORKSPACE, hex12: 'aaaa', lines: lines(now, 'exclusive A') });
+            const input: any = { workspace: WORKSPACE, sessionStartedAtMs: 0, instanceId: 'instance-A' };
+            const prepare = () => {
+                if (kind === 'already_claimed' || kind === 'stale_reclaimed') {
+                    claimTranscript(claimKey(a), OWNER_B);
+                    setTranscriptClaimLivenessProbe(owner => kind !== 'stale_reclaimed' || owner !== OWNER_B);
+                }
+            };
+            if (kind === 'pinned') input.providerSessionId = SESSION_A;
+            if (kind === 'legacy') delete input.instanceId;
+            if (kind === 'pre_spawn') input.sessionStartedAtMs = now + 60_000;
+            if (kind === 'ambiguous' || kind === 'prompt') writeSession({ sessionId: SESSION_B, workspace: WORKSPACE, hex12: 'bbbb', lines: lines(now, 'exclusive B') });
+            if (kind === 'prompt') recordSentPrompt('instance-A', 'exclusive A prompt');
+            prepare();
+            const synchronous = run(input)!;
+            const expected = { path: synchronous?.sourcePath || null, attribution: synchronous?.attribution, ownerConfirmed: synchronous?.ownerConfirmed, unavailableReason: synchronous?.unavailableReason };
+            __resetTranscriptClaimRegistry();
+            prepare();
+            const asynchronous = await asyncResolve(input);
+            expect(asynchronous.stale).not.toBe(true);
+            expect({ path: asynchronous.path, attribution: asynchronous.outcome?.attribution, ownerConfirmed: asynchronous.outcome?.ownerConfirmed, unavailableReason: asynchronous.outcome?.unavailableReason }).toEqual(expected);
+        });
+
+    it('serializes concurrent async claims and checks current generation before claiming', async () => {
+        const a = writeSession({ sessionId: SESSION_A, workspace: WORKSPACE, hex12: 'aaaa', lines: lines(Date.now(), 'A') });
+        const [first, second] = await Promise.all([
+            asyncResolve({ workspace: WORKSPACE, instanceId: 'instance-A' }),
+            asyncResolve({ workspace: WORKSPACE, instanceId: 'instance-B' }),
+        ]);
+        expect([first, second].filter(result => result.path === a)).toHaveLength(1);
+        expect([first.outcome?.attribution, second.outcome?.attribution]).toContain('already_claimed');
+        __resetTranscriptClaimRegistry();
+        const late = await asyncResolve({ workspace: WORKSPACE, instanceId: 'instance-A' }, () => false);
+        expect(late.path).toBeNull();
+        expect(transcriptClaimOwner(claimKey(a))).toBeUndefined();
+    });
+
+    it('honors a foreign live claim on a pin and never upgrades a cached discovery outcome', async () => {
+        const a = writeSession({ sessionId: SESSION_A, workspace: WORKSPACE, hex12: 'aaaa', lines: lines(Date.now(), 'A') });
+        claimTranscript(claimKey(a), OWNER_B);
+        const contested = await asyncResolve({ providerSessionId: SESSION_A, workspace: WORKSPACE, instanceId: 'instance-A' });
+        expect(contested.outcome).toMatchObject({ attribution: 'already_claimed', ownerConfirmed: false });
+        __resetTranscriptClaimRegistry();
+        const first = await asyncResolve({ workspace: WORKSPACE, instanceId: 'instance-A' });
+        const cached = await resolveJsonlSidecarSourceAsync(specSource(), { workspace: WORKSPACE, instanceId: 'instance-A' }, { isCurrent: () => true, evidence: first.evidence });
+        expect(cached.outcome).toEqual(first.outcome);
+        expect(cached.outcome?.attribution).toBe('claimed');
+    });
+});

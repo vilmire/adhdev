@@ -95,13 +95,25 @@ export interface BackgroundTaskDetection {
      * must still be held — tool exit alone is not the final answer.
      */
     pendingConsumption?: boolean;
+    /** Async evidence is not sealed yet; active holds completion without
+     * inventing a task id/count. Unavailable authority stays explicitly unknown. */
+    pending?: boolean;
     /**
+     * A pending async observation holds completion even when support is unknown;
+     * it does not assert a discovered background task. Otherwise:
      * 'tracked' = this provider's transcript is a understood authority for
      * background tool lifecycle; 'unknown' = no such authority exists for this
      * provider (the completion path is NOT gated on background work — an
      * explicit UNKNOWN, not a silent "no background work").
      */
     support?: BackgroundTaskSupport;
+}
+
+/** A cold/invalidated async snapshot is never a clean background verdict.
+ * Existing completion consumers already honor active with a bounded hold. */
+export function backgroundTaskSnapshot(state: 'loading' | 'ready' | 'unavailable', detection?: BackgroundTaskDetection): BackgroundTaskDetection {
+    if (state === 'ready' && detection) return detection;
+    return { active: true, count: 0, ids: [], pending: true, support: state === 'loading' ? 'tracked' : 'unknown' };
 }
 
 const EMPTY: BackgroundTaskDetection = { active: false, count: 0, ids: [] };
@@ -701,4 +713,59 @@ export function __resetTailJsonlCacheForTests(): void {
     tailJsonlCacheStats.misses = 0;
     tailJsonlCacheStats.fileReads = 0;
     tailJsonlCacheStats.parsePasses = 0;
+}
+
+export interface AsyncTailJsonlSnapshot {
+    signature: string;
+    records: unknown[];
+}
+const asyncTailJsonlCache = new Map<string, { token: object; snapshot?: AsyncTailJsonlSnapshot }>();
+/** Async bounded status reader. A changed revision is never installed or
+ * returned as a current snapshot; callers coalesce/retry after the writer settles. */
+const asyncTailJsonlInFlight = new Map<string, Promise<AsyncTailJsonlSnapshot | null>>();
+export async function readTailJsonlLinesAsync(filePath: string, maxBytes: number, isCurrent: () => boolean = () => true): Promise<AsyncTailJsonlSnapshot | null> {
+    if (!isCurrent()) return null;
+    const key = `${maxBytes}:${filePath}`;
+    let pending = asyncTailJsonlInFlight.get(key);
+    if (!pending) {
+        pending = readTailJsonlLinesAsyncOnce(filePath, maxBytes, isCurrent).catch(() => null);
+        asyncTailJsonlInFlight.set(key, pending);
+        void pending.finally(() => { if (asyncTailJsonlInFlight.get(key) === pending) asyncTailJsonlInFlight.delete(key); });
+    }
+    const snapshot = await pending;
+    return isCurrent() ? snapshot : null;
+}
+async function readTailJsonlLinesAsyncOnce(filePath: string, maxBytes: number, isCurrent: () => boolean): Promise<AsyncTailJsonlSnapshot | null> {
+    let fd: fs.promises.FileHandle | undefined;
+    try {
+        fd = await fs.promises.open(filePath, 'r');
+        const before = await fd.stat();
+        const signature = tailJsonlSignature(before);
+        if (!isCurrent()) return null;
+        const cacheKey = `${maxBytes}:${filePath}`;
+        const cached = asyncTailJsonlCache.get(cacheKey);
+        if (cached?.snapshot?.signature === signature) {
+            const pathStat = await fs.promises.stat(filePath);
+            return isCurrent() && tailJsonlSignature(pathStat) === signature ? cached.snapshot : null;
+        }
+        const token = {};
+        if (asyncTailJsonlCache.size >= 8) asyncTailJsonlCache.delete(asyncTailJsonlCache.keys().next().value!);
+        asyncTailJsonlCache.set(cacheKey, { token });
+        const start = Math.max(0, before.size - maxBytes);
+        const bytes = Buffer.alloc(before.size - start);
+        const read = await fd.read(bytes, 0, bytes.length, start);
+        const lines = bytes.subarray(0, read.bytesRead).toString('utf8').split('\n');
+        if (start > 0) lines.shift();
+        const records: unknown[] = [];
+        for (const line of lines) {
+            try { if (line.trim()) records.push(JSON.parse(line)); } catch { /* malformed/in-flight fragment */ }
+        }
+        const after = await fs.promises.stat(filePath);
+        if (!isCurrent() || read.bytesRead !== bytes.length || tailJsonlSignature(after) !== signature
+            || tailJsonlSignature(await fd.stat()) !== signature || asyncTailJsonlCache.get(cacheKey)?.token !== token) return null;
+        const snapshot = { signature, records };
+        asyncTailJsonlCache.set(cacheKey, { token, snapshot });
+        return snapshot;
+    } catch { return null; }
+    finally { await fd?.close(); }
 }

@@ -190,3 +190,25 @@ describe('glob memo — behaviour', () => {
         expect(second).toBe(file);
     });
 });
+
+import { resolveJsonlSidecarSourceAsync } from '../../../src/providers/spec/native-history-executor.js';
+import { sourceRevisionAsync } from '../../../src/providers/spec/native-history-paths.js';
+
+describe('async discovery revision manifest', () => {
+    it('tracks the changed deep parent instead of relying on unchanged root mtime', async () => {
+        const firstUuid = '10000000-0000-4000-8000-000000000001';
+        const nextUuid = '20000000-0000-4000-8000-000000000002';
+        stageMultiLevelSession(firstUuid, 'shared');
+        const src = { kind: 'jsonl', path: MULTI_LEVEL_TEMPLATE(), file_pattern: 'wire.jsonl' } as any;
+        const input = { agentType: 'kimi', providerSessionId: nextUuid };
+        const missing = await resolveJsonlSidecarSourceAsync(src, input, { isCurrent: () => true });
+        expect(missing.path).toBeNull();
+        const rootBefore = await sourceRevisionAsync(path.join(root, 'sessions'));
+        const created = stageMultiLevelSession(nextUuid, 'shared');
+        expect(await sourceRevisionAsync(path.join(root, 'sessions'))).toBe(rootBefore);
+        const changed: string[] = [];
+        for (const [p, revision] of missing.evidence!.revisions) if (await sourceRevisionAsync(p) !== revision) changed.push(p);
+        expect(changed).toContain(path.join(root, 'sessions', 'shared'));
+        expect((await resolveJsonlSidecarSourceAsync(src, input, { isCurrent: () => true })).path).toBe(created);
+    });
+});

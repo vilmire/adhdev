@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { LOG } from '../../logging/logger.js';
+import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
 import { SPAWN_BIND_GRACE_MS } from '../native-history/constants.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 
@@ -856,3 +857,156 @@ export function pickSessionBoundFileAcrossDateWindow(
 }
 
 export const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+/** Filesystem evidence for sidecar selection. Keys are canonicalized once,
+ * outside status reads and the synchronous claim transaction. */
+export interface SidecarSourceCandidate {
+    p: string;
+    key: string;
+    mtime: number;
+    birth: number;
+    workspaceMatches: boolean;
+    promptMatches?: boolean;
+}
+export interface SidecarSourceEvidence {
+    candidates: SidecarSourceCandidate[];
+    workspaceKey: string;
+    promptIdentity: string;
+    directPath?: string;
+    revisions: Map<string, string>;
+}
+export const sourceRevision = (st: fs.Stats): string => `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+export async function sourceRevisionAsync(p: string): Promise<string> {
+    try { return sourceRevision(await fs.promises.stat(p)); } catch { return 'missing'; }
+}
+export async function canonicalSourcePathAsync(p: string): Promise<string> {
+    let resolved = p;
+    try { resolved = await fs.promises.realpath(p); } catch { /* same fallback as claimKeyForPath */ }
+    return process.platform === 'win32'
+        ? path.win32.normalize(resolved).replace(/^\\\\\?\\/, '').replace(/(?<![A-Za-z]:)[\\/]+$/, '').toLowerCase()
+        : resolved;
+}
+
+/** Record every visited level, including the nearest existing parent of a
+ * missing root. Root mtime alone cannot detect a new session several levels down. */
+async function expandDirGlobAsync(template: string, revisions: Map<string, string>): Promise<string[]> {
+    const { root, segments } = splitTemplateRoot(template);
+    const firstGlob = segments.findIndex(seg => /[*?]/.test(seg));
+    const fixed = firstGlob < 0 ? segments : segments.slice(0, firstGlob);
+    const base = path.join(root, ...fixed);
+    let existing = base;
+    while (await sourceRevisionAsync(existing) === 'missing') {
+        revisions.set(existing, 'missing');
+        const parent = path.dirname(existing);
+        if (parent === existing) return [];
+        existing = parent;
+    }
+    revisions.set(existing, await sourceRevisionAsync(existing));
+    if (existing !== base) return [];
+    const walk = async (dir: string, rest: string[]): Promise<string[]> => {
+        revisions.set(dir, await sourceRevisionAsync(dir));
+        if (!rest.length) return [dir];
+        const [seg, ...tail] = rest;
+        if (!seg) return walk(dir, tail);
+        if (seg === '**') {
+            const out = await walk(dir, tail);
+            let entries: fs.Dirent[];
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return out; }
+            for (const entry of entries) if (entry.isDirectory()) out.push(...await walk(path.join(dir, entry.name), rest));
+            return out;
+        }
+        if (/[*?]/.test(seg)) {
+            let entries: fs.Dirent[];
+            try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
+            const pattern = globToRegex(seg);
+            const out: string[] = [];
+            for (const entry of entries) if (entry.isDirectory() && pattern.test(entry.name)) out.push(...await walk(path.join(dir, entry.name), tail));
+            return out;
+        }
+        const child = path.join(dir, seg);
+        revisions.set(child, await sourceRevisionAsync(child));
+        try { if ((await fs.promises.stat(child)).isDirectory()) return walk(child, tail); } catch { /* missing child stays in manifest */ }
+        return [];
+    };
+    return walk(base, firstGlob < 0 ? [] : segments.slice(firstGlob));
+}
+
+/** Same head+tail bound as the sync executor's prompt-evidence reader. */
+async function readPromptEvidenceAsync(p: string): Promise<string> {
+    let fd: fs.promises.FileHandle | undefined;
+    try {
+        fd = await fs.promises.open(p, 'r');
+        const size = (await fd.stat()).size;
+        const cap = 4 * 1024 * 1024;
+        const head = Buffer.alloc(Math.min(size, size <= cap * 2 ? size : cap));
+        const first = await fd.read(head, 0, head.length, 0);
+        if (size <= cap * 2) return head.subarray(0, first.bytesRead).toString('utf8');
+        const tail = Buffer.alloc(cap);
+        const last = await fd.read(tail, 0, cap, size - cap);
+        return head.subarray(0, first.bytesRead).toString('utf8') + '\n' + tail.subarray(0, last.bytesRead).toString('utf8');
+    } catch { return ''; }
+    finally { await fd?.close(); }
+}
+
+/** Async I/O only. Eligibility/selection/claims remain in the shared executor
+ * policy; this snapshot is reusable when only registry ownership changes. */
+export async function collectSidecarSourceEvidenceAsync(
+    src: import('./types.js').NativeHistoryJsonlSource,
+    input: NativeHistoryInput,
+): Promise<SidecarSourceEvidence> {
+    const { jsonPathGet } = await import('./native-history-jsonpath.js');
+    const revisions = new Map<string, string>();
+    const workspace = input.workspace?.trim() ?? '';
+    const workspaceReal = workspace ? await canonicalSourcePathAsync(workspace) : '';
+    const template = expandPath(src.path, { ...input, workspace: workspaceReal }, { skipWorkspaceRealpath: true });
+    const candidates: SidecarSourceCandidate[] = [];
+    const promptIdentity = JSON.stringify(sentPromptSnippets(input.instanceId));
+    if (!template) return { candidates, revisions, workspaceKey: workspaceReal, promptIdentity };
+    let directPath: string | undefined;
+    if (!/[*?]/.test(template)) {
+        try { if ((await fs.promises.stat(template)).isFile()) directPath = template; } catch { /* directory discovery records missing paths */ }
+    }
+    const pattern = directPath ? globToRegex(path.basename(directPath)) : src.file_pattern ? globToRegex(src.file_pattern) : /.*\.jsonl$/;
+    const dirs = directPath ? [path.dirname(directPath)] : await expandDirGlobAsync(template, revisions);
+    for (const dir of dirs) {
+        let entries: fs.Dirent[];
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; }
+        for (const entry of entries) {
+            pattern.lastIndex = 0;
+            if (!entry.isFile() || !pattern.test(entry.name)) continue;
+            const p = path.join(dir, entry.name);
+            let st: fs.Stats;
+            try { st = await fs.promises.stat(p); } catch { continue; }
+            revisions.set(p, sourceRevision(st));
+            let workspaceMatches = !workspace;
+            if (src.workspace_from_sidecar) {
+                const sidecar = path.resolve(dir, src.workspace_from_sidecar.rel_path);
+                revisions.set(sidecar, await sourceRevisionAsync(sidecar));
+                try {
+                    const parsed = JSON.parse(await fs.promises.readFile(sidecar, 'utf8'));
+                    const value = jsonPathGet(parsed, src.workspace_from_sidecar.workspace_path);
+                    const ws = typeof value === 'string' ? value.trim() : '';
+                    workspaceMatches = !!ws && (ws === workspace || await canonicalSourcePathAsync(ws) === workspaceReal);
+                } catch { /* unusable sidecar */ }
+            }
+            const key = await canonicalSourcePathAsync(p);
+            candidates.push({ p, key, mtime: Math.floor(st.mtimeMs), birth: Math.floor(st.birthtimeMs) || Math.floor(st.mtimeMs), workspaceMatches });
+        }
+    }
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    const evidence = { candidates, revisions, workspaceKey: workspaceReal, promptIdentity, directPath };
+    await refreshSidecarPromptEvidenceAsync(evidence, input);
+    return evidence;
+}
+
+
+/** Retain only match bits, not megabytes of account transcript text. A newly
+ * sent prompt refreshes this evidence asynchronously without a directory walk. */
+export async function refreshSidecarPromptEvidenceAsync(evidence: SidecarSourceEvidence, input: NativeHistoryInput): Promise<void> {
+    const snippets = sentPromptSnippets(input.instanceId);
+    evidence.promptIdentity = JSON.stringify(snippets);
+    for (const candidate of evidence.candidates) {
+        candidate.promptMatches = snippets.length > 0
+            && containsSentPrompt(await readPromptEvidenceAsync(candidate.p), snippets);
+    }
+}

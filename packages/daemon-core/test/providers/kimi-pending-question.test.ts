@@ -409,3 +409,313 @@ describe('buildKimiSelectorAnswerSteps', () => {
         )).toThrow(/Unknown option/);
     });
 });
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, vi } from 'vitest';
+import { readTailJsonlLinesAsync } from '../../src/providers/spec/background-task-detector.js';
+import { KimiPendingQuestionReader } from '../../src/providers/kimi-pending-question.js';
+import { __resetTranscriptClaimRegistry, claimTranscript, releaseTranscriptOwner, transcriptClaimOwner, transcriptClaimOwnerToken } from '../../src/providers/native-history/transcript-claim-registry.js';
+import { recordSentPrompt, __resetSentPromptRegistry } from '../../src/providers/native-history/sent-prompt-registry.js';
+const questionStores: string[] = [];
+const questionReaders: KimiPendingQuestionReader[] = [];
+afterEach(() => {
+    for (const reader of questionReaders.splice(0)) reader.dispose();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    __resetTranscriptClaimRegistry();
+    __resetSentPromptRegistry();
+    for (const root of questionStores.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+function questionStore(tag = 'q', existingRoot?: string, bucket = 'bucket', uuid = 'a0000000-0000-4000-8000-000000000001') {
+    const root = existingRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), 'kimi-reader-'));
+    if (!existingRoot) questionStores.push(root);
+    const session = path.join(root, 'sessions', bucket, `session_${uuid}`);
+    const dir = path.join(session, 'agents', 'main');
+    fs.mkdirSync(dir, { recursive: true });
+    const wire = path.join(dir, 'wire.jsonl');
+    const sidecar = path.join(session, 'state.json');
+    fs.writeFileSync(sidecar, JSON.stringify({ workDir: root }));
+    fs.writeFileSync(wire, JSON.stringify(askCallRow(tag, [COLORS_QUESTION])) + '\n');
+    const cfg: any = { source: { kind: 'jsonl', path: '${KIMI_TEST_STORE}/sessions/*/session_*/agents/main', file_pattern: 'wire.jsonl', session_id_from: 'dir_uuid', workspace_from_sidecar: { rel_path: '../../state.json', workspace_path: '$.workDir' } } };
+    const input = { agentType: 'kimi', workspace: root, instanceId: `owner-${tag}`, sessionStartedAtMs: 0, envOverrides: { KIMI_TEST_STORE: root } };
+    return { root, wire, sidecar, cfg, input, uuid };
+}
+function questionReader(notify = vi.fn()) {
+    const reader = new KimiPendingQuestionReader(notify);
+    questionReaders.push(reader);
+    return reader;
+}
+
+describe('per-incarnation asynchronous Kimi reader', () => {
+    it('keeps loading distinct from ready-null, reuses unchanged question projection, and observes append', async () => {
+        const f = questionStore();
+        const reader = questionReader();
+        expect(reader.read(f.cfg, f.input)).toMatchObject({ state: 'loading', prompt: null });
+        await reader.whenSettled();
+        const ready = reader.read(f.cfg, f.input);
+        expect(ready).toMatchObject({ state: 'ready', prompt: { promptId: 'q' } });
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).prompt).toBe(ready.prompt);
+        fs.appendFileSync(f.wire, JSON.stringify(toolResultRow('q')) + '\n');
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input)).toMatchObject({ state: 'ready', prompt: null });
+    });
+
+    it('does not share an owner-confirmed source with another owner or incarnation/spawn floor', async () => {
+        const f = questionStore();
+        const first = questionReader();
+        first.read(f.cfg, f.input);
+        await first.whenSettled();
+        const second = questionReader();
+        const other = { ...f.input, instanceId: 'other-owner' };
+        second.read(f.cfg, other);
+        await second.whenSettled();
+        expect(second.read(f.cfg, other)).toMatchObject({ state: 'unavailable', prompt: null, resolution: { outcome: { attribution: 'already_claimed' } } });
+        const future = { ...f.input, sessionStartedAtMs: Date.now() + 60_000 };
+        expect(first.read(f.cfg, future).prompt).toBeNull();
+        await first.whenSettled();
+        expect(first.read(f.cfg, future).state).toBe('unavailable');
+    });
+
+    it('invalidates provider/workspace/env/config/pin identities, including effective process fallback', async () => {
+        const a = questionStore('A');
+        const b = questionStore('B');
+        const reader = questionReader();
+        reader.read(a.cfg, a.input);
+        await reader.whenSettled();
+        expect(reader.read(a.cfg, { ...a.input, agentType: 'claude-cli' }).prompt).toBeNull();
+        reader.read(b.cfg, { ...b.input, providerSessionId: b.uuid });
+        await reader.whenSettled();
+        expect(reader.read(b.cfg, { ...b.input, providerSessionId: b.uuid }).prompt?.promptId).toBe('B');
+        expect(reader.read(b.cfg, { ...b.input, workspace: a.root, providerSessionId: undefined }).prompt).toBeNull();
+        await reader.whenSettled();
+        expect(reader.read(b.cfg, { ...b.input, workspace: a.root }).state).toBe('unavailable');
+        vi.stubEnv('KIMI_TEST_STORE', a.root);
+        const fallback = { ...a.input, envOverrides: {} };
+        reader.read(a.cfg, fallback);
+        await reader.whenSettled();
+        expect(reader.read(a.cfg, fallback).prompt?.promptId).toBe('A');
+        vi.stubEnv('KIMI_TEST_STORE', b.root);
+        expect(reader.read(a.cfg, fallback).prompt).toBeNull();
+        await reader.whenSettled();
+        expect(reader.read(a.cfg, fallback).state).toBe('unavailable');
+        const missingCfg = { source: { ...a.cfg.source, path: `${a.root}/absent/*` } };
+        expect(reader.read(missingCfg, a.input).prompt).toBeNull();
+    });
+
+    it('finds a deeply-created source from a negative cache without relying on root mtime', async () => {
+        const f = questionStore();
+        fs.rmSync(path.dirname(path.dirname(path.dirname(f.wire))), { recursive: true });
+        const reader = questionReader();
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(f.cfg, f.input).state).toBe('unavailable');
+        const rootRevision = fs.statSync(path.join(f.root, 'sessions')).mtimeMs;
+        questionStore('created', f.root);
+        expect(fs.statSync(path.join(f.root, 'sessions')).mtimeMs).toBe(rootRevision);
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).prompt?.promptId).toBe('created');
+    });
+
+    it('invalidates sidecar changes and replacement/truncation/same-size rewrites', async () => {
+        const f = questionStore();
+        const reader = questionReader();
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        fs.writeFileSync(f.wire + '.new', JSON.stringify(askCallRow('new-inode', [COLORS_QUESTION])) + '\n');
+        fs.renameSync(f.wire + '.new', f.wire);
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).prompt?.promptId).toBe('new-inode');
+        fs.writeFileSync(f.wire, JSON.stringify(askCallRow('same-size', [COLORS_QUESTION])) + '\n');
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).prompt?.promptId).toBe('same-size');
+        fs.writeFileSync(f.wire, '');
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).prompt).toBeNull();
+        fs.writeFileSync(f.sidecar, JSON.stringify({ workDir: path.join(f.root, 'other-workspace') }));
+        await reader.whenSettled(true);
+        expect(reader.read(f.cfg, f.input).state).toBe('unavailable');
+    });
+
+    it('rejects late discovery before claim and notification after disposal', async () => {
+        const f = questionStore();
+        const notify = vi.fn();
+        const reader = questionReader(notify);
+        let release!: () => void;
+        let entered!: () => void;
+        const barrier = new Promise<void>(resolve => { release = resolve; });
+        const blocked = new Promise<void>(resolve => { entered = resolve; });
+        const original = fs.promises.readdir;
+        vi.spyOn(fs.promises, 'readdir').mockImplementationOnce(async (...args: any[]) => {
+            entered(); await barrier; return (original as any)(...args);
+        });
+        reader.read(f.cfg, f.input);
+        await blocked;
+        reader.dispose();
+        release();
+        await reader.whenSettled();
+        expect(transcriptClaimOwner(fs.realpathSync(f.wire))).toBeUndefined();
+        expect(notify).not.toHaveBeenCalled();
+        expect(reader.read(f.cfg, f.input)).toMatchObject({ state: 'unavailable', prompt: null });
+    });
+
+    it('rejects an old identity completion when env/config changes during async discovery', async () => {
+        const a = questionStore('old');
+        const b = questionStore('current');
+        const reader = questionReader();
+        let release!: () => void;
+        let entered!: () => void;
+        const barrier = new Promise<void>(r => { release = r; });
+        const blocked = new Promise<void>(r => { entered = r; });
+        const original = fs.promises.readdir;
+        vi.spyOn(fs.promises, 'readdir').mockImplementationOnce(async (...args: any[]) => { entered(); await barrier; return (original as any)(...args); });
+        reader.read(a.cfg, a.input);
+        await blocked;
+        reader.read(b.cfg, b.input);
+        release();
+        await reader.whenSettled();
+        expect(transcriptClaimOwner(fs.realpathSync(a.wire))).toBeUndefined();
+        expect(transcriptClaimOwner(fs.realpathSync(b.wire))).toBe(transcriptClaimOwnerToken(b.input.instanceId));
+        expect(reader.read(b.cfg, b.input).prompt?.promptId).toBe('current');
+    });
+});
+
+describe('concrete Kimi source compatibility', () => {
+    it('keeps a concrete file source without manufacturing a claim or sidecar outcome', async () => {
+        const f = questionStore('direct');
+        const cfg: any = { source: { kind: 'jsonl', path: f.wire } };
+        const reader = questionReader();
+        reader.read(cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(cfg, f.input)).toMatchObject({ state: 'ready', prompt: { promptId: 'direct' } });
+        expect(reader.read(cfg, f.input).resolution?.outcome).toBeUndefined();
+        expect(transcriptClaimOwner(fs.realpathSync(f.wire))).toBeUndefined();
+    });
+});
+
+
+describe('negative-cache policy invalidation and late tail jobs', () => {
+    it('rechecks changed claim ownership from cached candidates without a directory walk', async () => {
+        const f = questionStore();
+        claimTranscript(fs.realpathSync(f.wire), 'foreign-owner');
+        const reader = questionReader();
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(f.cfg, f.input).state).toBe('unavailable');
+        const readdir = vi.spyOn(fs.promises, 'readdir');
+        releaseTranscriptOwner('foreign-owner');
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(f.cfg, f.input).prompt?.promptId).toBe('q');
+        expect(readdir).not.toHaveBeenCalled();
+    });
+
+    it('refreshes newly sent prompt evidence without repeating filesystem discovery', async () => {
+        const f = questionStore();
+        fs.appendFileSync(f.wire, JSON.stringify(promptRow('specific owned prompt')) + '\n');
+        recordSentPrompt(f.input.instanceId, 'different unmatched input');
+        const reader = questionReader();
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(f.cfg, f.input).state).toBe('unavailable');
+        const readdir = vi.spyOn(fs.promises, 'readdir');
+        recordSentPrompt(f.input.instanceId, 'specific owned prompt');
+        reader.read(f.cfg, f.input);
+        await reader.whenSettled();
+        expect(reader.read(f.cfg, f.input)).toMatchObject({ state: 'ready', prompt: null }); // later turn superseded the picker
+        expect(reader.read(f.cfg, f.input).resolution?.outcome?.attribution).toBe('claimed');
+        expect(readdir).not.toHaveBeenCalled();
+    });
+
+    it('cannot publish, cache or reclaim after teardown while a tail read is deferred', async () => {
+        const f = questionStore('late-tail');
+        const notify = vi.fn();
+        const reader = questionReader(notify);
+        let release!: () => void;
+        let entered!: () => void;
+        const barrier = new Promise<void>(r => { release = r; });
+        const blocked = new Promise<void>(r => { entered = r; });
+        const original = fs.promises.open;
+        vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args: any[]) => {
+            const fd = await (original as any)(...args);
+            const read = fd.read.bind(fd);
+            fd.read = async (...readArgs: any[]) => { entered(); await barrier; return read(...readArgs); };
+            return fd;
+        });
+        reader.read(f.cfg, f.input);
+        await blocked;
+        reader.dispose();
+        releaseTranscriptOwner(transcriptClaimOwnerToken(f.input.instanceId));
+        release();
+        await reader.whenSettled();
+        expect(transcriptClaimOwner(fs.realpathSync(f.wire))).toBeUndefined();
+        expect(notify).not.toHaveBeenCalled();
+        expect(reader.read(f.cfg, f.input)).toMatchObject({ state: 'unavailable', prompt: null });
+        let actualReads = 0;
+        vi.mocked(fs.promises.open).mockImplementation(async (...args: any[]) => {
+            const fd = await (original as any)(...args);
+            const read = fd.read.bind(fd);
+            fd.read = async (...readArgs: any[]) => { actualReads++; return read(...readArgs); };
+            return fd;
+        });
+        expect((await readTailJsonlLinesAsync(f.wire, 512 * 1024))?.records.length).toBe(1);
+        expect(actualReads).toBe(1); // disposed job never installed the shared tail cache
+    });
+});
+
+describe('owner-free background snapshots using the sealed Kimi reader', () => {
+    function backgroundReader(notify = vi.fn(), currentInput?: () => any) {
+        const reader = new KimiPendingQuestionReader(notify, undefined, undefined, currentInput, true);
+        questionReaders.push(reader);
+        return reader;
+    }
+    function rows() {
+        return [
+            { type: 'turn.prompt', input: [{ type: 'text', text: 'start' }] },
+            { type: 'context.append_loop_event', event: { type: 'tool.call', toolCallId: 'background', name: 'Bash', args: { run_in_background: true } } },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n';
+    }
+    it.each(['dispose', 'identity', 'config', 'append', 'rotate'] as const)('rejects late background publication across %s during tail I/O', async action => {
+        const f = questionStore(`bg-${action}`);
+        fs.writeFileSync(f.wire, rows());
+        let input: any = { ...f.input, instanceId: undefined };
+        const published: Array<boolean | undefined> = [];
+        let reader!: KimiPendingQuestionReader;
+        const notify = vi.fn(() => published.push((reader as any).snapshot.background?.active));
+        reader = backgroundReader(notify, () => input);
+        const original = fs.promises.open;
+        let release!: () => void; let entered!: () => void;
+        const barrier = new Promise<void>(resolve => { release = resolve; });
+        const reached = new Promise<void>(resolve => { entered = resolve; });
+        vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args: any[]) => {
+            const fd = await (original as any)(...args); const read = fd.read.bind(fd);
+            fd.read = async (...readArgs: any[]) => { entered(); await barrier; return read(...readArgs); };
+            return fd;
+        });
+        expect(reader.read(f.cfg, input).state).toBe('loading');
+        await reached;
+        if (action === 'dispose') reader.dispose();
+        if (action === 'identity') { input = { ...input, providerSessionId: 'b0000000-0000-4000-8000-000000000002' }; reader.read(f.cfg, input); }
+        if (action === 'config') reader.read({ source: { ...f.cfg.source, path: `${f.root}/missing/*` } }, input);
+        const clear = JSON.stringify({ type: 'turn.prompt', input: [{ type: 'text', text: 'new turn' }] }) + '\n';
+        if (action === 'append') fs.appendFileSync(f.wire, clear);
+        if (action === 'rotate') { fs.writeFileSync(f.wire + '.new', clear); fs.renameSync(f.wire + '.new', f.wire); }
+        notify.mockClear(); release();
+        await reader.whenSettled();
+        if (action === 'dispose') {
+            expect(reader.read(f.cfg, input)).toMatchObject({ state: 'unavailable' });
+            expect(notify).not.toHaveBeenCalled();
+        } else if (action === 'identity' || action === 'config') {
+            expect((reader as any).snapshot).toMatchObject({ state: 'unavailable' });
+            expect((reader as any).snapshot.background).toBeUndefined();
+        } else {
+            await reader.whenSettled(true);
+            expect((reader as any).snapshot).toMatchObject({ state: 'ready', background: { active: false } });
+            // No old active snapshot was published while the seal was changing.
+            expect(published).not.toContain(true);
+        }
+        expect(transcriptClaimOwner(fs.realpathSync(f.wire))).toBeUndefined();
+    });
+});

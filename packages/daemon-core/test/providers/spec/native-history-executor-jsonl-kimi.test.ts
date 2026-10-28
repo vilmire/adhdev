@@ -324,3 +324,20 @@ describe('kimi nativeHistory jsonl', () => {
         expect(r!.workspace).toBe(WORKSPACE);
     });
 });
+
+import { resolveJsonlSidecarSourceAsync } from '../../../src/providers/spec/native-history-executor.js';
+
+describe('async Kimi directory UUID and workspace evidence', () => {
+    it('agrees with the existing sidecar and prefixed pin paths across workspace aliases', async () => {
+        const wire = writeSession({ sessionId: SESSION_ID, workspace: tmpDir, hex12: 'abcdef', lines: multiTurnLines(Date.now()) });
+        const src = { ...KIMI_SOURCE, path: KIMI_SOURCE.path.replace('{SESSIONS}', sessionsDir) } as any;
+        const discovered = await resolveJsonlSidecarSourceAsync(src, { agentType: 'kimi', workspace: fs.realpathSync(tmpDir) }, { isCurrent: () => true });
+        expect(discovered.path).toBe(wire);
+        expect(discovered.outcome?.attribution).toBe('legacy');
+        const pinned = await resolveJsonlSidecarSourceAsync(src, { agentType: 'kimi', workspace: 'unrelated', providerSessionId: SESSION_ID }, { isCurrent: () => true });
+        expect(pinned.path).toBe(wire);
+        expect(pinned.outcome?.attribution).toBe('pinned');
+        const foreign = await resolveJsonlSidecarSourceAsync(src, { agentType: 'kimi', workspace: 'unrelated' }, { isCurrent: () => true });
+        expect(foreign.path).toBeNull();
+    });
+});

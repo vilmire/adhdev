@@ -789,3 +789,63 @@ describe('eligible slots, preferences and launch reservations', () => {
     } finally { cleanup(meshId) }
   })
 })
+
+
+// Operation counts cover real predicate/sweep consumers, with live CLI settings.
+import { liveSessionCountForNode, nodeHasActiveMeshWork, nodeHasLiveSessionPendingClaim, resolveSessionBusyVerdict } from '../../src/mesh/mesh-candidacy-predicates.js'
+
+describe('candidacy projection cost and orphan fences', () => {
+  function candidate(meshId: string, sessionId: string, settings: Record<string, unknown> = {}, status = 'idle') {
+    const live = { meshNodeFor: meshId, meshNodeId: NODE_WORKER, ...settings }
+    return { instanceId: sessionId, category: 'cli', settings: live,
+      getState: vi.fn(() => ({ instanceId: sessionId, type: 'claude-cli', status, settings: live })) }
+  }
+
+  it('rejects foreign mesh/node before projection and counts each local state once', () => {
+    const meshId = `mesh_cost_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = createMesh(meshId)
+      const foreign = candidate('foreign', 'sess-foreign')
+      const otherNode = candidate(meshId, 'sess-other', { meshNodeId: 'other-node' })
+      const own = candidate(meshId, 'sess-own')
+      const components = createComponents(mesh, { localSessions: [foreign, otherNode, own] })
+      const task = enqueueTask(meshId, 'candidate', { taskMode: 'code_change', difficulty: 'medium' })
+      expect(liveSessionCountForNode(components, meshId, NODE_WORKER)).toBe(1)
+      expect(own.getState).toHaveBeenCalledTimes(1)
+      expect(nodeHasActiveMeshWork(components, meshId, NODE_WORKER)).toBe(false)
+      expect(nodeHasLiveSessionPendingClaim(components, meshId, NODE_WORKER, task, mesh.nodes[0])).toBe(true)
+      expect(foreign.getState).not.toHaveBeenCalled()
+      expect(otherNode.getState).not.toHaveBeenCalled()
+      // Unknown observations retain their tri-state fence.
+      expect(resolveSessionBusyVerdict({ instanceManager: { getInstance: () => undefined, getByCategory: () => [] } } as any, 'absent')).toBe('UNKNOWN')
+    } finally { cleanup(meshId) }
+  })
+
+  it('prefilters foreign/unproven/protected origins and retains active/pending/assigned/grace orphan fences', () => {
+    const meshId = `mesh_orphan_cost_${randomUUID().slice(0, 8)}`
+    const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {})
+    try {
+      const mesh = createMesh(meshId)
+      enqueueTask(meshId, 'assigned work', { taskMode: 'code_change', difficulty: 'medium' })
+      const pending = enqueueTask(meshId, 'pending origin', { taskMode: 'code_change', difficulty: 'medium' })
+      const foreign = candidate('foreign', 'foreign', { autoLaunchedForQueueTaskId: 'gone' })
+      const unproven = candidate(meshId, 'unproven')
+      const protectedSession = candidate(meshId, 'protected', { autoLaunchedForQueueTaskId: 'gone', spawnedForTaskId: null })
+      const running = candidate(meshId, 'running', { autoLaunchedForQueueTaskId: 'gone' }, 'generating')
+      const awaiting = candidate(meshId, 'awaiting', { autoLaunchedForQueueTaskId: pending.id })
+      const assigned = candidate(meshId, 'assigned', { autoLaunchedForQueueTaskId: 'gone' })
+      // Real active assignment prevents this session from becoming an orphan.
+      MeshRuntimeStore.getInstance().claimNextQueueTask(meshId, NODE_WORKER, 'assigned', [], { providerType: 'claude-cli' })
+      const grace = candidate(meshId, 'grace', { autoLaunchedForQueueTaskId: 'gone' })
+      const orphan = candidate(meshId, 'orphan', { autoLaunchedForQueueTaskId: 'gone' })
+      for (const sid of ['running', 'awaiting', 'assigned', 'orphan']) __seedAutoLaunchOrphanFirstSeenForTests(meshId, sid, Date.now() - 120_000)
+      const components = createComponents(mesh, { localSessions: [foreign, unproven, protectedSession, running, awaiting, assigned, grace, orphan] })
+      sweepAutoLaunchOrphanSessions(components, meshId)
+      for (const inst of [foreign, unproven, protectedSession]) expect(inst.getState).not.toHaveBeenCalled()
+      for (const inst of [running, awaiting, assigned, grace, orphan]) expect(inst.getState).toHaveBeenCalledTimes(1)
+      const warnings = warn.mock.calls.map(c => String(c[1])).filter(msg => msg.includes('AUTOLAUNCH-ORPHAN-SWEEP'))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('session orphan ')
+    } finally { warn.mockRestore(); cleanup(meshId) }
+  })
+})

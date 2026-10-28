@@ -50,7 +50,7 @@ export class RawTail {
      * `append()` returns nothing (not the same lines again), and one that
      * follows a new `append()` sees only the newly-appended tail joined onto
      * whatever partial line was left over. Independent of `strippedTail`,
-     * which always reads the full `buf` fresh and has no cursor of its own.
+     * whose dismissal boundary is independent of the line cursor.
      */
     private lineCursorPos = 0;
     /** Monotonic append counter. Bumped once per `append()` call, never reset. */
@@ -64,6 +64,8 @@ export class RawTail {
      * also reads.
      */
     private strippedClearedAtSeq = 0;
+    /** Lazily computed once per append, shared by repeated status/auth reads. */
+    private strippedCache?: string;
 
     constructor(private readonly capBytes: number = DEFAULT_CAP_BYTES) {}
 
@@ -82,6 +84,7 @@ export class RawTail {
         const trimmed = before + chunk.length - next.length;
         this.buf = next;
         this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed);
+        this.strippedCache = undefined;
         this.seqCounter++;
     }
 
@@ -102,13 +105,13 @@ export class RawTail {
      * not the raw buffer). Replaces `appendAuthTail`/`TAIL_BYTES`'s
      * `` `${tail}${stripAnsi(chunk)}`.slice(-TAIL_BYTES) `` — same semantics
      * (append-and-cap over stripped text), but reading is now decoupled from
-     * writing: this is a pure read over the shared raw buffer, so calling it
+     * writing: this is a memoized view over the shared raw buffer, so calling it
      * repeatedly with different `maxBytes` never mutates state and never
      * competes with `takeCompleteLines()`'s cursor.
      */
     strippedTail(maxBytes: number): string {
         if (this.seqCounter <= this.strippedClearedAtSeq) return '';
-        return stripAnsi(this.buf).slice(-maxBytes);
+        return (this.strippedCache ??= stripAnsi(this.buf)).slice(-maxBytes);
     }
 
     /**
@@ -120,6 +123,7 @@ export class RawTail {
      */
     clearStrippedTail(): void {
         this.strippedClearedAtSeq = this.seqCounter;
+        this.strippedCache = undefined;
     }
 
     /**
@@ -161,5 +165,29 @@ export class RawTail {
     /** Byte length of the currently held raw buffer. */
     byteLength(): number {
         return Buffer.byteLength(this.buf, 'utf8');
+    }
+}
+
+
+/** Charge expensive full-window readers to new output or elapsed streaming
+ * time, rather than chunk count. A flush consumes the trailing partial budget;
+ * unchanged flushes do no work. The raw tail still receives every chunk before
+ * this decision, preserving ANSI and line boundaries for the reader. */
+export class TailReadBudget {
+    private bytes = 0;
+    private readAt?: number;
+    private readSeq?: number;
+
+    constructor(private readonly byteBudget = 8 * 1024, private readonly intervalMs = 250) {}
+
+    take(seq: number, appended: number, flush = false, now = Date.now()): boolean {
+        this.bytes += appended;
+        if (this.readSeq === seq) return false;
+        if (!flush && this.readAt !== undefined
+            && this.bytes < this.byteBudget && now - this.readAt < this.intervalMs) return false;
+        this.readAt = now;
+        this.readSeq = seq;
+        this.bytes = 0;
+        return true;
     }
 }

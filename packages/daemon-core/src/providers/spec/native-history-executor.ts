@@ -42,6 +42,7 @@ import {
     listMatchingFiles, pickSessionBoundFile, pickSessionBoundFileAcrossGlob,
     pickSessionBoundFileAcrossDateWindow, UUID_RE, recentFiles, recentFilesAcrossGlob,
     readCandidateSessionMeta, recentFilesAcrossDateWindow, claimKeyForPath,
+    collectSidecarSourceEvidenceAsync, refreshSidecarPromptEvidenceAsync, sourceRevisionAsync, type SidecarSourceEvidence, type SidecarSourceCandidate,
 } from './native-history-paths.js';
 export { claimKeyForPath } from './native-history-paths.js';
 import {
@@ -670,9 +671,12 @@ interface JsonlClaimOutcome {
     unavailableReason?: string;
 }
 
-interface JsonlSourceResolution {
+export interface JsonlSourceResolution {
     path: string | null;
     outcome?: JsonlClaimOutcome;
+    evidence?: SidecarSourceEvidence;
+    claimKey?: string;
+    stale?: boolean;
 }
 
 function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: NativeHistoryInput): JsonlSourceResolution {
@@ -994,101 +998,98 @@ export function pickUniqueSpawnEvidence(
  * `state.json` workDir). See the contract comment above.
  */
 function resolveSidecarClaimSource(
-    template: string,
-    pattern: RegExp,
-    windowMs: number,
-    sessionFloorMs: number,
-    workspaceHint: string,
-    requestedSessionId: string,
-    sidecar: { rel_path: string; workspace_path: string },
-    input: NativeHistoryInput,
+    template: string, pattern: RegExp, windowMs: number, sessionFloorMs: number,
+    workspaceHint: string, requestedSessionId: string,
+    sidecar: { rel_path: string; workspace_path: string }, input: NativeHistoryInput,
+): JsonlSourceResolution {
+    const exact = requestedSessionId ? pickDirUuidFileAcrossGlob(template, pattern, requestedSessionId) : null;
+    const legacy = !requestedSessionId && !workspaceHint ? newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs) : null;
+    const entries = requestedSessionId || !workspaceHint
+        ? (exact || legacy ? [{ p: (exact || legacy)!, mtime: safeMtimeMs((exact || legacy)!), birth: 0 }] : [])
+        : listSidecarWorkspaceCandidates(template, pattern, windowMs, sessionFloorMs, workspaceHint, sidecar);
+    const candidates = entries.map(c => ({ ...c, key: claimKeyForPath(c.p), workspaceMatches: true }));
+    return selectSidecarClaimSource(candidates, input, windowMs,
+        (p, snippets) => containsSentPrompt(readForPromptEvidence(p), snippets));
+}
+
+/** The SAME selection/claim transaction serves synchronous history and async
+ * status. All filesystem evidence is gathered before entering this function. */
+function selectSidecarClaimSource(
+    candidates: SidecarSourceCandidate[], input: NativeHistoryInput, windowMs: number,
+    matchesPrompt: (p: string, snippets: string[]) => boolean,
 ): JsonlSourceResolution {
     const owner = transcriptClaimOwnerToken(input.instanceId);
-
-    // (1) Pinned/exact bind: the strongest evidence — a previously claimed,
-    //     owner-confirmed session id. Exact-bind the directory uuid and refresh
-    //     the claim. A live FOREIGN claim on the pinned transcript means the
-    //     pin and the registry disagree (contested store) → fail closed rather
-    //     than read a sibling's transcript.
+    const workspaceHint = input.workspace?.trim() ?? '';
+    const requestedSessionId = readRequestedSessionId(input);
+    const sessionFloorMs = input.sessionStartedAtMs ?? 0;
     if (requestedSessionId) {
-        const pinned = pickDirUuidFileAcrossGlob(template, pattern, requestedSessionId);
+        const pinned = candidates.find(c => sameSessionUuid(dirUuid(c.p), requestedSessionId));
         if (!pinned) return { path: null };
-        if (!owner) return { path: pinned, outcome: { attribution: 'pinned' } };
-        const verdict = claimTranscript(claimKeyForPath(pinned), owner);
+        if (!owner) return { path: pinned.p, outcome: { attribution: 'pinned' } };
+        const verdict = claimTranscript(pinned.key, owner);
         if (verdict === 'denied') return failClosedResolution('already_claimed', workspaceHint, owner);
-        return {
-            path: pinned,
-            outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'pinned', ownerConfirmed: true },
-        };
+        return { path: pinned.p, outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'pinned', ownerConfirmed: true } };
     }
-
-    // (2) No workspace hint: no scoping evidence at all — keep the legacy
-    //     newest-recent single-session dev/test behaviour.
-    if (!workspaceHint) {
-        return { path: newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs) };
-    }
-
-    // (3) Workspace-scoped discovery. Candidates: sidecar workDir matches the
-    //     input workspace, inside the recency/spawn-floor window. Claims make
-    //     the pick exclusive; spawn proximity disambiguates; anything else
-    //     fails closed.
-    const candidates = listSidecarWorkspaceCandidates(template, pattern, windowMs, sessionFloorMs, workspaceHint, sidecar);
-    if (candidates.length === 0) return { path: null };
-
+    const cutoff = Math.max(Date.now() - windowMs, sessionFloorMs);
+    const scoped = candidates.filter(c => c.mtime >= cutoff && (!workspaceHint || c.workspaceMatches));
+    if (!workspaceHint) return { path: scoped[0]?.p ?? null };
+    if (!scoped.length) return { path: null };
     if (!owner) {
-        // Legacy identity-less resolution (no instanceId — unit tests, early
-        // boot, non-session callers). A single viable candidate binds exactly
-        // as before; with ≥2 candidates only UNIQUE spawn-proximity evidence
-        // may decide — never newest mtime.
-        if (candidates.length === 1) return { path: candidates[0].p, outcome: { attribution: 'legacy' } };
-        const picked = pickUniqueSpawnEvidence(candidates, sessionFloorMs);
+        if (scoped.length === 1) return { path: scoped[0].p, outcome: { attribution: 'legacy' } };
+        const picked = pickUniqueSpawnEvidence(scoped, sessionFloorMs);
         if (picked) return { path: picked, outcome: { attribution: 'spawn_evidence', ownerConfirmed: true } };
         return failClosedResolution('ambiguous', workspaceHint, owner);
     }
-
-    // Claims active: never consider a transcript a DIFFERENT live session owns.
-    const unclaimed = candidates.filter(c => !isTranscriptClaimedByOther(claimKeyForPath(c.p), owner));
-    if (unclaimed.length === 0) return failClosedResolution('already_claimed', workspaceHint, owner);
-
-    // Spawn-floor guard: this session's own wire.jsonl is born at/after it
-    // spawned (minus grace), so a pre-spawn store belongs to an earlier session
-    // and is never bound. With no viable own store yet, return null (wait for
-    // the own transcript on the next read) instead of mis-binding.
+    const unclaimed = scoped.filter(c => !isTranscriptClaimedByOther(c.key, owner));
+    if (!unclaimed.length) return failClosedResolution('already_claimed', workspaceHint, owner);
     const eligible = sessionFloorMs > 0
-        ? unclaimed.filter(c => (c.birth > 0 ? c.birth : c.mtime) >= sessionFloorMs - SPAWN_BIND_GRACE_MS)
-        : unclaimed;
-    if (eligible.length === 0) return { path: null };
-
-    // Content evidence first: the wire containing a prompt THIS session sent
-    // is its own. It also stops a lone candidate from being taken when it is a
-    // sibling's whose own reader has not claimed it yet (the first reader used
-    // to bind whatever single wire existed). No prompts recorded (attached /
-    // restored session) → the spawn-evidence rules below, unchanged.
+        ? unclaimed.filter(c => (c.birth > 0 ? c.birth : c.mtime) >= sessionFloorMs - SPAWN_BIND_GRACE_MS) : unclaimed;
+    if (!eligible.length) return { path: null };
     const snippets = sentPromptSnippets(input.instanceId);
     let chosen: string | null = null;
-    if (snippets.length > 0) {
-        const withPrompt = eligible.filter(c => containsSentPrompt(readForPromptEvidence(c.p), snippets));
-        if (withPrompt.length === 1) chosen = withPrompt[0].p;
-        else if (withPrompt.length === 0) return { path: null };
+    if (snippets.length) {
+        const matches = eligible.filter(c => matchesPrompt(c.p, snippets));
+        if (matches.length === 1) chosen = matches[0].p;
+        else if (!matches.length) return { path: null };
     }
-    if (!chosen && eligible.length === 1) {
-        chosen = eligible[0].p;
-    } else if (!chosen) {
-        // ≥2 viable candidates: only unique spawn-proximity evidence may
-        // decide. A wire born within ±grace of THIS session's spawn is its own;
-        // a sibling spawned seconds later falls outside the window, so each
-        // session still resolves its own transcript — independent of mtime
-        // ordering. A genuine tie is ambiguity → fail closed.
-        chosen = pickUniqueSpawnEvidence(eligible, sessionFloorMs);
-    }
+    if (!chosen && eligible.length === 1) chosen = eligible[0].p;
+    else if (!chosen) chosen = pickUniqueSpawnEvidence(eligible, sessionFloorMs);
     if (!chosen) return failClosedResolution('ambiguous', workspaceHint, owner);
-
-    const verdict = claimTranscript(claimKeyForPath(chosen), owner);
+    const verdict = claimTranscript(eligible.find(c => c.p === chosen)!.key, owner);
     if (verdict === 'denied') return failClosedResolution('already_claimed', workspaceHint, owner);
-    return {
-        path: chosen,
-        outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'claimed', ownerConfirmed: true },
-    };
+    return { path: chosen, outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'claimed', ownerConfirmed: true } };
+}
+
+/** Reuse prepared evidence when only registry ownership/prompt identity changed.
+ * isCurrent must be checked BEFORE the serialized claim, not just before UI writes. */
+export function resolveJsonlSidecarSourceFromEvidence(
+    src: NativeHistoryJsonlSource, input: NativeHistoryInput, evidence: SidecarSourceEvidence, isCurrent: () => boolean,
+): JsonlSourceResolution {
+    if (!isCurrent()) return { path: null, stale: true };
+    if (evidence.directPath) return { path: evidence.directPath, evidence };
+    if (!src.workspace_from_sidecar && src.session_id_from === 'dir_uuid') {
+        const requested = readRequestedSessionId(input);
+        const cutoff = Math.max(Date.now() - (src.recent_window_ms ?? 5 * 60_000), input.sessionStartedAtMs ?? 0);
+        const chosen = evidence.candidates.find(c => requested ? sameSessionUuid(dirUuid(c.p), requested) : c.mtime >= cutoff);
+        return { path: chosen?.p ?? null, evidence };
+    }
+    const result = selectSidecarClaimSource(evidence.candidates, input, src.recent_window_ms ?? 5 * 60_000,
+        (p, snippets) => JSON.stringify(snippets) === evidence.promptIdentity && evidence.candidates.find(c => c.p === p)?.promptMatches === true);
+    return { ...result, evidence, claimKey: evidence.candidates.find(c => c.p === result.path)?.key };
+}
+
+export async function resolveJsonlSidecarSourceAsync(
+    src: NativeHistoryJsonlSource, input: NativeHistoryInput,
+    options: { isCurrent: () => boolean; evidence?: SidecarSourceEvidence },
+): Promise<JsonlSourceResolution> {
+    const evidence = options.evidence ?? await collectSidecarSourceEvidenceAsync(src, input);
+    if (evidence.promptIdentity !== JSON.stringify(sentPromptSnippets(input.instanceId))) await refreshSidecarPromptEvidenceAsync(evidence, input);
+    // Reconcile creation/rename/write races during enumeration and evidence reads.
+    for (const [p, revision] of evidence.revisions) {
+        if (!options.isCurrent() || await sourceRevisionAsync(p) !== revision) return { path: null, evidence, stale: true };
+    }
+    if (evidence.promptIdentity !== JSON.stringify(sentPromptSnippets(input.instanceId))) return { path: null, evidence, stale: true };
+    return resolveJsonlSidecarSourceFromEvidence(src, input, evidence, options.isCurrent);
 }
 
 /**
