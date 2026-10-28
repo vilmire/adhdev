@@ -9,7 +9,7 @@ useHealthyManagedHostDisk()
 
 const cp = vi.hoisted(() => ({
   execFileSync: vi.fn(),
-  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
+  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} })),
 }))
 vi.mock('child_process', () => cp)
 

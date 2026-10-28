@@ -1,4 +1,4 @@
-import { afterAll } from 'vitest'
+import { afterAll, afterEach } from 'vitest'
 
 // Vitest global setup: shrink the production-sized mesh P2P probe windows for the
 // test environment.
@@ -105,3 +105,12 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env[`GIT_CONFIG_KEY_${base + 1}`] = 'receive.autogc'
   process.env[`GIT_CONFIG_VALUE_${base + 1}`] = 'false'
 }
+
+// The meshes.json SQLite write lock pins its lock file's inode per process and
+// fails closed if it is replaced. Many fixtures rm -rf and recreate the same
+// config dir between tests, so forget the pins after each test. Imported lazily
+// so a test file's own vi.mock of this module (or of fs) still applies.
+afterEach(async () => {
+  const lock = await import('../../src/config/mesh-config-write-lock.js')
+  lock.__resetMeshConfigMutexIncarnationsForTests?.()
+})

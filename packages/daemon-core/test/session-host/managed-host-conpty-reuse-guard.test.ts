@@ -8,7 +8,7 @@ useHealthyManagedHostDisk()
 
 const cp = vi.hoisted(() => ({
   execFileSync: vi.fn(),
-  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
+  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} })),
 }))
 vi.mock('child_process', () => cp)
 vi.mock('@adhdev/session-host-core', async original => ({ ...await original<any>(), SessionHostClient: class {
@@ -51,7 +51,7 @@ describe('managed session-host conpty reuse guard', () => {
     vi.spyOn(process, 'kill').mockImplementation((() => { throw Object.assign(new Error('owned dead PID'), { code: 'ESRCH' }) }) as any)
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
-    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
+    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} }))
     cp.execFileSync.mockImplementation(() => '24.3.0')
     platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     originalHome = process.env.HOME

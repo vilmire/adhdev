@@ -7,7 +7,7 @@ import { useHealthyManagedHostDisk } from '../helpers/managed-host-disk'
 
 useHealthyManagedHostDisk()
 
-const cp = vi.hoisted(() => ({ spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })) }))
+const cp = vi.hoisted(() => ({ spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} })) }))
 // Only the host spawn is faked; execFileSync stays real so the default
 // connect probe (short-lived child node) exercises a real unix socket.
 vi.mock('child_process', async (original) => ({ ...await original<typeof import('child_process')>(), spawn: cp.spawn }))

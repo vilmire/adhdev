@@ -8,7 +8,7 @@ useHealthyManagedHostDisk()
 
 const cp = vi.hoisted(() => ({
   execFileSync: vi.fn(),
-  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
+  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} })),
 }))
 vi.mock('child_process', () => cp)
 
@@ -44,7 +44,7 @@ describe('managed session-host conpty pre-spawn guard', () => {
   beforeEach(() => {
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
-    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
+    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} }))
     // findPortableNode22 probes candidates with `-p process.versions.node`;
     // report a non-22 version everywhere so the spawn falls back to
     // process.execPath without needing a staged portable node for these tests.

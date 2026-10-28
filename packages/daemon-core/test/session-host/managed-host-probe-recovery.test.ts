@@ -188,7 +188,7 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
             state.callsAtSpawn = state.calls
             expect(state.alive).toBe(false)
             state.replaced = true
-            return { pid: 4242, unref() {}, on() {} }
+            return { pid: 4242, unref() {}, on() {}, stdio: [null, null, null, { on() {}, end() {} }], once() {} }
         })
         vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal: any) => {
             if (signal === 0) {
@@ -261,7 +261,7 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
                 expect(fs.existsSync(host.endpoint.path)).toBe(false)
             })
             state.replaced = true
-            return { pid: 4242, unref() {}, on() {} }
+            return { pid: 4242, unref() {}, on() {}, stdio: [null, null, null, { on() {}, end() {} }], once() {} }
         })
         try {
             await expect(host.ensureReady()).resolves.toEqual(host.endpoint)

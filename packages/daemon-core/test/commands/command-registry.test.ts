@@ -257,6 +257,10 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create',
     'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
     'project_transfer_list', 'project_transfer_status', 'project_transfer_peer',
+    // Exact-target operator recovery (low-family/operator-recovery.ts, rc33 lock recovery):
+    // owner `operator_recovery` (standalone/ipc/p2p) + `mesh_operator_recovery_census`
+    // (mesh, meshSender 'authenticated_peer').
+    'operator_recovery', 'mesh_operator_recovery_census',
     // Intentional hold commands and their compatibility aliases.
     'maintenance_new_work_hold_set',
     'maintenance_new_work_hold_extend',

@@ -15,6 +15,9 @@ export class MeshConfigStrictLockError extends Error {
 // As with native flock, arbitrary privileged replacement of the lock directory
 // is outside mutual exclusion. Detect observed replacement/ABA and fail closed.
 const incarnations = new Map<string, string>();
+/** Test-only: fixtures delete and recreate config dirs under one path between tests,
+ * which this process would otherwise (correctly) refuse as a replaced lock inode. */
+export function __resetMeshConfigMutexIncarnationsForTests(): void { incarnations.clear(); }
 function identity(s: BigIntStats): string {
     if (!s.isFile() || s.nlink !== 1n || s.ino <= 0n) throw new Error('unsafe_mutex_inode');
     return [s.dev, s.ino, s.birthtimeNs, s.ctimeNs, s.size].join(':');

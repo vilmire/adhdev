@@ -8,7 +8,7 @@ useHealthyManagedHostDisk()
 
 const cp = vi.hoisted(() => ({
   execFileSync: vi.fn(),
-  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
+  spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} })),
 }))
 vi.mock('child_process', () => cp)
 
@@ -28,7 +28,7 @@ describe('managed session-host node runtime pin', () => {
   beforeEach(() => {
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
-    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
+    cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242, stdio: [null, null, null, { on() {}, end() {} }], once() {} }))
     platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     originalHome = process.env.HOME
     originalUserProfile = process.env.USERPROFILE
