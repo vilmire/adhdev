@@ -135,3 +135,8 @@ export function scrapeScreenAssistantMessages(cliType: string, screenText: strin
     }
     return messages;
 }
+
+/** getTraceState: the latest `limit` FSM states plus the current screen. */
+export function buildSpecTraceState(status: unknown, history: ReadonlyArray<unknown>, screenText: string | undefined, limit: number): Record<string, any> {
+    return { status, stateHistory: history.slice(-limit), screenText: screenText ?? '' };
+}

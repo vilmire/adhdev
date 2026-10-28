@@ -29,7 +29,7 @@ import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
 import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
 import {
-    buildSpecDebugSnapshot, extractCodexSessionIdFromScreen,
+    buildSpecDebugSnapshot, buildSpecTraceState, extractCodexSessionIdFromScreen,
     scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
 } from './spec-adapter-readouts.js';
 import * as fs from 'node:fs';
@@ -1282,12 +1282,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     getTraceState(limit = 120): Record<string, any> {
-        const history = this.driver.getStateHistory();
-        return {
-            status: this.getStatus().status,
-            stateHistory: history.slice(-limit),
-            screenText: this.driver.getScreen?.() ?? '',
-        };
+        return buildSpecTraceState(this.getStatus().status, this.driver.getStateHistory(), this.driver.getScreen?.(), limit);
     }
 
     getProviderResolutionMeta(): Record<string, any> {

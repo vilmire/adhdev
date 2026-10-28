@@ -193498,6 +193498,9 @@ ${text4}` : text4;
       }
       return messages;
     }
+    function buildSpecTraceState(status, history, screenText, limit) {
+      return { status, stateHistory: history.slice(-limit), screenText: screenText ?? "" };
+    }
     var fs117 = __toESM2(require("fs"));
     var import_node_crypto63 = require("crypto");
     init_provider_cli_shared();
@@ -196544,12 +196547,7 @@ ${text4}` : text4;
         return [];
       }
       getTraceState(limit = 120) {
-        const history = this.driver.getStateHistory();
-        return {
-          status: this.getStatus().status,
-          stateHistory: history.slice(-limit),
-          screenText: this.driver.getScreen?.() ?? ""
-        };
+        return buildSpecTraceState(this.getStatus().status, this.driver.getStateHistory(), this.driver.getScreen?.(), limit);
       }
       getProviderResolutionMeta() {
         return {
