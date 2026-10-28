@@ -12,7 +12,7 @@ import { createHash } from 'crypto';
  * diagnostics: enums and numbers only, by allow-list.
  */
 
-import { canonicalDaemonId, daemonIdsEquivalent, sanitizeRemoteRepoIdentity } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent, isCarryOverMissionTitle, sanitizeRemoteRepoIdentity } from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
@@ -276,6 +276,8 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
     const now = extras.now ?? Date.now();
     const staleMissions = missionList
         .filter((m) => readText(m?.status) === 'active')
+        // The auto carry-over mission is permanent by design — never "stale" (design 2026-10-28 §13.1).
+        .filter((m) => !isCarryOverMissionTitle(readText(m?.title)))
         .map((m) => {
             const last = Date.parse(readText(rec(m?.tasks)?.lastActivityAt) || readText(m?.updatedAt) || readText(m?.createdAt));
             return { id: readText(m?.id), title: readText(m?.title), last };

@@ -62,6 +62,8 @@ export function pruneMeshRuntimeRetention(): {
     taskOutputs: number;
     topicIndex: number;
     turnAttempts: number;
+    /** Mission history events dropped (collapsed closed missions + per-mesh cap). */
+    missionEvents: number;
 } {
     try {
         const store = MeshRuntimeStore.getInstance();
@@ -71,8 +73,10 @@ export function pruneMeshRuntimeRetention(): {
         const topicIndex = meshTopicIndexFor(store.db).pruneOlderThan(Date.now() - MESH_TOPIC_INDEX_RETENTION_MS);
         const turn = store.transaction(() => store.turnStore().pruneTerminalMeshAttempts(resolveTurnAttemptRetentionMs(), Date.now()));
         store.db.prepare('DELETE FROM session_artifacts WHERE updated_at < ?').run(Date.now() - MESH_SESSION_ARTIFACTS_RETENTION_MS);
-        if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts > 0) {
-            LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue (+${taskOutputs} task-output) / ${topicIndex} topic-index / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) row(s)`);
+        // Structured missions: closed >180d collapse to one summary event; per-mesh row cap (design §4.3).
+        const missionEvents = store.missionItems().pruneEvents().deleted;
+        if (localRecords + toolCalls + terminalQueue + taskOutputs + topicIndex + turn.attempts + missionEvents > 0) {
+            LOG.info('MeshRuntimeStore', `Retention prune removed ${localRecords} local-record / ${toolCalls} tool-call / ${terminalQueue} terminal-queue (+${taskOutputs} task-output) / ${topicIndex} topic-index / ${turn.attempts} mesh turn-attempt (+${turn.events} turn-event, +${turn.holds} hold) / ${missionEvents} mission-event row(s)`);
         }
         return {
             localRecords,
@@ -81,11 +85,12 @@ export function pruneMeshRuntimeRetention(): {
             taskOutputs,
             topicIndex,
             turnAttempts: turn.attempts,
+            missionEvents,
         };
     } catch (e: any) {
         LOG.warn('MeshRuntimeStore', `Runtime retention prune failed: ${e?.message || e}`);
         return {
-            localRecords: 0, toolCalls: 0, terminalQueue: 0, taskOutputs: 0, topicIndex: 0, turnAttempts: 0,
+            localRecords: 0, toolCalls: 0, terminalQueue: 0, taskOutputs: 0, topicIndex: 0, turnAttempts: 0, missionEvents: 0,
         };
     }
 }

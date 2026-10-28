@@ -1,4 +1,5 @@
 import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
+import { applyWorkerReportToMission } from './mesh-mission-structured.js';
 /**
  * Worker structured reporting — Phase B/C.
  *
@@ -644,7 +645,7 @@ export interface WorkerReportRefusalReceipt {
  * recorded only as `(unknown_field)` — never verbatim.
  */
 const REFUSAL_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
-    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes',
+    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes', 'decisionsNeeded', 'commits',
     'handoffNotes.intent', 'handoffNotes.conflictGuidance', 'handoffNotes.touchedFiles', 'handoffNotes.followUps',
 ]);
 const REFUSAL_FIELDS_MAX = 16;
@@ -1082,6 +1083,11 @@ export function acceptWorkerCompletionReportForIdentity(
         + (commit.duplicate ? ' (duplicate replay)' : '')
         + (handoffNoteRecorded ? ' with handoff note' : ''),
     ));
+
+    // Structured missions (design 2026-10-28 §4.4/§5.2): the report's decisions_needed become
+    // worker-requested decision items and its branch_state/touched_files/commits become evidence on
+    // the task's mission. Best-effort inside — never turns an accepted report into a refusal.
+    applyWorkerReportToMission(identity.meshId, identity.taskId, report);
 
     recordAcceptedSessionCompletion({ ...identity, attemptId: evidenceAttemptId }, nowMs);
     return {

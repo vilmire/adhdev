@@ -9,7 +9,10 @@ import { enumOf, MESH_SESSION_CLEANUP_MODES } from '@adhdev/mesh-shared';
 export const MESH_MISSION_UPSERT_TOOL = {
     name: 'mesh_mission_upsert',
     description: 'Create or update a persistent mission so a plan survives coordinator restarts. Optional — tasks need no mission; recommended for multi-task work: create it first, then attach each task with mission_id (mesh_enqueue_task, or one top-level mission_id on mesh_enqueue_batch for every entry). Set completed/abandoned when the outcome is decided. Progress is derived from task statuses (no progress field). '
-        + 'Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status — title/goal ignored, per-mission results returned; mission_ids wins over mission_id.',
+        + 'Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status — title/goal ignored, per-mission results returned; mission_ids wins over mission_id. '
+        + 'Structured record: `summary` = one-line current state; `items_add` records remaining work / live checks / owner decisions (kind "decision" — ask the OWNER here instead of in prose; the same question returns the same item and its answer if answered); `outcome` says why a mission closed. '
+        + 'Closing is never refused: open items move to carry_over_to (default: the mesh\'s carry-over mission) and the response reports movedItems/movedTo; reopening (status active) moves them back. You can never answer a decision yourself — only the owner can. '
+        + 'Omit mission_id AND title with items_add to file items straight into the carry-over mission.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -22,6 +25,46 @@ export const MESH_MISSION_UPSERT_TOOL = {
             title: { type: 'string', description: 'Short title. Required for a single create/update; ignored in bulk.' },
             goal: { type: 'string', description: 'Free-text goal/definition of done (the short summary mesh_mission_list shows). Ignored in bulk.' },
             status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Defaults to active on create. Required in bulk.' },
+            summary: { type: 'string', description: 'One-line current state (≤300 chars; longer is clipped). Shown in lists instead of the goal.' },
+            outcome: { type: 'string', enum: ['merged', 'verified_live', 'superseded', 'not_needed', 'owner_abandoned', 'unspecified'], description: 'Why the mission closed (set with status completed/abandoned; omitted → unspecified). owner_abandoned asks the owner to confirm — only use it when the owner really decided.' },
+            outcome_reason: { type: 'string', description: 'Optional (≤500 chars): the evidence/reasoning behind the outcome.' },
+            carry_over_to: { type: 'string', description: 'On close: mission id that receives the still-open items (default: the mesh carry-over mission).' },
+            items_add: {
+                type: 'array',
+                description: 'Items to record (≤50 per call). Duplicates return the existing item (deduped:true). Per-item results come back in itemResults[].',
+                items: {
+                    type: 'object',
+                    properties: {
+                        kind: { type: 'string', enum: ['remaining', 'live_check', 'decision', 'evidence'], description: 'Default remaining. decision = a question for the owner.' },
+                        text: { type: 'string', description: 'The item (≤300 chars). For a decision this is the question if `question` is omitted.' },
+                        machine: { type: 'string', description: 'live_check: which machine/node to verify on.' },
+                        refs: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string', enum: ['commit', 'branch', 'pr', 'task', 'artifact', 'mission', 'url'] }, repo: { type: 'string' }, value: { type: 'string' }, note: { type: 'string' } } }, description: 'Evidence references (≤8): {kind, repo?, value, note?}.' },
+                        dedupe_key: { type: 'string', description: 'Optional explicit dedupe key (default derived from the text/question).' },
+                        question: { type: 'string', description: 'decision: the question (≤300 chars).' },
+                        context: { type: 'string', description: 'decision: background the owner needs (≤600 chars).' },
+                        options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, detail: { type: 'string' } } }, description: 'decision: 0–5 options {label (≤60), detail? (≤200)}; ids a–e are assigned in order. None = free-text answer.' },
+                        recommended: { type: 'string', description: 'decision: option id (a–e) or label you recommend.' },
+                        due_at: { type: 'string', description: 'decision: ISO time the answer is wanted by.' },
+                        on_due: { type: 'string', enum: ['remind', 'apply_recommended'], description: 'decision: at due_at, remind (default) or apply the recommended option.' },
+                        urgency: { type: 'string', enum: ['normal', 'blocking'], description: 'decision: blocking = work is stalled waiting for this answer.' },
+                        allow_free_text: { type: 'boolean', description: 'decision: accept a free-text answer (default true).' },
+                    },
+                },
+            },
+            items_update: {
+                type: 'array',
+                description: 'Update existing items by id (≤50 per call): set state (remaining/live_check: open|done|dropped; decision: open|withdrawn|superseded), text, machine, refs. A decision cannot be answered here.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string', description: 'Item id (mi_…).' },
+                        state: { type: 'string', enum: ['open', 'done', 'dropped', 'withdrawn', 'superseded'] },
+                        text: { type: 'string' },
+                        machine: { type: 'string' },
+                        refs: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string' }, repo: { type: 'string' }, value: { type: 'string' }, note: { type: 'string' } } } },
+                    },
+                },
+            },
             brief: {
                 type: 'object',
                 description: 'Structured packet rendered into every task dispatched under this mission (unlike `goal`, which is the list summary): {goal (required — no goal = dropped), constraints?, doneCriteria?, handoffNotes?, ownedPaths?} string arrays (snake_case aliases accepted). Ignored in bulk. A dropped brief returns `briefIgnored: {reason, field?}`.',
@@ -43,7 +86,7 @@ export const MESH_MISSION_UPSERT_TOOL = {
 
 export const MESH_MISSION_LIST_TOOL = {
     name: 'mesh_mission_list',
-    description: 'List missions with their goal, status, and live task progress (total/pending/assigned/completed/failed). '
+    description: 'List missions with their goal, status, summary, outcome, open-item counts (openItems) and live task progress (total/pending/assigned/completed/failed). '
         + 'Default (no `status`): non-terminal missions (active/paused) return in detail, while completed/abandoned missions are '
         + 'folded into a `historyFold` summary (counts by status + newest-first `missionIds`) rather than listed one-by-one — this '
         + 'keeps the payload bounded as a mesh accumulates hundreds of finished missions. To read finished missions in full, pass '
@@ -67,6 +110,8 @@ export const MESH_MISSION_LIST_TOOL = {
             },
             verbose: { type: 'boolean', description: 'Return full goal text instead of a capped preview (also attaches stats). Defaults to false (compact).' },
             include_stats: { type: 'boolean', description: 'Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough.' },
+            items: { type: 'boolean', description: 'Attach each mission\'s items (remaining work, live checks, decisions with answers, evidence).' },
+            history: { type: 'boolean', description: 'Attach each mission\'s change history (last 50 events; goal edits keep the previous goal text).' },
         },
     },
 };

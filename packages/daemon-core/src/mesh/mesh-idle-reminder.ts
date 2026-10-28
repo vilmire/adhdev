@@ -292,7 +292,8 @@ export async function maybeInjectIdleActiveMissionReminder(
         if (policy?.idleActiveMissionReminder === false) return false;
 
         // Active missions gate — no active mission, nothing to remind about.
-        const activeMissions = getMeshMissions(meshId, ['active']);
+        // The auto carry-over mission is never a lingering plan to chase (design 2026-10-28 §13.1).
+        const activeMissions = getMeshMissions(meshId, ['active']).filter(m => !m.isCarryOver);
         if (activeMissions.length === 0) return false;
 
         // Fully-idle gate — any non-terminal queue/direct work suppresses the reminder.

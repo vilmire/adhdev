@@ -152,6 +152,28 @@ export const REPORT_COMPLETION_TOOL = {
         items: { type: 'string' },
         description: "What is blocking you. Expected when outcome is 'blocked'.",
       },
+      decisions_needed: {
+        type: 'array',
+        description:
+          'Up to 3 decisions only the OWNER can make (not the coordinator, not you). Each is recorded on this '
+          + "task's mission as a worker-requested question the owner sees; you will not receive the answer here — "
+          + 'the coordinator is told when it is answered. Optional; use sparingly, only for real forks.',
+        items: {
+          type: 'object',
+          properties: {
+            question: { type: 'string', description: 'The question (≤300 chars).' },
+            context: { type: 'string', description: 'What the owner needs to know to decide (≤600 chars).' },
+            options: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, detail: { type: 'string' } } }, description: '0–5 options {label, detail?}; none = free-text answer.' },
+            recommended: { type: 'string', description: 'Option id (a–e) or label you recommend.' },
+            urgency: { type: 'string', enum: ['normal', 'blocking'], description: 'blocking = work is stalled until answered.' },
+          },
+        },
+      },
+      commits: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Git commit SHAs this task produced (7–64 hex chars). Recorded as evidence on the mission; the summary text is never scanned for SHAs.',
+      },
     },
     required: ['outcome', 'summary'],
   },
@@ -406,6 +428,11 @@ function toDaemonReport(a: Record<string, any>): { report: Record<string, unknow
     ...(a.touched_files !== undefined ? { touchedFiles: a.touched_files } : {}),
     ...(a.branch_state !== undefined ? { branchState: a.branch_state } : {}),
     ...(a.blockers !== undefined ? { blockers: a.blockers } : {}),
+    // Optional structured-missions fields: sent ONLY when the worker used them, so a report
+    // that doesn't mention them is byte-identical to a pre-feature report (an older owner
+    // daemon's strict validator never sees an unknown key from an ordinary report).
+    ...((a.decisions_needed ?? a.decisionsNeeded) !== undefined ? { decisionsNeeded: a.decisions_needed ?? a.decisionsNeeded } : {}),
+    ...(a.commits !== undefined ? { commits: a.commits } : {}),
     ...(handoffNotes ? { handoffNotes } : {}),
   };
   return { report, ignoredHandoffKeys };

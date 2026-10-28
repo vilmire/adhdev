@@ -11,6 +11,7 @@ import { migrateTurnLedgerV1, turnLedgerExportPath, type TurnLedgerMigrationOpti
 import { migrateTurnLedgerV2, type TurnLedgerMigrationV2Report } from './turn-ledger/migrate-v2.js';
 import { migrateTurnLedgerV3, type TurnLedgerMigrationV3Report } from './turn-ledger/migrate-v3.js';
 import { LocalRecordStore } from './mesh-local-record-store.js';
+import { MissionItemStore, missionRowFromSql, type MeshMissionRow } from './mesh-mission-items-store.js';
 import { modelNamesEquivalent } from './slot-model-enforcement.js';
 import { expandDaemonIdForms } from '@adhdev/mesh-shared';
 import { isTaskReadonly } from './mesh-task-predicates.js';
@@ -246,6 +247,13 @@ export class MeshRuntimeStore {
     localRecordStore(): LocalRecordStore {
         if (!this.localRecordStoreInstance) this.localRecordStoreInstance = new LocalRecordStore(this.db);
         return this.localRecordStoreInstance;
+    }
+
+    /** Structured missions: items / events / structured columns (mesh-mission-items-store.ts). */
+    private missionItemStoreInstance: MissionItemStore | undefined;
+    missionItems(): MissionItemStore {
+        if (!this.missionItemStoreInstance) this.missionItemStoreInstance = new MissionItemStore(this.db);
+        return this.missionItemStoreInstance;
     }
 
     /** C3 one-way fold of the legacy turn/outbox/ledger tables (user_version 0 → 1). Boot calls it once. */
@@ -1015,27 +1023,27 @@ export class MeshRuntimeStore {
         this.maybeCheckpointWal();
     }
 
-    getMission(meshId: string, missionId: string): { id: string; meshId: string; title: string; goal: string; status: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string } | null {
+    getMission(meshId: string, missionId: string): MeshMissionRow | null {
         const row = this.db.prepare(
             'SELECT * FROM mesh_missions WHERE mesh_id = ? AND id = ?'
-        ).get(meshId, missionId) as Record<string, string> | undefined;
+        ).get(meshId, missionId) as Record<string, any> | undefined;
         if (!row) return null;
-        return { id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at };
+        return missionRowFromSql(row);
     }
 
-    getMissions(meshId: string, statuses?: string[]): Array<{ id: string; meshId: string; title: string; goal: string; status: string; closeCandidateEmittedAt?: string; briefJson?: string; createdAt: string; updatedAt: string }> {
-        let rows: Array<Record<string, string>>;
+    getMissions(meshId: string, statuses?: string[]): Array<MeshMissionRow> {
+        let rows: Array<Record<string, any>>;
         if (statuses?.length) {
             const placeholders = statuses.map(() => '?').join(', ');
             rows = this.db.prepare(
                 `SELECT * FROM mesh_missions WHERE mesh_id = ? AND status IN (${placeholders}) ORDER BY updated_at DESC`
-            ).all(meshId, ...statuses) as Array<Record<string, string>>;
+            ).all(meshId, ...statuses) as Array<Record<string, any>>;
         } else {
             rows = this.db.prepare(
                 'SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC'
-            ).all(meshId) as Array<Record<string, string>>;
+            ).all(meshId) as Array<Record<string, any>>;
         }
-        return rows.map(row => ({ id: row.id, meshId: row.mesh_id, title: row.title, goal: row.goal, status: row.status, closeCandidateEmittedAt: row.close_candidate_emitted_at ?? undefined, briefJson: row.brief_json ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }));
+        return rows.map(missionRowFromSql);
     }
 
     /**
@@ -1073,6 +1081,7 @@ export class MeshRuntimeStore {
 
     /** Remove all missions for a mesh — mesh deletion / test cleanup. */
     clearMissionsForMesh(meshId: string): number {
+        this.missionItems().clearMesh(meshId);
         return this.db.prepare('DELETE FROM mesh_missions WHERE mesh_id = ?').run(meshId).changes;
     }
 

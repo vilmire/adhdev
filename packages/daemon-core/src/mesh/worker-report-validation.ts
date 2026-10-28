@@ -3,7 +3,7 @@
  * `report_completion`, its field limits, and the validator that turns a raw tool
  * payload into a typed WorkerCompletionReport or a list of field errors.
  */
-import { isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
+import { normalizeMissionItemInput, WORKER_COMMITS_MAX, WORKER_DECISIONS_NEEDED_MAX, normalizeReportCommits, isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
 
 export interface WorkerHandoffNotes {
     /** What the change was FOR — the thing a diff cannot say. */
@@ -21,6 +21,15 @@ export interface WorkerCompletionReport {
     touchedFiles?: string[];
     branchState?: WorkerBranchState;
     blockers?: string[];
+    /**
+     * Structured missions (design 2026-10-28 §5.2): decisions the worker needs the OWNER to
+     * make (max 3). Registered on the task's mission as worker-requested items; the worker
+     * can never answer them. Optional — a daemon that predates the field never sees it
+     * (the mcp-server sends it only when the worker used it).
+     */
+    decisionsNeeded?: Array<Record<string, unknown>>;
+    /** Commit SHAs this task produced (§4.4) — the only source of commit evidence; the summary text is never parsed. */
+    commits?: string[];
 }
 
 /** Caps. Oversized input is REJECTED, never silently clipped (see validate below). */
@@ -64,7 +73,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
     }
     const input = raw as Record<string, unknown>;
 
-    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers']);
+    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits']);
     for (const key of Object.keys(input)) {
         if (!KNOWN.has(key)) {
             errors.push({ field: key, message: `unknown field '${key}' (expected one of: ${[...KNOWN].join(', ')})` });
@@ -94,6 +103,38 @@ export function validateWorkerCompletionReport(raw: unknown): {
             field: 'branchState',
             message: `branchState must be one of: ${WORKER_BRANCH_STATES.join(', ')}`,
         });
+    }
+
+    let decisionsNeeded: Array<Record<string, unknown>> | undefined;
+    if (input.decisionsNeeded !== undefined) {
+        const raw = input.decisionsNeeded;
+        if (!Array.isArray(raw)) {
+            errors.push({ field: 'decisionsNeeded', message: 'decisionsNeeded must be an array of {question, context?, options?, recommended?, urgency?} objects' });
+        } else if (raw.length > WORKER_DECISIONS_NEEDED_MAX) {
+            errors.push({ field: 'decisionsNeeded', message: `decisionsNeeded has ${raw.length} entries, over the ${WORKER_DECISIONS_NEEDED_MAX} limit — report the most important ones` });
+        } else {
+            const ok: Array<Record<string, unknown>> = [];
+            for (const entry of raw) {
+                // Reuse the mission-item normalizer purely as a shape check (it clamps, never rejects, text).
+                const n = entry && typeof entry === 'object' && !Array.isArray(entry)
+                    ? normalizeMissionItemInput({ ...(entry as object), kind: 'decision' })
+                    : null;
+                if (!n || 'error' in n) {
+                    errors.push({ field: 'decisionsNeeded', message: 'each decision needs a non-empty `question`' });
+                    ok.length = 0;
+                    break;
+                }
+                ok.push(entry as Record<string, unknown>);
+            }
+            if (ok.length) decisionsNeeded = ok;
+        }
+    }
+    let commits: string[] | undefined;
+    if (input.commits !== undefined) {
+        const normalized = normalizeReportCommits(input.commits);
+        if (!normalized) errors.push({ field: 'commits', message: 'commits must be an array of git SHA strings (7–64 hex chars)' });
+        else if (normalized.length > WORKER_COMMITS_MAX) errors.push({ field: 'commits', message: `commits has ${normalized.length} entries, over the ${WORKER_COMMITS_MAX} limit` });
+        else if (normalized.length) commits = normalized;
     }
 
     let handoffNotes: WorkerHandoffNotes | undefined;
@@ -169,6 +210,8 @@ export function validateWorkerCompletionReport(raw: unknown): {
             ...(touchedFiles !== undefined ? { touchedFiles } : {}),
             ...(input.branchState ? { branchState: input.branchState as WorkerBranchState } : {}),
             ...(blockers?.length ? { blockers } : {}),
+            ...(decisionsNeeded ? { decisionsNeeded } : {}),
+            ...(commits ? { commits } : {}),
         },
         errors: [],
     };

@@ -346,7 +346,48 @@ export async function missionUpsert(
     transport: CommandTransport,
     args: Omit<MissionUpsertRequest, 'v'>,
 ): Promise<MissionUpsertResponse> {
-    return dispatch(transport, 'mission_upsert', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionUpsertResponse);
+    return dispatchWithLegacyFallback(
+        transport, 'mission_upsert', args, STRUCTURED_UPSERT_CONTENT_KEYS, ['structured'],
+        (req) => dispatch(transport, 'mission_upsert', { v: TURN_IPC_PROTOCOL_VERSION, ...req }, decodeMissionUpsertResponse),
+    );
+}
+
+/**
+ * Structured-missions bundle (design 2026-10-28 §13.1 "버전 혼재"): a daemon that
+ * predates the new request keys rejects them (`request failed decode (bad shape)`,
+ * the strict wire guards). The capability flag alone (`structured`) is retried
+ * WITHOUT it so a plain mission call keeps working against an older daemon; a call
+ * that actually uses new fields cannot be honored there, so it fails with a message
+ * that says why instead of a bare decode error.
+ */
+const STRUCTURED_UPSERT_CONTENT_KEYS = ['summary', 'outcome', 'outcomeReason', 'carryOverTo', 'toCarryOver', 'itemsAdd', 'itemsUpdate'] as const;
+const STRUCTURED_LIST_CONTENT_KEYS = ['items', 'history'] as const;
+
+async function dispatchWithLegacyFallback<Req extends Record<string, unknown>, Res>(
+    _transport: CommandTransport,
+    command: TurnIpcCommand,
+    args: Req,
+    contentKeys: readonly string[],
+    flagKeys: readonly string[],
+    send: (req: Req) => Promise<Res>,
+): Promise<Res> {
+    try {
+        return await send(args);
+    } catch (e) {
+        if (!(e instanceof TurnIpcCommandError) || !/failed decode \(bad shape\)/.test(e.message)) throw e;
+        if (!flagKeys.some((k) => k in args)) throw e;
+        if (contentKeys.some((k) => args[k] !== undefined)) {
+            throw new TurnIpcCommandError(
+                e.code,
+                command,
+                `${command}: this daemon predates structured missions (summary/outcome/items) and rejected the request — update the daemon (adhdev update), then retry.`,
+                { cause: e },
+            );
+        }
+        const legacy: Record<string, unknown> = { ...args };
+        for (const k of flagKeys) delete legacy[k];
+        return send(legacy as Req);
+    }
 }
 
 /** List/read missions for a mesh (replaces the in-process `getMeshMissions`/`getMeshMission`). */
@@ -413,7 +454,10 @@ export async function missionListQuery(
     transport: CommandTransport,
     args: Omit<MissionListQueryRequest, 'v'>,
 ): Promise<MissionListQueryResponse> {
-    return dispatch(transport, 'mission_list_query', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeMissionListQueryResponse);
+    return dispatchWithLegacyFallback(
+        transport, 'mission_list_query', args, STRUCTURED_LIST_CONTENT_KEYS, ['structured'],
+        (req) => dispatch(transport, 'mission_list_query', { v: TURN_IPC_PROTOCOL_VERSION, ...req }, decodeMissionListQueryResponse),
+    );
 }
 
 // ─── C-W9a: records, queue composites, active work ───────────────────────────

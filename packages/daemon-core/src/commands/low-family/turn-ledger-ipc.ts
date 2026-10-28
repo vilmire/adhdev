@@ -107,10 +107,10 @@ import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
 import { getActiveTurnLedger, setActiveTurnLedger } from '../../mesh/turn-ledger/active-ledger.js';
 import { meshRecordAppended } from '../../mesh/mesh-record.js';
 import type { MeshIndexView, MeshTopicIndex } from '../../mesh/mesh-topic-index.js';
+import { structuredWireFields, upsertStructuredMission } from '../../mesh/mesh-mission-structured.js';
 import {
     getMeshMission,
     getMeshMissions,
-    upsertMeshMission,
     type MeshMissionRecord,
 } from '../../mesh/mesh-missions.js';
 import { LOG } from '../../logging/logger.js';
@@ -525,7 +525,7 @@ const meshIndexQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: an
 
 // ─── mission_upsert / mission_query ─────────────────────────────────────
 
-function toWireMission(record: MeshMissionRecord): MeshMissionRecordWire {
+function toWireMission(record: MeshMissionRecord, structured = false): MeshMissionRecordWire {
     return {
         id: record.id,
         meshId: record.meshId,
@@ -535,6 +535,9 @@ function toWireMission(record: MeshMissionRecord): MeshMissionRecordWire {
         // H2: `record.brief` is already normalized (mesh-missions.ts) — a structural
         // mirror is enough for the wire, not a re-normalize.
         ...(record.brief ? { brief: record.brief } : {}),
+        // Structured-missions fields ride ONLY when the caller declared the capability
+        // (`structured: true`): an older mcp-server's strict decoder never sees new keys.
+        ...(structured ? structuredWireFields(record.meshId, record) as Partial<MeshMissionRecordWire> : {}),
     };
 }
 
@@ -542,7 +545,11 @@ const missionUpsert: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any
     const req = decodeMissionUpsertRequest(args);
     if (!req) return badRequest('mission_upsert');
     try {
-        const record = upsertMeshMission(req.meshId, {
+        // Every mission write goes through the structured writer: history, version bump,
+        // carry-over on close. Legacy callers (no new keys) get the legacy response shape.
+        // The actor is the IPC caller's role — always the coordinator side here; the
+        // worker's decision requests arrive through the report path, not this command.
+        const { record, result } = upsertStructuredMission(req.meshId, {
             ...(req.id ? { id: req.id } : {}),
             title: req.title,
             ...(req.goal !== undefined ? { goal: req.goal } : {}),
@@ -551,8 +558,18 @@ const missionUpsert: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any
             // (explicit clear) and a MissionBriefWire object both forward as-is —
             // upsertMeshMission's own normalizeMissionBrief call does the real work.
             ...(req.brief !== undefined ? { brief: req.brief } : {}),
-        });
-        const response: MissionUpsertResponse = { mission: toWireMission(record) };
+            ...(req.summary !== undefined ? { summary: req.summary } : {}),
+            ...(req.outcome !== undefined ? { outcome: req.outcome } : {}),
+            ...(req.outcomeReason !== undefined ? { outcomeReason: req.outcomeReason } : {}),
+            ...(req.carryOverTo !== undefined ? { carryOverTo: req.carryOverTo } : {}),
+            ...(req.toCarryOver ? { toCarryOver: true } : {}),
+            ...(req.itemsAdd ? { itemsAdd: [...req.itemsAdd] } : {}),
+            ...(req.itemsUpdate ? { itemsUpdate: [...req.itemsUpdate] } : {}),
+        }, { actor: 'coordinator' });
+        const response: MissionUpsertResponse = {
+            mission: toWireMission(record, req.structured === true),
+            ...(req.structured === true ? { result: { ...result } } : {}),
+        };
         return { success: true, ...response };
     } catch (e: any) {
         return { success: false, error: e?.message ?? String(e) };
@@ -569,7 +586,7 @@ const missionQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
             return { success: true, ...response };
         }
         const records = getMeshMissions(req.meshId, req.statuses ? [...req.statuses] : undefined);
-        const response: MissionQueryResponse = { missions: records.map(toWireMission) };
+        const response: MissionQueryResponse = { missions: records.map(r => toWireMission(r)) };
         return { success: true, ...response };
     } catch (e: any) {
         return { success: false, error: e?.message ?? String(e) };

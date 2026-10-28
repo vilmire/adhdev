@@ -85,9 +85,43 @@ export interface MissionUpsertRequest {
      * this wire guard only checks SHAPE, not that decision.
      */
     brief?: MissionBriefWire | null
+    /**
+     * Structured-missions bundle A (design 2026-10-28 §5.1). Every key below is optional
+     * and ABSENT on a legacy call. `structured: true` is the caller's capability flag: the
+     * daemon only puts the new keys on the response (mission summary/outcome/version,
+     * `result`) when it is set, so an older mcp-server that never sends it keeps decoding
+     * byte-identical responses (mixed-version fleets, design §13.1).
+     */
+    structured?: boolean
+    summary?: string
+    outcome?: string
+    outcomeReason?: string
+    /** Mission id open items move to when this call closes the mission (default: the carry-over mission). */
+    carryOverTo?: string
+    /** Route to the mesh's auto-created carry-over mission instead of `id`/`title` (decision requests without a mission). `title` may then be empty. */
+    toCarryOver?: boolean
+    itemsAdd?: readonly Record<string, unknown>[]
+    itemsUpdate?: readonly Record<string, unknown>[]
 }
 
-export interface MeshMissionRecordWire {
+export interface MeshMissionOpenItemCountsWire {
+    remaining: number
+    live_check: number
+    decision: number
+    evidence: number
+}
+
+/** Structured-missions fields (only with `structured: true` on the request). */
+export interface MeshMissionStructuredWire {
+    summary?: string
+    outcome?: string
+    outcomeReason?: string
+    version?: number
+    carryOver?: boolean
+    openItems?: MeshMissionOpenItemCountsWire
+}
+
+export interface MeshMissionRecordWire extends MeshMissionStructuredWire {
     id: string
     meshId: string
     title: string
@@ -99,10 +133,30 @@ export interface MeshMissionRecordWire {
 
 export interface MissionUpsertResponse {
     mission: MeshMissionRecordWire
+    /** Structured calls only: per-item results, movedItems/movedTo, restoredItems, ownerConfirmationItemId, warnings. */
+    result?: Record<string, unknown>
+}
+
+const STRUCTURED_MISSION_KEYS = ['summary', 'outcome', 'outcomeReason', 'version', 'carryOver', 'openItems'] as const
+
+function isOpenItemCountsWire(value: unknown): value is MeshMissionOpenItemCountsWire {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['remaining', 'live_check', 'decision', 'evidence'])) return false
+    return (['remaining', 'live_check', 'decision', 'evidence'] as const).every((k) => isNonNegativeInt(value[k]))
+}
+
+function isStructuredMissionFields(value: Record<string, unknown>): boolean {
+    for (const k of ['summary', 'outcome', 'outcomeReason'] as const) {
+        if (value[k] !== undefined && typeof value[k] !== 'string') return false
+    }
+    if (value.version !== undefined && !isNonNegativeInt(value.version)) return false
+    if (value.carryOver !== undefined && typeof value.carryOver !== 'boolean') return false
+    if (value.openItems !== undefined && !isOpenItemCountsWire(value.openItems)) return false
+    return true
 }
 
 function isMeshMissionRecordWire(value: unknown): value is MeshMissionRecordWire {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'meshId', 'title', 'goal', 'status', 'brief'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'meshId', 'title', 'goal', 'status', 'brief', ...STRUCTURED_MISSION_KEYS])) return false
+    if (!isStructuredMissionFields(value)) return false
     if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
     if (typeof value.title !== 'string' || typeof value.goal !== 'string') return false
     if (!isMeshMissionStatusValue(value.status)) return false
@@ -111,11 +165,24 @@ function isMeshMissionRecordWire(value: unknown): value is MeshMissionRecordWire
 }
 
 function isMissionUpsertRequest(value: unknown): value is MissionUpsertRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'brief'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'brief', 'structured', 'summary', 'outcome', 'outcomeReason', 'carryOverTo', 'toCarryOver', 'itemsAdd', 'itemsUpdate'])) return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     if (value.id !== undefined && !isEvidenceIdentifier(value.id)) return false
-    if (typeof value.title !== 'string' || value.title.trim().length === 0) return false
+    if (typeof value.title !== 'string') return false
+    // An empty title is allowed only when the daemon can supply one: an existing mission (id) or the carry-over mission.
+    if (value.title.trim().length === 0 && value.toCarryOver !== true && value.id === undefined) return false
+    if (value.structured !== undefined && typeof value.structured !== 'boolean') return false
+    if (value.toCarryOver !== undefined && typeof value.toCarryOver !== 'boolean') return false
+    for (const k of ['summary', 'outcome', 'outcomeReason'] as const) {
+        if (value[k] !== undefined && typeof value[k] !== 'string') return false
+    }
+    if (value.carryOverTo !== undefined && !isEvidenceIdentifier(value.carryOverTo)) return false
+    for (const k of ['itemsAdd', 'itemsUpdate'] as const) {
+        const list = value[k]
+        // Bounded only to keep the IPC message sane; per-entry shape/size is clamped (never rejected) by the daemon.
+        if (list !== undefined && (!Array.isArray(list) || list.length > 500 || !list.every(isRecord))) return false
+    }
     if (value.goal !== undefined && typeof value.goal !== 'string') return false
     if (value.status !== undefined && !isMeshMissionStatusValue(value.status)) return false
     if (value.brief !== undefined && value.brief !== null && !isMissionBriefWire(value.brief)) return false
@@ -127,7 +194,8 @@ export function decodeMissionUpsertRequest(value: unknown): MissionUpsertRequest
 }
 
 export function isMissionUpsertResponse(value: unknown): value is MissionUpsertResponse {
-    return isRecord(value) && hasOnlyKeys(value, ['mission']) && isMeshMissionRecordWire(value.mission)
+    return isRecord(value) && hasOnlyKeys(value, ['mission', 'result']) && isMeshMissionRecordWire(value.mission)
+        && (value.result === undefined || isRecord(value.result))
 }
 
 export function decodeMissionUpsertResponse(value: unknown): MissionUpsertResponse | null {
@@ -207,6 +275,12 @@ export interface MissionListQueryRequest {
      * option except `historyIdLimit` is ignored. An older daemon rejects the key.
      */
     meshStatusView?: 'compact' | 'verbose'
+    /** Structured-missions capability flag (see MissionUpsertRequest.structured): rows then carry summary/outcome/openItems/carryOver/version. */
+    structured?: boolean
+    /** Structured only: attach each mission's items. */
+    items?: boolean
+    /** Structured only: attach each mission's change history (bounded tail). */
+    history?: boolean
 }
 
 export interface MeshMissionTaskAggregateWire {
@@ -248,6 +322,15 @@ export interface MissionListSummaryVerboseWire {
     createdAt?: string
     updatedAt?: string
     closeCandidateEmittedAt?: string | null
+    /** Structured lists only. */
+    summary?: string
+    outcome?: string
+    outcomeReason?: string
+    version?: number
+    carryOver?: boolean
+    openItems?: MeshMissionOpenItemCountsWire
+    items?: readonly Record<string, unknown>[]
+    history?: readonly Record<string, unknown>[]
 }
 
 /** Compact (default) mission row. `goalPreview`/`goalTruncated` present, `goal` absent. */
@@ -266,6 +349,15 @@ export interface MissionListSummarySlimWire {
     createdAt?: string
     updatedAt?: string
     closeCandidateEmittedAt?: string | null
+    /** Structured lists only. */
+    summary?: string
+    outcome?: string
+    outcomeReason?: string
+    version?: number
+    carryOver?: boolean
+    openItems?: MeshMissionOpenItemCountsWire
+    items?: readonly Record<string, unknown>[]
+    history?: readonly Record<string, unknown>[]
 }
 
 export type MissionListSummaryWire = MissionListSummaryVerboseWire | MissionListSummarySlimWire
@@ -286,7 +378,10 @@ export interface MissionListQueryResponse {
 }
 
 function isMissionListQueryRequest(value: unknown): value is MissionListQueryRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'withStats', 'limit', 'historyIdLimit', 'meshStatusView'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'statuses', 'verbose', 'withStats', 'limit', 'historyIdLimit', 'meshStatusView', 'structured', 'items', 'history'])) return false
+    for (const k of ['structured', 'items', 'history'] as const) {
+        if (value[k] !== undefined && typeof value[k] !== 'boolean') return false
+    }
     if (value.meshStatusView !== undefined && value.meshStatusView !== 'compact' && value.meshStatusView !== 'verbose') return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
@@ -332,7 +427,7 @@ function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWi
     const hasGoal = 'goal' in value
     const hasPreview = 'goalPreview' in value && 'goalTruncated' in value
     if (hasGoal === hasPreview) return false // exactly one of the two shapes
-    const baseKeys = ['id', 'meshId', 'title', 'status', 'tasks', 'stats', 'brief', 'createdAt', 'updatedAt', 'closeCandidateEmittedAt'] as const
+    const baseKeys = ['id', 'meshId', 'title', 'status', 'tasks', 'stats', 'brief', 'createdAt', 'updatedAt', 'closeCandidateEmittedAt', ...STRUCTURED_MISSION_KEYS, 'items', 'history'] as const
     const allowed = hasGoal ? [...baseKeys, 'goal'] : [...baseKeys, 'goalPreview', 'goalTruncated']
     if (!hasOnlyKeys(value, allowed)) return false
     if (!isEvidenceIdentifier(value.id) || !isEvidenceIdentifier(value.meshId)) return false
@@ -346,6 +441,10 @@ function isMissionListSummaryWire(value: unknown): value is MissionListSummaryWi
     if (value.createdAt !== undefined && typeof value.createdAt !== 'string') return false
     if (value.updatedAt !== undefined && typeof value.updatedAt !== 'string') return false
     if (value.closeCandidateEmittedAt !== undefined && value.closeCandidateEmittedAt !== null && typeof value.closeCandidateEmittedAt !== 'string') return false
+    if (!isStructuredMissionFields(value)) return false
+    for (const k of ['items', 'history'] as const) {
+        if (value[k] !== undefined && (!Array.isArray(value[k]) || !(value[k] as unknown[]).every(isRecord))) return false
+    }
     return true
 }
 

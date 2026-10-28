@@ -128,6 +128,43 @@ export function migrate(self: MeshRuntimeStore): void {
         CREATE INDEX IF NOT EXISTS idx_mesh_missions_mesh_status
             ON mesh_missions(mesh_id, status, updated_at);
 
+        -- Structured missions (docs/design/2026-10-28-structured-missions-and-owner-decisions.md
+        -- section 4.2): remaining work / live checks / owner decisions / evidence attached to a
+        -- mission. Items are never deleted by a mission close - a close MOVES the open ones.
+        CREATE TABLE IF NOT EXISTS mesh_mission_items (
+            id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'open',
+            text TEXT NOT NULL DEFAULT '',
+            machine TEXT,
+            refs_json TEXT,
+            decision_json TEXT,
+            dedupe_key TEXT,
+            created_by TEXT,
+            moved_to TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mesh_mission_items_dedupe
+            ON mesh_mission_items(mission_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_mesh_mission_items_mesh_kind_state
+            ON mesh_mission_items(mesh_id, kind, state);
+
+        -- Append-only change history (section 4.3). Payloads are capped at 16 KiB by the writer.
+        CREATE TABLE IF NOT EXISTS mesh_mission_events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            mission_id TEXT NOT NULL,
+            mesh_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            actor TEXT,
+            payload_json TEXT,
+            at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mesh_mission_events_mission
+            ON mesh_mission_events(mission_id, seq);
+
         -- Load-balancing scheduler: per-mesh round-robin rotation cursor. When
         -- the schedulingStrategy spreads work ('fitness' with no task in scope),
         -- eligible nodes tied at the same (priority, load) are rotated by this
@@ -450,6 +487,15 @@ export function migrateMeshIsolationColumns(self: MeshRuntimeStore): void {
         if (!missionCols.has('brief_json')) {
             self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN brief_json TEXT`);
         }
+        // 3d. Structured missions (design 2026-10-28 section 4.1): summary / outcome /
+        //     outcome_reason / version, plus is_carry_over (the flag that keeps the auto
+        //     carry-over mission out of the idle reminder and stale lists). All nullable or
+        //     defaulted, so pre-existing rows keep working untouched (version starts at 1).
+        if (!missionCols.has('summary')) self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN summary TEXT`);
+        if (!missionCols.has('outcome')) self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN outcome TEXT`);
+        if (!missionCols.has('outcome_reason')) self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN outcome_reason TEXT`);
+        if (!missionCols.has('version')) self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN version INTEGER NOT NULL DEFAULT 1`);
+        if (!missionCols.has('is_carry_over')) self.db.exec(`ALTER TABLE mesh_missions ADD COLUMN is_carry_over INTEGER NOT NULL DEFAULT 0`);
 
         // 4 / 4b. (C-W8) The legacy pending-event inbox envelope columns and the `input`
         //    column on the legacy direct-dispatch table / the legacy session-delivery table went with those

@@ -77,6 +77,7 @@ import {
 } from '../../mesh/mesh-work-queue.js';
 import { summarizeQueueEntryInputForView } from '../../mesh/mesh-task-predicates.js';
 import { requeueRefusalResponse } from '../../mesh/mesh-queue-attempt-guard.js';
+import { structuredWireFields } from '../../mesh/mesh-mission-structured.js';
 import { getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
 import { buildMeshActiveWork } from '../../mesh/mesh-active-work.js';
 import { buildMeshSchedulingRuntime } from '../../mesh/mesh-scheduling-runtime.js';
@@ -221,8 +222,16 @@ const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
         // spreading the summary raw made `mesh_mission_list` fail
         // `response failed decode` on every mesh with ≥1 mission (found live on
         // preview, 2026-09-25 — the unit tests only ever listed an empty mesh).
+        // Structured-missions capability (design 2026-10-28 §7): summary / outcome / open item
+        // counts (+ items / history on request). Old callers never send the flag.
+        const counts = req.structured ? MeshRuntimeStore.getInstance().missionItems().openCountsByMission(req.meshId) : undefined;
         const response: MissionListQueryResponse = {
-            missions: (result.missions as unknown as Record<string, unknown>[]).map((m) => toMissionListSummaryWire(m)),
+            missions: (result.missions as unknown as Record<string, unknown>[]).map((m) => ({
+                ...toMissionListSummaryWire(m),
+                ...(req.structured
+                    ? structuredWireFields(req.meshId, m as { id: string }, { items: req.items === true, history: req.history === true, counts })
+                    : {}),
+            }) as MissionListSummaryWire),
             historyFold: result.historyFold ?? null,
             truncated: result.truncated,
             matched: result.matched,

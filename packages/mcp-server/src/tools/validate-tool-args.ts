@@ -346,11 +346,22 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
         [TOP_LEVEL_SCOPE]: {
             missionId: 'mission_id',
             missionIds: 'mission_ids',
+            outcomeReason: 'outcome_reason',
+            carryOverTo: 'carry_over_to',
+            itemsAdd: 'items_add',
+            itemsUpdate: 'items_update',
         },
         brief: {
             done_criteria: 'doneCriteria',
             handoff_notes: 'handoffNotes',
             owned_paths: 'ownedPaths',
+        },
+        // Structured missions: snake_case published, camelCase still accepted.
+        items_add: {
+            dedupeKey: 'dedupe_key',
+            dueAt: 'due_at',
+            onDue: 'on_due',
+            allowFreeText: 'allow_free_text',
         },
     },
     mesh_mission_list: {

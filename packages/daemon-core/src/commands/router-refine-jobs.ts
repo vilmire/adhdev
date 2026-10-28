@@ -316,6 +316,12 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                     } : {}),
                 },
             }, { local: true });
+            // Structured missions (design 2026-10-28 §4.4): a recorded merge becomes an `evidence`
+            // item on the mission of the task that produced the branch. Best-effort; never throws.
+            if (kind === 'task_completed' && result?.merged === true) {
+                const { attachRefineMergeEvidence } = await import('../mesh/mesh-mission-structured.js');
+                attachRefineMergeEvidence(handle.meshId, handle.targetNodeId, result);
+            }
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);
         }

@@ -593,9 +593,63 @@ function missionIpcErrorResult(e: unknown): { success: false; code?: string; err
     return { success: false, error: message };
 }
 
+/** Structured-missions inputs a coordinator may send on `mesh_mission_upsert` (design 2026-10-28 §5.1). All optional. */
+interface StructuredUpsertArgs {
+    summary?: unknown;
+    outcome?: unknown;
+    outcome_reason?: unknown;
+    outcomeReason?: unknown;
+    carry_over_to?: unknown;
+    carryOverTo?: unknown;
+    items_add?: unknown;
+    itemsAdd?: unknown;
+    items_update?: unknown;
+    itemsUpdate?: unknown;
+}
+
+function readObjectList(value: unknown): Record<string, unknown>[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    return value.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v));
+}
+
+/** The structured request keys present in `args` (only what the caller used — a legacy call adds nothing but the capability flag). */
+function readStructuredUpsert(args: StructuredUpsertArgs): {
+    wire: { summary?: string; outcome?: string; outcomeReason?: string; carryOverTo?: string; itemsAdd?: Record<string, unknown>[]; itemsUpdate?: Record<string, unknown>[] };
+    used: boolean;
+} {
+    const summary = typeof args.summary === 'string' ? args.summary : undefined;
+    const outcome = readString(args.outcome) || undefined;
+    const outcomeReasonRaw = args.outcome_reason ?? args.outcomeReason;
+    const outcomeReason = typeof outcomeReasonRaw === 'string' ? outcomeReasonRaw : undefined;
+    const carryOverTo = readString(args.carry_over_to ?? args.carryOverTo) || undefined;
+    const itemsAdd = readObjectList(args.items_add ?? args.itemsAdd);
+    const itemsUpdate = readObjectList(args.items_update ?? args.itemsUpdate);
+    const wire = {
+        ...(summary !== undefined ? { summary } : {}),
+        ...(outcome ? { outcome } : {}),
+        ...(outcomeReason !== undefined ? { outcomeReason } : {}),
+        ...(carryOverTo ? { carryOverTo } : {}),
+        ...(itemsAdd?.length ? { itemsAdd } : {}),
+        ...(itemsUpdate?.length ? { itemsUpdate } : {}),
+    };
+    return { wire, used: Object.keys(wire).length > 0 };
+}
+
+/** Flatten the daemon's structured `result` into the tool response (movedItems/movedTo, itemResults, …). */
+function structuredResultFields(result: Record<string, unknown> | undefined): Record<string, unknown> {
+    if (!result) return {};
+    const out: Record<string, unknown> = {};
+    for (const key of ['movedItems', 'movedTo', 'restoredItems', 'foldedItems', 'ownerConfirmationItemId'] as const) {
+        if (result[key] !== undefined) out[key] = result[key];
+    }
+    if (Array.isArray(result.itemResults) && result.itemResults.length > 0) out.itemResults = result.itemResults;
+    if (Array.isArray(result.warnings) && result.warnings.length > 0) out.warnings = result.warnings;
+    return out;
+}
+
 export async function meshMissionUpsert(
     ctx: MeshContext,
-    args: { mission_id?: string; missionId?: string; mission_ids?: unknown; missionIds?: unknown; title?: string; goal?: string; status?: string; brief?: unknown },
+    args: { mission_id?: string; missionId?: string; mission_ids?: unknown; missionIds?: unknown; title?: string; goal?: string; status?: string; brief?: unknown } & StructuredUpsertArgs,
 ): Promise<string> {
     // Bulk mode: mission_ids[] + status applies one status to many missions (stale
     // cleanup). Takes precedence over the single mission_id path. title/goal are ignored;
@@ -603,12 +657,18 @@ export async function meshMissionUpsert(
     // re-supply the existing one per mission).
     const bulkIds = normalizeMissionIdList(args.mission_ids ?? args.missionIds);
     if (bulkIds.length > 0) {
-        return meshMissionUpsertBulk(ctx, bulkIds, readString(args.status));
+        return meshMissionUpsertBulk(ctx, bulkIds, readString(args.status), readStructuredUpsert(args).wire);
     }
 
     try {
+        const missionIdArg = readString(args.mission_id) || readString(args.missionId) || undefined;
+        const structured = readStructuredUpsert(args);
         const title = readString(args.title);
-        if (!title) {
+        // A decision/item request that names no mission goes to the mesh's carry-over mission
+        // (design §5.2) — the point is turning a plain question into a structured item, so a
+        // missing mission never blocks it. A known mission_id may omit title (daemon keeps it).
+        const toCarryOver = !title && !missionIdArg && !!structured.wire.itemsAdd?.length;
+        if (!title && !missionIdArg && !toCarryOver) {
             return JSON.stringify({
                 success: false,
                 code: 'mission_title_required',
@@ -624,17 +684,21 @@ export async function meshMissionUpsert(
             });
         }
         const { brief, briefIgnored } = coerceBriefArg(args.brief);
-        const { mission } = await missionUpsert(ctx.transport, {
+        const { mission, result } = await missionUpsert(ctx.transport, {
             meshId: ctx.mesh.id,
-            id: readString(args.mission_id) || readString(args.missionId) || undefined,
-            title,
+            id: missionIdArg,
+            title: title ?? '',
             goal: typeof args.goal === 'string' ? args.goal : undefined,
             status: statusArg,
             ...(brief !== undefined ? { brief } : {}),
+            structured: true,
+            ...structured.wire,
+            ...(toCarryOver ? { toCarryOver: true } : {}),
         });
         return JSON.stringify({
             success: true,
             mission,
+            ...structuredResultFields(result),
             ...(briefIgnored ? { briefIgnored } : {}),
             nextAction: 'Attach tasks with mesh_enqueue_task mission_id and depends_on. mesh_status shows live task aggregates for this mission.',
         });
@@ -660,12 +724,15 @@ function normalizeMissionIdList(value: unknown): string[] {
  * invalid status) never silently drops the rest. Each mission keeps its own title —
  * `missionUpsert` requires a non-empty title, so we look up the existing record (via
  * `missionQuery`) and re-supply its title while changing only the status. Primary use:
- * the one-time cleanup of accumulated stale missions.
+ * the one-time cleanup of accumulated stale missions. Closing follows the same rules as
+ * a single close (design §5.1): open items carry over, never rejected; `outcome` /
+ * `outcome_reason` / `carry_over_to` apply to every listed mission.
  */
 async function meshMissionUpsertBulk(
     ctx: MeshContext,
     missionIds: string[],
     status: string | undefined,
+    structuredWire: ReturnType<typeof readStructuredUpsert>['wire'] = {},
 ): Promise<string> {
     if (!status) {
         return JSON.stringify({
@@ -690,11 +757,17 @@ async function meshMissionUpsertBulk(
             results,
         });
     }
+    // Bulk applies a status (+ close semantics), never item edits or a per-mission summary.
+    const bulkWire = {
+        ...(structuredWire.outcome ? { outcome: structuredWire.outcome } : {}),
+        ...(structuredWire.outcomeReason !== undefined ? { outcomeReason: structuredWire.outcomeReason } : {}),
+        ...(structuredWire.carryOverTo ? { carryOverTo: structuredWire.carryOverTo } : {}),
+    };
     // One missionQuery(id) + one missionUpsert per id — same two IPC round trips
     // per mission the in-process version did as two function calls; run serially
     // (not Promise.all) so a slow daemon-side write can't reorder onto a stale
     // read for a later id in the same batch.
-    const results: Array<{ id: string; ok: boolean; status?: string; error?: string; code?: string }> = [];
+    const results: Array<{ id: string; ok: boolean; status?: string; error?: string; code?: string; movedItems?: number; movedTo?: string; restoredItems?: number }> = [];
     for (const id of missionIds) {
         try {
             const { missions } = await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id });
@@ -703,13 +776,20 @@ async function meshMissionUpsertBulk(
                 results.push({ id, ok: false, error: 'mission_not_found' });
                 continue;
             }
-            const { mission: updated } = await missionUpsert(ctx.transport, {
+            const { mission: updated, result } = await missionUpsert(ctx.transport, {
                 meshId: ctx.mesh.id,
                 id,
                 title: existing.title,
                 status,
+                structured: true,
+                ...bulkWire,
             });
-            results.push({ id, ok: true, status: updated.status });
+            const moved = structuredResultFields(result);
+            results.push({
+                id, ok: true, status: updated.status,
+                ...(moved.movedItems !== undefined ? { movedItems: moved.movedItems as number, movedTo: moved.movedTo as string } : {}),
+                ...(moved.restoredItems !== undefined ? { restoredItems: moved.restoredItems as number } : {}),
+            });
         } catch (e: any) {
             const errResult = missionIpcErrorResult(e);
             results.push({ id, ok: false, error: errResult.error, ...(errResult.code ? { code: errResult.code } : {}) });
@@ -748,6 +828,10 @@ export async function meshMissionList(
         include_stats?: boolean;
         includeStats?: boolean;
         limit?: number;
+        /** Attach each mission's items (design 2026-10-28 §7). */
+        items?: boolean;
+        /** Attach each mission's change history (bounded tail). */
+        history?: boolean;
     } = {},
 ): Promise<string> {
     try {
@@ -783,6 +867,9 @@ export async function meshMissionList(
             verbose,
             withStats,
             ...(limit !== undefined ? { limit } : {}),
+            structured: true,
+            ...(args.items === true ? { items: true } : {}),
+            ...(args.history === true ? { history: true } : {}),
         });
         return JSON.stringify({
             success: true,

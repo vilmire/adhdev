@@ -62,6 +62,15 @@ export interface MeshMissionRecord {
     brief?: MissionBrief;
     createdAt: string;
     updatedAt: string;
+    /** Structured missions (design 2026-10-28 §4.1): one-line current state, ≤300 chars. */
+    summary?: string;
+    /** Why/how it closed (merged | verified_live | superseded | not_needed | owner_abandoned | unspecified). */
+    outcome?: string;
+    outcomeReason?: string;
+    /** Bumps on every write; 1 for rows that predate it. */
+    version?: number;
+    /** The mesh's auto-created carry-over mission — excluded from the idle reminder and stale lists. */
+    isCarryOver?: boolean;
 }
 
 export interface MeshMissionTaskAggregate {
@@ -160,6 +169,11 @@ export function upsertMeshMission(meshId: string, input: {
      * see `upsertMission`'s `briefJson` doc for how that reaches storage.
      */
     brief?: unknown;
+}, opts?: {
+    /** Who is writing, for the change history (default 'coordinator'). */
+    actor?: string;
+    /** The structured wrapper bumps the version once per call itself; it passes `false` here. */
+    bump?: boolean;
 }): MeshMissionRecord {
     const title = typeof input.title === 'string' ? input.title.trim() : '';
     if (!title) throw new Error('mission_title_required: a mission needs a non-empty title');
@@ -233,6 +247,28 @@ export function upsertMeshMission(meshId: string, input: {
         prevStatus,
         prevGoal,
     });
+
+    // Structured history (§4.3): last-write-wins, nothing is rejected, nothing is lost —
+    // a goal rewrite keeps the PREVIOUS full text in its event (acceptance #2).
+    try {
+        const items = store.missionItems();
+        const actor = opts?.actor ?? 'coordinator';
+        if (!existing) {
+            items.appendEvent(meshId, id, 'created', actor, { title: result.title, status: result.status, goal: result.goal });
+        } else {
+            if (prevStatus !== null && prevStatus !== result.status) {
+                items.appendEvent(meshId, id, 'status_changed', actor, { from: prevStatus, to: result.status });
+            }
+            if ((result.goal ?? '') !== prevGoal) {
+                items.appendEvent(meshId, id, 'goal_changed', actor, { previousGoal: prevGoal, goal: result.goal ?? '' });
+            }
+        }
+        if (opts?.bump !== false) items.bumpVersion(meshId, id);
+        const refreshed = store.getMission(meshId, id);
+        if (refreshed) return { ...result, updatedAt: refreshed.updatedAt, version: refreshed.version, summary: refreshed.summary, outcome: refreshed.outcome, outcomeReason: refreshed.outcomeReason, isCarryOver: refreshed.isCarryOver };
+    } catch (e: any) {
+        LOG.warn('MeshMissions', `mission history write failed for ${id}: ${e?.message || e}`);
+    }
 
     return result;
 }
