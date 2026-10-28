@@ -6,7 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ArtifactFullscreenViewer from '../../src/components/attachments/ArtifactFullscreenViewer'
 import { toArtifactViewerItem, type ArtifactViewerItem } from '../../src/components/attachments/artifact-viewer-item'
-import { classifyArtifactOpenError } from '../../src/components/attachments/artifact-open-error'
+import { ARTIFACT_FALLBACK_TRANSLATIONS, getArtifactErrorCopy } from '../../src/components/attachments/artifact-i18n'
 import { isArtifactPopoutWirePayload } from '../../src/components/attachments/artifact-popout'
 import { readArtifactFetchCommandResponse } from '../../src/hooks/useArtifactRead'
 
@@ -101,18 +101,24 @@ describe('header title and position (issues 9, 11)', () => {
 })
 
 describe('open error mapping (issue 6)', () => {
-    it('maps known daemon codes to localized message keys', () => {
-        expect(classifyArtifactOpenError('artifact_not_found')).toBe('mesh.obs.artifactsErrNotFound')
-        expect(classifyArtifactOpenError('path_outside_workspace')).toBe('mesh.obs.artifactsErrWorkspaceGone')
-        expect(classifyArtifactOpenError('invalid_workspace_root')).toBe('mesh.obs.artifactsErrWorkspaceGone')
-        expect(classifyArtifactOpenError('artifact_session_mismatch')).toBe('mesh.obs.artifactsErrMismatch')
-        expect(classifyArtifactOpenError('missing_session_context')).toBe('mesh.obs.artifactsErrNoSession')
-        expect(classifyArtifactOpenError('timeout')).toBe('mesh.obs.artifactsErrOffline')
-        expect(classifyArtifactOpenError('request_failed', 'Request timed out after 30000ms')).toBe('mesh.obs.artifactsErrOffline')
-        expect(classifyArtifactOpenError('request_failed', 'Peer daemon unreachable')).toBe('mesh.obs.artifactsErrOffline')
-        expect(classifyArtifactOpenError('artifact_too_large')).toBe('mesh.obs.artifactsErrTooLarge')
-        expect(classifyArtifactOpenError('something_new', 'weird')).toBe('mesh.obs.artifactsErrGeneric')
-        expect(classifyArtifactOpenError(null)).toBe('mesh.obs.artifactsErrGeneric')
+    it('maps known daemon codes to localized copy and unknown codes to the generic message', () => {
+        const t = ((key: string, o?: { defaultValue?: string }) => o?.defaultValue ?? key) as any
+        const copy = (code: string | null, raw?: string) => getArtifactErrorCopy(t, 'en', code, raw)
+        const fb = ARTIFACT_FALLBACK_TRANSLATIONS.en
+        expect(copy('artifact_not_found')).toBe(fb['artifact.errorFileMissing'])
+        expect(copy('path_outside_workspace')).toBe(fb['artifact.errorWorkspaceGone'])
+        expect(copy('invalid_workspace_root')).toBe(fb['artifact.errorWorkspaceGone'])
+        expect(copy('artifact_session_mismatch')).toBe(fb['artifact.errorMismatch'])
+        expect(copy('artifact_mismatch')).toBe(fb['artifact.errorMismatch'])
+        expect(copy('missing_session_context')).toBe(fb['artifact.errorMissingSession'])
+        expect(copy('timeout')).toBe(fb['artifact.errorOffline'])
+        expect(copy('request_failed', 'Request timed out after 30000ms')).toBe(fb['artifact.errorOffline'])
+        expect(copy('request_failed', 'Peer daemon unreachable')).toBe(fb['artifact.errorOffline'])
+        expect(copy('artifact_access_denied')).toBe(fb['artifact.errorDenied'])
+        expect(copy('artifact_too_large')).toBe(fb['artifact.errorFileTooLarge'])
+        // Unknown code: generic copy, never the raw English sentence.
+        expect(copy('something_new', 'Weird raw sentence')).toBe(fb['artifact.errorGeneric'])
+        expect(copy(null)).toBe(fb['artifact.errorGeneric'])
     })
 
     it('readArtifactFetchCommandResponse returns the bare daemon code, not the English sentence', () => {

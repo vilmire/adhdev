@@ -236,7 +236,7 @@ describe('MeshArtifactsTab', () => {
         await flush()
         const rows = container.querySelectorAll('[data-testid="mesh-artifact-row"]')
         const alert = rows[1]!.querySelector('[role="alert"]')!
-        expect(alert.textContent).toContain('deleted or moved')
+        expect(alert.textContent).toContain('no longer present')
         expect(alert.textContent).not.toContain('artifact_not_found')
         expect(alert.getAttribute('title')).toContain('Artifact file not found: missing.md')
         expect(container.querySelectorAll('[role="alert"]').length).toBe(1)

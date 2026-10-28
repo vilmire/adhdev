@@ -40,6 +40,10 @@ export type ArtifactTranslationKey =
     | 'artifact.errorFileTooLarge'
     | 'artifact.errorUnsupported'
     | 'artifact.errorGeneric'
+    | 'artifact.errorWorkspaceGone'
+    | 'artifact.errorMismatch'
+    | 'artifact.errorOffline'
+    | 'artifact.errorDenied'
     | 'artifact.kind.markdown'
     | 'artifact.kind.diff'
     | 'artifact.kind.json'
@@ -88,6 +92,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.errorFileTooLarge': 'This artifact exceeds the 4 MiB viewer limit.',
         'artifact.errorUnsupported': 'This artifact format is not supported in the viewer.',
         'artifact.errorGeneric': 'Could not load full artifact content.',
+        'artifact.errorWorkspaceGone': 'The workspace holding this file is no longer available.',
+        'artifact.errorMismatch': 'This artifact doesn\'t match its session. Refresh the list and try again.',
+        'artifact.errorOffline': 'The machine that created this artifact is offline or not responding.',
+        'artifact.errorDenied': 'You don\'t have access to this artifact.',
         'artifact.kind.markdown': 'Markdown',
         'artifact.kind.diff': 'Diff',
         'artifact.kind.json': 'JSON',
@@ -133,6 +141,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.errorFileTooLarge': '산출물 크기가 4 MiB 제한을 초과합니다.',
         'artifact.errorUnsupported': '뷰어에서 지원하지 않는 산출물 형식입니다.',
         'artifact.errorGeneric': '산출물 전체 내용을 불러오지 못했습니다.',
+        'artifact.errorWorkspaceGone': '이 파일이 있던 작업 공간을 더 이상 사용할 수 없습니다.',
+        'artifact.errorMismatch': '이 산출물이 세션 정보와 일치하지 않습니다. 목록을 새로고침한 뒤 다시 시도하세요.',
+        'artifact.errorOffline': '이 산출물을 만든 머신이 오프라인이거나 응답하지 않습니다.',
+        'artifact.errorDenied': '이 산출물에 접근할 권한이 없습니다.',
         'artifact.kind.markdown': '마크다운',
         'artifact.kind.diff': '변경분 (Diff)',
         'artifact.kind.json': 'JSON',
@@ -178,6 +190,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.errorFileTooLarge': 'アーティファクトが 4 MiB の上限を超えています。',
         'artifact.errorUnsupported': 'このアーティファクト形式はサポートされていません。',
         'artifact.errorGeneric': 'アーティファクトの全内容を読み込めませんでした。',
+        'artifact.errorWorkspaceGone': 'このファイルがあったワークスペースは利用できなくなりました。',
+        'artifact.errorMismatch': 'このアーティファクトがセッション情報と一致しません。一覧を更新して再試行してください。',
+        'artifact.errorOffline': 'このアーティファクトを作成したマシンがオフラインか、応答していません。',
+        'artifact.errorDenied': 'このアーティファクトにアクセスする権限がありません。',
         'artifact.kind.markdown': 'Markdown',
         'artifact.kind.diff': 'Diff',
         'artifact.kind.json': 'JSON',
@@ -223,6 +239,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.errorFileTooLarge': '此产物超过 4 MiB 查看器限制。',
         'artifact.errorUnsupported': '查看器不支持此产物格式。',
         'artifact.errorGeneric': '无法加载完整产物内容。',
+        'artifact.errorWorkspaceGone': '存放该文件的工作区已不可用。',
+        'artifact.errorMismatch': '此产物与其会话不匹配。请刷新列表后重试。',
+        'artifact.errorOffline': '创建此产物的机器已离线或无响应。',
+        'artifact.errorDenied': '你无权访问此产物。',
         'artifact.kind.markdown': 'Markdown',
         'artifact.kind.diff': 'Diff',
         'artifact.kind.json': 'JSON',
@@ -268,6 +288,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.errorFileTooLarge': 'Este artefacto supera el límite de 4 MiB del visor.',
         'artifact.errorUnsupported': 'Este formato de artefacto no es compatible con el visor.',
         'artifact.errorGeneric': 'No se pudo cargar el contenido completo del artefacto.',
+        'artifact.errorWorkspaceGone': 'El espacio de trabajo que contenía este archivo ya no está disponible.',
+        'artifact.errorMismatch': 'Este artefacto no coincide con su sesión. Actualiza la lista e inténtalo de nuevo.',
+        'artifact.errorOffline': 'La máquina que creó este artefacto está sin conexión o no responde.',
+        'artifact.errorDenied': 'No tienes acceso a este artefacto.',
         'artifact.kind.markdown': 'Markdown',
         'artifact.kind.diff': 'Diff',
         'artifact.kind.json': 'JSON',
@@ -307,26 +331,51 @@ export function getArtifactKindLabel(
     return trArtifact(t, language, 'artifact.kind.text')
 }
 
+const OFFLINE_ERROR_PATTERN = /timed?[\s_-]?out|timeout|unreachable|offline|not connected|disconnected|peer|relay_result_malformed|no route/i
+
+/**
+ * Localized copy for an artifact fetch failure. Unknown codes fall back to the
+ * generic message; callers keep the raw reason for a tooltip (`title`).
+ */
 export function getArtifactErrorCopy(
     t: TFunction,
     language: string | undefined,
     errorCode: string | null | undefined,
     rawError: string | null | undefined,
 ): string {
-    if (errorCode === 'missing_session_context') {
-        return trArtifact(t, language, 'artifact.errorMissingSession')
+    switch ((errorCode ?? '').trim()) {
+        case 'missing_session_context':
+            return trArtifact(t, language, 'artifact.errorMissingSession')
+        case 'file_missing':
+        case 'artifact_not_found':
+        case 'not_a_regular_file':
+            return trArtifact(t, language, 'artifact.errorFileMissing')
+        case 'file_too_large':
+        case 'artifact_too_large':
+            return trArtifact(t, language, 'artifact.errorFileTooLarge')
+        case 'unsupported_kind':
+        case 'unsupported_mime':
+        case 'unsupported_mime_or_kind':
+            return trArtifact(t, language, 'artifact.errorUnsupported')
+        case 'path_outside_workspace':
+        case 'invalid_workspace_root':
+            return trArtifact(t, language, 'artifact.errorWorkspaceGone')
+        case 'artifact_session_mismatch':
+        case 'session_mismatch':
+        case 'artifact_mismatch':
+            return trArtifact(t, language, 'artifact.errorMismatch')
+        case 'timeout':
+        case 'peer_unreachable':
+        case 'origin_offline':
+        case 'relay_result_malformed':
+            return trArtifact(t, language, 'artifact.errorOffline')
+        case 'artifact_access_denied':
+        case 'secret_file_refused':
+        case 'unauthenticated':
+            return trArtifact(t, language, 'artifact.errorDenied')
+        default:
+            break
     }
-    if (errorCode === 'file_missing' || errorCode === 'artifact_not_found' || errorCode === 'not_a_regular_file') {
-        return trArtifact(t, language, 'artifact.errorFileMissing')
-    }
-    if (errorCode === 'file_too_large' || errorCode === 'artifact_too_large') {
-        return trArtifact(t, language, 'artifact.errorFileTooLarge')
-    }
-    if (errorCode === 'unsupported_kind' || errorCode === 'unsupported_mime' || errorCode === 'unsupported_mime_or_kind') {
-        return trArtifact(t, language, 'artifact.errorUnsupported')
-    }
-    if (typeof rawError === 'string' && rawError.trim()) {
-        return rawError.trim()
-    }
+    if (rawError && OFFLINE_ERROR_PATTERN.test(rawError)) return trArtifact(t, language, 'artifact.errorOffline')
     return trArtifact(t, language, 'artifact.errorGeneric')
 }

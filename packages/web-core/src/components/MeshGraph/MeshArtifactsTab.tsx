@@ -2,14 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ArtifactKind, ChatAttachmentMeta, RepoMeshStatus } from '@adhdev/daemon-core'
 import { useMeshArtifacts } from '../../hooks/useMeshArtifacts'
-import { fetchMeshArtifactPayload, type MeshArtifactSendCommand } from '../../utils/mesh-artifact-fetch'
+import { artifactErrorCodeOf, fetchMeshArtifactPayload, type MeshArtifactSendCommand } from '../../utils/mesh-artifact-fetch'
 import { enqueueThumbnail } from '../../utils/mesh-artifact-thumbnail'
 import { formatBytes } from '../../utils/daemon-utils'
 import { formatAbsoluteTime, formatRelativeTimeLocalized } from '../../utils/time'
 import { RefreshButton } from '../ui/RefreshButton'
 import { ArtifactFullscreenViewer } from '../attachments/ArtifactFullscreenViewer'
-import { getArtifactKindLabel } from '../attachments/artifact-i18n'
-import { artifactErrorCodeOf, classifyArtifactOpenError } from '../attachments/artifact-open-error'
+import { getArtifactErrorCopy, getArtifactKindLabel } from '../attachments/artifact-i18n'
 import { toArtifactViewerItem, type ArtifactViewerItem } from '../attachments/artifact-viewer-item'
 import { Badge } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import {
@@ -147,12 +146,12 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
         } catch (err) {
             if (openSeqRef.current === seq) {
                 const raw = err instanceof Error ? err.message : String(err)
-                setOpenError({ artifactId: target.attachment.artifactId, message: t(classifyArtifactOpenError(artifactErrorCodeOf(err), raw)), raw })
+                setOpenError({ artifactId: target.attachment.artifactId, message: getArtifactErrorCopy(t, i18n.language, artifactErrorCodeOf(err), raw), raw })
             }
         } finally {
             if (openSeqRef.current === seq) setOpeningId(null)
         }
-    }, [daemonId, sendDaemonCommand, t, view.ordered])
+    }, [daemonId, i18n.language, sendDaemonCommand, t, view.ordered])
 
     const viewerIndex = viewer ? view.ordered.findIndex(i => i.attachment.artifactId === viewer.artifactId) : -1
     const onNavigate = useCallback((delta: -1 | 1) => {

@@ -243,7 +243,7 @@ export function AttachmentBubble({
                                 data-error-code={errorCode || 'request_failed'}
                                 className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-800 dark:text-rose-200"
                             >
-                                <span className="min-w-0 flex-1 break-words">
+                                <span className="min-w-0 flex-1 break-words" title={error || undefined}>
                                     {getArtifactErrorCopy(t, i18n.language, errorCode, error)}
                                 </span>
                                 <button

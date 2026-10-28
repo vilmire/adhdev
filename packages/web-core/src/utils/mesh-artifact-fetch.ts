@@ -66,3 +66,9 @@ export async function fetchMeshArtifactPayload(opts: {
     if (cacheKey && !parsed.data.sha256Changed) setCachedArtifactPayload(cacheKey, parsed.data)
     return parsed.data
 }
+
+/** Machine code carried by a thrown fetch error, when it has one (MeshArtifactFetchError). */
+export function artifactErrorCodeOf(err: unknown): string | null {
+    const code = (err as { code?: unknown } | null)?.code
+    return typeof code === 'string' ? code : null
+}
