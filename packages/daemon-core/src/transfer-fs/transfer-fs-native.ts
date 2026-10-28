@@ -20,7 +20,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   TransferFsError,
   splitPortableRelativePath,
@@ -29,7 +29,25 @@ import {
 } from './path-validation.js';
 
 const ADDON_FILE = 'transfer_fs_node.node';
-const requireNative = createRequire(import.meta.url);
+
+/**
+ * This module's file URL. ESM has `import.meta.url`; the CJS build of daemon-core has no
+ * `import.meta` (esbuild rewrites it to `{}`), so fall back to the bundle's `__filename`.
+ * Nothing here may run at module load: every CJS consumer of the daemon-core barrel
+ * evaluates this file whether or not it ever transfers a file (a top-level
+ * `createRequire(import.meta.url)` crashed `require('@adhdev/daemon-core')` outright).
+ */
+function moduleUrl(): string | undefined {
+  if (typeof import.meta?.url === 'string') return import.meta.url;
+  return typeof __filename === 'string' ? pathToFileURL(__filename).href : undefined;
+}
+
+let nativeRequire: NodeJS.Require | null = null;
+function requireNative(absolutePath: string): unknown {
+  // Candidates are absolute paths, so the anchor only has to be a valid file URL.
+  nativeRequire ??= createRequire(moduleUrl() ?? pathToFileURL(path.join(process.cwd(), '__adhdev_transfer_fs_loader__.js')).href);
+  return nativeRequire(absolutePath);
+}
 
 export interface TransferFsBindingInfo {
   apiLevel: number;
@@ -100,12 +118,17 @@ interface RawTransferFsAddon {
 }
 
 function resolveNativeRootDirs(): string[] {
-  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const url = moduleUrl();
+  const moduleDir = url ? path.dirname(fileURLToPath(url)) : null;
   return [
-    path.resolve(moduleDir, 'native'),
-    path.resolve(moduleDir, '../native'),
-    path.resolve(moduleDir, '../src/transfer-fs/native'),
-    path.resolve(moduleDir, '../../src/transfer-fs/native'),
+    ...(moduleDir
+      ? [
+          path.resolve(moduleDir, 'native'),
+          path.resolve(moduleDir, '../native'),
+          path.resolve(moduleDir, '../src/transfer-fs/native'),
+          path.resolve(moduleDir, '../../src/transfer-fs/native'),
+        ]
+      : []),
     path.resolve(process.cwd(), 'oss/packages/daemon-core/src/transfer-fs/native'),
     path.resolve(process.cwd(), 'packages/daemon-core/src/transfer-fs/native'),
     path.resolve(process.cwd(), 'src/transfer-fs/native'),
