@@ -784,28 +784,3 @@ export function listMeshMissionsForTool(
         ...(overflow.length > 0 ? { overflowIds: overflow.map(m => m.id) } : {}),
     };
 }
-
-/**
- * M3-3: render active missions as a prompt section for {{mission}}.
- * Empty string when no active mission — the prompt stays byte-identical to
- * the pre-M3 output in that case (regression guarantee).
- */
-export function buildMissionPromptSection(meshId: string): string {
-    const summaries = getActiveMeshMissionSummaries(meshId);
-    if (summaries.length === 0) return '';
-    const lines: string[] = ['## Active Mission' + (summaries.length > 1 ? 's' : '')];
-    for (const mission of summaries) {
-        const t = mission.tasks;
-        lines.push(
-            `- **${mission.title}** (id: \`${mission.id}\`)`
-            + (mission.goal ? `\n  Goal: ${mission.goal}` : '')
-            + `\n  Tasks: ${t.total} total — ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled`
-            + (t.lastActivityAt ? `\n  Last activity: ${t.lastActivityAt}` : ''),
-        );
-    }
-    lines.push(
-        'Continue this mission from its current task state. Do not re-enqueue tasks that already exist — check mesh_view_queue first. '
-        + 'Update the mission with mesh_mission_upsert when its goal changes or it reaches a terminal state (completed/abandoned).',
-    );
-    return lines.join('\n');
-}

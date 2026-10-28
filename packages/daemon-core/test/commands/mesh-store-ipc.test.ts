@@ -183,6 +183,23 @@ describe('active_work_query / recovery_context_query / tool_call_record / missio
     });
 });
 
+describe('mission_list_query meshStatusView — structured fields are capability-gated (bundle B)', () => {
+    it('adds summary + openItems only when the caller sends structured:true (an older tool gets the legacy rows)', async () => {
+        const { upsertStructuredMission } = await import('../../src/mesh/mesh-mission-structured.js');
+        upsertStructuredMission(meshId, {
+            title: 'Status mission', goal: 'g', summary: 'one line state',
+            itemsAdd: [{ kind: 'decision', question: 'Which?', options: [{ label: 'x' }] }, { kind: 'remaining', text: 'r' }],
+        });
+        const legacy = await call('mission_list_query', { v, meshId, meshStatusView: 'compact' });
+        expect(legacy.success).toBe(true);
+        expect(legacy.missions[0].summary).toBeUndefined();
+        expect(legacy.missions[0].openItems).toBeUndefined();
+        const structured = await call('mission_list_query', { v, meshId, meshStatusView: 'compact', structured: true });
+        expect(structured.missions[0]).toMatchObject({ summary: 'one line state', openItems: { decision: 1, remaining: 1 } });
+        expect(structured.missions[0].goalPreview).toBe('g');
+    });
+});
+
 describe('router-internal args (live regression 2026-09-25: mesh_send_task → queue_query "bad shape")', () => {
     // The router stamps `_interactionId` onto every command's args before the
     // handler runs. The wire decoders are strict, so the SPEC (what the router

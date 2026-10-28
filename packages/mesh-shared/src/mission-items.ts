@@ -106,6 +106,12 @@ export interface MissionDecision {
     urgency: MissionDecisionUrgency
     answer?: MissionDecisionAnswer
     delivery?: MissionDecisionDelivery
+    /**
+     * Coordinator-prompt watermark (bundle B): ISO time the coordinator last "saw" this item's
+     * answer. An answered decision is shown in the coordinator prompt while this is absent or
+     * older than `answer.at` (a changed answer re-surfaces). Written only by the daemon.
+     */
+    promptAckedAt?: string
 }
 
 export interface NormalizedMissionItem {

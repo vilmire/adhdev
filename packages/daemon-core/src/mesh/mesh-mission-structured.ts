@@ -35,6 +35,7 @@ import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { newMissionItemId, type MissionItemRecord, type MissionItemStore } from './mesh-mission-items-store.js';
 import { getMeshMission, upsertMeshMission, type MeshMissionRecord } from './mesh-missions.js';
+import { acknowledgeAnsweredDecisions } from './mesh-mission-prompt.js';
 
 export type MissionWriteActor = 'coordinator' | 'worker' | 'daemon';
 
@@ -412,6 +413,10 @@ export function upsertStructuredMission(
         // Every call is one write: exactly one version bump (last-write-wins, no conflict).
         void wrote;
         result.version = created ? (items.getStructured(meshId, missionId)?.version ?? 1) : items.bumpVersion(meshId, missionId);
+        // A coordinator write on this mission means it has the mission's state: advance the
+        // answered-decision prompt watermark (see mesh-mission-prompt.ts) so each answer is
+        // shown once, not on every later prompt build.
+        if (actor === 'coordinator' && !created) acknowledgeAnsweredDecisions(meshId, missionId);
         const record = getMeshMission(meshId, missionId)!;
         return { record, result };
     });

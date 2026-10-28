@@ -593,6 +593,25 @@ export function statusPolicyForResponse(meshPolicy: unknown, compact: boolean): 
     return policyForResponse;
 }
 
+/**
+ * Structured missions (design 2026-10-28 §7): a compact status row shows the mission's `summary`
+ * (falling back to the elided `goalPreview` when it has none) plus its open decision count — a
+ * coordinator-facing output tweak only; the daemon wire rows are unchanged.
+ */
+export function compactStatusMissionRow(row: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = { ...row };
+    if (typeof out.summary === 'string' && out.summary.length > 0) { delete out.goalPreview; delete out.goalTruncated; }
+    const counts = out.openItems as Record<string, number> | undefined;
+    delete out.openItems;
+    if (counts) {
+        // Only the non-zero kinds, so a mission with nothing open adds no bytes to every poll.
+        const open = Object.fromEntries(Object.entries(counts).filter(([k, n]) => k !== 'evidence' && typeof n === 'number' && n > 0));
+        if (Object.keys(open).length > 0) out.openItems = open;
+        if (typeof counts.decision === 'number' && counts.decision > 0) out.openDecisions = counts.decision;
+    }
+    return out;
+}
+
 /** Missions section (compact: byte-bounded live detail + history fold; verbose: full rows + stats). */
 export function applyStatusMissions(response: Record<string, unknown>, view: MeshStatusView, compact: boolean): void {
 // M3-2: mission summaries — goal + live task aggregates (derived, not stored).
@@ -617,7 +636,8 @@ try {
         // Computed in the daemon (mission_list_query meshStatusView) — this
         // process no longer opens the daemon's store to re-read the whole queue
         // once per live mission.
-        const { live, historyFold } = readViewMissionsCompact(view);
+        const { live: liveRows, historyFold } = readViewMissionsCompact(view);
+        const live = liveRows.map(compactStatusMissionRow);
         // Bound the live-mission detail by byte budget, newest-active first.
         // Overflow folds into foldedMissions so every live id stays addressable.
         const ranked = [...live].sort((a, b) =>

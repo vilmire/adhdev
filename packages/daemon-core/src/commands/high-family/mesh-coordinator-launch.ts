@@ -221,7 +221,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
 
                 try {
                     const { buildCoordinatorSystemPrompt } = await import('../../mesh/coordinator-prompt.js');
-                    const { buildMissionPromptSection } = await import('../../mesh/mesh-missions.js');
+                    const { buildMissionPromptSection } = await import('../../mesh/mesh-mission-prompt.js');
                     // M3-3: inject the active mission summary into the coordinator prompt.
                     // Best-effort — a store failure must not block coordinator launch.
                     const buildMissionSectionBestEffort = (id: string): string => {

@@ -72710,7 +72710,6 @@ ${body}`;
       MESH_MISSION_LIST_HISTORY_ID_LIMIT: () => MESH_MISSION_LIST_HISTORY_ID_LIMIT,
       MESH_MISSION_LIST_STATUS_LIMIT: () => MESH_MISSION_LIST_STATUS_LIMIT,
       MESH_MISSION_STATUSES: () => MESH_MISSION_STATUSES22,
-      buildMissionPromptSection: () => buildMissionPromptSection,
       getActiveMeshMissionSummaries: () => getActiveMeshMissionSummaries,
       getMeshMission: () => getMeshMission,
       getMeshMissions: () => getMeshMissions,
@@ -73065,24 +73064,6 @@ ${body}`;
         ...overflow.length > 0 ? { overflowIds: overflow.map((m) => m.id) } : {}
       };
     }
-    function buildMissionPromptSection(meshId) {
-      const summaries = getActiveMeshMissionSummaries(meshId);
-      if (summaries.length === 0) return "";
-      const lines = ["## Active Mission" + (summaries.length > 1 ? "s" : "")];
-      for (const mission of summaries) {
-        const t = mission.tasks;
-        lines.push(
-          `- **${mission.title}** (id: \`${mission.id}\`)` + (mission.goal ? `
-  Goal: ${mission.goal}` : "") + `
-  Tasks: ${t.total} total \u2014 ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled` + (t.lastActivityAt ? `
-  Last activity: ${t.lastActivityAt}` : "")
-        );
-      }
-      lines.push(
-        "Continue this mission from its current task state. Do not re-enqueue tasks that already exist \u2014 check mesh_view_queue first. Update the mission with mesh_mission_upsert when its goal changes or it reaches a terminal state (completed/abandoned)."
-      );
-      return lines.join("\n");
-    }
     var import_crypto14;
     var LEDGER_GOAL_SUMMARY_MAX;
     var MESH_MISSION_STATUSES22;
@@ -73108,6 +73089,158 @@ ${body}`;
         COMPACT_STATUS_GOAL_PREVIEW_MAX = 80;
         MESH_MISSION_LIST_HISTORY_ID_LIMIT = 30;
         MESH_MISSION_LIST_STATUS_LIMIT = 50;
+      }
+    });
+    var mesh_mission_prompt_exports = {};
+    __export2(mesh_mission_prompt_exports, {
+      MISSION_BLOCK_CHAR_CAP: () => MISSION_BLOCK_CHAR_CAP,
+      MISSION_MIGRATION_HINT: () => MISSION_MIGRATION_HINT,
+      acknowledgeAnsweredDecisions: () => acknowledgeAnsweredDecisions,
+      buildMissionPromptSection: () => buildMissionPromptSection,
+      isUnseenAnswer: () => isUnseenAnswer,
+      renderMissionBlock: () => renderMissionBlock
+    });
+    function decisionOf(item) {
+      return item.decision && typeof item.decision === "object" ? item.decision : void 0;
+    }
+    function isUnseenAnswer(item) {
+      if (item.kind !== "decision" || item.state !== "answered") return false;
+      const d = decisionOf(item);
+      const at = d?.answer?.at;
+      if (!d?.answer || !at) return false;
+      if (d.delivery?.state === "acked") return false;
+      return !d.promptAckedAt || d.promptAckedAt < at;
+    }
+    function recommendedLabel(d) {
+      if (!d.recommended) return "";
+      const opt = d.options.find((o) => o.id === d.recommended);
+      return ` (rec ${d.recommended}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ""})`;
+    }
+    function openDecisionLine(item) {
+      const d = decisionOf(item);
+      const q = truncateMissionText(d?.question || item.text, QUESTION_MAX);
+      const urgent = d?.urgency === "blocking" ? " [blocking]" : "";
+      return `  ? ${item.id}${urgent} ${q}${d ? recommendedLabel(d) : ""}`;
+    }
+    function answeredLine(item) {
+      const d = decisionOf(item);
+      const a = d.answer;
+      const opt = a.optionId ? d.options.find((o) => o.id === a.optionId) : void 0;
+      const answerText = [a.optionId ? `${a.optionId}${opt ? `: ${truncateMissionText(opt.label, LABEL_MAX)}` : ""}` : "", a.text ? truncateMissionText(a.text, 60) : ""].filter(Boolean).join(" / ") || "(no text)";
+      return `  \u2713 ${item.id} ${truncateMissionText(d.question || item.text, 50)} \u2192 ${answerText} (via ${a.via})`;
+    }
+    function countsLine(input) {
+      const { remaining, live_check, decision } = input.open;
+      const parts = [];
+      if (remaining) parts.push(`${remaining} remaining`);
+      if (live_check) parts.push(`${live_check} live_check`);
+      if (decision) {
+        const blocking = input.openDecisions.filter((i) => decisionOf(i)?.urgency === "blocking").length;
+        parts.push(`${decision} decision${blocking ? ` (${blocking} blocking)` : ""}`);
+      }
+      return `  Open: ${parts.length ? parts.join(", ") : "none"}`;
+    }
+    function renderMissionBlock(input) {
+      const m = input.summary;
+      const carryOver = isCarryOverMissionRecord(m);
+      const t = m.tasks;
+      const header = `- **${truncateMissionText(m.title, TITLE_MAX)}** (id: \`${m.id}\`)${carryOver ? " [carry-over]" : ""}`;
+      const counts = countsLine(input);
+      const tasks = carryOver || t.total === 0 ? "" : `  Tasks: ${t.total} total \u2014 ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled`;
+      const summaryText = m.summary ? m.summary : m.goal ? m.goal.replace(/\s+/g, " ").trim() : "";
+      const summaryLabel = m.summary ? "Summary" : "Goal";
+      const fixed = header.length + counts.length + tasks.length + 3;
+      const summaryBudget = Math.max(40, Math.min(m.summary ? SUMMARY_MAX : GOAL_FALLBACK_MAX, MISSION_BLOCK_CHAR_CAP - fixed - 40));
+      const summaryLine = summaryText ? `  ${summaryLabel}: ${truncateMissionText(summaryText, summaryBudget)}` : "";
+      const required = [header, summaryLine, counts, tasks].filter(Boolean);
+      let used2 = required.join("\n").length;
+      const optional = [];
+      if (input.needsMigration) optional.push(`  ${MISSION_MIGRATION_HINT}`);
+      for (const a of input.answered) optional.push(answeredLine(a));
+      const ordered = [...input.openDecisions].sort((a, b) => {
+        const ba = decisionOf(a)?.urgency === "blocking" ? 0 : 1;
+        const bb = decisionOf(b)?.urgency === "blocking" ? 0 : 1;
+        return ba - bb;
+      });
+      for (const d of ordered) optional.push(openDecisionLine(d));
+      const lines = [...required];
+      let omitted = 0;
+      optional.forEach((line, idx) => {
+        const remainingAfter = optional.length - idx - 1;
+        const reserve = remainingAfter > 0 ? MORE_LINE_RESERVE : 0;
+        if (omitted === 0 && used2 + 1 + line.length + reserve <= MISSION_BLOCK_CHAR_CAP) {
+          lines.push(line);
+          used2 += 1 + line.length;
+        } else {
+          omitted += 1;
+        }
+      });
+      if (omitted > 0) lines.push(`  +${omitted} more`);
+      let out = lines.join("\n");
+      if (out.length > MISSION_BLOCK_CHAR_CAP) out = `${out.slice(0, MISSION_BLOCK_CHAR_CAP - 1)}\u2026`;
+      return out;
+    }
+    function buildMissionPromptSection(meshId) {
+      const missions = getActiveMeshMissionSummaries(meshId);
+      if (missions.length === 0) return "";
+      const items = MeshRuntimeStore.getInstance().missionItems();
+      const blocks = [];
+      for (const mission of missions) {
+        const carryOver = isCarryOverMissionRecord(mission);
+        const all = items.listItems(meshId, mission.id);
+        const open = all.filter((i) => i.state === "open");
+        const openDecisions = open.filter((i) => i.kind === "decision");
+        const counts = {
+          remaining: open.filter((i) => i.kind === "remaining").length,
+          live_check: open.filter((i) => i.kind === "live_check").length,
+          decision: openDecisions.length
+        };
+        if (carryOver && counts.remaining + counts.live_check + counts.decision === 0) continue;
+        blocks.push(renderMissionBlock({
+          summary: mission,
+          open: counts,
+          openDecisions,
+          answered: all.filter(isUnseenAnswer),
+          needsMigration: !carryOver && !mission.summary && all.length === 0
+        }));
+      }
+      if (blocks.length === 0) return "";
+      return [`## Active Mission${blocks.length > 1 ? "s" : ""}`, ...blocks, SECTION_FOOTER].join("\n");
+    }
+    function acknowledgeAnsweredDecisions(meshId, missionId, nowIso = (/* @__PURE__ */ new Date()).toISOString()) {
+      const items = MeshRuntimeStore.getInstance().missionItems();
+      let n = 0;
+      for (const item of items.listItems(meshId, missionId, { kinds: ["decision"], states: ["answered"] })) {
+        if (!isUnseenAnswer(item) || !item.decision) continue;
+        items.updateItem(meshId, item.id, { decision: { ...item.decision, promptAckedAt: nowIso } });
+        n += 1;
+      }
+      return n;
+    }
+    var MISSION_BLOCK_CHAR_CAP;
+    var SUMMARY_MAX;
+    var GOAL_FALLBACK_MAX;
+    var TITLE_MAX;
+    var QUESTION_MAX;
+    var LABEL_MAX;
+    var MORE_LINE_RESERVE;
+    var MISSION_MIGRATION_HINT;
+    var SECTION_FOOTER;
+    var init_mesh_mission_prompt = __esm2({
+      "src/mesh/mesh-mission-prompt.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_missions();
+        init_dist();
+        MISSION_BLOCK_CHAR_CAP = 600;
+        SUMMARY_MAX = 200;
+        GOAL_FALLBACK_MAX = 160;
+        TITLE_MAX = 60;
+        QUESTION_MAX = 70;
+        LABEL_MAX = 24;
+        MORE_LINE_RESERVE = 14;
+        MISSION_MIGRATION_HINT = "Migrate: on your next update of this mission, add a summary + items (mesh_mission_upsert summary / items_add).";
+        SECTION_FOOTER = "Continue each mission from its current task state. Do not re-enqueue tasks that already exist \u2014 check mesh_view_queue first. Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). Decision items are the OWNER's to answer \u2014 never answer one yourself; when an answer arrives act on it. Full goal text: mesh_mission_list verbose.";
       }
     });
     var mesh_mission_structured_exports = {};
@@ -73419,6 +73552,7 @@ ${body}`;
         }
         void wrote;
         result.version = created ? items.getStructured(meshId, missionId)?.version ?? 1 : items.bumpVersion(meshId, missionId);
+        if (actor === "coordinator" && !created) acknowledgeAnsweredDecisions(meshId, missionId);
         const record7 = getMeshMission(meshId, missionId);
         return { record: record7, result };
       });
@@ -73573,6 +73707,7 @@ ${body}`;
         init_mesh_runtime_store();
         init_mesh_mission_items_store();
         init_mesh_missions();
+        init_mesh_mission_prompt();
         CLOSED = /* @__PURE__ */ new Set(["completed", "abandoned"]);
         isCarryOverMission = isCarryOverMissionRecord;
       }
@@ -89467,10 +89602,10 @@ Before doing any coordinator work, confirm that the actual callable tool list in
 When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, follow the guided flow in the \`mesh_init\` description: you draft, the user approves, the daemon writes \u2014 label every draft repo-file (commit target) vs machine-local, show a current-vs-suggested diff, and never write without an explicit approval turn (\`mesh_init\` with \`mode="reinit"\` needs per-section approval; \`.adhdev/mesh.json\` goes through \`mesh_config\` with \`kind="mesh_json"\`).`;
         ASSISTANT_RELAY_SECTION = `## Requests relayed by the assistant
 
-- A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and any question you need answered.
+- A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and \u2014 when the owner must decide something \u2014 a one-line pointer to the decision item you registered (see the last bullet).
 - A question, status check or read-only lookup is answered directly from \`mesh_*\` reads \u2014 do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
 - Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it \u2014 do not ask for that approval in chat text.
-- **Never open an interactive picker to ask the user a clarification or decision** (\`AskUserQuestion\` or any single/multi-choice tool). Permission approvals are different: they stay on the Inbox/approval flow above. A picker blocks your whole turn and the assistant cannot see the question or relay an answer. Put the question in your final message as plain text \u2014 the question, numbered options, and your recommendation \u2014 and END the turn so the assistant can relay it and return the answer. Keep working on anything that does not depend on the answer.`;
+- **Never open an interactive picker to ask the user a clarification or decision** (\`AskUserQuestion\` or any single/multi-choice tool). Permission approvals are different: they stay on the Inbox/approval flow above. A picker blocks your whole turn and the assistant cannot see the question or relay an answer. When the owner must decide something, REGISTER it as a decision item instead of asking in chat: call \`mesh_mission_upsert\` with \`items_add: [{ kind: "decision", question, options: [{ label, detail? }, \u2026up to 5], recommended, \u2026 }]\` (omit \`title\`/\`mission_id\` for a question that belongs to no mission \u2014 it lands in the carry-over mission). Put your recommendation and its reason in the options (\`recommended\` = the option id, the reason in that option's \`detail\`). Set \`urgency: "blocking"\` when work is waiting on the answer; set \`due_at\` (ISO time) with \`on_due: "apply_recommended"\` when it can wait and the recommended option is safe to apply if the owner does not answer (default \`on_due\` is \`remind\`). Re-asking the same question returns the existing item and any answer it already has \u2014 do not ask twice. Then leave ONE line in your final message pointing to the item (id + question) and END the turn. The answer comes back to you as an \`[owner decision <itemId>]\` message; you never answer a decision yourself \u2014 not even a recommended one (only the owner, or the due-date rule you set, does). Keep working on anything that does not depend on the answer.`;
       }
     });
     function eventStatus(event, fallback) {
@@ -115362,8 +115497,13 @@ ${detail.join("\n")}` : stripped;
           try {
             if (req.meshStatusView === "compact") {
               const { live, historyFold } = getMeshStatusMissionsCompact(req.meshId, req.historyIdLimit !== void 0 ? { historyIdLimit: req.historyIdLimit } : void 0);
+              const statusCounts = req.structured ? MeshRuntimeStore.getInstance().missionItems().openCountsByMission(req.meshId) : void 0;
               const response2 = {
-                missions: live.map((m) => toMissionListSummaryWire(m, true)),
+                missions: live.map((m) => ({
+                  ...toMissionListSummaryWire(m, true),
+                  // Only what the status line needs (summary + counts): version/outcome would bloat every poll.
+                  ...statusCounts ? (({ summary, openItems, carryOver }) => ({ ...summary !== void 0 ? { summary } : {}, openItems, ...carryOver ? { carryOver } : {} }))(structuredWireFields(req.meshId, m, { counts: statusCounts })) : {}
+                })),
                 historyFold: historyFold ?? null,
                 truncated: false,
                 matched: live.length
@@ -143719,6 +143859,7 @@ ${tail}` : ""
       __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
       __setCliInventoryTestOverridesForTests: () => __setCliInventoryTestOverridesForTests,
       __writeTaskStatusForTests: () => __writeTaskStatusForTests,
+      acknowledgeAnsweredDecisions: () => acknowledgeAnsweredDecisions,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
       activateMeshTopicsAtBoot: () => activateMeshTopicsAtBoot,
       activeTranscriptProjectionService: () => activeTranscriptProjectionService,
@@ -145490,6 +145631,7 @@ ${tail}` : ""
     init_dist();
     init_dist();
     init_coordinator_prompt();
+    init_mesh_mission_prompt();
     init_mesh_missions();
     init_mesh_task_stats();
     init_mesh_review_inbox();
@@ -149363,7 +149505,7 @@ CONSUMED:${nonceHash}`);
       const nodeIds = [...new Set(memberNodes.map((n) => readText(n?.id)).filter(Boolean))];
       const compact2 = args.compact !== false;
       const missionsRead = async () => {
-        const list2 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose" }));
+        const list2 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose", ...args.structured ? { structured: true } : {} }));
         if (compact2 || list2.success === false) return { list: list2 };
         const ids = (Array.isArray(list2.missions) ? list2.missions : []).map((m) => String(m?.id)).filter(Boolean);
         const stats = ids.length > 0 ? await settle(() => execute("task_stats_query", { v, meshId, missionIds: ids })) : null;
@@ -149429,6 +149571,7 @@ CONSUMED:${nonceHash}`);
           meshId,
           refresh: args?.refresh === true,
           compact: args?.compact !== false,
+          ...args?.structured === true ? { structured: true } : {},
           includeTerminalDirect: args?.includeTerminalDirect === true,
           pendingEvents: readOptionalRecord2(args?.pendingEvents),
           toolCall: readOptionalRecord2(args?.toolCall)
@@ -181024,7 +181167,7 @@ ${output}` : "";
         if (!meshId) return { success: false, error: "meshId required" };
         try {
           const { buildCoordinatorSystemPrompt: buildCoordinatorSystemPrompt2 } = await Promise.resolve().then(() => (init_coordinator_prompt(), coordinator_prompt_exports));
-          const { buildMissionPromptSection: buildMissionPromptSection2 } = await Promise.resolve().then(() => (init_mesh_missions(), mesh_missions_exports));
+          const { buildMissionPromptSection: buildMissionPromptSection2 } = await Promise.resolve().then(() => (init_mesh_mission_prompt(), mesh_mission_prompt_exports));
           const buildMissionSectionBestEffort = (id4) => {
             try {
               return buildMissionPromptSection2(id4);
@@ -222755,7 +222898,7 @@ var MESH_CHECKPOINT_TOOL = {
 // src/tools/mesh-tool-schemas-admin.ts
 var MESH_MISSION_UPSERT_TOOL = {
   name: "mesh_mission_upsert",
-  description: 'Create or update a persistent mission so a plan survives coordinator restarts. Optional \u2014 tasks need no mission; recommended for multi-task work: create it first, then attach each task with mission_id (mesh_enqueue_task, or one top-level mission_id on mesh_enqueue_batch for every entry). Set completed/abandoned when the outcome is decided. Progress is derived from task statuses (no progress field). Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status \u2014 title/goal ignored, per-mission results returned; mission_ids wins over mission_id. Structured record: `summary` = one-line current state; `items_add` records remaining work / live checks / owner decisions (kind "decision" \u2014 ask the OWNER here instead of in prose; the same question returns the same item and its answer if answered); `outcome` says why a mission closed. Closing is never refused: open items move to carry_over_to (default: the mesh\'s carry-over mission) and the response reports movedItems/movedTo; reopening (status active) moves them back. You can never answer a decision yourself \u2014 only the owner can. Omit mission_id AND title with items_add to file items straight into the carry-over mission.',
+  description: 'Create or update a persistent mission so a plan survives coordinator restarts. Optional \u2014 tasks need no mission; recommended for multi-task work: create it first, then attach each task with mission_id (mesh_enqueue_task, or one top-level mission_id on mesh_enqueue_batch for every entry). Set completed/abandoned when the outcome is decided. Progress is derived from task statuses (no progress field). Single: title (+ mission_id to update). Bulk status change (e.g. stale cleanup): mission_ids + status \u2014 title/goal ignored, per-mission results returned; mission_ids wins over mission_id. Structured record: `summary` = one-line current state; `items_add` records remaining work / live checks / owner decisions (kind "decision" \u2014 ask the OWNER here instead of in prose: question + up to 5 options + `recommended` (put the reason in that option\'s `detail`); `urgency:"blocking"` when work waits on the answer, or `due_at` + `on_due:"apply_recommended"` when it can wait; then point to the item in ONE line of your final message. The same question returns the same item and its answer if answered); `outcome` says why a mission closed. Closing is never refused: open items move to carry_over_to (default: the mesh\'s carry-over mission) and the response reports movedItems/movedTo; reopening (status active) moves them back. You can never answer a decision yourself \u2014 only the owner can. Omit mission_id AND title with items_add to file items straight into the carry-over mission.',
   inputSchema: {
     type: "object",
     properties: {
@@ -224197,6 +224340,8 @@ async function readMeshStatusView(ctx, request) {
     meshId: ctx.mesh.id,
     ...request.refresh ? { refresh: true } : {},
     compact: request.compact,
+    // Older daemons ignore this key; newer ones then add summary / openItems to the mission rows.
+    structured: true,
     ...request.includeTerminalDirect ? { includeTerminalDirect: true } : {},
     ...request.pendingEvents ? { pendingEvents: request.pendingEvents } : {},
     ...request.toolCall ? { toolCall: request.toolCall } : {},
@@ -224583,10 +224728,26 @@ function statusPolicyForResponse(meshPolicy, compact) {
   const { maxParallelTasks: _omitPolicyMaxParallelTasks, ...policyForResponse } = source;
   return policyForResponse;
 }
+function compactStatusMissionRow(row) {
+  const out = { ...row };
+  if (typeof out.summary === "string" && out.summary.length > 0) {
+    delete out.goalPreview;
+    delete out.goalTruncated;
+  }
+  const counts = out.openItems;
+  delete out.openItems;
+  if (counts) {
+    const open = Object.fromEntries(Object.entries(counts).filter(([k, n]) => k !== "evidence" && typeof n === "number" && n > 0));
+    if (Object.keys(open).length > 0) out.openItems = open;
+    if (typeof counts.decision === "number" && counts.decision > 0) out.openDecisions = counts.decision;
+  }
+  return out;
+}
 function applyStatusMissions(response, view, compact) {
   try {
     if (compact) {
-      const { live, historyFold } = readViewMissionsCompact(view);
+      const { live: liveRows, historyFold } = readViewMissionsCompact(view);
+      const live = liveRows.map(compactStatusMissionRow);
       const ranked = [...live].sort((a, b) => String(b.tasks?.lastActivityAt ?? "").localeCompare(String(a.tasks?.lastActivityAt ?? "")));
       const kept = [];
       const overflow = [];

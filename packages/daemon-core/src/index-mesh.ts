@@ -31,7 +31,8 @@ export type { CanonicalMeshToolName } from '@adhdev/mesh-shared';
 
 // ── Mesh Coordinator ──
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
-export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionSummaries, listMeshMissionsForTool, buildMissionPromptSection, GOAL_PREVIEW_MAX, COMPACT_STATUS_GOAL_PREVIEW_MAX, MESH_MISSION_LIST_HISTORY_ID_LIMIT, MESH_MISSION_LIST_STATUS_LIMIT, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
+export { buildMissionPromptSection, acknowledgeAnsweredDecisions } from './mesh/mesh-mission-prompt.js';
+export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionSummaries, listMeshMissionsForTool, GOAL_PREVIEW_MAX, COMPACT_STATUS_GOAL_PREVIEW_MAX, MESH_MISSION_LIST_HISTORY_ID_LIMIT, MESH_MISSION_LIST_STATUS_LIMIT, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
 export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionSlimSummary, MeshMissionTaskAggregate, MeshStatusMissionsCompact, MeshStatusMissionsHistoryFold, MeshMissionListResult } from './mesh/mesh-missions.js';
 export { computeMeshTaskStats, computeMeshMissionStats } from './mesh/mesh-task-stats.js';
 export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js';

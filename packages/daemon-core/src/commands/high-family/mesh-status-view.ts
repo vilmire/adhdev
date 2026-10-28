@@ -80,6 +80,8 @@ export interface MeshStatusViewArgs {
     refresh?: boolean;
     /** Missions: the compact projection (default) or the verbose rows with stats. */
     compact?: boolean;
+    /** The caller understands the structured mission fields (summary / openItems); absent = an older tool. */
+    structured?: boolean;
     includeTerminalDirect?: boolean;
     /** Drain the caller's pending coordinator events with these args (omit = no drain). */
     pendingEvents?: Record<string, unknown> | null;
@@ -110,7 +112,7 @@ export async function composeMeshStatusView(execute: Execute, args: MeshStatusVi
     const compact = args.compact !== false;
 
     const missionsRead = async (): Promise<Record<string, unknown>> => {
-        const list = await settle(() => execute('mission_list_query', { v, meshId, meshStatusView: compact ? 'compact' : 'verbose' }));
+        const list = await settle(() => execute('mission_list_query', { v, meshId, meshStatusView: compact ? 'compact' : 'verbose', ...(args.structured ? { structured: true } : {}) }));
         if (compact || list.success === false) return { list };
         const ids = (Array.isArray((list as any).missions) ? (list as any).missions : []).map((m: any) => String(m?.id)).filter(Boolean);
         const stats = ids.length > 0 ? await settle(() => execute('task_stats_query', { v, meshId, missionIds: ids })) : null;
@@ -181,6 +183,7 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
             meshId,
             refresh: args?.refresh === true,
             compact: args?.compact !== false,
+            ...(args?.structured === true ? { structured: true } : {}),
             includeTerminalDirect: args?.includeTerminalDirect === true,
             pendingEvents: readOptionalRecord(args?.pendingEvents),
             toolCall: readOptionalRecord(args?.toolCall) as MeshStatusViewArgs['toolCall'],

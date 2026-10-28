@@ -40,6 +40,8 @@ export async function readMeshStatusView(ctx: MeshContext, request: MeshStatusVi
         meshId: ctx.mesh.id,
         ...(request.refresh ? { refresh: true } : {}),
         compact: request.compact,
+        // Older daemons ignore this key; newer ones then add summary / openItems to the mission rows.
+        structured: true,
         ...(request.includeTerminalDirect ? { includeTerminalDirect: true } : {}),
         ...(request.pendingEvents ? { pendingEvents: request.pendingEvents } : {}),
         ...(request.toolCall ? { toolCall: request.toolCall } : {}),

@@ -1377,13 +1377,22 @@ describe('Repo Mesh coordinator prompt — correctness of the operating rules (b
     expect(section).toContain('dashboard Inbox')
   })
 
-  it('forbids asking the owner through an interactive picker — plain-text question, end the turn', () => {
+  it('forbids asking the owner through an interactive picker — register a decision item, one line, end the turn', () => {
     const p = prompt()
     const section = p.slice(p.indexOf('## Requests relayed by the assistant'))
     expect(section).toContain('Never open an interactive picker to ask the user a clarification or decision')
     expect(section).toContain('Permission approvals are different: they stay on the Inbox/approval flow')
     expect(section).toContain('AskUserQuestion')
-    expect(section).toContain('numbered options')
+    // Structured-missions bundle B (design 2026-10-28 §5.2): the plain-text numbered-options rule is replaced.
+    expect(section).not.toContain('as plain text')
+    expect(section).not.toContain('numbered options')
+    expect(section).toContain('REGISTER it as a decision item')
+    expect(section).toContain('mesh_mission_upsert')
+    expect(section).toContain('kind: "decision"')
+    expect(section).toContain('urgency: "blocking"')
+    expect(section).toContain('on_due: "apply_recommended"')
+    expect(section).toContain('ONE line')
+    expect(section).toContain('you never answer a decision yourself')
     expect(section).toContain('END the turn')
     expect(section).toContain('Keep working on anything that does not depend on the answer')
   })

@@ -8,9 +8,9 @@ import {
     getActiveMeshMissionSummaries,
     getMeshStatusMissionSummaries,
     listMeshMissionSummaries,
-    buildMissionPromptSection,
     GOAL_PREVIEW_MAX,
 } from '../../src/mesh/mesh-missions.js';
+import { buildMissionPromptSection } from '../../src/mesh/mesh-mission-prompt.js';
 import { enqueueTask, updateTaskStatus, __writeTaskStatusForTests, claimNextTask, recordDirectDispatchTask, updateSessionTaskStatus, getQueue, __clearMeshQueueForTests } from '../../src/mesh/mesh-work-queue.js';
 import { computeMeshMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { seedLocalRecord } from '../helpers/local-records.js';

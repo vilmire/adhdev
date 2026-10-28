@@ -188,8 +188,14 @@ const missionListQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: 
         // getMeshStatusMissionSummaries in-process).
         if (req.meshStatusView === 'compact') {
             const { live, historyFold } = getMeshStatusMissionsCompact(req.meshId, req.historyIdLimit !== undefined ? { historyIdLimit: req.historyIdLimit } : undefined);
+            // `structured` (sent only by a mesh_status_view that knows the fields): summary + open-item counts.
+            const statusCounts = req.structured ? MeshRuntimeStore.getInstance().missionItems().openCountsByMission(req.meshId) : undefined;
             const response: MissionListQueryResponse = {
-                missions: (live as unknown as Record<string, unknown>[]).map(m => toMissionListSummaryWire(m, true)),
+                missions: (live as unknown as Record<string, unknown>[]).map(m => ({
+                    ...toMissionListSummaryWire(m, true),
+                    // Only what the status line needs (summary + counts): version/outcome would bloat every poll.
+                    ...(statusCounts ? (({ summary, openItems, carryOver }) => ({ ...(summary !== undefined ? { summary } : {}), openItems, ...(carryOver ? { carryOver } : {}) }))(structuredWireFields(req.meshId, m as { id: string }, { counts: statusCounts }) as { summary?: string; openItems: unknown; carryOver?: boolean }) : {}),
+                }) as MissionListSummaryWire),
                 historyFold: historyFold ?? null,
                 truncated: false,
                 matched: live.length,
