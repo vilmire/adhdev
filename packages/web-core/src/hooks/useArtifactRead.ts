@@ -176,7 +176,7 @@ export function buildArtifactCacheKey(scope: ArtifactCacheScope): string | null 
     return JSON.stringify([origin, daemonId, sessionId, coordinatorDaemonId, artifactId, sha256])
 }
 
-function setCachedArtifactPayload(key: string, payload: ArtifactResolvedPayload): void {
+export function setCachedArtifactPayload(key: string, payload: ArtifactResolvedPayload): void {
     if (artifactPayloadCache.has(key)) {
         artifactPayloadCache.delete(key)
     } else if (artifactPayloadCache.size >= MAX_ARTIFACT_CACHE_ENTRIES) {
@@ -188,7 +188,7 @@ function setCachedArtifactPayload(key: string, payload: ArtifactResolvedPayload)
     artifactPayloadCache.set(key, payload)
 }
 
-function getCachedArtifactPayload(key: string): ArtifactResolvedPayload | undefined {
+export function getCachedArtifactPayload(key: string): ArtifactResolvedPayload | undefined {
     const existing = artifactPayloadCache.get(key)
     if (!existing) return undefined
     // Refresh LRU order

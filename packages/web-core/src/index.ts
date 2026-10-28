@@ -387,6 +387,9 @@ export { default as RepoMesh } from './pages/RepoMesh'
 // instead (components/dashboard/LazyDashboardMeshGraphDialog).
 export { default as LazyDashboardMeshGraphDialog, preloadDashboardMeshGraphDialog } from './components/dashboard/LazyDashboardMeshGraphDialog'
 export { default as ApprovalsPage } from './pages/Approvals'
+export { default as ArtifactViewerPage } from './pages/ArtifactViewerPage'
+export { ArtifactFullscreenViewer, openArtifactInNewWindow } from './components/attachments'
+export type { ArtifactFullscreenViewerProps, ArtifactViewerItem } from './components/attachments'
 // Imported from the module itself, not the MeshGraph index, for the same reason.
 export { default as PendingApprovalsInbox, derivePendingApprovals } from './components/MeshGraph/PendingApprovalsInbox'
 export { deriveApprovalsFromConversations, formatApprovalWait } from './components/MeshGraph/PendingApprovalsInbox'

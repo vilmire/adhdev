@@ -67,6 +67,7 @@ import {
     verifyLocalWorkerQueueAndLedgerFence,
 } from './artifact-sharing.js';
 import { getArtifactStore, getMeshRuntimeStore, type ArtifactCommandContext } from './artifact-runtime.js';
+import { handleOwnerMeshArtifactList, isOwnerMeshListRequest } from './artifact-list-scope.js';
 
 export { handleArtifactFetchOrigin, handleArtifactIndexForwarded };
 
@@ -965,6 +966,15 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
 const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
     const ingress = verifyArtifactCommandIngress(args, 'list');
     if (!ingress.ok) return ingress.result;
+    if (isOwnerMeshListRequest(ingress.recordArgs, ingress.ownerTrusted)) {
+        try {
+            const ownerResult = handleOwnerMeshArtifactList(ctx, ingress.recordArgs);
+            const recheck = verifyArtifactCommandIngress(args, 'list');
+            return recheck.ok && recheck.ownerTrusted ? ownerResult : recheck.ok ? { success: false, code: 'COMMAND_SOURCE_REJECTED', error: 'Artifact owner authority changed' } : recheck.result;
+        } catch (err) {
+            return handleArtifactError(err);
+        }
+    }
     const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, 'list', ingress.ownerTrusted);
     if (!auth.ok) return auth.result;
     const currentIngress = verifyArtifactCommandIngress(args, 'list');

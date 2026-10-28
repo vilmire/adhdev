@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel, FIRST_RUN_DIALOG_EVENT } from '@adhdev/web-core'
+import { ArtifactViewerPage, TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel, FIRST_RUN_DIALOG_EVENT } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -312,7 +312,7 @@ function InteractivePromptGate() {
     )
 }
 
-export default function App() {
+function StandaloneShell() {
     const transportValue = useMemo(() => ({
         sendCommand: sendCommandViaWs,
         sendData: sendDataViaWs,
@@ -320,12 +320,7 @@ export default function App() {
     }), [])
 
     return (
-        <BrowserRouter
-            future={{
-                v7_startTransition: true,
-                v7_relativeSplatPath: true,
-            }}
-        >
+        <>
             <ApiProvider client={standaloneApiClient}>
                 <StandaloneAuthGate>
                     <StandaloneDaemonProvider>
@@ -359,6 +354,22 @@ export default function App() {
                     </StandaloneDaemonProvider>
                 </StandaloneAuthGate>
             </ApiProvider>
+        </>
+    )
+}
+
+/**
+ * `/artifact-view` is the artifact pop-out window. It is handed its content by the opener
+ * (postMessage) and needs no daemon, so it is routed ABOVE the auth gate and
+ * StandaloneDaemonProvider — nothing here opens a daemon WebSocket.
+ */
+export default function App() {
+    return (
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+            <Routes>
+                <Route path="/artifact-view" element={<ArtifactViewerPage />} />
+                <Route path="*" element={<StandaloneShell />} />
+            </Routes>
         </BrowserRouter>
     )
 }
