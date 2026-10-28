@@ -544,6 +544,10 @@ export function tryAssignQueueTask(
         return false;
     }
 
+    // Resolve the live model and lineage from one projection of this candidate.
+    const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
+    if (!claiming) return false;
+
     // QUOTA GATE (claim path) + PIN OVERRIDE: see mesh-queue-claim-gate.ts. Returns
     // true when the claim must be refused — the task stays pending.
     // agent:ready / idle-drain / reconcile claims carry no routing decision, so
@@ -551,7 +555,7 @@ export function tryAssignQueueTask(
     // session is gated on the blended provider headline instead of its own pool.
     let gateModel: string | undefined = routingDecision?.selectedSlot?.model;
     if (!gateModel) {
-        try { gateModel = readSessionModel(components.instanceManager?.getInstance?.(sessionId)?.getState?.()); } catch { /* best-effort */ }
+        try { gateModel = readSessionModel(claiming.claimState); } catch { /* best-effort */ }
     }
     if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
         return false;
@@ -570,9 +574,6 @@ export function tryAssignQueueTask(
         }
     }
     assertMaintenanceNode(meshId, nodeId, readMeshNodeDaemonId(node ?? {}));
-    const claiming = resolveClaimingSessionState(components, nodeId, sessionId, node);
-    if (!claiming) return false;
-
     const claim = buildClaimOptions({ components, meshId, nodeId, sessionId, providerType, node, mesh, claimState: claiming.claimState, routingDecision });
     // A6-SILENT-REFUSAL: collect WHICH gate refused so the `!task` exit below stops being
     // the silent funnel that made a permanently-stuck task look like an idle queue.

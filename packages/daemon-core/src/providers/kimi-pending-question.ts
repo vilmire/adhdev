@@ -49,10 +49,16 @@
  */
 'use strict';
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
-import { resolveJsonlSourcePath } from './spec/native-history-executor.js';
+import { resolveJsonlSourcePath, resolveJsonlSidecarSourceAsync, resolveJsonlSidecarSourceFromEvidence, type JsonlSourceResolution } from './spec/native-history-executor.js';
 import type { NativeHistoryInput } from './spec/native-history-types.js';
-import { readTailJsonlLines } from './spec/background-task-detector.js';
+import { readTailJsonlLines, readTailJsonlLinesAsync, detectFromRecords, type BackgroundTaskDetection } from './spec/background-task-detector.js';
+import { canonicalSourcePathAsync, expandPath, sourceRevisionAsync, type SidecarSourceEvidence } from './spec/native-history-paths.js';
+import { claimTranscript, transcriptClaimOwner, transcriptClaimOwnerToken } from './native-history/transcript-claim-registry.js';
+import { sentPromptSnippets } from './native-history/sent-prompt-registry.js';
+import type { InteractivePrompts } from './spec/fsm-types.js';
 import type { NativeHistoryConfig } from './spec/types.js';
 import {
     interactivePromptContentFingerprint,
@@ -351,4 +357,298 @@ export function buildKimiSelectorAnswerSteps(
     for (let i = 0; i < Math.abs(diff); i += 1) steps.push(key);
     steps.push('\r');
     return steps;
+}
+
+
+export interface KimiQuestionSnapshot {
+    state: 'loading' | 'ready' | 'unavailable';
+    prompt: InteractivePrompt | null;
+    resolution?: JsonlSourceResolution;
+    background?: BackgroundTaskDetection;
+}
+type KimiHeader = { native_history?: NativeHistoryConfig; interactive_prompts?: InteractivePrompts };
+
+/** One reader per adapter incarnation. Status reads are memory-only; watchers
+ * and the fallback reconcile timer perform asynchronous revision checks. No
+ * unchanged reconcile enumerates directories or rereads question records. */
+export class KimiPendingQuestionReader {
+    private generation = 0;
+    private sourceEpoch = 0;
+    private closed = false;
+    private key = '';
+    private cfg?: NativeHistoryConfig;
+    private input: NativeHistoryInput = {};
+    private snapshot: KimiQuestionSnapshot = { state: 'ready', prompt: null };
+    private evidence?: SidecarSourceEvidence;
+    private binding?: JsonlSourceResolution;
+    private revisions = new Map<string, string>();
+    private watchers: fs.FSWatcher[] = [];
+    private configWatcher?: fs.FSWatcher;
+    private configSeal?: string;
+    private configSequence = 0;
+    private configPending?: Promise<void>;
+    private configLoaded = false;
+    private pending?: Promise<void>;
+    private dirty = false;
+    private policy = '';
+    private retry?: ReturnType<typeof setTimeout>;
+    private timer?: ReturnType<typeof setInterval>;
+
+    constructor(
+        private readonly onChange: () => void,
+        private specPath?: string,
+        private readonly onHeader?: (header: KimiHeader) => void,
+        private readonly currentInput?: () => NativeHistoryInput,
+        // Background reads retain their owner-free resolution policy; never
+        // borrow an owner-claimed question binding across attribution policies.
+        private readonly backgroundOnly = false,
+    ) {}
+
+    private identity(cfg = this.cfg, input = this.currentInput?.() ?? this.input): string {
+        const expanded = cfg?.source?.kind === 'jsonl'
+            ? expandPath(cfg.source.path, input, { skipWorkspaceRealpath: true }) : '';
+        const env = Object.entries(input.envOverrides ?? {}).sort(([a], [b]) => a.localeCompare(b));
+        return JSON.stringify([this.specPath, cfg, input.agentType, input.providerSessionId, input.sessionId,
+            input.historySessionId, input.sessionStartedAtMs, input.instanceId, input.workspace, env, expanded]);
+    }
+    private policyIdentity(): string {
+        return JSON.stringify([sentPromptSnippets(this.input.instanceId),
+            this.evidence?.candidates.map(c => [c.key, transcriptClaimOwner(c.key)])]);
+    }
+    private current(generation: number, key: string): boolean {
+        return !this.closed && !this.configPending && generation === this.generation && key === this.identity();
+    }
+    private emit(): void { if (!this.closed) this.onChange(); }
+    private setSnapshot(next: KimiQuestionSnapshot): void {
+        const changed = next.state !== this.snapshot.state || next.prompt?.promptId !== this.snapshot.prompt?.promptId
+            || JSON.stringify(next.background) !== JSON.stringify(this.snapshot.background);
+        this.snapshot = next;
+        if (changed) this.emit();
+    }
+    private clearWatches(): void { for (const w of this.watchers) w.close(); this.watchers = []; }
+    private invalidate(): void {
+        this.generation++;
+        this.evidence = undefined;
+        this.binding = undefined;
+        this.revisions.clear();
+        this.clearWatches();
+        this.snapshot = { state: 'loading', prompt: null };
+        this.dirty = true;
+    }
+
+    read(cfg: NativeHistoryConfig | undefined, input: NativeHistoryInput): KimiQuestionSnapshot {
+        if (this.closed) return { state: 'unavailable', prompt: null };
+        this.cfg = cfg;
+        this.input = input;
+        const key = this.identity();
+        if (key !== this.key) { this.key = key; this.invalidate(); }
+        if (this.specPath && !this.configLoaded) this.request();
+        if (!this.timer && (this.specPath || input.agentType === 'kimi' && cfg?.source?.kind === 'jsonl')) {
+            this.timer = setInterval(() => this.request(), 1_000); this.timer.unref?.();
+        }
+        if (input.agentType !== 'kimi' || cfg?.source?.kind !== 'jsonl') {
+            this.snapshot = { state: 'ready', prompt: null };
+            return this.snapshot;
+        }
+        if (this.binding?.claimKey && this.binding.outcome?.ownerConfirmed) {
+            const owner = transcriptClaimOwnerToken(input.instanceId);
+            if (owner && claimTranscript(this.binding.claimKey, owner) === 'denied') {
+                this.binding = undefined;
+                this.snapshot = { state: 'unavailable', prompt: null };
+                this.dirty = true;
+            }
+        }
+        if (!this.binding && this.policy !== this.policyIdentity()) this.dirty = true;
+        if (this.dirty) this.request();
+        return this.snapshot;
+    }
+
+    /** Explicit provider-definition refresh and the spec watch share this path. */
+    reloadConfig(specPath = this.specPath, force = true): Promise<void> {
+        if (this.closed || !specPath) return Promise.resolve();
+        const wasLoaded = this.configLoaded;
+        if (specPath !== this.specPath) { this.configWatcher?.close(); this.configWatcher = undefined; this.specPath = specPath; this.configLoaded = false; }
+        const sequence = ++this.configSequence;
+        // Invalidate synchronously before awaiting config I/O: an old discovery
+        // cannot claim during a provider-definition replacement.
+        if (wasLoaded && force) this.invalidate();
+        const work = (async () => {
+            if (!this.configWatcher) {
+                try {
+                    this.configWatcher = fs.watch(path.dirname(specPath), { persistent: false }, (_event, filename) => {
+                        if (!filename || String(filename) === path.basename(specPath)) void this.reloadConfig(this.specPath, false);
+                    });
+                    this.configWatcher.on('error', () => { this.configWatcher?.close(); this.configWatcher = undefined; });
+                } catch { /* async reconcile still checks the config seal */ }
+            }
+            const before = await sourceRevisionAsync(specPath);
+            let header: KimiHeader;
+            try {
+                const raw = JSON.parse(await fs.promises.readFile(specPath, 'utf8'));
+                if (!raw || typeof raw !== 'object' || (raw.id && raw.id !== this.input.agentType)) throw new Error('provider mismatch');
+                if (raw.native_history?.source && (raw.native_history.source.kind !== 'jsonl'
+                    || typeof raw.native_history.source.path !== 'string')) throw new Error('unsupported source');
+                header = { native_history: raw.native_history, interactive_prompts: raw.interactive_prompts };
+            } catch { header = { native_history: undefined, interactive_prompts: undefined }; }
+            const after = await sourceRevisionAsync(specPath);
+            if (this.closed || sequence !== this.configSequence) return;
+            if (before !== after) { this.defer(); return; }
+            const changed = this.configSeal !== undefined && this.configSeal !== after
+                || JSON.stringify(this.cfg) !== JSON.stringify(header.native_history);
+            this.configSeal = after;
+            this.configLoaded = true;
+            if (changed) this.invalidate();
+            this.cfg = header.native_history;
+            this.onHeader?.(header);
+            this.key = this.identity();
+        })();
+        this.configPending = work;
+        void work.finally(() => {
+            if (this.configPending === work) { this.configPending = undefined; this.request(); this.emit(); }
+        }).catch(() => {});
+        return work;
+    }
+
+    private defer(): void {
+        if (this.retry || this.closed) return;
+        this.retry = setTimeout(() => { this.retry = undefined; this.request(); }, 25);
+        this.retry.unref?.();
+    }
+    private request(): void {
+        if (this.closed) return;
+        this.dirty = true;
+        if (this.pending || this.configPending) return;
+        const generation = this.generation;
+        const work = Promise.resolve().then(async () => {
+            if (!this.configLoaded && this.specPath) await this.reloadConfig();
+            if (this.closed || this.configPending) return;
+            this.dirty = false;
+            await this.refresh();
+        }).catch(() => { if (!this.closed && generation === this.generation) this.setSnapshot({ state: 'unavailable', prompt: this.snapshot.prompt }); });
+        this.pending = work;
+        void work.finally(() => {
+            if (this.pending !== work) return;
+            this.pending = undefined;
+            if (this.dirty && !this.closed) this.defer();
+        });
+    }
+
+    /** Test/embedding drain seam; no timers or polling of active sessions. */
+    async whenSettled(reconcile = false): Promise<void> {
+        if (reconcile) this.request();
+        for (let turn = 0; turn < 32; turn++) {
+            if (this.dirty && !this.pending && !this.configPending && !this.closed) {
+                if (this.retry) { clearTimeout(this.retry); this.retry = undefined; }
+                this.request();
+            }
+            const pending = this.configPending ?? this.pending;
+            if (!pending) break;
+            await pending;
+        }
+    }
+    private watch(revisions: Map<string, string>, bound: boolean): void {
+        this.clearWatches();
+        for (const [p, revision] of revisions) {
+            if (revision === 'missing') continue;
+            try {
+                const watched = bound ? path.dirname(p) : p;
+                const watcher = fs.watch(watched, { persistent: false }, (_event, name) => {
+                    if (!bound || !name || String(name) === path.basename(p)) { this.sourceEpoch++; this.markBackgroundPending(); this.request(); }
+                });
+                watcher.on('error', () => { this.sourceEpoch++; this.markBackgroundPending(); this.request(); });
+                this.watchers.push(watcher);
+            } catch { /* timer validates all levels, even if native watch limits are reached */ }
+        }
+    }
+    private markBackgroundPending(): void {
+        if (this.backgroundOnly && !this.closed && this.snapshot.state === 'ready') {
+            this.setSnapshot({ ...this.snapshot, state: 'loading' });
+        }
+    }
+    private async refresh(): Promise<void> {
+        const generation = this.generation;
+        const key = this.key;
+        const sourceEpoch = this.sourceEpoch;
+        const valid = () => this.current(generation, key) && sourceEpoch === this.sourceEpoch;
+        const cfg = this.cfg;
+        const input = { ...this.input, envOverrides: { ...this.input.envOverrides } };
+        if (!valid()) return;
+        if (this.specPath && this.configSeal !== await sourceRevisionAsync(this.specPath)) { await this.reloadConfig(this.specPath, false); return; }
+        if (cfg?.source?.kind !== 'jsonl') return;
+        let changed = false;
+        for (const [p, revision] of this.revisions) if (await sourceRevisionAsync(p) !== revision) { changed = true; break; }
+        if (!valid()) return;
+        if (changed) this.markBackgroundPending();
+        if (this.evidence && input.workspace && await canonicalSourcePathAsync(input.workspace) !== this.evidence.workspaceKey) {
+            if (valid()) { this.invalidate(); this.emit(); }
+            return;
+        }
+        if (this.binding?.path) {
+            const p = this.binding.path;
+            const before = this.revisions.get(p)!;
+            const now = await sourceRevisionAsync(p);
+            const sidecar = cfg.source.workspace_from_sidecar
+                ? path.resolve(path.dirname(p), cfg.source.workspace_from_sidecar.rel_path) : undefined;
+            const sameIdentity = now.split(':').slice(0, 2).join(':') === before.split(':').slice(0, 2).join(':');
+            const sourceChanged = now !== before && (!sameIdentity || Number(now.split(':')[2]) <= Number(before.split(':')[2]));
+            if (sourceChanged || sidecar && await sourceRevisionAsync(sidecar) !== this.revisions.get(sidecar)) {
+                if (valid()) { this.invalidate(); this.emit(); }
+                return;
+            }
+            if (!changed && this.snapshot.state === 'ready') return;
+        } else {
+            if (this.evidence && !changed && this.policy === this.policyIdentity() && this.snapshot.state === 'unavailable') return;
+            const promptChanged = this.evidence?.promptIdentity !== JSON.stringify(sentPromptSnippets(input.instanceId));
+            const result = this.evidence && !changed && !promptChanged
+                ? resolveJsonlSidecarSourceFromEvidence(cfg.source, input, this.evidence, valid)
+                : await resolveJsonlSidecarSourceAsync(cfg.source, input, { isCurrent: valid, evidence: !changed ? this.evidence : undefined });
+            if (!valid()) return;
+            if (result.stale) { this.dirty = true; return; }
+            this.evidence = result.evidence;
+            this.policy = this.policyIdentity();
+            if (!result.path) {
+                this.revisions = this.evidence?.revisions ?? new Map();
+                this.watch(this.revisions, false);
+                this.setSnapshot({ state: 'unavailable', prompt: null, resolution: result });
+                return;
+            }
+            this.binding = { ...result, evidence: undefined };
+            this.revisions = new Map([[result.path, this.evidence!.revisions.get(result.path)!]]);
+            const sidecar = cfg.source.workspace_from_sidecar;
+            if (sidecar) {
+                const p = path.resolve(path.dirname(result.path), sidecar.rel_path);
+                this.revisions.set(p, this.evidence!.revisions.get(p)!);
+            }
+            this.evidence = { ...this.evidence!, candidates: this.evidence!.candidates.filter(c => c.p === result.path), revisions: this.revisions };
+            this.watch(this.revisions, true);
+        }
+        const source = this.binding!.path!;
+        const tail = await readTailJsonlLinesAsync(source, TAIL_BYTES, valid);
+        if (!valid()) return;
+        if (!tail) { this.dirty = true; return; }
+        // Reject a replacement between resolution and the tail read, too.
+        const expected = this.revisions.get(source)!.split(':').slice(0, 2).join(':');
+        if (tail.signature.split(':').slice(0, 2).join(':') !== expected) { this.invalidate(); this.emit(); return; }
+        const sidecar = cfg.source.workspace_from_sidecar;
+        if (sidecar) {
+            const p = path.resolve(path.dirname(source), sidecar.rel_path);
+            if (await sourceRevisionAsync(p) !== this.revisions.get(p)) { if (valid()) { this.invalidate(); this.emit(); } return; }
+        }
+        if (!valid()) return;
+        this.revisions.set(source, tail.signature);
+        this.setSnapshot({ state: 'ready', prompt: this.backgroundOnly ? null : detectKimiPendingQuestionFromRecords(tail.records),
+            ...(this.backgroundOnly ? { background: detectFromRecords(tail.records, 'kimi') } : {}), resolution: this.binding });
+    }
+    dispose(): void {
+        this.closed = true;
+        this.generation++;
+        this.configSequence++;
+        this.clearWatches();
+        this.configWatcher?.close();
+        if (this.timer) clearInterval(this.timer);
+        if (this.retry) clearTimeout(this.retry);
+        this.evidence = undefined;
+        this.binding = undefined;
+        this.snapshot = { state: 'unavailable', prompt: null };
+    }
 }

@@ -38,12 +38,12 @@ export function getMeshConfigPath(): string {
 //      previous writer committed;
 //   2. the save itself is atomic (tmp sibling + rename), so a reader never
 //      sees a torn half-written file.
-// The lock is best-effort: on acquisition timeout the write proceeds unlocked
-// (degrades to the pre-fix behavior) rather than wedging the registry, and a
-// lock abandoned by a crashed process is broken after STALE_MS.
+// All writers fail closed on contention. A timestamp does not prove a lock
+// owner is dead: a slow Git probe/fsync or paused process can exceed any age
+// threshold. Never steal an unproven lock or continue with an unlocked write.
+// Abandoned locks require owner recovery; reads remain available.
 
 const MESH_CONFIG_LOCK_WAIT_MS = 2000;
-const MESH_CONFIG_LOCK_STALE_MS = 15_000;
 const MESH_CONFIG_LOCK_POLL_MS = 25;
 
 // In-process reentrancy: loadMeshConfig's eager-migration persist runs INSIDE
@@ -70,18 +70,7 @@ function acquireMeshConfigLock(): (() => void) | null {
                 }
             };
         } catch (error: any) {
-            if (error?.code !== 'EEXIST') return null;
-            try {
-                const stat = statSync(lockPath);
-                if (Date.now() - stat.mtimeMs > MESH_CONFIG_LOCK_STALE_MS) {
-                    // Abandoned by a crashed writer; break it.
-                    rmSync(lockPath, { recursive: true, force: true });
-                    continue;
-                }
-            } catch {
-                // Lock disappeared between stat attempts; retry immediately.
-                continue;
-            }
+            if (error?.code !== 'EEXIST') throw new MeshConfigStrictLockError('project_storage_unavailable', lockPath);
             sleepBlockingMs(MESH_CONFIG_LOCK_POLL_MS);
         }
     }
@@ -91,13 +80,13 @@ function acquireMeshConfigLock(): (() => void) | null {
 /**
  * Run a full load→mutate→save span under the cross-process meshes.json lock.
  * Reentrant within this process (see meshConfigLockHeldInProcess). When the
- * lock cannot be acquired the span still runs — a slow or wedged peer must
- * degrade write isolation, never block mesh operations outright.
+ * lock cannot be acquired, fail closed just like strict transactions. A slow
+ * or paused peer still owns its lock; elapsed time grants no write authority.
  */
 export function withMeshConfigWriteLock<T>(fn: () => T): T {
     if (meshConfigLockHeldInProcess) return fn();
     const release = acquireMeshConfigLock();
-    if (!release) return fn();
+    if (!release) throw new MeshConfigStrictLockError('store_busy', `${getMeshConfigPath()}.lock`);
     meshConfigLockHeldInProcess = true;
     try {
         return fn();

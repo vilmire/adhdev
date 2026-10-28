@@ -93,6 +93,7 @@ export {
     meshPlanOnboarding,
     meshCreate,
     meshAddNode,
+    meshReattachSourceParent,
 } from './mesh-tools-crud.js';
 
 // 2026-09-26 tool consolidation — the merged-tool dispatchers.

@@ -381,6 +381,8 @@ export interface LocalMeshNodeEntry {
     worktreeBranch?: string;
     /** Node ID this worktree was cloned from */
     clonedFromNodeId?: string;
+    /** Owner-authorized dangling-parent repair; protects against stale inline snapshots. */
+    sourceParentReattachment?: { previousParentId: string; parentId: string };
     /** Repo-local preparation result for ADHDev-created worktree nodes. */
     worktreeBootstrap?: {
         // 'complete' is the terminal stamp written by markWorktreeBootstrapTerminalState

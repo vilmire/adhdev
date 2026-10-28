@@ -27,7 +27,7 @@ import { invokeSpecControl } from './picker-controls.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
-import { detectBackgroundTaskActive } from './background-task-detector.js';
+import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
 import {
     buildSpecDebugSnapshot, extractCodexSessionIdFromScreen,
     scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
@@ -57,7 +57,7 @@ import {
 } from '../types/interactive-prompt.js';
 import { buildKimiInteractiveTuiAnswerSteps } from '../types/interactive-prompt.js';
 import {
-    detectKimiPendingQuestion, detectKimiIdleSelectorPrompt,
+    KimiPendingQuestionReader, detectKimiIdleSelectorPrompt,
     buildKimiSelectorAnswerSteps, KIMI_TUI_SELECTOR_PROMPT_PREFIX,
 } from '../kimi-pending-question.js';
 import type { FsmStatus, InteractivePrompts } from './fsm-types.js';
@@ -80,7 +80,7 @@ import {
 
 import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
-import { RawTail } from './raw-tail.js';
+import { RawTail, TailReadBudget } from './raw-tail.js';
 import { recordSentPrompt } from '../native-history/sent-prompt-registry.js';
 import { Win32RawInputWriter } from './win32-raw-input-writer.js';
 
@@ -195,6 +195,10 @@ export class SpecCliAdapter implements CliAdapter {
      *  pair — see raw-tail.ts. Lazy like `liveAuth` (Object.create-built suites skip field init). */
     private rawTailBuf?: RawTail;
     private get rawTail(): RawTail { return (this.rawTailBuf ??= new RawTail()); }
+    private failureScanBudget?: TailReadBudget;
+    private kimiQuestionReader?: KimiPendingQuestionReader;
+    private kimiBackgroundReader?: KimiPendingQuestionReader;
+    private specPath?: string;
     private exited = false;
     private spawned = false;
     private providerFailure: ProviderFailure | null = null;
@@ -248,6 +252,7 @@ export class SpecCliAdapter implements CliAdapter {
         },
         resolvedTrustPlan?: ResolvedTrustPlan | null,
     ) {
+        this.specPath = specPath;
         const raw = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         this.spec = {
             id: raw.id,
@@ -289,6 +294,7 @@ export class SpecCliAdapter implements CliAdapter {
 
     async spawn(): Promise<void> {
         if (this.spawned) return;
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose(); this.kimiQuestionReader = undefined; this.kimiBackgroundReader = undefined;
         this.driver.start();
         this.spawned = true;
         this.spawnedAtMs = Date.now();
@@ -468,10 +474,11 @@ export class SpecCliAdapter implements CliAdapter {
     getStatus(_options?: { allowParse?: boolean }): CliAdapterStatus {
         // Side effects stay here (they touch adapter state / lazily refresh);
         // the DECISION is the pure projection in adapter-status-projection.ts.
+        // Flush the trailing chunk even if the stream stopped below the byte
+        // budget. Unchanged polls do no classification work.
+        if (!this.exited) this.observeProviderFailureOutput('', undefined, undefined, true);
         this.maybeConfirmLiveAuthBillingSuspect();
-        // kimi_wire prompt hold: refresh on the ROUTINE status poll (not only
-        // on chat reads) so a question asked while nobody reads the chat still
-        // surfaces promptly — same cadence rationale as the legacy adapter.
+        // Sample the memory-only Kimi prompt view even without a chat reader.
         // Guarded by the same spawned/exited preconditions the projection uses,
         // so a dead or unspawned adapter does no work (verbatim ordering from
         // before the extraction: these ran only after those early returns).
@@ -535,28 +542,27 @@ export class SpecCliAdapter implements CliAdapter {
         const providerSessionId = this.extractProviderSessionIdFromScreen();
         if (providerSessionId) this.providerSessionId = providerSessionId;
         const status = this.getStatus();
-        // Background-task passthrough: read the native-history transcript at
-        // poll time for causally-owned background tool work (claude-cli
-        // run_in_background bash; kimi run_in_background tool.call cells whose
-        // launch result returns immediately with `status: running`). This is a
-        // NEW signal that rides alongside `status` (it is NOT run through the
-        // 5-value FSM normalization). Providers whose transcript the detector
-        // cannot authoritatively read report backgroundTaskSupport:'unknown'
-        // (an explicit UNKNOWN — never a silent "no background work") and are
-        // not gated. Read at each poll — the JSONL trails the live idle
-        // transition, so it must be observed BEFORE completion fires, which
-        // SUB-B's hold + settle window give us.
+        // Kimi background evidence is a sealed async memory view; other providers
+        // retain the public synchronous detector and their original policies.
         const bg = this.detectBackgroundTask();
         return {
             ...status,
             messages: this.readScreenAssistantMessages(),
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),
             backgroundTaskSupport: bg.support ?? 'unknown',
+            ...(bg.pending ? { backgroundTaskPending: true } : {}),
             ...(bg.active ? { backgroundTaskActive: true, backgroundTaskCount: bg.count, backgroundTaskIds: bg.ids } : {}),
         };
     }
 
-    private detectBackgroundTask(): { active: boolean; count: number; ids: string[]; support?: 'tracked' | 'unknown' } {
+    private detectBackgroundTask(): BackgroundTaskDetection {
+        if (this.cliType === 'kimi' && (this.spec.native_history?.source?.kind === 'jsonl' || this.kimiBackgroundReader)) {
+            const reader = (this.kimiBackgroundReader ??= new KimiPendingQuestionReader(
+                () => this.notifyChange('fsm_state'), this.specPath, header => Object.assign(this.spec, header),
+                () => this.nativeHistoryInput({ withOwner: false }), true));
+            const view = reader.read(this.spec.native_history, this.nativeHistoryInput({ withOwner: false }));
+            return backgroundTaskSnapshot(view.state, view.background);
+        }
         if (!this.spec.native_history?.source) {
             // antigravity-cli declares no declarative `source` (its authority is
             // the per-session conversations/<uuid>.db, read via the built-in
@@ -584,6 +590,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     shutdown(): void {
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
         (this.liveAuth ??= createLiveAuthState()).stopRequested = true;
         this.win32RawInputWriter?.dispose();
         try { this.driver.dispatch({ kind: 'shutdown' }); } catch { /* ignore */ }
@@ -592,6 +599,7 @@ export class SpecCliAdapter implements CliAdapter {
     /** CliManager.detachAll() on daemon shutdown: release the runtime so it
      *  survives the restart (shutdown() would stop it). */
     detach(): void {
+        this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
         try { this.driver.detach(); } catch { /* ignore */ }
     }
 
@@ -918,7 +926,12 @@ export class SpecCliAdapter implements CliAdapter {
         // stamp unbound on the record — the root of SESSION-ACCUMULATION-LEAK.
         try { this.driver.updateMeta(meta); } catch { /* transport may not support meta */ }
     }
-    refreshProviderDefinition(_provider?: unknown): void { /* hot reload handled by SpecDriver fs.watch */ }
+    refreshProviderDefinition(provider?: unknown): void {
+        const specPath = (provider as { _resolvedSpecPath?: string })?._resolvedSpecPath;
+        if (specPath) this.specPath = specPath;
+        void this.kimiQuestionReader?.reloadConfig(specPath || this.specPath);
+        void this.kimiBackgroundReader?.reloadConfig(specPath || this.specPath);
+    }
 
     /**
      * (TOOL-EXPAND) Re-read one truncated tool bubble at full length.
@@ -978,6 +991,7 @@ export class SpecCliAdapter implements CliAdapter {
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
+                this.kimiBackgroundReader?.dispose(); this.kimiQuestionReader?.dispose();
                 this.exited = true;
                 this.lastExitCode = ev.exit_code;
                 // Some CLIs repaint the failure off-screen before exit. Re-run the
@@ -1030,12 +1044,12 @@ export class SpecCliAdapter implements CliAdapter {
 
     /** Auth/billing classification of PTY output. WHAT the daemon may do about a
      *  match (live = suspicion/advisory, exit = verdict) is live-auth-advisory.ts. */
-    private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }): boolean {
+    private observeProviderFailureOutput(chunk: string, exitCode?: number, exit?: { exit_code: number | null; termination?: SessionTermination }, flush = false): boolean {
         if (this.providerFailure || (exit && !exitClassificationAllowed(exit.exit_code, exit.termination, this.liveAuth))) return false;
-        // `chunk` is already appended into `rawTail` by handleEvent's 'pty_data'
-        // case (C6, one append before any reader) — this reads a fresh,
-        // ANSI-stripped view, replacing the former appendAuthTail accumulator.
-        void chunk;
+        // Full-window tool/code filtering needs line context. Budget streaming
+        // scans by bytes/time; status flushes the remainder, exit always rechecks.
+        if (!exit && exitCode === undefined
+            && !(this.failureScanBudget ??= new TailReadBudget()).take(this.rawTail.seq, chunk.length, flush)) return false;
         const failure = classifyAuthBillingOutput(this.cliType, this.rawTail.strippedTail(TAIL_BYTES), exitCode);
         if (!failure) return false;
         if (exitCode === undefined && !this.exited) {
@@ -1091,30 +1105,22 @@ export class SpecCliAdapter implements CliAdapter {
         return this.cliType === 'claude-cli' ? 'claude_tui' : this.cliType === 'antigravity-cli' ? 'antigravity_tui' : null;
     }
 
-    /**
-     * kimi_wire scheme: refresh the held AskUserQuestion / built-in selector
-     * prompt on the routine status poll — the spec-path port of the legacy
-     * adapter's refreshKimiPendingQuestion (same wire.jsonl authority, same
-     * every-poll cadence, same fail-open semantics).
-     */
+    /** Memory-only status view; discovery/config/tail I/O lives in the reader. */
     private refreshWirePendingQuestion(): void {
-        if (this.interactivePromptScheme() !== 'kimi_wire') return;
-        try {
-            let prompt: InteractivePrompt | null = null;
-            if (this.spec.native_history?.source) {
-                prompt = detectKimiPendingQuestion(this.spec.native_history, this.nativeHistoryInput({ withOwner: true }));
-            }
-            if (!prompt && this.latestState?.status !== 'generating') {
-                // Built-in idle/cache-expired selector: TUI-only, never on the
-                // wire; only appears at idle (a quoted snapshot in scrolling
-                // output must never parse as the picker).
-                prompt = detectKimiIdleSelectorPrompt(this.driver.snapshot());
-            }
-            if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
-                this.activeInteractivePrompt = prompt;
-                this.notifyChange(prompt ? 'prompt_captured' : 'prompt_cleared');
-            }
-        } catch { /* fail open — keep the currently-held prompt */ }
+        const enabled = this.interactivePromptScheme() === 'kimi_wire';
+        if (!enabled && !this.kimiQuestionReader) return;
+        const reader = (this.kimiQuestionReader ??= new KimiPendingQuestionReader(
+            () => this.refreshWirePendingQuestion(), this.specPath, header => Object.assign(this.spec, header),
+            () => this.nativeHistoryInput({ withOwner: true })));
+        const view = reader.read(enabled ? this.spec.native_history : undefined, this.nativeHistoryInput({ withOwner: true }));
+        let prompt = view.prompt;
+        if (enabled && !prompt && view.state === 'ready' && this.latestState?.status !== 'generating') {
+            prompt = detectKimiIdleSelectorPrompt(this.driver.snapshot());
+        }
+        if ((prompt?.promptId ?? null) !== (this.activeInteractivePrompt?.promptId ?? null)) {
+            this.activeInteractivePrompt = prompt;
+            this.notifyChange(prompt ? 'prompt_captured' : 'prompt_cleared');
+        }
     }
 
     private detectInteractivePromptFromPtyChunk(chunk: string): void {

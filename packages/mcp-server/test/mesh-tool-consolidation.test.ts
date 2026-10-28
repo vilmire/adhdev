@@ -43,12 +43,15 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 44 with artifact_list for coordinators (artifact viewer, 2026-10-21).
 // 45 with mesh_queue_revise for pending expected-revision updates.
 // 47 with artifact_register and artifact_read for coordinators (artifact sharing, 2026-10-23).
-// 46 once the deprecated mesh_ledger_query alias is dropped next release.
-test('the published surface is 47 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 47);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 47);
+// 48 with mesh_reattach_source_parent for owner-authorized source-parent repair.
+// 47 once the deprecated mesh_ledger_query alias is dropped next release.
+test('the published surface is 48 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 48);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 48);
     assert.equal(published.has('mesh_queue_revise'), true);
     assert.equal(typeof resolveMeshToolHandler('mesh_queue_revise'), 'function');
+    assert.equal(published.has('mesh_reattach_source_parent'), true);
+    assert.equal(typeof resolveMeshToolHandler('mesh_reattach_source_parent'), 'function');
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);

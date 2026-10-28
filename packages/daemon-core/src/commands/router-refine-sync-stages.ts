@@ -56,7 +56,7 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
                 ? mesh?.nodes.find((n: any) => meshNodeIdMatches(n, node.clonedFromNodeId))
                 : mesh?.nodes.find((n: any) => !n.isLocalWorktree);
             const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
-            if (!repoRoot) return { kind: 'terminal', result: { success: false, error: 'Source node repoRoot not found', refineStages } };
+            if (!repoRoot) return { kind: 'terminal', result: { success: false, code: 'source_parent_not_found', nodeId, sourceNodeId: node.clonedFromNodeId, error: 'Source node repoRoot not found. Have the Mesh Host owner inspect the explicit source binding and use mesh_reattach_source_parent dry-run with expected_old_parent_id before retrying.', refineStages } };
 
             const { execFile } = await import('node:child_process');
             const { promisify } = await import('node:util');

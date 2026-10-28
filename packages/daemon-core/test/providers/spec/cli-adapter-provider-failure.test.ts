@@ -105,6 +105,7 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
     adapter.handleEvent({ kind: 'pty_data', chunk: 'Authentica' })
     expect(adapter.getStatus().status).not.toBe('error')
     adapter.handleEvent({ kind: 'pty_data', chunk: 'tion failed: access token has expired. Please run kimi login.\r\n' })
+    adapter.getStatus() // status flushes the throttled trailing chunk
     // AUTH-LIVE-CONFIRM: a live match settles for 5s before the screen is trusted.
     adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 6_000
 

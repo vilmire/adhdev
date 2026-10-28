@@ -6,7 +6,8 @@
  * `takeCompleteLines` (replaces `jsonLineTail`) are independent read views
  * over the same buffer, and the byte cap holds.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as classifier from '../../../src/providers/spec/provider-failure-classifier.js';
 import { RawTail } from '../../../src/providers/spec/raw-tail.js';
 
 describe('RawTail', () => {
@@ -162,5 +163,49 @@ describe('RawTail', () => {
             tail.strippedTail(1024);
             expect(tail.takeCompleteLines()).toEqual(['alpha', 'beta']);
         });
+    });
+});
+
+
+describe('RawTail stripped view caching and clear boundaries', () => {
+    it('strips once per append even with repeated readers and different limits', () => {
+        const strip = vi.spyOn(classifier, 'stripAnsi');
+        try {
+            const tail = new RawTail();
+            tail.append('\x1b[31mhello\x1b[0m\n');
+            for (let i = 0; i < 100; i++) {
+                expect(tail.strippedTail(100)).toBe('hello\n');
+                expect(tail.strippedTail(3)).toBe('lo\n');
+            }
+            expect(strip).toHaveBeenCalledTimes(1);
+            tail.append('next');
+            expect(tail.strippedTail(100)).toBe('hello\nnext');
+            expect(strip).toHaveBeenCalledTimes(2);
+        } finally { strip.mockRestore(); }
+    });
+
+    it('preserves ANSI boundaries across chunks and independent CRLF line cursors', () => {
+        const tail = new RawTail();
+        for (const chunk of ['\x1b[3', '1mred', '\x1b[0', 'm\r', '\n']) tail.append(chunk);
+        expect(tail.strippedTail(100)).toBe('red\r\n');
+        expect(tail.takeCompleteLines()).toEqual(['\x1b[31mred\x1b[0m']);
+        tail.append('\x1b]title');
+        tail.append('\x07plain\n');
+        expect(tail.strippedTail(100)).toBe('red\r\nplain\n');
+    });
+
+    it('preserves the clear-until-next-append contract and independent line cursor under cap trimming', () => {
+        const tail = new RawTail(40);
+        tail.append('Authentication failed\npartial');
+        const seq = tail.seq;
+        tail.clearStrippedTail();
+        expect(tail.strippedTail(100)).toBe('');
+        expect(tail.seq).toBe(seq);
+        expect(tail.takeCompleteLines()).toEqual(['Authentication failed']);
+        tail.append('-line\n');
+        expect(tail.strippedTail(100)).toBe('Authentication failed\npartial-line\n');
+        expect(tail.takeCompleteLines()).toEqual(['partial-line']);
+        tail.append('x'.repeat(45));
+        expect(tail.strippedTail(100)).toBe('x'.repeat(40));
     });
 });

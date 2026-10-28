@@ -252,3 +252,15 @@ export async function meshAddNode(
         next_step: `Node registered. Launch an agent on it with mesh_launch_session (node_id: "${addPayload.node.id}") or delegate work with mesh_send_task / mesh_enqueue_task.`,
     }, null, 2);
 }
+
+/** In-place owner repair. Dry-run unless write=true; never accepts filesystem paths. */
+export async function meshReattachSourceParent(
+    transport: CommandTransport,
+    args: { node_id: string; parent_node_id: string; expected_old_parent_id: string; write?: boolean },
+    meshId: string,
+): Promise<string> {
+    return JSON.stringify(unwrapCommandPayload(await transport.command('reattach_mesh_source_parent', {
+        meshId, nodeId: args.node_id, parentNodeId: args.parent_node_id,
+        expectedOldParentId: args.expected_old_parent_id, write: args.write === true,
+    })), null, 2);
+}

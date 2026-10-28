@@ -136,12 +136,31 @@ export function getCachedInlineMeshNodesWithVisibility(host: InlineMeshRosterHos
     return out;
 }
 
+/** Only a durable owner repair overrides replayed pre-repair source metadata. */
+function applyDurableSourceParents(meshId: string, mesh: any): any {
+    if (!Array.isArray(mesh?.nodes)) return mesh;
+    const config = readMeshConfigFromDisk();
+    if (!config && mesh.nodes.some((node: any) => node.sourceParentReattachment)) {
+        throw new Error('source_parent_registry_unavailable: cannot reconcile a repaired binding until the durable registry is readable');
+    }
+    const durable = config?.meshes.find(m => m.id === meshId);
+    for (const node of mesh.nodes) {
+        const stored = durable?.nodes.find(n => n.id === normalizeMeshNodeId(node));
+        const repair = stored?.sourceParentReattachment;
+        if (repair && repair.parentId === stored.clonedFromNodeId) {
+            node.clonedFromNodeId = repair.parentId;
+            node.sourceParentReattachment = repair;
+        }
+    }
+    return mesh;
+}
+
 export function getCachedInlineMesh(host: InlineMeshRosterHost, meshId: string, inlineMesh?: unknown): any | undefined {
     syncInlineMeshPoliciesFromDisk(host);
     if (inlineMesh && typeof inlineMesh === 'object') {
         return warmInlineMeshCache(host, meshId, inlineMesh);
     }
-    return host.inlineMeshCache.get(meshId);
+    return applyDurableSourceParents(meshId, host.inlineMeshCache.get(meshId));
 }
 
 export function warmInlineMeshCache(host: InlineMeshRosterHost, meshId: string, inlineMesh?: unknown): any | undefined {
@@ -156,9 +175,11 @@ export function warmInlineMeshCache(host: InlineMeshRosterHost, meshId: string, 
     const cached = host.inlineMeshCache.get(meshId);
     if (cached) {
         const merged = reconcileInlineMeshCache(cached, sanitizedInlineMesh, host.removedInlineMeshNodeIds.get(meshId));
+        applyDurableSourceParents(meshId, merged);
         host.inlineMeshCache.set(meshId, merged);
         return merged;
     }
+    applyDurableSourceParents(meshId, sanitizedInlineMesh);
     host.inlineMeshCache.set(meshId, sanitizedInlineMesh as any);
     return sanitizedInlineMesh as any;
 }
@@ -179,6 +200,7 @@ export async function getMeshForCommand(host: InlineMeshRosterHost, meshId: stri
                     applyInlineMeshNodeTombstones(host, meshId, stripUntrustedInlineMeshGrantKeys(inlineMesh as any)),
                     host.removedInlineMeshNodeIds.get(meshId),
                 );
+                applyDurableSourceParents(meshId, merged);
                 host.inlineMeshCache.set(meshId, sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(merged)));
                 return { mesh: merged, inline: true, source: 'inline_cache' };
             }
@@ -187,7 +209,7 @@ export async function getMeshForCommand(host: InlineMeshRosterHost, meshId: stri
         if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
             const stripped = stripUntrustedInlineMeshGrantKeys(inlineMesh as any);
             warmInlineMeshCache(host, meshId, stripped);
-            return { mesh: stripped, inline: true, source: 'inline_bootstrap' };
+            return { mesh: getCachedInlineMesh(host, meshId), inline: true, source: 'inline_bootstrap' };
         }
     }
     try {
