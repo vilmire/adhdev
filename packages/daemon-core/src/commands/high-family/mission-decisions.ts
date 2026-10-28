@@ -19,8 +19,9 @@
  *      session, not a coordinator) is the only MCP-origin caller let through and
  *      must state `via: 'assistant'` + the owner's words (`interpretedFrom`).
  *   4. Owner transports (`p2p` dashboard, `standalone` authenticated dashboard)
- *      may state `dashboard` | `push`; a plain local CLI is `cli`. `assistant`
- *      is never accepted from them.
+ *      may state `dashboard` | `push`; a credential-less local call (the CLI, or a
+ *      standalone dashboard without a password, which is demoted to `ipc`) may state
+ *      `cli` | `dashboard` | `push`. `assistant` is never accepted from them.
  *
  * Residual (not detectable by the daemon): a coordinator's own shell running
  * `adhdev decide` is indistinguishable from the owner's terminal. The CLI
@@ -87,8 +88,12 @@ export function classifyDecisionCaller(rawArgs: Record<string, unknown>): Decisi
         return refuse('coordinator and worker credentials cannot answer owner decisions — only the owner (or the assistant on the owner\'s words) can');
     }
     if (source === 'ipc') {
-        if (requestedVia && requestedVia !== 'cli') return refuse(`a local CLI caller must use via 'cli'`);
-        return { ok: true, actor: { by: 'owner', via: 'cli' } };
+        // No MCP credential behind a local call: the owner's CLI, or a standalone dashboard
+        // with no password configured (its commands are demoted to `ipc`). Only the assistant
+        // label needs a credential.
+        const via = (requestedVia || 'cli') as DecisionAnswerVia;
+        if (via !== 'cli' && via !== 'dashboard' && via !== 'push') return refuse(`via '${requestedVia}' needs an assistant session credential`);
+        return { ok: true, actor: { by: 'owner', via } };
     }
     if (source === 'p2p' || source === 'standalone' || source === 'ext') {
         const via = (requestedVia || 'dashboard') as DecisionAnswerVia;
@@ -124,6 +129,7 @@ const answer: HighFamilyHandler = async (ctx, rawArgs) => {
             const sender = createCoordinatorDecisionSender(() => projectPortsFor(ctx));
             const attempt = await deliverDecisionAnswer(meshId, itemId, sender);
             if (attempt === 'sent' || attempt === 'duplicate') deliveryState = 'sent';
+            else if (attempt === 'queued') deliveryState = 'queued';
         } catch (e: any) {
             // The write is committed and the delivery stays pending — the housekeeping tick retries.
             LOG.warn('MissionDecision', `immediate delivery of ${itemId} failed, left pending: ${e?.message || e}`);

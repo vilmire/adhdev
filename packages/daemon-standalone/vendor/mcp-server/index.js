@@ -75919,7 +75919,7 @@ ${block2.text}`,
         try {
           value = JSON.parse((0, import_node_fs12.readFileSync)((0, import_node_path8.join)(root, namespace, kind, `${sessionId}.json`), "utf8"));
         } catch (error) {
-          if (error.code === "ENOENT") continue;
+          if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) continue;
           throw error;
         }
         const record7 = value?.record ?? value;
@@ -126663,8 +126663,16 @@ ${asText(streams.stderr)}
           items.bumpVersion(req.meshId, item.missionId, nowIso);
           return { ok: true, action: "undone", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision: revision2, ...delivery2 ? { delivery: delivery2 } : {} };
         }
-        const optionId = typeof req.optionId === "string" ? req.optionId.trim() : "";
-        const rawText = typeof req.text === "string" ? req.text.trim() : "";
+        let optionId = typeof req.optionId === "string" ? req.optionId.trim() : "";
+        let rawText = typeof req.text === "string" ? req.text.trim() : "";
+        if (!optionId && rawText) {
+          const t = rawText.toLowerCase();
+          const hit = d.options.find((o) => o.id.toLowerCase() === t || o.label.trim().toLowerCase() === t);
+          if (hit) {
+            optionId = hit.id;
+            rawText = "";
+          }
+        }
         if (!optionId && !rawText) return fail3("answer_required", "give an optionId or a text answer");
         if (optionId && !d.options.some((o) => o.id === optionId)) {
           return fail3("unknown_option", `option '${optionId}' does not exist on this decision`, { validOptions: d.options.map((o) => o.id) });
@@ -130794,6 +130802,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
       }
     });
+    function decisionRetryDelayMs(attempts) {
+      const n = Math.max(0, Math.min(attempts - 1, 16));
+      return Math.min(DECISION_DELIVERY_RETRY_MS * 2 ** n, DECISION_DELIVERY_RETRY_MAX_MS);
+    }
     function formatDecisionDelivery(itemId, d) {
       const kind = d.delivery?.kind ?? "answered";
       if (kind === "undone") return `[owner decision undone ${itemId}]`;
@@ -130809,7 +130821,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const d = item?.decision;
       const delivery = d?.delivery;
       if (!item || !d || !delivery || delivery.state !== "pending") return "skipped";
-      if (opts?.respectRetryDelay && delivery.lastAttemptAt && nowMs2 - Date.parse(delivery.lastAttemptAt) < DECISION_DELIVERY_RETRY_MS) return "skipped";
+      if (opts?.respectRetryDelay && delivery.lastAttemptAt && nowMs2 - Date.parse(delivery.lastAttemptAt) < decisionRetryDelayMs(delivery.attempts ?? 1)) return "skipped";
       const messageId = delivery.messageId;
       if (inFlight4.has(messageId)) return "skipped";
       inFlight4.add(messageId);
@@ -130827,17 +130839,53 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           return result.ok ? result.duplicate ? "duplicate" : "sent" : "failed";
         }
         const attemptIso = new Date(nowMs2).toISOString();
-        const next = result.ok ? { ...fd.delivery, state: "sent", lastAttemptAt: attemptIso } : { ...fd.delivery, state: "pending", lastAttemptAt: attemptIso };
+        const attempts = (fd.delivery.attempts ?? 0) + 1;
+        const confirmLater = result.ok && (result.queued || result.duplicate) && !!result.sessionId && !!result.wireMessageId;
+        const next = !result.ok ? { ...fd.delivery, state: "pending", lastAttemptAt: attemptIso, attempts } : confirmLater ? { ...fd.delivery, state: "queued", lastAttemptAt: attemptIso, sessionId: result.sessionId, wireMessageId: result.wireMessageId } : { ...fd.delivery, state: "sent", lastAttemptAt: attemptIso };
         items.updateItem(meshId, itemId, { decision: { ...fd, delivery: next } });
-        if (!result.ok) LOG.warn("MissionDecision", `delivery of ${messageId} to mesh ${meshId} failed (${result.code}): ${result.error} \u2014 will retry`);
+        if (!result.ok) {
+          const line = `delivery of ${messageId} to mesh ${meshId} failed (${result.code}, attempt ${attempts}): ${result.error} \u2014 will retry in ${Math.round(decisionRetryDelayMs(attempts) / 1e3)}s`;
+          if (attempts === 1 || attempts % 10 === 0) LOG.warn("MissionDecision", line);
+          else LOG.debug("MissionDecision", line);
+        }
         notifyMissionChanged(meshId);
-        return result.ok ? result.duplicate ? "duplicate" : "sent" : "failed";
+        return !result.ok ? "failed" : confirmLater ? "queued" : result.duplicate ? "duplicate" : "sent";
       } finally {
         inFlight4.delete(messageId);
       }
     }
     function pendingDecisionDeliveries(meshId) {
-      return MeshRuntimeStore.getInstance().missionItems().listByKindStates(meshId, "decision", ["open", "answered"]).filter((i) => i.decision?.delivery?.state === "pending").map((i) => i.id);
+      return deliveriesInState(meshId, "pending");
+    }
+    function deliveriesInState(meshId, state2) {
+      return MeshRuntimeStore.getInstance().missionItems().listByKindStates(meshId, "decision", ["open", "answered"]).filter((i) => i.decision?.delivery?.state === state2).map((i) => i.id);
+    }
+    function nextAttemptMessageId(messageId) {
+      const m = /^(.*):a(\d+)$/.exec(messageId);
+      return m ? `${m[1]}:a${Number(m[2]) + 1}` : `${messageId}:a2`;
+    }
+    async function confirmQueuedDecision(meshId, itemId, check) {
+      const items = MeshRuntimeStore.getInstance().missionItems();
+      const d = items.getItem(meshId, itemId)?.decision;
+      const dl = d?.delivery;
+      if (!d || !dl || dl.state !== "queued" || !dl.sessionId || !dl.wireMessageId) return "skipped";
+      let state2;
+      try {
+        state2 = await check(dl.sessionId, dl.wireMessageId, formatDecisionDelivery(itemId, d));
+      } catch (e) {
+        LOG.debug("MissionDecision", `receipt check for ${dl.messageId} failed: ${e?.message || e}`);
+        return "waiting";
+      }
+      if (state2 === "accepted" || state2 === "busy") return "waiting";
+      const fresh = items.getItem(meshId, itemId)?.decision;
+      if (!fresh?.delivery || fresh.delivery.messageId !== dl.messageId || fresh.delivery.state !== "queued") return "skipped";
+      const { sessionId: _s, wireMessageId: _w, lastAttemptAt: _t, ...base } = fresh.delivery;
+      const delivered = state2 === "submitted" || state2 === "seen";
+      const next = delivered ? { ...fresh.delivery, state: "sent" } : { ...base, state: "pending", messageId: nextAttemptMessageId(dl.messageId) };
+      items.updateItem(meshId, itemId, { decision: { ...fresh, delivery: next } });
+      if (!delivered) LOG.warn("MissionDecision", `queued delivery ${dl.messageId} never reached the coordinator (its queue was dropped) \u2014 re-sending as ${next.messageId}`);
+      notifyMissionChanged(meshId);
+      return delivered ? "sent" : "rearmed";
     }
     function createCoordinatorDecisionSender(getPorts) {
       return async ({ meshId, text: text4, messageId }) => {
@@ -130846,11 +130894,34 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const { localProjectSend: localProjectSend2 } = await Promise.resolve().then(() => (init_assistant(), assistant_exports));
         const sent = await localProjectSend2(await getPorts(), mesh, text4, messageId);
         if (!sent.ok) return { ok: false, code: sent.code, error: sent.error };
-        return { ok: true, ...sent.status === "duplicate" ? { duplicate: true } : {} };
+        return {
+          ok: true,
+          ...sent.status === "duplicate" ? { duplicate: true } : {},
+          ...sent.status === "queued" ? { queued: true } : {},
+          ...sent.coordinatorSessionId ? { sessionId: sent.coordinatorSessionId } : {},
+          ...sent.messageId ? { wireMessageId: sent.messageId } : {}
+        };
       };
     }
-    function componentsDecisionSender(components) {
-      return createCoordinatorDecisionSender(async () => {
+    function createDecisionReceiptChecker(getPorts) {
+      return async (sessionId, wireMessageId, text4) => {
+        const ports = await getPorts();
+        const out = await ports.execute("outgoing_receipts", { targetSessionId: sessionId, messageIds: [wireMessageId] });
+        if (!out?.success) throw new Error(out?.error || "outgoing_receipts failed");
+        const receipt = Array.isArray(out.receipts) ? out.receipts.find((r) => r?.messageId === wireMessageId) : void 0;
+        if (receipt?.state === "submitted") return "submitted";
+        if (receipt?.state === "accepted") return "accepted";
+        const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: TRANSCRIPT_SCAN_LIMIT });
+        if (!chat?.success) throw new Error(chat?.error || "read_chat failed");
+        const messages = Array.isArray(chat.messages) ? chat.messages : [];
+        const needle = text4.trim();
+        const seen2 = messages.some((m) => m?.role === "user" && (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")).includes(needle));
+        if (seen2) return "seen";
+        return chat.status === "idle" ? "lost" : "busy";
+      };
+    }
+    function componentsDecisionTransport(components) {
+      const getPorts = async () => {
         const router = components.router;
         if (!router) throw new Error("command router not ready");
         const { getAssistantProjectPorts: getAssistantProjectPorts2 } = await Promise.resolve().then(() => (init_assistant_project_ports(), assistant_project_ports_exports));
@@ -130864,15 +130935,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             ...router.deps?.getMeshPeerConnectionStatus ? { peerStatus: router.deps.getMeshPeerConnectionStatus } : {}
           }
         });
-      });
+      };
+      return { send: createCoordinatorDecisionSender(getPorts), check: createDecisionReceiptChecker(getPorts) };
     }
-    async function runDecisionTick(meshId, send, nowMs2 = Date.now()) {
+    async function runDecisionTick(meshId, send, nowMs2 = Date.now(), check) {
       const out = { autoApplied: 0, delivered: 0, failed: 0 };
       try {
         out.autoApplied = processDecisionDeadlines(meshId, nowMs2).autoApplied.length;
+        if (check) for (const itemId of deliveriesInState(meshId, "queued")) await confirmQueuedDecision(meshId, itemId, check);
         for (const itemId of pendingDecisionDeliveries(meshId)) {
           const r = await deliverDecisionAnswer(meshId, itemId, send, { nowMs: nowMs2, respectRetryDelay: true });
-          if (r === "sent" || r === "duplicate") out.delivered++;
+          if (r === "sent" || r === "queued" || r === "duplicate") out.delivered++;
           else if (r === "failed") out.failed++;
         }
       } catch (e) {
@@ -130881,8 +130954,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return out;
     }
     var DECISION_DELIVERY_RETRY_MS;
+    var DECISION_DELIVERY_RETRY_MAX_MS;
     var QUESTION_ECHO_MAX;
     var inFlight4;
+    var TRANSCRIPT_SCAN_LIMIT;
     var init_mesh_mission_decision_delivery = __esm2({
       "src/mesh/mesh-mission-decision-delivery.ts"() {
         "use strict";
@@ -130893,8 +130968,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_mesh_mission_decisions();
         init_mesh_mission_change_notifier();
         DECISION_DELIVERY_RETRY_MS = 15e3;
+        DECISION_DELIVERY_RETRY_MAX_MS = 10 * 6e4;
         QUESTION_ECHO_MAX = 200;
         inFlight4 = /* @__PURE__ */ new Set();
+        TRANSCRIPT_SCAN_LIMIT = 80;
       }
     });
     var mesh_housekeeping_tick_exports = {};
@@ -130974,9 +131051,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             LOG.warn("MeshHousekeeping", `Orphaned dispatch sweep failed for mesh ${mesh.id}: ${e?.message || e}`);
           }
         }
-        const decisionSend = componentsDecisionSender(components);
+        const decisionTransport = componentsDecisionTransport(components);
         for (const { mesh } of hosted) {
-          await runDecisionTick(mesh.id, decisionSend, nowMs2);
+          await runDecisionTick(mesh.id, decisionTransport.send, nowMs2, decisionTransport.check);
         }
       }
       const diskDue = state2.lastDiskRetentionRunAt === void 0 || nowMs2 - state2.lastDiskRetentionRunAt >= DISK_RETENTION_INTERVAL_MS;
@@ -183195,8 +183272,9 @@ ${ptyResult.output.slice(-2e3)}`);
         return refuse3("coordinator and worker credentials cannot answer owner decisions \u2014 only the owner (or the assistant on the owner's words) can");
       }
       if (source2 === "ipc") {
-        if (requestedVia && requestedVia !== "cli") return refuse3(`a local CLI caller must use via 'cli'`);
-        return { ok: true, actor: { by: "owner", via: "cli" } };
+        const via = requestedVia || "cli";
+        if (via !== "cli" && via !== "dashboard" && via !== "push") return refuse3(`via '${requestedVia}' needs an assistant session credential`);
+        return { ok: true, actor: { by: "owner", via } };
       }
       if (source2 === "p2p" || source2 === "standalone" || source2 === "ext") {
         const via = requestedVia || "dashboard";
@@ -183231,6 +183309,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const sender = createCoordinatorDecisionSender(() => projectPortsFor(ctx));
           const attempt = await deliverDecisionAnswer(meshId, itemId, sender);
           if (attempt === "sent" || attempt === "duplicate") deliveryState = "sent";
+          else if (attempt === "queued") deliveryState = "queued";
         } catch (e) {
           LOG.warn("MissionDecision", `immediate delivery of ${itemId} failed, left pending: ${e?.message || e}`);
         }
@@ -183823,7 +183902,7 @@ ${ptyResult.output.slice(-2e3)}`);
         try {
           files = await (0, import_promises12.readdir)(runtimes);
         } catch (error) {
-          if (error.code === "ENOENT") files = [];
+          if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) files = [];
           else throw error;
         }
         const candidates = new Set(options.boundSessionId && namespace === options.boundNamespace ? [options.boundSessionId] : []);

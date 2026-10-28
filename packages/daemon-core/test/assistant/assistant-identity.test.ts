@@ -122,3 +122,10 @@ it('retains duplicate protection when a new role-marked writer appears after the
     expect(await scan({ onUnverified: unverified })).toEqual(new Set(['old-binding']));
     expect(unverified).toHaveBeenCalledWith('foreign');
 });
+
+it('skips a stray file beside the namespace dirs (macOS .DS_Store) instead of failing the scan', async () => {
+    const one = seed('one');
+    writeFileSync(join(dir, 'session-host', '.DS_Store'), 'finder');
+    host([one]);
+    expect(await scan()).toEqual(new Set(['one']));
+});

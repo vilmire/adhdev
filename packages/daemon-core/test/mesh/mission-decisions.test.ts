@@ -28,9 +28,13 @@ import {
 } from '../../src/mesh/mesh-mission-decisions.js';
 import {
     DECISION_DELIVERY_RETRY_MS,
+    DECISION_DELIVERY_RETRY_MAX_MS,
+    decisionRetryDelayMs,
     deliverDecisionAnswer,
     formatDecisionDelivery,
     runDecisionTick,
+    type DecisionReceiptChecker,
+    type DecisionReceiptState,
     type DecisionSender,
 } from '../../src/mesh/mesh-mission-decision-delivery.js';
 import { buildMissionPromptSection, acknowledgeAnsweredDecisions } from '../../src/mesh/mesh-mission-prompt.js';
@@ -67,6 +71,17 @@ const item = (id: string) => store().missionItems().getItem(meshId, id)!;
 const okSender = () => { const calls: Array<{ text: string; messageId: string }> = []; const fn: DecisionSender = async (r) => { calls.push({ text: r.text, messageId: r.messageId }); return { ok: true }; }; return { fn, calls }; };
 
 describe('answerMissionDecision', () => {
+    it('a text answer that is an option letter or label is recorded as that option', () => {
+        const { itemId } = ask();
+        expect(answerMissionDecision({ meshId, itemId, text: 'B' }, owner)).toMatchObject({ ok: true });
+        expect(item(itemId).decision!.answer).toMatchObject({ optionId: 'b' });
+        expect(item(itemId).decision!.answer!.text).toBeUndefined();
+        answerMissionDecision({ meshId, itemId, text: 'Temp Value' }, owner);
+        expect(item(itemId).decision!.answer).toMatchObject({ optionId: 'a' });
+        answerMissionDecision({ meshId, itemId, text: 'b please' }, owner);
+        expect(item(itemId).decision!.answer).toMatchObject({ text: 'b please' });
+    });
+
     it('records the answer, event, version bump, clears the prompt watermark and arms a pending delivery', () => {
         const { missionId, itemId } = ask();
         const before = store().missionItems().getStructured(meshId, missionId)!.version;
@@ -182,6 +197,61 @@ describe('delivery to the coordinator', () => {
         expect((await runDecisionTick(meshId, send, t0 + DECISION_DELIVERY_RETRY_MS + 1)).delivered).toBe(1);
         await runDecisionTick(meshId, send, t0 + 10 * DECISION_DELIVERY_RETRY_MS);
         expect(ids).toEqual([`decision:${itemId}:r1`, `decision:${itemId}:r1`]);
+        expect(item(itemId).decision!.delivery!.state).toBe('sent');
+    });
+
+    it('an undeliverable answer backs off (15s, 30s, 1m … capped at 10m) and counts attempts', async () => {
+        expect([1, 2, 3, 4].map(decisionRetryDelayMs)).toEqual([15_000, 30_000, 60_000, 120_000]);
+        expect(decisionRetryDelayMs(50)).toBe(DECISION_DELIVERY_RETRY_MAX_MS);
+        const { itemId } = ask();
+        answerMissionDecision({ meshId, itemId, optionId: 'a' }, owner);
+        let calls = 0;
+        const send: DecisionSender = async () => { calls++; return { ok: false, code: 'no_coordinator', error: 'down' }; };
+        const t0 = Date.now();
+        await runDecisionTick(meshId, send, t0);
+        await runDecisionTick(meshId, send, t0 + 16_000);                 // 2nd attempt after 15s
+        await runDecisionTick(meshId, send, t0 + 16_000 + 20_000);        // inside the 30s backoff → skipped
+        expect(calls).toBe(2);
+        await runDecisionTick(meshId, send, t0 + 16_000 + 31_000);        // 3rd attempt
+        expect(calls).toBe(3);
+        expect(item(itemId).decision!.delivery).toMatchObject({ state: 'pending', attempts: 3 });
+    });
+
+    it('a send the coordinator only queued is confirmed by its receipt, and re-sent under a new id if a restart dropped it', async () => {
+        const { itemId } = ask();
+        answerMissionDecision({ meshId, itemId, optionId: 'a' }, owner);
+        const ids: string[] = [];
+        const send: DecisionSender = async (r) => { ids.push(r.messageId); return { ok: true, queued: true, sessionId: 'coord-1', wireMessageId: `wire:${r.messageId}` }; };
+        let receipt: DecisionReceiptState = 'accepted';
+        const checked: string[] = [];
+        const check: DecisionReceiptChecker = async (sid, wire, text) => { checked.push(`${sid}|${wire}`); expect(text).toContain(`[owner decision ${itemId}]`); return receipt; };
+        const t0 = Date.now();
+        await runDecisionTick(meshId, send, t0, check);
+        expect(item(itemId).decision!.delivery).toMatchObject({ state: 'queued', sessionId: 'coord-1', wireMessageId: `wire:decision:${itemId}:r1` });
+        await runDecisionTick(meshId, send, t0 + 1000, check);           // still in the queue → wait
+        expect(ids).toEqual([`decision:${itemId}:r1`]);
+        expect(checked).toEqual([`coord-1|wire:decision:${itemId}:r1`]);
+        receipt = 'busy';                                                 // receipt unknown, coordinator still working → wait
+        await runDecisionTick(meshId, send, t0 + 1500, check);
+        expect(ids).toHaveLength(1);
+        receipt = 'lost';                                                 // idle and not in the transcript: the queue was dropped
+        await runDecisionTick(meshId, send, t0 + 2000, check);
+        expect(ids).toEqual([`decision:${itemId}:r1`, `decision:${itemId}:r1:a2`]);
+        receipt = 'submitted';
+        await runDecisionTick(meshId, send, t0 + 3000, check);
+        expect(item(itemId).decision!.delivery).toMatchObject({ state: 'sent', messageId: `decision:${itemId}:r1:a2` });
+        await runDecisionTick(meshId, send, t0 + 600_000, check);
+        expect(ids).toHaveLength(2);
+    });
+
+    it('a queued delivery whose receipt is unknown but whose text reached the transcript is not re-sent', async () => {
+        const { itemId } = ask();
+        answerMissionDecision({ meshId, itemId, optionId: 'a' }, owner);
+        const ids: string[] = [];
+        const send: DecisionSender = async (r) => { ids.push(r.messageId); return { ok: true, queued: true, sessionId: 'coord-1', wireMessageId: 'w1' }; };
+        await runDecisionTick(meshId, send, Date.now(), async () => 'seen');
+        await runDecisionTick(meshId, send, Date.now() + 1000, async () => 'seen');
+        expect(ids).toHaveLength(1);
         expect(item(itemId).decision!.delivery!.state).toBe('sent');
     });
 
@@ -313,7 +383,9 @@ describe('who may answer (caller identity)', () => {
         expect(classifyDecisionCaller(stamped('standalone'))).toMatchObject({ ok: true });
         expect(classifyDecisionCaller(stamped('ipc'))).toEqual({ ok: true, actor: { by: 'owner', via: 'cli' } });
         expect(classifyDecisionCaller(stamped('p2p', { via: 'assistant' }))).toMatchObject({ ok: false, code: 'decision_answer_not_allowed' });
-        expect(classifyDecisionCaller(stamped('ipc', { via: 'dashboard' }))).toMatchObject({ ok: false });
+        // a standalone dashboard with no password configured is demoted to `ipc` — still the owner
+        expect(classifyDecisionCaller(stamped('ipc', { via: 'dashboard' }))).toEqual({ ok: true, actor: { by: 'owner', via: 'dashboard' } });
+        expect(classifyDecisionCaller(stamped('ipc', { via: 'assistant' }))).toMatchObject({ ok: false, code: 'decision_answer_not_allowed' });
         for (const s of ['mesh', 'internal', 'ws', 'api', 'project_attach', '']) {
             expect(classifyDecisionCaller(stamped(s))).toMatchObject({ ok: false, code: 'decision_answer_not_allowed' });
         }

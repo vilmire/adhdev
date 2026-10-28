@@ -91,8 +91,17 @@ export interface MissionDecisionAnswer {
 
 export interface MissionDecisionDelivery {
     messageId: string
-    state: 'pending' | 'sent' | 'acked'
+    /**
+     * `queued`: the coordinator's input queue accepted it but has not typed it yet — the daemon
+     * confirms it against the send receipt (a daemon restart drops that queue). Daemon-written.
+     */
+    state: 'pending' | 'queued' | 'sent' | 'acked'
     lastAttemptAt?: string
+    /** Coordinator session + funnel messageId of a `queued` delivery (receipt lookup). Daemon-written. */
+    sessionId?: string
+    wireMessageId?: string
+    /** Failed send attempts of this revision (retry backoff). Daemon-written. */
+    attempts?: number
     /** What the coordinator is told: a first answer, a changed answer, or an undone one. Daemon-written. */
     kind?: 'answered' | 'changed' | 'undone'
 }

@@ -94,7 +94,8 @@ export async function persistedAssistantRuntimeIds(configDir: string, options: {
         const runtimes = join(hostRoot, namespace, 'runtimes');
         let files: string[];
         try { files = await readdir(runtimes); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') files = []; else throw error; }
+        // ENOTDIR: a stray file (macOS Finder's .DS_Store) sits beside the namespace dirs.
+        catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) files = []; else throw error; }
         // The durable binding is also positive role provenance, including legacy
         // runtimes whose metadata predates assistant:true or whose file rotated.
         const candidates = new Set<string>(options.boundSessionId && namespace === options.boundNamespace ? [options.boundSessionId] : []);

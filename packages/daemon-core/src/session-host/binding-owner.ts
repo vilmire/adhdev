@@ -38,7 +38,8 @@ export function persistedBindingEvidence(sessionId: string, configDir = getConfi
     for (const namespace of namespaces) for (const kind of ['runtimes', 'tombstones']) {
         let value;
         try { value = JSON.parse(readFileSync(join(root, namespace, kind, `${sessionId}.json`), 'utf8')); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+        // ENOTDIR: a stray file (macOS Finder's .DS_Store) sits beside the namespace dirs.
+        catch (error) { if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) continue; throw error; }
         const record = value?.record ?? value;
         if (record?.sessionId !== sessionId) continue;
         evidence.push({ namespace, record, terminal: kind === 'tombstones' || !!record.termination || ['stopped', 'failed'].includes(record.lifecycle) });

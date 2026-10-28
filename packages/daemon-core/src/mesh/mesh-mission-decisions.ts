@@ -143,8 +143,15 @@ export function answerMissionDecision(
         }
 
         // ── answer / change ──
-        const optionId = typeof req.optionId === 'string' ? req.optionId.trim() : '';
-        const rawText = typeof req.text === 'string' ? req.text.trim() : '';
+        let optionId = typeof req.optionId === 'string' ? req.optionId.trim() : '';
+        let rawText = typeof req.text === 'string' ? req.text.trim() : '';
+        // A text answer that IS an option ("b", "B", or its exact label) is that option — callers
+        // that lack the option list (e.g. the CLI changing an already-answered item) send text.
+        if (!optionId && rawText) {
+            const t = rawText.toLowerCase();
+            const hit = d.options.find(o => o.id.toLowerCase() === t || o.label.trim().toLowerCase() === t);
+            if (hit) { optionId = hit.id; rawText = ''; }
+        }
         if (!optionId && !rawText) return fail('answer_required', 'give an optionId or a text answer');
         if (optionId && !d.options.some(o => o.id === optionId)) {
             return fail('unknown_option', `option '${optionId}' does not exist on this decision`, { validOptions: d.options.map(o => o.id) });
