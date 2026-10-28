@@ -73,10 +73,17 @@ describe('actual cross-process recovery owner fence', () => {
             utimesSync(path,new Date(0),new Date(0)); // stale mtime never authorizes theft
             expect(() => withRecoveryMeshOwnershipFence(() => { throw Error('ADMITTED'); })).toThrow('held');
             writeFileSync(join(root, 'publish'), 'go');
-            // The holder detects the external ctime mutation and refuses its
-            // publish. Closing its process still releases the real kernel lock.
+            // A metadata-only touch is not a replacement: ctime is deliberately not part
+            // of the lock identity, so on Linux the holder publishes. On APFS an mtime
+            // earlier than the birthtime also rewinds the birthtime, so the holder sees
+            // a changed identity and refuses. Either way nothing half-written lands and
+            // closing the process releases the real kernel lock.
             await exited;
-            expect(existsSync(getMeshConfigPath())).toBe(false);
+            if (existsSync(getMeshConfigPath())) {
+                expect(JSON.parse(readFileSync(getMeshConfigPath(), 'utf8'))).toEqual({ meshes: [] });
+            } else {
+                expect(process.platform).toBe('darwin');
+            }
             withRecoveryMeshOwnershipFence(() => expect(statSync(path).ino).toBe(inode));
         } finally { w.kill(); }
     });
