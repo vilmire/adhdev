@@ -116904,7 +116904,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const originDaemonId = canonGrantDaemonId(rawOriginDaemonId);
       const expectedHostDaemonId = canonGrantDaemonId(expected.hostDaemonId);
       const expectedOriginDaemonId = canonGrantDaemonId(expected.originDaemonId);
-      if (meshId !== expected.meshId.trim() || !expectedHostDaemonId || !expectedOriginDaemonId || !daemonIdsEquivalent4(hostDaemonId, expectedHostDaemonId) || hostDaemonId !== expectedHostDaemonId || !daemonIdsEquivalent4(originDaemonId, expectedOriginDaemonId) || originDaemonId !== expectedOriginDaemonId || artifactId !== expected.artifactId.trim() || !sessionIdsEquivalent(requesterSessionId, expected.requesterSessionId.trim())) {
+      if (meshId !== expected.meshId.trim() || !expectedHostDaemonId || !expectedOriginDaemonId || !daemonIdsEquivalent4(hostDaemonId, expectedHostDaemonId) || hostDaemonId !== expectedHostDaemonId || // canon-ok: both sides canonicalised above; exact match on top of daemonIdsEquivalent binds the signed grant to one spelling
+      !daemonIdsEquivalent4(originDaemonId, expectedOriginDaemonId) || originDaemonId !== expectedOriginDaemonId || // canon-ok: same as above, exact canonical match for the signed grant
+      artifactId !== expected.artifactId.trim() || !sessionIdsEquivalent(requesterSessionId, expected.requesterSessionId.trim())) {
         return { ok: false, reason: "grant_scope_mismatch" };
       }
       if (expected.requesterTaskId !== void 0) {

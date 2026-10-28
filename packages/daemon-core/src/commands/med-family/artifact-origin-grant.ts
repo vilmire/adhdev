@@ -456,9 +456,9 @@ export function verifyArtifactOriginFetchGrant(
         !expectedHostDaemonId ||
         !expectedOriginDaemonId ||
         !daemonIdsEquivalent(hostDaemonId, expectedHostDaemonId) ||
-        hostDaemonId !== expectedHostDaemonId ||
+        hostDaemonId !== expectedHostDaemonId || // canon-ok: both sides canonicalised above; exact match on top of daemonIdsEquivalent binds the signed grant to one spelling
         !daemonIdsEquivalent(originDaemonId, expectedOriginDaemonId) ||
-        originDaemonId !== expectedOriginDaemonId ||
+        originDaemonId !== expectedOriginDaemonId || // canon-ok: same as above, exact canonical match for the signed grant
         artifactId !== expected.artifactId.trim() ||
         !sessionIdsEquivalent(requesterSessionId, expected.requesterSessionId.trim())
     ) {

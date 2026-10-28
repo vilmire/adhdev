@@ -1055,7 +1055,7 @@ async function executeArtifactFetchOrRead(
             return fetchArtifactFromOriginDaemon(
                 ctx,
                 authority,
-                effectiveOriginDaemonId && effectiveOriginDaemonId !== record.originDaemonId
+                effectiveOriginDaemonId && effectiveOriginDaemonId !== record.originDaemonId // canon-ok: stamps the derived origin onto the record; not a machine-identity decision
                     ? { ...record, originDaemonId: effectiveOriginDaemonId }
                     : record,
                 args,
