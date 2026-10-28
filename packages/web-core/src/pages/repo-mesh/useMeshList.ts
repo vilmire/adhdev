@@ -94,6 +94,19 @@ export async function collectMeshListAnswersProgressively(
 }
 
 /**
+ * True for "the command transport is not up yet" failures (standalone WS still
+ * connecting, a P2P channel not open). These are transient: the list stays on its
+ * loading state and retries instead of rendering an empty state + raw error.
+ */
+export function isTransportNotReadyError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+    return /command channel unavailable|channel (is )?not (open|ready|connected)|not connected/i.test(message)
+}
+
+/** Bounded backoff for transport-not-ready retries (~35 s total before giving up). */
+export const MESH_LIST_RETRY_DELAYS_MS = [300, 600, 1200, 2400, 4000, 4000, 4000, 4000, 4000, 4000, 4000]
+
+/**
  * Fold a partial (still-pending) merge into the list already on screen: entries
  * present in `partial` are replaced/added (host-first already applied), entries
  * not answered yet are KEPT. Removal is only ever decided by the final, complete
@@ -419,7 +432,30 @@ export function useMeshList({
     // Only the latest loadMeshes() call may write: a slow answer from a superseded
     // load must not overwrite (or re-shrink) a newer list.
     const loadGenerationRef = useRef(0)
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const retryAttemptRef = useRef(0)
+    const retryingRef = useRef(false)
+    const loadMeshesRef = useRef<(refresh?: boolean) => Promise<void>>(async () => {})
+    useEffect(() => () => { if (retryTimerRef.current) clearTimeout(retryTimerRef.current) }, [])
     const loadMeshes = useCallback(async (refresh = false) => {
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
+        if (retryingRef.current) retryingRef.current = false
+        else retryAttemptRef.current = 0
+        let waitingForTransport = false
+        // Returns true (and schedules a bounded retry) while the transport is not ready.
+        const scheduleRetry = (): boolean => {
+            const delay = MESH_LIST_RETRY_DELAYS_MS[retryAttemptRef.current]
+            if (delay === undefined) return false
+            retryAttemptRef.current += 1
+            waitingForTransport = true
+            setError(null)
+            retryTimerRef.current = setTimeout(() => {
+                retryTimerRef.current = null
+                retryingRef.current = true
+                void loadMeshesRef.current(refresh)
+            }, delay)
+            return true
+        }
         const generation = ++loadGenerationRef.current
         const isCurrent = () => loadGenerationRef.current === generation
         // No daemon to ask yet: nothing has LOADED, so stay on the loading state —
@@ -437,11 +473,18 @@ export function useMeshList({
                 // comes from its host/coordinator's answer (mergeMeshListAnswers).
                 // Progressive: paint as soon as any daemon answers with meshes and
                 // merge later answers in, instead of waiting for the slowest daemon.
+                let transportNotReady = false
                 const next = await collectMeshListAnswersProgressively(
                     daemons,
                     async daemon => {
                         if (!daemon.id) return { daemonId: '', meshes: [] as MeshEntry[] }
-                        const raw = await sendCommand(daemon.id, 'list_meshes', {})
+                        let raw: any
+                        try {
+                            raw = await sendCommand(daemon.id, 'list_meshes', {})
+                        } catch (err) {
+                            if (isTransportNotReadyError(err)) transportNotReady = true
+                            throw err
+                        }
                         const result = unwrapResult(raw)
                         if (result?.success === false) throw new Error(result.error || 'Failed to load meshes')
                         const meshes: MeshEntry[] = (Array.isArray(result?.meshes) ? result.meshes : [])
@@ -463,6 +506,8 @@ export function useMeshList({
                     },
                 )
                 if (!isCurrent()) return
+                // Nobody could be asked yet: not "no meshes" — wait and retry.
+                if (next.length === 0 && transportNotReady && scheduleRetry()) return
                 setMeshes(prev => (meshesEqual(prev, next) ? prev : next))
                 meshListCache.set(daemonIdsKey, next)
                 setError(null)
@@ -479,12 +524,16 @@ export function useMeshList({
                 }
             }
         } catch (e: any) {
-            if (isCurrent()) setError(e?.message || 'Failed to load meshes')
+            if (!isCurrent()) return
+            if (isTransportNotReadyError(e) && scheduleRetry()) return
+            setError(e?.message || 'Failed to load meshes')
         } finally {
-            if (isCurrent()) setLoading(false)
+            if (isCurrent() && !waitingForTransport) setLoading(false)
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [daemonIdsKey, primaryDaemonId, sendCommand, unwrapResult, normalizeMesh, features.createDaemonPicker])
+
+    loadMeshesRef.current = loadMeshes
 
     /**
      * Create a mesh, then attach the picked workspace as its first node.

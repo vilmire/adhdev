@@ -36,6 +36,21 @@ export interface ArtifactFullscreenViewerProps {
     popOutPayload?: ArtifactResolvedPayload | ArtifactViewerItem
 }
 
+/**
+ * Displayed pixel size for the image viewer: natural x fitScale x zoom/100, where
+ * fitScale = min(1, bodyW/naturalW, bodyH/naturalH). Null until both sizes are known.
+ */
+export function imageDisplaySize(
+    natural: { w: number; h: number } | null,
+    body: { w: number; h: number } | null,
+    zoom: number,
+): { width: number; height: number; maxWidth: 'none'; maxHeight: 'none' } | null {
+    if (!natural || !body || natural.w <= 0 || natural.h <= 0 || body.w <= 0 || body.h <= 0) return null
+    const fit = Math.min(1, body.w / natural.w, body.h / natural.h)
+    const scale = fit * (zoom / 100)
+    return { width: natural.w * scale, height: natural.h * scale, maxWidth: 'none', maxHeight: 'none' }
+}
+
 /** md breakpoint: the contents panel starts open only when there is room beside the text. */
 function isWideViewport(): boolean {
     if (typeof window === 'undefined') return true
@@ -118,6 +133,18 @@ export function ArtifactFullscreenViewer({
     const [zoom, setZoom] = useState(100)
     const [popOutBlocked, setPopOutBlocked] = useState(false)
     const [imageFailed, setImageFailed] = useState(false)
+    const bodyRef = useRef<HTMLDivElement | null>(null)
+    const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null)
+    const [bodySize, setBodySize] = useState<{ w: number; h: number } | null>(null)
+    const measureBody = useCallback(() => {
+        const el = bodyRef.current
+        if (!el) return
+        const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null
+        const pad = (side: string) => parseFloat(cs?.getPropertyValue(side) ?? '') || 0
+        const w = el.clientWidth - pad('padding-left') - pad('padding-right')
+        const h = el.clientHeight - pad('padding-top') - pad('padding-bottom')
+        setBodySize(prev => (prev && prev.w === w && prev.h === h ? prev : { w, h }))
+    }, [])
     const [tocOpen, setTocOpen] = useState(isWideViewport)
 
     // Capture the opener once so focus can return to it on close.
@@ -136,10 +163,24 @@ export function ArtifactFullscreenViewer({
         return () => URL.revokeObjectURL(url)
     }, [isImage, item.blob])
 
+    useEffect(() => {
+        if (!isImage) return
+        measureBody()
+        const el = bodyRef.current
+        let observer: ResizeObserver | null = null
+        if (el && typeof ResizeObserver !== 'undefined') {
+            observer = new ResizeObserver(() => measureBody())
+            observer.observe(el)
+        }
+        window.addEventListener('resize', measureBody)
+        return () => { observer?.disconnect(); window.removeEventListener('resize', measureBody) }
+    }, [isImage, measureBody])
+
     // Reset per-artifact view state when navigating between artifacts.
     useEffect(() => {
         setZoom(100)
         setImageFailed(false)
+        setNaturalSize(null)
     }, [item])
 
     const close = useCallback(() => {
@@ -316,6 +357,7 @@ export function ArtifactFullscreenViewer({
                     </nav>
                 )}
                 <div
+                    ref={bodyRef}
                     className={`min-w-0 flex-1 overflow-auto p-2 sm:p-4${isImage ? ' flex' : ''}`}
                     data-testid="artifact-fullscreen-body"
                     onTouchStart={(e) => { if (isImage && e.touches.length === 2) pinchRef.current = { dist: touchDist(e), zoom } }}
@@ -332,22 +374,24 @@ export function ArtifactFullscreenViewer({
                                 {tr('artifact.imageBroken')}
                             </div>
                         ) : imageUrl ? (
-                            // 100% = the whole image fits the body (never upscaled past natural size); the
-                            // zoom factor scales the fit box, so >100 scrolls and <100 shrinks.
-                            <div
-                                className="m-auto flex shrink-0 items-center justify-center"
-                                style={{ width: `${zoom}%`, height: `${zoom}%`, touchAction: 'pan-x pan-y' }}
-                                data-testid="artifact-image-box"
-                            >
-                                <img
-                                    src={imageUrl}
-                                    alt={item.title || item.filename}
-                                    data-testid="artifact-fullscreen-image"
-                                    draggable={false}
-                                    onError={() => setImageFailed(true)}
-                                    style={{ width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                                />
-                            </div>
+                            // 100% = the whole image fits the body (never upscaled). Displayed size =
+                            // natural x fitScale x zoom/100, so zoom-in enlarges tiny images too and
+                            // anything larger than the body scrolls. `margin:auto` on the child of the
+                            // flex scroll container centres small images without clipping the top-left
+                            // of large ones (justify-center would make that part unreachable).
+                            <img
+                                src={imageUrl}
+                                alt={item.title || item.filename}
+                                data-testid="artifact-fullscreen-image"
+                                draggable={false}
+                                onLoad={(e) => {
+                                    setNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
+                                    measureBody()
+                                }}
+                                onError={() => setImageFailed(true)}
+                                style={imageDisplaySize(naturalSize, bodySize, zoom) ?? { maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
+                                className="m-auto shrink-0 object-contain"
+                            />
                         ) : null
                     ) : (
                         <div ref={contentRef} data-testid="artifact-fullscreen-content" data-text-scale={textScale} style={{ zoom: textScale } as React.CSSProperties}>

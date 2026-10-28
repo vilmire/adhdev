@@ -36,24 +36,46 @@ afterEach(() => {
     URL.revokeObjectURL = origRevoke
 })
 
-describe('image fit (issue 1)', () => {
-    it('100% fits the whole image inside the body without upscaling; zoom scales the fit box', async () => {
+describe('image fit and zoom (issue 1)', () => {
+    async function loadImage(natural: { w: number; h: number }, body: { w: number; h: number }) {
         await render(<ArtifactFullscreenViewer item={img()} onClose={() => {}} />)
+        const bodyEl = document.querySelector<HTMLElement>('[data-testid="artifact-fullscreen-body"]')!
+        Object.defineProperty(bodyEl, 'clientWidth', { configurable: true, value: body.w })
+        Object.defineProperty(bodyEl, 'clientHeight', { configurable: true, value: body.h })
         const image = document.querySelector<HTMLImageElement>('[data-testid="artifact-fullscreen-image"]')!
-        expect(image.style.maxWidth).toBe('100%')
-        expect(image.style.maxHeight).toBe('100%')
-        expect(image.style.width).toBe('auto')
-        expect(image.style.height).toBe('auto')
-        const box = () => document.querySelector<HTMLElement>('[data-testid="artifact-image-box"]')!
-        expect(box().style.width).toBe('100%')
-        expect(box().style.height).toBe('100%')
-        await act(async () => { (document.querySelector('[data-testid="artifact-zoom-in"]') as HTMLButtonElement).click() })
-        expect(box().style.width).toBe('125%')
-        await act(async () => { (document.querySelector('[data-testid="artifact-zoom-out"]') as HTMLButtonElement).click() })
-        await act(async () => { (document.querySelector('[data-testid="artifact-zoom-out"]') as HTMLButtonElement).click() })
-        expect(box().style.width).toBe('75%')
-        await act(async () => { (document.querySelector('[data-testid="artifact-zoom-fit"]') as HTMLButtonElement).click() })
-        expect(box().style.width).toBe('100%')
+        Object.defineProperty(image, 'naturalWidth', { configurable: true, value: natural.w })
+        Object.defineProperty(image, 'naturalHeight', { configurable: true, value: natural.h })
+        await act(async () => { image.dispatchEvent(new Event('load')) })
+        return () => document.querySelector<HTMLImageElement>('[data-testid="artifact-fullscreen-image"]')!
+    }
+    const size = (el: HTMLImageElement) => [Math.round(parseFloat(el.style.width)), Math.round(parseFloat(el.style.height))]
+    const click = async (id: string) => { await act(async () => { (document.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement).click() }) }
+
+    it('small image: 100% is natural size (never upscaled); zoom-in enlarges it', async () => {
+        const image = await loadImage({ w: 320, h: 200 }, { w: 1280, h: 767 })
+        expect(size(image())).toEqual([320, 200])
+        await click('artifact-zoom-in'); await click('artifact-zoom-in'); await click('artifact-zoom-in'); await click('artifact-zoom-in')
+        expect(size(image())).toEqual([640, 400]) // 200%
+        await click('artifact-zoom-fit')
+        expect(size(image())).toEqual([320, 200])
+    })
+
+    it('large image: 100% fits the whole image in the body; 150% is 1.5x the fitted size', async () => {
+        const image = await loadImage({ w: 4000, h: 3000 }, { w: 1280, h: 600 })
+        // fit = min(1, 1280/4000, 600/3000) = 0.2
+        expect(size(image())).toEqual([800, 600])
+        await click('artifact-zoom-in'); await click('artifact-zoom-in')
+        expect(size(image())).toEqual([1200, 900])
+        await click('artifact-zoom-out'); await click('artifact-zoom-out'); await click('artifact-zoom-out')
+        expect(size(image())).toEqual([600, 450]) // 75%
+    })
+
+    it('centres via auto margins on a flex scroll container (no justify-center clipping)', async () => {
+        const image = await loadImage({ w: 10, h: 10 }, { w: 100, h: 100 })
+        expect(image().className).toContain('m-auto')
+        const body = document.querySelector<HTMLElement>('[data-testid="artifact-fullscreen-body"]')!
+        expect(body.className).toContain('flex')
+        expect(body.className).not.toContain('justify-center')
     })
 })
 
