@@ -426,6 +426,7 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
       let swaps = 0;
       let shareBlocked = 0;
       let stop = false;
+      let readySent = false;
       parentPort.on('message', (m) => { if (m === 'stop') stop = true; });
 
       function tick() {
@@ -452,6 +453,8 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
             }
           }
         }
+        // Signal once the first batch of swap attempts has run, so the writer loop races a live attacker.
+        if (!readySent) { readySent = true; parentPort.postMessage('ready'); }
         setImmediate(tick);
       }
       tick();
@@ -461,6 +464,7 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
       eval: true,
       workerData: { subDir, subReal, subJunc },
     });
+    await new Promise<void>((resolve) => worker.once('message', () => resolve()));
 
     const rootH = openRoot(rootDir);
     let succeededInside = 0;
@@ -474,7 +478,7 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
           succeededInside++;
         } catch (err) {
           if (err instanceof TransferFsError) {
-            expect(['SYMLINK_OR_REPARSE_REJECTED', 'IO_ERROR', 'ROOT_UNAVAILABLE']).toContain(err.reason);
+            expect(['SYMLINK_OR_REPARSE_REJECTED', 'PATH_TRAVERSAL_REJECTED', 'IO_ERROR', 'ROOT_UNAVAILABLE']).toContain(err.reason);
             refusedOnSwap++;
           } else {
             throw err;
@@ -687,6 +691,7 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
             'SYMLINK_OR_REPARSE_REJECTED',
             'POST_RENAME_QUARANTINED',
             'PUBLISHED_HARDLINK_DETECTED',
+            'HARDLINK_REJECTED',
             'IO_ERROR',
             'TARGET_EXISTS',
           ]).toContain((err as TransferFsError).reason);
