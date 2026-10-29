@@ -217,7 +217,7 @@ test('delete_session_if_expected refuses replaced incarnation after stop await',
       payload: { sessionId: expected.sessionId, expected, force: true },
     });
     assert.equal(del.success, false);
-    assert.equal(del.error, 'cleanup_native_incarnation_mismatch');
+    assert.equal(del.error, 'cleanup_after_stop_side_effect:cleanup_native_incarnation_mismatch');
     assert.equal(server.registry.getSession(expected.sessionId).runtimeKey, 'native-incarnation-2');
     assert.deepEqual(stops, ['stop']);
   });

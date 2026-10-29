@@ -143,6 +143,11 @@ export function confirmSessionStop(db: Database, sessionId: string, stopId: stri
     db.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
 }
 
+/** Clear a fence after a proven host delete — the incarnation is gone, so a stop tombstone is not needed. */
+export function clearSessionStopFence(db: Database, sessionId: string, stopId: string): void {
+    db.prepare('DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?').run(sessionId.trim(), stopId);
+}
+
 /** Host refusal codes that prove the runtime was not mutated. */
 export const CLEANUP_HOST_REFUSAL_CODES = new Set([
     'cleanup_expected_malformed',

@@ -4,7 +4,7 @@
  * stop_session_if_expected / delete_session_if_expected critical section —
  * never a last-read CAS before an async unconditional stop/delete.
  */
-import { resolveHostBootId } from '@adhdev/session-host-core';
+import { resolveHostBootId, stripCleanupAfterStopSideEffect } from '@adhdev/session-host-core';
 import type { SessionCleanupExpectedAssignment } from '@adhdev/session-host-core';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import {
@@ -13,6 +13,7 @@ import {
     releaseSessionStop,
     markSessionStopSent,
     confirmSessionStop,
+    clearSessionStopFence,
     abortSessionStopAfterHostRefusal,
     CLEANUP_HOST_REFUSAL_CODES,
     type SessionCleanupExpected,
@@ -49,12 +50,24 @@ async function resolveOperatorHostBootId(control: OperatorCleanupHostControl): P
 
 function sanitizeOperatorCleanupError(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error ?? 'cleanup_unconfirmed');
-    if (CLEANUP_HOST_REFUSAL_CODES.has(raw) || raw === 'cleanup_session_still_running') return raw;
+    const stripped = stripCleanupAfterStopSideEffect(raw);
+    if (CLEANUP_HOST_REFUSAL_CODES.has(stripped.code) || stripped.code === 'cleanup_session_still_running') {
+        return stripped.code;
+    }
+    // Prefer delete-kind before generic Unsupported — production RPC is
+    // "Unsupported session host request: delete_session_if_expected".
+    if (raw.includes('delete_session_if_expected')) return 'cleanup_expected_delete_unsupported';
     if (raw.includes('Unsupported') || raw.includes('Unknown request') || raw.includes('stop_session_if_expected')) {
         return 'cleanup_expected_stop_unsupported';
     }
-    if (raw.includes('delete_session_if_expected')) return 'cleanup_expected_delete_unsupported';
     return 'cleanup_unconfirmed';
+}
+
+/** Proven before-action host refusals — safe to drop the durable stop fence. */
+function isProvenBeforeActionRefusal(error: unknown, code: string): boolean {
+    const raw = error instanceof Error ? error.message : String(error ?? '');
+    if (stripCleanupAfterStopSideEffect(raw).afterStop) return false;
+    return CLEANUP_HOST_REFUSAL_CODES.has(code) || code === 'cleanup_session_still_running';
 }
 
 export function captureOperatorCleanupExpected(
@@ -100,7 +113,7 @@ export async function operatorStopSessionIfExpected(args: {
             return { success: true, expected };
         } catch (error) {
             const code = sanitizeOperatorCleanupError(error);
-            if (CLEANUP_HOST_REFUSAL_CODES.has(code) || code === 'cleanup_expected_stop_unsupported') {
+            if (isProvenBeforeActionRefusal(error, code) || code === 'cleanup_expected_stop_unsupported') {
                 abortSessionStopAfterHostRefusal(db, sessionId, stopId);
             }
             return { success: false, error: code, retained: true };
@@ -113,20 +126,60 @@ export async function operatorStopSessionIfExpected(args: {
 /**
  * Delete only when the host still holds the exact stopped/selected incarnation.
  * Must not delete a newly replaced/reassigned record after the stop await.
+ *
+ * Force-delete (stop_and_delete) reserves the durable stop fence across the host
+ * runtime.stop()/waitForRuntimeExit await and the post-await delete CAS so
+ * claim/reuse/sendinput stay refused while the writer may already be dying.
  */
 export async function operatorDeleteSessionIfExpected(args: {
     control: OperatorCleanupHostControl;
+    meshId?: string;
     sessionId: string;
     expected: SessionCleanupExpectedAssignment;
     force?: boolean;
+    beforeHostDelete?: () => Promise<void>;
 }): Promise<{ success: true; deleted: true; alreadyAbsent?: boolean }
     | { success: false; error: string; retained: true }> {
     const { control, sessionId, expected } = args;
     if (typeof control.deleteSessionIfExpected !== 'function') {
         return { success: false, error: 'cleanup_expected_delete_unsupported', retained: true };
     }
+
+    const force = args.force === true;
+    const fenceMeshId = typeof args.meshId === 'string' && args.meshId ? args.meshId : null;
+    // Force-delete awaits host stop — hold the same durable fence as mode=stop.
+    if (force && fenceMeshId) {
+        const db = MeshRuntimeStore.getInstance().db;
+        const stopId = reserveSessionStop(db, fenceMeshId, sessionId, undefined, expected);
+        try {
+            if (args.beforeHostDelete) await args.beforeHostDelete();
+            markSessionStopSent(db, sessionId, stopId);
+            try {
+                const result = await control.deleteSessionIfExpected(sessionId, expected, { force: true });
+                if (!result || result.deleted !== true) {
+                    return { success: false, error: 'cleanup_unconfirmed', retained: true };
+                }
+                // Proven delete removes the incarnation — clear fence (do not leave a
+                // stop tombstone that would poison a later claim on the same sessionId).
+                clearSessionStopFence(db, sessionId, stopId);
+                return { success: true, deleted: true, ...(result.alreadyAbsent ? { alreadyAbsent: true } : {}) };
+            } catch (error) {
+                const code = sanitizeOperatorCleanupError(error);
+                // Unsupported delete: no host mutation — keep fence for same-tuple
+                // conditional-stop fallback (caller). Proven before-action refusal may abort.
+                if (isProvenBeforeActionRefusal(error, code)) {
+                    abortSessionStopAfterHostRefusal(db, sessionId, stopId);
+                }
+                return { success: false, error: code, retained: true };
+            }
+        } finally {
+            releaseSessionStop(db, sessionId, stopId);
+        }
+    }
+
     try {
-        const result = await control.deleteSessionIfExpected(sessionId, expected, { force: args.force === true });
+        if (args.beforeHostDelete) await args.beforeHostDelete();
+        const result = await control.deleteSessionIfExpected(sessionId, expected, { force });
         if (!result || result.deleted !== true) {
             return { success: false, error: 'cleanup_unconfirmed', retained: true };
         }
@@ -186,15 +239,36 @@ export async function applyOperatorSessionCleanupMode(args: {
         return { kind: 'deleted' };
     }
 
-    // stop_and_delete
+    // stop_and_delete — production SessionHostController always exposes
+    // deleteSessionIfExpected; old hosts refuse via RPC Unsupported. Fence the
+    // force-delete await; unsupported delete may fall back ONLY to conditional
+    // stop_session_if_expected under the same expected tuple + durable fence.
     if (!dryRun) {
         if (!expected) return { kind: 'refused', error: 'cleanup_expected_malformed' };
         if (typeof control.deleteSessionIfExpected === 'function') {
-            if (!completed) await args.markIntentionalStop('delete_session_force');
-            const deleted = await operatorDeleteSessionIfExpected({ control, sessionId, expected, force: true });
-            if (!deleted.success) return { kind: 'refused', error: deleted.error };
-            return { kind: 'deleted' };
+            const deleted = await operatorDeleteSessionIfExpected({
+                control,
+                meshId,
+                sessionId,
+                expected,
+                force: true,
+                beforeHostDelete: completed ? undefined : () => args.markIntentionalStop('delete_session_force'),
+            });
+            if (deleted.success) return { kind: 'deleted' };
+            if (deleted.error === 'cleanup_expected_delete_unsupported') {
+                if (!completed) {
+                    const stopped = await operatorStopSessionIfExpected({
+                        control, meshId, sessionId, expected,
+                        beforeHostStop: () => args.markIntentionalStop('stop_session'),
+                    });
+                    if (!stopped.success) return { kind: 'refused', error: stopped.error };
+                    return { kind: 'delete_unsupported', stopped: true };
+                }
+                return { kind: 'delete_unsupported' };
+            }
+            return { kind: 'refused', error: deleted.error };
         }
+        // Method absent (non-production stubs only): stop-only soft fallback.
         if (!completed) {
             const stopped = await operatorStopSessionIfExpected({
                 control, meshId, sessionId, expected,

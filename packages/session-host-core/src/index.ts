@@ -59,6 +59,9 @@ export type {
 
 export { SESSION_HOST_SUPPORTED_REQUEST_TYPES } from './types.js';
 export {
+  CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX,
+  tagCleanupAfterStopSideEffect,
+  stripCleanupAfterStopSideEffect,
   hostBootIdFromStartedAt,
   resolveHostBootId,
   refuseCleanupExpectedStop,

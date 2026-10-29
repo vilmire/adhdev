@@ -1,6 +1,24 @@
 /** Shared cleanup expected-assignment / host-boot helpers (daemon + host). */
 import type { SessionCleanupExpectedAssignment, SessionHostRecord } from './types.js';
 
+/**
+ * Prefix on delete_session_if_expected refusals after runtime.stop was requested.
+ * Client durable fences must not abort on these — the writer may already be dying.
+ * Before-action refusals keep the bare CLEANUP_HOST_REFUSAL_CODES (abort-safe proof).
+ */
+export const CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX = 'cleanup_after_stop_side_effect:';
+
+export function tagCleanupAfterStopSideEffect(code: string): string {
+  return `${CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX}${code}`;
+}
+
+export function stripCleanupAfterStopSideEffect(raw: string): { afterStop: boolean; code: string } {
+  if (raw.startsWith(CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX)) {
+    return { afterStop: true, code: raw.slice(CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX.length) };
+  }
+  return { afterStop: false, code: raw };
+}
+
 export function hostBootIdFromStartedAt(hostStartedAt: number): string {
   return `hs:${hostStartedAt}`;
 }

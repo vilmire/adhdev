@@ -2862,6 +2862,7 @@ var require_dist = __commonJS({
     var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
     var index_exports2 = {};
     __export2(index_exports2, {
+      CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX: () => CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX,
       CLI_CHILD_NICE_ENV: () => CLI_CHILD_NICE_ENV,
       CLI_CHILD_NICE_INCREMENT: () => CLI_CHILD_NICE_INCREMENT,
       CLI_CHILD_SCHEDULING_ENV: () => CLI_CHILD_SCHEDULING_ENV,
@@ -2917,6 +2918,8 @@ var require_dist = __commonJS({
       resolveSessionHostRows: () => resolveSessionHostRows,
       sanitizeSpawnEnv: () => sanitizeSpawnEnv,
       spawnCliChild: () => spawnCliChild,
+      stripCleanupAfterStopSideEffect: () => stripCleanupAfterStopSideEffect,
+      tagCleanupAfterStopSideEffect: () => tagCleanupAfterStopSideEffect,
       validateSessionHostEndpoint: () => validateSessionHostEndpoint,
       writeEnvelope: () => writeEnvelope
     });
@@ -3074,6 +3077,16 @@ var require_dist = __commonJS({
       "get_session",
       "list_sessions"
     ];
+    var CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX = "cleanup_after_stop_side_effect:";
+    function tagCleanupAfterStopSideEffect(code) {
+      return `${CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX}${code}`;
+    }
+    function stripCleanupAfterStopSideEffect(raw) {
+      if (raw.startsWith(CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX)) {
+        return { afterStop: true, code: raw.slice(CLEANUP_AFTER_STOP_SIDE_EFFECT_PREFIX.length) };
+      }
+      return { afterStop: false, code: raw };
+    }
     function hostBootIdFromStartedAt(hostStartedAt) {
       return `hs:${hostStartedAt}`;
     }
@@ -47793,6 +47806,9 @@ ${error.message || ""}`;
     }
     function confirmSessionStop(db2, sessionId, stopId) {
       db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
+    }
+    function clearSessionStopFence(db2, sessionId, stopId) {
+      db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
     }
     var import_node_crypto6;
     var CLEANUP_HOST_REFUSAL_CODES;
@@ -188390,12 +188406,20 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function sanitizeOperatorCleanupError(error) {
       const raw = error instanceof Error ? error.message : String(error ?? "cleanup_unconfirmed");
-      if (CLEANUP_HOST_REFUSAL_CODES.has(raw) || raw === "cleanup_session_still_running") return raw;
+      const stripped = (0, import_session_host_core18.stripCleanupAfterStopSideEffect)(raw);
+      if (CLEANUP_HOST_REFUSAL_CODES.has(stripped.code) || stripped.code === "cleanup_session_still_running") {
+        return stripped.code;
+      }
+      if (raw.includes("delete_session_if_expected")) return "cleanup_expected_delete_unsupported";
       if (raw.includes("Unsupported") || raw.includes("Unknown request") || raw.includes("stop_session_if_expected")) {
         return "cleanup_expected_stop_unsupported";
       }
-      if (raw.includes("delete_session_if_expected")) return "cleanup_expected_delete_unsupported";
       return "cleanup_unconfirmed";
+    }
+    function isProvenBeforeActionRefusal(error, code) {
+      const raw = error instanceof Error ? error.message : String(error ?? "");
+      if ((0, import_session_host_core18.stripCleanupAfterStopSideEffect)(raw).afterStop) return false;
+      return CLEANUP_HOST_REFUSAL_CODES.has(code) || code === "cleanup_session_still_running";
     }
     function captureOperatorCleanupExpected(hostBootId, record7) {
       const sessionId = typeof record7.sessionId === "string" ? record7.sessionId : "";
@@ -188424,7 +188448,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           return { success: true, expected };
         } catch (error) {
           const code = sanitizeOperatorCleanupError(error);
-          if (CLEANUP_HOST_REFUSAL_CODES.has(code) || code === "cleanup_expected_stop_unsupported") {
+          if (isProvenBeforeActionRefusal(error, code) || code === "cleanup_expected_stop_unsupported") {
             abortSessionStopAfterHostRefusal(db2, sessionId, stopId);
           }
           return { success: false, error: code, retained: true };
@@ -188438,8 +188462,35 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (typeof control.deleteSessionIfExpected !== "function") {
         return { success: false, error: "cleanup_expected_delete_unsupported", retained: true };
       }
+      const force = args.force === true;
+      const fenceMeshId = typeof args.meshId === "string" && args.meshId ? args.meshId : null;
+      if (force && fenceMeshId) {
+        const db2 = MeshRuntimeStore.getInstance().db;
+        const stopId = reserveSessionStop(db2, fenceMeshId, sessionId, void 0, expected);
+        try {
+          if (args.beforeHostDelete) await args.beforeHostDelete();
+          markSessionStopSent(db2, sessionId, stopId);
+          try {
+            const result = await control.deleteSessionIfExpected(sessionId, expected, { force: true });
+            if (!result || result.deleted !== true) {
+              return { success: false, error: "cleanup_unconfirmed", retained: true };
+            }
+            clearSessionStopFence(db2, sessionId, stopId);
+            return { success: true, deleted: true, ...result.alreadyAbsent ? { alreadyAbsent: true } : {} };
+          } catch (error) {
+            const code = sanitizeOperatorCleanupError(error);
+            if (isProvenBeforeActionRefusal(error, code)) {
+              abortSessionStopAfterHostRefusal(db2, sessionId, stopId);
+            }
+            return { success: false, error: code, retained: true };
+          }
+        } finally {
+          releaseSessionStop(db2, sessionId, stopId);
+        }
+      }
       try {
-        const result = await control.deleteSessionIfExpected(sessionId, expected, { force: args.force === true });
+        if (args.beforeHostDelete) await args.beforeHostDelete();
+        const result = await control.deleteSessionIfExpected(sessionId, expected, { force });
         if (!result || result.deleted !== true) {
           return { success: false, error: "cleanup_unconfirmed", retained: true };
         }
@@ -188481,10 +188532,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!dryRun) {
         if (!expected) return { kind: "refused", error: "cleanup_expected_malformed" };
         if (typeof control.deleteSessionIfExpected === "function") {
-          if (!completed) await args.markIntentionalStop("delete_session_force");
-          const deleted = await operatorDeleteSessionIfExpected({ control, sessionId, expected, force: true });
-          if (!deleted.success) return { kind: "refused", error: deleted.error };
-          return { kind: "deleted" };
+          const deleted = await operatorDeleteSessionIfExpected({
+            control,
+            meshId,
+            sessionId,
+            expected,
+            force: true,
+            beforeHostDelete: completed ? void 0 : () => args.markIntentionalStop("delete_session_force")
+          });
+          if (deleted.success) return { kind: "deleted" };
+          if (deleted.error === "cleanup_expected_delete_unsupported") {
+            if (!completed) {
+              const stopped = await operatorStopSessionIfExpected({
+                control,
+                meshId,
+                sessionId,
+                expected,
+                beforeHostStop: () => args.markIntentionalStop("stop_session")
+              });
+              if (!stopped.success) return { kind: "refused", error: stopped.error };
+              return { kind: "delete_unsupported", stopped: true };
+            }
+            return { kind: "delete_unsupported" };
+          }
+          return { kind: "refused", error: deleted.error };
         }
         if (!completed) {
           const stopped = await operatorStopSessionIfExpected({

@@ -45,7 +45,7 @@ module.exports = __toCommonJS(index_exports);
 var import_crypto3 = require("crypto");
 var fs11 = __toESM(require("fs"));
 var path9 = __toESM(require("path"));
-var import_session_host_core12 = require("@adhdev/session-host-core");
+var import_session_host_core13 = require("@adhdev/session-host-core");
 
 // src/guardian-artifact.ts
 var fs = __toESM(require("fs"));
@@ -143,7 +143,7 @@ function lsofSocketOwnerPids(socketPath) {
 }
 
 // src/server.ts
-var import_session_host_core10 = require("@adhdev/session-host-core");
+var import_session_host_core11 = require("@adhdev/session-host-core");
 
 // src/runtime.ts
 var fs3 = __toESM(require("fs"));
@@ -1198,7 +1198,7 @@ var OperatorRecoveryFence = class {
 };
 
 // src/server.ts
-var import_session_host_core11 = require("@adhdev/session-host-core");
+var import_session_host_core12 = require("@adhdev/session-host-core");
 
 // src/operator-recovery-control.ts
 var import_session_host_core5 = require("@adhdev/session-host-core");
@@ -1377,6 +1377,7 @@ function observeRecoveryTombstones(tombstones, runtimes) {
 var import_session_host_core6 = require("@adhdev/session-host-core");
 
 // src/delete-session-if-expected.ts
+var import_session_host_core7 = require("@adhdev/session-host-core");
 async function handleDeleteSessionIfExpected(host, payload) {
   const before = host.registry.getSession(payload.sessionId);
   if (!before) {
@@ -1390,11 +1391,13 @@ async function handleDeleteSessionIfExpected(host, payload) {
     payload.force === true
   );
   if (refused) return { success: false, error: refused };
+  let stopRequested = false;
   if (host.runtimes.has(payload.sessionId)) {
     host.stopRequests.set(payload.sessionId, "delete");
     host.registry.setLifecycle(payload.sessionId, "stopping");
     host.persistNow(payload.sessionId);
     host.requireRuntime(payload.sessionId).stop();
+    stopRequested = true;
     await host.waitForRuntimeExit(payload.sessionId).catch((error) => {
       host.recordRuntimeTransition(
         payload.sessionId,
@@ -1417,7 +1420,12 @@ async function handleDeleteSessionIfExpected(host, payload) {
     host.runtimes.has(payload.sessionId),
     false
   );
-  if (afterRefused) return { success: false, error: afterRefused };
+  if (afterRefused) {
+    return {
+      success: false,
+      error: stopRequested ? (0, import_session_host_core7.tagCleanupAfterStopSideEffect)(afterRefused) : afterRefused
+    };
+  }
   host.registry.deleteSession(payload.sessionId);
   host.storage.remove(payload.sessionId);
   host.storage.removeTombstone(payload.sessionId);
@@ -1450,10 +1458,10 @@ function handleStopSessionIfExpected(host, payload) {
 var import_crypto2 = require("crypto");
 var fs8 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
-var import_session_host_core7 = require("@adhdev/session-host-core");
+var import_session_host_core8 = require("@adhdev/session-host-core");
 var INSTANCE_ARG_PREFIX = "--instance-config-key=";
 function sessionHostInstanceArg(configDir) {
-  const canonical = (0, import_session_host_core7.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: configDir });
+  const canonical = (0, import_session_host_core8.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: configDir });
   const digest3 = (0, import_crypto2.createHash)("sha256").update(canonical).digest("hex");
   return `${INSTANCE_ARG_PREFIX}${digest3}`;
 }
@@ -1528,8 +1536,8 @@ function readVerifiedReplacementProvenance(options) {
     if (options.appName !== void 0 && parsed.appName !== void 0 && parsed.appName !== options.appName) {
       return void 0;
     }
-    const canonicalDir = (0, import_session_host_core7.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
-    if (typeof parsed.instanceConfigDir !== "string" || (0, import_session_host_core7.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
+    const canonicalDir = (0, import_session_host_core8.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
+    if (typeof parsed.instanceConfigDir !== "string" || (0, import_session_host_core8.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
       return void 0;
     }
     if (fs8.existsSync(canonicalDir)) {
@@ -1628,7 +1636,7 @@ function readVerifiedReplacementProvenance(options) {
 
 // src/session-diagnostics.ts
 var path7 = __toESM(require("path"));
-var import_session_host_core8 = require("@adhdev/session-host-core");
+var import_session_host_core9 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
 function resolveHostEntryPath() {
   const entry = process.argv[1];
@@ -1697,7 +1705,7 @@ function buildHostDiagnostics(params) {
     hostEntryPath: resolveHostEntryPath(),
     ...params.hostBootId ? { hostBootId: params.hostBootId } : {},
     runtimeCount: params.runtimeCount,
-    supportedRequestTypes: [...import_session_host_core8.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
+    supportedRequestTypes: [...import_session_host_core9.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
     liveRuntimes,
     recoverySnapshots,
@@ -1709,7 +1717,7 @@ function buildHostDiagnostics(params) {
 }
 
 // src/session-lifecycle.ts
-var import_session_host_core9 = require("@adhdev/session-host-core");
+var import_session_host_core10 = require("@adhdev/session-host-core");
 function compareDuplicateCandidates(a, b) {
   const score = (record) => {
     const lifecycleScore = record.lifecycle === "running" ? 4 : record.lifecycle === "starting" ? 3 : record.lifecycle === "stopping" ? 2 : record.lifecycle === "interrupted" ? 1 : 0;
@@ -1773,9 +1781,9 @@ function buildPayloadFromRecord(record) {
     providerType: record.providerType,
     category: record.category,
     workspace: record.workspace,
-    launchCommand: { ...record.launchCommand, env: (0, import_session_host_core9.replayLaunchEnv)(record.launchCommand), envMode: "launch_overrides" },
-    cols: (0, import_session_host_core9.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
-    rows: (0, import_session_host_core9.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
+    launchCommand: { ...record.launchCommand, env: (0, import_session_host_core10.replayLaunchEnv)(record.launchCommand), envMode: "launch_overrides" },
+    cols: (0, import_session_host_core10.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
+    rows: (0, import_session_host_core10.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
     meta: record.meta
   };
 }
@@ -1889,7 +1897,7 @@ function withReplayResyncPreamble(text, sinceSeq) {
 // src/server.ts
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
-  registry = new import_session_host_core10.SessionHostRegistry();
+  registry = new import_session_host_core11.SessionHostRegistry();
   runtimes = /* @__PURE__ */ new Map();
   storage;
   recoveryFence;
@@ -1933,7 +1941,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
   stopPromise = null;
   constructor(options = {}) {
     super();
-    this.endpoint = options.endpoint || (0, import_session_host_core10.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
+    this.endpoint = options.endpoint || (0, import_session_host_core11.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
     if (options.upgradeBinding) {
       const relative3 = options.storageRootDir && path8.relative(options.upgradeBinding.stateDir, options.storageRootDir);
       if (this.endpoint.kind !== "unix" || !options.storageRootDir || !path8.isAbsolute(options.storageRootDir) || !path8.isAbsolute(options.upgradeBinding.stateDir) || relative3 === ".." || relative3?.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative3 || "")) {
@@ -1955,7 +1963,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       appName: options.appName || "adhdev",
       rootDir: options.storageRootDir
     });
-    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir || path8.join((0, import_session_host_core11.resolveInstanceConfigDir)(process.env), "session-host", options.appName || "adhdev"));
+    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir || path8.join((0, import_session_host_core12.resolveInstanceConfigDir)(process.env), "session-host", options.appName || "adhdev"));
     this.recoveryControl = new OperatorRecoveryControl(() => ({
       upgradeLease: this.upgradeLease,
       instanceConfigDir: this.instanceConfigDir,
@@ -2072,7 +2080,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.startupFence();
   }
   async start() {
-    (0, import_session_host_core10.validateSessionHostEndpoint)(this.endpoint);
+    (0, import_session_host_core11.validateSessionHostEndpoint)(this.endpoint);
     this.assertNoAutomaticReplacementContext();
     if (this.instanceLockPath && !this.instanceLock) {
       this.instanceLock = acquireHostInstanceLock({
@@ -2106,7 +2114,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.startupFence?.();
     this.ipcServer = net2.createServer((socket) => {
       this.sockets.add(socket);
-      const parser = (0, import_session_host_core10.createLineParser)((envelope) => {
+      const parser = (0, import_session_host_core11.createLineParser)((envelope) => {
         if (envelope.kind !== "request") return;
         void this.handleIncomingRequest(socket, envelope);
       });
@@ -2592,7 +2600,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       durationMs: Math.max(0, Date.now() - startedAt),
       error: response.success ? void 0 : response.error
     });
-    this.writeEnvelopeSafely(socket, (0, import_session_host_core10.createResponseEnvelope)(envelope.requestId, response));
+    this.writeEnvelopeSafely(socket, (0, import_session_host_core11.createResponseEnvelope)(envelope.requestId, response));
   }
   writeEnvelopeSafely(socket, envelope) {
     if (socket.destroyed || !socket.writable || socket.writableEnded) {
@@ -2634,7 +2642,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
   persistNow(sessionId, allowTerminal = false) {
     const record = this.registry.getSession(sessionId);
     if (!record) return;
-    if (!allowTerminal && (0, import_session_host_core10.isTerminalRecord)(record)) return;
+    if (!allowTerminal && (0, import_session_host_core11.isTerminalRecord)(record)) return;
     const snapshot = this.getSnapshot(sessionId);
     try {
       this.storage.save(record, snapshot);
@@ -2901,7 +2909,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
    */
   handleRuntimeExit(record, exitCode, signal) {
     const priorRecord = this.registry.getSession(record.sessionId);
-    const termination = (0, import_session_host_core10.classifyTermination)({
+    const termination = (0, import_session_host_core11.classifyTermination)({
       exitCode,
       signal,
       osPid: priorRecord?.osPid,
@@ -2950,7 +2958,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     );
     setTimeout(() => {
       const current = this.registry.getSession(record.sessionId);
-      if (current && !(0, import_session_host_core10.isTerminalRecord)(current)) return;
+      if (current && !(0, import_session_host_core11.isTerminalRecord)(current)) return;
       this.registry.deleteSession(record.sessionId);
       this.storage.remove(record.sessionId);
     }, 5e3).unref?.();
@@ -3011,10 +3019,10 @@ function writeStderrLineSync(line) {
 // src/index.ts
 var SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || "adhdev";
 var SHUTDOWN_DEADLINE_MS = 1e4;
-var INSTANCE_CONFIG_DIR = (0, import_session_host_core12.resolveInstanceConfigDir)(process.env);
-var INSTANCE_IPC_KEY = (0, import_session_host_core12.resolveSessionHostIpcKey)(INSTANCE_CONFIG_DIR);
+var INSTANCE_CONFIG_DIR = (0, import_session_host_core13.resolveInstanceConfigDir)(process.env);
+var INSTANCE_IPC_KEY = (0, import_session_host_core13.resolveSessionHostIpcKey)(INSTANCE_CONFIG_DIR);
 function getSessionHostEndpoint() {
-  return (0, import_session_host_core12.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
+  return (0, import_session_host_core13.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
 }
 function getSessionHostStorageRoot() {
   return path9.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
@@ -3140,7 +3148,7 @@ async function runServer(instanceKeyArgs = []) {
   });
 }
 async function listRuntimes(showAll = false) {
-  const client = new import_session_host_core12.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+  const client = new import_session_host_core13.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   try {
     const response = await client.request({
       type: "list_sessions",
@@ -3159,7 +3167,7 @@ async function listRuntimes(showAll = false) {
       console.log([
         runtime.runtimeKey,
         runtime.lifecycle,
-        (0, import_session_host_core12.formatRuntimeOwner)(runtime),
+        (0, import_session_host_core13.formatRuntimeOwner)(runtime),
         runtime.workspaceLabel,
         runtime.sessionId,
         runtime.displayName
@@ -3171,7 +3179,7 @@ async function listRuntimes(showAll = false) {
   }
 }
 async function attachRuntime(target3, readOnly = false, takeover = false) {
-  const client = new import_session_host_core12.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+  const client = new import_session_host_core13.SessionHostClient({ endpoint: getSessionHostEndpoint() });
   const clientId = `local-terminal-${process.pid}-${(0, import_crypto3.randomUUID)().slice(0, 8)}`;
   let lastSeq = 0;
   let restoredRawMode = false;
@@ -3266,7 +3274,7 @@ async function attachRuntime(target3, readOnly = false, takeover = false) {
     if (!listResponse.success || !listResponse.result) {
       throw new Error(listResponse.error || "Failed to list runtimes");
     }
-    let runtimeRecord = (0, import_session_host_core12.resolveAttachableRuntimeRecord)(listResponse.result, target3);
+    let runtimeRecord = (0, import_session_host_core13.resolveAttachableRuntimeRecord)(listResponse.result, target3);
     runtimeId = runtimeRecord.sessionId;
     if (runtimeRecord.lifecycle === "interrupted" && !readOnly) {
       const resumeResponse = await client.request({
@@ -3409,13 +3417,13 @@ async function main() {
     if (!target3) {
       throw new Error("runtime target is required: adhdev-sessiond resume <runtimeId|runtimeKey>");
     }
-    const client = new import_session_host_core12.SessionHostClient({ endpoint: getSessionHostEndpoint() });
+    const client = new import_session_host_core13.SessionHostClient({ endpoint: getSessionHostEndpoint() });
     try {
       const listResponse = await client.request({ type: "list_sessions", payload: {} });
       if (!listResponse.success || !listResponse.result) {
         throw new Error(listResponse.error || "Failed to list runtimes");
       }
-      const runtimeRecord = (0, import_session_host_core12.resolveRuntimeRecord)(listResponse.result, target3);
+      const runtimeRecord = (0, import_session_host_core13.resolveRuntimeRecord)(listResponse.result, target3);
       const resumeResponse = await client.request({
         type: "resume_session",
         payload: {

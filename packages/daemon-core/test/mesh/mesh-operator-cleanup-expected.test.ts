@@ -2,9 +2,17 @@
  * assignment through host stop/delete CAS — never unconditional stop then delete. */
 import { describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { hostBootIdFromStartedAt, refuseCleanupExpectedStop, refuseCleanupExpectedDelete } from '@adhdev/session-host-core';
+import {
+    hostBootIdFromStartedAt, refuseCleanupExpectedStop, refuseCleanupExpectedDelete,
+    tagCleanupAfterStopSideEffect,
+} from '@adhdev/session-host-core';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
-import { sessionIsStopping, sessionStopPending } from '../../src/mesh/mesh-session-stop-fence.js';
+import { claimNextTask } from '../../src/mesh/mesh-work-queue.js';
+import { reuseIdleTaskSession } from '../../src/mesh/mesh-session-reuse.js';
+import {
+    sessionIsStopping, sessionStopPending, readReservedCleanupExpected,
+} from '../../src/mesh/mesh-session-stop-fence.js';
+import { agentCommand } from '../../src/commands/cli-manager-agent-command.js';
 import { cleanupMeshSessions } from '../../src/commands/router-worktree-cleanup.js';
 
 function fixture(over: { bound?: boolean; lifecycle?: string } = {}) {
@@ -155,7 +163,7 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
             // Simulate replace after stop await: new incarnation under same sessionId.
             const replaced = { ...f.record, runtimeKey: 'rt-replaced', startedAt: f.record.startedAt + 1, lifecycle: 'running' };
             const refused = refuseCleanupExpectedDelete(replaced, exp, f.hostBootId, true, true);
-            if (refused) throw new Error(refused);
+            if (refused) throw new Error(tagCleanupAfterStopSideEffect(refused));
             return { sessionId: f.sessionId, deleted: true };
         };
         const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
@@ -163,6 +171,8 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
         expect(result.errors?.[0]?.error).toBe('cleanup_native_incarnation_mismatch');
         expect(result.deletedSessionIds).toEqual([]);
         expect(f.control.deleteSession).not.toHaveBeenCalled();
+        // After-stop refusal retains the durable fence (cannot pretend writer alive).
+        expect(sessionIsStopping(MeshRuntimeStore.getInstance().db, f.sessionId)).toBe(true);
     });
 
     it('refuses restart/incarnation mismatch without fabricating a stop receipt', async () => {
@@ -258,5 +268,258 @@ describe('B1 operator cleanupMeshSessions expected-assignment CAS', () => {
         expect(result.errors?.[0]?.error).toBe('cleanup_assignment_mismatch');
         expect(f.record.meta.meshActiveAssignment.taskId).toBe('replacement-task');
         expect(f.stops()).toBe(0);
+    });
+});
+
+describe('F1 stop_and_delete durable fence across host force-delete await', () => {
+    it('holds sessionIsStopping through awaited host exit and refuses claim/reuse/sendinput', async () => {
+        const f = fixture();
+        const store = MeshRuntimeStore.getInstance();
+        let entered!: () => void;
+        let finish!: () => void;
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        const released = new Promise<void>(resolve => { finish = resolve; });
+        // Production-shaped force-delete: stop() then await exit then post-await CAS.
+        f.control.deleteSessionIfExpected = async (_id: string, exp: any, opts?: { force?: boolean }) => {
+            expect(opts?.force).toBe(true);
+            expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+            expect(readReservedCleanupExpected(store.db, f.sessionId,
+                (store.db.prepare('SELECT stop_id FROM mesh_session_stop_fences WHERE session_id = ?')
+                    .get(f.sessionId) as { stop_id: string }).stop_id)).toEqual(exp);
+            entered();
+            await released;
+            const refused = refuseCleanupExpectedDelete(
+                f.record, exp, f.hostBootId, f.record.lifecycle === 'running', true,
+            );
+            if (refused) throw new Error(refused);
+            f.record.lifecycle = 'stopped';
+            f.control.listSessions = async () => [];
+            return { sessionId: f.sessionId, deleted: true };
+        };
+        const deleting = cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        await started;
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+        expect(sessionStopPending(store.db, f.sessionId)).toBe(true);
+
+        store.insertQueueEntry({
+            id: randomUUID(), meshId: f.meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly',
+            message: 'must not claim during force-delete await',
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        expect(claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true })).toBeNull();
+
+        const idleState: any = {
+            instanceId: f.sessionId, status: 'idle', type: 'codex-cli',
+            settings: {
+                meshNodeFor: f.meshId, meshNodeId: f.nodeId, launchedByCoordinator: true,
+                meshActiveDispatchNonce: null,
+            },
+        };
+        const claim = vi.fn(() => true);
+        expect(reuseIdleTaskSession(
+            { instanceManager: { getByCategory: () => [{ getState: () => idleState }] } } as any,
+            f.meshId,
+            {
+                id: randomUUID(), meshId: f.meshId, status: 'pending', readonly: true,
+                taskMode: 'live_debug_readonly', message: 'reuse', createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+            } as any,
+            [{ id: f.nodeId }],
+            claim,
+        )).toBe('none');
+        expect(claim).not.toHaveBeenCalled();
+
+        const sendHost: any = {
+            findAdapter: () => ({ adapter: {}, key: f.sessionId }),
+            deps: { getInstanceManager: () => ({ getByCategory: () => [] }) },
+        };
+        await expect(agentCommand(sendHost, {
+            action: 'send_chat', agentType: 'codex-cli', targetSessionId: f.sessionId,
+            meshContext: { meshId: f.meshId },
+        })).rejects.toThrow('session_lifetime_stopping');
+
+        finish();
+        const result = await deleting;
+        expect(result).toMatchObject({ success: true, deletedSessionIds: [f.sessionId] });
+        expect(f.control.deleteSession).not.toHaveBeenCalled();
+        // Proven delete clears the fence — incarnation is gone.
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(false);
+        expect(sessionStopPending(store.db, f.sessionId)).toBe(false);
+    });
+
+    it('refuses replacement incarnation at post-await delete CAS while fence held during await', async () => {
+        const f = fixture();
+        const store = MeshRuntimeStore.getInstance();
+        let entered!: () => void;
+        let finish!: () => void;
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        const released = new Promise<void>(resolve => { finish = resolve; });
+        f.control.deleteSessionIfExpected = async (_id: string, exp: any) => {
+            entered();
+            await released;
+            expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+            const replaced = {
+                ...f.record,
+                runtimeKey: 'rt-replaced',
+                startedAt: f.record.startedAt + 1,
+                lifecycle: 'running',
+            };
+            const refused = refuseCleanupExpectedDelete(replaced, exp, f.hostBootId, true, true);
+            if (refused) throw new Error(tagCleanupAfterStopSideEffect(refused));
+            return { sessionId: f.sessionId, deleted: true };
+        };
+        const deleting = cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        await started;
+        store.insertQueueEntry({
+            id: randomUUID(), meshId: f.meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly',
+            message: 'barrier during await', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        expect(claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true })).toBeNull();
+        finish();
+        const result = await deleting;
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_native_incarnation_mismatch');
+        expect(result.deletedSessionIds).toEqual([]);
+        // After-stop refusal: keep conservative stopping state (do not pretend writer alive).
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+    });
+
+    it('keeps fence on uncertain transport/timeout after potential host stop side effect', async () => {
+        const f = fixture();
+        const store = MeshRuntimeStore.getInstance();
+        f.control.deleteSessionIfExpected = async () => {
+            expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+            throw new Error('host waitForRuntimeExit timed out');
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_unconfirmed');
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+        store.insertQueueEntry({
+            id: randomUUID(), meshId: f.meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly',
+            message: 'uncertain outcome', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        expect(claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true })).toBeNull();
+    });
+
+    it('aborts fence only on proven before-action refusal and allows a later claim', async () => {
+        const f = fixture();
+        const store = MeshRuntimeStore.getInstance();
+        f.control.deleteSessionIfExpected = async (_id, exp) => {
+            expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+            throw new Error('cleanup_assignment_mismatch');
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_assignment_mismatch');
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(false);
+        const taskId = randomUUID();
+        store.insertQueueEntry({
+            id: taskId, meshId: f.meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly',
+            message: 'after proven refuse', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        expect(claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true })?.id).toBe(taskId);
+    });
+
+    it('late ACK / repeat cleanup remains idempotent with fence + matching positive delete', async () => {
+        const f = fixture();
+        const first = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(first).toMatchObject({ success: true, deletedSessionIds: [f.sessionId] });
+        expect(f.deletes()).toBe(1);
+        // Host already absent — repeat must not fabricate a fresh unconditional delete.
+        f.control.deleteSessionIfExpected = async () => ({ sessionId: f.sessionId, deleted: true, alreadyAbsent: true });
+        f.control.listSessions = async () => [];
+        const second = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(second).toMatchObject({ success: true });
+        expect(second.deletedSessionIds ?? []).toEqual([]);
+        expect(f.control.deleteSession).not.toHaveBeenCalled();
+    });
+});
+
+describe('F2 production-shaped delete unsupported (method present + RPC refuse)', () => {
+    it('stop_and_delete: Unsupported delete_session_if_expected falls back to conditional stop; records remain', async () => {
+        const f = fixture();
+        // Production SessionHostController always has the method; old host RPC refuses.
+        f.control.deleteSessionIfExpected = async () => {
+            throw new Error('Unsupported session host request: delete_session_if_expected');
+        };
+        let stopped = 0;
+        f.control.stopSessionIfExpected = async (_id, exp) => {
+            const refused = refuseCleanupExpectedStop(f.record, exp, f.hostBootId, true);
+            if (refused) throw new Error(refused);
+            stopped++;
+            f.record.lifecycle = 'stopping';
+            return { ...f.record, lifecycle: 'stopping' };
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(result).toMatchObject({
+            success: true,
+            deleteUnsupported: true,
+            effectiveCleanup: 'stopped_only_records_remain',
+            stoppedSessionIds: [f.sessionId],
+        });
+        expect(result.deletedSessionIds).toEqual([]);
+        expect(result.recordsRemainSessionIds).toContain(f.sessionId);
+        expect(stopped).toBe(1);
+        expect(f.control.stopSession).not.toHaveBeenCalled();
+        expect(f.control.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('delete_stopped: same production Unsupported maps to records-remain without stop', async () => {
+        const f = fixture({ lifecycle: 'stopped' });
+        f.control.deleteSessionIfExpected = async () => {
+            throw new Error('Unsupported session host request: delete_session_if_expected');
+        };
+        f.control.stopSessionIfExpected = async () => {
+            throw new Error('stop must not run for delete_stopped unsupported');
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'delete_stopped' });
+        expect(result).toMatchObject({
+            success: true,
+            deleteUnsupported: true,
+            effectiveCleanup: 'delete_unsupported_records_remain',
+        });
+        expect(result.deletedSessionIds).toEqual([]);
+        expect(result.stoppedSessionIds).toEqual([]);
+        expect(result.recordsRemainSessionIds).toContain(f.sessionId);
+        expect(f.control.stopSession).not.toHaveBeenCalled();
+        expect(f.control.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('stop_and_delete: unsupported delete + unsupported stop fails closed and retains writer', async () => {
+        const f = fixture();
+        f.control.deleteSessionIfExpected = async () => {
+            throw new Error('Unsupported session host request: delete_session_if_expected');
+        };
+        f.control.stopSessionIfExpected = async () => {
+            throw new Error('Unsupported session host request: stop_session_if_expected');
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_expected_stop_unsupported');
+        expect(result.deletedSessionIds).toEqual([]);
+        expect(f.control.stopSession).not.toHaveBeenCalled();
+        expect(f.control.deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('stop_and_delete: unsupported delete keeps fence when fallback stop outcome is uncertain', async () => {
+        const f = fixture();
+        const store = MeshRuntimeStore.getInstance();
+        f.control.deleteSessionIfExpected = async () => {
+            throw new Error('Unsupported session host request: delete_session_if_expected');
+        };
+        f.control.stopSessionIfExpected = async () => {
+            expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+            throw new Error('transport lost after stop dispatched');
+        };
+        const result = await cleanupMeshSessions(f.self, { ...f.args, mode: 'stop_and_delete' });
+        expect(result).toMatchObject({ success: false, retained: true });
+        expect(result.errors?.[0]?.error).toBe('cleanup_unconfirmed');
+        expect(sessionIsStopping(store.db, f.sessionId)).toBe(true);
+        store.insertQueueEntry({
+            id: randomUUID(), meshId: f.meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly',
+            message: 'uncertain fallback stop', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+        expect(claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true })).toBeNull();
     });
 });

@@ -1383,6 +1383,7 @@ import {
 } from "@adhdev/session-host-core";
 
 // src/delete-session-if-expected.ts
+import { tagCleanupAfterStopSideEffect } from "@adhdev/session-host-core";
 async function handleDeleteSessionIfExpected(host, payload) {
   const before = host.registry.getSession(payload.sessionId);
   if (!before) {
@@ -1396,11 +1397,13 @@ async function handleDeleteSessionIfExpected(host, payload) {
     payload.force === true
   );
   if (refused) return { success: false, error: refused };
+  let stopRequested = false;
   if (host.runtimes.has(payload.sessionId)) {
     host.stopRequests.set(payload.sessionId, "delete");
     host.registry.setLifecycle(payload.sessionId, "stopping");
     host.persistNow(payload.sessionId);
     host.requireRuntime(payload.sessionId).stop();
+    stopRequested = true;
     await host.waitForRuntimeExit(payload.sessionId).catch((error) => {
       host.recordRuntimeTransition(
         payload.sessionId,
@@ -1423,7 +1426,12 @@ async function handleDeleteSessionIfExpected(host, payload) {
     host.runtimes.has(payload.sessionId),
     false
   );
-  if (afterRefused) return { success: false, error: afterRefused };
+  if (afterRefused) {
+    return {
+      success: false,
+      error: stopRequested ? tagCleanupAfterStopSideEffect(afterRefused) : afterRefused
+    };
+  }
   host.registry.deleteSession(payload.sessionId);
   host.storage.remove(payload.sessionId);
   host.storage.removeTombstone(payload.sessionId);
