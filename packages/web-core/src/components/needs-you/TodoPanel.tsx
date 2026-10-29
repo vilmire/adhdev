@@ -200,9 +200,9 @@ export default function TodoPanel() {
     return (
         <div className="flex flex-col gap-3 p-3 md:p-4" data-testid="todo-panel">
             <div className="flex flex-wrap items-center gap-2" data-testid="needs-you-filters">
-                <div className="flex flex-wrap gap-1" role="group" aria-label={t('needsYou.filterKind')}>
+                <div className="flex flex-nowrap gap-1 overflow-x-auto max-w-full -mx-1 px-1 md:flex-wrap md:overflow-visible" role="group" aria-label={t('needsYou.filterKind')}>
                     {(['all', ...NEEDS_YOU_KINDS] as const).map(k => (
-                        <Button key={k} size="sm" className="min-h-[44px] md:min-h-0" variant={filter.kind === k ? 'primary' : 'ghost'} aria-pressed={filter.kind === k} onClick={() => setFilter(f => ({ ...f, kind: k }))}>
+                        <Button key={k} size="sm" className="min-h-[44px] md:min-h-0 shrink-0 whitespace-nowrap" variant={filter.kind === k ? 'primary' : 'ghost'} aria-pressed={filter.kind === k} onClick={() => setFilter(f => ({ ...f, kind: k }))}>
                             {k === 'all' ? t('needsYou.kinds.all') : `${t(`needsYou.kinds.${k}`)} ${kindCounts[k]}`}
                         </Button>
                     ))}
@@ -291,9 +291,9 @@ export default function TodoPanel() {
             )}
 
             {toast && (
-                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] max-w-[92vw] rounded-lg border border-border-subtle bg-bg-panel px-3 py-2 text-xs shadow-lg flex items-center gap-3" role="status" data-testid="needs-you-toast">
-                    <span>{toast.message}</span>
-                    {toast.undo && <Button size="sm" variant="ghost" onClick={toast.undo}>{t('needsYou.undo')}</Button>}
+                <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-md rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-3 py-2 text-sm shadow-lg flex items-center gap-3 mb-[env(safe-area-inset-bottom)]" role="status" data-testid="needs-you-toast">
+                    <span className="flex-1 min-w-0 truncate">{toast.message}</span>
+                    {toast.undo && <Button size="sm" variant="ghost" className="shrink-0 whitespace-nowrap min-h-[44px] md:min-h-0" onClick={toast.undo}>{t('needsYou.undo')}</Button>}
                 </div>
             )}
         </div>

@@ -175,13 +175,15 @@ export default function TodoDrawer() {
 }
 
 /** Mount once per app (inside router + NeedsYouProvider): the drawer plus a floating opener where no header button exists. */
+// The floating opener sits bottom-right: top-right covered page actions (e.g. "+ 메시 생성", QA 2026-10-29).
+// On mobile it stays above the bottom tab bar and the chat FAB.
 export function TodoDrawerHost() {
     const buttons = useTodoButtonMountedCount()
     const { open } = useTodoDrawer()
     return (
         <>
             {buttons === 0 && !open && (
-                <div className="fixed top-2 right-3 z-40" data-testid="todo-floating-button">
+                <div className="fixed right-5 z-40 bottom-[calc(env(safe-area-inset-bottom,0px)+64px+20px+68px)] md:bottom-6 md:right-6" data-testid="todo-floating-button">
                     <TodoButton floating className="bg-bg-secondary border border-border-subtle shadow-md" />
                 </div>
             )}
