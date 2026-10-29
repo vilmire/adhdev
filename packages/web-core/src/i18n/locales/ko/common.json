@@ -4512,7 +4512,7 @@
         "toastAnswered": "답변: {{answer}}",
         "carryOverTitle": "이월 — 닫힌 미션에서 넘어온 항목",
         "confirm": {
-            "question": "\"소유자가 포기\"로 닫혔습니다 — 맞나요?",
+            "question": "코디가 \"오너 결정으로 중단\"으로 닫았습니다 — 맞나요?",
             "contextWithReason": "미션 \"{{title}}\" — 사유: {{reason}}",
             "context": "미션 \"{{title}}\"",
             "optionCorrect": "맞아요",
