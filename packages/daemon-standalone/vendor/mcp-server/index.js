@@ -127993,8 +127993,8 @@ ${grant.exp}`).digest("hex");
         for (const task of tasks.filter((t) => text3(t.nodeId) === nodeId && text3(t.taskId) && text3(t.sessionId))) {
           const sid = text3(task.sessionId);
           if (!owner || !ownershipConsistent || text3(task.ownerDaemonId) && !daemonIdsEquivalent4(owner, text3(task.ownerDaemonId))) continue;
-          const localState = local ? (opts.localStates ?? []).map(rec2).find((s2) => sessionIdsEquivalent(text3(s2.instanceId), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && text3(rec2(s2.settings).meshNodeId) === nodeId && rec2(s2.settings).assistant !== true) : void 0;
-          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text3(s2.id), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && text3(rec2(s2.settings).meshNodeId) === nodeId) : void 0;
+          const localState = local ? (opts.localStates ?? []).map(rec2).find((s2) => sessionIdsEquivalent(text3(s2.instanceId), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent4(text3(rec2(s2.settings).meshNodeId), nodeId) && rec2(s2.settings).assistant !== true) : void 0;
+          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text3(s2.id), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent4(text3(rec2(s2.settings).meshNodeId), nodeId)) : void 0;
           const detail = list(node.activeSessionDetails).find((s2) => sessionIdsEquivalent(text3(s2.sessionId), sid));
           const state2 = localState ? detail ?? localState : remoteState ? detail ?? remoteState : void 0;
           const attemptId = text3(task.attemptId) || null;

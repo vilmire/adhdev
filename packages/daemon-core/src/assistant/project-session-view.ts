@@ -133,11 +133,11 @@ export function projectSessionView(view: RecordValue, opts: {
             const sid = text(task.sessionId);
             if (!owner || !ownershipConsistent || (text(task.ownerDaemonId) && !daemonIdsEquivalent(owner, text(task.ownerDaemonId)))) continue;
             const localState = local ? (opts.localStates ?? []).map(rec).find(s => sessionIdsEquivalent(text(s.instanceId), sid)
-                && text(rec(s.settings).meshNodeFor) === opts.meshId && text(rec(s.settings).meshNodeId) === nodeId
+                && text(rec(s.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent(text(rec(s.settings).meshNodeId), nodeId)
                 && rec(s.settings).assistant !== true) : undefined;
             // held.sessions is daemon-wide: require explicit project AND node stamps.
             const remoteState = !local && ownerMatches ? list(held.sessions).find(s => sessionIdsEquivalent(text(s.id), sid)
-                && text(rec(s.settings).meshNodeFor) === opts.meshId && text(rec(s.settings).meshNodeId) === nodeId) : undefined;
+                && text(rec(s.settings).meshNodeFor) === opts.meshId && daemonIdsEquivalent(text(rec(s.settings).meshNodeId), nodeId)) : undefined;
             const detail = list(node.activeSessionDetails).find(s => sessionIdsEquivalent(text(s.sessionId), sid));
             // The node details are already node-scoped by mesh_status; only use on matching daemon.
             const state = localState ? detail ?? localState : remoteState ? detail ?? remoteState : undefined;

@@ -96,6 +96,15 @@ describe('project task-bound sessions over held mesh status', () => {
         expect(out.sessionCoverage[1]).toMatchObject({ freshness: 'fresh', coverage: 'unknown' });
     });
 
+    it('accepts canonical machine-node aliases on project-stamped runtime sessions', () => {
+        const view = fixture();
+        view.membership.mesh.nodes[1]!.id = 'daemon_mach_m4';
+        view.status.nodes[1]!.nodeId = 'daemon_mach_m4';
+        view.activeWork.activeWork.activeWork[0]!.nodeId = 'daemon_mach_m4';
+        view.status.nodes[1]!.heldRuntime!.sessions[0]!.settings.meshNodeId = 'mach_m4';
+        expect(projectSessionView(view, opts).sessions[0]!.status).toBe('generating');
+    });
+
     it('retains observed terminal status and rejects mismatched attempts', () => {
         const view = fixture();
         view.status.nodes[1]!.activeSessionDetails![0]!.chatStatus = 'stopped';
