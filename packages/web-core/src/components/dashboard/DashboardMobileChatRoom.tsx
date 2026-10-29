@@ -15,6 +15,7 @@ import { getConversationTabMetaText, getConversationTitle } from './conversation
 import InteractivePromptModal from '../interactive-prompt/InteractivePromptModal'
 import { useInteractivePrompt } from '../../hooks/useInteractivePrompt'
 import { getInteractivePromptScopeId } from './ApprovalBanner'
+import TodoButton from '../needs-you/TodoButton'
 
 interface DashboardMobileChatRoomProps {
     selectedConversation: ActiveConversation
@@ -90,6 +91,7 @@ export default function DashboardMobileChatRoom({
                         </div>
                     </div>
                     <div className="mobile-room-header-actions flex items-center justify-end gap-1 shrink-0">
+                        <TodoButton />
                         {isCli && cliViewMode && (
                             <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
                         )}

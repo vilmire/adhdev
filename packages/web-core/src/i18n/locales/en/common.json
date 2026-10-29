@@ -1630,7 +1630,7 @@
         "idLink": {
             "artifact": "Open artifact {{id}}",
             "session": "Open session {{id}}",
-            "decision": "Open decision {{id}} in Needs you",
+            "decision": "Open decision {{id}} in To do",
             "mission": "Open mission {{id}} in its mesh",
             "task": "Open task {{id}} in the mesh Tasks tab",
             "newWindow": "Open {{id}} in a new window",
@@ -4471,8 +4471,11 @@
         "soundEffectsDesc": "Play a sound when agent completes or needs approval"
     },
     "needsYou": {
-        "pageTitle": "Needs you",
+        "pageTitle": "To do",
         "pageSubtitle": "Decisions, approvals and live checks waiting on you.",
+        "openTitle": "To do ({{count}} waiting)",
+        "close": "Close",
+        "dragHandle": "Drag down to close",
         "badge": "Waiting",
         "loading": "Loading…",
         "empty": "Nothing needs you right now.",
@@ -4604,7 +4607,6 @@
     "nav": {
         "dashboard": "Dashboard",
         "machines": "Machines",
-        "needsYou": "Needs you",
         "notifications": "Notifications",
         "mesh": "Mesh",
         "marketplace": "Marketplace",

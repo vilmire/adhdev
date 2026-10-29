@@ -1630,7 +1630,7 @@
         "idLink": {
             "artifact": "打开工件 {{id}}",
             "session": "打开会话 {{id}}",
-            "decision": "在“需要你处理”中打开决策 {{id}}",
+            "decision": "在“待办”中打开决策 {{id}}",
             "mission": "在其网格中打开任务集 {{id}}",
             "task": "在网格任务标签页中打开任务 {{id}}",
             "newWindow": "在新窗口中打开 {{id}}",
@@ -4471,8 +4471,11 @@
         "soundEffectsDesc": "代理完成或需要审批时播放声音"
     },
     "needsYou": {
-        "pageTitle": "待你处理",
+        "pageTitle": "待办",
         "pageSubtitle": "正在等你的决定、审批和实机检查。",
+        "openTitle": "待办（{{count}} 项等待中）",
+        "close": "关闭",
+        "dragHandle": "向下拖动以关闭",
         "badge": "等待中",
         "loading": "加载中…",
         "empty": "目前没有需要你处理的事项。",
@@ -4604,7 +4607,6 @@
     "nav": {
         "dashboard": "仪表板",
         "machines": "机器",
-        "needsYou": "待你处理",
         "notifications": "通知",
         "mesh": "网格",
         "marketplace": "市场",

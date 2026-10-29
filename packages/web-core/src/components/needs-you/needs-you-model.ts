@@ -345,6 +345,31 @@ export function planRecommendedAnswers(entries: readonly NeedsYouEntry[]): Recom
 
 export interface NeedsYouDeepLink { meshId?: string; decisionId?: string; choose?: string }
 
+/** Query param that keeps the To-do drawer open on any route. */
+export const TODO_DRAWER_PARAM = 'todo'
+
+/** True when the URL asks for the drawer (`?todo=1`, or any decision deep link). */
+export function isTodoDrawerOpen(search: string): boolean {
+    const p = new URLSearchParams(search)
+    const v = p.get(TODO_DRAWER_PARAM)
+    return (v !== null && v !== '0' && v !== 'false') || !!p.get('decision')?.trim()
+}
+
+/** Search string with the drawer opened (other params kept). */
+export function withTodoDrawer(search: string): string {
+    const p = new URLSearchParams(search)
+    p.set(TODO_DRAWER_PARAM, '1')
+    return `?${p.toString()}`
+}
+
+/** Search string with the drawer and its deep-link params (`todo`, `decision`, `choose`, `mesh`) removed. */
+export function withoutTodoDrawer(search: string): string {
+    const p = new URLSearchParams(search)
+    for (const k of [TODO_DRAWER_PARAM, 'decision', 'choose', 'mesh']) p.delete(k)
+    const out = p.toString()
+    return out ? `?${out}` : ''
+}
+
 /** `/needs-you?mesh=<meshId>&decision=<itemId>&choose=<optionId>` (bundle F's push links land here). */
 export function parseNeedsYouQuery(search: string): NeedsYouDeepLink {
     const p = new URLSearchParams(search)

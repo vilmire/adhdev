@@ -1630,7 +1630,7 @@
         "idLink": {
             "artifact": "아티팩트 {{id}} 열기",
             "session": "세션 {{id}} 열기",
-            "decision": "결정 {{id}}을(를) 확인 필요에서 열기",
+            "decision": "결정 {{id}}을(를) 할 일에서 열기",
             "mission": "미션 {{id}}을(를) 메시에서 열기",
             "task": "작업 {{id}}을(를) 메시 작업 탭에서 열기",
             "newWindow": "{{id}}을(를) 새 창에서 열기",
@@ -4471,8 +4471,11 @@
         "soundEffectsDesc": "에이전트가 완료하거나 승인이 필요할 때 사운드 재생"
     },
     "needsYou": {
-        "pageTitle": "나에게 필요한 것",
+        "pageTitle": "할 일",
         "pageSubtitle": "내 결정을 기다리는 결정, 승인, 라이브 확인입니다.",
+        "openTitle": "할 일 ({{count}}건 대기)",
+        "close": "닫기",
+        "dragHandle": "아래로 끌어 닫기",
         "badge": "대기 중",
         "loading": "불러오는 중…",
         "empty": "지금 필요한 것이 없습니다.",
@@ -4604,7 +4607,6 @@
     "nav": {
         "dashboard": "대시보드",
         "machines": "머신",
-        "needsYou": "나에게 필요한 것",
         "notifications": "알림",
         "mesh": "메시",
         "marketplace": "마켓플레이스",

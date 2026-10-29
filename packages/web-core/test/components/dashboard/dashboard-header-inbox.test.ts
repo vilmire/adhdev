@@ -334,50 +334,19 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html).not.toContain('header-count-mobile')
   })
 
-  it('renders pending driver activations and actions in the dashboard Inbox when no assistant session is open', () => {
+  it('no longer lists held approvals (driver activations / writes) in the bell inbox — they live in the To do drawer; the header carries the To do button slot', () => {
     const html = renderHeader({
       activeConv: undefined,
       conversations: [],
       notifications: [],
       notificationUnreadCount: 0,
-      stagedState: {
-        items: [
-          {
-            id: 'driver-activation-1',
-            kind: 'driver_activation',
-            action: 'activate',
-            target: 'browser-playwright',
-            detail: 'Browser (Playwright MCP)',
-            origin: 'driver',
-            createdAt: '2026-10-18T12:00:00.000Z',
-            driverActivation: {
-              name: 'Browser (Playwright MCP)',
-              publisher: 'ADHDev',
-              providerVersion: '1.0.0',
-              treeDigest: 'sha256:' + 'b'.repeat(64),
-              trust: 'user-custom',
-              runtime: { kind: 'mcp-stdio', command: 'node', args: ['./bin/browser-server.js'] },
-              riskClass: 'low',
-              reasons: [],
-              declaredAccess: { network: ['*'], filesystem: ['workspace'], desktopControl: false },
-            },
-          },
-        ],
-        memoryStatus: null,
-        busyIds: new Set<string>(),
-        outcomes: {},
-        refresh: async () => {},
-        resolve: async () => {},
-      },
     })
-
-    expect(html).toContain('data-dashboard-staged-badge="1"')
-    expect(html).toContain('data-dashboard-staged-approvals')
-    expect(html).toContain('Held for your approval')
-    expect(html).toContain('Browser (Playwright MCP)')
-    expect(html).toContain('ADHDev')
-    expect(html).toContain('1.0.0')
-    expect(html).not.toContain('No pending activity')
+    expect(html).not.toContain('data-dashboard-staged-badge')
+    expect(html).not.toContain('data-dashboard-staged-approvals')
+    expect(html).not.toContain('Held for your approval')
+    expect(html).toContain('No pending activity')
+    const source = readFileSync(path.join(__dirname, '../../../src/components/dashboard/DashboardHeader.tsx'), 'utf8')
+    expect(source).toContain('<TodoButton />')
   })
 })
 

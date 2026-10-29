@@ -22,6 +22,7 @@ import { getMobileInboxRowType, type MobileInboxRowType } from './dashboard-mobi
 import StartAssistantButton from './StartAssistantButton'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
 import DashboardMobileApprovalsLink from './DashboardMobileApprovalsLink'
+import TodoButton from '../needs-you/TodoButton'
 import DashboardHiddenConversationsList from './DashboardHiddenConversationsList'
 import {
     computeAnchoredMenuPlacement,
@@ -790,6 +791,7 @@ export default function DashboardMobileChatInbox({
                                 <span>{noticeCount}</span>
                             </div>
                         )}
+                        <TodoButton size={18} className="shrink-0" />
                         <button onClick={onOpenSettings} className="w-9 h-9 -mr-1.5 inline-flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors shrink-0">
                             <IconSettings size={18} />
                         </button>

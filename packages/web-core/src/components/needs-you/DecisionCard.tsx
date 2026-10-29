@@ -151,7 +151,7 @@ export default function DecisionCard({
                                 variant={isRec ? 'primary' : 'secondary'}
                                 disabled={busy}
                                 aria-pressed={preselect !== undefined ? isPicked : undefined}
-                                className={cn(isPicked && 'ring-2 ring-accent-primary')}
+                                className={cn('min-h-[44px] md:min-h-0 whitespace-normal text-left max-w-full', isPicked && 'ring-2 ring-accent-primary')}
                                 title={o.detail}
                                 onClick={() => choose(o.id)}
                             >
@@ -163,29 +163,32 @@ export default function DecisionCard({
             )}
             {pickedOption && (
                 <div className="flex items-center gap-2">
-                    <Button size="sm" variant="primary" disabled={busy} onClick={() => onAnswer({ optionId: pickedOption.id })}>
+                    <Button size="sm" className="min-h-[44px] md:min-h-0" variant="primary" disabled={busy} onClick={() => onAnswer({ optionId: pickedOption.id })}>
                         {t('needsYou.confirmChoice', { label: pickedOption.label })}
                     </Button>
-                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPicked(undefined)}>{t('needsYou.cancel')}</Button>
+                    <Button size="sm" className="min-h-[44px] md:min-h-0" variant="ghost" disabled={busy} onClick={() => setPicked(undefined)}>{t('needsYou.cancel')}</Button>
                 </div>
             )}
             {decision.allowFreeText && !confirmation && (
                 <div className="flex gap-2">
                     <input
-                        className="input flex-1 min-w-0 text-xs"
+                        className="input flex-1 min-w-0 text-xs min-h-[44px] md:min-h-0"
                         value={text}
                         placeholder={t('needsYou.freeTextPlaceholder')}
                         aria-label={t('needsYou.freeTextPlaceholder')}
                         disabled={busy}
                         onChange={e => setText(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') sendText() }}
+                        // On-screen keyboard: once it has animated in, bring the field back into view (the
+                        // bottom sheet also shrinks to the visual viewport, see TodoDrawer).
+                        onFocus={e => { const el = e.currentTarget; setTimeout(() => el.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 300) }}
                     />
-                    <Button size="sm" disabled={busy || !text.trim()} onClick={sendText}>{t('needsYou.send')}</Button>
+                    <Button size="sm" className="min-h-[44px] md:min-h-0" disabled={busy || !text.trim()} onClick={sendText}>{t('needsYou.send')}</Button>
                 </div>
             )}
             {onLater && (
                 <div className="flex justify-end">
-                    <button type="button" className="text-3xs text-text-muted hover:text-text-primary underline decoration-dotted" onClick={onLater}>{t('needsYou.later')}</button>
+                    <button type="button" className="min-h-[44px] md:min-h-0 px-2 text-3xs text-text-muted hover:text-text-primary underline decoration-dotted" onClick={onLater}>{t('needsYou.later')}</button>
                 </div>
             )}
             {outcome && !outcome.ok && <div className="text-2xs" style={{ color: 'var(--status-error)' }} role="alert">{t('needsYou.answerFailed', { code: outcome.code ?? '' })}</div>}

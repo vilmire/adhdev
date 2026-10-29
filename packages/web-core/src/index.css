@@ -5100,3 +5100,15 @@
         right: -5px;
     }
 }
+
+/* To do drawer (components/needs-you/TodoDrawer.tsx): slide-in without fill-mode so no transform
+   lingers on the panel (a lingering transform would re-anchor the position:fixed toast inside it). */
+@keyframes todo-drawer-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes todo-sheet-in { from { transform: translateY(32px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes todo-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+.todo-drawer-in { animation: todo-drawer-in 160ms ease-out; }
+.todo-sheet-in { animation: todo-sheet-in 200ms ease-out; }
+.todo-drawer-backdrop { animation: todo-backdrop-in 160ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+    .todo-drawer-in, .todo-sheet-in, .todo-drawer-backdrop { animation: none; }
+}

@@ -1,14 +1,14 @@
 /**
  * Structured-mission facts on the Overview mission cards (design 2026-10-28 §7): the mission's
- * one-line summary, open item counts and a decision badge linking to `/needs-you?mesh=…`.
+ * one-line summary, open item counts and a decision badge opening the To-do drawer for that project.
  * The facts come from the owner-decision inbox state (`mission_decisions_list` with
  * `includeMissions`) rather than the strict mesh.status mission wire, so older daemons simply
  * show nothing extra. Also hosts the carry-over title localization.
  */
-import { useInRouterContext, useNavigate } from 'react-router-dom'
+import { useInRouterContext, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useNeedsYou } from '../../context/NeedsYouContext'
-import { missionDisplayTitle, type NeedsYouMissionStructure } from '../needs-you/needs-you-model'
+import { missionDisplayTitle, withTodoDrawer, type NeedsYouMissionStructure } from '../needs-you/needs-you-model'
 import type { MeshGraphTheme } from './meshGraphTheme'
 
 export function useMissionStructure(meshId: string | undefined, missionId: string): { structure?: NeedsYouMissionStructure; decisions: number } {
@@ -28,7 +28,13 @@ export function useMissionTitle(mission: { id: string; meshId?: string; title: s
 function DecisionBadge({ meshId, count }: { meshId?: string; count: number }) {
     const { t } = useTranslation('common')
     const navigate = useNavigate()
-    const to = `/needs-you${meshId ? `?mesh=${encodeURIComponent(meshId)}` : ''}`
+    const location = useLocation()
+    // Opens the To-do drawer in place (any route), narrowed to this project.
+    const openTodo = () => {
+        const p = new URLSearchParams(withTodoDrawer(location.search))
+        if (meshId) p.set('mesh', meshId)
+        navigate({ pathname: location.pathname, search: `?${p.toString()}`, hash: location.hash })
+    }
     return (
         <button
             type="button"
@@ -36,7 +42,7 @@ function DecisionBadge({ meshId, count }: { meshId?: string; count: number }) {
             className="rounded px-1.5 py-0.5 text-3xs font-bold"
             style={{ background: 'color-mix(in srgb, var(--status-warning) 20%, transparent)', color: 'var(--status-warning)' }}
             title={t('needsYou.decisionBadgeLabel')}
-            onClick={() => navigate(to)}
+            onClick={openTodo}
         >{t('needsYou.decisionsWaiting', { count })}</button>
     )
 }

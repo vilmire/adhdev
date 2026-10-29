@@ -1630,7 +1630,7 @@
         "idLink": {
             "artifact": "アーティファクト {{id}} を開く",
             "session": "セッション {{id}} を開く",
-            "decision": "判断 {{id}} を「要対応」で開く",
+            "decision": "判断 {{id}} を「やること」で開く",
             "mission": "ミッション {{id}} をメッシュで開く",
             "task": "タスク {{id}} をメッシュのタスクタブで開く",
             "newWindow": "{{id}} を新しいウィンドウで開く",
@@ -4471,8 +4471,11 @@
         "soundEffectsDesc": "エージェントが完了または承認を必要とするときに音を鳴らす"
     },
     "needsYou": {
-        "pageTitle": "要対応",
+        "pageTitle": "やること",
         "pageSubtitle": "あなたの判断を待っている決定・承認・ライブ確認です。",
+        "openTitle": "やること（{{count}} 件待ち）",
+        "close": "閉じる",
+        "dragHandle": "下にドラッグして閉じる",
         "badge": "待機中",
         "loading": "読み込み中…",
         "empty": "今は対応が必要なものはありません。",
@@ -4604,7 +4607,6 @@
     "nav": {
         "dashboard": "ダッシュボード",
         "machines": "マシン",
-        "needsYou": "要対応",
         "notifications": "通知",
         "mesh": "メッシュ",
         "marketplace": "マーケットプレイス",

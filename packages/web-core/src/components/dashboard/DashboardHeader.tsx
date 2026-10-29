@@ -25,8 +25,7 @@ import ConversationMeshGraphButton from './ConversationMeshGraphButton';
 import { MeshRoleIcon } from './ConversationMeshRoleMarker';
 import DashboardHiddenConversationsList from './DashboardHiddenConversationsList';
 import { Tooltip } from '../ui/InfoTip';
-import { AssistantStagedWritesList } from './AssistantStagedWrites';
-import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../../hooks/useAssistantStagedWrites';
+import TodoButton from '../needs-you/TodoButton';
 
 export interface DashboardHeaderProps {
     activeConv: ActiveConversation | undefined;
@@ -69,9 +68,6 @@ export interface DashboardHeaderProps {
     actionShortcuts?: Partial<Record<DashboardActionShortcutId, string>>;
     onOpenGitDialog?: (daemonId: string, workspace: string) => void;
     onOpenMeshGraph?: (conversation: ActiveConversation) => void;
-    stagedState?: AssistantStagedWritesState;
-    stagedDaemonId?: string | null;
-    sendDaemonCommand?: (daemonId: string, type: string, payload?: any) => Promise<any>;
 }
 
 type DashboardHeaderConnectionState = {
@@ -281,9 +277,6 @@ export default function DashboardHeader({
     onDeleteNotification,
     onOpenGitDialog,
     onOpenMeshGraph,
-    stagedState,
-    stagedDaemonId,
-    sendDaemonCommand,
 }: DashboardHeaderProps) {
     const { t } = useTranslation();
     const { ides, p2pStates = {}, usesP2P = true } = useBaseDaemons();
@@ -296,25 +289,6 @@ export default function DashboardHeader({
     const hiddenRef = useRef<HTMLDivElement | null>(null);
 
     const daemons = ides.filter(i => i.type === 'adhdev-daemon');
-    const resolvedStagedDaemonId = stagedDaemonId
-        ?? activeConv?.daemonId
-        ?? startAssistantDefault?.machineId
-        ?? startAssistantMachines?.[0]?.machineId
-        ?? daemons[0]?.id
-        ?? (!usesP2P ? 'standalone' : null);
-    const internalStagedState = useAssistantStagedWrites({
-        daemonId: resolvedStagedDaemonId,
-        enabled: !stagedState && !!sendDaemonCommand && !!resolvedStagedDaemonId && wsStatus === 'connected',
-        status: activeConv?.status,
-        sendCommand: sendDaemonCommand ?? (async () => null),
-    });
-    const effectiveStagedState = stagedState ?? internalStagedState;
-    const pendingDriverItems = useMemo(
-        () => (effectiveStagedState.items ?? []).filter(
-            item => item.kind === 'driver_activation' || item.kind === 'driver_action_request',
-        ),
-        [effectiveStagedState.items],
-    );
     const connectionState = getDashboardHeaderConnectionState({
         wsStatus,
         isConnected,
@@ -348,12 +322,9 @@ export default function DashboardHeader({
         () => unreadNotifications.slice(0, 9),
         [unreadNotifications],
     )
-    const inboxCount = notificationUnreadCount + pendingDriverItems.length;
-    const toggleInbox = () => {
-        const next = !inboxOpen;
-        if (next) void effectiveStagedState.refresh();
-        onInboxOpenChange(next);
-    };
+    // Held owner approvals (driver activations, assistant writes) are in the "To do" drawer now; the bell is history only.
+    const inboxCount = notificationUnreadCount;
+    const toggleInbox = () => onInboxOpenChange(!inboxOpen);
 
     useEffect(() => {
         if (!inboxOpen) return;
@@ -632,21 +603,7 @@ export default function DashboardHeader({
                             </div>
                         )}
                     </div>
-                    {pendingDriverItems.length > 0 && !activeConv?.assistant && (
-                        <button
-                            type="button"
-                            className={`chat-activity-toggle assistant-staged-badge${inboxOpen ? ' chat-activity-toggle-active' : ''}`}
-                            onClick={toggleInbox}
-                            aria-expanded={inboxOpen}
-                            aria-haspopup="dialog"
-                            title={t('assistantStaged.badgeTitle')}
-                            aria-label={`${t('assistantStaged.badge', { count: pendingDriverItems.length })} — ${t('assistantStaged.badgeTitle')}`}
-                            data-dashboard-staged-badge={pendingDriverItems.length}
-                        >
-                            <span className="chat-activity-toggle-dot" />
-                            {t('assistantStaged.badge', { count: pendingDriverItems.length })}
-                        </button>
-                    )}
+                    <TodoButton />
                     <button
                         type="button"
                         onClick={toggleInbox}
@@ -658,14 +615,6 @@ export default function DashboardHeader({
                     </button>
                     {inboxOpen && (
                         <div className="dashboard-header-inbox-popover">
-                            {pendingDriverItems.length > 0 && (
-                                <div className="dashboard-header-inbox-section" data-dashboard-staged-approvals>
-                                    <div className="dashboard-header-inbox-section-title">{t('assistantStaged.title')}</div>
-                                    <div className="flex flex-col gap-2 px-1 py-1 text-xs text-text-secondary">
-                                        <AssistantStagedWritesList state={effectiveStagedState} items={pendingDriverItems} />
-                                    </div>
-                                </div>
-                            )}
                             {unreadNotifications.length > 0 && (
                                 <div className="dashboard-header-inbox-section">
                                     <div className="dashboard-header-inbox-section-title">{t('dashboard.inbox.unread')}</div>
@@ -697,7 +646,7 @@ export default function DashboardHeader({
                                     ))}
                                 </div>
                             )}
-                            {notifications.length === 0 && pendingDriverItems.length === 0 && (
+                            {notifications.length === 0 && (
                                 <div className="dashboard-header-inbox-empty">{t('dashboard.inbox.empty')}</div>
                             )}
                         </div>

@@ -19,6 +19,7 @@ import {
     getSavedHistoryHelperLabel,
 } from '../../utils/dashboard-launch-copy'
 import { buildSavedHistorySummaryView } from '../../utils/saved-history-summary'
+import TodoButton from '../needs-you/TodoButton'
 import DashboardMobileBottomNav, { type DashboardMobileSection } from './DashboardMobileBottomNav'
 import WorkspaceBrowseDialog from '../machine/WorkspaceBrowseDialog'
 import LaunchConfirmDialog from '../machine/LaunchConfirmDialog'
@@ -186,6 +187,7 @@ export default function DashboardMobileMachineScreen({
                         </div>
                     </div>
                 </div>
+                <TodoButton size={18} className="shrink-0" />
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto py-2 flex flex-col gap-2 -webkit-overflow-scrolling-touch">
