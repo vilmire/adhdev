@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateProviderQuotaGate, expiryRiskForRanking, rankProvidersByQuotaGate } from '../../src/mesh/mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, expiryRiskForRanking, longQuotaAxisFor, rankProvidersByQuotaGate } from '../../src/mesh/mesh-quota-routing.js';
 import { quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider } from '../../src/mesh/mesh-quota-ranking-records.js';
 import { DEFAULT_QUOTA_ROUTING_POLICY } from '../../src/repo-mesh-types.js';
 
@@ -61,6 +61,29 @@ describe('Cursor monthly routing', () => {
     it('only proven last-good monthly windows survive a failed probe', () => {
         expect(gate({ ...quota(100), status: 'error' })).toBeNull();
         expect(gate({ ...quota(100), status: 'error', metadata: { lastGoodWindows: true } })?.window).toBe('monthly');
+    });
+    it.each([false, true])('monthly ranking requires proven last-good windows after errors (proven=%s)', proven => {
+        const q = { ...quota(12.1, NOW + DAY), status: 'error',
+            ...(proven ? { metadata: { lastGoodWindows: true } } : {}) };
+        const n = node(q);
+        const risk = expiryRiskForRanking(n, 'cursor-cli', 'monthly', undefined, NOW, context);
+        const rank = rankProvidersByQuotaGate(n, ['unknown', 'cursor-cli'], undefined, NOW, context);
+        expect(rank.clear).toEqual(proven ? ['cursor-cli', 'unknown'] : ['unknown', 'cursor-cli']);
+        expect(rank.sessionAxisActive).toBe(proven);
+        if (proven) {
+            expect(risk?.remainingPercent).toBeCloseTo(87.9);
+            expect(risk?.risk).toBeCloseTo(84.6884493972);
+            expect(rank.rankingEvidence[0]).toMatchObject({ axis: 'monthly', remainingPercent: 87.9, risk: risk!.risk });
+        } else {
+            expect(risk).toBeUndefined();
+            expect(rank.rankingEvidence).toEqual([
+                { providerType: 'unknown', axis: 'weekly' },
+                { providerType: 'cursor-cli', axis: 'monthly' },
+            ]);
+        }
+        // An ineligible monthly value must not displace a readable weekly axis.
+        const mixed = node({ ...q, weekly: { usedPercent: 1, windowMinutes: 10080, resetsAt: NOW + DAY } });
+        expect(longQuotaAxisFor(mixed, 'cursor-cli', undefined, NOW, context)).toBe(proven ? 'monthly' : 'weekly');
     });
     it('5h and 7d gates and the most-constrained spread bonus remain effective alongside 30d', () => {
         const q = { ...quota(), session: { usedPercent: 99, windowMinutes: 300, resetsAt: NOW + 3_600_000 },

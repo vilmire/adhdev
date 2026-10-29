@@ -528,7 +528,8 @@ export function longQuotaAxisFor(
     if (!entry) return providerType === 'cursor-cli' ? 'monthly' : 'weekly';
     const axes = quotaAxesForTarget(providerType, entry.quota, target);
     const weekly = isWindowTrustworthy(axes.weekly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.weekly) : undefined;
-    const monthly = isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : undefined;
+    const monthlyEligible = entry.quota.status === 'ok' || entry.quota.metadata?.lastGoodWindows === true;
+    const monthly = monthlyEligible && isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : undefined;
     if (monthly !== undefined && (weekly === undefined || monthly < weekly)) return 'monthly';
     return !axes.weekly && (axes.monthly || providerType === 'cursor-cli') ? 'monthly' : 'weekly';
 }
@@ -678,6 +679,9 @@ export function expiryRiskForRanking(
     const { facts, quota } = entry;
     const axes = quotaAxesForTarget(providerType, quota, target);
     const window = axes[axis];
+    // Monthly values need the same provenance as the gate and spread bonus.
+    // Leave the established session/weekly ranking behavior unchanged.
+    if (axis === 'monthly' && quota.status !== 'ok' && quota.metadata?.lastGoodWindows !== true) return undefined;
     // Keep ranking on the same per-window authority boundary as the launch
     // gate and spread bonus. In particular, an already-reset window is not
     // "fully elapsed" risk; it no longer says anything about the new window.

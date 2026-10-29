@@ -68665,7 +68665,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!entry) return providerType === "cursor-cli" ? "monthly" : "weekly";
       const axes = quotaAxesForTarget2(providerType, entry.quota, target4);
       const weekly = isWindowTrustworthy(axes.weekly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.weekly) : void 0;
-      const monthly = isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : void 0;
+      const monthlyEligible = entry.quota.status === "ok" || entry.quota.metadata?.lastGoodWindows === true;
+      const monthly = monthlyEligible && isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : void 0;
       if (monthly !== void 0 && (weekly === void 0 || monthly < weekly)) return "monthly";
       return !axes.weekly && (axes.monthly || providerType === "cursor-cli") ? "monthly" : "weekly";
     }
@@ -68679,6 +68680,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const { facts, quota } = entry;
       const axes = quotaAxesForTarget2(providerType, quota, target4);
       const window = axes[axis2];
+      if (axis2 === "monthly" && quota.status !== "ok" && quota.metadata?.lastGoodWindows !== true) return void 0;
       if (!isWindowTrustworthy(window, facts, quota, policy, now)) return void 0;
       const remaining = remainingPercent(window);
       if (remaining === void 0) return void 0;
