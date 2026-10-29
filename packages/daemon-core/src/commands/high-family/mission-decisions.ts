@@ -45,6 +45,7 @@ import {
     type DecisionAnswerRequest,
     type DecisionAnswerVia,
 } from '../../mesh/mesh-mission-decisions.js';
+import { computeDecisionMetrics } from '../../mesh/mesh-mission-decision-metrics.js';
 import { createCoordinatorDecisionSender, deliverDecisionAnswer } from '../../mesh/mesh-mission-decision-delivery.js';
 import { hostedMeshes } from '../../mesh/mesh-housekeeping-tick.js';
 import { LOG } from '../../logging/logger.js';
@@ -177,9 +178,13 @@ const list: HighFamilyHandler = async (ctx, rawArgs) => {
     // Opt-in: the default output stays exactly as before.
     const liveChecks = args.includeLiveChecks === true ? meshIds.flatMap(id => buildOpenLiveChecks(id)) : undefined;
     const missions = args.includeMissions === true ? meshIds.flatMap(id => buildMissionStructure(id)) : undefined;
+    // Opt-in (design §3 metrics): `metricsDays` window, default 7, max 90.
+    const metricsDays = Math.max(1, Math.min(Number(args.metricsDays) || 7, 90));
+    const metrics = args.includeMetrics === true ? meshIds.map(id => computeDecisionMetrics(id, metricsDays * 86_400_000)) : undefined;
     return {
         success: true,
         ownerDecisions: decisions,
+        ...(metrics ? { metrics } : {}),
         ...(missions ? { missions, hostedMeshIds: meshIds, meshNames } : {}),
         ...(recentlyAnswered ? { recentlyAnswered } : {}),
         ...(liveChecks ? { liveChecks } : {}),

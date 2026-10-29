@@ -320,6 +320,20 @@ export class MissionItemStore {
         }));
     }
 
+    /** Mesh-wide event scan (decision metrics): events of `types` at/after `sinceIso`, oldest first, bounded. */
+    listMeshEvents(meshId: string, types: readonly MissionEventType[], sinceIso: string, limit = MISSION_EVENTS_PER_MESH_CAP): MissionEventRecord[] {
+        if (!types.length) return [];
+        const rows = this.db.prepare(
+            `SELECT * FROM mesh_mission_events WHERE mesh_id = ? AND at >= ? AND type IN (${types.map(() => '?').join(', ')}) ORDER BY seq ASC LIMIT ?`,
+        ).all(meshId, sinceIso, ...types, limit) as Array<Record<string, any>>;
+        return rows.map(r => ({
+            seq: r.seq, missionId: r.mission_id, meshId: r.mesh_id, type: r.type,
+            ...(r.actor ? { actor: r.actor } : {}),
+            payload: parseJson<Record<string, unknown>>(r.payload_json, {}),
+            at: r.at,
+        }));
+    }
+
     // ── retention (design §4.3 / §13.1 "DB 크기") ───────────────────────────
 
     /**

@@ -172,6 +172,14 @@ export function migrate(self: MeshRuntimeStore): void {
         -- of always favouring the same array-order node. Persisted (not a module
         -- Map) so rotation survives daemon restarts and stays a single source of
         -- truth across scheduling entry points.
+        -- Idle-active-mission reminder marker (once per mission set). Persisted so a daemon
+        -- restart does not re-send the "one-time" [System] reminder for the same set.
+        CREATE TABLE IF NOT EXISTS mesh_idle_reminder (
+            mesh_id TEXT PRIMARY KEY,
+            emitted_at INTEGER NOT NULL,
+            set_hash TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS mesh_scheduler_cursor (
             mesh_id TEXT PRIMARY KEY,
             cursor INTEGER NOT NULL DEFAULT 0

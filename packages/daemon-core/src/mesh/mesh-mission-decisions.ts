@@ -138,7 +138,7 @@ export function answerMissionDecision(
                 decision: { ...rest, answerRevision: revision, ...(delivery ? { delivery } : {}) },
             });
             items.appendEvent(req.meshId, item.missionId, 'decision_answer_undone', actor.by, {
-                itemId: item.id, revision, via: actor.via, wasAnswer: truncateMissionText(describeDecisionAnswer(d), 200), notifyCoordinator: told,
+                itemId: item.id, revision, via: actor.via, wasVia: d.answer.via, wasAnswer: truncateMissionText(describeDecisionAnswer(d), 200), notifyCoordinator: told,
             });
             items.bumpVersion(req.meshId, item.missionId, nowIso);
             return { ok: true, action: 'undone', meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision, ...(delivery ? { delivery } : {}) };

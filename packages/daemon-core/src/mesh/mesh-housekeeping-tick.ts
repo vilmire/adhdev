@@ -38,6 +38,7 @@ import { componentsDecisionTransport, runDecisionTick } from './mesh-mission-dec
 import { readText } from '@adhdev/mesh-shared';
 import { contractHousekeeping } from './contract-runtime.js';
 import { depositWorkerMailboxMessage } from './worker-mailbox.js';
+import { liveWorkerHomes, sweepStaleWorkerHomes } from './worker-home-cleanup.js';
 import { publishHeldHandoffNote } from './worker-report.js';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
@@ -167,6 +168,13 @@ export async function runMeshHousekeepingTick(
             runDiskRetentionSweep(nowMs);
         } catch (e: any) {
             LOG.warn('MeshHousekeeping', `Disk retention sweep failed: ${e?.message || e}`);
+        }
+        // Dead per-launch worker HOMEs under $TMPDIR (12 GB seen live): unowned + >3h unused.
+        try {
+            const swept = sweepStaleWorkerHomes({ liveHomes: liveWorkerHomes(components.instanceManager?.collectAllStates()), nowMs });
+            if (swept.removed.length) LOG.info('MeshHousekeeping', `Removed ${swept.removed.length} stale worker home(s) (kept ${swept.keptLive} live, ${swept.keptRecent} recent)`);
+        } catch (e: any) {
+            LOG.warn('MeshHousekeeping', `Worker home sweep failed: ${e?.message || e}`);
         }
         // mesh-runtime.db row retention (tool-call log, terminal queue rows,
         // terminal session deliveries, terminal mesh turn attempts). Its hourly caller went with the retired reconcile

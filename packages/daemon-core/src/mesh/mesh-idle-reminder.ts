@@ -378,6 +378,11 @@ export async function maybeInjectIdleActiveMissionReminder(
         const hash = missionSetHash(activeMissions);
         const last = store.getIdleReminderState(meshId);
         if (!shouldFireIdleReminder(last, hash, now)) return false;
+        // The reminder says "one-time". Within one process the funnel's messageId dedupe makes a
+        // window re-fire for the same set a no-op, but that memory dies with the daemon: live QA
+        // 2026-10-29 saw the notice re-injected after every restart. A marker written by an
+        // EARLIER process therefore suppresses the reminder unless the set GREW.
+        if (last?.priorProcess && !missionSetGrew(last.missionSetHash, hash)) return false;
 
         const message = buildIdleReminderMessage(activeMissions);
         // D2: one message per (mesh, mission set) — a re-fired edge for the same set is

@@ -463,6 +463,22 @@ describe('mesh idle-active-mission reminder', () => {
         expect(coord.calls).toHaveLength(2);
     });
 
+    it('★a daemon restart does not re-send the one-time reminder for the same mission set (marker is persisted)', async () => {
+        upsertMeshMission(meshId, { title: 'Persistent', goal: 'x' });
+        const first = makeCoordinator();
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, first.instance, undefined, 1_000)).toBe(true);
+
+        MeshRuntimeStore.resetForTests(); // "restart": new process-local store, same on-disk DB
+        const second = makeCoordinator();
+        const later = 1_000 + IDLE_REMINDER_DEBOUNCE_MS + 1; // even past the debounce window
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, second.instance, undefined, later)).toBe(false);
+        expect(second.calls).toHaveLength(0);
+
+        // A genuinely new active mission after the restart still reminds.
+        upsertMeshMission(meshId, { title: 'Another', goal: 'y' });
+        expect(await maybeInjectIdleActiveMissionReminder(meshId, second.instance, undefined, later + 1)).toBe(true);
+    });
+
     // ── MISSION-SET-GROWTH-BYPASS: 2026-08-17 repeat-fire root cause ────────────────
     //
     // The coordinator re-upserting the SAME mission (same mission_id, edited goal text)

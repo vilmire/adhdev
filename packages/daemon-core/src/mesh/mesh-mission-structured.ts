@@ -37,6 +37,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { newMissionItemId, type MissionItemRecord, type MissionItemStore } from './mesh-mission-items-store.js';
 import { getMeshMission, upsertMeshMission, type MeshMissionRecord } from './mesh-missions.js';
 import { acknowledgeAnsweredDecisions } from './mesh-mission-prompt.js';
+import { recordDecisionDedupeHit } from './mesh-mission-decision-metrics.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { notifyDecisionPush } from './mesh-mission-decision-push-notifier.js';
 
@@ -141,6 +142,8 @@ export function addNormalizedItem(
     if (n.kind === 'decision') {
         const found = items.findDecisionByKey(meshId, n.dedupeKey, ['open', 'answered']);
         if (found) {
+            // Metric (design §3 "재질문"): an in-memory counter — a deduped re-ask must leave the event history alone.
+            recordDecisionDedupeHit(meshId);
             return { ...base, id: found.id, state: found.state, deduped: true, ...(found.decision?.answer ? { answer: found.decision.answer } : {}) };
         }
     }

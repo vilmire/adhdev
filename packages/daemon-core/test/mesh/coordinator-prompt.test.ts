@@ -1397,6 +1397,18 @@ describe('Repo Mesh coordinator prompt — correctness of the operating rules (b
     expect(section).toContain('Keep working on anything that does not depend on the answer')
   })
 
+  it('★the unconditional safety tail repeats the owner-question rule in the shape live coordinators emit (2026-10-29 QA)', () => {
+    const p = prompt()
+    const tail = p.slice(p.indexOf('### Non-negotiable'))
+    expect(tail).toContain('Never put a question to the owner in chat')
+    expect(tail).toContain('Decision for you')
+    expect(tail).toContain('Which one should I use?')
+    expect(tail).toContain('kind: "decision"')
+    expect(tail).toContain('ONE line')
+    // and the relay section's lead sentence names the same anti-pattern
+    expect(p).toContain('Any question to the owner that has options goes into a decision item')
+  })
+
   it('does not ask workers for a terminal-scraped JSON result block — report_completion is the record', () => {
     const p = prompt()
     expect(p).not.toContain('The daemon parses this automatically')

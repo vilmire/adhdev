@@ -141,7 +141,7 @@ export class MeshRuntimeStore {
     // is warranted. Keyed by meshId; the value records when the last reminder fired
     // and the hash of the active-mission id set it named, so a changed mission set
     // re-fires before the time window elapses.
-    private readonly idleReminderState = new Map<string, { emittedAt: number; missionSetHash: string }>();
+    private readonly idleReminderWrittenHere = new Set<string>();
     // WAL checkpointing runs on a timer, never inside a write (mesh-runtime-store-wal.ts).
     private readonly walCheckpoints: WalCheckpointScheduler;
     /** Writes since the last checkpoint tick (tests read it to pin counter independence). */
@@ -1061,22 +1061,28 @@ export class MeshRuntimeStore {
     }
 
     /**
-     * Read the last idle-active-mission-reminder debounce marker for a mesh, or null if
-     * none has fired this process. In-memory only (see idleReminderState) — best-effort
-     * spam guard for a coordinator nudge, intentionally not SQLite-backed.
+     * Last idle-active-mission-reminder marker for a mesh (SQLite-backed so a daemon restart
+     * keeps "already reminded about this mission set"). `priorProcess` = the marker was
+     * written by an earlier daemon process: the in-process funnel dedupe no longer covers it.
      */
-    getIdleReminderState(meshId: string): { emittedAt: number; missionSetHash: string } | null {
-        return this.idleReminderState.get(meshId) ?? null;
+    getIdleReminderState(meshId: string): { emittedAt: number; missionSetHash: string; priorProcess: boolean } | null {
+        const row = this.db.prepare('SELECT emitted_at, set_hash FROM mesh_idle_reminder WHERE mesh_id = ?').get(meshId) as { emitted_at: number; set_hash: string } | undefined;
+        if (!row) return null;
+        return { emittedAt: row.emitted_at, missionSetHash: row.set_hash, priorProcess: !this.idleReminderWrittenHere.has(meshId) };
     }
 
-    /** Record that an idle-active-mission reminder just fired for a mesh (debounce marker). */
+    /** Record that an idle-active-mission reminder just fired for a mesh (marker). */
     setIdleReminderState(meshId: string, state: { emittedAt: number; missionSetHash: string }): void {
-        this.idleReminderState.set(meshId, state);
+        this.db.prepare(
+            'INSERT INTO mesh_idle_reminder (mesh_id, emitted_at, set_hash) VALUES (?, ?, ?) ON CONFLICT(mesh_id) DO UPDATE SET emitted_at = excluded.emitted_at, set_hash = excluded.set_hash',
+        ).run(meshId, state.emittedAt, state.missionSetHash);
+        this.idleReminderWrittenHere.add(meshId);
     }
 
-    /** Clear the idle-reminder debounce marker for a mesh — mesh deletion / test cleanup. */
+    /** Clear the idle-reminder marker for a mesh — mesh deletion / test cleanup. */
     clearIdleReminderState(meshId: string): void {
-        this.idleReminderState.delete(meshId);
+        this.db.prepare('DELETE FROM mesh_idle_reminder WHERE mesh_id = ?').run(meshId);
+        this.idleReminderWrittenHere.delete(meshId);
     }
 
     /** Remove all missions for a mesh — mesh deletion / test cleanup. */
