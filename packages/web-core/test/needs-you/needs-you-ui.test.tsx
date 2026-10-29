@@ -7,7 +7,7 @@
  */
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import NeedsYou from '../../src/pages/NeedsYou'
 import { NeedsYouStateProvider, type NeedsYouState } from '../../src/context/NeedsYouContext'
@@ -179,6 +179,71 @@ describe('NeedsYou page', () => {
         expect(state.answer).toHaveBeenCalledWith(expect.objectContaining({ itemId: 'conf', optionId: 'b' }))
         // carry-over mission title is shown through the locale string
         expect(card.textContent).toContain('Carry-over — open items from closed missions')
+    })
+})
+
+function LocationProbe() {
+    const l = useLocation()
+    return <span data-testid="loc">{l.pathname}{l.search}</span>
+}
+
+describe('NeedsYou — QA fixes', () => {
+    const MID = '09094c4a-1111-2222-3333-444455556666'
+    it('close confirmation renders localized, without the mission id; the answered row too', () => {
+        const options = [{ id: 'a', label: 'Correct' }, { id: 'b', label: 'Reopen' }]
+        const state = makeState({
+            decisions: [dec({
+                itemId: 'conf', question: "The coordinator closed this as 'owner abandoned' — correct?", source: 'daemon', options, recommended: undefined,
+                context: `Mission "Ship budget" (${MID}) — reason: dropped`,
+            })],
+            answered: [{
+                daemonId: 'd1', meshId: 'm1', missionId: 'ms1', itemId: 'conf2', question: "The coordinator closed this as 'owner abandoned' — correct?", options,
+                answer: { optionId: 'a', by: 'owner', via: 'dashboard', at: new Date().toISOString() }, revision: 1, autoApplied: false, allowFreeText: false,
+            }],
+        })
+        mount(state)
+        const card = host.querySelector('[data-decision-id="conf"]')!
+        expect(card.textContent).toContain('Closed as "owner abandoned" — correct?')
+        expect(card.textContent).toContain('Mission "Ship budget" — reason: dropped')
+        expect(card.textContent).not.toContain(MID)
+        expect(card.textContent).not.toContain("The coordinator closed this")
+        const answered = host.querySelector('[data-testid="needs-you-answered-card"]')!
+        expect(answered.textContent).toContain('Closed as "owner abandoned" — correct?')
+        expect(answered.textContent).toContain('Answered: Correct')
+    })
+
+    it('a tapped answer shows an in-place toast with Undo that sends undo', async () => {
+        const state = makeState({ decisions: [dec()] })
+        mount(state)
+        await act(async () => { click(buttonByText('Final value')) })
+        await act(async () => { await Promise.resolve() })
+        const toast = host.querySelector('[data-testid="needs-you-toast"]')!
+        expect(toast.textContent).toContain('Recorded: Final value')
+        click([...toast.querySelectorAll('button')].find(b => b.textContent === 'Undo') ?? null)
+        expect(state.answer).toHaveBeenLastCalledWith(expect.objectContaining({ itemId: 'mi_1', undo: true }))
+    })
+
+    it('answering the deep-linked card clears decision/choose from the URL and keeps mesh', async () => {
+        const state = makeState({ decisions: [dec({ itemId: 'target' }), dec({ itemId: 'other', question: 'Other?' })] })
+        mount(state, '/needs-you?mesh=m1&decision=target&choose=b', <LocationProbe />)
+        expect(host.querySelector('[data-testid="loc"]')?.textContent).toBe('/needs-you?mesh=m1&decision=target&choose=b')
+        const card = host.querySelector('[data-decision-id="target"]')!
+        await act(async () => { click([...card.querySelectorAll('button')].find(b => b.textContent?.startsWith('Confirm')) ?? null) })
+        await act(async () => { await Promise.resolve() })
+        expect(host.querySelector('[data-testid="loc"]')?.textContent).toBe('/needs-you?mesh=m1')
+    })
+
+    it('the header count covers every shown item, live checks included', () => {
+        const state = makeState({
+            decisions: [dec()],
+            liveChecks: [{ daemonId: 'd1', meshId: 'm1', missionId: 'ms1', missionTitle: 'Ship budget', itemId: 'lc1', text: 'verify on win32', createdAt: 'x' }],
+        })
+        mount(state)
+        const header = host.querySelector('h1')?.parentElement?.textContent ?? ''
+        expect(header).toMatch(/Waiting/)
+        expect(header).toMatch(/\b2\b/)
+        expect(header).not.toMatch(/\b1\b/)
+        expect(host.querySelectorAll('[data-testid="needs-you-decision-card"], [data-testid="needs-you-live-check"]')).toHaveLength(2)
     })
 })
 

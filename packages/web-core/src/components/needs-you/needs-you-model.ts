@@ -210,6 +210,35 @@ export function isCloseConfirmation(d: Pick<NeedsYouDecision, 'question' | 'sour
     return OWNER_ABANDON_CONFIRM_OPTIONS.every(l => labels.includes(l))
 }
 
+/** i18n key suffix of a close-confirmation option label ("Correct" → `optionCorrect`), or undefined for any other label. */
+export function confirmationOptionKey(label: string): 'optionCorrect' | 'optionReopen' | undefined {
+    if (label === OWNER_ABANDON_CONFIRM_OPTIONS[0]) return 'optionCorrect'
+    if (label === OWNER_ABANDON_CONFIRM_OPTIONS[1]) return 'optionReopen'
+    return undefined
+}
+
+/**
+ * The stored canonical context of a close confirmation is `Mission "<title>" (<uuid>) — reason: <reason>`
+ * (daemon-core `createOwnerConfirmation`). Returns the title and reason without the id, or null when the
+ * text does not have that shape (shown raw then).
+ */
+export function parseCloseConfirmationContext(context: string | undefined): { title: string; reason?: string } | null {
+    if (!context) return null
+    const m = /^Mission "([\s\S]*?)" \(([0-9A-Za-z_-]{8,})\)(?: — reason: ([\s\S]*))?$/.exec(context.trim())
+    if (!m) return null
+    const reason = m[3]?.trim()
+    return { title: m[1], ...(reason ? { reason } : {}) }
+}
+
+/** `?decision=…&choose=…` removed (a handled deep link must not re-target an answered card); `mesh` and any other param stay. */
+export function clearDecisionFromQuery(search: string): string {
+    const p = new URLSearchParams(search)
+    p.delete('decision')
+    p.delete('choose')
+    const out = p.toString()
+    return out ? `?${out}` : ''
+}
+
 export function decisionKey(d: { meshId: string; itemId: string }): string { return `d:${d.meshId}:${d.itemId}` }
 
 export function buildNeedsYouEntries(

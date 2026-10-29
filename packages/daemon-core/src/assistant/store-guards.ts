@@ -187,6 +187,14 @@ export type StoreWriteOrigin = 'human' | 'relay' | 'review' | 'review_tainted' |
 /** Kinds of input the daemon delivers into the assistant session. */
 export type AssistantInputSource =
     | 'human'
+    /**
+     * A person at the dashboard of a daemon with NO owner authentication
+     * configured (standalone default). Attribution only: it never counts as
+     * `human` for write classification, review windows, the review trigger, or
+     * any owner authority — the only reader that accepts it is the decision
+     * gate (`assistant-decisions.ts`).
+     */
+    | 'human_unverified'
     | 'relay'
     | 'progress'
     | 'stall'

@@ -27,9 +27,10 @@ import AppPage from '../components/ui/AppPage'
 import Button from '../components/ui/Button'
 import { IconWarning } from '../components/Icons'
 import { getMeshName } from '../utils/mesh-name-registry'
-import DecisionCard, { AnsweredCard, ProjectMissionLine } from '../components/needs-you/DecisionCard'
+import DecisionCard, { AnsweredCard, ProjectMissionLine, localizeConfirmation } from '../components/needs-you/DecisionCard'
 import {
     NEEDS_YOU_KINDS,
+    clearDecisionFromQuery,
     entryMeshId,
     filterNeedsYou,
     parseNeedsYouQuery,
@@ -98,17 +99,25 @@ export default function NeedsYou() {
         return c
     }, [sorted])
 
-    const answerDecision = useCallback(async (d: NeedsYouDecision, input: { optionId?: string; text?: string }, withUndoToast = false) => {
+    // A handled deep link must not re-target an answered/dismissed card on reload: drop decision/choose, keep mesh.
+    const clearDeepLink = useCallback((itemId: string) => {
+        if (link.decisionId !== itemId) return
+        navigate({ pathname: location.pathname, search: clearDecisionFromQuery(location.search) }, { replace: true })
+    }, [link.decisionId, location.pathname, location.search, navigate])
+
+    const answerDecision = useCallback(async (d: NeedsYouDecision, input: { optionId?: string; text?: string }, confirmation = false) => {
         const outcome = await state.answer({ daemonId: d.daemonId, meshId: d.meshId, missionId: d.missionId, itemId: d.itemId, ...input })
-        if (outcome.ok && withUndoToast) {
-            const label = input.optionId ? d.options.find(o => o.id === input.optionId)?.label ?? input.optionId : input.text ?? ''
+        if (outcome.ok) {
+            clearDeepLink(d.itemId)
+            const options = localizeConfirmation(t, d, confirmation).options
+            const label = input.optionId ? options.find(o => o.id === input.optionId)?.label ?? input.optionId : input.text ?? ''
             setToast({
                 message: t('needsYou.toastAnswered', { answer: label }),
                 undo: () => { setToast(null); void state.answer({ daemonId: d.daemonId, meshId: d.meshId, missionId: d.missionId, itemId: d.itemId, undo: true }) },
             })
         }
         return outcome
-    }, [state, t])
+    }, [state, t, clearDeepLink])
 
     const startAnswerAll = () => setAnswerAll({ phase: 'preview', lines: planRecommendedAnswers(visible) })
     const applyAnswerAll = async () => {
@@ -175,8 +184,8 @@ export default function NeedsYou() {
                 projectName={nameOf(d.meshId)}
                 preselect={preselect}
                 highlighted={deepLinked}
-                onAnswer={(input, opts) => { void answerDecision(d, input, opts?.swipe === true) }}
-                onLater={() => setLater(prev => new Set(prev).add(e.key))}
+                onAnswer={input => { void answerDecision(d, input, e.kind === 'confirmation') }}
+                onLater={() => { setLater(prev => new Set(prev).add(e.key)); clearDeepLink(d.itemId) }}
                 onOpenMission={() => navigate('/mesh')}
             />
         )
@@ -190,7 +199,7 @@ export default function NeedsYou() {
             icon={<IconWarning size={18} />}
             title={t('needsYou.pageTitle')}
             subtitle={t('needsYou.pageSubtitle')}
-            badge={state.count > 0 ? { text: t('needsYou.badge'), count: state.count } : undefined}
+            badge={visible.length > 0 ? { text: t('needsYou.badge'), count: visible.length } : undefined}
         >
             <div className="flex flex-wrap items-center gap-2" data-testid="needs-you-filters">
                 <div className="flex flex-wrap gap-1" role="group" aria-label={t('needsYou.filterKind')}>
@@ -279,7 +288,7 @@ export default function NeedsYou() {
             )}
 
             {toast && (
-                <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border-subtle bg-bg-panel px-3 py-2 text-xs shadow-lg flex items-center gap-3" role="status" data-testid="needs-you-toast">
+                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg border border-border-subtle bg-bg-panel px-3 py-2 text-xs shadow-lg flex items-center gap-3" role="status" data-testid="needs-you-toast">
                     <span>{toast.message}</span>
                     {toast.undo && <Button size="sm" variant="ghost" onClick={toast.undo}>{t('needsYou.undo')}</Button>}
                 </div>

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
     buildNeedsYouEntries,
+    clearDecisionFromQuery,
+    confirmationOptionKey,
+    parseCloseConfirmationContext,
     dueInfo,
     filterNeedsYou,
     isCloseConfirmation,
@@ -93,6 +96,26 @@ describe('deep link', () => {
         expect(parseNeedsYouQuery('?mesh=m1')).toEqual({ meshId: 'm1' })
         expect(parseNeedsYouQuery('?choose=b')).toEqual({})
         expect(parseNeedsYouQuery('')).toEqual({})
+    })
+})
+
+describe('close confirmation text + deep-link clearing', () => {
+    it('parses the stored context into title + reason without the mission id; other shapes are not parsed', () => {
+        const id = '09094c4a-1111-2222-3333-444455556666'
+        expect(parseCloseConfirmationContext(`Mission "Ship budget" (${id}) — reason: not needed anymore`)).toEqual({ title: 'Ship budget', reason: 'not needed anymore' })
+        expect(parseCloseConfirmationContext(`Mission "Say "hi" now" (${id})`)).toEqual({ title: 'Say "hi" now' })
+        expect(parseCloseConfirmationContext('something else')).toBeNull()
+        expect(parseCloseConfirmationContext(undefined)).toBeNull()
+    })
+    it('maps the two canonical option labels', () => {
+        expect(confirmationOptionKey('Correct')).toBe('optionCorrect')
+        expect(confirmationOptionKey('Reopen')).toBe('optionReopen')
+        expect(confirmationOptionKey('Other')).toBeUndefined()
+    })
+    it('clearDecisionFromQuery drops decision/choose and keeps mesh', () => {
+        expect(clearDecisionFromQuery('?mesh=m1&decision=mi_9&choose=b')).toBe('?mesh=m1')
+        expect(clearDecisionFromQuery('?decision=mi_9&choose=b')).toBe('')
+        expect(clearDecisionFromQuery('')).toBe('')
     })
 })
 

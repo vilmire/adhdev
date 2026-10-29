@@ -67,6 +67,7 @@ import {
   isStandaloneRequestAuthenticated,
   isStandaloneHostAllowed,
   isStandaloneOriginAllowed,
+  UNAUTHENTICATED_ARTIFACT_READ_VERBS,
   type StandalonePasswordConfig,
 } from './standalone-auth.js';
 
@@ -83,6 +84,7 @@ export interface StandaloneHttpDeps {
       ownerVerified?: boolean;
       ownerProof?: TrustedOwnerIngressProof | null;
       verifyCurrentOwner?: () => boolean;
+      unverifiedDashboardInput?: boolean;
     },
   ): Promise<any>;
   rawTerminalService(): RawTerminalHttpService;
@@ -191,12 +193,6 @@ function secretsEqual(presented: string, expected: string): boolean {
 function readMeshJoinString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
-
-/** Artifact read verbs a no-auth daemon serves to the open dashboard (see captureUnauthenticatedArtifactReadGuard). */
-const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set([
-  'artifact_fetch', 'artifact_read', 'session_artifact_fetch',
-  'artifact_list', 'session_artifact_list',
-]);
 
 export class StandaloneHttpApi {
   authToken: string | null = null;
@@ -330,6 +326,11 @@ export class StandaloneHttpApi {
     if (!this.isAllowedOrigin(req)) return null;
     const capturedEpoch = this.authEpoch;
     return () => !this.hasAnyAuth() && !this.hasMcpCredentialHeader(req) && this.authEpoch === capturedEpoch;
+  }
+
+  /** Attribution only, no authority: no-auth daemon `send_chat`/`pty_input` from an allowed origin without MCP/internal credentials (stays `ipc`, unverified). Re-evaluated per command. */
+  isUnverifiedDashboardInput(req: IncomingMessage, commandType: string): boolean {
+    return (commandType === 'send_chat' || commandType === 'pty_input') && !this.hasAnyAuth() && !this.hasMcpCredentialHeader(req) && !this.resolveInternalAuthScope(req) && this.isAllowedOrigin(req);
   }
 
   /**
@@ -961,6 +962,7 @@ export class StandaloneHttpApi {
             return;
           }
           const commandPayload = (payload && typeof payload === 'object' ? { ...payload } : {}) as Record<string, unknown>;
+          delete commandPayload._unverifiedDashboardInput; // router-internal; never caller-supplied
           if (
             internalScope === 'worker' &&
             (type === 'artifact_register' || type === 'artifact_list' || type === 'artifact_read')
@@ -1037,6 +1039,7 @@ export class StandaloneHttpApi {
               ownerVerified,
               ownerProof,
               verifyCurrentOwner: ownerGuard ?? undefined,
+              ...(!isOwner && this.isUnverifiedDashboardInput(req, type) ? { unverifiedDashboardInput: true } : {}),
             },
           );
           res.writeHead(200, { 'Content-Type': 'application/json' });

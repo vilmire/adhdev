@@ -59,8 +59,13 @@ export function authorizeAssistantDecisionCaller(args: unknown, opts: { requireO
     if (opts.requireOwnerUtterance) {
         const log = getAssistantServices().inputLog;
         const turn = log.currentTurn(boundSid);
-        const humanTurn = !!turn && turn.open && turn.openedBy === 'human';
-        if (!humanTurn && log.writeContext(boundSid).origin !== 'human') {
+        // `human_unverified` = the owner's dashboard chat on a daemon with no owner
+        // authentication (standalone default). Accepting it HERE adds no authority:
+        // on such a daemon any local process can already answer as the owner via
+        // `mission_decision_answer` over ipc / `adhdev decide`. Owner actions and
+        // store writes never accept it (classifyWriteOrigin ignores that kind).
+        const humanTurn = !!turn && turn.open && (turn.openedBy === 'human' || turn.openedBy === 'human_unverified');
+        if (!humanTurn && log.writeContext(boundSid).origin !== 'human' && !isUnverifiedHumanWrite(boundSid)) {
             return fail(
                 'no_owner_utterance',
                 'No owner message is behind this call: decisions are answered only on the owner\'s own words in the current turn. Ask the owner, then answer when they reply.',
@@ -68,6 +73,12 @@ export function authorizeAssistantDecisionCaller(args: unknown, opts: { requireO
         }
     }
     return null;
+}
+
+/** The most recent delivered input is an unverified dashboard human (the equivalent of writeContext origin `human`). */
+function isUnverifiedHumanWrite(sessionId: string): boolean {
+    const entries = getAssistantServices().inputLog.entries(sessionId);
+    return entries[entries.length - 1]?.source === 'human_unverified';
 }
 
 const decisionAnswer = assistantVerb(ASSISTANT_VERB.decisionAnswer, async (ports, args, ctx) => {

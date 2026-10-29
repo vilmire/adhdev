@@ -16,7 +16,7 @@ import {
 } from '../providers/control-effects.js';
 import { LOG } from '../logging/logger.js';
 import { reportSessionTerminalInput } from '../assistant/assistant-human-input.js';
-import { readCommandSource } from './command-args.js';
+import { readCommandSource, readUnverifiedDashboardInput } from './command-args.js';
 
 function normalizeOpenPanelCommandResult(result: CommandResult): { opened: boolean; visible: boolean; focused: boolean } {
     const payload = Object.prototype.hasOwnProperty.call(result, 'result') ? result.result : result;
@@ -120,7 +120,7 @@ export async function handlePtyInput(h: CommandHelpers, args: any): Promise<Comm
     const requested = typeof targetSessionId === 'string' ? targetSessionId.trim() : '';
     const resolved = h.currentSession?.sessionId || '';
     const sessionIds = [...new Set([requested, resolved].filter(Boolean))];
-    if (typeof cleanData === 'string' && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args) });
+    if (typeof cleanData === 'string' && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args), unverified: readUnverifiedDashboardInput(args) });
     return { success: true };
 }
 

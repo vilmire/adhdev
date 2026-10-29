@@ -4509,8 +4509,15 @@
         "resultTitle": "Answered {{ok}} of {{total}}",
         "dismiss": "Done",
         "recentlyAnswered": "Recently answered",
-        "toastAnswered": "Answered: {{answer}}",
+        "toastAnswered": "Recorded: {{answer}}",
         "carryOverTitle": "Carry-over — open items from closed missions",
+        "confirm": {
+            "question": "Closed as \"owner abandoned\" — correct?",
+            "contextWithReason": "Mission \"{{title}}\" — reason: {{reason}}",
+            "context": "Mission \"{{title}}\"",
+            "optionCorrect": "Correct",
+            "optionReopen": "Reopen"
+        },
         "decisionsWaiting": "{{count}} decisions waiting",
         "openItems": "{{count}} open items",
         "liveChecksOpen": "{{count}} live checks",

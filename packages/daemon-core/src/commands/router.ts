@@ -123,7 +123,7 @@ import { setMissionChangeListener } from '../mesh/mesh-mission-change-notifier.j
 import { getCachedAggregateMeshStatus, invalidateAggregateMeshStatusForPeer, rememberAggregateMeshStatus } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
-import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, applyRouterCommandIngressProvenance, isTrustedOwnerIngress, preserveTrustedOwnerIngress, readMeshDirectDispatchFlag, withMeshDirectDispatch, type TrustedOwnerIngressProof } from './command-args.js';
+import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, UNVERIFIED_DASHBOARD_INPUT_ARG, UNVERIFIED_DASHBOARD_INPUT_COMMANDS, applyRouterCommandIngressProvenance, isTrustedOwnerIngress, preserveTrustedOwnerIngress, readMeshDirectDispatchFlag, withMeshDirectDispatch, type TrustedOwnerIngressProof } from './command-args.js';
 import { evaluateMeshSender, markVerifiedMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, readMeshSender, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
@@ -798,6 +798,8 @@ export class DaemonCommandRouter {
             ownerVerified?: boolean;
             ownerProof?: TrustedOwnerIngressProof | null;
             verifyCurrentOwner?: () => boolean;
+            /** Trusted transport option (daemon-standalone, no-auth dashboard input) — see UNVERIFIED_DASHBOARD_INPUT_ARG. */
+            unverifiedDashboardInput?: boolean;
         },
     ): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
@@ -814,6 +816,11 @@ export class DaemonCommandRouter {
         const hadCommandSourceArg = COMMAND_SOURCE_ARG in normalizedArgs;
         if (hadCommandSourceArg) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
+        // Attribution-only flag: the caller's copy is always dropped; only the trusted option stamps it.
+        delete normalizedArgs[UNVERIFIED_DASHBOARD_INPUT_ARG];
+        if (opts?.unverifiedDashboardInput === true && opts.ownerVerified !== true && logSource === 'ipc' && UNVERIFIED_DASHBOARD_INPUT_COMMANDS.has(cmd)) {
+            normalizedArgs[UNVERIFIED_DASHBOARD_INPUT_ARG] = true;
+        }
         applyRouterCommandIngressProvenance(args, normalizedArgs, logSource, peerId, opts, hadCommandSourceArg, cmd);
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const artifactRefusal = rejectUntrustedArtifactIngress(cmd, normalizedArgs);
@@ -1025,6 +1032,7 @@ export class DaemonCommandRouter {
             delete args._interactionId;
             delete args[MESH_SENDER_DAEMON_ID_ARG];
             delete args[COMMAND_SOURCE_ARG];
+            delete args[UNVERIFIED_DASHBOARD_INPUT_ARG];
             preserveTrustedOwnerIngress(previousArgs, args);
             if (verifiedSender) markVerifiedMeshSender(args, verifiedSender);
         }

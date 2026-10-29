@@ -4511,6 +4511,13 @@
         "recentlyAnswered": "最近回答した決定",
         "toastAnswered": "回答: {{answer}}",
         "carryOverTitle": "繰り越し — 閉じたミッションの未完了項目",
+        "confirm": {
+            "question": "「オーナーが中止」として閉じられました — 合っていますか？",
+            "contextWithReason": "ミッション「{{title}}」 — 理由: {{reason}}",
+            "context": "ミッション「{{title}}」",
+            "optionCorrect": "合っています",
+            "optionReopen": "再開"
+        },
         "decisionsWaiting": "決定 {{count}} 件待ち",
         "openItems": "未完了 {{count}} 件",
         "liveChecksOpen": "ライブ確認 {{count}} 件",

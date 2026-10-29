@@ -77331,7 +77331,7 @@ ${includeRefs[0]}`;
     }
     function argumentsKey(args) {
       const sessionAlias = typeof args.sessionId === "string" ? args.sessionId.trim() : void 0;
-      return JSON.stringify(Object.keys(args).filter((key5) => key5 !== "_interactionId" && key5 !== "_commandSource" && !(key5 === "targetSessionId" && sessionAlias && args[key5] === sessionAlias)).sort().map((key5) => [key5, args[key5]]));
+      return JSON.stringify(Object.keys(args).filter((key5) => key5 !== "_interactionId" && key5 !== "_commandSource" && key5 !== "_unverifiedDashboardInput" && !(key5 === "targetSessionId" && sessionAlias && args[key5] === sessionAlias)).sort().map((key5) => [key5, args[key5]]));
     }
     function attachAuthenticatedMcpCommand(args, command, verifyCurrent, scope) {
       if (!(ARTIFACT_COMMANDS.has(command) || MCP_ATTRIBUTED_COMMANDS.has(command)) || typeof verifyCurrent !== "function") return args;
@@ -77507,6 +77507,9 @@ ${includeRefs[0]}`;
     function readOutboundOrigin(args, fallback) {
       const raw = args?.origin;
       return isOutboundMessageOrigin(raw) ? raw : fallback;
+    }
+    function readUnverifiedDashboardInput(args) {
+      return args?.[UNVERIFIED_DASHBOARD_INPUT_ARG] === true;
     }
     function readCommandSource(args) {
       const raw = args?.[COMMAND_SOURCE_ARG];
@@ -77738,6 +77741,8 @@ ${includeRefs[0]}`;
     }
     var COMMAND_SOURCE_ARG;
     var COMMAND_SOURCE_STAMPED;
+    var UNVERIFIED_DASHBOARD_INPUT_ARG;
+    var UNVERIFIED_DASHBOARD_INPUT_COMMANDS;
     var TRUSTED_OWNER_INGRESS_STATE_KEY;
     var issuedOwnerIngressProofs;
     var transportAttachedOwnerProofs;
@@ -77751,6 +77756,8 @@ ${includeRefs[0]}`;
         init_mcp_command_ingress();
         COMMAND_SOURCE_ARG = "_commandSource";
         COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer"]);
+        UNVERIFIED_DASHBOARD_INPUT_ARG = "_unverifiedDashboardInput";
+        UNVERIFIED_DASHBOARD_INPUT_COMMANDS = /* @__PURE__ */ new Set(["send_chat", "pty_input"]);
         TRUSTED_OWNER_INGRESS_STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.trustedOwnerIngressState");
         ({
           issuedOwnerIngressProofs,
@@ -111451,11 +111458,14 @@ ${body}`;
     function isHumanCommandSource(source2) {
       return typeof source2 === "string" && ASSISTANT_HUMAN_COMMAND_SOURCES.includes(source2);
     }
+    function isReportableHumanInput(source2, unverified) {
+      return isHumanCommandSource(source2) || unverified === true && source2 === "ipc";
+    }
     function setAssistantHumanInputSink(next) {
       sink = next;
     }
     function reportSessionChatInput(report) {
-      if (!sink || !isHumanCommandSource(report.source)) return;
+      if (!sink || !isReportableHumanInput(report.source, report.unverified)) return;
       try {
         sink.chat(report);
       } catch {
@@ -111493,7 +111503,7 @@ ${body}`;
       return { submits, inPaste: paste };
     }
     function reportSessionTerminalInput(report) {
-      if (!sink || !isHumanCommandSource(report.source) || typeof report.data !== "string" || !report.data) return;
+      if (!sink || !isReportableHumanInput(report.source, report.unverified) || typeof report.data !== "string" || !report.data) return;
       try {
         sink.terminal(report);
       } catch {
@@ -133797,16 +133807,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
            * driver FIFO (`queued`) → logged when the drain writes it. A duplicate or
            * a refusal wrote nothing and is not logged.
            */
-          recordHumanSubmit(sessionIds, messageId, outcome) {
+          recordHumanSubmit(sessionIds, messageId, outcome, unverified = false) {
             const sid = this.ports.assistantSessionId();
             if (!sid || !sessionIds.includes(sid)) return;
             if (outcome.kind !== "delivered" && outcome.kind !== "queued") return;
             this.dropQueuedReview();
             if (outcome.kind === "delivered" || outcome.route === "agent_queue") {
               this.pendingHuman = this.pendingHuman.filter((p) => p.messageId !== messageId);
-              this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId });
+              this.ports.inputLog.append(sid, unverified ? "human_unverified" : "human", { at: this.clock.now(), messageId });
             } else if (!this.pendingHuman.some((p) => p.messageId === messageId)) {
-              this.pendingHuman.push({ at: this.clock.now(), messageId });
+              this.pendingHuman.push({ at: this.clock.now(), messageId, ...unverified ? { kind: "human_unverified" } : {} });
             }
           }
           /**
@@ -133818,7 +133828,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
            * `term:<session>:<ms>:<n>`. Keystrokes without a submit key log nothing.
            * Only the bound assistant session is recorded.
            */
-          recordHumanTerminalInput(sessionIds, data) {
+          recordHumanTerminalInput(sessionIds, data, unverified = false) {
             const sid = this.ports.assistantSessionId();
             if (!sid || !sessionIds.includes(sid)) return;
             const prevOpen = this.terminalPaste.sessionId === sid && this.terminalPaste.open;
@@ -133829,7 +133839,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const at = this.clock.now();
             for (let k = 0; k < Math.min(submits, TERMINAL_SUBMITS_PER_WRITE_CAP); k++) {
               this.terminalSeq += 1;
-              this.ports.inputLog.append(sid, "human", { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
+              this.ports.inputLog.append(sid, unverified ? "human_unverified" : "human", { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
             }
           }
           /** Periodic (≈1 min): progress / stall signals, vanished projects, retention, retries. */
@@ -133904,7 +133914,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               }
               if (!drained.length || this.ports.assistantSessionId() !== sid) return;
               const at = this.clock.now();
-              for (const p of pending) if (drained.includes(p.messageId)) this.ports.inputLog.append(sid, "human", { at, messageId: p.messageId });
+              for (const p of pending) if (drained.includes(p.messageId)) this.ports.inputLog.append(sid, p.kind ?? "human", { at, messageId: p.messageId });
               this.pendingHuman = this.pendingHuman.filter((p) => !drained.includes(p.messageId));
               this.kick();
             };
@@ -133959,7 +133969,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                   void this.resolveDrainedHuman(sid);
                 } else {
                   const p = this.pendingHuman.shift();
-                  this.ports.inputLog.append(sid, "human", { at: this.clock.now(), messageId: p.messageId });
+                  this.ports.inputLog.append(sid, p.kind ?? "human", { at: this.clock.now(), messageId: p.messageId });
                 }
               }
               if (e.phase !== "committed") return;
@@ -137502,8 +137512,8 @@ ${defangRelayBody(text5)}`;
       const services2 = getAssistantServices();
       services2.reviewMetrics = metrics2 ? { creditReviewWrite: (id4, kind, at) => metrics2.creditReviewWrite(id4, kind, at) } : null;
       setAssistantHumanInputSink({
-        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome),
-        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data)
+        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome, r.unverified === true && r.source === "ipc"),
+        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data, r.unverified === true && r.source === "ipc")
       });
       setAssistantRelayHooks({
         openThread: (meshId) => {
@@ -170786,7 +170796,7 @@ ${output}` : "";
         ...chatReceipt(service, sessionKey2, messageId)
       };
       const requested = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
-      reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome });
+      reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome, unverified: readUnverifiedDashboardInput(args) });
       return {
         ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
         ...chatReceipt(service, sessionKey2, messageId),
@@ -172144,7 +172154,7 @@ ${output}` : "";
       const requested = typeof targetSessionId === "string" ? targetSessionId.trim() : "";
       const resolved = h.currentSession?.sessionId || "";
       const sessionIds = [...new Set([requested, resolved].filter(Boolean))];
-      if (typeof cleanData === "string" && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args) });
+      if (typeof cleanData === "string" && sessionIds.length) reportSessionTerminalInput({ sessionIds, data: cleanData, source: readCommandSource(args), unverified: readUnverifiedDashboardInput(args) });
       return { success: true };
     }
     function handlePtyResize(_h, args) {
@@ -184414,8 +184424,8 @@ ${ptyResult.output.slice(-2e3)}`);
       if (opts.requireOwnerUtterance) {
         const log = getAssistantServices().inputLog;
         const turn = log.currentTurn(boundSid);
-        const humanTurn = !!turn && turn.open && turn.openedBy === "human";
-        if (!humanTurn && log.writeContext(boundSid).origin !== "human") {
+        const humanTurn = !!turn && turn.open && (turn.openedBy === "human" || turn.openedBy === "human_unverified");
+        if (!humanTurn && log.writeContext(boundSid).origin !== "human" && !isUnverifiedHumanWrite(boundSid)) {
           return fail5(
             "no_owner_utterance",
             "No owner message is behind this call: decisions are answered only on the owner's own words in the current turn. Ask the owner, then answer when they reply."
@@ -184423,6 +184433,10 @@ ${ptyResult.output.slice(-2e3)}`);
         }
       }
       return null;
+    }
+    function isUnverifiedHumanWrite(sessionId) {
+      const entries2 = getAssistantServices().inputLog.entries(sessionId);
+      return entries2[entries2.length - 1]?.source === "human_unverified";
     }
     var decisionAnswer = assistantVerb(ASSISTANT_VERB2.decisionAnswer, async (ports, args, ctx) => {
       const denied = authorizeAssistantDecisionCaller(args, { requireOwnerUtterance: true });
@@ -188828,6 +188842,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const hadCommandSourceArg = COMMAND_SOURCE_ARG in normalizedArgs;
         if (hadCommandSourceArg) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
+        delete normalizedArgs[UNVERIFIED_DASHBOARD_INPUT_ARG];
+        if (opts?.unverifiedDashboardInput === true && opts.ownerVerified !== true && logSource === "ipc" && UNVERIFIED_DASHBOARD_INPUT_COMMANDS.has(cmd)) {
+          normalizedArgs[UNVERIFIED_DASHBOARD_INPUT_ARG] = true;
+        }
         applyRouterCommandIngressProvenance(args, normalizedArgs, logSource, peerId, opts, hadCommandSourceArg, cmd);
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const artifactRefusal = rejectUntrustedArtifactIngress(cmd, normalizedArgs);
@@ -189018,6 +189036,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           delete args._interactionId;
           delete args[MESH_SENDER_DAEMON_ID_ARG];
           delete args[COMMAND_SOURCE_ARG];
+          delete args[UNVERIFIED_DASHBOARD_INPUT_ARG];
           preserveTrustedOwnerIngress(previousArgs, args);
           if (verifiedSender) markVerifiedMeshSender(args, verifiedSender);
         }

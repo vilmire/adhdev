@@ -40,6 +40,15 @@ export function isHumanCommandSource(source: unknown): boolean {
     return typeof source === 'string' && (ASSISTANT_HUMAN_COMMAND_SOURCES as readonly string[]).includes(source);
 }
 
+/**
+ * A dashboard person: a human source, or the narrow unverified-dashboard case
+ * (source `ipc` with the router-stamped flag, no-auth standalone). The sink
+ * records the latter as `human_unverified`, never `human`.
+ */
+function isReportableHumanInput(source: unknown, unverified: boolean | undefined): boolean {
+    return isHumanCommandSource(source) || (unverified === true && source === 'ipc');
+}
+
 export interface SessionChatInputReport {
     /** Every id the send addressed (resolved session key, requested target id). */
     sessionIds: readonly string[];
@@ -47,6 +56,8 @@ export interface SessionChatInputReport {
     /** Router-stamped command source. */
     source: unknown;
     outcome: SubmitOutcome;
+    /** Router-stamped `_unverifiedDashboardInput` (no-auth standalone dashboard, source `ipc`). */
+    unverified?: boolean;
 }
 
 export interface SessionTerminalInputReport {
@@ -56,6 +67,8 @@ export interface SessionTerminalInputReport {
     data: string;
     /** Router-stamped command source, or the transport's own (`p2p` frame). */
     source: unknown;
+    /** Router-stamped `_unverifiedDashboardInput` (no-auth standalone dashboard, source `ipc`). */
+    unverified?: boolean;
 }
 
 export interface AssistantHumanInputSink {
@@ -72,7 +85,7 @@ export function setAssistantHumanInputSink(next: AssistantHumanInputSink | null)
 
 /** Send path: report a chat submit. No-op unless the source is a human dashboard and an assistant runtime is wired. */
 export function reportSessionChatInput(report: SessionChatInputReport): void {
-    if (!sink || !isHumanCommandSource(report.source)) return;
+    if (!sink || !isReportableHumanInput(report.source, report.unverified)) return;
     try {
         sink.chat(report);
     } catch {
@@ -138,7 +151,7 @@ export function countTerminalSubmits(data: string, inPaste = false): { submits: 
  * the source is a human dashboard and an assistant runtime is wired.
  */
 export function reportSessionTerminalInput(report: SessionTerminalInputReport): void {
-    if (!sink || !isHumanCommandSource(report.source) || typeof report.data !== 'string' || !report.data) return;
+    if (!sink || !isReportableHumanInput(report.source, report.unverified) || typeof report.data !== 'string' || !report.data) return;
     try {
         sink.terminal(report);
     } catch {

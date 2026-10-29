@@ -118,6 +118,7 @@ export interface DaemonHostRuntime {
             ownerVerified?: boolean;
             ownerProof?: import('../commands/command-args.js').TrustedOwnerIngressProof | null;
             verifyCurrentOwner?: () => boolean;
+            unverifiedDashboardInput?: boolean;
         },
     ): Promise<CommandRouterResult & { interactionId: string }>;
     /** Latest interaction id recorded for a session (router-owned, bounded). */

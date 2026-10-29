@@ -156,6 +156,22 @@ describe('decision_answer', () => {
         expect(item(itemId).state).toBe('open');
     });
 
+    it('accepts a turn opened by an unverified dashboard human (no-auth standalone) — and only that, not a relay after it', async () => {
+        const { itemId } = ask();
+        const log = getAssistantServices().inputLog;
+        log.append(assistantSession.sid, 'human_unverified');
+        const a = { project: meshId, itemId, optionId: 'a', interpretedFrom: 'temp', ...authed() };
+        expect(await run(ASSISTANT_VERB.decisionAnswer, a)).toMatchObject({ success: true });
+        expect(item(itemId).state).not.toBe('open');
+        // the write classification of that kind stays non-human
+        expect(log.writeContext(assistantSession.sid).origin).toBe('relay');
+        // a relay-only turn after it is still refused
+        const second = ask('Second?').itemId;
+        log.closeTurn(assistantSession.sid);
+        log.append(assistantSession.sid, 'relay');
+        expect(await run(ASSISTANT_VERB.decisionAnswer, { ...a, itemId: second })).toMatchObject({ success: false, code: 'no_owner_utterance' });
+    });
+
     it('maps one owner sentence onto several decisions: via assistant, interpretedFrom kept, a line per answer with the item id', async () => {
         const budget = ask('Budget default?');
         const npmrc = ask('Keep .npmrc as is?', { options: [{ label: 'keep' }, { label: 'change' }], recommended: 'a' });

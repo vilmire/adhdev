@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSISTANT_VERB, type SendPolicy, type SubmitOutcome } from '@adhdev/mesh-shared';
 import { DaemonCommandRouter } from '../../src/commands/router.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
-import { COMMAND_SOURCE_ARG } from '../../src/commands/command-args.js';
+import { COMMAND_SOURCE_ARG, UNVERIFIED_DASHBOARD_INPUT_ARG } from '../../src/commands/command-args.js';
 import { handleSendChat } from '../../src/commands/chat-commands.js';
 import type { CommandHelpers } from '../../src/commands/handler.js';
 import { assistantStoreHandlers } from '../../src/commands/high-family/assistant-store.js';
@@ -79,6 +79,24 @@ describe('router stamps the command source on send_chat', () => {
         expect(COMMAND_SOURCE_ARG in handleSpec.mock.calls[2]![1]).toBe(false);
     });
 
+    it('the unverified-dashboard flag is stamped only from the trusted option, only for ipc send_chat/pty_input; a caller copy is dropped', async () => {
+        const { router, handleSpec } = createRouter();
+        const flagged = (i: number) => handleSpec.mock.calls[i]![1][UNVERIFIED_DASHBOARD_INPUT_ARG];
+        await router.execute('send_chat', { targetSessionId: SID, message: 'hi', [UNVERIFIED_DASHBOARD_INPUT_ARG]: true }, 'ipc');
+        expect(flagged(0)).toBeUndefined();
+        await router.execute('send_chat', { targetSessionId: SID, message: 'hi', [UNVERIFIED_DASHBOARD_INPUT_ARG]: true }, 'p2p', { unverifiedDashboardInput: true });
+        expect(flagged(1)).toBeUndefined();
+        await router.execute('send_chat', { targetSessionId: SID, message: 'hi' }, 'ipc', { unverifiedDashboardInput: true, ownerVerified: true });
+        expect(flagged(2)).toBeUndefined();
+        await router.execute('read_chat', { targetSessionId: SID }, 'ipc', { unverifiedDashboardInput: true });
+        expect(flagged(3)).toBeUndefined();
+        await router.execute('send_chat', { targetSessionId: SID, message: 'hi' }, 'ipc', { unverifiedDashboardInput: true });
+        expect(flagged(4)).toBe(true);
+        expect(handleSpec.mock.calls[4]![1][COMMAND_SOURCE_ARG]).toBe('ipc');
+        await router.execute('pty_input', { targetSessionId: SID, data: 'x' }, 'ipc', { unverifiedDashboardInput: true });
+        expect(flagged(5)).toBe(true);
+    });
+
     it('human sources are exactly the dashboards', () => {
         for (const s of ['ws', 'p2p', 'standalone']) expect(isHumanCommandSource(s)).toBe(true);
         for (const s of ['api', 'mesh', 'ipc', 'internal', 'ext', 'unknown', undefined, '']) expect(isHumanCommandSource(s)).toBe(false);
@@ -116,8 +134,8 @@ describe('dashboard send_chat into the assistant session', () => {
             getCliAdapter: (key: string) => adapters.get(key) ?? null,
             ctx: { adapters },
         } as unknown as CommandHelpers;
-        const send = (messageId: string, source: string | undefined, target = SID) =>
-            handleSendChat(helpers, { targetSessionId: target, message: `body ${messageId}`, messageId, ...(source ? { [COMMAND_SOURCE_ARG]: source } : {}) });
+        const send = (messageId: string, source: string | undefined, target = SID, unverified = false) =>
+            handleSendChat(helpers, { targetSessionId: target, message: `body ${messageId}`, messageId, ...(source ? { [COMMAND_SOURCE_ARG]: source } : {}), ...(unverified ? { [UNVERIFIED_DASHBOARD_INPUT_ARG]: true } : {}) });
         return { send, parked, registry };
     }
     const addUser = (text: string) => assistantStoreHandlers[ASSISTANT_VERB.memory]({} as any, { action: 'add', target: 'user', text, assistantSessionId: SID });
@@ -141,6 +159,30 @@ describe('dashboard send_chat into the assistant session', () => {
         expect(svc.inputLog.entries(SID)).toEqual([]);
         expect(svc.inputLog.has(OTHER)).toBe(false);
         expect(await addUser('x')).toMatchObject({ success: false, code: 'memory_user_requires_human' });
+    });
+
+    it('an unverified (no-auth standalone) dashboard send is logged human_unverified and grants no write authority', async () => {
+        const { send } = setup();
+        await send('u1', 'ipc', SID, true);
+        expect(svc.inputLog.entries(SID).map((e) => [e.source, e.messageId])).toEqual([['human_unverified', 'u1']]);
+        expect(svc.inputLog.currentTurn(SID)?.openedBy).toBe('human_unverified');
+        expect(svc.inputLog.humanInputCount(SID)).toBe(0);
+        expect(svc.inputLog.writeContext(SID).origin).toBe('relay');
+        expect(await addUser('x')).toMatchObject({ success: false, code: 'memory_user_requires_human' });
+        // the flag alone does nothing for a non-ipc / absent source, and ipc without the flag is still unlogged
+        await send('u2', 'ipc');
+        await send('u3', undefined, SID, true);
+        await send('u4', 'api', SID, true);
+        expect(svc.inputLog.sources(SID)).toEqual(['human_unverified']);
+    });
+
+    it('a verified human after an unverified one still classifies as human (and the reverse does not)', async () => {
+        const { send } = setup();
+        await send('v1', 'p2p');
+        await send('v2', 'ipc', SID, true);
+        expect(svc.inputLog.writeContext(SID).origin).toBe('relay');
+        await send('v3', 'standalone');
+        expect(svc.inputLog.writeContext(SID).origin).toBe('human');
     });
 
     it('one entry per delivered message: a resend of the same id is a duplicate, not a second human input', async () => {

@@ -4511,6 +4511,13 @@
         "recentlyAnswered": "最近已答复",
         "toastAnswered": "已答复：{{answer}}",
         "carryOverTitle": "结转 — 已关闭任务遗留的未完成项",
+        "confirm": {
+            "question": "已按“所有者放弃”关闭 — 是否正确？",
+            "contextWithReason": "任务“{{title}}” — 原因：{{reason}}",
+            "context": "任务“{{title}}”",
+            "optionCorrect": "正确",
+            "optionReopen": "重新打开"
+        },
         "decisionsWaiting": "{{count}} 项决定待处理",
         "openItems": "{{count}} 个未完成项",
         "liveChecksOpen": "{{count}} 项实机检查",

@@ -434,3 +434,9 @@ export {
   isStandaloneOriginAllowed,
 };
 export type { StandalonePasswordConfig };
+
+/** Artifact read verbs a no-auth daemon serves to the open dashboard (see captureUnauthenticatedArtifactReadGuard). */
+export const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set([
+  'artifact_fetch', 'artifact_read', 'session_artifact_fetch',
+  'artifact_list', 'session_artifact_list',
+]);

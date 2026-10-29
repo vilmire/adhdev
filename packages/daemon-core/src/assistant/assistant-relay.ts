@@ -171,7 +171,7 @@ export class AssistantRelay {
     private readonly attemptBodyCapture = new Map<string, Promise<void>>();
     private queue: Item[] = [];
     /** Human inputs parked in the driver FIFO, oldest first (logged when drained). */
-    private pendingHuman: Array<{ at: number; messageId: string }> = [];
+    private pendingHuman: Array<{ at: number; messageId: string; kind?: 'human_unverified' }> = [];
     private resolvingHuman: Promise<void> | null = null;
     /** Bracketed paste left open by the last terminal write into this assistant session. */
     private terminalPaste: { sessionId: string; open: boolean } = { sessionId: '', open: false };
@@ -344,7 +344,7 @@ export class AssistantRelay {
      * driver FIFO (`queued`) → logged when the drain writes it. A duplicate or
      * a refusal wrote nothing and is not logged.
      */
-    recordHumanSubmit(sessionIds: readonly string[], messageId: string, outcome: SubmitOutcome): void {
+    recordHumanSubmit(sessionIds: readonly string[], messageId: string, outcome: SubmitOutcome, unverified = false): void {
         const sid = this.ports.assistantSessionId();
         if (!sid || !sessionIds.includes(sid)) return;
         if (outcome.kind !== 'delivered' && outcome.kind !== 'queued') return;
@@ -352,9 +352,9 @@ export class AssistantRelay {
         this.dropQueuedReview();
         if (outcome.kind === 'delivered' || outcome.route === 'agent_queue') {
             this.pendingHuman = this.pendingHuman.filter((p) => p.messageId !== messageId); // promoted out of the FIFO
-            this.ports.inputLog.append(sid, 'human', { at: this.clock.now(), messageId });
+            this.ports.inputLog.append(sid, unverified ? 'human_unverified' : 'human', { at: this.clock.now(), messageId });
         } else if (!this.pendingHuman.some((p) => p.messageId === messageId)) {
-            this.pendingHuman.push({ at: this.clock.now(), messageId });
+            this.pendingHuman.push({ at: this.clock.now(), messageId, ...(unverified ? { kind: 'human_unverified' as const } : {}) });
         }
     }
 
@@ -367,7 +367,7 @@ export class AssistantRelay {
      * `term:<session>:<ms>:<n>`. Keystrokes without a submit key log nothing.
      * Only the bound assistant session is recorded.
      */
-    recordHumanTerminalInput(sessionIds: readonly string[], data: string): void {
+    recordHumanTerminalInput(sessionIds: readonly string[], data: string, unverified = false): void {
         const sid = this.ports.assistantSessionId();
         if (!sid || !sessionIds.includes(sid)) return;
         const prevOpen = this.terminalPaste.sessionId === sid && this.terminalPaste.open;
@@ -378,7 +378,7 @@ export class AssistantRelay {
         const at = this.clock.now();
         for (let k = 0; k < Math.min(submits, TERMINAL_SUBMITS_PER_WRITE_CAP); k++) {
             this.terminalSeq += 1;
-            this.ports.inputLog.append(sid, 'human', { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
+            this.ports.inputLog.append(sid, unverified ? 'human_unverified' : 'human', { at, messageId: `term:${sid}:${at}:${this.terminalSeq}` });
         }
     }
 
@@ -454,7 +454,7 @@ export class AssistantRelay {
             }
             if (!drained.length || this.ports.assistantSessionId() !== sid) return;
             const at = this.clock.now();
-            for (const p of pending) if (drained.includes(p.messageId)) this.ports.inputLog.append(sid, 'human', { at, messageId: p.messageId });
+            for (const p of pending) if (drained.includes(p.messageId)) this.ports.inputLog.append(sid, p.kind ?? 'human', { at, messageId: p.messageId });
             this.pendingHuman = this.pendingHuman.filter((p) => !drained.includes(p.messageId));
             this.kick();
         };
@@ -514,7 +514,7 @@ export class AssistantRelay {
                     void this.resolveDrainedHuman(sid);
                 } else {
                     const p = this.pendingHuman.shift()!; // one drained body starts one turn
-                    this.ports.inputLog.append(sid, 'human', { at: this.clock.now(), messageId: p.messageId });
+                    this.ports.inputLog.append(sid, p.kind ?? 'human', { at: this.clock.now(), messageId: p.messageId });
                 }
             }
             if (e.phase !== 'committed') return;

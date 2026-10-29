@@ -217,6 +217,25 @@ export const COMMAND_SOURCE_ARG = '_commandSource'
 /** Commands whose handler reads `COMMAND_SOURCE_ARG`. */
 export const COMMAND_SOURCE_STAMPED: ReadonlySet<string> = new Set(['send_chat', 'pty_input', 'interactive_prompt_response', 'assistant_staged_resolve', 'mission_decision_answer'])
 
+/**
+ * Router-stamped attribution flag (NOT authority): a dashboard `send_chat` /
+ * `pty_input` that reached a daemon with NO owner authentication configured,
+ * so its source is the unverified `ipc`. ONE writer: `DaemonCommandRouter.execute`
+ * deletes any caller-supplied copy and stamps it only from the trusted
+ * `unverifiedDashboardInput` execute option (set by daemon-standalone) and only
+ * when the source is `ipc` and the owner is NOT verified. It lets the assistant
+ * input log record the turn as `human_unverified` — never as `human`.
+ */
+export const UNVERIFIED_DASHBOARD_INPUT_ARG = '_unverifiedDashboardInput'
+
+/** Commands that may carry {@link UNVERIFIED_DASHBOARD_INPUT_ARG}. */
+export const UNVERIFIED_DASHBOARD_INPUT_COMMANDS: ReadonlySet<string> = new Set(['send_chat', 'pty_input'])
+
+/** True only when the router stamped the flag. */
+export function readUnverifiedDashboardInput(args: unknown): boolean {
+    return (args as Record<string, unknown> | null | undefined)?.[UNVERIFIED_DASHBOARD_INPUT_ARG] === true
+}
+
 /** The router-stamped source, or undefined (absent → not human, fail-closed). */
 export function readCommandSource(args: unknown): string | undefined {
     const raw = (args as Record<string, unknown> | null | undefined)?.[COMMAND_SOURCE_ARG]

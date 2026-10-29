@@ -15,12 +15,17 @@ import { getMeshName } from '../../utils/mesh-name-registry'
 import {
     dueInfo,
     formatSpan,
+    confirmationOptionKey,
+    isCloseConfirmation,
     missionDisplayTitle,
+    parseCloseConfirmationContext,
     type NeedsYouAnswered,
     type NeedsYouDecision,
+    type NeedsYouOption,
 } from './needs-you-model'
 import { mayAlreadyBeInProgress, describeAnswer } from './needs-you-model'
 import { useSwipe } from './useSwipe'
+import type { TFunction } from 'i18next'
 import type { NeedsYouOutcome } from '../../context/NeedsYouContext'
 
 export interface DecisionCardProps {
@@ -36,6 +41,25 @@ export interface DecisionCardProps {
     onAnswer: (input: { optionId?: string; text?: string }, opts?: { swipe?: boolean }) => void
     onLater?: () => void
     onOpenMission?: () => void
+}
+
+/**
+ * Close-confirmation text through the locale (stored canonical text stays English): question, the
+ * mission title + reason without its id, and the two option labels. Other cards pass through.
+ */
+export function localizeConfirmation(t: TFunction, d: { question: string; context?: string; options: NeedsYouOption[] }, confirmation: boolean): { question: string; context?: string; options: NeedsYouOption[] } {
+    if (!confirmation) return d
+    const parsed = parseCloseConfirmationContext(d.context)
+    return {
+        question: t('needsYou.confirm.question'),
+        context: parsed
+            ? (parsed.reason ? t('needsYou.confirm.contextWithReason', { title: parsed.title, reason: parsed.reason }) : t('needsYou.confirm.context', { title: parsed.title }))
+            : d.context,
+        options: d.options.map(o => {
+            const key = confirmationOptionKey(o.label)
+            return key ? { ...o, label: t(`needsYou.confirm.${key}`) } : o
+        }),
+    }
 }
 
 export function ProjectMissionLine({ meshId, missionTitle, carryOver, projectName, onOpenMission }: {
@@ -66,6 +90,7 @@ export default function DecisionCard({
         if (highlighted) rootRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
     }, [highlighted])
 
+    const shown = localizeConfirmation(t, decision, confirmation === true)
     const recommended = decision.options.find(o => o.id === decision.recommended)
     const due = dueInfo(decision, nowMs)
     const swipe = useSwipe({
@@ -73,7 +98,7 @@ export default function DecisionCard({
         onRight: recommended && !confirmation ? () => onAnswer({ optionId: recommended.id }, { swipe: true }) : undefined,
         onLeft: onLater,
     })
-    const pickedOption = decision.options.find(o => o.id === picked)
+    const pickedOption = shown.options.find(o => o.id === picked)
     const choose = (id: string) => {
         if (busy) return
         if (preselect !== undefined) setPicked(id)   // deep-linked: choosing only selects, Confirm answers
@@ -111,12 +136,12 @@ export default function DecisionCard({
                 )}
             </div>
             <ProjectMissionLine meshId={decision.meshId} missionTitle={decision.missionTitle} carryOver={decision.carryOver} projectName={projectName} onOpenMission={onOpenMission} />
-            <div className="text-sm font-semibold text-text-primary">{decision.question}</div>
-            {decision.context && <div className="text-xs text-text-secondary whitespace-pre-wrap">{decision.context}</div>}
+            <div className="text-sm font-semibold text-text-primary">{shown.question}</div>
+            {shown.context && <div className="text-xs text-text-secondary whitespace-pre-wrap">{shown.context}</div>}
 
-            {decision.options.length > 0 && (
+            {shown.options.length > 0 && (
                 <div className="flex flex-wrap gap-2" role="group" aria-label={t('needsYou.optionsLabel')}>
-                    {decision.options.map(o => {
+                    {shown.options.map(o => {
                         const isRec = o.id === decision.recommended
                         const isPicked = picked === o.id
                         return (
@@ -180,11 +205,13 @@ export function AnsweredCard({ item, busy, nowMs, projectName, onUndo, onChange 
     const { t } = useTranslation('common')
     const [changing, setChanging] = useState(false)
     const [text, setText] = useState('')
-    const summary = describeAnswer(item.answer, item.options) || '—'
+    const confirm = isCloseConfirmation({ question: item.question, source: 'coordinator', options: item.options })
+    const shown = localizeConfirmation(t, item, confirm)
+    const summary = describeAnswer(item.answer, shown.options) || '—'
     const inProgress = mayAlreadyBeInProgress(item.answer.at, nowMs)
     return (
         <div data-testid="needs-you-answered-card" data-decision-id={item.itemId} className="rounded-lg border border-border-subtle p-3 flex flex-col gap-1.5 bg-bg-panel">
-            <div className="text-xs text-text-secondary">{item.question}</div>
+            <div className="text-xs text-text-secondary">{shown.question}</div>
             <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-text-primary">{t('needsYou.answeredWith', { answer: summary })}</span>
                 {item.autoApplied && <span className="text-3xs rounded px-1.5 py-0.5 bg-bg-secondary text-text-muted">{t('needsYou.autoApplied')}</span>}
@@ -195,7 +222,7 @@ export function AnsweredCard({ item, busy, nowMs, projectName, onUndo, onChange 
             {inProgress && <div className="text-2xs text-text-muted" data-testid="needs-you-in-progress">{t('needsYou.mayBeInProgress')}</div>}
             {changing && (
                 <div className="flex flex-wrap gap-2 items-center">
-                    {item.options.map(o => (
+                    {shown.options.map(o => (
                         <Button key={o.id} size="sm" disabled={busy} onClick={() => { setChanging(false); onChange({ optionId: o.id }) }}>{o.label}</Button>
                     ))}
                     {item.allowFreeText && (

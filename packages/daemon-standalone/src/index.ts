@@ -429,6 +429,7 @@ export class StandaloneServer {
               ownerGuard ? 'standalone' : 'ipc',
               ownerGuard ?? undefined,
               (commandType) => this.http.captureUnauthenticatedArtifactReadGuard(req, commandType),
+              (commandType) => this.http.isUnverifiedDashboardInput(req, commandType),
             );
           });
           return;
@@ -576,6 +577,7 @@ export class StandaloneServer {
     source: 'standalone' | 'ipc',
     isOwnerAuthorized?: () => boolean,
     captureReadGuard?: (commandType: string) => (() => boolean) | null,
+    unverifiedInputGuard?: (commandType: string) => boolean,
   ): void {
     // Max client limit to prevent connection storms
     const MAX_WS_CLIENTS = 10;
@@ -631,9 +633,12 @@ export class StandaloneServer {
             : captureReadGuard?.(type) ?? undefined;
           const liveOwnerAuthorized = Boolean(ownerGuard && ownerGuard());
           const effectiveSource: 'standalone' | 'ipc' = liveOwnerAuthorized ? 'standalone' : 'ipc';
-          const result = await this.executeCommand(type, payload || {}, effectiveSource, {
+          const commandArgs = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+          delete commandArgs._unverifiedDashboardInput; // router-internal; never caller-supplied
+          const result = await this.executeCommand(type, commandArgs, effectiveSource, {
             ownerVerified: liveOwnerAuthorized,
             verifyCurrentOwner: liveOwnerAuthorized ? ownerGuard : undefined,
+            ...(!liveOwnerAuthorized && unverifiedInputGuard?.(type) ? { unverifiedDashboardInput: true } : {}),
           });
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }
@@ -741,6 +746,7 @@ export class StandaloneServer {
       ownerVerified?: boolean;
       ownerProof?: TrustedOwnerIngressProof | null;
       verifyCurrentOwner?: () => boolean;
+      unverifiedDashboardInput?: boolean;
     },
   ): Promise<any> {
     if (!this.host) {
@@ -765,6 +771,7 @@ export class StandaloneServer {
       ownerVerified: isOwner ? true : opts?.ownerVerified,
       ownerProof,
       verifyCurrentOwner: opts?.verifyCurrentOwner,
+      ...(opts?.unverifiedDashboardInput === true && !isOwner ? { unverifiedDashboardInput: true } : {}),
     });
   }
 

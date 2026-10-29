@@ -270,7 +270,7 @@ function argumentsKey(args: Record<string, unknown>): string {
     // The host adds only this correlation id. Every authority/file/operation
     // field remains bound; JSON serialization or spread does not copy the map.
     const sessionAlias = typeof args.sessionId === 'string' ? args.sessionId.trim() : undefined;
-    return JSON.stringify(Object.keys(args).filter(key => key !== '_interactionId' && key !== '_commandSource' // router-stamped (command-args.ts COMMAND_SOURCE_ARG)
+    return JSON.stringify(Object.keys(args).filter(key => key !== '_interactionId' && key !== '_commandSource' && key !== '_unverifiedDashboardInput' // router-stamped (command-args.ts COMMAND_SOURCE_ARG)
         && !(key === 'targetSessionId' && sessionAlias && args[key] === sessionAlias)).sort()
         .map(key => [key, args[key]]));
 }

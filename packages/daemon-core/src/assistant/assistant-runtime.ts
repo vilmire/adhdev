@@ -608,8 +608,8 @@ export function wireAssistantRuntime(
     // Dashboard chat (at delivery) and dashboard terminal submit keys (at the
     // PTY write) into the assistant session → input log (human).
     setAssistantHumanInputSink({
-        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome),
-        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data),
+        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome, r.unverified === true && r.source === 'ipc'),
+        terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data, r.unverified === true && r.source === 'ipc'),
     });
 
     setAssistantRelayHooks({

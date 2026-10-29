@@ -4514,6 +4514,13 @@
         "recentlyAnswered": "Respondidas recientemente",
         "toastAnswered": "Respondida: {{answer}}",
         "carryOverTitle": "Arrastre — elementos abiertos de misiones cerradas",
+        "confirm": {
+            "question": "Cerrada como \"abandonada por el propietario\" — ¿es correcto?",
+            "contextWithReason": "Misión \"{{title}}\" — motivo: {{reason}}",
+            "context": "Misión \"{{title}}\"",
+            "optionCorrect": "Correcto",
+            "optionReopen": "Reabrir"
+        },
         "decisionsWaiting": "{{count}} decisiones en espera",
         "openItems": "{{count}} elementos abiertos",
         "liveChecksOpen": "{{count}} comprobaciones en vivo",

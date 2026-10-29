@@ -15,7 +15,7 @@ import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type P
 import { assertTextOnlyInput } from '../providers/provider-input-support.js';
 import { pickApprovalButton, pickLeastPrivilegeApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
-import { mintLegacyMessageId, preserveTrustedOwnerIngress, readCommandSource, readMessageId, readOutboundOrigin, readSendPolicy } from './command-args.js';
+import { mintLegacyMessageId, preserveTrustedOwnerIngress, readCommandSource, readMessageId, readOutboundOrigin, readSendPolicy, readUnverifiedDashboardInput } from './command-args.js';
 import { reportSessionChatInput } from '../assistant/assistant-human-input.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
 import { createSessionInputService, type SessionInputService } from '../sessions/session-input-service.js';
@@ -291,7 +291,7 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     // Assistant input attribution (§4.10.2 check 5): the hook keeps only
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
+    reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome, unverified: readUnverifiedDashboardInput(args) });
     return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
         ...chatReceipt(service, sessionKey, messageId),
         ...(prepared && 'expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
