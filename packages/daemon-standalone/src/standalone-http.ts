@@ -319,8 +319,7 @@ export class StandaloneHttpApi {
    * trade-off: a local process could approve over HTTP on a no-auth daemon, and
    * configuring a password restores the strict boundary. Never `artifact_register`,
    * never when any auth is configured, never when an MCP-scope credential header
-   * is present (valid or not), never cross-origin or via DNS rebinding, and revoked
-   * the instant auth is configured.
+   * is present (valid or not), never cross-origin/DNS rebinding; revoked once auth is set.
    */
   captureUnauthenticatedArtifactReadGuard(req: IncomingMessage, commandType: string): (() => boolean) | null {
     if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType) && !UNAUTHENTICATED_OWNER_APPROVAL_VERBS.has(commandType)) return null;
