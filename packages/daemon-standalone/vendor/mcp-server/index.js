@@ -23855,6 +23855,9 @@ var require_dist3 = __commonJS({
       DASHBOARD_TO_DAEMON_P2P_TYPES: () => DASHBOARD_TO_DAEMON_P2P_TYPES2,
       DASHBOARD_TO_USER_SESSION_TYPES: () => DASHBOARD_TO_USER_SESSION_TYPES2,
       DASHBOARD_WIRE_VERSION: () => DASHBOARD_WIRE_VERSION,
+      DECISION_PUSH_OPTIONS_MAX: () => DECISION_PUSH_OPTIONS_MAX,
+      DECISION_PUSH_OPTION_LABEL_MAX: () => DECISION_PUSH_OPTION_LABEL_MAX,
+      DECISION_PUSH_QUESTION_MAX: () => DECISION_PUSH_QUESTION_MAX,
       DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
       DELIVERY_OUTCOMES: () => DELIVERY_OUTCOMES2,
       DELIVERY_VIAS: () => DELIVERY_VIAS2,
@@ -27128,6 +27131,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     var NUMERIC_IDENTIFIER;
     var DAEMON_STATUS_EVENT_NAMES2;
     var isDaemonStatusEventName2;
+    var DECISION_PUSH_QUESTION_MAX;
+    var DECISION_PUSH_OPTION_LABEL_MAX;
+    var DECISION_PUSH_OPTIONS_MAX;
     var RELEASE_CHANNELS;
     var NPM_UPDATE_TAGS;
     var VERSION_UPDATE_REASONS;
@@ -27626,9 +27632,15 @@ ${renderWorkerProtocolFooter2(input)}`;
           "agent:waiting_choice",
           "agent:generating_completed",
           "agent:stopped",
-          "monitor:no_progress"
+          "monitor:no_progress",
+          // An owner decision (structured missions) needs the owner. Server-bound for the push only;
+          // the dashboard learns about decisions over P2P (`mission_decisions_list`).
+          "agent:decision_needed"
         ];
         isDaemonStatusEventName2 = makeTypeGuard2(DAEMON_STATUS_EVENT_NAMES2);
+        DECISION_PUSH_QUESTION_MAX = 80;
+        DECISION_PUSH_OPTION_LABEL_MAX = 24;
+        DECISION_PUSH_OPTIONS_MAX = 3;
         RELEASE_CHANNELS = ["stable", "preview"];
         NPM_UPDATE_TAGS = ["latest", "next"];
         VERSION_UPDATE_REASONS = ["force_update_below", "major_minor_mismatch", "patch_mismatch", "daemon_ahead"];
@@ -37070,19 +37082,19 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
               this.history[type2] = entries2.slice(-MAX_ENTRIES_PER_PROVIDER);
             }
             this.save();
-            for (const listener2 of this.listeners) {
+            for (const listener3 of this.listeners) {
               try {
-                listener2(type2, version2, previousVersion);
+                listener3(type2, version2, previousVersion);
               } catch {
               }
             }
             return true;
           }
           /** Subscribe to newly recorded or changed provider versions in this archive. */
-          onVersionChange(listener2) {
-            this.listeners.add(listener2);
+          onVersionChange(listener3) {
+            this.listeners.add(listener3);
             return () => {
-              this.listeners.delete(listener2);
+              this.listeners.delete(listener3);
             };
           }
           /** Get version history for a provider */
@@ -40708,16 +40720,16 @@ child.on('exit', () => process.exit(0));
     function setAmbientQuotaEnableGate(isEnabled) {
       ambientIsEnabled = isEnabled;
     }
-    function setQuotaCacheChangedListener(listener2) {
+    function setQuotaCacheChangedListener(listener3) {
       const previous = quotaCacheChangedListener;
-      quotaCacheChangedListener = listener2;
+      quotaCacheChangedListener = listener3;
       return previous;
     }
     function notifyQuotaCacheChanged() {
-      const listener2 = quotaCacheChangedListener;
-      if (!listener2) return;
+      const listener3 = quotaCacheChangedListener;
+      if (!listener3) return;
       try {
-        listener2();
+        listener3();
       } catch (e) {
         LOG.warn("Quota", `Quota cache-change listener failed: ${e?.message || e}`);
       }
@@ -57229,17 +57241,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       return set2;
     }
-    function onTopicActivated(node, listener2) {
+    function onTopicActivated(node, listener3) {
       const set2 = listenersFor(node);
-      set2.add(listener2);
+      set2.add(listener3);
       return () => {
-        set2.delete(listener2);
+        set2.delete(listener3);
       };
     }
     function announceTopicActivated(node, topic) {
-      for (const listener2 of listenersFor(node)) {
+      for (const listener3 of listenersFor(node)) {
         try {
-          listener2(topic);
+          listener3(topic);
         } catch (error) {
           warnOnce2(`topic activation listener failed (further failures logged once) topic=${topic}: ${errorMessage(error)}`);
         }
@@ -73285,6 +73297,23 @@ ${body}`;
         SECTION_FOOTER = "Continue each mission from its current task state. Do not re-enqueue tasks that already exist \u2014 check mesh_view_queue first. Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). Decision items are the OWNER's to answer \u2014 never answer one yourself; when an answer arrives act on it. Full goal text: mesh_mission_list verbose.";
       }
     });
+    function setDecisionPushListener(fn) {
+      listener2 = fn;
+    }
+    function notifyDecisionPush(src) {
+      if (!listener2) return;
+      try {
+        listener2(src);
+      } catch {
+      }
+    }
+    var listener2;
+    var init_mesh_mission_decision_push_notifier = __esm2({
+      "src/mesh/mesh-mission-decision-push-notifier.ts"() {
+        "use strict";
+        listener2 = null;
+      }
+    });
     var mesh_mission_structured_exports = {};
     __export2(mesh_mission_structured_exports, {
       addNormalizedItem: () => addNormalizedItem,
@@ -73341,6 +73370,7 @@ ${body}`;
         if (reviveFrom.includes(same.state)) {
           items.updateItem(meshId, same.id, { state: "open", text: n.text, ...n.decision ? { decision: n.decision } : {}, movedTo: null, ...n.refs.length ? { refs: n.refs } : {} });
           items.appendEvent(meshId, missionId, "item_state_changed", actor, { itemId: same.id, from: same.state, to: "open", revived: true });
+          if (n.kind === "decision") notifyDecisionPush({ meshId, missionId, itemId: same.id, reason: "new" });
           return { ...base, id: same.id, state: "open", revived: true };
         }
         return { ...base, id: same.id, state: same.state, deduped: true, ...same.decision?.answer ? { answer: same.decision.answer } : {} };
@@ -73360,6 +73390,7 @@ ${body}`;
         createdBy
       });
       items.appendEvent(meshId, missionId, "item_added", actor, { itemId: rec5.id, kind: rec5.kind, text: truncateMissionText(rec5.text, 120), createdBy });
+      if (rec5.kind === "decision") notifyDecisionPush({ meshId, missionId, itemId: rec5.id, reason: "new" });
       return { ...base, id: rec5.id, state: state2 };
     }
     function updateItem(meshId, rawUpdate, actor) {
@@ -73760,6 +73791,7 @@ ${body}`;
         init_mesh_missions();
         init_mesh_mission_prompt();
         init_mesh_mission_change_notifier();
+        init_mesh_mission_decision_push_notifier();
         CLOSED = /* @__PURE__ */ new Set(["completed", "abandoned"]);
         isCarryOverMission = isCarryOverMissionRecord;
       }
@@ -99307,9 +99339,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
     }
     function emit(change) {
-      for (const listener2 of Array.from(listeners)) {
+      for (const listener3 of Array.from(listeners)) {
         try {
-          listener2(change);
+          listener3(change);
         } catch (err) {
           LOG.warn(
             "MeshPeerSecrets",
@@ -99368,10 +99400,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       emit({ kind: "remove", meshId: mesh, peerDaemonId: canonical2, role: removed.role, filePath: path124 });
       return true;
     }
-    function onPeerSecretsChanged(listener2) {
-      listeners.add(listener2);
+    function onPeerSecretsChanged(listener3) {
+      listeners.add(listener3);
       return () => {
-        listeners.delete(listener2);
+        listeners.delete(listener3);
       };
     }
     function resetPeerSecretsWarningsForTest() {
@@ -126898,6 +126930,7 @@ ${asText(streams.stderr)}
           items.bumpVersion(meshId, item.missionId, nowIso);
         });
         out.reminded.push(item.id);
+        if (d.urgency === "blocking") notifyDecisionPush({ meshId, missionId: item.missionId, itemId: item.id, reason: "remind" });
         notifyMissionChanged(meshId);
       }
       return out;
@@ -126912,6 +126945,7 @@ ${asText(streams.stderr)}
         init_mesh_missions();
         init_mesh_mission_change_notifier();
         init_mesh_mission_owner_confirm();
+        init_mesh_mission_decision_push_notifier();
         DECISION_ANSWER_TEXT_MAX = 1e3;
         DECISION_INTERPRETED_FROM_MAX = 500;
       }
@@ -145442,16 +145476,16 @@ ${tail}` : ""
       getCompactSummary(workspace) {
         return this.cache.get(workspace)?.compactSummary;
       }
-      onUpdate(listener2) {
-        this.listeners.add(listener2);
+      onUpdate(listener3) {
+        this.listeners.add(listener3);
         return () => {
-          this.listeners.delete(listener2);
+          this.listeners.delete(listener3);
         };
       }
-      createSubscription(params, listener2) {
+      createSubscription(params, listener3) {
         const normalized = this.normalize(params);
-        const scopedListener = listener2 ? (update, cacheEntry) => {
-          if (update.workspace === normalized.workspace) listener2(update, cacheEntry);
+        const scopedListener = listener3 ? (update, cacheEntry) => {
+          if (update.workspace === normalized.workspace) listener3(update, cacheEntry);
         } : void 0;
         const unsubscribe = scopedListener ? this.onUpdate(scopedListener) : () => void 0;
         return {
@@ -145471,8 +145505,8 @@ ${tail}` : ""
         return `${this.keyPrefix}:${workspace}`;
       }
       emit(update, cacheEntry) {
-        for (const listener2 of this.listeners) {
-          listener2(update, cacheEntry);
+        for (const listener3 of this.listeners) {
+          listener3(update, cacheEntry);
         }
       }
     };
@@ -148518,19 +148552,19 @@ ${tail}` : ""
        * attached; it closes when its last socket goes (or it is torn down). Peers that
        * are already open are replayed to a late subscriber. Returns an unsubscribe.
        */
-      onPeerLifecycle(listener2) {
-        this.peerLifecycleListeners.add(listener2);
+      onPeerLifecycle(listener3) {
+        this.peerLifecycleListeners.add(listener3);
         for (const peer of this.peers.values()) {
           if (peer.state === "connected") {
             this.announcedOpenPeers.add(peer.daemonId);
             try {
-              listener2.onPeerOpen(peer.daemonId, this.connectionHandle(peer));
+              listener3.onPeerOpen(peer.daemonId, this.connectionHandle(peer));
             } catch {
             }
           }
         }
         return () => {
-          this.peerLifecycleListeners.delete(listener2);
+          this.peerLifecycleListeners.delete(listener3);
         };
       }
       /**
@@ -149085,18 +149119,18 @@ ${tail}` : ""
         if (this.announcedOpenPeers.has(peer.daemonId)) return;
         this.announcedOpenPeers.add(peer.daemonId);
         const handle = this.connectionHandle(peer);
-        for (const listener2 of this.peerLifecycleListeners) {
+        for (const listener3 of this.peerLifecycleListeners) {
           try {
-            listener2.onPeerOpen(peer.daemonId, handle);
+            listener3.onPeerOpen(peer.daemonId, handle);
           } catch {
           }
         }
       }
       emitPeerClosed(daemonId) {
         if (!this.announcedOpenPeers.delete(daemonId)) return;
-        for (const listener2 of this.peerLifecycleListeners) {
+        for (const listener3 of this.peerLifecycleListeners) {
           try {
-            listener2.onPeerClosed(daemonId);
+            listener3.onPeerClosed(daemonId);
           } catch {
           }
         }
@@ -155195,12 +155229,12 @@ ${marker2}`,
         if (!this.isConnected) return null;
         const quality = opts?.quality ?? 20;
         try {
-          let clip;
+          let clip2;
           try {
             const metrics2 = await this.sendInternal("Page.getLayoutMetrics", {}, 3e3);
             const vp = metrics2?.cssVisualViewport || metrics2?.visualViewport;
             if (vp) {
-              clip = {
+              clip2 = {
                 x: 0,
                 y: 0,
                 width: Math.round(vp.clientWidth || vp.width || 1920),
@@ -155213,7 +155247,7 @@ ${marker2}`,
           const result = await this.sendInternal("Page.captureScreenshot", {
             format: "webp",
             quality,
-            ...clip ? { clip } : {},
+            ...clip2 ? { clip: clip2 } : {},
             optimizeForSpeed: true,
             captureBeyondViewport: false
           }, 1e4);
@@ -185062,7 +185096,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function watchWorkspaceGit(workspace, onChange, opts = {}) {
       const dirs = (opts.resolveDirs ?? resolveWorkspaceGitDirs)(workspace);
       if (!dirs) return null;
-      const watch6 = opts.watch ?? ((target4, options, listener2) => fs105.watch(target4, options, listener2));
+      const watch6 = opts.watch ?? ((target4, options, listener3) => fs105.watch(target4, options, listener3));
       const setTimeoutFn = opts.setTimeoutFn ?? ((fn, ms3) => {
         const handle = setTimeout(fn, ms3);
         handle.unref?.();
@@ -192262,10 +192296,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** SUBMIT-UNCONFIRMED-RECLAIM: called synchronously after each output chunk
        *  reached the screen (before any debounce), so a reader sees every frame. */
       screenWriteListeners = /* @__PURE__ */ new Set();
-      onScreenWrite(listener2) {
-        this.screenWriteListeners.add(listener2);
+      onScreenWrite(listener3) {
+        this.screenWriteListeners.add(listener3);
         return () => {
-          this.screenWriteListeners.delete(listener2);
+          this.screenWriteListeners.delete(listener3);
         };
       }
       /** SUBMIT-UNCONFIRMED-RECLAIM: could anyone but this daemon type into the
@@ -192438,9 +192472,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
         this.screen.write(chunk);
         this.screenVersion += 1;
-        for (const listener2 of this.screenWriteListeners) {
+        for (const listener3 of this.screenWriteListeners) {
           try {
-            listener2();
+            listener3();
           } catch {
           }
         }
@@ -193934,10 +193968,10 @@ trust_level = "trusted"
       sends;
       /** REDRAW-NUDGE: input-free false-busy recovery (see redraw-nudge.ts). */
       redrawNudge;
-      subscribe(listener2) {
-        this.listeners.add(listener2);
+      subscribe(listener3) {
+        this.listeners.add(listener3);
         return () => {
-          this.listeners.delete(listener2);
+          this.listeners.delete(listener3);
         };
       }
       start() {
@@ -215626,17 +215660,17 @@ ${notice.notice}${supersededHint}`;
         onActivated: async () => {
           providerLoader.registerToDetector();
           await refreshProviderAvailability();
-          for (const listener2 of activatedListeners) {
+          for (const listener3 of activatedListeners) {
             try {
-              listener2();
+              listener3();
             } catch {
             }
           }
         },
         onStale: () => {
-          for (const listener2 of staleListeners) {
+          for (const listener3 of staleListeners) {
             try {
-              listener2();
+              listener3();
             } catch {
             }
           }
@@ -217292,10 +217326,10 @@ ${notice.notice}${supersededHint}`;
        * uniform across standalone lanes, so "new for one lane" is "new for all").
        * Returns the unsubscribe.
        */
-      onTopicsAvailable(listener2) {
-        this.availabilityListeners.add(listener2);
+      onTopicsAvailable(listener3) {
+        this.availabilityListeners.add(listener3);
         return () => {
-          this.availabilityListeners.delete(listener2);
+          this.availabilityListeners.delete(listener3);
         };
       }
       /** Live lane count (tests / diagnostics). */
@@ -217372,9 +217406,9 @@ ${notice.notice}${supersededHint}`;
       /** Never throws — runs inside a transcript publish / session registration. */
       announceAvailable(topics) {
         if (this.closed || this.availabilityListeners.size === 0) return;
-        for (const listener2 of [...this.availabilityListeners]) {
+        for (const listener3 of [...this.availabilityListeners]) {
           try {
-            listener2(topics);
+            listener3(topics);
           } catch (error) {
             LOG.warn(
               "Seqscribe",
@@ -217731,6 +217765,54 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
+    init_dist();
+    init_logger();
+    init_mesh_mission_decisions();
+    init_mesh_mission_decision_push_notifier();
+    function clip(value, max) {
+      const text4 = value.replace(/\s+/g, " ").trim();
+      return text4.length <= max ? text4 : `${text4.slice(0, max - 1).trimEnd()}\u2026`;
+    }
+    function projectDecisionPushEvent(entry, reason, timestamp2 = Date.now()) {
+      const options = entry.options.slice(0, DECISION_PUSH_OPTIONS_MAX).map((o) => ({ id: o.id, label: clip(o.label, DECISION_PUSH_OPTION_LABEL_MAX) }));
+      const decision = {
+        meshId: entry.meshId,
+        missionId: entry.missionId,
+        itemId: entry.itemId,
+        question: clip(entry.question, DECISION_PUSH_QUESTION_MAX),
+        options,
+        urgency: entry.urgency === "blocking" ? "blocking" : "normal",
+        reason
+      };
+      if (entry.recommended && options.some((o) => o.id === entry.recommended)) decision.recommended = entry.recommended;
+      if (entry.dueAt) decision.dueAt = entry.dueAt;
+      return { event: "agent:decision_needed", timestamp: timestamp2, decision };
+    }
+    function createDecisionPushEmitter(deps) {
+      const seen2 = /* @__PURE__ */ new Set();
+      const max = deps.maxDedupe ?? 512;
+      const resolve66 = deps.resolveEntry ?? ((meshId, itemId) => buildOwnerDecisions(meshId).find((e) => e.itemId === itemId));
+      setDecisionPushListener((src) => {
+        const key5 = `${src.itemId}:${src.reason}`;
+        if (seen2.has(key5)) return;
+        seen2.add(key5);
+        while (seen2.size > max) {
+          const oldest = seen2.values().next().value;
+          if (oldest === void 0) break;
+          seen2.delete(oldest);
+        }
+        queueMicrotask(() => {
+          try {
+            const entry = resolve66(src.meshId, src.itemId);
+            if (!entry) return;
+            deps.sendServer(projectDecisionPushEvent(entry, src.reason));
+          } catch (error) {
+            LOG.warn("DecisionPush", `delivery failed: ${error?.message ?? error}`);
+          }
+        });
+      });
+      return () => setDecisionPushListener(null);
+    }
     var TURN_SOURCED_WIRE_NAMES = new Set(TURN_WIRE_EVENT_NAMES);
     function nonEmpty(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
@@ -217743,6 +217825,7 @@ ${notice.notice}${supersededHint}`;
         case "agent:generating_completed":
         case "agent:stopped":
         case "monitor:no_progress":
+        case "agent:decision_needed":
           return value;
         default:
           return null;
@@ -217863,6 +217946,9 @@ ${notice.notice}${supersededHint}`;
       const eventName = toDaemonStatusEventName(event.event);
       if (!eventName) return null;
       if (eventName.startsWith("provider:")) {
+        return null;
+      }
+      if (eventName === "agent:decision_needed") {
         return null;
       }
       if (TURN_SOURCED_WIRE_NAMES.has(eventName)) {
@@ -218030,7 +218116,12 @@ ${notice.notice}${supersededHint}`;
         escalation.retire(e.sessionId);
       }, { name: "host.status-event.approval-escalation-retire" }) : () => {
       };
+      const unsubDecisionPush = deps.sendServer ? createDecisionPushEmitter({ sendServer: (payload) => {
+        sendServer(payload);
+      } }) : () => {
+      };
       return () => {
+        unsubDecisionPush();
         unsubProviderEvent();
         unsubTurn();
         unsubTerminated();
@@ -218571,9 +218662,9 @@ ${notice.notice}${supersededHint}`;
       const replacedListeners = /* @__PURE__ */ new Set();
       const notifyHostReplaced = async () => {
         if (maintenanceHeld()) return;
-        for (const listener2 of replacedListeners) {
+        for (const listener3 of replacedListeners) {
           try {
-            await listener2();
+            await listener3();
           } catch {
           }
         }
@@ -218636,8 +218727,8 @@ ${notice.notice}${supersededHint}`;
           managedByTag: opts.managedBy,
           getBindingOwner: () => ({ namespace: opts.appName ?? resolveSessionHostAppName({ standalone: opts.managedBy === "adhdev-standalone" }), endpoint: `${current4.kind}:${current4.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
           control,
-          onHostReplaced: (listener2) => {
-            replacedListeners.add(listener2);
+          onHostReplaced: (listener3) => {
+            replacedListeners.add(listener3);
           }
         }),
         stop: () => control.stop()
@@ -219119,7 +219210,10 @@ var DAEMON_STATUS_EVENT_NAMES = [
   "agent:waiting_choice",
   "agent:generating_completed",
   "agent:stopped",
-  "monitor:no_progress"
+  "monitor:no_progress",
+  // An owner decision (structured missions) needs the owner. Server-bound for the push only;
+  // the dashboard learns about decisions over P2P (`mission_decisions_list`).
+  "agent:decision_needed"
 ];
 var isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES);
 var P2P_SIGNAL_TYPES = ["p2p_ready", "p2p_offer", "p2p_answer", "p2p_ice"];

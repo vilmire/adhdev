@@ -52,6 +52,9 @@ export const DAEMON_STATUS_EVENT_NAMES = [
     'agent:generating_completed',
     'agent:stopped',
     'monitor:no_progress',
+    // An owner decision (structured missions) needs the owner. Server-bound for the push only;
+    // the dashboard learns about decisions over P2P (`mission_decisions_list`).
+    'agent:decision_needed',
 ] as const
 export type DaemonStatusEventName = typeof DAEMON_STATUS_EVENT_NAMES[number]
 export const isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES)
@@ -62,6 +65,27 @@ export const isDaemonStatusEventName = makeTypeGuard(DAEMON_STATUS_EVENT_NAMES)
  * (`modalMessage`/`modalButtons`, CLAUDE.md "Push notification exception").
  * Mirror of daemon-core `DaemonStatusEventPayload`.
  */
+/**
+ * Owner-decision push payload (design §9, owner decision D1 2026-10-28). The ONLY mission text that
+ * reaches the server: the question (<=80 chars) and up to 3 option labels (<=24 chars). Never
+ * `context`, free-text answers, mission goal/summary or chat content.
+ */
+export type DecisionPushWire = {
+    meshId: string
+    missionId: string
+    itemId: string
+    question: string
+    options: Array<{ id: string; label: string }>
+    recommended?: string
+    urgency: 'normal' | 'blocking'
+    dueAt?: string
+    /** `new` = freshly asked; `remind` = a blocking decision crossed its due time. */
+    reason: 'new' | 'remind'
+}
+export const DECISION_PUSH_QUESTION_MAX = 80
+export const DECISION_PUSH_OPTION_LABEL_MAX = 24
+export const DECISION_PUSH_OPTIONS_MAX = 3
+
 export type DaemonStatusEventWirePayload = {
     event: DaemonStatusEventName
     timestamp: number
@@ -78,6 +102,8 @@ export type DaemonStatusEventWirePayload = {
     waitKind?: 'external'
     surfaceHidden?: boolean
     muted?: boolean
+    /** Present only on `agent:decision_needed`. */
+    decision?: DecisionPushWire
 }
 
 // ─── Status report (mirror of daemon-core `CloudStatusReportPayload`) ──────

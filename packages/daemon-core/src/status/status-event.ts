@@ -29,6 +29,7 @@ import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { TURN_WIRE_EVENT_NAMES, projectTurnWireEvent, type TurnWireEvent } from '../mesh/turn-ledger/bus-projection.js';
 import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
 import { createApprovalEscalationGate } from './approval-escalation.js';
+import { createDecisionPushEmitter } from './decision-push.js';
 
 /** The two wire names `turn-ledger/bus-projection.ts` now solely produces from a
  *  committed turn (wiring-unification C1/C5). A `provider_event` still carrying
@@ -73,6 +74,7 @@ export function toDaemonStatusEventName(value: unknown): DaemonStatusEventPayloa
         case 'agent:generating_completed':
         case 'agent:stopped':
         case 'monitor:no_progress':
+        case 'agent:decision_needed':
             return value;
         default:
             return null;
@@ -283,6 +285,11 @@ export function projectServerStatusEvent(
     // Provider UI effects can carry arbitrary text content and are not required
     // for server-side routing, push, or dashboard session targeting.
     if (eventName.startsWith('provider:')) {
+        return null;
+    }
+    // `agent:decision_needed` is produced ONLY by projectDecisionPushEvent (decision-push.ts);
+    // a provider_event may never smuggle one (or a `decision` bag) onto the wire.
+    if (eventName === 'agent:decision_needed') {
         return null;
     }
 
@@ -552,7 +559,12 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     const unsubEscalationRetire = escalation ? bus.on('terminated', (e) => {
         escalation.retire(e.sessionId);
     }, { name: 'host.status-event.approval-escalation-retire' }) : () => {};
+    // Owner-decision pushes (server leg only; standalone has no sendServer → no listener).
+    const unsubDecisionPush = deps.sendServer
+        ? createDecisionPushEmitter({ sendServer: (payload) => { sendServer(payload); } })
+        : () => {};
     return () => {
+        unsubDecisionPush();
         unsubProviderEvent();
         unsubTurn();
         unsubTerminated();

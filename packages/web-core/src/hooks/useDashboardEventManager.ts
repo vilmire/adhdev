@@ -5,6 +5,7 @@ import type { StatusEventPayload, ToastConfig } from '../managers/EventManager'
 import type { Toast, BaseDaemonActions } from '../context/BaseDaemonContext'
 import type { ActiveConversation } from '../components/dashboard/types'
 import type { DaemonData } from '../types'
+import { decisionAnswerFailed, planDecisionPushAnswer } from './decisionPushAnswer'
 
 interface UseDashboardEventManagerOptions {
     ides: DaemonData[]
@@ -112,4 +113,19 @@ export function useDashboardEventManager({
         navigator.serviceWorker?.addEventListener('message', handler)
         return () => navigator.serviceWorker?.removeEventListener('message', handler)
     }, [resolveConversationByTarget, sendDaemonCommand])
+
+    // Owner-decision push: the recommended-option action answers over the dashboard's own P2P
+    // command path (never a server relay); any failure falls back to the /needs-you deep link.
+    useEffect(() => {
+        const handler = (event: MessageEvent) => {
+            const plan = planDecisionPushAnswer(event.data)
+            if (!plan) return
+            const fallback = () => { try { window.location.assign(plan.fallbackUrl) } catch { /* no window */ } }
+            sendDaemonCommand(plan.routeId, 'mission_decision_answer', plan.payload)
+                .then(result => { if (decisionAnswerFailed(result)) fallback() })
+                .catch(error => { console.error('[SW Action] decision answer failed:', error); fallback() })
+        }
+        navigator.serviceWorker?.addEventListener('message', handler)
+        return () => navigator.serviceWorker?.removeEventListener('message', handler)
+    }, [sendDaemonCommand])
 }

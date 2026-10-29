@@ -30,6 +30,7 @@ import type { MissionEventType, MissionItemRecord } from './mesh-mission-items-s
 import { getMeshMission, getMeshMissions } from './mesh-missions.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { applyOwnerConfirmationAnswer } from './mesh-mission-owner-confirm.js';
+import { notifyDecisionPush } from './mesh-mission-decision-push-notifier.js';
 
 export type DecisionAnswerVia = 'dashboard' | 'assistant' | 'push' | 'cli';
 export const DECISION_ANSWER_VIAS: readonly DecisionAnswerVia[] = ['dashboard', 'assistant', 'push', 'cli'];
@@ -438,6 +439,8 @@ export function processDecisionDeadlines(meshId: string, nowMs: number = Date.no
             items.bumpVersion(meshId, item.missionId, nowIso);
         });
         out.reminded.push(item.id);
+        // Only a BLOCKING decision re-pushes; a normal one's remind stays in the inbox/digest.
+        if (d.urgency === 'blocking') notifyDecisionPush({ meshId, missionId: item.missionId, itemId: item.id, reason: 'remind' });
         notifyMissionChanged(meshId);
     }
     return out;
