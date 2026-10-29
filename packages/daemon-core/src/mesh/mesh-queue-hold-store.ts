@@ -16,7 +16,12 @@ export function recordQueueTaskHold(meshId: string, taskId: string, reason: stri
     store.transaction(() => {
         const task = store.findQueueEntryById(meshId, taskId);
         if (!task || task.status !== 'pending' || (preserveExisting && task.hold)) return;
-        const queue = store.getQueueEntries(meshId, ['pending', 'assigned']);
+        // Same active-writer set admission uses (assignedRowsMeshWide includes stopping
+        // exclusive writers whose queue status may already be terminal) plus pending rows
+        // for launch reservations / dependency titles — not a pending+assigned-only copy.
+        const writers = store.assignedRowsMeshWide(meshId).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
+        const pending = store.getQueueEntries(meshId, ['pending']);
+        const queue = [...writers, ...pending.filter(p => !writers.some(w => w.id === p.id))];
         const context = queueHoldContext(task, reason, queue, nodeId);
         if (reason === 'dependencies_unsatisfied') {
             const completed = new Set(store.getQueueHeads(meshId, ['completed']).map(head => head.id));

@@ -32,6 +32,7 @@ function countsFrom(partial: Partial<Record<MeshActiveWorkStatus, number>>): Rec
     awaiting_approval: 0,
     awaiting_choice: 0,
     finalizing: 0,
+    stopping: 0,
     ...partial,
   }
 }

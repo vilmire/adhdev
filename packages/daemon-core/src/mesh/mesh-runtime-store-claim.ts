@@ -478,6 +478,9 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             reason: gate.reason,
             test: candidate => {
                 if (gate.test(candidate)) return true;
+                // assignedRowsMeshWide is the admission active-writer set (includes stopping
+                // exclusive writers). queueHoldContext must project that set — not re-filter
+                // to status==='assigned' — so hold blockers match the refusal predicate.
                 holdBlockers ??= (host.assignedRowsMeshWide(meshId)).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
                 const context = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
                 if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');

@@ -48038,8 +48038,11 @@ ${error.message || ""}`;
     function queueTaskShortTitle(task) {
       return (task.message || "").trim().split("\n")[0].slice(0, 100);
     }
+    function holdActiveWriters(task, queue) {
+      return queue.filter((other) => other.id !== task.id && (other.status !== "pending" || pendingLaunchReservation(other)));
+    }
     function queueHoldContext(task, reason, queue, nodeId) {
-      const active = queue.filter((other) => other.id !== task.id && other.status === "assigned");
+      const active = holdActiveWriters(task, queue);
       const overlaps2 = [];
       if (reason === "owned_paths_conflict" && task.ownedPaths) {
         for (const other of active) {
@@ -48057,7 +48060,14 @@ ${error.message || ""}`;
           }
         }
       }
-      const blockingTaskIds = reason === "owned_paths_conflict" ? [...new Set(overlaps2.map((pair) => pair.taskId))] : reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
+      if (reason === "owned_paths_conflict") {
+        const blockingTaskIds2 = [...new Set(overlaps2.map((pair) => pair.taskId))].sort();
+        if (!blockingTaskIds2.length) {
+          return { blockingTaskIds: [], detail: { message: UNKNOWN_BLOCKER_NO_EVIDENCE } };
+        }
+        return { blockingTaskIds: blockingTaskIds2, detail: { overlappingPaths: overlaps2 } };
+      }
+      const blockingTaskIds = reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
       return { blockingTaskIds, detail: overlaps2.length ? { overlappingPaths: overlaps2 } : {} };
     }
     function setQueueTaskHold(task, reason, context2, now = Date.now()) {
@@ -48076,12 +48086,15 @@ ${error.message || ""}`;
       };
     }
     var QUEUE_HOLD_NOTICE_AFTER_MS;
+    var UNKNOWN_BLOCKER_NO_EVIDENCE;
     var init_mesh_queue_hold = __esm2({
       "src/mesh/mesh-queue-hold.ts"() {
         "use strict";
         init_mesh_physical_ownership();
         init_dist();
+        init_mesh_task_routing_contract();
         QUEUE_HOLD_NOTICE_AFTER_MS = 3 * 6e4;
+        UNKNOWN_BLOCKER_NO_EVIDENCE = "unknown_blocker_no_evidence";
       }
     });
     function inBridgeReceiptTransaction(db2) {
@@ -78371,7 +78384,9 @@ ${includeRefs[0]}`;
       store4.transaction(() => {
         const task = store4.findQueueEntryById(meshId, taskId);
         if (!task || task.status !== "pending" || preserveExisting && task.hold) return;
-        const queue = store4.getQueueEntries(meshId, ["pending", "assigned"]);
+        const writers = store4.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
+        const pending = store4.getQueueEntries(meshId, ["pending"]);
+        const queue = [...writers, ...pending.filter((p) => !writers.some((w) => w.id === p.id))];
         const context2 = queueHoldContext(task, reason, queue, nodeId);
         if (reason === "dependencies_unsatisfied") {
           const completed = new Set(store4.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
@@ -93029,8 +93044,9 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         case "waiting_choice":
           return { status: "awaiting_choice", attemptId: presentation.attemptId, stage };
         case "finalizing":
-        case "stopping":
           return { status: "finalizing", attemptId: presentation.attemptId, stage };
+        case "stopping":
+          return { status: "stopping", attemptId: presentation.attemptId, stage };
         case "completed":
         case "blocked":
           return { status: "idle", attemptId: presentation.attemptId, stage };
@@ -93376,7 +93392,8 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         failed: 0,
         awaiting_approval: 0,
         awaiting_choice: 0,
-        finalizing: 0
+        finalizing: 0,
+        stopping: 0
       };
       const sourceCounts = { queue: 0, direct: 0 };
       for (const item of activeWork) {
@@ -132444,6 +132461,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           "generating",
           "pending",
           "assigned",
+          "stopping",
           "finalizing",
           "idle"
         ];
@@ -226739,17 +226757,16 @@ function buildQueueStatusSummary(queue) {
     }
     if (status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
   }
-  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
   return {
     heldCount: held.length,
     heldReasons,
     totalCount: queue.length,
-    activeCount: counts.pending + liveAssigned,
+    activeCount: counts.pending + counts.assigned,
     historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
     counts,
     activeCounts: {
       pending: counts.pending,
-      assigned: liveAssigned
+      assigned: counts.assigned
     },
     staleAssignedCount: staleAssigned,
     rawActiveCounts: {
@@ -226777,15 +226794,14 @@ function buildQueueStatusSummaryFromCounts(statusCounts, activeRows, allowed) {
       if (task?.status === "assigned" && task?.staleAssigned === true) staleAssigned += 1;
     }
   }
-  const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
   return {
     heldCount: !allowed || allowed.has("pending") ? activeRows.filter((task) => task.status === "pending" && task.hold).length : 0,
     heldReasons: !allowed || allowed.has("pending") ? buildQueueStatusSummary(activeRows).heldReasons : {},
     totalCount,
-    activeCount: counts.pending + liveAssigned,
+    activeCount: counts.pending + counts.assigned,
     historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
     counts,
-    activeCounts: { pending: counts.pending, assigned: liveAssigned },
+    activeCounts: { pending: counts.pending, assigned: counts.assigned },
     staleAssignedCount: staleAssigned,
     rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
     historicalCounts: { completed: counts.completed, blocked: counts.blocked, failed: counts.failed, cancelled: counts.cancelled }

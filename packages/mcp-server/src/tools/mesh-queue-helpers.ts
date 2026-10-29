@@ -112,17 +112,19 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
         }
         if (status === 'assigned' && task?.staleAssigned === true) staleAssigned += 1;
     }
-    const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
+    // activeCounts must match the raw assigned workset SoT. Stale-assigned is a
+    // separate diagnostic annotation (node/session absent) — never subtract it to
+    // make active look greener while exclusive ownership may still be uncertain.
     return {
         heldCount: held.length,
         heldReasons,
         totalCount: queue.length,
-        activeCount: counts.pending + liveAssigned,
+        activeCount: counts.pending + counts.assigned,
         historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
         counts,
         activeCounts: {
             pending: counts.pending,
-            assigned: liveAssigned,
+            assigned: counts.assigned,
         },
         staleAssignedCount: staleAssigned,
         rawActiveCounts: {
@@ -161,15 +163,15 @@ export function buildQueueStatusSummaryFromCounts(
             if (task?.status === 'assigned' && task?.staleAssigned === true) staleAssigned += 1;
         }
     }
-    const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
+    // Keep activeCounts === rawActiveCounts; staleAssignedCount stays a separate diagnostic.
     return {
         heldCount: (!allowed || allowed.has('pending')) ? activeRows.filter(task => task.status === 'pending' && task.hold).length : 0,
         heldReasons: (!allowed || allowed.has('pending')) ? buildQueueStatusSummary(activeRows).heldReasons : {},
         totalCount,
-        activeCount: counts.pending + liveAssigned,
+        activeCount: counts.pending + counts.assigned,
         historicalCount: counts.completed + counts.blocked + counts.failed + counts.cancelled,
         counts,
-        activeCounts: { pending: counts.pending, assigned: liveAssigned },
+        activeCounts: { pending: counts.pending, assigned: counts.assigned },
         staleAssignedCount: staleAssigned,
         rawActiveCounts: { pending: counts.pending, assigned: counts.assigned },
         historicalCounts: { completed: counts.completed, blocked: counts.blocked, failed: counts.failed, cancelled: counts.cancelled },

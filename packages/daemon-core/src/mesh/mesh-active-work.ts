@@ -10,15 +10,15 @@ import { resolveTurnAttemptRow, presentationFromAttemptRow, type TurnStage } fro
 import { isWeakCompletionEvidence } from './mesh-events-utils.js';
 
 export type MeshActiveWorkSource = 'queue' | 'direct';
-export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice' | 'finalizing';
+export type MeshActiveWorkStatus = 'pending' | 'assigned' | 'generating' | 'idle' | 'failed' | 'awaiting_approval' | 'awaiting_choice' | 'finalizing' | 'stopping';
 
 /**
  * TURN-PRESENTATION (Stage 6): task-level active-work status for a task with a
  * Stage 5 attempt comes from the SAME reducer projection as read_chat /
  * session_status / mesh_status — so all surfaces agree on stage and attemptId.
- * `finalizing` is surfaced verbatim (never collapsed to idle) until the reducer
- * commits terminal. Returns null when no attempt exists (legacy behavior keeps
- * governing — the ONLY fallback condition).
+ * `finalizing` and `stopping` stay distinct (never collapsed to idle/completed)
+ * until the reducer commits terminal. Returns null when no attempt exists
+ * (legacy behavior keeps governing — the ONLY fallback condition).
  */
 function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { status: MeshActiveWorkStatus; attemptId: string; stage: TurnStage } | null {
     const row = resolveTurnAttemptRow({ meshId, taskId });
@@ -38,8 +38,9 @@ function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { statu
         case 'waiting_choice':
             return { status: 'awaiting_choice', attemptId: presentation.attemptId!, stage };
         case 'finalizing':
-        case 'stopping':
             return { status: 'finalizing', attemptId: presentation.attemptId!, stage };
+        case 'stopping':
+            return { status: 'stopping', attemptId: presentation.attemptId!, stage };
         case 'completed':
         case 'blocked':
             return { status: 'idle', attemptId: presentation.attemptId!, stage };
@@ -764,6 +765,7 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         awaiting_approval: 0,
         awaiting_choice: 0,
         finalizing: 0,
+        stopping: 0,
     };
     const sourceCounts: Record<MeshActiveWorkSource, number> = { queue: 0, direct: 0 };
     for (const item of activeWork) {

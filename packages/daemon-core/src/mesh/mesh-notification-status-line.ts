@@ -84,6 +84,7 @@ const STATUS_RENDER_ORDER: readonly MeshActiveWorkStatus[] = [
     'generating',
     'pending',
     'assigned',
+    'stopping',
     'finalizing',
     'idle',
 ];

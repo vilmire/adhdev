@@ -2964,12 +2964,14 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
   assert.deepEqual(payload.sourceOfTruth.historicalStatuses, ['completed', 'blocked', 'failed', 'cancelled']);
   assert.equal(payload.summary.totalCount, 3);
   assert.equal(payload.visibleSummary.totalCount, 3);
-  assert.deepEqual(payload.activeCounts, { pending: 0, assigned: 1 });
+  // activeCounts track the raw assigned workset; staleAssignedCount is a separate diagnostic
+  // (do not subtract uncertain/stale writers to make active look greener).
+  assert.deepEqual(payload.activeCounts, { pending: 0, assigned: 2 });
   assert.deepEqual(payload.summary.rawActiveCounts, { pending: 0, assigned: 2 });
   assert.deepEqual(payload.historicalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
-  assert.deepEqual(payload.visibleActiveCounts, { pending: 0, assigned: 1 });
+  assert.deepEqual(payload.visibleActiveCounts, { pending: 0, assigned: 2 });
   assert.deepEqual(payload.visibleHistoricalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
-  assert.equal(payload.activeCount, 1);
+  assert.equal(payload.activeCount, 2);
   assert.equal(payload.historicalCount, 1);
   assert.equal(payload.staleAssignedCount, 1);
   assert.equal(payload.staleAssignedTasks[0].id, 'task-stale-assigned');
@@ -3009,7 +3011,7 @@ test('mesh_view_queue annotates stale assigned tasks and historical task metadat
     transport: { command: async (c: string, a?: Record<string, unknown>) => { if (isTurnIpcCommand(c)) return answerTurnIpc(c, a ?? {}); throw new Error(`no transport for ${c}`); } } as any,
   } as any, { status: ['failed', 'completed'], verbose: true }));
   assert.equal(filteredPayload.success, true);
-  assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 1 });
+  assert.deepEqual(filteredPayload.activeCounts, { pending: 0, assigned: 2 });
   assert.deepEqual(filteredPayload.visibleActiveCounts, { pending: 0, assigned: 0 });
   assert.deepEqual(filteredPayload.visibleHistoricalCounts, { completed: 1, blocked: 0, failed: 0, cancelled: 0 });
   assert.equal(filteredPayload.staleAssignedCount, 1);
