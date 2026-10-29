@@ -26,6 +26,8 @@ import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/coo
 import { subscribeMeshTermination } from '../../mesh/mesh-termination-bridge.js';
 import { subscribeMeshProviderSignals } from '../../mesh/mesh-signal-bridge.js';
 import { subscribeCoordinatorRegistryRemoval } from '../../mesh/coordinator-registry.js';
+import { wireInferredOwnerDecisions } from '../../mesh/coordinator-inferred-decision-wiring.js';
+import { subscribeWorkerHomeCleanup } from '../../mesh/worker-home-cleanup.js';
 import { hasLiveWorkerSessionBind, setWorkerSessionBindPersistence, subscribeWorkerBindRevocation, subscribeWorkerMcpSharedConfigCleanup } from '../../mesh/worker-mcp-isolation.js';
 import { SqliteWorkerSessionBindStore } from '../../mesh/worker-session-bind-store.js';
 import { installLocalNodeProviderFallback } from '../../mesh/mesh-slot-provider-usability.js';
@@ -873,6 +875,9 @@ export function bootMeshRuntime(s6: ProjectionsStage): MeshRuntimeStage {
         // (restoring what it shadowed) — see resolveWorkerMcpPlacement.
         subscribeWorkerMcpSharedConfigCleanup(bus),
         subscribeWorkerBindRevocation(bus),
+        subscribeWorkerHomeCleanup(bus),
+        // Safety net: a coordinator's plain-text multiple-choice question becomes a decision item.
+        wireInferredOwnerDecisions(components),
         subscribeContractGrantRevocation(bus),
     ];
 

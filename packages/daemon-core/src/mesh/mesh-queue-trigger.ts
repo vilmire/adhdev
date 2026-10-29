@@ -56,6 +56,13 @@ export interface MeshQueueTriggerResult {
      * `noIdleMeshSessionAvailable`, which is suppressed whenever this is true.
      */
     autoLaunchPending?: boolean;
+    /**
+     * What is being auto-launched (provider / session when already known) — lets the MCP
+     * guidance say "auto-launching <provider>" instead of the misleading "no idle worker".
+     * `inFlight` = the launch scan is still running (provider selection / quota gate / spawn)
+     * and has not yet stamped task.autoLaunch.
+     */
+    autoLaunching?: { taskId?: string; providerType?: string; sessionId?: string; nodeId?: string; inFlight?: boolean };
     noIdleMeshSessionAvailable?: boolean;
 }
 
@@ -330,10 +337,17 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // Give the launch scan its synchronous prologue (gates + per-task lock + markAutoLaunch)
     // a chance to land before we snapshot the queue, without waiting on any spawn I/O. If it
     // settles within this turn we report it exactly as the old await did.
-    autoLaunchStarted = await Promise.race([
+    // A scan still running after this turn (quota gate / provider detect / spawn in progress)
+    // has not stamped task.autoLaunch yet. Live QA 2026-10-29: that window made the first
+    // enqueue report "no idle session" although the daemon log showed the spawn succeeding —
+    // so remember whether the scan was still in flight and report it as pending below.
+    const SCAN_STILL_RUNNING = Symbol('scan_still_running');
+    const raced = await Promise.race([
         autoLaunchPromise,
-        new Promise<boolean>(resolve => setImmediate(() => resolve(false))),
+        new Promise<typeof SCAN_STILL_RUNNING>(resolve => setImmediate(() => resolve(SCAN_STILL_RUNNING))),
     ]);
+    const autoLaunchScanInFlight = raced === SCAN_STILL_RUNNING;
+    autoLaunchStarted = raced === SCAN_STILL_RUNNING ? false : raced;
     // AUTOLAUNCH-ORPHAN-SWEEP: run AFTER the drain + auto-launch so it reads post-claim
     // assignment state (a session that just won its claim must not be reported as an orphan).
     sweepAutoLaunchOrphanSessions(components, meshId, {
@@ -376,7 +390,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
     // advice while the just-launched session converges.
     // `autoLaunch` is a payload field, not a head field, so only the still-pending rows are
     // read in full here (IPC load audit #10) — assigned/other-status rows never need it.
-    const autoLaunchPending = autoLaunchStarted || getQueue(meshId, { status: ['pending'] }).some(task => {
+    const launchingTask = getQueue(meshId, { status: ['pending'] }).find(task => {
         const al = task.autoLaunch;
         if (!al || (al.status !== 'started' && al.status !== 'completed')) return false;
         // CLOCK-LOWER-BOUND: `al.updatedAt` is foreign; a future stamp must not report
@@ -384,6 +398,16 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         const launchedAtMs = Date.parse(al.updatedAt);
         return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs);
     });
+    const autoLaunchPending = autoLaunchStarted || autoLaunchScanInFlight || Boolean(launchingTask);
+    const autoLaunching = autoLaunchPending
+        ? {
+            ...(launchingTask ? { taskId: launchingTask.id } : {}),
+            ...(launchingTask?.autoLaunch?.providerType ? { providerType: launchingTask.autoLaunch.providerType } : {}),
+            ...(launchingTask?.autoLaunch?.sessionId ? { sessionId: launchingTask.autoLaunch.sessionId } : {}),
+            ...(launchingTask?.autoLaunch?.nodeId ? { nodeId: launchingTask.autoLaunch.nodeId } : {}),
+            ...(autoLaunchScanInFlight && !launchingTask ? { inFlight: true as const } : {}),
+        }
+        : undefined;
 
     notifyHeldQueueTasks(meshId);
     return {
@@ -399,7 +423,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         remoteIdleSessionsChecked,
         skippedSessions,
         autoLaunchStarted,
-        ...(autoLaunchPending ? { autoLaunchPending: true } : {}),
+        ...(autoLaunchPending ? { autoLaunchPending: true, autoLaunching } : {}),
         // Only report "no idle session, go launch one" when nothing is already on its way.
         // A pending auto-launch (this tick or a prior still-converging one) means a session
         // WILL claim shortly, so it is not a no-session-available situation.

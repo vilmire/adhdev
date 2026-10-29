@@ -259,6 +259,7 @@ test('mesh_launch_session queue guidance tells caller to WAIT (not launch anothe
           skippedSessions: [{ nodeId: 'node-local', sessionId: 'session-worker-1', reason: 'session_not_idle', status: 'generating' }],
           autoLaunchStarted: false,
           autoLaunchPending: true,
+          autoLaunching: { providerType: 'codex-cli', sessionId: 'auto-s1' },
         },
       };
     }
@@ -295,6 +296,8 @@ test('mesh_launch_session queue guidance tells caller to WAIT (not launch anothe
   // Must NOT advise launching another session.
   assert.ok(!/mesh_launch_session/.test(result.nextAction), 'autoLaunchPending guidance must not advise mesh_launch_session');
   assert.match(result.nextAction, /do NOT launch another/i);
+  assert.equal(result.autoLaunching, true);
+  assert.match(result.nextAction, /auto-launched.*codex-cli, session auto-s1/);
 });
 
 test('mesh_send_task queue response includes trigger claim state', async () => {

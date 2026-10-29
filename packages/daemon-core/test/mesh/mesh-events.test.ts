@@ -67,6 +67,7 @@ vi.mock('../../src/mesh/mesh-remote-ready-wait.js', async (importOriginal) => {
 })
 
 import { __resetIdleAutoFastForwardForTests, __resetMeshWorkspaceCacheForTests, handleMeshForwardEvent, notifyMeshCoordinator, setupMeshEventForwarding, triggerMeshQueue, tryAssignQueueTask } from '../../src/mesh/mesh-events.js'
+import { awaitInFlightAutoLaunches } from '../../src/mesh/mesh-queue-trigger.js'
 // C-W3: coordinator notices are turn.notify rows; the helper captures them.
 import { drainPendingMeshCoordinatorEvents, getPendingMeshCoordinatorEvents, __clearMeshPendingEventsForTests } from '../helpers/pending-notices.js'
 import { isWeakCompletionMetadata } from '../../src/mesh/mesh-events-utils.js'
@@ -1126,7 +1127,35 @@ const { emit } = components
       // ...but the result tells callers to WAIT, not to launch another worker.
       expect(result.autoLaunchPending).toBe(true)
       expect(result.noIdleMeshSessionAvailable).toBeUndefined()
+      // ...and says WHAT is launching so the coordinator does not report "no worker".
+      expect(result.autoLaunching).toMatchObject({ taskId: queued.id, providerType: 'hermes-cli', sessionId: 'auto-session-booting' })
     } finally {
+      cleanupMeshFiles(meshId)
+    }
+  })
+
+  it('reports autoLaunchPending (not noIdleMeshSessionAvailable) while the auto-launch scan is still in flight and has not stamped the task yet', async () => {
+    // Live QA 2026-10-29: the first enqueue answered "no idle worker, auto-launch did not
+    // start" while the (backgrounded) scan was still resolving providers and then spawned.
+    const meshId = `mesh_autolaunch_inflight_${Date.now()}`
+    try {
+      meshConfigMocks.getMesh.mockReturnValue({
+        id: meshId,
+        nodes: [{ id: 'node_child_1', workspace: '/repo/worktree-a', health: 'online', policy: { providerPriority: ['hermes-cli'] } }],
+        policy: { maxParallelTasks: 2, spawnedSessionVisibility: 'hidden' },
+      })
+      detectCliMocks.detectCLI.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve({ path: '/bin/hermes' }), 150)))
+      enqueueTask(meshId, 'queued task whose launch scan is slow', { difficulty: 'medium' })
+      const { components } = createQueueAutoLaunchComponents()
+
+      const result = await triggerMeshQueue(components, meshId)
+
+      expect(result.autoLaunchPending).toBe(true)
+      expect(result.noIdleMeshSessionAvailable).toBeUndefined()
+      expect(result.autoLaunching).toBeDefined()
+      await awaitInFlightAutoLaunches(meshId)
+    } finally {
+      detectCliMocks.detectCLI.mockReset()
       cleanupMeshFiles(meshId)
     }
   })

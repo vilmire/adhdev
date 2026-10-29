@@ -182,10 +182,15 @@ export function buildQueueTriggerGuidance(queueTrigger: Record<string, unknown> 
         // task — it is booting and will claim within a few seconds. Telling the caller to
         // launch ANOTHER session here would double-edit the worktree. Do NOT advise a new
         // launch; just wait for the in-flight session to claim.
+        const al = (queueTrigger.autoLaunching && typeof queueTrigger.autoLaunching === 'object' ? queueTrigger.autoLaunching : {}) as Record<string, unknown>;
+        const what = [typeof al.providerType === 'string' ? al.providerType : '', typeof al.sessionId === 'string' ? `session ${al.sessionId}` : ''].filter(Boolean).join(', ');
         return {
             queueClaimed: false,
             queueDispatchState: 'pending_waiting_for_autolaunch',
-            nextAction: 'A worker session was just auto-launched for this task and is booting; it will claim the task shortly. Wait for it to claim — do NOT launch another session. Use mesh_view_queue to confirm the assignment lands.',
+            autoLaunching: true,
+            ...(Object.keys(al).length ? { autoLaunch: al } : {}),
+            nextAction: `A worker session is being auto-launched for this task${what ? ` (${what})` : ''} and is booting; it will claim the task shortly. `
+                + 'Do NOT tell the owner there is no worker or that auto-launch did not start — it is starting. Wait for it to claim — do NOT launch another session. Use mesh_view_queue to confirm the assignment lands.',
         };
     }
     if (queueTrigger.noIdleMeshSessionAvailable === true) {

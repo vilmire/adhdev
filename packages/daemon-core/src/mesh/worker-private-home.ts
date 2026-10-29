@@ -217,6 +217,21 @@ function materializeWorkerHomeLink(source: string, target: string): WorkerHomeLi
     }
 }
 
+/** Default parent of every per-launch worker HOME (`$TMPDIR/adhdev-worker-home`). */
+export function defaultWorkerHomeBaseDir(): string {
+    return path.join(os.tmpdir(), 'adhdev-worker-home');
+}
+
+/**
+ * The directory `prepareWorkerPrivateHome` uses for (provider, workspace, sessionKey).
+ * Pure — shared with worker-home-cleanup.ts so session-end removal and the stale sweep
+ * address exactly the directory a launch created.
+ */
+export function workerPrivateHomePath(providerType: string, workspace: string, sessionKey: string, baseDir?: string): string {
+    const scope = shortHash(`${providerType}${path.resolve(workspace || '')}${sessionKey}`);
+    return path.join(baseDir || defaultWorkerHomeBaseDir(), `${providerType}-${scope}`);
+}
+
 /**
  * Materialize a worker-private HOME for a provider that roots its config in `~`.
  *
@@ -233,9 +248,7 @@ export function prepareWorkerPrivateHome(
     spec: WorkerPrivateHomeSpec,
     opts: { workspace: string; sessionKey: string; realHome?: string; baseDir?: string },
 ): PreparedWorkerHome {
-    const baseDir = opts.baseDir || path.join(os.tmpdir(), 'adhdev-worker-home');
-    const scope = shortHash(`${spec.providerType}${path.resolve(opts.workspace || '')}${opts.sessionKey}`);
-    const home = path.join(baseDir, `${spec.providerType}-${scope}`);
+    const home = workerPrivateHomePath(spec.providerType, opts.workspace, opts.sessionKey, opts.baseDir);
     return materializePrivateHome(spec, { home, workspace: opts.workspace, realHome: opts.realHome });
 }
 
