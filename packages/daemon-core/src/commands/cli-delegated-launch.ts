@@ -226,6 +226,7 @@ function renderWorkerMcpDeliveryArgs(
         delivery.envVarsTemplate,
         delivery.enabledTemplate,
         delivery.shellEnvExcludeTemplate,
+        delivery.approvalModeTemplate,
     ];
     const renderedArgs: string[] = [];
     for (const template of templates) {

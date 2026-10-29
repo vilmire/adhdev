@@ -432,6 +432,7 @@ describe('validateProviderDefinition', () => {
             envVarsTemplate: 'mcp_servers.{serverName}.env_vars={env_vars_json}',
             enabledTemplate: 'mcp_servers.{serverName}.enabled=true',
             shellEnvExcludeTemplate: 'shell_environment_policy.exclude={env_vars_json}',
+            approvalModeTemplate: 'mcp_servers.{serverName}.default_tools_approval_mode="approve"',
           },
           args: [
             {
