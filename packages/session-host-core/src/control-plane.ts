@@ -1,3 +1,4 @@
+import { resolveHostBootId } from './cleanup-expected.js';
 import type {
   AcquireWritePayload,
   GetHostDiagnosticsPayload,
@@ -29,6 +30,13 @@ export interface SessionHostSnapshot {
  */
 export interface SessionHostControlPlane {
   getDiagnostics(payload?: GetHostDiagnosticsPayload): Promise<SessionHostDiagnostics>;
+  /**
+   * Authoritative host boot identity for idle inventory / cleanup expected CAS.
+   * Prefers diagnostics.hostBootId (host SoT), else proves upgrade lease bootId
+   * via get_upgrade_lease, else hs:<hostStartedAt> for non-upgrade / old hosts.
+   * Ambiguous upgrade-lease failures fail closed (null) — never invent a UUID.
+   */
+  resolveHostBootId(): Promise<string | null>;
   listSessions(): Promise<SessionHostRecord[]>;
   stopSession(sessionId: string): Promise<SessionHostRecord | null>;
   /** Host CAS stop: refuses without mutating when expected assignment/boot/incarnation drift. */
@@ -78,6 +86,34 @@ export function createSessionHostControlPlane(
   return {
     getDiagnostics(payload: GetHostDiagnosticsPayload = {}): Promise<SessionHostDiagnostics> {
       return transport.request<SessionHostDiagnostics>('get_host_diagnostics', payload as Record<string, unknown>);
+    },
+    async resolveHostBootId(): Promise<string | null> {
+      let diagnostics: SessionHostDiagnostics;
+      try {
+        diagnostics = await transport.request<SessionHostDiagnostics>('get_host_diagnostics', {});
+      } catch {
+        return null;
+      }
+      if (typeof diagnostics.hostBootId === 'string' && diagnostics.hostBootId) {
+        return diagnostics.hostBootId;
+      }
+      // Host omitted hostBootId (older binary). Prove upgrade lease or fall back to hs:.
+      try {
+        const proof = await transport.request<{ bootId?: string }>('get_upgrade_lease', {});
+        return resolveHostBootId({
+          upgradeBootId: typeof proof?.bootId === 'string' ? proof.bootId : null,
+          hostStartedAt: diagnostics.hostStartedAt,
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (
+          msg.includes('native_host_upgrade_binding_unavailable')
+          || /unsupported|unknown request/i.test(msg)
+        ) {
+          return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt });
+        }
+        return null;
+      }
     },
     listSessions(): Promise<SessionHostRecord[]> {
       return transport.request<SessionHostRecord[]>('list_sessions', {});

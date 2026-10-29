@@ -143,6 +143,8 @@ export * from '../mesh/mesh-coordinator-config.js';
 
 export interface SessionHostControlPlane {
     getDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): Promise<any>;
+    /** Optional: authoritative host boot id for idle cleanup expected CAS. */
+    resolveHostBootId?(): Promise<string | null> | string | null;
     listSessions(): Promise<any[]>;
     stopSession(sessionId: string): Promise<any>;
     deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;

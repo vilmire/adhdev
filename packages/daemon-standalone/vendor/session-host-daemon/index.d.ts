@@ -141,6 +141,8 @@ declare class SessionHostServer extends EventEmitter {
      * post-mortem window before cleanup.
      */
     private persistNow;
+    /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
+    private currentHostBootId;
     private getHostDiagnostics;
     private recordHostLog;
     private recordRequestTrace;

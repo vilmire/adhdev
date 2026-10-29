@@ -86,6 +86,8 @@ export function sanitizeDiagnosticsRecord(record: SessionHostRecord): SessionHos
 export interface BuildHostDiagnosticsParams {
   payload?: { includeSessions?: boolean; limit?: number };
   hostStartedAt: number;
+  /** Same boot identity stop_session_if_expected refuses against. */
+  hostBootId: string | null;
   endpointPath: string;
   runtimeCount: number;
   sessions: SessionHostRecord[];
@@ -117,6 +119,7 @@ export function buildHostDiagnostics(params: BuildHostDiagnosticsParams): Sessio
     // Self-reported so a client can tell WHICH install this host runs from
     // without needing process-inspection privileges. See SessionHostDiagnostics.
     hostEntryPath: resolveHostEntryPath(),
+    ...(params.hostBootId ? { hostBootId: params.hostBootId } : {}),
     runtimeCount: params.runtimeCount,
     supportedRequestTypes: [...SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,

@@ -367,6 +367,13 @@ export interface SessionHostDiagnostics {
    * must treat `undefined` as "unknown", never as a match.
    */
   hostEntryPath?: string;
+  /**
+   * Authoritative host boot identity used by cleanup expected-assignment CAS.
+   * Same value `stop_session_if_expected` refuses against: upgrade-lease bootId
+   * when the host was launched with a native upgrade binding, otherwise `hs:<hostStartedAt>`.
+   * Optional so older hosts omit it; callers must not invent an upgrade UUID.
+   */
+  hostBootId?: string;
   runtimeCount: number;
   supportedRequestTypes?: SessionHostRequestType[];
   sessions?: SessionHostRecord[];

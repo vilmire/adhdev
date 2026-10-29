@@ -1625,6 +1625,7 @@ function buildHostDiagnostics(params) {
     // Self-reported so a client can tell WHICH install this host runs from
     // without needing process-inspection privileges. See SessionHostDiagnostics.
     hostEntryPath: resolveHostEntryPath(),
+    ...params.hostBootId ? { hostBootId: params.hostBootId } : {},
     runtimeCount: params.runtimeCount,
     supportedRequestTypes: [...import_session_host_core8.SESSION_HOST_SUPPORTED_REQUEST_TYPES],
     sessions,
@@ -2362,7 +2363,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
           const refused = (0, import_session_host_core6.refuseCleanupExpectedStop)(
             record,
             p.expected,
-            (0, import_session_host_core6.resolveHostBootId)({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt }),
+            this.currentHostBootId(),
             this.runtimes.has(p.sessionId)
           );
           if (refused) return { success: false, error: refused };
@@ -2585,10 +2586,15 @@ var SessionHostServer = class extends import_events.EventEmitter {
       console.error(`[session-host] Persist failed for ${sessionId}: ${code}: ${error?.message || error}`);
     }
   }
+  /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
+  currentHostBootId() {
+    return (0, import_session_host_core6.resolveHostBootId)({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt });
+  }
   getHostDiagnostics(payload) {
     return buildHostDiagnostics({
       payload,
       hostStartedAt: this.startedAt,
+      hostBootId: this.currentHostBootId(),
       endpointPath: this.endpoint.path,
       runtimeCount: this.runtimes.size,
       sessions: this.registry.listSessions(),

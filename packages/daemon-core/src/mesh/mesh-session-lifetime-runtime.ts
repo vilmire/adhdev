@@ -14,10 +14,15 @@ import { getQueueHeads } from './mesh-work-queue.js';
 import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 
-async function localHostBootId(control: { getDiagnostics?: (payload?: object) => Promise<{ hostStartedAt: number }> }): Promise<string | null> {
+async function localHostBootId(control: {
+    resolveHostBootId?: () => Promise<string | null> | string | null;
+    getDiagnostics?: (payload?: object) => Promise<{ hostStartedAt: number; hostBootId?: string }>;
+}): Promise<string | null> {
+    if (typeof control.resolveHostBootId === 'function') return control.resolveHostBootId();
     if (typeof control.getDiagnostics !== 'function') return null;
     try {
         const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics.hostBootId === 'string' && diagnostics.hostBootId) return diagnostics.hostBootId;
         return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt });
     } catch {
         return null;

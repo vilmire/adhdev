@@ -652,7 +652,7 @@ export class SessionHostServer extends EventEmitter {
         case 'stop_session_if_expected': {
           const p = request.payload, record = this.registry.getSession(p.sessionId);
           const refused = refuseCleanupExpectedStop(record, p.expected,
-            resolveHostBootId({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt }), this.runtimes.has(p.sessionId));
+            this.currentHostBootId(), this.runtimes.has(p.sessionId));
           if (refused) return { success: false, error: refused };
           this.stopRequests.set(p.sessionId, 'stop');
           this.registry.setLifecycle(p.sessionId, 'stopping');
@@ -916,10 +916,16 @@ export class SessionHostServer extends EventEmitter {
     }
   }
 
+  /** Single SoT for cleanup inventory + stop_session_if_expected host boot CAS. */
+  private currentHostBootId(): string | null {
+    return resolveHostBootId({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt });
+  }
+
   private getHostDiagnostics(payload?: { includeSessions?: boolean; limit?: number }): SessionHostDiagnostics {
     return buildHostDiagnostics({
       payload,
       hostStartedAt: this.startedAt,
+      hostBootId: this.currentHostBootId(),
       endpointPath: this.endpoint.path,
       runtimeCount: this.runtimes.size,
       sessions: this.registry.listSessions(),

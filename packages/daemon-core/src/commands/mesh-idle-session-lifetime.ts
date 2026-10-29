@@ -20,6 +20,8 @@ async function resolveLifetimeHostBootId(control: NonNullable<CliAgentCommandHos
     if (typeof control.getDiagnostics !== 'function') return null;
     try {
         const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics.hostBootId === 'string' && diagnostics.hostBootId) return diagnostics.hostBootId;
+        // Legacy control without resolveHostBootId / hostBootId: non-upgrade hs: only.
         return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt });
     } catch {
         return null;

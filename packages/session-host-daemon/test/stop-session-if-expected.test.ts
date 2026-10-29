@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SessionCleanupExpectedAssignment, SessionHostRecord } from '@adhdev/session-host-core';
 import { hostBootIdFromStartedAt } from '@adhdev/session-host-core';
 import { SessionHostServer } from '../src/server.js';
@@ -83,4 +86,86 @@ test('host boot mismatch refuses before touching the runtime', async () => {
     assert.equal(reply.error, 'cleanup_host_boot_mismatch');
     assert.deepEqual(stops, []);
   });
+});
+
+test('diagnostics.hostBootId matches stop_session_if_expected non-upgrade identity', async () => {
+  await fixture(async (server, _stops, _record, expected, bootId) => {
+    const diagnostics = await server.handleRequest({ type: 'get_host_diagnostics', payload: {} });
+    assert.equal(diagnostics.success, true);
+    assert.equal(diagnostics.result.hostBootId, bootId);
+    assert.equal(diagnostics.result.hostBootId, expected.hostBootId);
+  });
+});
+
+test('upgradeBinding hostBootId is lease UUID and refuses hs: inventory identity', {
+  skip: process.platform !== 'darwin',
+}, async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'cleanup-expected-upgrade-')));
+  try {
+    const helper = join(root, 'lock-helper');
+    const lockSrc = join(dirname(fileURLToPath(import.meta.url)), '../native/instance-lock.c');
+    if (!existsSync(lockSrc)) return;
+    execFileSync('/usr/bin/cc', ['-Wall', '-Wextra', '-Werror', lockSrc, '-o', helper]);
+    const pin = createHash('sha256').update(readFileSync(helper)).digest('hex');
+    const stateDir = join(root, 'state');
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    chmodSync(stateDir, 0o700);
+    const storageRootDir = join(stateDir, 'records');
+    mkdirSync(storageRootDir, { recursive: true, mode: 0o700 });
+    const server = new SessionHostServer({
+      endpoint: { kind: 'unix', path: join(root, 'host.sock') },
+      storageRootDir,
+      upgradeBinding: { helperPath: helper, helperSha256: pin, stateDir },
+    }) as any;
+    await server.upgradeLease.start();
+    try {
+      const startedAt = 1_700_000_000_000;
+      const record: SessionHostRecord = {
+        sessionId: 'session-upgrade', runtimeKey: 'native-incarnation-1', displayName: 'Worker', workspaceLabel: 'test',
+        transport: 'pty', providerType: 'codex-cli', category: 'cli', workspace: '/fake/worktree',
+        launchCommand: { command: 'fake-worker', args: [] }, osPid: 417, createdAt: startedAt, startedAt,
+        lastActivityAt: startedAt, lifecycle: 'running', writeOwner: null, attachedClients: [],
+        buffer: { scrollbackBytes: 0, snapshotSeq: 0 }, meta: { meshNodeFor: 'mesh-1', launchedByCoordinator: true },
+      };
+      server.registry.restoreSession(record);
+      const stops: string[] = [];
+      server.runtimes.set(record.sessionId, { stop: () => stops.push('stop') });
+      const bootId = server.upgradeLease.bootId as string;
+      const diagnostics = await server.handleRequest({ type: 'get_host_diagnostics', payload: {} });
+      assert.equal(diagnostics.result.hostBootId, bootId);
+      assert.notEqual(bootId, hostBootIdFromStartedAt(server.startedAt));
+      const hsRefuse = await server.handleRequest({
+        type: 'stop_session_if_expected',
+        payload: {
+          sessionId: record.sessionId,
+          expected: {
+            sessionId: record.sessionId,
+            hostBootId: hostBootIdFromStartedAt(server.startedAt),
+            runtimeKey: record.runtimeKey,
+            startedAt: record.startedAt!,
+            taskId: null, attemptId: null, generation: null, dispatchNonce: null,
+          },
+        },
+      });
+      assert.equal(hsRefuse.success, false);
+      assert.equal(hsRefuse.error, 'cleanup_host_boot_mismatch');
+      assert.deepEqual(stops, []);
+      const matched = await server.handleRequest({
+        type: 'stop_session_if_expected',
+        payload: {
+          sessionId: record.sessionId,
+          expected: {
+            sessionId: record.sessionId, hostBootId: bootId, runtimeKey: record.runtimeKey, startedAt: record.startedAt!,
+            taskId: null, attemptId: null, generation: null, dispatchNonce: null,
+          },
+        },
+      });
+      assert.equal(matched.success, true);
+      assert.deepEqual(stops, ['stop']);
+    } finally {
+      await server.upgradeLease.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

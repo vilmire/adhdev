@@ -124,6 +124,10 @@ export class SessionHostController implements SessionHostControlPlane {
         return this.plane.getDiagnostics(payload);
     }
 
+    resolveHostBootId(): Promise<string | null> {
+        return this.plane.resolveHostBootId();
+    }
+
     listSessions(): Promise<SessionHostRecord[]> {
         return this.plane.listSessions();
     }
@@ -179,7 +183,7 @@ export class SessionHostController implements SessionHostControlPlane {
         type: SessionHostRequestType;
         payload: unknown;
     }): Promise<T> {
-        const readOnly = ['list_sessions', 'get_host_diagnostics'].includes(request.type);
+        const readOnly = ['list_sessions', 'get_host_diagnostics', 'get_upgrade_lease'].includes(request.type);
         const execute = async () => {
             if (
                 this.forceDisconnectBeforeNextRequest &&

@@ -4404,6 +4404,30 @@ var require_dist = __commonJS({
         getDiagnostics(payload = {}) {
           return transport.request("get_host_diagnostics", payload);
         },
+        async resolveHostBootId() {
+          let diagnostics;
+          try {
+            diagnostics = await transport.request("get_host_diagnostics", {});
+          } catch {
+            return null;
+          }
+          if (typeof diagnostics.hostBootId === "string" && diagnostics.hostBootId) {
+            return diagnostics.hostBootId;
+          }
+          try {
+            const proof = await transport.request("get_upgrade_lease", {});
+            return resolveHostBootId({
+              upgradeBootId: typeof proof?.bootId === "string" ? proof.bootId : null,
+              hostStartedAt: diagnostics.hostStartedAt
+            });
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes("native_host_upgrade_binding_unavailable") || /unsupported|unknown request/i.test(msg)) {
+              return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt });
+            }
+            return null;
+          }
+        },
         listSessions() {
           return transport.request("list_sessions", {});
         },
@@ -127038,9 +127062,11 @@ ${asText(streams.stderr)}
       }
     });
     async function localHostBootId(control) {
+      if (typeof control.resolveHostBootId === "function") return control.resolveHostBootId();
       if (typeof control.getDiagnostics !== "function") return null;
       try {
         const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics.hostBootId === "string" && diagnostics.hostBootId) return diagnostics.hostBootId;
         return (0, import_session_host_core16.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
       } catch {
         return null;
@@ -207824,6 +207850,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (typeof control.getDiagnostics !== "function") return null;
       try {
         const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics.hostBootId === "string" && diagnostics.hostBootId) return diagnostics.hostBootId;
         return (0, import_session_host_core23.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
       } catch {
         return null;
@@ -220674,6 +220701,9 @@ ${notice.notice}${supersededHint}`;
       getDiagnostics(payload = {}) {
         return this.plane.getDiagnostics(payload);
       }
+      resolveHostBootId() {
+        return this.plane.resolveHostBootId();
+      }
       listSessions() {
         return this.plane.listSessions();
       }
@@ -220711,7 +220741,7 @@ ${notice.notice}${supersededHint}`;
         return this.plane.getSnapshot(sessionId, sinceSeq);
       }
       async request(request) {
-        const readOnly = ["list_sessions", "get_host_diagnostics"].includes(request.type);
+        const readOnly = ["list_sessions", "get_host_diagnostics", "get_upgrade_lease"].includes(request.type);
         const execute = async () => {
           if (this.forceDisconnectBeforeNextRequest && !this.forcedDisconnectInStreak && this.inFlightRequests === 0) {
             this.forceDisconnectBeforeNextRequest = false;
