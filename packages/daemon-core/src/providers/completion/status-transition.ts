@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
  * INTERACTIVE-QUESTION-EMIT, MESH-STALL-WATCH dedupe, ARCH-REFACTOR R1.
  */
 
+import { BUSY_BLIP_DAMP_MS, clearBusyBlip, dampBusyBlip } from './busy-blip-damper.js';
 import type { ProviderModule } from '../contracts.js';
 import type { ProviderEvent, ProviderErrorReason } from '../provider-instance.js';
 import type { StatusMonitor } from '../status-monitor.js';
@@ -342,6 +343,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     );
 
     const previousStatus = host.lastStatus;
+    if (newStatus !== 'generating') clearBusyBlip(host);
     if (newStatus !== host.lastStatus) {
         LOG.info('CLI', `[${host.type}] status: ${host.lastStatus} → ${newStatus}`);
         // COMPLETION-EARLYNOTIFY: snapshot every FSM status transition (the arm/fire/cancel
@@ -394,6 +396,12 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             // null, so this blip guard is a no-op and we arm normally below.)
             if (host.completedDebouncePending && host.generatingStartedAt === 0) {
                 LOG.debug('CLI', `[${host.type}] ignoring post-completion PTY generating blip (generatingStartedAt=0)`);
+                return;
+            }
+            // Flap damper: a busy frame must persist BUSY_BLIP_DAMP_MS before it may
+            // cancel an armed completion (see busy-blip-damper.ts).
+            if (host.completedDebouncePending && dampBusyBlip(host, now)) {
+                LOG.debug('CLI', `[${host.type}] busy blip right after idle — completion stays armed (<${BUSY_BLIP_DAMP_MS}ms)`);
                 return;
             }
             host.suppressIdleHistoryReplay = false;

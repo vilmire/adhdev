@@ -386,6 +386,7 @@
     "chatControls": {
         "loading": "불러오는 중…",
         "launchModelChanged": "{{from}} → {{to}} (변경됨)",
+        "launchModelFallback": "요청한 모델 {{requested}} 대신 {{actual}}로 실행됨",
         "launchModelSource": {
           "user": "선택함",
           "remembered": "기억된 값",

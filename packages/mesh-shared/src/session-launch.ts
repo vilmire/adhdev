@@ -101,6 +101,13 @@ export interface ModelSelection {
     /** Last value the provider itself reported (statusline, native history). */
     observed?: string
     observedAt?: number
+    /**
+     * The provider SILENTLY substituted another model for the requested one
+     * (antigravity: `model X is not recognized … Using "Y" instead`). `observed`
+     * then holds the model actually running. P2P/launch-record only — the
+     * server path never carries it (see the content boundary above).
+     */
+    fallback?: boolean
     /** Every value change in order. The last entry is the value in force. */
     history: ModelSelectionHistoryEntry[]
 }
@@ -206,6 +213,7 @@ function parseModelSelection(raw: unknown): ModelSelection | undefined {
     const current = readString(record.current)
     const observed = readString(record.observed)
     const observedAt = readFiniteNumber(record.observedAt)
+    const fallback = record.fallback === true
     return {
         source: isModelAxisSource(record.source) ? record.source : 'unspecified',
         ...(requested ? { requested } : {}),
@@ -214,6 +222,7 @@ function parseModelSelection(raw: unknown): ModelSelection | undefined {
         ...(current ? { current } : {}),
         ...(observed ? { observed } : {}),
         ...(observedAt !== undefined ? { observedAt } : {}),
+        ...(fallback ? { fallback } : {}),
         history: history.slice(-MODEL_SELECTION_HISTORY_LIMIT),
     }
 }

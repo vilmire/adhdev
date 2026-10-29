@@ -210,6 +210,20 @@ describe('SessionRegistry launch record', () => {
     expect(launched().map((e) => e.cause)).toEqual(['launch', 'observed'])
   })
 
+  it('a fallback observation marks the model axis and is sticky; a repeat does not duplicate history', () => {
+    const { registry, launched } = setup()
+    registry.register(target('s1'), 'launch')
+    registry.setLaunchRecord('s1', record('s1'))
+    expect(registry.observeLaunchAxis('s1', 'model', 'Gemini 4 Argon (Medium)', 2000, { fallback: true })).toBe(true)
+    // same value again: nothing new to report
+    expect(registry.observeLaunchAxis('s1', 'model', 'Gemini 4 Argon (Medium)', 2500, { fallback: true })).toBe(false)
+    const model = registry.get('s1')!.launch!.model
+    expect(model.fallback).toBe(true)
+    expect(model.observed).toBe('Gemini 4 Argon (Medium)')
+    expect(model.history.map((h) => h.via)).toEqual(['launch', 'observed'])
+    expect(launched().map((e) => e.cause)).toEqual(['launch', 'observed'])
+  })
+
   it('observing the value already in force adds no history entry', () => {
     const { registry } = setup()
     registry.register(target('s1'), 'launch')

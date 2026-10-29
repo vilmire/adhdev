@@ -150,6 +150,8 @@ export interface EvidenceHost {
     adapter: {
         getStatus(opts: { allowParse: boolean }): unknown;
         getScriptParsedStatus(): any;
+        /** cursor-cli: the answer on a settled screen (see SpecCliAdapter). Optional. */
+        readSettledScreenFinalAssistant?(): unknown[];
     };
     // Mutable evidence state (instance-owned).
     lastExternalCompletionProbe: ExternalTranscriptProbe | null;
@@ -592,6 +594,16 @@ export function completionFinalAssistantEvidence(host: EvidenceHost, parsedMessa
             messages: Array.isArray(parsedMessages) ? parsedMessages : [],
             source: 'parsed',
         };
+    }
+
+    // LAST RESORT (cursor-cli 2026-10 fleet member): neither the PTY parse nor the native
+    // transcript produced a final assistant (binding lost / idle past the window) yet the
+    // screen is settled idle with the finished answer on it. Finalize from that block
+    // rather than forcing a weak `missing_final_assistant` emit with no summary.
+    let screenFinal: unknown[] = [];
+    try { screenFinal = host.adapter.readSettledScreenFinalAssistant?.() ?? []; } catch { screenFinal = []; }
+    if (screenFinal.length > 0 && host.completionHasFinalAssistantMessage(screenFinal, turnStartedAt)) {
+        return { present: turnClosed, messages: screenFinal, source: 'parsed' };
     }
 
     return {

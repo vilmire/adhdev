@@ -155,6 +155,32 @@ describe('cursor nativeHistory jsonl', () => {
         expect(assistant.map((m: any) => m.content)).toEqual(['391']);
     });
 
+    it('drops standalone [REDACTED] bubbles and strips leading/trailing/inner placeholder paragraphs', () => {
+        const dir = path.join(projectsDir, cursorSlug(WORKSPACE), 'agent-transcripts', SESSION_ID);
+        fs.mkdirSync(dir, { recursive: true });
+        const rec = (role: string, text: string) => JSON.stringify({ role, message: { content: [{ type: 'text', text }] } });
+        fs.writeFileSync(path.join(dir, `${SESSION_ID}.jsonl`), [
+            rec('user', '<user_query>\nhi\n</user_query>'),
+            rec('assistant', '[REDACTED]'),
+            rec('assistant', '[REDACTED]\n\nfirst'),
+            rec('assistant', 'second\n\n[REDACTED]'),
+            rec('assistant', 'third\n\n[REDACTED]\n\nfourth'),
+        ].join('\n') + '\n', 'utf8');
+        const r = run({ providerSessionId: SESSION_ID, workspace: WORKSPACE, sessionStartedAtMs: 0 });
+        const assistant = r!.messages.filter((m: any) => m.role === 'assistant');
+        expect(assistant.map((m: any) => m.content)).toEqual(['first', 'second', 'third\n\nfourth']);
+    });
+
+    it('keeps provider.v1.json and specs/1.0.json native_history maps in sync (live daemon reads the spec)', () => {
+        // Live 2026-10-29: [REDACTED] kept appearing because only provider.v1.json
+        // declared content_strip_literals while the CLI adapter reads
+        // specs/1.0.json native_history. Both must carry the same message_map.
+        const root = new URL('../../../../../../adhdev-providers/cli/cursor-cli/', import.meta.url);
+        const v1 = JSON.parse(fs.readFileSync(new URL('provider.v1.json', root), 'utf8'));
+        const spec = JSON.parse(fs.readFileSync(new URL('specs/1.0.json', root), 'utf8'));
+        expect(spec.native_history.source.message_map).toEqual(v1.nativeHistory.source.message_map);
+    });
+
     it('does not stamp a mismatched workspace (no cross-workspace aliasing)', () => {
         // The exact-session file still resolves by uuid, but because the file does
         // not live under the requested workspace's slug the workspace must stay

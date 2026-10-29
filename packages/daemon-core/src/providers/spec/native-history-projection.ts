@@ -256,7 +256,11 @@ function cleanContent(input: string, map: NativeHistoryMessageMap): string {
     }
     if (content && map.content_strip_literals) {
         for (const literal of map.content_strip_literals) {
-            if (literal) content = content.split(literal).join('');
+            if (!literal || !content.includes(literal)) continue;
+            content = content.split(literal).join('');
+            // A placeholder that sat on its own paragraph leaves a blank-line gap
+            // behind (leading/trailing is handled by the trim below; inner gaps here).
+            content = content.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n');
         }
     }
     return content ? content.trim() : '';

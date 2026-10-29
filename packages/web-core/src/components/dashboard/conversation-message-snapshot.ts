@@ -512,7 +512,15 @@ function isConversationAnchorMessage(message: DashboardMessage): boolean {
     const role = String(message.role || '').toLowerCase()
     if (role !== 'user' && role !== 'assistant') return false
     const kind = String((message as { kind?: unknown }).kind || 'standard').toLowerCase()
-    return kind === '' || kind === 'standard'
+    if (!(kind === '' || kind === 'standard')) return false
+    // An EMPTY-content row renders as nothing, so it is not a visible anchor: a
+    // tail of tool/thought rows + an empty assistant row used to count as
+    // "assistant visible" and left the pane with zero bubbles.
+    const content = (message as { content?: unknown }).content
+    if (content == null) return false
+    if (typeof content === 'string') return content.trim() !== ''
+    if (Array.isArray(content)) return content.length > 0
+    return true
 }
 
 function conversationAnchorRole(message: DashboardMessage): 'user' | 'assistant' | '' {
@@ -600,6 +608,18 @@ function getConversationAnchorMessages(
             // unless the visible window already shows a user bubble.
             if (!visibleUserVisible) rescued.unshift(message)
             break
+        }
+    }
+    if (rescued.length === 0 && !visibleUserVisible) {
+        // The visible slice has no real bubble at all (only tool/thought rows
+        // and empty rows) and the hidden tail has no assistant answer either:
+        // pull the newest hidden real bubble (a user prompt) forward so the
+        // pane never opens blank while older rows exist.
+        for (let i = hiddenLiveMessages.length - 1; i >= 0; i -= 1) {
+            if (conversationAnchorRole(hiddenLiveMessages[i])) {
+                rescued.push(hiddenLiveMessages[i])
+                break
+            }
         }
     }
     return rescued

@@ -386,6 +386,7 @@
     "chatControls": {
         "loading": "加载中…",
         "launchModelChanged": "{{from}} → {{to}}（已更改）",
+        "launchModelFallback": "请求的模型 {{requested}} 不可用，已改用 {{actual}} 运行",
         "launchModelSource": {
           "user": "已选择",
           "remembered": "已记住",

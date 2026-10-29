@@ -144,6 +144,23 @@ export function transcriptClaimOwner(key: string, now: number = Date.now()): str
 }
 
 
+/** Keys currently recorded as held by `owner` (live by definition: an owner
+ *  asking about its own claims is running). Lets a resolver re-use the
+ *  transcript a session already bound instead of re-deriving it from recency. */
+export function transcriptKeysOwnedBy(owner: string): string[] {
+  if (!owner) return [];
+  const out: string[] = [];
+  for (const [key, claim] of claimsByKey) if (claim.owner === owner) out.push(key);
+  return out;
+}
+
+/** True when `key` has a claim record held by someone ELSE, live or not. A
+ *  prompt match alone is not enough to take such a transcript over. */
+export function hasForeignClaimRecord(key: string, owner: string): boolean {
+  const existing = claimsByKey.get(normalizeKey(key));
+  return !!existing && existing.owner !== owner;
+}
+
 /** Release every key held by `owner` (called on session shutdown). */
 export function releaseTranscriptOwner(owner: string): void {
   if (!owner) return;

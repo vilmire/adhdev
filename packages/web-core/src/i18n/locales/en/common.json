@@ -386,6 +386,7 @@
     "chatControls": {
         "loading": "Loading…",
         "launchModelChanged": "{{from}} → {{to}} (changed)",
+        "launchModelFallback": "Requested model {{requested}} was not available - running {{actual}} instead",
         "launchModelSource": {
           "user": "chosen",
           "remembered": "remembered",

@@ -57,6 +57,7 @@ import * as approvalGate from './completion/approval-gate.js';
 import * as evidence from './completion/evidence.js';
 import { runStatusTransitionTick } from './completion/status-transition.js';
 import type { SessionEventPort } from './provider-event-port.js';
+import { scanModelFallback } from './cli-provider-model-fallback.js';
 import type { TurnEvidencePort } from './turn-evidence-port.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { AdapterChangeCause } from '../cli-adapter-types.js';
@@ -407,6 +408,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     async onTick(): Promise<void> {
+        scanModelFallback(this);
         if (this.providerSessionId) return;
         if (this.provider.resume?.skipProbeOnNewSession && this.launchMode === 'new') return;
 

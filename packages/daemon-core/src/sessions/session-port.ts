@@ -47,6 +47,12 @@ export interface SessionEventPort {
      * states so status builders can publish it over P2P.
      */
     launchRecord?(sessionId: string): Readonly<SessionLaunchRecord> | undefined;
+    /**
+     * The provider reported the model it is really running (screen warning,
+     * not a transcript). `fallback` marks a silent substitution of the
+     * requested model. Narrow write into the registry's launch record.
+     */
+    observeLaunchModel?(sessionId: string, value: string, observedAt: number, opts?: { fallback?: boolean }): void;
 }
 
 export interface CreateSessionEventPortOptions {
@@ -89,6 +95,9 @@ export function createSessionEventPort(
         },
         launchRecord(sessionId) {
             return registry.get(sessionId)?.launch;
+        },
+        observeLaunchModel(sessionId, value, observedAt, opts) {
+            registry.observeLaunchAxis(sessionId, 'model', value, observedAt, opts);
         },
     };
 }

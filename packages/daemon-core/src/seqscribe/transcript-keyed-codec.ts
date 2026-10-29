@@ -91,11 +91,24 @@ export function parseChatKey(key: string): { id: string; k: number | null } | nu
 export const CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
 
 /**
- * Live bytes kept per session (owner decision Q1, §11). Beyond it the oldest
- * bubbles are tombstoned and `coverage.omittedBefore` turns true; the full
- * record stays in the provider's own history file.
+ * Live bytes kept per session (owner decision Q1, §11; lowered 16 MiB -> 2 MiB
+ * on 2026-10-29). Beyond it the oldest bubbles are tombstoned and
+ * `coverage.omittedBefore` turns true; the full record stays in the provider's
+ * own history file (dashboards page older rows through `chat_history`).
+ *
+ * Why 2 MiB: the tail SNAP is `latestPerKey ∪ rowsAfter` — the WHOLE live set —
+ * so this cap is also the first-SNAP size. At 16 MiB a 4k-bubble coordinator
+ * produced ~4 MiB SNAPs per subscriber; the lane backpressured and seqscribe
+ * re-sent coalesced SNAPs in a loop (~130 resyncs / 12 h), leaving the
+ * dashboard with no keyed frame ("empty chat until load earlier"). We cannot
+ * send a smaller SNAP than the live set without breaking the commit digest
+ * (SHA-256 over ALL live (id, rev) pairs, verified by the reader), so the
+ * digest-preserving way to bound the SNAP is to bound the live set itself:
+ * the oldest bubbles are tombstoned (omittedBefore=true) and old rows come
+ * from `chat_history`. Trade-off: keyed-lane readers see ~2 MiB of recent
+ * bubbles instead of ~16 MiB; the provider history file is unchanged.
  */
-export const CHAT_LIVE_BYTES_MAX = 16 * 1024 * 1024;
+export const CHAT_LIVE_BYTES_MAX = 2 * 1024 * 1024;
 
 /** Presentation strings in `meta` are bounded so the entry stays far below 64 KiB. */
 export const CHAT_META_TEXT_MAX = 16 * 1024;

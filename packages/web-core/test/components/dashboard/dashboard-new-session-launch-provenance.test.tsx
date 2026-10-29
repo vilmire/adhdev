@@ -209,6 +209,13 @@ describe('session launch chip', () => {
         expect(formatSessionLaunchChip(readSessionLaunchSurface({ launch: record }))?.text).toBe('sonnet → opus (changed)')
     })
 
+    it('warns when the provider silently ran another model than requested', () => {
+        const record = { ...launch, model: { requested: 'Claude Opus 4.6 (Thinking)', source: 'user', launchValue: 'claude-opus-4-6-thinking', observed: 'Gemini 4 Argon (Medium)', observedAt: 5, fallback: true, history: [{ at: 1, value: 'claude-opus-4-6-thinking', via: 'launch' }, { at: 5, value: 'Gemini 4 Argon (Medium)', via: 'observed' }] } }
+        const chip = formatSessionLaunchChip(readSessionLaunchSurface({ launch: record }))
+        expect(chip?.warning).toBe(true)
+        expect(chip?.text).toBe('Requested model Claude Opus 4.6 (Thinking) was not available - running Gemini 4 Argon (Medium) instead')
+    })
+
     it('falls back to the server-projected model / modelSource before P2P', () => {
         expect(formatSessionLaunchChip(readSessionLaunchSurface({ model: 'opus', modelSource: 'mesh_slot' }))?.text).toBe('opus · mesh slot')
         expect(formatSessionLaunchChip(readSessionLaunchSurface({ model: 'opus', modelSource: 'bogus' }))?.text).toBe('opus')

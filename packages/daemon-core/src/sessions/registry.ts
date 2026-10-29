@@ -228,15 +228,21 @@ export class SessionRegistry {
      * transcript re-read of old lines cannot roll it back), and a repeat of the
      * same value only refreshes `observedAt` — no history entry, no event.
      */
-    observeLaunchAxis(sessionId: string | undefined | null, axis: LaunchAxis, value: string | undefined | null, observedAt: number): boolean {
+    observeLaunchAxis(sessionId: string | undefined | null, axis: LaunchAxis, value: string | undefined | null, observedAt: number, opts: { fallback?: boolean } = {}): boolean {
         const target = sessionId ? this.bySessionId.get(sessionId) : undefined;
         const next = typeof value === 'string' ? value.trim() : '';
         if (!target?.launch || !next || !Number.isFinite(observedAt)) return false;
         const selection = target.launch[axis];
         if (typeof selection.observedAt === 'number' && observedAt < selection.observedAt) return false;
+        // `fallback`: the provider reported running `next` INSTEAD of the request
+        // (a silent substitution). Sticky for the session; set before the
+        // same-value early return so a repeat observation can still raise it.
+        const raisesFallback = opts.fallback === true && selection.fallback !== true;
+        if (raisesFallback) selection.fallback = true;
         if (selection.observed === next) {
             selection.observedAt = observedAt;
-            return false;
+            if (raisesFallback) this.emitLaunchUpdated(target, 'observed');
+            return raisesFallback;
         }
         selection.observed = next;
         selection.observedAt = observedAt;

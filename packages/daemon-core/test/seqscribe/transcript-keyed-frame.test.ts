@@ -113,7 +113,7 @@ describe('KeyedChatSessionState — large bubbles (§4.6)', () => {
 });
 
 describe('KeyedChatSessionState — live cap (§11 Q1)', () => {
-    it('beyond 16 MiB the oldest bubbles are tombstoned and coverage.omittedBefore turns true', () => {
+    it('beyond the live cap the oldest bubbles are tombstoned and coverage.omittedBefore turns true', () => {
         const driver = new FrameDriver();
         const big = Math.floor(CHAT_LIVE_BYTES_MAX / 3) - 1024; // three fit (with head overhead), four do not
         const specs = [0, 1, 2, 3].map((i) => ({ id: `d.c.${i + 1}`, ord: ordOf(i), text: filler(i, big) }));
@@ -254,4 +254,20 @@ describe('frames fold back into the same view (producer ↔ KeyedTranscriptFolde
         expect(view.messages.map((m) => [m.messageId, m.content])).toEqual(specs.map((s) => [s.id, s.text]));
         expect(folder.stats().rejectedRows).toBe(0);
     });
+});
+
+describe('KeyedChatSessionState — bounded first tail SNAP (2026-10-29)', () => {
+    it('a 4k-bubble session keeps the live set (= tail SNAP) within the live cap and flags omittedBefore', () => {
+        const driver = new FrameDriver();
+        const specs = Array.from({ length: 4283 }, (_, i) => ({ id: `d.big.${i + 1}`, ord: ordOf(i), text: filler(i, 2048) }));
+        const frame = driver.step(observation(specs))!;
+        expect(frame.capped).toBe(true);
+        expect(driver.state.liveBytes()).toBeLessThanOrEqual(CHAT_LIVE_BYTES_MAX);
+        expect(CHAT_LIVE_BYTES_MAX).toBeLessThanOrEqual(2 * 1024 * 1024);
+        const live = frame.commit.liveCount;
+        expect(live).toBeGreaterThan(100);
+        expect(live).toBeLessThan(4283);
+        const meta = frame.rows.find((r) => r.kind === CHAT_META_KIND)!.payload as { coverage: { omittedBefore: boolean } };
+        expect(meta.coverage.omittedBefore).toBe(true);
+    }, 60_000);
 });

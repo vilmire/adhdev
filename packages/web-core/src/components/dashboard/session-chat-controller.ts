@@ -192,7 +192,12 @@ export function buildEmptySnapshot(): SessionChatSnapshot {
         hasLiveSnapshot: false,
         historyMessages: [],
         historyOffset: 0,
-        hasMoreHistory: true,
+        // False until a live snapshot (omittedBefore) or a history result says
+        // otherwise. `true` here used to hide the "awaiting first view"
+        // placeholder (ChatMessageList treated "more history" as content), so a
+        // slow first keyed frame left a blank pane with only the load-earlier
+        // button.
+        hasMoreHistory: false,
         historyError: null,
         omittedBefore: false,
     }

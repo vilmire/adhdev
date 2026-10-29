@@ -95,7 +95,7 @@ describe('committed keyed views', () => {
     const snapshot = controller().getSnapshot()
     expect(snapshot.hasLiveSnapshot).toBe(false)
     expect(snapshot.liveMessages).toEqual([])
-    expect(snapshot.hasMoreHistory).toBe(true)
+    expect(snapshot.hasMoreHistory).toBe(false)
   })
 
   it('applies a committed view as the live window, in ord order, keyed by messageId', () => {

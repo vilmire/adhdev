@@ -55,6 +55,11 @@
         }
       }
     },
+    "joinAdjacentLines": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, a role line immediately after a same-role line (no blank line, chrome line or other role between) is the soft-wrapped continuation of that message and is joined to it instead of starting a new message. cursor-agent wraps its plain answer at the terminal width. Boxed (userBackgroundSgr) lines are always merged this way."
+    },
     "chromePatterns": {
       "type": "array",
       "items": {

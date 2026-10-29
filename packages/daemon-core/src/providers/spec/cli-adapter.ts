@@ -82,6 +82,7 @@ import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
 import { RawTail, TailReadBudget } from './raw-tail.js';
 import { recordSentPrompt } from '../native-history/sent-prompt-registry.js';
+import { readSettledCursorScreen } from './cursor-screen-messages.js';
 import { Win32RawInputWriter } from './win32-raw-input-writer.js';
 
 /** What the adapter reports on PTY death (replaces the deleted shared/session-termination-sink). */
@@ -1168,6 +1169,8 @@ export class SpecCliAdapter implements CliAdapter {
         return extractCodexSessionIdFromScreen(screenText) || this.providerSessionId;
     }
 
+    /** cursor-cli only: settled-screen final answer (completion last resort; see cursor-screen-messages.ts). */
+    readSettledScreenFinalAssistant(): ChatMessage[] { return this.cliType === 'cursor-cli' ? readSettledCursorScreen(() => this.driver.snapshot(), this.owningSessionId) : []; }
     /** PTY-scrape assistant bubbles — see scrapeScreenAssistantMessages. */
     private readScreenAssistantMessages(): ChatMessage[] {
         if (!screenScrapeSupported(this.cliType)) return [];

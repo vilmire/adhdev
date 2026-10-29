@@ -513,7 +513,7 @@ export class KeyedChatSessionState {
             windowRetained.clear();
         }
 
-        // ── §11 Q1 live cap: tombstone the oldest bubbles beyond 16 MiB ──────
+        // ── §11 Q1 live cap: tombstone the oldest bubbles beyond CHAT_LIVE_BYTES_MAX (2 MiB) ──────
         const byOrd: Array<{ id: string; ord: string; bytes: number }> = [
             ...observed.map((b) => ({ id: b.id, ord: b.ord, bytes: b.bytes })),
             ...Array.from(retained, (id) => {

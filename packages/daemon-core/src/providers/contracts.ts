@@ -534,6 +534,17 @@ export interface ProviderModule {
    */
   modelLaunchValueMap?: Record<string, string>;
   /**
+   * Optional: a TUI warning the CLI prints when it SILENTLY runs a different
+   * model than the one requested via `modelLaunchArgs` (antigravity: `model
+   * claude-opus-4-6-thinking is not recognized … Using "Gemini 4 Argon (Medium)"
+   * instead.`). `pattern` is a regex matched against the rendered screen; its
+   * first capture group (or the named group `actual`) is the model really in
+   * use. A match is recorded on the session's launch record (`model.observed`
+   * + `model.fallback`) and the dashboard shows a warning instead of letting the
+   * wrong model pass unnoticed. Only consulted when a model was requested.
+   */
+  modelFallbackWarning?: { pattern: string; flags?: string };
+  /**
    * BRAIN-ROUTING (model axis): suggested model values for this provider, surfaced
    * as dropdown options in the new-session dialog (e.g. claude ['opus','sonnet',
    * 'haiku']; codex ['gpt-5.5','gpt-5-codex']). Advisory only — the UI allows free

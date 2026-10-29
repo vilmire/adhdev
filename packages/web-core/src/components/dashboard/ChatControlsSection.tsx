@@ -57,8 +57,23 @@ function interpolateDefault(_key: string, options: Record<string, unknown>): str
 export function formatSessionLaunchChip(
     surface: SessionLaunchSurface,
     t: Translate = interpolateDefault,
-): { text: string; source: ModelAxisSource } | null {
+): { text: string; source: ModelAxisSource; warning?: boolean } | null {
     const described = surface.launch ? describeModelSelection(surface.launch.model) : undefined
+    // The provider silently ran another model than the one requested (e.g.
+    // antigravity "model X is not recognized ... Using Y instead"): say so
+    // loudly rather than showing the requested model as if it were running.
+    const fallbackModel = surface.launch?.model
+    if (fallbackModel?.fallback && fallbackModel.observed) {
+        return {
+            text: t('chatControls.launchModelFallback', {
+                requested: fallbackModel.requested ?? described?.changedFrom ?? '?',
+                actual: fallbackModel.observed,
+                defaultValue: 'Requested model {{requested}} was not available - running {{actual}} instead',
+            }),
+            source: described?.source ?? surface.modelSource ?? 'unspecified',
+            warning: true,
+        }
+    }
     const value = described?.value ?? surface.model
     if (!value) return null
     const source: ModelAxisSource = described?.source ?? surface.modelSource ?? 'unspecified'
@@ -84,9 +99,13 @@ export function SessionLaunchChip({ surface }: { surface: SessionLaunchSurface }
     if (!chip) return null
     return (
         <span
-            className="inline-flex items-center rounded-full border border-border-subtle px-2 py-0.5 text-2xs text-text-muted"
+            className={chip.warning
+                ? 'inline-flex items-center rounded-full border border-yellow-500/40 bg-yellow-500/10 px-2 py-0.5 text-2xs text-yellow-400'
+                : 'inline-flex items-center rounded-full border border-border-subtle px-2 py-0.5 text-2xs text-text-muted'}
             data-testid="session-launch-chip"
             data-model-source={chip.source}
+            data-model-fallback={chip.warning ? 'true' : undefined}
+            {...(chip.warning ? { role: 'status', title: chip.text } : {})}
         >
             {chip.text}
         </span>

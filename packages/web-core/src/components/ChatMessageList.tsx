@@ -634,7 +634,8 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 </div>
             )}
 
-            {items.length === 0 && !hasMoreVisibleContent && (
+            {/* Never a blank pane: show the empty/loading state whenever nothing renders, even with the load-earlier button above it. */}
+            {items.length === 0 && (
                 emptyState || (
                     <div className="text-center mt-16 opacity-20 text-xxs">
                         {t('chatList.waitingForMessages')}

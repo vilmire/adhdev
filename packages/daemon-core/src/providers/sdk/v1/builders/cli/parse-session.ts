@@ -43,6 +43,14 @@ export interface TranscriptPtySpec {
     userPrefix?: PrefixSpec
     toolPrefix?: ToolPrefixSpec
     continuationLine?: { indented?: boolean }
+    /**
+     * When true, a role line IMMEDIATELY after a same-role line (no blank line,
+     * chrome line or other role in between) is the soft-wrapped continuation of
+     * that message, not a new message (cursor-agent wraps both the boxed prompt
+     * and the plain answer at the terminal width). Boxed (background-SGR) user
+     * lines are merged this way regardless of this flag.
+     */
+    joinAdjacentLines?: boolean
     chromePatterns?: ChromePatternSpec[]
     stripLeadingChrome?: boolean
     scope?: 'screen' | 'buffer' | 'tail'
@@ -271,6 +279,7 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
         new RegExp(p.regex, p.flags || ''))
     const requireIndentForContinuation = spec.transcriptPty.continuationLine?.indented ?? false
     const stripLeadingChrome = spec.transcriptPty.stripLeadingChrome ?? true
+    const joinAdjacent = spec.transcriptPty.joinAdjacentLines ?? false
     const scope = spec.transcriptPty.scope ?? 'buffer'
     // Background-SGR user-turn markers. A raw line whose ANSI carries one of
     // these `48;5;NNN`-style background codes is a user turn even when its
@@ -329,11 +338,20 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
 
         const messages: SynthesizedMessage[] = []
         let seenFirstRoleLine = !stripLeadingChrome
+        // Role of the message the previous physical line belonged to, while the
+        // lines stay contiguous (see joinAdjacentLines). Reset by blank/chrome lines.
+        let adjacentRole: 'user' | 'assistant' | null = null
+        let adjacentUserBox = false
 
         for (const entry of rawLines) {
             const line = entry.text
             if (line.trim() === '') {
                 // Blank line: ends streaming continuation but doesn't add a message.
+                // A background-padded blank row is still INSIDE a user box.
+                if (!(adjacentUserBox && entry.raw && userBgRes.some(re => re.test(entry.raw)))) {
+                    adjacentRole = null
+                    adjacentUserBox = false
+                }
                 continue
             }
 
@@ -342,7 +360,7 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
             for (const cre of chromeRes) {
                 if (cre.test(line)) { isChrome = true; break }
             }
-            if (isChrome) continue
+            if (isChrome) { adjacentRole = null; adjacentUserBox = false; continue }
 
             // Background-SGR user classification. Checked before prefix matching
             // so a user turn rendered as a bg-boxed plain line (no distinctive
@@ -353,9 +371,14 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
                 seenFirstRoleLine = true
                 // Strip a leading composer glyph (e.g. "→ ") the boxed echo may carry.
                 const content = line.replace(/^\s*[→>›❯]\s*/, '').trim()
-                if (content) messages.push({ role: 'user', kind: 'standard', content })
+                const lastUser = messages[messages.length - 1]
+                if (content && adjacentUserBox && lastUser?.role === 'user') lastUser.content = `${lastUser.content} ${content}`
+                else if (content) messages.push({ role: 'user', kind: 'standard', content })
+                adjacentRole = 'user'
+                adjacentUserBox = true
                 continue
             }
+            adjacentUserBox = false
 
             // Role detection
             const userMatch = userRe ? line.match(userRe) : null
@@ -378,7 +401,11 @@ export function buildParseSessionFromTui(spec: ParseSessionTuiSpec): (input: any
             if (assistMatch) {
                 seenFirstRoleLine = true
                 const content = (assistMatch[1] ?? assistMatch[0]).trim()
-                if (content) messages.push({ role: 'assistant', kind: 'standard', content })
+                const lastAssistant = messages[messages.length - 1]
+                if (content && joinAdjacent && adjacentRole === 'assistant' && lastAssistant?.role === 'assistant' && lastAssistant.kind === 'standard') {
+                    lastAssistant.content = `${lastAssistant.content}\n${content}`
+                } else if (content) messages.push({ role: 'assistant', kind: 'standard', content })
+                adjacentRole = content ? 'assistant' : null
                 continue
             }
 

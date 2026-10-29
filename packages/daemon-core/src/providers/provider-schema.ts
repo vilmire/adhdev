@@ -85,6 +85,7 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   // stops drifting in both directions. Read-only; the result is a runtime
   // overlay and is never written back into this manifest (digest-verified).
   'modelDiscovery',
+  'modelFallbackWarning',
   'thinkingLaunchArgs',
   'thinkingLevelMap',
   'thinkingLevelOptions',

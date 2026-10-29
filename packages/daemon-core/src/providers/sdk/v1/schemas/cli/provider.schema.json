@@ -329,6 +329,22 @@
       },
       "description": "Suggested model values shown as dropdown options in the new-session dialog (brain-routing model axis), e.g. ['opus','sonnet','haiku']. Advisory — the UI still accepts free text, so a stale list never blocks an accepted model."
     },
+    "modelFallbackWarning": {
+      "type": "object",
+      "required": ["pattern"],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Regex matched against the rendered screen. Its first capture group (or the named group `actual`) is the model the CLI really runs."
+        },
+        "flags": {
+          "type": "string"
+        }
+      },
+      "description": "Optional: the TUI warning a CLI prints when it silently substitutes another model for the one requested via modelLaunchArgs (e.g. antigravity: model X is not recognized ... Using \"Y\" instead). A match is recorded on the session launch record (model.observed + model.fallback) and surfaced as a dashboard warning."
+    },
     "thinkingLaunchArgs": {
       "type": "array",
       "items": {

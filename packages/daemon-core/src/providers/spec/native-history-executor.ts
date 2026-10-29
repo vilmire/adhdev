@@ -45,6 +45,7 @@ import {
     collectSidecarSourceEvidenceAsync, refreshSidecarPromptEvidenceAsync, sourceRevisionAsync, type SidecarSourceEvidence, type SidecarSourceCandidate,
 } from './native-history-paths.js';
 export { claimKeyForPath } from './native-history-paths.js';
+import { pinnedTranscript, rankPromptEvidenceCandidates } from './native-history-prompt-bind.js';
 import {
     containsSentPrompt, hasExclusiveSentInput, hasRecordedSentInput, sentPromptSnippets,
 } from '../native-history/sent-prompt-registry.js';
@@ -734,7 +735,7 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
             if (exact) claimOwnTranscript(exact, input);
             sourcePath = exact || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint);
             if (!sourcePath) {
-                return pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input);
+                return pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input, filePat, sessionFloor);
             }
         }
     } else {
@@ -756,7 +757,7 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
             sourcePath = exact
                 || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint));
             if (!sourcePath && !requestedSessionId) {
-                const pick = pickRecentByPromptEvidence(recentFiles(resolved, filePat, windowMs, sessionFloor), input);
+                const pick = pickRecentByPromptEvidence(recentFiles(resolved, filePat, windowMs, sessionFloor), input, filePat, sessionFloor);
                 if (pick.path) return pick;
             }
         }
@@ -871,13 +872,18 @@ function claimOwnTranscript(p: string, input: NativeHistoryInput): void {
  *   - with no recorded prompts (attached/restored session) the newest unclaimed
  *     transcript is returned unconfirmed, as before.
  */
-function pickRecentByPromptEvidence(candidates: string[], input: NativeHistoryInput): JsonlSourceResolution {
+function pickRecentByPromptEvidence(candidates: string[], input: NativeHistoryInput, filePat: RegExp, floorMs: number): JsonlSourceResolution {
     const owner = transcriptClaimOwnerToken(input.instanceId);
     if (!owner) return { path: candidates[0] ?? null };
+    // PIN: a transcript this session already holds is kept regardless of the
+    // recency window (see native-history-prompt-bind.ts).
+    const pinned = pinnedTranscript(owner, filePat);
+    if (pinned) return { path: candidates.find(c => claimKeyForPath(c) === pinned) ?? pinned, outcome: { attribution: 'claimed', ownerConfirmed: true } };
     const unclaimed = candidates.filter(p => !isTranscriptClaimedByOther(claimKeyForPath(p), owner));
     const snippets = sentPromptSnippets(input.instanceId);
     if (snippets.length === 0) return { path: unclaimed[0] ?? null };
-    const own = unclaimed.find(p => containsSentPrompt(readForPromptEvidence(p), snippets));
+    const matching = unclaimed.filter(p => containsSentPrompt(readForPromptEvidence(p), snippets));
+    const own = rankPromptEvidenceCandidates(matching, owner, floorMs, snippets[0])[0];
     if (!own) {
         if (unclaimed.length > 0) LOG.debug('TranscriptClaim', `decision=no_prompt_evidence provider=${input.agentType || '?'} owner=${owner} candidates=${unclaimed.length} → unresolved (no borrowed transcript)`);
         return { path: null };

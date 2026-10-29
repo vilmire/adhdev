@@ -579,7 +579,12 @@ async function readCliNativeHistoryForReadChat(
     // the user echo → fail-closed → regress to pty-parser (user-echo only).
     // Trusting the owner-confirmed uuid lets the assistant answer reach the
     // dashboard on the FIRST read.
-    const ownerConfirmedUuid = (adapter.cliType === 'antigravity-cli' || adapter.cliType === 'codex-cli')
+    // cursor-cli: cursor-agent exposes no --session-id, so the only identity proof is
+    // the claim transaction in native-history-executor (prompt evidence + exclusive
+    // per-session transcript claim). `ownerConfirmed` is only set there on a pinned/
+    // claimed/spawn-evidence pick; ambiguous or foreign-claimed files fail closed
+    // with ownerConfirmed=false, so honouring it here keeps those cases strict.
+    const ownerConfirmedUuid = (adapter.cliType === 'antigravity-cli' || adapter.cliType === 'codex-cli' || adapter.cliType === 'cursor-cli')
         && (nativeHistory as any)?.ownerConfirmed === true
         && typeof historyProviderSessionId === 'string'
         && historyProviderSessionId.trim()
