@@ -165,19 +165,58 @@ export async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.e
   throw new Error('cyclic superproject config lookup; refusing public publish');
 }
 
-/** Approval identity comes ONLY from every effective push destination.
- * Non-exact hosts (including GitHub redirects), local mirrors and unknown paths
- * are public but supply no approval key. Never borrow origin/checkout metadata.
- */
-export async function publicPushRepoKeys(cwd, remoteName = 'origin') {
-  const { urls } = await pushDestinations(cwd, remoteName);
-  return urls.map(url => {
-    const parsed = parseRemoteDetails(url);
-    const defaultPort = { 'https:': '443', 'http:': '80', 'ssh:': '22', 'git:': '9418' }[parsed?.protocol];
-    const repoKey = parsed?.privateEligible && parsed.host === 'github.com' && parsed.port === defaultPort && REPO_KEYS.get(parsed.path);
-    if (!repoKey) throw new Error('publish_approval_required: unknown push destination repository identity; configure a named remote with an exact canonical GitHub push URL');
-    return { url, repoKey };
+/** Stable approval identity is independent of visibility. Only exact canonical
+ * GitHub HTTPS/SSH paths qualify; aliases must first resolve through Git. */
+export class PublishDestinationError extends Error {
+  constructor(code, message) { super(`${code}: ${message}`); this.code = code; }
+}
+export function canonicalPushIdentity(value) {
+  const parsed = parseRemoteDetails(value);
+  if (!parsed?.privateEligible || parsed.host !== 'github.com'
+      || !((parsed.protocol === 'https:' && parsed.port === '443') || (parsed.protocol === 'ssh:' && parsed.port === '22'))
+      || !/^[a-z0-9-]+\/[a-z0-9_.-]+$/.test(parsed.path)) {
+    throw new PublishDestinationError('publish_destination_malformed', 'unknown push destination identity; configure a named remote with an exact canonical GitHub HTTPS/SSH URL');
+  }
+  return `github.com/${parsed.path}`;
+}
+
+/** Additional repositories require committed policy in the same authenticated,
+ * digest-pinned private-root patterns document. Local remote flags cannot grant
+ * visibility. Public built-ins cannot be downgraded by configuration. */
+export async function resolvePushPolicy(cwd, remoteName = 'origin') {
+  const destinations = await pushDestinations(cwd, remoteName);
+  const identities = destinations.urls.map(canonicalPushIdentity);
+  let configured = {};
+  if (identities.some(identity => !REPO_KEYS.has(identity.slice('github.com/'.length)))) {
+    let patterns;
+    try { patterns = await loadPublicPushPatternsForRepo(cwd); }
+    catch { throw new PublishDestinationError('publish_policy_unmapped', 'push destination visibility requires committed private-root repository policy'); }
+    configured = patterns.repositories || {};
+    if (!configured || typeof configured !== 'object' || Array.isArray(configured)) {
+      throw new PublishDestinationError('publish_policy_unmapped', 'invalid repository visibility policy');
+    }
+  }
+  const keyed = identities.map((identity, index) => {
+    const path = identity.slice('github.com/'.length);
+    const builtIn = REPO_KEYS.get(path);
+    const visibility = builtIn ? (path === 'vilmire/adhdev-cloud' ? 'private' : 'public') : configured[identity];
+    if (visibility !== 'public' && visibility !== 'private') {
+      throw new PublishDestinationError('publish_policy_unmapped', 'unknown push destination visibility; configure committed repository policy before requesting approval');
+    }
+    return { url: destinations.urls[index], repoKey: builtIn || identity, visibility };
   });
+  // Every raw URL must independently prove private; a rewrite cannot downgrade
+  // a public configured destination, and an alias supplies no private evidence.
+  const isPrivate = value => {
+    let identity;
+    try { identity = canonicalPushIdentity(value); } catch { return false; }
+    const path = identity.slice('github.com/'.length);
+    return REPO_KEYS.has(path) ? path === 'vilmire/adhdev-cloud' : configured[identity] === 'private';
+  };
+  return { urls: destinations.urls, isPublic: [...destinations.urls, ...destinations.configuredUrls].some(url => !isPrivate(url)), keyed };
+}
+export async function publicPushRepoKeys(cwd, remoteName = 'origin') {
+  return (await resolvePushPolicy(cwd, remoteName)).keyed.map(({ url, repoKey }) => ({ url, repoKey }));
 }
 
 export async function publicPushRepoKey(cwd, remoteName = 'origin') {
@@ -197,7 +236,7 @@ export async function pushDestinations(cwd, remoteName = 'origin') {
   const all = [...urls, ...configured.replace(/\n$/, '').split('\n')];
   // Local adhdev-private markers cannot broaden this allow-list. Every URL,
   // including configured aliases and rewrites, must prove the same private repo.
-  return { urls, isPublic: all.some(isPublicRemoteUrl) };
+  return { urls, configuredUrls: configured.replace(/\n$/, '').split('\n'), isPublic: all.some(isPublicRemoteUrl) };
 }
 
 // Parse a command into argv, then quote each argument for Git's command runner.

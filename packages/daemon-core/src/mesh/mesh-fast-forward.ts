@@ -1,6 +1,6 @@
 import { devNull } from 'node:os';
 import { gitChildEnv } from '../git/git-locale.js';
-import { assertRefineryPublishApproved, PublicPublishApprovalRequired, type MeshRefinePublishApprovalRequest, type PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
+import { preflightRefineryPublish, type MeshRefinePublishApprovalRequest, type PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
 import type { GitRepoStatus, GitSubmoduleStatus } from '../git/git-types.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { GitCommandError, runGit } from '../git/git-executor.js';
@@ -369,6 +369,19 @@ async function pushMeshNode(
     return result;
   }
 
+  const commit = (await runGit(workspace, ['--no-replace-objects', 'rev-parse', 'HEAD'], { env: realGitEnv() })).stdout.trim();
+  const publication = await preflightRefineryPublish(workspace, commit, target.remoteBranch, args.approvedPublishShas, target.remote);
+  if (!publication.ok) {
+    const result: MeshFastForwardResult = {
+      ...block(base, publication.code, [publication.code]), current, preStatus: current, pushTarget,
+      operationError: publication.error,
+      ...(publication.approval ? { publishApproval: publication.approval } : {}),
+      finalBranchConvergenceState: buildConvergenceState(current, 'blocked_review'),
+    };
+    await appendFastForwardLedger(result, 'blocked');
+    return result;
+  }
+
   if (dryRun) {
     const result: MeshFastForwardResult = {
       ...base,
@@ -390,8 +403,6 @@ async function pushMeshNode(
 
   // Execute the root ff-only push.
   try {
-    const commit = (await runGit(workspace, ['--no-replace-objects', 'rev-parse', 'HEAD'], { env: realGitEnv() })).stdout.trim();
-    await assertRefineryPublishApproved(workspace, commit, target.remoteBranch, args.approvedPublishShas, target.remote);
     await runGit(workspace, ['push', target.remote, `${commit}:refs/heads/${target.remoteBranch}`], { timeoutMs: args.timeoutMs ?? 30_000 });
   } catch (error) {
     const result: MeshFastForwardResult = {
@@ -400,7 +411,6 @@ async function pushMeshNode(
       preStatus: current,
       pushTarget,
       operationError: formatGitError(error),
-      ...(error instanceof PublicPublishApprovalRequired ? { publishApproval: error.approval } : {}),
       finalBranchConvergenceState: buildConvergenceState(current, 'not_mergeable'),
     };
     await appendFastForwardLedger(result, 'failed');

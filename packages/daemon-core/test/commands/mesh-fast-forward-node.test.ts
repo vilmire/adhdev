@@ -149,6 +149,7 @@ describe('fast_forward_mesh_node', () => {
         workspace: work,
         mode: 'push',
         nodeId: 'node-push',
+        approvedPublishShas: { oss: [localHead] },
       })
 
       expect(result).toMatchObject({ success: true, allowed: true, willRun: false, executed: false, dryRun: true, code: 'push_available', mode: 'push' })

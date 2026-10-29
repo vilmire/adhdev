@@ -19,7 +19,7 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { checkPush as checkPublicPush, pushDestinations, publicPushRepoKeys, publicPushPendingCommits, loadPublicPushPatternsForRepo, readPushIntegrationBase } from '../git/public-push-guard.mjs';
+import { checkPush as checkPublicPush, resolvePushPolicy, PublishDestinationError, pushDestinations, publicPushRepoKeys, publicPushPendingCommits, loadPublicPushPatternsForRepo, readPushIntegrationBase } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 import { pushRefineryPinnedCommit } from './mesh-refine-pinned-push.js';
@@ -766,8 +766,8 @@ export async function evaluatePublicPublishApproval(
     patternRepo = submodulePath,
     publicRepoCount = 1,
 ): Promise<MeshRefinePublishApprovalRequest | undefined> {
-    const destinations = await pushDestinations(submodulePath, remoteName);
-    const keyed = await publicPushRepoKeys(submodulePath, remoteName);
+    const destinations = await resolvePushPolicy(submodulePath, remoteName);
+    const keyed = destinations.keyed;
     // Explicit approval mapping also fences the private root. It is authority
     // for these exact commits, never permission to manufacture a merge SHA.
     if (!destinations.isPublic && approvedShas === undefined) return undefined;
@@ -792,7 +792,7 @@ export async function evaluatePublicPublishApproval(
 
 async function evaluatePublicPublishApprovalForDestinations(
     submodulePath: string, commit: string, branch: string, approvedShas: readonly string[] | undefined,
-    remoteName: string, patternRepo: string, destinations: Awaited<ReturnType<typeof pushDestinations>>,
+    remoteName: string, patternRepo: string, destinations: { urls: string[]; isPublic: boolean },
 ): Promise<MeshRefinePublishApprovalRequest | undefined> {
     const { execFile } = await import('node:child_process');
     const run = async (args: string[], input?: string): Promise<string> => {
@@ -878,13 +878,24 @@ export class PublicPublishApprovalRequired extends Error {
     }
 }
 
+export type PublishPreflightResult = { ok: true } | { ok: false; code: string; error: string; approval?: MeshRefinePublishApprovalRequest };
+/** Shared by planning and execution. Never pushes or changes approval authority. */
+export async function preflightRefineryPublish(...args: Parameters<typeof assertRefineryPublishApproved>): Promise<PublishPreflightResult> {
+    try { await assertRefineryPublishApproved(...args); return { ok: true }; }
+    catch (error) {
+        if (error instanceof PublicPublishApprovalRequired) return { ok: false, code: 'publish_approval_required', error: error.message, approval: error.approval };
+        if (error instanceof PublishDestinationError) return { ok: false, code: error.code, error: error.message };
+        return { ok: false, code: 'publish_preflight_failed', error: 'publication evidence or guard policy could not be verified' };
+    }
+}
+
 export type RefineryIntegrationScan = { base: string; target: string; checked: number; policy: 'public' | 'private'; identityFindings: number; pathFindings: number };
 export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey?: string, publicRepoCount = 1, publication: { integrationBase?: string; onScan?: (scan: RefineryIntegrationScan) => void } = {}): Promise<void> {
     const keys = await publicPushRepoKeys(repo, remoteName);
     if (repoKey !== undefined && keys.some(destination => repoKey !== destination.repoKey)) throw new Error('public publish repository key mismatch');
     const request = await evaluatePublicPublishApproval(repo, commit, branch, approvedShas, remoteName, repo, publicRepoCount);
     if (request) throw new PublicPublishApprovalRequired(request);
-    const destinations = await pushDestinations(repo, remoteName);
+    const destinations = await resolvePushPolicy(repo, remoteName);
     if (destinations.isPublic || publication.integrationBase !== undefined) {
         const patterns = await loadPublicPushPatternsForRepo(repo);
         for (const remoteUrl of destinations.urls) {

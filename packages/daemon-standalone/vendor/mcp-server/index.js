@@ -33126,15 +33126,52 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       throw new Error("cyclic superproject config lookup; refusing public publish");
     }
-    async function publicPushRepoKeys(cwd, remoteName = "origin") {
-      const { urls } = await pushDestinations(cwd, remoteName);
-      return urls.map((url) => {
-        const parsed = parseRemoteDetails(url);
-        const defaultPort = { "https:": "443", "http:": "80", "ssh:": "22", "git:": "9418" }[parsed?.protocol];
-        const repoKey = parsed?.privateEligible && parsed.host === "github.com" && parsed.port === defaultPort && REPO_KEYS.get(parsed.path);
-        if (!repoKey) throw new Error("publish_approval_required: unknown push destination repository identity; configure a named remote with an exact canonical GitHub push URL");
-        return { url, repoKey };
+    function canonicalPushIdentity(value) {
+      const parsed = parseRemoteDetails(value);
+      if (!parsed?.privateEligible || parsed.host !== "github.com" || !(parsed.protocol === "https:" && parsed.port === "443" || parsed.protocol === "ssh:" && parsed.port === "22") || !/^[a-z0-9-]+\/[a-z0-9_.-]+$/.test(parsed.path)) {
+        throw new PublishDestinationError("publish_destination_malformed", "unknown push destination identity; configure a named remote with an exact canonical GitHub HTTPS/SSH URL");
+      }
+      return `github.com/${parsed.path}`;
+    }
+    async function resolvePushPolicy(cwd, remoteName = "origin") {
+      const destinations = await pushDestinations(cwd, remoteName);
+      const identities = destinations.urls.map(canonicalPushIdentity);
+      let configured = {};
+      if (identities.some((identity4) => !REPO_KEYS.has(identity4.slice("github.com/".length)))) {
+        let patterns;
+        try {
+          patterns = await loadPublicPushPatternsForRepo(cwd);
+        } catch {
+          throw new PublishDestinationError("publish_policy_unmapped", "push destination visibility requires committed private-root repository policy");
+        }
+        configured = patterns.repositories || {};
+        if (!configured || typeof configured !== "object" || Array.isArray(configured)) {
+          throw new PublishDestinationError("publish_policy_unmapped", "invalid repository visibility policy");
+        }
+      }
+      const keyed = identities.map((identity4, index) => {
+        const path126 = identity4.slice("github.com/".length);
+        const builtIn = REPO_KEYS.get(path126);
+        const visibility = builtIn ? path126 === "vilmire/adhdev-cloud" ? "private" : "public" : configured[identity4];
+        if (visibility !== "public" && visibility !== "private") {
+          throw new PublishDestinationError("publish_policy_unmapped", "unknown push destination visibility; configure committed repository policy before requesting approval");
+        }
+        return { url: destinations.urls[index], repoKey: builtIn || identity4, visibility };
       });
+      const isPrivate = (value) => {
+        let identity4;
+        try {
+          identity4 = canonicalPushIdentity(value);
+        } catch {
+          return false;
+        }
+        const path126 = identity4.slice("github.com/".length);
+        return REPO_KEYS.has(path126) ? path126 === "vilmire/adhdev-cloud" : configured[identity4] === "private";
+      };
+      return { urls: destinations.urls, isPublic: [...destinations.urls, ...destinations.configuredUrls].some((url) => !isPrivate(url)), keyed };
+    }
+    async function publicPushRepoKeys(cwd, remoteName = "origin") {
+      return (await resolvePushPolicy(cwd, remoteName)).keyed.map(({ url, repoKey }) => ({ url, repoKey }));
     }
     async function pushDestinations(cwd, remoteName = "origin") {
       if (/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(remoteName)) throw new Error("Raw URL push remotes are not supported for approval; configure a named Git remote and retry");
@@ -33143,7 +33180,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const configured = pushurls || await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.url`]);
       if (!urls.length || urls.every((url) => !url)) throw new Error(`no push destinations for ${remoteName}`);
       const all = [...urls, ...configured.replace(/\n$/, "").split("\n")];
-      return { urls, isPublic: all.some(isPublicRemoteUrl) };
+      return { urls, configuredUrls: configured.replace(/\n$/, "").split("\n"), isPublic: all.some(isPublicRemoteUrl) };
     }
     function commandWords(command) {
       const words = [];
@@ -33591,6 +33628,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
     var REPO_KEYS;
     var REPO_LOCATION_VARS2;
     var tryGit;
+    var PublishDestinationError;
     var SHA_LINE;
     var BLOCKED_HINT;
     var init_public_push_guard = __esm2({
@@ -33614,6 +33652,12 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
             return (await runGit2(cwd, args)).trim();
           } catch {
             return null;
+          }
+        };
+        PublishDestinationError = class extends Error {
+          constructor(code, message) {
+            super(`${code}: ${message}`);
+            this.code = code;
           }
         };
         SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?\r?$/;
@@ -35153,8 +35197,8 @@ ${tail}`;
       return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : void 0;
     }
     async function evaluatePublicPublishApproval(submodulePath, commit2, branch, approvedShas, remoteName = "origin", patternRepo = submodulePath, publicRepoCount = 1) {
-      const destinations = await pushDestinations(submodulePath, remoteName);
-      const keyed = await publicPushRepoKeys(submodulePath, remoteName);
+      const destinations = await resolvePushPolicy(submodulePath, remoteName);
+      const keyed = destinations.keyed;
       if (!destinations.isPublic && approvedShas === void 0) return void 0;
       const groups = /* @__PURE__ */ new Map();
       for (const { url, repoKey } of keyed) groups.set(repoKey, [...groups.get(repoKey) || [], url]);
@@ -35273,12 +35317,22 @@ ${tail}`;
       if (!evidenceError && !scanError && violationsBySha.size === 0 && invalidApproved.length === 0 && unapproved.length === 0 && extraApproved.length === 0) return void 0;
       return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved, invalidApproved, ...evidenceError || scanError ? { error: evidenceError || scanError } : {} };
     }
+    async function preflightRefineryPublish(...args) {
+      try {
+        await assertRefineryPublishApproved(...args);
+        return { ok: true };
+      } catch (error) {
+        if (error instanceof PublicPublishApprovalRequired) return { ok: false, code: "publish_approval_required", error: error.message, approval: error.approval };
+        if (error instanceof PublishDestinationError) return { ok: false, code: error.code, error: error.message };
+        return { ok: false, code: "publish_preflight_failed", error: "publication evidence or guard policy could not be verified" };
+      }
+    }
     async function assertRefineryPublishApproved(repo, commit2, branch, approvedShas, remoteName = "origin", repoKey, publicRepoCount = 1, publication = {}) {
       const keys2 = await publicPushRepoKeys(repo, remoteName);
       if (repoKey !== void 0 && keys2.some((destination) => repoKey !== destination.repoKey)) throw new Error("public publish repository key mismatch");
       const request = await evaluatePublicPublishApproval(repo, commit2, branch, approvedShas, remoteName, repo, publicRepoCount);
       if (request) throw new PublicPublishApprovalRequired(request);
-      const destinations = await pushDestinations(repo, remoteName);
+      const destinations = await resolvePushPolicy(repo, remoteName);
       if (destinations.isPublic || publication.integrationBase !== void 0) {
         const patterns = await loadPublicPushPatternsForRepo(repo);
         for (const remoteUrl of destinations.urls) {
@@ -78832,6 +78886,21 @@ ${includeRefs[0]}`;
         await appendFastForwardLedger(result2, "blocked");
         return result2;
       }
+      const commit2 = (await runGit(workspace, ["--no-replace-objects", "rev-parse", "HEAD"], { env: realGitEnv2() })).stdout.trim();
+      const publication = await preflightRefineryPublish(workspace, commit2, target4.remoteBranch, args.approvedPublishShas, target4.remote);
+      if (!publication.ok) {
+        const result2 = {
+          ...block(base, publication.code, [publication.code]),
+          current: current4,
+          preStatus: current4,
+          pushTarget,
+          operationError: publication.error,
+          ...publication.approval ? { publishApproval: publication.approval } : {},
+          finalBranchConvergenceState: buildConvergenceState(current4, "blocked_review")
+        };
+        await appendFastForwardLedger(result2, "blocked");
+        return result2;
+      }
       if (dryRun) {
         const result2 = {
           ...base,
@@ -78851,8 +78920,6 @@ ${includeRefs[0]}`;
         return result2;
       }
       try {
-        const commit2 = (await runGit(workspace, ["--no-replace-objects", "rev-parse", "HEAD"], { env: realGitEnv2() })).stdout.trim();
-        await assertRefineryPublishApproved(workspace, commit2, target4.remoteBranch, args.approvedPublishShas, target4.remote);
         await runGit(workspace, ["push", target4.remote, `${commit2}:refs/heads/${target4.remoteBranch}`], { timeoutMs: args.timeoutMs ?? 3e4 });
       } catch (error) {
         const result2 = {
@@ -78861,7 +78928,6 @@ ${includeRefs[0]}`;
           preStatus: current4,
           pushTarget,
           operationError: formatGitError2(error),
-          ...error instanceof PublicPublishApprovalRequired ? { publishApproval: error.approval } : {},
           finalBranchConvergenceState: buildConvergenceState(current4, "not_mergeable")
         };
         await appendFastForwardLedger(result2, "failed");

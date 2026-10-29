@@ -35,6 +35,7 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/commands/mesh-crud-clone-sync-submodule-generic.test.ts',
   'test/commands/mesh-crud-oss-clone-sync-guard.test.ts',
   'test/commands/mesh-fast-forward-node.test.ts',
+  'test/mesh/publish-destination-policy.test.ts',
   'test/commands/mesh-refine-batch.test.ts',
   'test/commands/mesh-refine-no-op-guard.test.ts',
   'test/commands/mesh-refine-validation.test.ts',
