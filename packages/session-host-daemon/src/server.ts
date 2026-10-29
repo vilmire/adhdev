@@ -36,7 +36,9 @@ import { acquireHostInstanceLock, type HostInstanceLock } from './host-instance-
 import { OperatorRecoveryFence } from './operator-recovery-fence.js';
 import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
 import { OperatorRecoveryControl } from './operator-recovery-control.js';
-import { refuseCleanupExpectedStop, resolveHostBootId } from './stop-session-if-expected.js';
+import { resolveHostBootId } from './stop-session-if-expected.js';
+import { handleDeleteSessionIfExpected } from './delete-session-if-expected.js';
+import { handleStopSessionIfExpected } from './handle-stop-session-if-expected.js';
 
 export {
   sessionHostInstanceArg,
@@ -649,19 +651,8 @@ export class SessionHostServer extends EventEmitter {
           this.recordRuntimeTransition(request.payload.sessionId, 'stop_session', 'stopping', undefined, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
-        case 'stop_session_if_expected': {
-          const p = request.payload, record = this.registry.getSession(p.sessionId);
-          const refused = refuseCleanupExpectedStop(record, p.expected,
-            this.currentHostBootId(), this.runtimes.has(p.sessionId));
-          if (refused) return { success: false, error: refused };
-          this.stopRequests.set(p.sessionId, 'stop');
-          this.registry.setLifecycle(p.sessionId, 'stopping');
-          this.persistNow(p.sessionId);
-          this.requireRuntime(p.sessionId).stop();
-          this.emitEvent({ type: 'session_stopped', sessionId: p.sessionId });
-          this.recordRuntimeTransition(p.sessionId, 'stop_session_if_expected', 'stopping', undefined, true);
-          return { success: true, result: this.registry.getSession(p.sessionId) };
-        }
+        case 'stop_session_if_expected':
+          return handleStopSessionIfExpected(this as any, request.payload);
         case 'stop_mesh_writer': {
           const p = request.payload, record = this.registry.getSession(p.sessionId);
           const active = record?.meta.meshActiveAssignment as Record<string, unknown> | undefined;
@@ -712,6 +703,8 @@ export class SessionHostServer extends EventEmitter {
           this.recordRuntimeTransition(record.sessionId, 'delete_session', record.lifecycle, undefined, true);
           return { success: true, result: { sessionId: record.sessionId, deleted: true } };
         }
+        case 'delete_session_if_expected':
+          return handleDeleteSessionIfExpected(this as any, request.payload);
         case 'resume_session': {
           const existing = this.registry.getSession(request.payload.sessionId);
           if (!existing) {

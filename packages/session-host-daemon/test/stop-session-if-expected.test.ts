@@ -169,3 +169,78 @@ test('upgradeBinding hostBootId is lease UUID and refuses hs: inventory identity
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('delete_session_if_expected removes the matching stopped incarnation', async () => {
+  await fixture(async (server, stops, record, expected) => {
+    const stop = await server.handleRequest({ type: 'stop_session_if_expected', payload: { sessionId: expected.sessionId, expected } });
+    assert.equal(stop.success, true);
+    assert.deepEqual(stops, ['stop']);
+    server.runtimes.delete(record.sessionId);
+    server.registry.setLifecycle(record.sessionId, 'stopped');
+    const del = await server.handleRequest({
+      type: 'delete_session_if_expected',
+      payload: { sessionId: expected.sessionId, expected, force: false },
+    });
+    assert.equal(del.success, true);
+    assert.equal(del.result.deleted, true);
+    assert.equal(server.registry.getSession(expected.sessionId), null);
+  });
+});
+
+test('delete_session_if_expected refuses replaced incarnation after stop await', async () => {
+  await fixture(async (server, stops, record, expected) => {
+    server.runtimes.set(record.sessionId, {
+      stop: () => {
+        stops.push('stop');
+        // During await, replace the record with a new incarnation (same sessionId).
+        server.runtimes.delete(record.sessionId);
+        const replaced = {
+          ...record,
+          runtimeKey: 'native-incarnation-2',
+          startedAt: record.startedAt! + 1,
+          lifecycle: 'running',
+          meta: {
+            ...record.meta,
+            meshActiveAssignment: {
+              meshId: 'mesh-1', nodeId: 'n1', taskId: 'new-task', attemptId: 'a1', generation: 0, dispatchNonce: 1, ownerDaemonId: 'owner',
+            },
+          },
+        };
+        server.registry.restoreSession(replaced);
+        server.runtimes.set(record.sessionId, { stop: () => stops.push('stop-replaced') });
+      },
+    });
+    // Patch waitForRuntimeExit to resolve immediately after stop mutates.
+    server.waitForRuntimeExit = async () => {};
+    const del = await server.handleRequest({
+      type: 'delete_session_if_expected',
+      payload: { sessionId: expected.sessionId, expected, force: true },
+    });
+    assert.equal(del.success, false);
+    assert.equal(del.error, 'cleanup_native_incarnation_mismatch');
+    assert.equal(server.registry.getSession(expected.sessionId).runtimeKey, 'native-incarnation-2');
+    assert.deepEqual(stops, ['stop']);
+  });
+});
+
+test('delete_session_if_expected unbound refuses after bind without deleting', async () => {
+  await fixture(async (server, stops, record, expected) => {
+    server.registry.restoreSession({
+      ...record,
+      meta: {
+        ...record.meta,
+        meshActiveAssignment: {
+          meshId: 'mesh-1', nodeId: 'n1', taskId: 'new-task', attemptId: 'a1', generation: 0, dispatchNonce: 1, ownerDaemonId: 'owner',
+        },
+      },
+    });
+    const del = await server.handleRequest({
+      type: 'delete_session_if_expected',
+      payload: { sessionId: expected.sessionId, expected, force: true },
+    });
+    assert.equal(del.success, false);
+    assert.equal(del.error, 'cleanup_expected_unbound_now_bound');
+    assert.deepEqual(stops, []);
+    assert.ok(server.registry.getSession(expected.sessionId));
+  });
+});

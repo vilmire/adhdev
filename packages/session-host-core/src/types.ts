@@ -230,6 +230,13 @@ export interface DeleteSessionPayload {
   /** Stop a live runtime before deleting the persisted record. */
   force?: boolean;
 }
+/** Expected identity for record deletion; old hosts must refuse this distinct kind. */
+export interface DeleteSessionIfExpectedPayload {
+  sessionId: string;
+  expected: SessionCleanupExpectedAssignment;
+  /** Stop the matching live runtime before deleting that exact incarnation. */
+  force?: boolean;
+}
 
 export interface ResumeSessionPayload {
   sessionId: string;
@@ -413,6 +420,8 @@ export type SessionHostRequest =
   | { type: 'stop_session_if_expected'; payload: StopSessionIfExpectedPayload }
   | { type: 'stop_mesh_writer'; payload: StopMeshWriterPayload }
   | { type: 'delete_session'; payload: DeleteSessionPayload }
+  /** Distinct kind: old hosts must refuse instead of deleting by session id alone. */
+  | { type: 'delete_session_if_expected'; payload: DeleteSessionIfExpectedPayload }
   | { type: 'resume_session'; payload: ResumeSessionPayload }
   | { type: 'acquire_write'; payload: AcquireWritePayload }
   | { type: 'release_write'; payload: ReleaseWritePayload }
@@ -452,6 +461,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'stop_session_if_expected',
   'stop_mesh_writer',
   'delete_session',
+  'delete_session_if_expected',
   'resume_session',
   'acquire_write',
   'release_write',

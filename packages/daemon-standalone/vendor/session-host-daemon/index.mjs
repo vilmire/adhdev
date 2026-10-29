@@ -1378,8 +1378,79 @@ function observeRecoveryTombstones(tombstones, runtimes) {
 import {
   hostBootIdFromStartedAt,
   resolveHostBootId,
-  refuseCleanupExpectedStop
+  refuseCleanupExpectedStop,
+  refuseCleanupExpectedDelete
 } from "@adhdev/session-host-core";
+
+// src/delete-session-if-expected.ts
+async function handleDeleteSessionIfExpected(host, payload) {
+  const before = host.registry.getSession(payload.sessionId);
+  if (!before) {
+    return { success: true, result: { sessionId: payload.sessionId, deleted: true, alreadyAbsent: true } };
+  }
+  const refused = refuseCleanupExpectedDelete(
+    before,
+    payload.expected,
+    host.currentHostBootId(),
+    host.runtimes.has(payload.sessionId),
+    payload.force === true
+  );
+  if (refused) return { success: false, error: refused };
+  if (host.runtimes.has(payload.sessionId)) {
+    host.stopRequests.set(payload.sessionId, "delete");
+    host.registry.setLifecycle(payload.sessionId, "stopping");
+    host.persistNow(payload.sessionId);
+    host.requireRuntime(payload.sessionId).stop();
+    await host.waitForRuntimeExit(payload.sessionId).catch((error) => {
+      host.recordRuntimeTransition(
+        payload.sessionId,
+        "delete_session_if_expected_timeout",
+        "stopping",
+        void 0,
+        false,
+        error?.message || String(error)
+      );
+    });
+  }
+  const after = host.registry.getSession(payload.sessionId);
+  if (!after) {
+    return { success: true, result: { sessionId: payload.sessionId, deleted: true, alreadyAbsent: true } };
+  }
+  const afterRefused = refuseCleanupExpectedDelete(
+    after,
+    payload.expected,
+    host.currentHostBootId(),
+    host.runtimes.has(payload.sessionId),
+    false
+  );
+  if (afterRefused) return { success: false, error: afterRefused };
+  host.registry.deleteSession(payload.sessionId);
+  host.storage.remove(payload.sessionId);
+  host.storage.removeTombstone(payload.sessionId);
+  host.stopRequests.delete(payload.sessionId);
+  host.emitEvent({ type: "session_deleted", sessionId: payload.sessionId });
+  host.recordRuntimeTransition(payload.sessionId, "delete_session_if_expected", after.lifecycle, void 0, true);
+  return { success: true, result: { sessionId: payload.sessionId, deleted: true } };
+}
+
+// src/handle-stop-session-if-expected.ts
+function handleStopSessionIfExpected(host, payload) {
+  const record = host.registry.getSession(payload.sessionId);
+  const refused = refuseCleanupExpectedStop(
+    record,
+    payload.expected,
+    host.currentHostBootId(),
+    host.runtimes.has(payload.sessionId)
+  );
+  if (refused) return { success: false, error: refused };
+  host.stopRequests.set(payload.sessionId, "stop");
+  host.registry.setLifecycle(payload.sessionId, "stopping");
+  host.persistNow(payload.sessionId);
+  host.requireRuntime(payload.sessionId).stop();
+  host.emitEvent({ type: "session_stopped", sessionId: payload.sessionId });
+  host.recordRuntimeTransition(payload.sessionId, "stop_session_if_expected", "stopping", void 0, true);
+  return { success: true, result: host.registry.getSession(payload.sessionId) };
+}
 
 // src/prior-host-identity.ts
 import { createHash as createHash4 } from "crypto";
@@ -2369,23 +2440,8 @@ var SessionHostServer = class extends EventEmitter {
           this.recordRuntimeTransition(request.payload.sessionId, "stop_session", "stopping", void 0, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
-        case "stop_session_if_expected": {
-          const p = request.payload, record = this.registry.getSession(p.sessionId);
-          const refused = refuseCleanupExpectedStop(
-            record,
-            p.expected,
-            this.currentHostBootId(),
-            this.runtimes.has(p.sessionId)
-          );
-          if (refused) return { success: false, error: refused };
-          this.stopRequests.set(p.sessionId, "stop");
-          this.registry.setLifecycle(p.sessionId, "stopping");
-          this.persistNow(p.sessionId);
-          this.requireRuntime(p.sessionId).stop();
-          this.emitEvent({ type: "session_stopped", sessionId: p.sessionId });
-          this.recordRuntimeTransition(p.sessionId, "stop_session_if_expected", "stopping", void 0, true);
-          return { success: true, result: this.registry.getSession(p.sessionId) };
-        }
+        case "stop_session_if_expected":
+          return handleStopSessionIfExpected(this, request.payload);
         case "stop_mesh_writer": {
           const p = request.payload, record = this.registry.getSession(p.sessionId);
           const active = record?.meta.meshActiveAssignment;
@@ -2427,6 +2483,8 @@ var SessionHostServer = class extends EventEmitter {
           this.recordRuntimeTransition(record.sessionId, "delete_session", record.lifecycle, void 0, true);
           return { success: true, result: { sessionId: record.sessionId, deleted: true } };
         }
+        case "delete_session_if_expected":
+          return handleDeleteSessionIfExpected(this, request.payload);
         case "resume_session": {
           const existing = this.registry.getSession(request.payload.sessionId);
           if (!existing) {

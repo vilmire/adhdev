@@ -42,6 +42,12 @@ export interface SessionHostControlPlane {
   /** Host CAS stop: refuses without mutating when expected assignment/boot/incarnation drift. */
   stopSessionIfExpected(sessionId: string, expected: SessionCleanupExpectedAssignment): Promise<SessionHostRecord | null>;
   deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<SessionHostRecord | null>;
+  /** Host CAS delete: refuses without mutating when expected assignment/boot/incarnation drift. */
+  deleteSessionIfExpected(
+    sessionId: string,
+    expected: SessionCleanupExpectedAssignment,
+    opts?: { force?: boolean },
+  ): Promise<{ sessionId: string; deleted: boolean; alreadyAbsent?: boolean } | null>;
   resumeSession(sessionId: string): Promise<SessionHostRecord | null>;
   restartSession(sessionId: string): Promise<SessionHostRecord | null>;
   sendSignal(sessionId: string, signal: string): Promise<SessionHostRecord | null>;
@@ -126,6 +132,16 @@ export function createSessionHostControlPlane(
     },
     deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<SessionHostRecord | null> {
       return transport.request<SessionHostRecord | null>('delete_session', { sessionId, force: opts.force === true });
+    },
+    deleteSessionIfExpected(
+      sessionId: string,
+      expected: SessionCleanupExpectedAssignment,
+      opts: { force?: boolean } = {},
+    ): Promise<{ sessionId: string; deleted: boolean; alreadyAbsent?: boolean } | null> {
+      return transport.request<{ sessionId: string; deleted: boolean; alreadyAbsent?: boolean } | null>(
+        'delete_session_if_expected',
+        { sessionId, expected, force: opts.force === true },
+      );
     },
     resumeSession(sessionId: string): Promise<SessionHostRecord | null> {
       return transport.request<SessionHostRecord | null>('resume_session', { sessionId });

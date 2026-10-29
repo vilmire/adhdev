@@ -23,6 +23,11 @@ import { workingDirBasename } from '../providers/working-dir.js';
 import { checkWorktreeChangesPatchEquivalentInRef, MeshWorktreePatchContainmentSummary } from '../mesh/mesh-refine-gates.js';
 import { getSessionHostSurfaceKind } from '../session-host/runtime-surface.js';
 import type { RepoMeshSessionCleanupMode } from '../repo-mesh-types.js';
+import {
+    applyOperatorSessionCleanupMode,
+    operatorCleanupDeleteUnsupportedFallback,
+    resolveOperatorCleanupHostBootId,
+} from './mesh-operator-session-cleanup.js';
 
 /**
  * Legacy pre-home-dir worktree layout: `<repoParent>/.adhdev-worktrees/<meshName>/<branch>`.
@@ -1012,6 +1017,11 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         };
         const reclaimedOrphanSessionIds: string[] = [];
         const sessions = await self.deps.sessionHostControl.listSessions();
+        // Capture host boot once at selection — expected tuples carry this through host CAS.
+        const hostBootId = args.dryRun ? 'dry-run' : await resolveOperatorCleanupHostBootId(self.deps.sessionHostControl);
+        if (!args.dryRun && !hostBootId) {
+            return { success: false, error: 'cleanup_host_boot_unknown', retained: true };
+        }
         const matched = sessions.filter(record => self.sessionMatchesMeshNode(record, args.node, args.nodeId, requestedSessionIds));
         const hasExplicitSessionIds = !!requestedSessionIds?.size;
         const stoppedSessionIds: string[] = [];
@@ -1023,7 +1033,8 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
         const actedLiveDelegateSessionIds: string[] = [];
         const deleteUnsupportedSessionIds: string[] = [];
         const recordsRemainSessionIds: string[] = [];
-        const errors: Array<{ sessionId: string; error: string }> = [];
+        const retainedSessionIds: string[] = [];
+        const errors: Array<{ sessionId: string; error: string; retained?: true }> = [];
         const cleanupSource = args.source || 'mesh_cleanup_sessions';
         const markedIntentionalStopSessionIds = new Set<string>();
         const markIntentionalStop = async (sessionId: string, action: 'stop_session' | 'delete_session_force') => {
@@ -1038,6 +1049,10 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
                 source: cleanupSource,
                 action,
             });
+        };
+        const refuseSession = (sessionId: string, error: string) => {
+            retainedSessionIds.push(sessionId);
+            errors.push({ sessionId, error, retained: true });
         };
         const matchedBySurfaceKind = {
             live_runtime: 0,
@@ -1136,51 +1151,49 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
                 actedLiveDelegateSessionIds.push(sessionId);
             }
             try {
-                if (args.mode === 'stop') {
-                    if (!completed) {
-                        if (!args.dryRun) {
-                            await markIntentionalStop(sessionId, 'stop_session');
-                            await self.deps.sessionHostControl.stopSession(sessionId);
-                        }
-                        stoppedSessionIds.push(sessionId);
-                    } else {
-                        skippedSessionIds.push(sessionId);
-                    }
-                    continue;
-                }
-
-                if (args.mode === 'delete_stopped') {
-                    if (completed) {
-                        if (!args.dryRun) await self.deps.sessionHostControl.deleteSession(sessionId, { force: false });
-                        deletedSessionIds.push(sessionId);
-                    } else {
-                        skippedSessionIds.push(sessionId);
-                    }
-                    continue;
-                }
-
-                if (args.mode === 'stop_and_delete') {
-                    if (!completed) await markIntentionalStop(sessionId, 'delete_session_force');
-                    if (!args.dryRun) await self.deps.sessionHostControl.deleteSession(sessionId, { force: true });
-                    deletedSessionIds.push(sessionId);
-                    continue;
+                const outcome = await applyOperatorSessionCleanupMode({
+                    control: self.deps.sessionHostControl,
+                    meshId: args.meshId,
+                    sessionId,
+                    record,
+                    hostBootId: hostBootId!,
+                    mode: args.mode,
+                    completed,
+                    dryRun: args.dryRun === true,
+                    markIntentionalStop: (action) => markIntentionalStop(sessionId, action),
+                });
+                if (outcome.kind === 'stopped') stoppedSessionIds.push(sessionId);
+                else if (outcome.kind === 'deleted') deletedSessionIds.push(sessionId);
+                else if (outcome.kind === 'skipped') skippedSessionIds.push(sessionId);
+                else if (outcome.kind === 'refused') refuseSession(sessionId, outcome.error);
+                else if (outcome.kind === 'delete_unsupported') {
+                    deleteUnsupportedSessionIds.push(sessionId);
+                    recordsRemainSessionIds.push(sessionId);
+                    if (outcome.stopped) stoppedSessionIds.push(sessionId);
+                    skippedSessionIds.push(sessionId);
                 }
             } catch (e: any) {
                 const message = e?.message || String(e);
-                if (message.includes('Unsupported session host request: delete_session')
+                if ((message.includes('Unsupported session host request: delete_session')
+                    || message.includes('delete_session_if_expected'))
                     && (args.mode === 'delete_stopped' || args.mode === 'stop_and_delete')) {
+                    const outcome = await operatorCleanupDeleteUnsupportedFallback({
+                        control: self.deps.sessionHostControl,
+                        meshId: args.meshId,
+                        sessionId,
+                        record,
+                        hostBootId: hostBootId!,
+                        mode: args.mode,
+                        completed,
+                        markIntentionalStop: (action) => markIntentionalStop(sessionId, action),
+                    });
+                    if (outcome.kind === 'refused') {
+                        refuseSession(sessionId, outcome.error);
+                        continue;
+                    }
                     deleteUnsupportedSessionIds.push(sessionId);
                     recordsRemainSessionIds.push(sessionId);
-                    if (args.mode === 'stop_and_delete' && !completed) {
-                        try {
-                            await markIntentionalStop(sessionId, 'stop_session');
-                            await self.deps.sessionHostControl.stopSession(sessionId);
-                            stoppedSessionIds.push(sessionId);
-                        } catch (stopError: any) {
-                            errors.push({ sessionId, error: stopError?.message || String(stopError) });
-                            continue;
-                        }
-                    }
+                    if (outcome.kind === 'delete_unsupported' && outcome.stopped) stoppedSessionIds.push(sessionId);
                     skippedSessionIds.push(sessionId);
                     continue;
                 }
@@ -1203,9 +1216,10 @@ export async function cleanupMeshSessions(self: DaemonCommandRouter, args: {
             ...(actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {}),
             ...(reclaimedOrphanSessionIds.length ? { reclaimedOrphanSessionIds } : {}),
             ...(skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {}),
+            ...(retainedSessionIds.length ? { retainedSessionIds, retained: true } : {}),
             ...(deleteUnsupported ? {
                 deleteUnsupported: true,
-                effectiveCleanup: args.mode === 'stop_and_delete'
+                effectiveCleanup: args.mode === 'stop_and_delete' && stoppedSessionIds.length > 0
                     ? 'stopped_only_records_remain'
                     : 'delete_unsupported_records_remain',
                 deleteUnsupportedSessionIds,

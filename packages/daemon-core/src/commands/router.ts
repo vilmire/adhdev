@@ -147,7 +147,18 @@ export interface SessionHostControlPlane {
     resolveHostBootId?(): Promise<string | null> | string | null;
     listSessions(): Promise<any[]>;
     stopSession(sessionId: string): Promise<any>;
+    /** Optional: host CAS stop — old hosts omit this and operator cleanup fails closed. */
+    stopSessionIfExpected?(
+        sessionId: string,
+        expected: import('@adhdev/session-host-core').SessionCleanupExpectedAssignment,
+    ): Promise<any>;
     deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<any>;
+    /** Optional: host CAS delete — old hosts omit this and operator cleanup fails closed. */
+    deleteSessionIfExpected?(
+        sessionId: string,
+        expected: import('@adhdev/session-host-core').SessionCleanupExpectedAssignment,
+        opts?: { force?: boolean },
+    ): Promise<{ sessionId: string; deleted: boolean; alreadyAbsent?: boolean } | null>;
     resumeSession(sessionId: string): Promise<any>;
     restartSession(sessionId: string): Promise<any>;
     sendSignal(sessionId: string, signal: string): Promise<any>;

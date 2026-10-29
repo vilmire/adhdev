@@ -3,4 +3,5 @@ export {
   hostBootIdFromStartedAt,
   resolveHostBootId,
   refuseCleanupExpectedStop,
+  refuseCleanupExpectedDelete,
 } from '@adhdev/session-host-core';

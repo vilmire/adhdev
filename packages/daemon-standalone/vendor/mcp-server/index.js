@@ -2905,6 +2905,7 @@ var require_dist = __commonJS({
       partitionSessionHostDiagnosticsSessions: () => partitionSessionHostDiagnosticsSessions2,
       partitionSessionHostRecords: () => partitionSessionHostRecords2,
       recoveryTargetBytes: () => recoveryTargetBytes,
+      refuseCleanupExpectedDelete: () => refuseCleanupExpectedDelete,
       refuseCleanupExpectedStop: () => refuseCleanupExpectedStop,
       replayLaunchEnv: () => replayLaunchEnv,
       resolveAttachableRuntimeRecord: () => resolveAttachableRuntimeRecord,
@@ -3056,6 +3057,7 @@ var require_dist = __commonJS({
       "stop_session_if_expected",
       "stop_mesh_writer",
       "delete_session",
+      "delete_session_if_expected",
       "resume_session",
       "acquire_write",
       "release_write",
@@ -3080,28 +3082,50 @@ var require_dist = __commonJS({
       if (!Number.isFinite(opts.hostStartedAt) || opts.hostStartedAt <= 0) return null;
       return hostBootIdFromStartedAt(opts.hostStartedAt);
     }
-    function refuseCleanupExpectedStop(record, expected, currentHostBootId, hasRuntime) {
+    function refuseCleanupExpectedIdentity(record, expected, currentHostBootId) {
       if (!expected || expected.sessionId !== (record?.sessionId ?? "") || typeof expected.hostBootId !== "string" || !expected.hostBootId || typeof expected.runtimeKey !== "string" || !expected.runtimeKey || !Number.isSafeInteger(expected.startedAt) || expected.startedAt <= 0) {
         return "cleanup_expected_malformed";
       }
       if (!currentHostBootId) return "cleanup_host_boot_unknown";
       if (expected.hostBootId !== currentHostBootId) return "cleanup_host_boot_mismatch";
-      if (!record || record.termination || !hasRuntime || record.lifecycle !== "running") {
-        return "cleanup_session_not_running";
-      }
+      if (!record) return "cleanup_session_not_running";
       if (record.runtimeKey !== expected.runtimeKey || record.startedAt !== expected.startedAt) {
         return "cleanup_native_incarnation_mismatch";
       }
+      return null;
+    }
+    function refuseCleanupExpectedAssignment(record, expected, opts = {}) {
       const active = record.meta?.meshActiveAssignment;
       if (expected.taskId === null) {
         if (active && typeof active.taskId === "string" && active.taskId) return "cleanup_expected_unbound_now_bound";
         return null;
       }
-      if (!active || typeof active.taskId !== "string" || !active.taskId) return "cleanup_expected_bound_now_unbound";
+      if (!active || typeof active.taskId !== "string" || !active.taskId) {
+        return opts.allowClearedBound ? null : "cleanup_expected_bound_now_unbound";
+      }
       if (active.taskId !== expected.taskId || active.attemptId !== expected.attemptId || active.generation !== expected.generation || active.dispatchNonce !== expected.dispatchNonce) {
         return "cleanup_assignment_mismatch";
       }
       return null;
+    }
+    function refuseCleanupExpectedStop(record, expected, currentHostBootId, hasRuntime) {
+      const identity = refuseCleanupExpectedIdentity(record, expected, currentHostBootId);
+      if (identity) return identity;
+      if (!record || record.termination || !hasRuntime || record.lifecycle !== "running") {
+        return "cleanup_session_not_running";
+      }
+      return refuseCleanupExpectedAssignment(record, expected);
+    }
+    function refuseCleanupExpectedDelete(record, expected, currentHostBootId, hasRuntime, force) {
+      if (!record) return "cleanup_session_not_running";
+      const identity = refuseCleanupExpectedIdentity(record, expected, currentHostBootId);
+      if (identity) return identity;
+      if (hasRuntime) {
+        if (!force) return "cleanup_session_still_running";
+        if (record.termination || record.lifecycle !== "running") return "cleanup_session_not_running";
+        return refuseCleanupExpectedAssignment(record, expected);
+      }
+      return refuseCleanupExpectedAssignment(record, expected, { allowClearedBound: true });
     }
     function classifyTermination(input) {
       const { exitCode, terminatedAt } = input;
@@ -4439,6 +4463,12 @@ var require_dist = __commonJS({
         },
         deleteSession(sessionId, opts = {}) {
           return transport.request("delete_session", { sessionId, force: opts.force === true });
+        },
+        deleteSessionIfExpected(sessionId, expected, opts = {}) {
+          return transport.request(
+            "delete_session_if_expected",
+            { sessionId, expected, force: opts.force === true }
+          );
         },
         resumeSession(sessionId) {
           return transport.request("resume_session", { sessionId });
@@ -47665,6 +47695,30 @@ ${error.message || ""}`;
         runtimeKey: args.runtimeKey,
         startedAt: args.startedAt,
         ...sessionClaimFence(args.state)
+      };
+    }
+    function claimFenceFromHostRecord(record7) {
+      const active = record7?.meta?.meshActiveAssignment;
+      if (active && typeof active.taskId === "string" && active.taskId) {
+        return {
+          taskId: active.taskId,
+          attemptId: typeof active.attemptId === "string" ? active.attemptId : null,
+          generation: Number.isSafeInteger(active.generation) ? Number(active.generation) : null,
+          dispatchNonce: Number.isSafeInteger(active.dispatchNonce) ? Number(active.dispatchNonce) : null
+        };
+      }
+      return { taskId: null, attemptId: null, generation: null, dispatchNonce: null };
+    }
+    function captureCleanupExpectedFromHostRecord(args) {
+      if (!args.hostBootId || !args.record.runtimeKey || !Number.isSafeInteger(args.record.startedAt) || (args.record.startedAt ?? 0) <= 0) {
+        return null;
+      }
+      return {
+        sessionId: args.sessionId,
+        hostBootId: args.hostBootId,
+        runtimeKey: args.record.runtimeKey,
+        startedAt: args.record.startedAt,
+        ...claimFenceFromHostRecord(args.record)
       };
     }
     function expectedAssignmentUnchanged(expected, state2, record7) {
@@ -141735,7 +141789,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os39;
-    var import_session_host_core18;
+    var import_session_host_core19;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -141745,7 +141799,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os39 = __toESM2(require("os"));
-        import_session_host_core18 = require_dist();
+        import_session_host_core19 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -141793,8 +141847,8 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const launch = (0, import_session_host_core18.niceLaunch)(resolveWin32Executable(command), args, options.env);
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core18.spawnCliChild)(() => pty.spawn(launch.command, launch.args, {
+            const launch = (0, import_session_host_core19.niceLaunch)(resolveWin32Executable(command), args, options.env);
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core19.spawnCliChild)(() => pty.spawn(launch.command, launch.args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -141808,7 +141862,7 @@ ${tail}` : ""
     });
     var import_node_crypto69;
     var import_node_perf_hooks3;
-    var import_session_host_core29;
+    var import_session_host_core30;
     var hash3;
     var OperatorRecoveryAnchors;
     var init_operator_recovery = __esm2({
@@ -141817,7 +141871,7 @@ ${tail}` : ""
         import_node_crypto69 = require("crypto");
         import_node_perf_hooks3 = require("perf_hooks");
         init_worker_bridge_transaction();
-        import_session_host_core29 = require_dist();
+        import_session_host_core30 = require_dist();
         hash3 = (s2) => (0, import_node_crypto69.createHash)("sha256").update(s2).digest("hex");
         OperatorRecoveryAnchors = class {
           constructor(deps) {
@@ -141858,16 +141912,16 @@ ${tail}` : ""
               "nodeId",
               "deliveryId"
             ]) {
-              if (c[key5] !== import_session_host_core29.OPERATOR_RECOVERY_TARGET[key5]) throw new Error("recovery_current_assignment_mismatch");
+              if (c[key5] !== import_session_host_core30.OPERATOR_RECOVERY_TARGET[key5]) throw new Error("recovery_current_assignment_mismatch");
             }
             if (!c.writerStopRequestId?.trim() || c.writerStopConfirmed !== false || c.writerStopTerminalPresent !== false || c.reportPresent !== false || c.reclaimCount !== 0 || !c.holdsRevision || c.state !== "stopping" || c.queueStatus !== "assigned" || // eslint-disable-next-line no-restricted-syntax -- Recovery is pinned to this exact persisted queue node, with no reassociation or alias substitution.
-            c.queueNodeId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
+            c.queueNodeId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
             return JSON.stringify(Object.fromEntries(Object.entries(c).sort(([a], [b]) => a.localeCompare(b))));
           }
           assertPeer(p) {
-            if (p.peer.peerId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || // canon-ok: captured cloud worker peer identity must match byte for byte
-            p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.workerDaemonId || // canon-ok: worker identity is hashed into the durable signed fence binding
-            p.peer.binding.namespace !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !(0, import_session_host_core29.isRecoveryEndpoint)(p.peer.binding.endpoint) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
+            if (p.peer.peerId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || // canon-ok: captured cloud worker peer identity must match byte for byte
+            p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.workerDaemonId || // canon-ok: worker identity is hashed into the durable signed fence binding
+            p.peer.binding.namespace !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !(0, import_session_host_core30.isRecoveryEndpoint)(p.peer.binding.endpoint) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
           }
           revoke() {
             this.pending.clear();
@@ -141894,10 +141948,10 @@ ${tail}` : ""
             (this.deps.withOwnershipFence ?? ((f) => f()))(() => this.deps.db.transaction(() => {
               p.current = this.current();
               this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
-              if (this.deps.db.prepare("SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?").get(import_session_host_core29.recoveryTargetBytes)) {
+              if (this.deps.db.prepare("SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?").get(import_session_host_core30.recoveryTargetBytes)) {
                 throw new Error("recovery_already_consumed");
               }
-              this.deps.db.prepare("INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)").run(nonceHash, import_session_host_core29.recoveryTargetBytes, this.deps.coordinatorBootId, p.current, "issued");
+              this.deps.db.prepare("INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)").run(nonceHash, import_session_host_core30.recoveryTargetBytes, this.deps.coordinatorBootId, p.current, "issued");
             }).immediate());
             this.pending.set(nonceHash, p);
             try {
@@ -141918,8 +141972,8 @@ ${tail}` : ""
                   throw new Error("recovery_expired_revoked_or_reassigned");
                 }
                 const row2 = this.deps.db.prepare("SELECT * FROM operator_recovery_challenges_v1 WHERE nonce_hash=?").get(nonceHash);
-                if (!row2 || row2.state !== "issued" || row2.coordinator_boot !== this.deps.coordinatorBootId || row2.assignment !== p.current || row2.target !== import_session_host_core29.recoveryTargetBytes) throw new Error("recovery_challenge_replayed");
-                if (!proof || proof.protocol !== 1 || proof.verdict !== "ABSENT" || proof.nonce !== nonce || proof.fenceDigest !== p.fenceDigest || proof.sessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId || proof.providerSessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.providerSessionId || proof.namespace !== peer.binding.namespace || proof.hostBootId !== peer.binding.hostBootId || proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) {
+                if (!row2 || row2.state !== "issued" || row2.coordinator_boot !== this.deps.coordinatorBootId || row2.assignment !== p.current || row2.target !== import_session_host_core30.recoveryTargetBytes) throw new Error("recovery_challenge_replayed");
+                if (!proof || proof.protocol !== 1 || proof.verdict !== "ABSENT" || proof.nonce !== nonce || proof.fenceDigest !== p.fenceDigest || proof.sessionId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.sessionId || proof.providerSessionId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.providerSessionId || proof.namespace !== peer.binding.namespace || proof.hostBootId !== peer.binding.hostBootId || proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) {
                   throw new Error("recovery_physical_proof_refused");
                 }
                 const accepted = {
@@ -141928,19 +141982,19 @@ ${tail}` : ""
                   reason: "native_dual_uuid_absence",
                   nonce,
                   fenceDigest: p.fenceDigest,
-                  sessionId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId,
-                  providerSessionId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.providerSessionId,
+                  sessionId: import_session_host_core30.OPERATOR_RECOVERY_TARGET.sessionId,
+                  providerSessionId: import_session_host_core30.OPERATOR_RECOVERY_TARGET.providerSessionId,
                   namespace: proof.namespace,
                   hostBootId: proof.hostBootId,
                   workerDaemonId: proof.workerDaemonId,
                   endpoint: proof.endpoint
                 };
                 this.deps.burnWitness?.(nonceHash, hash3(JSON.stringify(accepted)));
-                this.deps.db.prepare("INSERT INTO operator_recovery_anchors_v1 VALUES (?,?,?,?,?)").run(import_session_host_core29.recoveryTargetBytes, nonceHash, "operator_asserted", JSON.stringify(accepted), p.current);
+                this.deps.db.prepare("INSERT INTO operator_recovery_anchors_v1 VALUES (?,?,?,?,?)").run(import_session_host_core30.recoveryTargetBytes, nonceHash, "operator_asserted", JSON.stringify(accepted), p.current);
                 this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='consumed' WHERE nonce_hash=?").run(nonceHash);
                 const anchor = Object.freeze({
                   association: "operator_asserted",
-                  target: import_session_host_core29.OPERATOR_RECOVERY_TARGET,
+                  target: import_session_host_core30.OPERATOR_RECOVERY_TARGET,
                   proof: Object.freeze(accepted)
                 });
                 this.deps.settleInTransaction?.(anchor);
@@ -141964,7 +142018,7 @@ ${tail}` : ""
       }
     });
     function readRecoveryCurrentAssignment(db2, selfDaemonId) {
-      if (!db2.inTransaction || selfDaemonId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_owner_transaction_required");
+      if (!db2.inTransaction || selfDaemonId !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_owner_transaction_required");
       if (!inRecoveryMeshOwnershipFence()) throw new Error("recovery_physical_owner_fence_required");
       const fd = (0, import_node_fs42.openSync)(getMeshConfigPath(), import_node_fs42.constants.O_RDONLY | import_node_fs42.constants.O_NOFOLLOW);
       let ownerBytes;
@@ -141981,19 +142035,19 @@ ${tail}` : ""
       } finally {
         (0, import_node_fs42.closeSync)(fd);
       }
-      const currentMesh = JSON.parse(ownerBytes).meshes?.find((m) => m.id === import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId);
-      const allowedOwnerPins = /* @__PURE__ */ new Set([import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId.slice("daemon_".length)]);
+      const currentMesh = JSON.parse(ownerBytes).meshes?.find((m) => m.id === import_session_host_core31.OPERATOR_RECOVERY_TARGET.meshId);
+      const allowedOwnerPins = /* @__PURE__ */ new Set([import_session_host_core31.OPERATOR_RECOVERY_TARGET.ownerDaemonId, import_session_host_core31.OPERATOR_RECOVERY_TARGET.ownerDaemonId.slice("daemon_".length)]);
       if (currentMesh?.meshHost?.role !== "host" || !allowedOwnerPins.has(currentMesh.meshHost.hostDaemonId)) throw new Error("recovery_current_mesh_owner_mismatch");
       const a = db2.prepare(`SELECT * FROM turn_attempts WHERE mesh_id=? AND task_id=?
-        ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId);
-      const q2 = db2.prepare("SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?").get(import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId);
+        ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(import_session_host_core31.OPERATOR_RECOVERY_TARGET.meshId, import_session_host_core31.OPERATOR_RECOVERY_TARGET.taskId);
+      const q2 = db2.prepare("SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?").get(import_session_host_core31.OPERATOR_RECOVERY_TARGET.taskId, import_session_host_core31.OPERATOR_RECOVERY_TARGET.meshId);
       if (!a || !q2 || a.owner_daemon_id !== selfDaemonId || a.terminal_outcome !== null) throw new Error("recovery_current_assignment_missing");
       const data = JSON.parse(a.data_json);
       const stop = data?.writerStop;
       if (a.state !== "stopping" || a.reclaim_count !== 0 || !stop || typeof stop.requestId !== "string" || !stop.requestId.trim() || stop.confirmed === true || stop.terminal !== void 0 || data.report !== void 0) throw new Error("recovery_stopping_state_unsafe");
       const holds = db2.prepare("SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id").all(a.attempt_id);
       const payload = JSON.parse(q2.payload);
-      if (payload.id !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
+      if (payload.id !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
       const hash4 = (s2) => (0, import_node_crypto70.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
       return {
         ownerDaemonId: a.owner_daemon_id,
@@ -142021,14 +142075,14 @@ ${tail}` : ""
     }
     var import_node_fs42;
     var import_node_crypto70;
-    var import_session_host_core30;
+    var import_session_host_core31;
     var init_operator_recovery_store = __esm2({
       "src/mesh/turn-ledger/operator-recovery-store.ts"() {
         "use strict";
         import_node_fs42 = require("fs");
         init_mesh_config_store();
         import_node_crypto70 = require("crypto");
-        import_session_host_core30 = require_dist();
+        import_session_host_core31 = require_dist();
       }
     });
     function isPublishableAttempt(attempt) {
@@ -142724,7 +142778,7 @@ ${tail}` : ""
       }
       return {
         async recoverOperatorAssertedLegacy(input) {
-          if (deps.selfDaemonId !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_wrong_coordinator");
+          if (deps.selfDaemonId !== import_session_host_core32.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_wrong_coordinator");
           const recovery2 = new OperatorRecoveryAnchors({
             db: deps.db,
             owner: input.owner,
@@ -142743,8 +142797,8 @@ ${tail}` : ""
                   source: "scheduler",
                   at: now(),
                   observedBy: deps.selfDaemonId,
-                  sessionId: import_session_host_core31.OPERATOR_RECOVERY_TARGET.sessionId,
-                  attemptRef: { attemptId: import_session_host_core31.OPERATOR_RECOVERY_TARGET.attemptId, generation: import_session_host_core31.OPERATOR_RECOVERY_TARGET.generation },
+                  sessionId: import_session_host_core32.OPERATOR_RECOVERY_TARGET.sessionId,
+                  attemptRef: { attemptId: import_session_host_core32.OPERATOR_RECOVERY_TARGET.attemptId, generation: import_session_host_core32.OPERATOR_RECOVERY_TARGET.generation },
                   status: "failed",
                   reason: "operator_update"
                 });
@@ -142813,7 +142867,7 @@ ${tail}` : ""
     }
     var import_node_util16;
     var import_crypto47;
-    var import_session_host_core31;
+    var import_session_host_core32;
     var REPORT_GATE_RULES;
     var DEFAULT_LOG;
     var PUBLISH_BATCH;
@@ -142834,7 +142888,7 @@ ${tail}` : ""
         init_store();
         init_operator_recovery();
         init_operator_recovery_store();
-        import_session_host_core31 = require_dist();
+        import_session_host_core32 = require_dist();
         init_effects();
         REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13d", "R13u", "R13x", "R13z", "R13c", "R17c", "R17g", "R9t", "R13t"]);
         DEFAULT_LOG = { info: () => {
@@ -188320,6 +188374,150 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_working_dir();
     init_mesh_refine_gates();
     init_runtime_surface();
+    var import_session_host_core18 = require_dist();
+    init_mesh_runtime_store();
+    init_mesh_session_stop_fence();
+    async function resolveOperatorHostBootId(control) {
+      if (typeof control.resolveHostBootId === "function") return control.resolveHostBootId();
+      if (typeof control.getDiagnostics !== "function") return null;
+      try {
+        const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics?.hostBootId === "string" && diagnostics.hostBootId) return diagnostics.hostBootId;
+        return (0, import_session_host_core18.resolveHostBootId)({ hostStartedAt: diagnostics?.hostStartedAt ?? 0 });
+      } catch {
+        return null;
+      }
+    }
+    function sanitizeOperatorCleanupError(error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "cleanup_unconfirmed");
+      if (CLEANUP_HOST_REFUSAL_CODES.has(raw) || raw === "cleanup_session_still_running") return raw;
+      if (raw.includes("Unsupported") || raw.includes("Unknown request") || raw.includes("stop_session_if_expected")) {
+        return "cleanup_expected_stop_unsupported";
+      }
+      if (raw.includes("delete_session_if_expected")) return "cleanup_expected_delete_unsupported";
+      return "cleanup_unconfirmed";
+    }
+    function captureOperatorCleanupExpected(hostBootId, record7) {
+      const sessionId = typeof record7.sessionId === "string" ? record7.sessionId : "";
+      if (!sessionId) return null;
+      return captureCleanupExpectedFromHostRecord({ sessionId, hostBootId, record: record7 });
+    }
+    async function resolveOperatorCleanupHostBootId(control) {
+      return resolveOperatorHostBootId(control);
+    }
+    async function operatorStopSessionIfExpected(args) {
+      const { control, meshId, sessionId, expected } = args;
+      if (typeof control.stopSessionIfExpected !== "function") {
+        return { success: false, error: "cleanup_expected_stop_unsupported", retained: true };
+      }
+      const db2 = MeshRuntimeStore.getInstance().db;
+      const stopId = reserveSessionStop(db2, meshId, sessionId, void 0, expected);
+      try {
+        if (args.beforeHostStop) await args.beforeHostStop();
+        markSessionStopSent(db2, sessionId, stopId);
+        try {
+          const stopped = await control.stopSessionIfExpected(sessionId, expected);
+          if (!stopped || stopped.lifecycle !== "stopped" && stopped.lifecycle !== "stopping") {
+            return { success: false, error: "cleanup_unconfirmed", retained: true };
+          }
+          confirmSessionStop(db2, sessionId, stopId);
+          return { success: true, expected };
+        } catch (error) {
+          const code = sanitizeOperatorCleanupError(error);
+          if (CLEANUP_HOST_REFUSAL_CODES.has(code) || code === "cleanup_expected_stop_unsupported") {
+            abortSessionStopAfterHostRefusal(db2, sessionId, stopId);
+          }
+          return { success: false, error: code, retained: true };
+        }
+      } finally {
+        releaseSessionStop(db2, sessionId, stopId);
+      }
+    }
+    async function operatorDeleteSessionIfExpected(args) {
+      const { control, sessionId, expected } = args;
+      if (typeof control.deleteSessionIfExpected !== "function") {
+        return { success: false, error: "cleanup_expected_delete_unsupported", retained: true };
+      }
+      try {
+        const result = await control.deleteSessionIfExpected(sessionId, expected, { force: args.force === true });
+        if (!result || result.deleted !== true) {
+          return { success: false, error: "cleanup_unconfirmed", retained: true };
+        }
+        return { success: true, deleted: true, ...result.alreadyAbsent ? { alreadyAbsent: true } : {} };
+      } catch (error) {
+        return { success: false, error: sanitizeOperatorCleanupError(error), retained: true };
+      }
+    }
+    async function applyOperatorSessionCleanupMode(args) {
+      const { control, meshId, sessionId, mode, completed, dryRun } = args;
+      const expected = dryRun ? null : captureOperatorCleanupExpected(args.hostBootId, args.record);
+      if (mode === "stop") {
+        if (completed) return { kind: "skipped" };
+        if (!dryRun) {
+          if (!expected) return { kind: "refused", error: "cleanup_expected_malformed" };
+          const stopped = await operatorStopSessionIfExpected({
+            control,
+            meshId,
+            sessionId,
+            expected,
+            beforeHostStop: () => args.markIntentionalStop("stop_session")
+          });
+          if (!stopped.success) return { kind: "refused", error: stopped.error };
+        }
+        return { kind: "stopped" };
+      }
+      if (mode === "delete_stopped") {
+        if (!completed) return { kind: "skipped" };
+        if (!dryRun) {
+          if (!expected) return { kind: "refused", error: "cleanup_expected_malformed" };
+          const deleted = await operatorDeleteSessionIfExpected({ control, sessionId, expected, force: false });
+          if (!deleted.success) {
+            if (deleted.error === "cleanup_expected_delete_unsupported") return { kind: "delete_unsupported" };
+            return { kind: "refused", error: deleted.error };
+          }
+        }
+        return { kind: "deleted" };
+      }
+      if (!dryRun) {
+        if (!expected) return { kind: "refused", error: "cleanup_expected_malformed" };
+        if (typeof control.deleteSessionIfExpected === "function") {
+          if (!completed) await args.markIntentionalStop("delete_session_force");
+          const deleted = await operatorDeleteSessionIfExpected({ control, sessionId, expected, force: true });
+          if (!deleted.success) return { kind: "refused", error: deleted.error };
+          return { kind: "deleted" };
+        }
+        if (!completed) {
+          const stopped = await operatorStopSessionIfExpected({
+            control,
+            meshId,
+            sessionId,
+            expected,
+            beforeHostStop: () => args.markIntentionalStop("stop_session")
+          });
+          if (!stopped.success) return { kind: "refused", error: stopped.error };
+          return { kind: "delete_unsupported", stopped: true };
+        }
+        return { kind: "delete_unsupported" };
+      }
+      if (!completed) await args.markIntentionalStop("delete_session_force");
+      return { kind: "deleted" };
+    }
+    async function operatorCleanupDeleteUnsupportedFallback(args) {
+      if (args.mode === "stop_and_delete" && !args.completed) {
+        const expected = captureOperatorCleanupExpected(args.hostBootId, args.record);
+        if (!expected) return { kind: "refused", error: "cleanup_expected_malformed" };
+        const stopped = await operatorStopSessionIfExpected({
+          control: args.control,
+          meshId: args.meshId,
+          sessionId: args.sessionId,
+          expected,
+          beforeHostStop: () => args.markIntentionalStop("stop_session")
+        });
+        if (!stopped.success) return { kind: "refused", error: stopped.error };
+        return { kind: "delete_unsupported", stopped: true };
+      }
+      return { kind: "delete_unsupported" };
+    }
     var LEGACY_WORKTREE_DIR_NAME = ".adhdev-worktrees";
     function acceptableManagedWorktreePaths(resolveWorktreePath2, normalizePath2, repoRoot, meshName, branch, worktreeBaseDir, originalBranch) {
       const safeBranch = branch.replace(/[/\\:*?"<>|]/g, "-").replace(/^\.+|\.+$/g, "");
@@ -188970,6 +189168,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
+      const hostBootId = args.dryRun ? "dry-run" : await resolveOperatorCleanupHostBootId(self.deps.sessionHostControl);
+      if (!args.dryRun && !hostBootId) {
+        return { success: false, error: "cleanup_host_boot_unknown", retained: true };
+      }
       const matched = sessions.filter((record7) => self.sessionMatchesMeshNode(record7, args.node, args.nodeId, requestedSessionIds));
       const hasExplicitSessionIds = !!requestedSessionIds?.size;
       const stoppedSessionIds = [];
@@ -188981,6 +189183,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const actedLiveDelegateSessionIds = [];
       const deleteUnsupportedSessionIds = [];
       const recordsRemainSessionIds = [];
+      const retainedSessionIds = [];
       const errors = [];
       const cleanupSource = args.source || "mesh_cleanup_sessions";
       const markedIntentionalStopSessionIds = /* @__PURE__ */ new Set();
@@ -188996,6 +189199,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           source: cleanupSource,
           action: action2
         });
+      };
+      const refuseSession = (sessionId, error) => {
+        retainedSessionIds.push(sessionId);
+        errors.push({ sessionId, error, retained: true });
       };
       const matchedBySurfaceKind = {
         live_runtime: 0,
@@ -189048,48 +189255,47 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           actedLiveDelegateSessionIds.push(sessionId);
         }
         try {
-          if (args.mode === "stop") {
-            if (!completed) {
-              if (!args.dryRun) {
-                await markIntentionalStop(sessionId, "stop_session");
-                await self.deps.sessionHostControl.stopSession(sessionId);
-              }
-              stoppedSessionIds.push(sessionId);
-            } else {
-              skippedSessionIds.push(sessionId);
-            }
-            continue;
-          }
-          if (args.mode === "delete_stopped") {
-            if (completed) {
-              if (!args.dryRun) await self.deps.sessionHostControl.deleteSession(sessionId, { force: false });
-              deletedSessionIds.push(sessionId);
-            } else {
-              skippedSessionIds.push(sessionId);
-            }
-            continue;
-          }
-          if (args.mode === "stop_and_delete") {
-            if (!completed) await markIntentionalStop(sessionId, "delete_session_force");
-            if (!args.dryRun) await self.deps.sessionHostControl.deleteSession(sessionId, { force: true });
-            deletedSessionIds.push(sessionId);
-            continue;
+          const outcome = await applyOperatorSessionCleanupMode({
+            control: self.deps.sessionHostControl,
+            meshId: args.meshId,
+            sessionId,
+            record: record7,
+            hostBootId,
+            mode: args.mode,
+            completed,
+            dryRun: args.dryRun === true,
+            markIntentionalStop: (action2) => markIntentionalStop(sessionId, action2)
+          });
+          if (outcome.kind === "stopped") stoppedSessionIds.push(sessionId);
+          else if (outcome.kind === "deleted") deletedSessionIds.push(sessionId);
+          else if (outcome.kind === "skipped") skippedSessionIds.push(sessionId);
+          else if (outcome.kind === "refused") refuseSession(sessionId, outcome.error);
+          else if (outcome.kind === "delete_unsupported") {
+            deleteUnsupportedSessionIds.push(sessionId);
+            recordsRemainSessionIds.push(sessionId);
+            if (outcome.stopped) stoppedSessionIds.push(sessionId);
+            skippedSessionIds.push(sessionId);
           }
         } catch (e) {
           const message = e?.message || String(e);
-          if (message.includes("Unsupported session host request: delete_session") && (args.mode === "delete_stopped" || args.mode === "stop_and_delete")) {
+          if ((message.includes("Unsupported session host request: delete_session") || message.includes("delete_session_if_expected")) && (args.mode === "delete_stopped" || args.mode === "stop_and_delete")) {
+            const outcome = await operatorCleanupDeleteUnsupportedFallback({
+              control: self.deps.sessionHostControl,
+              meshId: args.meshId,
+              sessionId,
+              record: record7,
+              hostBootId,
+              mode: args.mode,
+              completed,
+              markIntentionalStop: (action2) => markIntentionalStop(sessionId, action2)
+            });
+            if (outcome.kind === "refused") {
+              refuseSession(sessionId, outcome.error);
+              continue;
+            }
             deleteUnsupportedSessionIds.push(sessionId);
             recordsRemainSessionIds.push(sessionId);
-            if (args.mode === "stop_and_delete" && !completed) {
-              try {
-                await markIntentionalStop(sessionId, "stop_session");
-                await self.deps.sessionHostControl.stopSession(sessionId);
-                stoppedSessionIds.push(sessionId);
-              } catch (stopError) {
-                errors.push({ sessionId, error: stopError?.message || String(stopError) });
-                continue;
-              }
-            }
+            if (outcome.kind === "delete_unsupported" && outcome.stopped) stoppedSessionIds.push(sessionId);
             skippedSessionIds.push(sessionId);
             continue;
           }
@@ -189111,9 +189317,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         ...actedLiveDelegateSessionIds.length ? { actedLiveDelegateSessionIds } : {},
         ...reclaimedOrphanSessionIds.length ? { reclaimedOrphanSessionIds } : {},
         ...skippedLiveSessionReasons.length ? { skippedLiveSessionReasons } : {},
+        ...retainedSessionIds.length ? { retainedSessionIds, retained: true } : {},
         ...deleteUnsupported ? {
           deleteUnsupported: true,
-          effectiveCleanup: args.mode === "stop_and_delete" ? "stopped_only_records_remain" : "delete_unsupported_records_remain",
+          effectiveCleanup: args.mode === "stop_and_delete" && stoppedSessionIds.length > 0 ? "stopped_only_records_remain" : "delete_unsupported_records_remain",
           deleteUnsupportedSessionIds,
           recordsRemainSessionIds
         } : {},
@@ -193956,7 +194163,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
-    var import_session_host_core24 = require_dist();
+    var import_session_host_core25 = require_dist();
     var import_node_crypto63 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
@@ -194190,7 +194397,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os44 = __toESM2(require("os"));
     var path114 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core19 = require_dist();
+    var import_session_host_core20 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -194211,8 +194418,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers2) {
         this.opts = opts;
         this.handlers = handlers2;
-        this.cols = opts.cols ?? import_session_host_core19.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core19.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core20.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core20.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -195019,7 +195226,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core20 = require_dist();
+    var import_session_host_core21 = require_dist();
     var fs114 = __toESM2(require("fs"));
     var path113 = __toESM2(require("path"));
     var fs110 = __toESM2(require("fs"));
@@ -195436,8 +195643,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core20.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core20.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core21.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core21.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -206822,7 +207029,7 @@ ${buttons.join("\n")}`;
       if (typeof dir !== "string") return "";
       return dir.trim().replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
     }
-    var import_session_host_core21 = require_dist();
+    var import_session_host_core22 = require_dist();
     init_validate();
     init_ports();
     init_cooperative_gate();
@@ -206935,7 +207142,7 @@ ${buttons.join("\n")}`;
     init_standalone_mcp_auth();
     init_mcp_command_ingress();
     async function startSession(host, cliType, workingDir, cliArgs, initialModel, options) {
-      (0, import_session_host_core21.assertRecoveryLaunchIdentity)({ cliArgs, options });
+      (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ cliArgs, options });
       assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: "start_session" });
       assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
       const plan = planSessionStart(host, cliType, workingDir, options);
@@ -207062,7 +207269,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         LOG.warn("CLI", `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template \u2014 launching without thinking-level selection.`);
       }
       const sessionBinding = options?.restartBinding ?? resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
-      (0, import_session_host_core21.assertRecoveryLaunchIdentity)({ key: key5, sessionBinding, cliArgsWithBrain });
+      (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ key: key5, sessionBinding, cliArgsWithBrain });
       const resolvedCliArgs = sessionBinding.cliArgs;
       const cliLaunchRecord = options?.restartRecord ? { ...structuredClone(options.restartRecord), sessionId: key5, launchedAt: Date.now() } : buildSessionLaunchRecord({
         roleLaunch: options?.launchProvenance?.roleLaunch,
@@ -207445,7 +207652,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return false;
     }
-    var import_session_host_core22 = require_dist();
+    var import_session_host_core23 = require_dist();
     init_dist();
     init_binding_owner();
     init_coordinator_registry();
@@ -207608,7 +207815,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       signal?.throwIfAborted();
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       for (const r of sessions) {
-        (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ runtimeId: r.runtimeId, providerSessionId: r.providerSessionId, cliArgs: r.cliArgs });
+        (0, import_session_host_core23.assertRecoveryLaunchIdentity)({ runtimeId: r.runtimeId, providerSessionId: r.providerSessionId, cliArgs: r.cliArgs });
       }
       const owner = host.deps.getHostedBindingOwner?.();
       const registry = getAssistantRegistry();
@@ -207842,7 +208049,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_mesh_session_lifetime();
     init_mesh_session_stop_fence();
     init_dist();
-    var import_session_host_core23 = require_dist();
+    var import_session_host_core24 = require_dist();
     init_mesh_session_lifetime();
     init_command_args();
     async function resolveLifetimeHostBootId(control) {
@@ -207851,7 +208058,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       try {
         const diagnostics = await control.getDiagnostics({});
         if (typeof diagnostics.hostBootId === "string" && diagnostics.hostBootId) return diagnostics.hostBootId;
-        return (0, import_session_host_core23.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
+        return (0, import_session_host_core24.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
       } catch {
         return null;
       }
@@ -208258,7 +208465,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }) || void 0;
       }
       createAdapter(cliType, workingDir, cliArgs, runtimeId, providerSessionId, attachExisting = false, extraEnv, removeSpawnArgs, resolvedTrustPlan) {
-        (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ runtimeId, providerSessionId, cliArgs });
+        (0, import_session_host_core25.assertRecoveryLaunchIdentity)({ runtimeId, providerSessionId, cliArgs });
         const normalizedType = this.providerLoader.resolveAlias(cliType);
         const provider = this.providerLoader.getMeta(normalizedType);
         if (provider && provider.category === "cli" && provider.patterns && provider.spawn) {
@@ -208326,7 +208533,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }, 3e3);
       }
       async registerCliInstance(key5, normalizedType, cliType, resolvedDir, cliArgs, provider, settings2, attachExisting = false, options) {
-        (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ key: key5, cliArgs, options });
+        (0, import_session_host_core25.assertRecoveryLaunchIdentity)({ key: key5, cliArgs, options });
         return withMaintenanceAdmission(async () => {
           options = options ? { ...options } : void 0;
           if (attachExisting) await verifyHeldObservationPromotion(this, { runtimeId: key5, providerType: normalizedType, workspace: resolvedDir, providerSessionId: options?.providerSessionId, startedAt: options?.attachStartedAtMs, binding: { meshId: settings2.meshNodeFor || "", nodeId: settings2.meshNodeId || "", coordinatorMeshId: settings2.meshCoordinatorFor || "", workOwner: settings2.meshCoordinatorDaemonId || "" } });
@@ -208494,7 +208701,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         for (const [runtimeId, adapter] of this.adapters) {
           try {
             const meta2 = adapter.getRuntimeMetadata?.();
-            (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ runtimeId, meta: meta2 });
+            (0, import_session_host_core25.assertRecoveryLaunchIdentity)({ runtimeId, meta: meta2 });
             if (!meta2) adapterCensus = "unknown";
           } catch {
             adapterCensus = "live";
@@ -213485,7 +213692,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core25 = require_dist();
+    var import_session_host_core26 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record7) {
@@ -213498,7 +213705,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core25.SessionHostClient({
+        this.client = new import_session_host_core26.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -214338,7 +214545,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && (/^(?:Runtime not found for session|Unknown session):/.test(error) || error === "session_absent");
     }
     var import_crypto45 = require("crypto");
-    var import_session_host_core26 = require_dist();
+    var import_session_host_core27 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -214436,7 +214643,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto45.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core26.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core27.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -214531,7 +214738,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     var fs127 = __toESM2(require("fs"));
-    var import_session_host_core27 = require_dist();
+    var import_session_host_core28 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -214689,7 +214896,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function probeHost(endpoint2, requiredRequestTypes, timeoutMs, identity4, invocation) {
-      const client = new import_session_host_core27.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: timeoutMs, registerAsShared: false });
+      const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
       let requestTimeoutMs = timeoutMs;
@@ -214732,7 +214939,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function ensureSessionHostReady(options) {
-      const endpoint2 = options.endpoint || (0, import_session_host_core27.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint2 = options.endpoint || (0, import_session_host_core28.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const key5 = endpointKey(endpoint2);
       const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
@@ -214810,7 +215017,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await options.beforeSpawnHost?.(endpoint2);
         if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint2, lastError);
         assertStartAdmission();
-        import_session_host_core27.SessionHostClient.disconnectClients?.(endpoint2);
+        import_session_host_core28.SessionHostClient.disconnectClients?.(endpoint2);
         assertStartAdmission();
         options.spawnHost();
         probeEvidence2.delete(key5);
@@ -214837,7 +215044,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function listHostedCliRuntimes(endpoint2, options) {
-      const client = new import_session_host_core27.SessionHostClient({ endpoint: endpoint2, registerAsShared: false, requestTimeoutMs: 5e3 });
+      const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, registerAsShared: false, requestTimeoutMs: 5e3 });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -214900,7 +215107,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs128 = __toESM2(require("fs"));
     var os48 = __toESM2(require("os"));
     var path125 = __toESM2(require("path"));
-    var import_session_host_core28 = require_dist();
+    var import_session_host_core29 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -214910,9 +215117,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => false);
       const canSignalPid = (pid) => pid > 0 && pid !== process.pid && isManagedPid(pid) && isManagedSessionHostCommandLine(getProcessCommandLine(pid), instance().configDir);
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core28.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core29.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core28.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core29.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         if (typeof baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE === "string" && baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim()) {
@@ -215283,7 +215490,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const endpoint2 = getEndpoint();
         const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
         const probeDeadline = Date.now() + probeTimeoutMs;
-        const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
+        const client = new import_session_host_core29.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported;
         let connected = false;
         let requestTimeoutMs = probeTimeoutMs;
@@ -215342,7 +215549,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint2.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, registerAsShared: false });
+          const client = new import_session_host_core29.SessionHostClient({ endpoint: endpoint2, registerAsShared: false });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -220629,13 +220836,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core32 = require_dist();
+    var import_session_host_core33 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint2, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core32.SessionHostClient({ endpoint: endpoint2 });
-        this.plane = (0, import_session_host_core32.createSessionHostControlPlane)({
+        this.client = new import_session_host_core33.SessionHostClient({ endpoint: endpoint2 });
+        this.plane = (0, import_session_host_core33.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }
@@ -220715,6 +220922,9 @@ ${notice.notice}${supersededHint}`;
       }
       deleteSession(sessionId, opts = {}) {
         return this.plane.deleteSession(sessionId, opts);
+      }
+      deleteSessionIfExpected(sessionId, expected, opts = {}) {
+        return this.plane.deleteSessionIfExpected(sessionId, expected, opts);
       }
       resumeSession(sessionId) {
         return this.plane.resumeSession(sessionId);

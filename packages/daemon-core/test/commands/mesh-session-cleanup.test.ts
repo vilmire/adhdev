@@ -55,12 +55,38 @@ async function createTempGitRepoWithSubmodule(prefix: string) {
   return { dir, repoRoot, submoduleRoot, worktreeBaseDir }
 }
 
+const HOST_BOOT_ID = 'hs:1700000000000'
+const RECORD_STARTED_AT = 1_700_000_000_000
+
+/** Minimal incarnation fields required for expected-assignment operator cleanup. */
+function withIncarnation<T extends Record<string, unknown>>(record: T, sessionId = String(record.sessionId ?? 'session')): T & {
+  runtimeKey: string
+  startedAt: number
+} {
+  return {
+    ...record,
+    runtimeKey: typeof record.runtimeKey === 'string' ? record.runtimeKey : `rt-${sessionId}`,
+    startedAt: typeof record.startedAt === 'number' ? record.startedAt : RECORD_STARTED_AT,
+  }
+}
+
 function createRouter(overrides: Record<string, unknown> = {}, depsOverrides: Record<string, unknown> = {}) {
+  const userListSessions = overrides.listSessions as ((...args: unknown[]) => Promise<any[]>) | undefined
+  const {
+    listSessions: _listSessions,
+    ...controlOverrides
+  } = overrides
   const sessionHostControl = {
-    listSessions: vi.fn(async () => []),
+    listSessions: vi.fn(async (...args: unknown[]) => {
+      const sessions = userListSessions ? await userListSessions(...args) : []
+      return (Array.isArray(sessions) ? sessions : []).map((s: any) => withIncarnation(s))
+    }),
     stopSession: vi.fn(async (sessionId: string) => ({ sessionId })),
+    stopSessionIfExpected: vi.fn(async (sessionId: string) => ({ sessionId, lifecycle: 'stopping' })),
     deleteSession: vi.fn(async (sessionId: string) => ({ sessionId, deleted: true })),
-    getDiagnostics: vi.fn(async () => ({})),
+    deleteSessionIfExpected: vi.fn(async (sessionId: string) => ({ sessionId, deleted: true })),
+    resolveHostBootId: vi.fn(async () => HOST_BOOT_ID),
+    getDiagnostics: vi.fn(async () => ({ hostBootId: HOST_BOOT_ID, hostStartedAt: RECORD_STARTED_AT })),
     resumeSession: vi.fn(async (sessionId: string) => ({ sessionId })),
     restartSession: vi.fn(async (sessionId: string) => ({ sessionId })),
     sendSignal: vi.fn(async (sessionId: string) => ({ sessionId })),
@@ -68,7 +94,7 @@ function createRouter(overrides: Record<string, unknown> = {}, depsOverrides: Re
     pruneDuplicateSessions: vi.fn(async () => ({ prunedSessionIds: [] })),
     acquireWrite: vi.fn(async () => ({ sessionId: 'session-write' })),
     releaseWrite: vi.fn(async () => ({ sessionId: 'session-release' })),
-    ...overrides,
+    ...controlOverrides,
   }
 
   const router = new DaemonCommandRouter({
@@ -125,20 +151,21 @@ describe('mesh session cleanup', () => {
       deletedSessionIds: ['done-1', 'failed-1'],
       skippedSessionIds: ['running-1'],
     })
-    expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(2)
-    expect(sessionHostControl.deleteSession).toHaveBeenNthCalledWith(1, 'done-1', { force: false })
-    expect(sessionHostControl.deleteSession).toHaveBeenNthCalledWith(2, 'failed-1', { force: false })
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledTimes(2)
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenNthCalledWith(1, 'done-1', expect.objectContaining({ sessionId: 'done-1', hostBootId: HOST_BOOT_ID }), { force: false })
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenNthCalledWith(2, 'failed-1', expect.objectContaining({ sessionId: 'failed-1', hostBootId: HOST_BOOT_ID }), { force: false })
     expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.stopSessionIfExpected).not.toHaveBeenCalled()
   })
 
-  it('falls back to stopping live sessions when delete_session is unsupported by an older session host', async () => {
-    const unsupported = new Error('Unsupported session host request: delete_session')
+  it('falls back to expected-assignment stop when delete_session_if_expected is unsupported by an older session host', async () => {
     const { router, sessionHostControl } = createRouter({
       listSessions: vi.fn(async () => [
         { sessionId: 'running-1', workspace: '/repo/worktree-a', lifecycle: 'running' },
         { sessionId: 'done-1', workspace: '/repo/worktree-a', lifecycle: 'stopped' },
       ]),
-      deleteSession: vi.fn(async () => { throw unsupported }),
+      // Old host: no CAS delete kind — must not fall back to unconditional delete/stop.
+      deleteSessionIfExpected: undefined,
     })
 
     const result = await router.execute('cleanup_mesh_sessions', {
@@ -163,9 +190,10 @@ describe('mesh session cleanup', () => {
       skippedSessionIds: ['running-1', 'done-1'],
       deleteUnsupportedSessionIds: ['running-1', 'done-1'],
     })
-    expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(2)
-    expect(sessionHostControl.stopSession).toHaveBeenCalledTimes(1)
-    expect(sessionHostControl.stopSession).toHaveBeenCalledWith('running-1')
+    expect(sessionHostControl.stopSessionIfExpected).toHaveBeenCalledTimes(1)
+    expect(sessionHostControl.stopSessionIfExpected).toHaveBeenCalledWith('running-1', expect.objectContaining({ sessionId: 'running-1', hostBootId: HOST_BOOT_ID }))
+    expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
   })
 
   it('protects live runtimes from broad workspace cleanup unless explicit session IDs are requested', async () => {
@@ -204,7 +232,9 @@ describe('mesh session cleanup', () => {
       skippedLiveSessionIds: ['coordinator-live'],
     })
     expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.stopSessionIfExpected).not.toHaveBeenCalled()
     expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.deleteSessionIfExpected).not.toHaveBeenCalled()
   })
 
   it('stops a live delegate session explicitly bound to the node being removed even on a shared daemon', async () => {
@@ -257,8 +287,8 @@ describe('mesh session cleanup', () => {
       expect(reasons.find(r => r.sessionId === 'delegate-b')?.reason).toBe('live_delegate_bound_to_other_node:node-b')
       expect(reasons.find(r => r.sessionId === 'ambient-live')?.reason).toBe('live_session_matched_by_workspace_only_no_node_binding')
       // delegate-a actually force-deleted; coordinator/other never touched
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(1)
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('delegate-a', { force: true })
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledTimes(1)
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('delegate-a', expect.objectContaining({ sessionId: 'delegate-a' }), { force: true })
     } finally {
       cleanupLedgerFile(meshId)
     }
@@ -288,7 +318,9 @@ describe('mesh session cleanup', () => {
       .find(r => r.sessionId === 'delegate-a')?.reason)
       .toBe('live_delegate_preserved_by_delete_stopped_mode_use_stop_or_stop_and_delete')
     expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.deleteSessionIfExpected).not.toHaveBeenCalled()
     expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
+    expect(sessionHostControl.stopSessionIfExpected).not.toHaveBeenCalled()
   })
 
   it('protects coordinator sessions from broad remove-node cleanup even when they are no longer live runtimes', async () => {
@@ -330,8 +362,8 @@ describe('mesh session cleanup', () => {
         skippedCoordinatorSessionIds: ['coordinator-inactive'],
       },
     })
-    expect(sessionHostControl.deleteSession).toHaveBeenCalledTimes(1)
-    expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('worker-stopped', { force: true })
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledTimes(1)
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('worker-stopped', expect.objectContaining({ sessionId: 'worker-stopped' }), { force: true })
   })
 
   it('allows explicit session IDs to target live runtimes during manual cleanup', async () => {
@@ -359,7 +391,8 @@ describe('mesh session cleanup', () => {
       stoppedSessionIds: ['smoke-live'],
       skippedLiveSessionIds: [],
     })
-    expect(sessionHostControl.stopSession).toHaveBeenCalledWith('smoke-live')
+    expect(sessionHostControl.stopSessionIfExpected).toHaveBeenCalledWith('smoke-live', expect.objectContaining({ sessionId: 'smoke-live', hostBootId: HOST_BOOT_ID }))
+    expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
     cleanupLedgerFile('mesh-1')
   })
 
@@ -386,7 +419,8 @@ describe('mesh session cleanup', () => {
       })
 
       expect(result).toMatchObject({ success: true, stoppedSessionIds: ['duplicate-live'] })
-      expect(sessionHostControl.stopSession).toHaveBeenCalledWith('duplicate-live')
+      expect(sessionHostControl.stopSessionIfExpected).toHaveBeenCalledWith('duplicate-live', expect.objectContaining({ sessionId: 'duplicate-live', hostBootId: HOST_BOOT_ID }))
+      expect(sessionHostControl.stopSession).not.toHaveBeenCalled()
       const entries = readLocalRecords(meshId)
       expect(entries).toHaveLength(1)
       expect(entries[0]).toMatchObject({
@@ -434,7 +468,8 @@ describe('mesh session cleanup', () => {
         removed: true,
         sessionCleanup: { deletedSessionIds: ['remove-live'] },
       })
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('remove-live', { force: true })
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('remove-live', expect.objectContaining({ sessionId: 'remove-live' }), { force: true })
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
       const stopIntent = readLocalRecords(meshId).find(entry => entry.kind === 'session_stopped')
       expect(stopIntent).toMatchObject({
         nodeId: 'node-a',
@@ -453,13 +488,12 @@ describe('mesh session cleanup', () => {
   })
 
   it('reports older hosts with unsupported delete as stopped-only with records remaining', async () => {
-    const unsupported = new Error('Unsupported session host request: delete_session')
     const { router } = createRouter({
       listSessions: vi.fn(async () => [
         { sessionId: 'done-1', workspace: '/repo/worktree-a', lifecycle: 'stopped' },
         { sessionId: 'snapshot-1', workspace: '/repo/worktree-a', lifecycle: 'failed', meta: { restoredFromStorage: true } },
       ]),
-      deleteSession: vi.fn(async () => { throw unsupported }),
+      deleteSessionIfExpected: undefined,
     })
 
     const result = await router.execute('cleanup_mesh_sessions', {
@@ -514,7 +548,8 @@ describe('mesh session cleanup', () => {
         deletedSessionIds: ['done-1'],
       },
     })
-    expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('done-1', { force: false })
+    expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('done-1', expect.objectContaining({ sessionId: 'done-1' }), { force: false })
+    expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
   })
 
   it('blocks local worktree removal when the path is not the managed worktree path', async () => {
@@ -821,8 +856,9 @@ describe('mesh session cleanup', () => {
 
       expect(result).toMatchObject({ success: true, removed: true, worktreeCleanup: { success: true } })
       // Default worktree cleanup mode is stop_and_delete: a live workspace-bound
-      // session is force-deleted (it does not route through stopSession).
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('live-1', { force: true })
+      // session is force-deleted via expected-assignment host CAS.
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('live-1', expect.objectContaining({ sessionId: 'live-1' }), { force: true })
+      expect(sessionHostControl.deleteSession).not.toHaveBeenCalled()
       expect(existsSync(created.worktreePath)).toBe(false)
       expect(inlineMesh.nodes.some(node => node.id === 'node-worktree')).toBe(false)
     } finally {
@@ -993,9 +1029,9 @@ describe('mesh session cleanup', () => {
       const reasons = result.sessionCleanup.skippedLiveSessionReasons as Array<{ sessionId: string; reason: string }>
       expect(reasons.find(r => r.sessionId === 'delegate-b')?.reason).toBe('live_delegate_bound_to_other_node:node-b')
       // orphan-live force-deleted, coordinator/delegate-b never touched.
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('orphan-live', { force: true })
-      expect(sessionHostControl.deleteSession).not.toHaveBeenCalledWith('coordinator-live', { force: true })
-      expect(sessionHostControl.deleteSession).not.toHaveBeenCalledWith('delegate-b', { force: true })
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('orphan-live', expect.objectContaining({ sessionId: 'orphan-live' }), { force: true })
+      expect(sessionHostControl.deleteSessionIfExpected).not.toHaveBeenCalledWith('coordinator-live', expect.anything(), expect.anything())
+      expect(sessionHostControl.deleteSessionIfExpected).not.toHaveBeenCalledWith('delegate-b', expect.anything(), expect.anything())
       // delegate-b is bound to another node and legitimately survives → it is still a
       // remaining live session, so orphanedSessionsRemaining truthfully flags it (and ONLY it).
       expect(result.orphanedSessionsRemaining).toBe(true)
@@ -1076,7 +1112,7 @@ describe('mesh session cleanup', () => {
       // Defaulted to stop_and_delete → the live session is force-deleted, not preserved.
       expect(result.sessionCleanup.mode).toBe('stop_and_delete')
       expect(result.sessionCleanup.deletedSessionIds).toContain('orphan-live')
-      expect(sessionHostControl.deleteSession).toHaveBeenCalledWith('orphan-live', { force: true })
+      expect(sessionHostControl.deleteSessionIfExpected).toHaveBeenCalledWith('orphan-live', expect.objectContaining({ sessionId: 'orphan-live' }), { force: true })
     } finally {
       cleanupLedgerFile(meshId)
     }

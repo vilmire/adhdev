@@ -31,6 +31,38 @@ export function captureCleanupExpected(args: {
         startedAt: args.startedAt, ...sessionClaimFence(args.state) };
 }
 
+/** Capture expected from the host session record (operator cleanup selection). */
+export function claimFenceFromHostRecord(record: { meta?: any } | null | undefined): SessionClaimFence {
+    const active = record?.meta?.meshActiveAssignment;
+    if (active && typeof active.taskId === 'string' && active.taskId) {
+        return {
+            taskId: active.taskId,
+            attemptId: typeof active.attemptId === 'string' ? active.attemptId : null,
+            generation: Number.isSafeInteger(active.generation) ? Number(active.generation) : null,
+            dispatchNonce: Number.isSafeInteger(active.dispatchNonce) ? Number(active.dispatchNonce) : null,
+        };
+    }
+    return { taskId: null, attemptId: null, generation: null, dispatchNonce: null };
+}
+
+export function captureCleanupExpectedFromHostRecord(args: {
+    sessionId: string;
+    hostBootId: string;
+    record: { runtimeKey?: string; startedAt?: number; meta?: any };
+}): SessionCleanupExpected | null {
+    if (!args.hostBootId || !args.record.runtimeKey
+        || !Number.isSafeInteger(args.record.startedAt) || (args.record.startedAt ?? 0) <= 0) {
+        return null;
+    }
+    return {
+        sessionId: args.sessionId,
+        hostBootId: args.hostBootId,
+        runtimeKey: args.record.runtimeKey,
+        startedAt: args.record.startedAt as number,
+        ...claimFenceFromHostRecord(args.record),
+    };
+}
+
 export function expectedAssignmentUnchanged(expected: SessionCleanupExpected, state: any, record: {
     sessionId: string; runtimeKey?: string; startedAt?: number;
 }): boolean {

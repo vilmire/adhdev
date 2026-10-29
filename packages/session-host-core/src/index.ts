@@ -54,6 +54,7 @@ export type {
   StopSessionPayload,
   SessionCleanupExpectedAssignment,
   StopSessionIfExpectedPayload,
+  DeleteSessionIfExpectedPayload,
 } from './types.js';
 
 export { SESSION_HOST_SUPPORTED_REQUEST_TYPES } from './types.js';
@@ -61,6 +62,7 @@ export {
   hostBootIdFromStartedAt,
   resolveHostBootId,
   refuseCleanupExpectedStop,
+  refuseCleanupExpectedDelete,
 } from './cleanup-expected.js';
 export { classifyTermination } from './termination.js';
 export { CLI_CHILD_NICE_INCREMENT, CLI_CHILD_NICE_ENV, CLI_CHILD_SCHEDULING_ENV, createCliChildPriorityPolicy, niceLaunch, spawnCliChild, type NiceLaunch } from './cli-child-priority.js';
