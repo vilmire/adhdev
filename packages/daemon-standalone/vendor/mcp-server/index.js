@@ -32596,13 +32596,13 @@ ${renderWorkerProtocolFooter2(input)}`;
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
       interceptorInstalled = true;
-      const stripAnsi3 = (str222) => str222.replace(/\x1B\[[0-9;]*m/g, "");
+      const stripAnsi4 = (str222) => str222.replace(/\x1B\[[0-9;]*m/g, "");
       const isDaemonLogLine = (msg) => /\[(DBG|INF|WRN|ERR)\]/.test(msg);
       console.log = (...args) => {
         origConsoleLog(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi3(msg);
+          const clean2 = stripAnsi4(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = clean2.startsWith("[20") ? clean2 : `[${fullTs()}] ${clean2}`;
           writeToFile(line);
@@ -32623,7 +32623,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         origConsoleError(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi3(msg);
+          const clean2 = stripAnsi4(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = `[${fullTs()}] [ERROR] ${clean2}`;
           writeToFile(line);
@@ -32638,7 +32638,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         origConsoleWarn(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi3(msg);
+          const clean2 = stripAnsi4(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = `[${fullTs()}] [WARN] ${clean2}`;
           writeToFile(line);
@@ -103752,7 +103752,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       return dedupe(models);
     }
+    function stripAnsi2(value) {
+      return value.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+    }
     function parseModels(raw, parse2) {
+      raw = typeof raw === "string" ? stripAnsi2(raw) : raw;
       switch (parse2.format) {
         case "json":
           return parseJsonModels(raw, parse2);
@@ -112777,7 +112781,7 @@ ${detail.join("\n")}` : stripped;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
-    function stripAnsi2(text5) {
+    function stripAnsi3(text5) {
       const s2 = String(text5 || "");
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
@@ -112998,7 +113002,7 @@ ${detail.join("\n")}` : stripped;
       return out.join("\n");
     }
     function detectProviderFailure(output, _exitCode) {
-      const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
+      const stripped = stripAnsi3(output).replace(/\r\n?/g, "\n");
       const filtered = stripToolAndCodeLines(stripped);
       const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
       const text5 = linesText.replace(/\s+/g, " ").trim();
@@ -113071,7 +113075,7 @@ ${detail.join("\n")}` : stripped;
       return null;
     }
     function detectAuthFailureOnlyReply(reply) {
-      const text5 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      const text5 = stripAnsi3(reply).replace(/\s+/g, " ").trim().toLowerCase();
       if (!text5 || text5.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
       const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text5);
       const segments = (isJsonOrRaw401 ? text5.split(/\s*·\s*/) : text5.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
@@ -113992,7 +113996,7 @@ ${detail.join("\n")}` : stripped;
     });
     function isAnchoredSignInViewport(viewport, spec) {
       if (!viewport || !spec?.transitions) return false;
-      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+      const stripped = stripAnsi3(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
       if (!stripped.trim()) return false;
       const cleaned = stripToolAndCodeLines(stripped);
       if (!cleaned.trim()) return false;
@@ -114006,7 +114010,7 @@ ${detail.join("\n")}` : stripped;
     }
     function hasCredentialInputPromptInViewport(viewport) {
       if (!viewport) return false;
-      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+      const stripped = stripAnsi3(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
       if (!stripped.trim()) return false;
       const cleaned = stripToolAndCodeLines(stripped);
       if (!cleaned.trim()) return false;
@@ -197481,7 +197485,7 @@ ${text5}` : text5;
       };
     }
     function extractCodexSessionIdFromScreen(screenText) {
-      const clean2 = stripAnsi2(screenText);
+      const clean2 = stripAnsi3(screenText);
       const match = clean2.match(/(?:gpt-|o\d|codex-)[^\n·]*·[^\n·]*·\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       return match?.[1];
     }
@@ -199187,7 +199191,7 @@ ${text5}` : text5;
     }
     function maskForeignProviderText(cliType, text5) {
       if (!(cliType in PROVIDER_MARKERS) || !text5) return text5;
-      const clean2 = stripAnsi2(text5);
+      const clean2 = stripAnsi3(text5);
       const foreign = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType);
       if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text5;
       return logicalBlocks(clean2).flatMap((block2) => labelledStatements(cliType, block2)).map((statement) => foreign.some(([, marker2]) => marker2.test(statement)) ? "" : statement).join("\n");
@@ -199206,7 +199210,7 @@ ${text5}` : text5;
     var ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|api\s+error\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{))|(?:[●✗✖⚠!]\s+)?(?:(?:http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S))/i;
     function hasAnchoredMidTurnAuthFailure(cliType, rawSurface) {
       const masked = maskForeignProviderText(cliType, rawSurface);
-      const stripped = stripAnsi2(masked).replace(/\r\n?/g, "\n");
+      const stripped = stripAnsi3(masked).replace(/\r\n?/g, "\n");
       const filtered = stripToolAndCodeLines(stripped);
       if (!filtered.trim()) return false;
       const rawNonEmpty = stripped.split("\n").filter((l) => l.trim().length > 0);
@@ -199364,7 +199368,7 @@ ${text5}` : text5;
        */
       strippedTail(maxBytes) {
         if (this.seqCounter <= this.strippedClearedAtSeq) return "";
-        return (this.strippedCache ??= stripAnsi2(this.buf)).slice(-maxBytes);
+        return (this.strippedCache ??= stripAnsi3(this.buf)).slice(-maxBytes);
       }
       /**
        * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
@@ -199436,7 +199440,7 @@ ${text5}` : text5;
     var TOOL_OR_DIFF = /^\s*(?:▎|(?:Edited|Editing|Created|Creating|Deleted|Deleting|Read|Reading|Ran|Running|Searched|Searching|Listed|Listing|Grepped|Globbed|Fetched|Fetching)\s+\S+(?:\s+[+-]\d+)*\s*$)/;
     var MAX_CHARS = 4e3;
     function extractCursorScreenAssistantMessages(screenText, promptSnippets = []) {
-      const text5 = stripAnsi2(screenText || "").replace(/\r/g, "").replace(/\s+$/, "");
+      const text5 = stripAnsi3(screenText || "").replace(/\r/g, "").replace(/\s+$/, "");
       const tail = text5.split("\n").slice(-18).join("\n");
       if (!SETTLED_FOOTER.test(tail) || BUSY.test(tail)) return [];
       const lines = text5.split("\n");

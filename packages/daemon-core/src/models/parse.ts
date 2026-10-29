@@ -189,7 +189,22 @@ export function parseTomlTableKeyModels(raw: string, parse: ModelDiscoveryParse)
 }
 
 /** Dispatch on the declared format. An unknown format yields `[]` (→ `parse` failure → manifest fallback). */
+/**
+ * Strip ANSI SGR/CSI sequences.
+ *
+ * ★Not hypothetical either: `cursor-agent models` colours its output whenever
+ * FORCE_COLOR is set in the environment it inherits (measured 2026-10-29 under
+ * a daemon started with FORCE_COLOR) — `\x1b[36mauto\x1b[39m \x1b[2m- Auto…`.
+ * Every slug then fails the line pattern and discovery reports "no models".
+ * Stripped here, in the shared parser, so any CLI that colours its listing is
+ * handled the same way.
+ */
+function stripAnsi(value: string): string {
+    return value.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
 export function parseModels(raw: string, parse: ModelDiscoveryParse): DiscoveredModel[] {
+    raw = typeof raw === 'string' ? stripAnsi(raw) : raw;
     switch (parse.format) {
         case 'json': return parseJsonModels(raw, parse);
         case 'lines': return parseLineModels(raw, parse);

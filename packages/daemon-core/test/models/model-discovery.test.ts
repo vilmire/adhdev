@@ -679,3 +679,19 @@ describe('CLI version invalidation & self-updating CLI rediscovery', () => {
         }
     });
 });
+
+describe('model discovery under a colour-forcing environment', () => {
+    const cursorLines = {
+        format: 'lines' as const,
+        linePattern: '^(?<slug>[A-Za-z0-9][\\w./-]*)\\s+-\\s+(?<label>.+?)\\s*$',
+    };
+
+    it('parses cursor-agent output that carries ANSI colour codes', () => {
+        const raw = '\u001b[2mAvailable models\u001b[22m\n\n'
+            + '\u001b[36mauto\u001b[39m \u001b[2m- Auto\u001b[22m\u001b[2m (default)\u001b[22m\n'
+            + '\u001b[36mgpt-5.3-codex-low\u001b[39m \u001b[2m- Codex 5.3 Low\u001b[22m\n';
+        const models = parseModels(raw, cursorLines);
+        expect(models.map(m => m.slug)).toEqual(['auto', 'gpt-5.3-codex-low']);
+    });
+
+});
