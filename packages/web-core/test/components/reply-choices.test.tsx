@@ -23,6 +23,11 @@ describe('extractReplyChoices', () => {
         expect(extractReplyChoices('[[choices: a | b]]\nmore text').choices).toEqual([])
         expect(extractReplyChoices('no options here').choices).toEqual([])
     })
+    it('also takes the bare `[[a | b]]` form (keyword dropped), inline or on its own line, but not wiki-style [[page]]', () => {
+        expect(extractReplyChoices('Remove it?\n[[빼기 (권장) | 넣기]]')).toEqual({ text: 'Remove it?', choices: ['빼기 (권장)', '넣기'] })
+        expect(extractReplyChoices('Remove it? [[yes | no]]')).toEqual({ text: 'Remove it?', choices: ['yes', 'no'] })
+        expect(extractReplyChoices('see [[some page]]').choices).toEqual([])
+    })
     it('caps the number and length of options', () => {
         expect(extractReplyChoices(`q\n[[choices: 1|2|3|4|5|6|${'x'.repeat(90)}]]`).choices).toEqual(['1', '2', '3', '4', '5'])
     })

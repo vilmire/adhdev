@@ -25,12 +25,14 @@ import PendingApprovalsInbox, {
 import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import AppPage from '../components/ui/AppPage'
 import Button from '../components/ui/Button'
+import { AssistantStagedWritesList } from '../components/dashboard/AssistantStagedWrites'
 import { IconWarning } from '../components/Icons'
 import { getMeshName } from '../utils/mesh-name-registry'
 import DecisionCard, { AnsweredCard, ProjectMissionLine, localizeConfirmation } from '../components/needs-you/DecisionCard'
 import {
     NEEDS_YOU_KINDS,
     clearDecisionFromQuery,
+    entryFilterKind,
     entryMeshId,
     filterNeedsYou,
     parseNeedsYouQuery,
@@ -95,7 +97,7 @@ export default function NeedsYou() {
 
     const kindCounts = useMemo(() => {
         const c: Record<NeedsYouKind, number> = { decision: 0, approval: 0, live_check: 0, confirmation: 0 }
-        for (const e of sorted) c[e.kind]++
+        for (const e of sorted) c[entryFilterKind(e)]++
         return c
     }, [sorted])
 
@@ -156,7 +158,9 @@ export default function NeedsYou() {
     const recommendedCount = planRecommendedAnswers(visible).length
     const empty = visible.length === 0
 
-    const renderEntry = (e: Exclude<NeedsYouEntry, { kind: 'approval' }>) => {
+    const stagedVisible = visible.filter((e): e is Extract<NeedsYouEntry, { kind: 'staged' }> => e.kind === 'staged').map(e => e.item)
+
+    const renderEntry = (e: Exclude<NeedsYouEntry, { kind: 'approval' | 'staged' }>) => {
         if (e.kind === 'live_check') {
             const c = e.check
             return (
@@ -192,7 +196,7 @@ export default function NeedsYou() {
     }
 
     // Approvals lead (an agent is blocked right now), then decisions → confirmations → live checks, each already sorted.
-    const nonApprovals = visible.filter((e): e is Exclude<NeedsYouEntry, { kind: 'approval' }> => e.kind !== 'approval')
+    const nonApprovals = visible.filter((e): e is Exclude<NeedsYouEntry, { kind: 'approval' | 'staged' }> => e.kind !== 'approval' && e.kind !== 'staged')
 
     return (
         <AppPage
@@ -260,6 +264,11 @@ export default function NeedsYou() {
                 <>
                     {approvalsVisible.length > 0 && (
                         <PendingApprovalsInbox approvals={approvalsVisible} onResolve={resolveApproval} onOpenSession={openSession} hideWhenEmpty nowMs={nowMs} />
+                    )}
+                    {stagedVisible.length > 0 && (
+                        <section className="flex flex-col gap-2 text-xs text-text-secondary" data-testid="needs-you-staged" aria-label={t('assistantStaged.title')}>
+                            <AssistantStagedWritesList state={state.staged} items={stagedVisible} />
+                        </section>
                     )}
                     {nonApprovals.map(renderEntry)}
                     {empty && <div className="text-xs opacity-60 py-6 text-center" data-testid="needs-you-empty">{t('needsYou.empty')}</div>}

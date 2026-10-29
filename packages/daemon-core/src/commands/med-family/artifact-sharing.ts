@@ -54,7 +54,18 @@ import {
  * outside any mission handed to a worker was invisible under the old
  * "same mission" test (standalone QA 2026-10-29; owner: requiring one mission
  * across related work is wrong).
+
+ *
+ * Because the mission no longer scopes the grant, the mesh must: an artifact is
+ * reachable through a worker grant only when it is positively bound to the
+ * worker task's mesh. An unbound record (no meshId) is never reachable this way,
+ * so a coordinator cannot launder an artifact outside its mesh through a worker.
  */
+export function isSameBoundMesh(recordMeshId: string | null | undefined, taskMeshId: string | null | undefined): boolean {
+    const a = (recordMeshId ?? '').trim();
+    const b = (taskMeshId ?? '').trim();
+    return a.length > 0 && a === b;
+}
 
 export {
     __resetOriginGrantStateForTest,
@@ -594,7 +605,7 @@ export async function authorizeCrossSessionArtifactAccess(
               ? taskPayload.inputArtifactIds
               : (authority.remoteInputArtifactIds ?? []);
         const allowedIds = new Set(rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0));
-        const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
+        const sameMesh = isSameBoundMesh(record.meshId, authority.meshId);
         if (!sameMesh || !allowedIds.has(artifactId)) {
             return {
                 ok: false,
@@ -679,7 +690,7 @@ export function listWorkerAuthorizedArtifacts(
         if (!id || seen.has(id)) continue;
         const record = store.get(id) ?? remoteArtifactById.get(id);
         if (!record) continue;
-        const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
+        const sameMesh = isSameBoundMesh(record.meshId, authority.meshId);
         if (sameMesh) {
             seen.add(id);
             merged.push(record);
@@ -998,7 +1009,7 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
                 const rec = store.get(id);
                 if (!rec) continue;
                 const recMissionId = resolveRecMission(rec);
-                const sameMesh = !rec.meshId || rec.meshId === meshId;
+                const sameMesh = isSameBoundMesh(rec.meshId, meshId);
                 if (sameMesh) {
                     inputArtifacts.push({
                         ...rec,
@@ -1017,7 +1028,7 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
                 const reqMissionId = resolveRecMission(reqRec);
                 const isAllowed =
                     sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) ||
-                    ((!reqRec.meshId || reqRec.meshId === meshId) &&
+                    (isSameBoundMesh(reqRec.meshId, meshId) &&
                         allowedSet.has(reqArtifactId));
                 if (!isAllowed) {
                     return {

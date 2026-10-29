@@ -101,7 +101,7 @@ export function normalizeAssistantRemoteAccessBinding(
 
 // ─── CRUD Operations ────────────────────────────
 
-// policy.drivers?: Record<type, { actions: string[] }> is defined by RepoMeshPolicy.
+// policy.drivers?: Record<type, { actions: string[] }> is defined by RepoMeshPolicy (optional restriction; no entry for a type = all declared actions of an owner-activated driver are allowed).
 // Policy storage is SPARSE (docs/design/2026-10-07-mesh-workspace-policy.md §A):
 // create stores normalizePolicyOverrides(opts.policy), update applies the patch via
 // mergePolicyOverrides (`null` clears a key). Readers resolve through resolveMeshPolicy.

@@ -17,6 +17,7 @@ import type { MeshStatusSnapshotUpdate } from '@adhdev/daemon-core'
 import { useTransport } from './TransportContext'
 import { useDaemons } from '../compat'
 import { subscriptionManager } from '../managers/SubscriptionManager'
+import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../hooks/useAssistantStagedWrites'
 import { extractRepoMeshStatus } from '../utils/repo-mesh-status'
 import { deriveProviderApprovalInbox } from '../components/MeshGraph/providerApprovalInbox'
 import type { PendingApprovalItem } from '../components/MeshGraph/PendingApprovalsInbox'
@@ -54,6 +55,8 @@ export interface NeedsYouOutcome {
 export interface NeedsYouState {
     snapshot: NeedsYouSnapshot
     approvals: PendingApprovalItem[]
+    /** Owner-held writes (driver activations / destructive driver actions / assistant writes) of the primary daemon; resolve via the shared staged hook. */
+    staged: AssistantStagedWritesState
     entries: NeedsYouEntry[]
     /** Open decisions + approvals (the nav badge). */
     count: number
@@ -66,8 +69,12 @@ export interface NeedsYouState {
     answer: (input: NeedsYouAnswerInput) => Promise<NeedsYouOutcome>
 }
 
+const EMPTY_STAGED: AssistantStagedWritesState = {
+    items: null, memoryStatus: null, outcomes: {}, busyIds: new Set(), refresh: async () => {}, resolve: async () => {},
+}
+
 const EMPTY_STATE: NeedsYouState = {
-    snapshot: EMPTY_NEEDS_YOU_SNAPSHOT, approvals: [], entries: [], count: 0, loaded: true, outcomes: {},
+    snapshot: EMPTY_NEEDS_YOU_SNAPSHOT, approvals: [], staged: EMPTY_STAGED, entries: [], count: 0, loaded: true, outcomes: {},
     busyIds: new Set(), refresh: async () => {}, answer: async () => ({ ok: false, code: 'unavailable' }),
 }
 
@@ -105,7 +112,17 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
     const daemonKey = daemonIds.join(',')
     const approvals = useMemo(() => deriveProviderApprovalInbox(ides, connectionStates), [ides, connectionStates])
 
+    // Owner-held writes live on the daemon that hosts the assistant (the first connected daemon).
+    const staged = useAssistantStagedWrites({
+        daemonId: daemonIds[0] ?? null,
+        enabled: daemonIds.length > 0,
+        sendCommand,
+    })
+    const stagedRefreshRef = useRef(staged.refresh)
+    stagedRefreshRef.current = staged.refresh
+
     const refresh = useCallback(async () => {
+        void stagedRefreshRef.current()
         const ids = daemonKey ? daemonKey.split(',') : []
         const mine = ++seq.current
         lastFetchAt.current = Date.now()
@@ -193,10 +210,10 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
         return outcome
     }, [refresh])
 
-    const entries = useMemo(() => buildNeedsYouEntries(snapshot, approvals), [snapshot, approvals])
+    const entries = useMemo(() => buildNeedsYouEntries(snapshot, approvals, staged.items ?? []), [snapshot, approvals, staged.items])
     const value = useMemo<NeedsYouState>(() => ({
-        snapshot, approvals, entries, count: needsYouCount(entries), loaded, outcomes, busyIds, refresh, answer,
-    }), [snapshot, approvals, entries, loaded, outcomes, busyIds, refresh, answer])
+        snapshot, approvals, staged, entries, count: needsYouCount(entries), loaded, outcomes, busyIds, refresh, answer,
+    }), [snapshot, approvals, staged, entries, loaded, outcomes, busyIds, refresh, answer])
 
     return <NeedsYouCtx.Provider value={value}>{children}</NeedsYouCtx.Provider>
 }

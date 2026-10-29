@@ -7,6 +7,7 @@
  */
 import { OWNER_ABANDON_CONFIRM_OPTIONS, OWNER_ABANDON_CONFIRM_QUESTION, isCarryOverMissionTitle } from '@adhdev/mesh-shared'
 import type { PendingApprovalItem } from '../MeshGraph/PendingApprovalsInbox'
+import type { AssistantStagedItem } from '../dashboard/assistant-staged'
 
 // ─── wire types (mirror daemon-core OwnerDecisionEntry & friends; additive/optional) ───
 
@@ -202,6 +203,13 @@ export type NeedsYouEntry =
     | { kind: 'confirmation'; key: string; decision: NeedsYouDecision }
     | { kind: 'live_check'; key: string; check: NeedsYouLiveCheck }
     | { kind: 'approval'; key: string; approval: PendingApprovalItem }
+    /** An owner-held write waiting for approval (assistant held write, driver activation, destructive driver action). Filters as an `approval`. */
+    | { kind: 'staged'; key: string; item: AssistantStagedItem }
+
+/** The filter bucket of an entry: held owner approvals sit under the 승인/approval filter. */
+export function entryFilterKind(e: NeedsYouEntry): NeedsYouKind {
+    return e.kind === 'staged' ? 'approval' : e.kind
+}
 
 /** The coordinator's `owner_abandoned` close confirmation (Correct / Reopen). */
 export function isCloseConfirmation(d: Pick<NeedsYouDecision, 'question' | 'source' | 'options'>): boolean {
@@ -244,9 +252,11 @@ export function decisionKey(d: { meshId: string; itemId: string }): string { ret
 export function buildNeedsYouEntries(
     snapshot: Pick<NeedsYouSnapshot, 'decisions' | 'liveChecks'>,
     approvals: readonly PendingApprovalItem[],
+    staged: readonly AssistantStagedItem[] = [],
 ): NeedsYouEntry[] {
     const out: NeedsYouEntry[] = []
     for (const approval of approvals) out.push({ kind: 'approval', key: `a:${approval.nodeId}:${approval.sessionId}`, approval })
+    for (const item of staged) out.push({ kind: 'staged', key: `s:${item.id}`, item })
     for (const decision of snapshot.decisions) {
         out.push({ kind: isCloseConfirmation(decision) ? 'confirmation' : 'decision', key: decisionKey(decision), decision })
     }
@@ -264,6 +274,7 @@ function dueMs(iso: string | undefined): number {
 function rank(e: NeedsYouEntry): number {
     switch (e.kind) {
         case 'approval': return 0
+        case 'staged': return 0
         case 'decision': return e.decision.urgency === 'blocking' ? 1 : 2
         case 'confirmation': return 3
         case 'live_check': return 4
@@ -271,7 +282,7 @@ function rank(e: NeedsYouEntry): number {
 }
 
 function createdOf(e: NeedsYouEntry): string {
-    return e.kind === 'live_check' ? e.check.createdAt : e.kind === 'approval' ? '' : e.decision.createdAt
+    return e.kind === 'live_check' ? e.check.createdAt : e.kind === 'approval' ? '' : e.kind === 'staged' ? e.item.createdAt ?? '' : e.decision.createdAt
 }
 
 /** Most urgent first; stable. Approvals by longest wait, decisions by nearest due then oldest. */
@@ -299,11 +310,11 @@ export interface NeedsYouFilter {
 }
 
 export function entryMeshId(e: NeedsYouEntry): string | null {
-    return e.kind === 'live_check' ? e.check.meshId : e.kind === 'approval' ? null : e.decision.meshId
+    return e.kind === 'live_check' ? e.check.meshId : e.kind === 'approval' || e.kind === 'staged' ? null : e.decision.meshId
 }
 
 export function filterNeedsYou(entries: readonly NeedsYouEntry[], f: NeedsYouFilter): NeedsYouEntry[] {
-    return entries.filter(e => (f.kind === 'all' || e.kind === f.kind) && (f.meshId === 'all' || entryMeshId(e) === f.meshId))
+    return entries.filter(e => (f.kind === 'all' || entryFilterKind(e) === f.kind) && (f.meshId === 'all' || entryMeshId(e) === f.meshId))
 }
 
 /** What the nav badge counts: open decisions (incl. close confirmations) + approvals. */

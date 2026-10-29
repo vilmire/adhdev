@@ -68,6 +68,7 @@ import {
   isStandaloneHostAllowed,
   isStandaloneOriginAllowed,
   UNAUTHENTICATED_ARTIFACT_READ_VERBS,
+  UNAUTHENTICATED_OWNER_APPROVAL_VERBS,
   type StandalonePasswordConfig,
 } from './standalone-auth.js';
 
@@ -313,17 +314,17 @@ export class StandaloneHttpApi {
    * password session, so a no-auth daemon demoted every dashboard command to an
    * unverified `ipc` source — and `artifact_fetch` / `artifact_list` refuse that
    * ("downgraded unverified owner ingress"), which broke the viewer's "View
-   * full". The open dashboard already reads status, chat and transcripts
-   * without credentials; artifact reads are the same class. Narrow on purpose:
-   * only the read verbs (never `artifact_register`), never when any auth is
-   * configured, never when an MCP-scope credential header is present (valid or
-   * invalid/expired), never cross-origin or via DNS rebinding, and revoked the
-   * instant auth is configured.
+   * full". Owner decision: the same grant covers `assistant_staged_resolve` and
+   * `driver_set_enabled` (UNAUTHENTICATED_OWNER_APPROVAL_VERBS, standalone-auth.ts);
+   * trade-off: a local process could approve over HTTP on a no-auth daemon, and
+   * configuring a password restores the strict boundary. Never `artifact_register`,
+   * never when any auth is configured, never when an MCP-scope credential header
+   * is present (valid or not), never cross-origin or via DNS rebinding, and revoked
+   * the instant auth is configured.
    */
   captureUnauthenticatedArtifactReadGuard(req: IncomingMessage, commandType: string): (() => boolean) | null {
-    if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType)) return null;
-    if (this.hasAnyAuth() || this.hasMcpCredentialHeader(req) || this.resolveInternalAuthScope(req)) return null;
-    if (!this.isAllowedOrigin(req)) return null;
+    if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType) && !UNAUTHENTICATED_OWNER_APPROVAL_VERBS.has(commandType)) return null;
+    if (this.hasAnyAuth() || this.hasMcpCredentialHeader(req) || this.resolveInternalAuthScope(req) || !this.isAllowedOrigin(req)) return null;
     const capturedEpoch = this.authEpoch;
     return () => !this.hasAnyAuth() && !this.hasMcpCredentialHeader(req) && this.authEpoch === capturedEpoch;
   }

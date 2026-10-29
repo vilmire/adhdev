@@ -129,7 +129,7 @@ export interface RepoMeshAutoFastForwardPolicy {
  * requirePostTaskCheckpoint, dirtyWorkspaceBehavior — see RETIRED_MESH_POLICY_KEYS.
  */
 export interface RepoMeshPolicy {
-    /** Local driver action allowlist; absent means no driver execution. No UI yet. */
+    /** Optional per-type driver action restriction. No entry for a type = every declared action of an owner-activated driver is allowed (destructive ones still need per-action owner approval); an entry restricts to its `actions`. No UI yet (edit meshes.json). */
     drivers?: Record<string, { actions: string[] }>;
     requireApprovalForPush: boolean;
     /**

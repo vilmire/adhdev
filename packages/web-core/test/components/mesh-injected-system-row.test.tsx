@@ -49,3 +49,16 @@ describe('mesh-injected [System] user turns', () => {
         expect(isMeshInjectedSystemText('[System]no-space')).toBe(false)
     })
 })
+
+describe('pasted_content wrapper tags', () => {
+    it('are stripped from a user bubble and the injected system line, tags inline or on their own lines', async () => {
+        const { resolveChatRow } = await import('../../src/components/ChatMessageList/chat-row-model')
+        const inline = resolveChatRow({ role: 'user', content: '<pasted_content id="6519">[System] Node n1 completed task t1\n</pasted_content id="6519">' } as never)
+        expect(JSON.stringify(inline)).not.toContain('pasted_content')
+        expect(inline.injected?.source).toBe('system')
+        const lines = resolveChatRow({ role: 'user', content: '<pasted_content id="7">\nhello there\n</pasted_content id="7">' } as never)
+        expect('text' in lines.body && lines.body.text).toBe('hello there')
+        const plain = resolveChatRow({ role: 'user', content: 'what is <pasted_content> used for?' } as never)
+        expect('text' in plain.body && plain.body.text).toBe('what is <pasted_content> used for?')
+    })
+})

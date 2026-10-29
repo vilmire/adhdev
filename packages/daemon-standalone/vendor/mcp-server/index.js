@@ -119603,6 +119603,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         initializedNonceDbs = /* @__PURE__ */ new WeakSet();
       }
     });
+    function isSameBoundMesh(recordMeshId, taskMeshId) {
+      const a = (recordMeshId ?? "").trim();
+      const b = (taskMeshId ?? "").trim();
+      return a.length > 0 && a === b;
+    }
     function trimString3(value) {
       return typeof value === "string" ? value.trim() : "";
     }
@@ -119968,7 +119973,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const taskPayload = taskEntry?.payload ?? {};
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
         const allowedIds = new Set(rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0));
-        const sameMesh = !record7.meshId || !authority.meshId || record7.meshId === authority.meshId;
+        const sameMesh = isSameBoundMesh(record7.meshId, authority.meshId);
         if (!sameMesh || !allowedIds.has(artifactId)) {
           return {
             ok: false,
@@ -120030,7 +120035,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!id4 || seen2.has(id4)) continue;
         const record7 = store4.get(id4) ?? remoteArtifactById.get(id4);
         if (!record7) continue;
-        const sameMesh = !record7.meshId || !authority.meshId || record7.meshId === authority.meshId;
+        const sameMesh = isSameBoundMesh(record7.meshId, authority.meshId);
         if (sameMesh) {
           seen2.add(id4);
           merged.push(record7);
@@ -120314,7 +120319,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 const rec6 = store4.get(id4);
                 if (!rec6) continue;
                 const recMissionId = resolveRecMission(rec6);
-                const sameMesh = !rec6.meshId || rec6.meshId === meshId;
+                const sameMesh = isSameBoundMesh(rec6.meshId, meshId);
                 if (sameMesh) {
                   inputArtifacts.push({
                     ...rec6,
@@ -120331,7 +120336,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                   return { success: false, code: "artifact_not_found", error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
                 }
                 const reqMissionId = resolveRecMission(reqRec);
-                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || (!reqRec.meshId || reqRec.meshId === meshId) && allowedSet.has(reqArtifactId);
+                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || isSameBoundMesh(reqRec.meshId, meshId) && allowedSet.has(reqArtifactId);
                 if (!isAllowed) {
                   return {
                     success: false,
@@ -125009,6 +125014,12 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
+    function actionAllowedByPolicy(policy, type2, action2) {
+      if (!policy) return false;
+      if (!Object.hasOwn(policy, type2)) return true;
+      const entry = policy[type2];
+      return Array.isArray(entry?.actions) && entry.actions.includes(action2);
+    }
     var import_node_crypto51;
     var import_node_os8;
     var import_node_path25;
@@ -125152,9 +125163,8 @@ ${asText(streams.stderr)}
             }
             if (!this.ports.activations.isReady(input.type, installed.treeDigest)) return refused2("driver_not_approved");
             const policy = await this.ports.policy(identity4.meshId).catch(() => void 0);
-            const allowed = policy && Object.hasOwn(policy, input.type) ? policy[input.type] : void 0;
             const action2 = installed.module.actions.find((a) => a.id === input.action);
-            if (!action2 || !Array.isArray(allowed?.actions) || !allowed.actions.includes(input.action)) return refused2("driver_not_allowed_for_mesh");
+            if (!action2 || !actionAllowedByPolicy(policy, input.type, input.action)) return refused2("driver_not_allowed_for_mesh");
             if (action2.risk === "destructive" && !approval) {
               const staged = this.ports.actions.write({
                 type: input.type,
@@ -125192,7 +125202,7 @@ ${asText(streams.stderr)}
               return refused2("driver_not_approved");
             }
             const latest = await this.ports.policy(identity4.meshId).catch(() => void 0);
-            if (!latest || !Object.hasOwn(latest, input.type) || !Array.isArray(latest[input.type]?.actions) || !latest[input.type].actions.includes(input.action)) {
+            if (!actionAllowedByPolicy(latest, input.type, input.action)) {
               releaseNew();
               return refused2("driver_not_allowed_for_mesh");
             }
@@ -125444,7 +125454,10 @@ ${asText(streams.stderr)}
           const cwd = ctx.deps.providerLoader.findProviderDir(type2);
           return current4 && cwd ? { ...current4, cwd } : null;
         },
-        policy: async (meshId) => (await ctx.getMeshForCommand(meshId))?.mesh?.policy?.drivers,
+        policy: async (meshId) => {
+          const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
+          return mesh ? mesh.policy?.drivers ?? {} : void 0;
+        },
         relay: (identity4, result) => {
           const text5 = JSON.stringify({ kind: "driver_action_result", ...result });
           return depositWorkerMailboxMessage({

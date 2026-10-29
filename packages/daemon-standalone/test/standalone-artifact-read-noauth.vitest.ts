@@ -178,6 +178,23 @@ describe('no-auth standalone — artifact read verbs', () => {
     expect(guard && guard()).toBe(false);
   });
 
+  it('owner decision: approval verbs get the same no-auth grant, but not with auth, an MCP header, or a cross-origin request; send_chat stays out', async () => {
+    const { http } = await startServer();
+    const mk = (headers: Record<string, string> = {}): any => ({ headers: { host: '127.0.0.1:3847', ...headers }, socket: { remoteAddress: '127.0.0.1' }, url: '/ws' });
+    for (const verb of ['assistant_staged_resolve', 'driver_set_enabled']) {
+      const guard = http.captureUnauthenticatedArtifactReadGuard(mk(), verb);
+      expect(guard && guard(), verb).toBe(true);
+      expect(http.captureUnauthenticatedArtifactReadGuard(mk({ [INTERNAL_HEADER]: 'adi_x' }), verb), `${verb} mcp`).toBeNull();
+      expect(http.captureUnauthenticatedArtifactReadGuard(mk({ origin: 'https://evil.example' }), verb), `${verb} cross-origin`).toBeNull();
+    }
+    expect(http.captureUnauthenticatedArtifactReadGuard(mk(), 'send_chat')).toBeNull();
+    expect(http.captureUnauthenticatedArtifactReadGuard(mk(), 'pty_input')).toBeNull();
+    const guard = http.captureUnauthenticatedArtifactReadGuard(mk(), 'assistant_staged_resolve');
+    http.configureAuth(TOKEN);
+    expect(guard && guard()).toBe(false);
+    expect(http.captureUnauthenticatedArtifactReadGuard(mk(), 'driver_set_enabled')).toBeNull();
+  });
+
   it('Finding 1: an invalid, rotated, or expired MCP credential header returns 401 and never falls back to the anonymous owner read grant', async () => {
     const { base, calls, http } = await startServer();
     const readVerbs = ['artifact_fetch', 'artifact_read', 'session_artifact_fetch', 'artifact_list', 'session_artifact_list'] as const;

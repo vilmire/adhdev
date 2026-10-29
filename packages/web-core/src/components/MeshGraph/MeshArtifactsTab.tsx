@@ -9,6 +9,7 @@ import { formatAbsoluteTime, formatRelativeTimeLocalized } from '../../utils/tim
 import { RefreshButton } from '../ui/RefreshButton'
 import { ArtifactFullscreenViewer } from '../attachments/ArtifactFullscreenViewer'
 import { getArtifactErrorCopy, getArtifactKindLabel } from '../attachments/artifact-i18n'
+import { findArtifactByLink } from '../attachments/artifact-link-context'
 import { toArtifactViewerItem, type ArtifactViewerItem } from '../attachments/artifact-viewer-item'
 import { Badge } from './MeshObservabilitySurface/meshSurfacePrimitives'
 import {
@@ -154,6 +155,11 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
     }, [daemonId, i18n.language, sendDaemonCommand, t, view.ordered])
 
     const viewerIndex = viewer ? view.ordered.findIndex(i => i.attachment.artifactId === viewer.artifactId) : -1
+    const resolveLink = useCallback((href: string) => {
+        const index = findArtifactByLink(href, view.ordered.map(i => i.attachment))
+        if (index < 0 || index === viewerIndex) return null
+        return () => { if (!opening) void openAt(index) }
+    }, [view.ordered, viewerIndex, opening, openAt])
     const onNavigate = useCallback((delta: -1 | 1) => {
         if (opening || viewerIndex < 0) return
         const next = viewerIndex + delta
@@ -329,6 +335,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                     onClose={() => setViewer(null)}
                     position={viewerIndex >= 0 ? { index: viewerIndex, total: view.ordered.length, more: hasMore } : undefined}
                     onNavigate={viewerIndex >= 0 ? onNavigate : undefined}
+                    resolveLink={resolveLink}
                 />
             )}
         </div>

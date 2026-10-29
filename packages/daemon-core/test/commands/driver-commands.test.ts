@@ -78,7 +78,7 @@ describe('real Worker → service → official SDK → stdio', () => {
             .toMatchObject({ success: true, status: 'completed', output: { content: [{ type: 'text', text: '{"text":"wire-result"}' }] } });
     });
     it('caller inlineMesh and claimed meshId cannot grant permission', async () => {
-        policy = {};
+        policy = { browser: { actions: [] } };
         expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', meshId: 'forged',
             inlineMesh: { policy: { drivers: { browser: { actions: ['echo'] } } } } })).toMatchObject({ code: 'driver_not_allowed_for_mesh' });
     });

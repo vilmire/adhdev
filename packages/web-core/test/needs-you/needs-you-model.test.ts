@@ -172,3 +172,15 @@ describe('wire parsing', () => {
         expect(mergeNeedsYouSnapshots([parseNeedsYouList(body, 'a'), parseNeedsYouList(body, 'b')]).decisions).toHaveLength(2)
     })
 })
+
+describe('owner-held staged approvals', () => {
+    const staged = { id: 'driver-activation-1', kind: 'driver_activation', action: 'activate', target: 'browser', origin: 'driver', createdAt: '2026-10-29T00:00:00.000Z' } as any
+    it('appear under the approval filter, count in the badge, and sort with approvals', () => {
+        const entries = buildNeedsYouEntries({ decisions: [decision()], liveChecks: [] }, [], [staged])
+        expect(entries.map(e => e.kind)).toEqual(['staged', 'decision'])
+        expect(needsYouCount(entries)).toBe(2)
+        expect(filterNeedsYou(entries, { kind: 'approval', meshId: 'all' }).map(e => e.kind)).toEqual(['staged'])
+        expect(filterNeedsYou(entries, { kind: 'decision', meshId: 'all' }).map(e => e.kind)).toEqual(['decision'])
+        expect(sortNeedsYou(entries)[0].kind).toBe('staged')
+    })
+})

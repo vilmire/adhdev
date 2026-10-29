@@ -10,7 +10,10 @@
  * Pure: no React, no i18n.
  */
 
-const CHOICES_LINE = /^\s*\[\[\s*choices\s*:\s*(.+?)\s*\]\]\s*$/i;
+// `[[choices: a | b]]` (prompted form) or a bare `[[a | b]]` (models drop the keyword);
+// the bare form needs at least one `|` so wiki-style `[[page]]` text is left alone. The
+// bracket group may trail text on the same line.
+const CHOICES_LINE = /^(.*?)\[\[\s*(?:choices\s*:\s*)?(.+?)\s*\]\]\s*$/i;
 const MAX_CHOICES = 5;
 const MAX_CHOICE_CHARS = 80;
 
@@ -27,10 +30,13 @@ export function extractReplyChoices(text: string): ReplyChoices {
     while (last >= 0 && !lines[last]!.trim()) last--;
     const match = last >= 0 ? CHOICES_LINE.exec(lines[last]!) : null;
     if (!match) return { text, choices: [] };
-    const choices = match[1]!.split('|')
+    const keyworded = /\[\[\s*choices\s*:/i.test(lines[last]!);
+    if (!keyworded && !match[2]!.includes('|')) return { text, choices: [] };
+    const choices = match[2]!.split('|')
         .map((c) => c.trim())
         .filter((c) => c.length > 0 && c.length <= MAX_CHOICE_CHARS)
         .slice(0, MAX_CHOICES);
-    const kept = lines.slice(0, last).join('\n').replace(/\s+$/, '');
+    const lead = match[1]!.trimEnd();
+    const kept = [...lines.slice(0, last), ...(lead ? [lead] : [])].join('\n').replace(/\s+$/, '');
     return { text: kept, choices };
 }

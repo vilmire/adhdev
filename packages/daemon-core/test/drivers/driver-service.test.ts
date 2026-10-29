@@ -62,6 +62,13 @@ describe('six ordered permission gates', () => {
         policy = { browser: { actions: ['unknown'] } };
         expect(await service.invoke(worker, { ...input, action: 'unknown' })).toMatchObject({ code: 'driver_not_allowed_for_mesh' });
     });
+    it('3b: a mesh with no entry for the type allows declared actions; an explicit entry restricts', async () => {
+        policy = {};
+        expect(await service.invoke(worker, input)).not.toMatchObject({ code: 'driver_not_allowed_for_mesh' });
+        expect(await service.invoke(worker, { ...input, action: 'undeclared' })).toMatchObject({ code: 'driver_not_allowed_for_mesh' });
+        policy = { browser: { actions: ['erase'] } };
+        expect(await service.invoke(worker, input)).toMatchObject({ code: 'driver_not_allowed_for_mesh' });
+    });
     it('4: creates a fixed destructive request without spawning or acquiring a lease', async () => {
         const args = { message: 'fixed' };
         const result = await service.invoke(worker, { ...input, action: 'erase', args });

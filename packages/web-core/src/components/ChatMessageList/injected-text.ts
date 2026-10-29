@@ -99,8 +99,17 @@ const PREVIEW_MAX_CHARS = 160;
  * returned unchanged.
  */
 export function unwrapPastedEnvelope(text: string): string {
-    return unwrapPastedContent(text);
+    const lineWrapped = unwrapPastedContent(text);
+    if (lineWrapped !== text) return lineWrapped;
+    // Inline form: `<pasted_content id="6519">[System] … </pasted_content id="6519">`
+    // (tags share a line with the content). Same guard: the text must OPEN with the tag.
+    const inline = INLINE_PASTED_OPEN.exec(text);
+    if (!inline) return text;
+    return text.slice(inline[0].length).replace(INLINE_PASTED_CLOSE_TAIL, '').replace(/^\n+/, '');
 }
+
+const INLINE_PASTED_OPEN = /^\s*<pasted_content(?:\s+id="[^"]*")?\s*>[ \t]*/;
+const INLINE_PASTED_CLOSE_TAIL = /\s*<\/pasted_content(?:\s+id="[^"]*")?\s*>\s*$/;
 
 export function isMeshInjectedSystemText(text: string): boolean {
     return SYSTEM_RE.test(text);

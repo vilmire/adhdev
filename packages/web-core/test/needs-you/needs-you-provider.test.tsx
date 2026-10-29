@@ -75,4 +75,23 @@ describe('NeedsYouProvider', () => {
         expect(latest!.outcomes.x).toEqual({ ok: false, code: 'decision_not_open' })
         act(() => root.unmount())
     })
+
+    it('lists owner-held staged writes from the primary daemon into entries and the count', async () => {
+        const sendCommand = vi.fn(async (_id: string, type: string, payload?: any) => {
+            if (type === 'assistant_staged_resolve' && payload?.action === 'list') {
+                return { success: true, memory: [{ id: 'staged-1', origin: 'relay', createdAt: '2026-10-29T00:00:00.000Z', op: { action: 'add', target: 'memory', content: 'x' } }] }
+            }
+            throw new Error('unknown command')
+        })
+        const host = document.createElement('div')
+        const root = createRoot(host)
+        await act(async () => {
+            root.render(<TransportProvider value={{ sendCommand }}><NeedsYouProvider><Probe /></NeedsYouProvider></TransportProvider>)
+        })
+        await act(async () => { await Promise.resolve() })
+        expect(sendCommand.mock.calls.some(c => c[1] === 'assistant_staged_resolve' && c[2]?.action === 'list')).toBe(true)
+        expect(latest!.entries.some(e => e.kind === 'staged')).toBe(true)
+        expect(latest!.count).toBe(1)
+        await act(async () => { root.unmount() })
+    })
 })

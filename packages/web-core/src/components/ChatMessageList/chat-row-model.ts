@@ -26,7 +26,7 @@ import {
     type ToolExpandAddress,
 } from './chatMessageHelpers';
 import { extractReplyChoices } from './reply-choices';
-import { detectInjectedText, type InjectedSegment, type InjectedSource } from './injected-text';
+import { detectInjectedText, unwrapPastedEnvelope, type InjectedSegment, type InjectedSource } from './injected-text';
 
 export type ChatRowKind = 'user' | 'assistant' | 'system' | 'injected' | 'tool' | 'thought' | 'terminal' | 'activity' | 'artifact';
 
@@ -293,7 +293,9 @@ function computeChatRow(message: ChatMessage, ctx: ResolveChatRowContext): ChatR
     const role = (message.role || '').toLowerCase();
     const structured = isStructuredMessagePartArray(message.content) ? message.content : null;
     const parts = structured?.some((part) => part.type !== 'text') ? structured : null;
-    const rawText = stringifyTextContent(message.content, { joiner: '\n' });
+    const stringified = stringifyTextContent(message.content, { joiner: '\n' });
+    // Claude Code wraps long injected/pasted input in `<pasted_content id="…">` tags; never show them.
+    const rawText = role === 'user' || role === 'human' ? unwrapPastedEnvelope(stringified) : stringified;
 
     // A PTY-hosted session records daemon-typed input as USER turns. The
     // owner's own optimistic bubble is never injected.

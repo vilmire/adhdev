@@ -36,6 +36,20 @@ export interface DriverServicePorts {
 }
 const refused = (code: string): DriverReply => ({ success: false, code });
 const LEASE_MS = 30 * 60_000;
+/**
+ * Mesh driver policy. `undefined` = mesh unknown/unreadable -> refuse. Owner
+ * decision (convenience first): a mesh with NO `policy.drivers[type]` entry
+ * allows every declared action of an owner-activated driver (the digest-bound
+ * owner activation is the gate; destructive actions still need per-action owner
+ * approval). An explicit entry restricts to its `actions`.
+ */
+function actionAllowedByPolicy(policy: Record<string, { actions: string[] }> | undefined, type: string, action: string): boolean {
+    if (!policy) return false;
+    if (!Object.hasOwn(policy, type)) return true;
+    const entry = policy[type];
+    return Array.isArray(entry?.actions) && entry.actions.includes(action);
+}
+
 export class DriverService {
     private closed = false;
     private readonly instances = new Map<string, { digest: string; state: DriverInstanceState; process?: ManagedClient }>();
@@ -137,9 +151,8 @@ export class DriverService {
         if (!this.ports.activations.isReady(input.type, installed.treeDigest)) return refused('driver_not_approved');
         // 3. Policy comes from the daemon's mesh record, never caller-supplied inlineMesh.
         const policy = await this.ports.policy(identity.meshId).catch(() => undefined);
-        const allowed = policy && Object.hasOwn(policy, input.type) ? policy[input.type] : undefined;
         const action = installed.module.actions.find(a => a.id === input.action);
-        if (!action || !Array.isArray(allowed?.actions) || !allowed.actions.includes(input.action)) return refused('driver_not_allowed_for_mesh');
+        if (!action || !actionAllowedByPolicy(policy, input.type, input.action)) return refused('driver_not_allowed_for_mesh');
         // 4. A worker can propose destructive execution, but cannot execute it.
         if (action.risk === 'destructive' && !approval) {
             const staged = this.ports.actions.write({ type: input.type, action: input.action,
@@ -172,7 +185,7 @@ export class DriverService {
             releaseNew(); return refused('driver_not_approved');
         }
         const latest = await this.ports.policy(identity.meshId).catch(() => undefined);
-        if (!latest || !Object.hasOwn(latest, input.type) || !Array.isArray(latest[input.type]?.actions) || !latest[input.type].actions.includes(input.action)) {
+        if (!actionAllowedByPolicy(latest, input.type, input.action)) {
             releaseNew(); return refused('driver_not_allowed_for_mesh');
         }
         if (this.read(input.type)?.treeDigest !== installed.treeDigest || !this.ports.activations.isReady(input.type, installed.treeDigest)) {

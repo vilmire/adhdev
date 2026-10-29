@@ -440,3 +440,18 @@ export const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set(
   'artifact_fetch', 'artifact_read', 'session_artifact_fetch',
   'artifact_list', 'session_artifact_list',
 ]);
+
+/**
+ * Owner approval verbs a no-auth daemon accepts straight from the open
+ * dashboard. OWNER DECISION (convenience first, security second): on a
+ * password-less standalone the owner must still be able to see and approve
+ * held assistant writes and driver activations/destructive driver actions
+ * from the dashboard; without this grant those commands were demoted to an
+ * unverified `ipc` source and the approvals list silently showed nothing.
+ * Trade-off: on a no-auth daemon a local process can approve via HTTP too;
+ * configuring a password/token restores the strict boundary at once.
+ * `send_chat` / `pty_input` are deliberately NOT here (attribution only).
+ */
+export const UNAUTHENTICATED_OWNER_APPROVAL_VERBS: ReadonlySet<string> = new Set([
+  'assistant_staged_resolve', 'driver_set_enabled',
+]);

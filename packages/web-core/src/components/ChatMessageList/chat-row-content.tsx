@@ -8,7 +8,7 @@
  * `~` range renders the same way everywhere.
  */
 
-import { memo, useState, useCallback, isValidElement } from 'react';
+import { memo, useState, useCallback, useContext, isValidElement } from 'react';
 import type { ComponentPropsWithoutRef, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
@@ -26,6 +26,7 @@ import {
     type StructuredMessagePart,
 } from './chatMessageHelpers';
 import type { RowBody } from './chat-row-model';
+import { ArtifactLinkContext } from '../attachments/artifact-link-context';
 
 /**
  * One copy control. `size:'sm'` is the row-header control; `size:'code'` sits
@@ -89,37 +90,58 @@ function ChatCodeBlock(props: ComponentPropsWithoutRef<'pre'>) {
     );
 }
 
-function isSafeArtifactLinkHref(href: string | undefined): href is string {
+/** Absolute http(s) / mailto link: opens in a new tab. */
+function isExternalArtifactLinkHref(href: string | undefined): href is string {
     if (typeof href !== 'string') return false;
     const trimmed = href.trim();
-    if (!trimmed) return false;
-    if (trimmed.startsWith('#')) return true;
-    // Disallow protocol-relative URLs
-    if (trimmed.startsWith('//')) return false;
+    if (!trimmed || trimmed.startsWith('//')) return false;
     const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(trimmed);
-    if (!schemeMatch) {
-        // Relative path without scheme
-        return true;
-    }
+    if (!schemeMatch) return false;
     const protocol = `${schemeMatch[1].toLowerCase()}:`;
     return protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:';
 }
 
+/** Scheme-less, non-anchor href = a workspace-relative path. Never an app route. */
+function isRelativeArtifactLinkHref(href: string | undefined): href is string {
+    if (typeof href !== 'string') return false;
+    const trimmed = href.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return false;
+    return !/^([a-zA-Z][a-zA-Z0-9+.-]*):/.test(trimmed);
+}
+
 function ArtifactSafeLink(props: ComponentPropsWithoutRef<'a'>) {
     const { href, children } = props;
-    if (!isSafeArtifactLinkHref(href)) {
-        return <span data-testid="artifact-markdown-blocked-link">{children}</span>;
+    const resolveLink = useContext(ArtifactLinkContext);
+    if (isExternalArtifactLinkHref(href)) {
+        return (
+            <a
+                href={href.trim()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline decoration-accent-primary/60 underline-offset-2 hover:text-accent-primary"
+            >
+                {children}
+            </a>
+        );
     }
-    return (
-        <a
-            href={href.trim()}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline decoration-accent-primary/60 underline-offset-2 hover:text-accent-primary"
-        >
-            {children}
-        </a>
-    );
+    if (isRelativeArtifactLinkHref(href)) {
+        const open = resolveLink?.(href) ?? null;
+        if (open) {
+            return (
+                <button
+                    type="button"
+                    data-testid="artifact-markdown-internal-link"
+                    title={href}
+                    onClick={open}
+                    className="inline cursor-pointer border-0 bg-transparent p-0 text-left underline decoration-accent-primary/60 underline-offset-2 hover:text-accent-primary"
+                >
+                    {children}
+                </button>
+            );
+        }
+        return <span data-testid="artifact-markdown-relative-link" title={href}>{children}</span>;
+    }
+    return <span data-testid="artifact-markdown-blocked-link">{children}</span>;
 }
 
 function ArtifactBlockedImage(props: ComponentPropsWithoutRef<'img'>) {

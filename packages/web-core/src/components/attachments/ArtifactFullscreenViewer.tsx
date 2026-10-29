@@ -4,6 +4,7 @@ import type { ArtifactResolvedPayload } from '../../hooks/useArtifactRead'
 import { formatBytes } from '../../utils/daemon-utils'
 import ModalPortal from '../ui/ModalPortal'
 import { writeClipboard } from '../ui/TechnicalDetails'
+import { ArtifactLinkContext, type ArtifactLinkResolver } from './artifact-link-context'
 import { ArtifactContentRenderer } from './ArtifactContentRenderers'
 import { getArtifactKindLabel, trArtifact } from './artifact-i18n'
 import { openArtifactInNewWindow } from './artifact-popout'
@@ -34,6 +35,8 @@ export interface ArtifactFullscreenViewerProps {
     disablePopOut?: boolean
     /** Full payload for the pop-out; defaults to the item itself. */
     popOutPayload?: ArtifactResolvedPayload | ArtifactViewerItem
+    /** Maps a relative markdown link onto another artifact of the same list (opener) or null. Without it relative links are plain text. */
+    resolveLink?: ArtifactLinkResolver
 }
 
 /**
@@ -121,6 +124,7 @@ export function ArtifactFullscreenViewer({
     onNavigate,
     disablePopOut,
     popOutPayload,
+    resolveLink,
 }: ArtifactFullscreenViewerProps) {
     const { t, i18n } = useTranslation('common')
     const tr = (key: Parameters<typeof trArtifact>[2]) => trArtifact(t, i18n.language, key)
@@ -395,6 +399,7 @@ export function ArtifactFullscreenViewer({
                         ) : null
                     ) : (
                         <div ref={contentRef} data-testid="artifact-fullscreen-content" data-text-scale={textScale} style={{ zoom: textScale } as React.CSSProperties}>
+                            <ArtifactLinkContext.Provider value={resolveLink ?? null}>
                             <ArtifactContentRenderer
                                 variant="fullscreen"
                                 objectUrl={null}
@@ -405,6 +410,7 @@ export function ArtifactFullscreenViewer({
                                     encoding: 'utf8', content: item.text ?? '', textContent: item.text ?? '', bytes: new Uint8Array(0),
                                 }}
                             />
+                            </ArtifactLinkContext.Provider>
                         </div>
                     )}
                 </div>
