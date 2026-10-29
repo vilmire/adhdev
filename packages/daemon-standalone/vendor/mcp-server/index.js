@@ -33039,12 +33039,12 @@ ${renderWorkerProtocolFooter2(input)}`;
       try {
         if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
           const url = new URL(value);
-          return !!url.password || !!url.username && !(url.protocol === "ssh:" && url.username === "git");
+          return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(value) && !(url.protocol === "ssh:" && url.username === "git" && !url.password);
         }
         const scp = /^([^@/:]+)@[^/:]+:/.exec(value);
         return !!scp && scp[1] !== "git";
       } catch {
-        return true;
+        return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(value);
       }
     }
     function parseRemoteDetails(value) {

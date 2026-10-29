@@ -165,7 +165,7 @@ it('refuses a raw public policy-root pushurl rewritten to the private canonical 
     rmSync(f.root, { recursive: true, force: true })
   }
 })
-for (const credentialUrl of ['https://synthetic-user:synthetic-password@github.com/fixture/widget.git', 'https://synthetic-user@github.com/fixture/widget.git', 'ssh://git:synthetic-password@github.com/fixture/widget.git', 'synthetic-user@github.com:fixture/widget.git']) {
+for (const credentialUrl of ['https://synthetic-user:synthetic-password@github.com/fixture/widget.git', 'https://synthetic-user@github.com/fixture/widget.git', 'ssh://git:synthetic-password@github.com/fixture/widget.git', 'synthetic-user@github.com:fixture/widget.git', 'https://synthetic-user:synthetic-password@[broken']) {
   it('refuses credentials in raw/effective URLs without structured output or console disclosure', async () => {
     const f = fixture()
     const logs: unknown[][] = []

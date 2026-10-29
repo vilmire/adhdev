@@ -77,11 +77,17 @@ function hasRemoteCredentials(value) {
   try {
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
       const url = new URL(value);
-      return !!url.password || (!!url.username && !(url.protocol === 'ssh:' && url.username === 'git'));
+      return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(value)
+        && !(url.protocol === 'ssh:' && url.username === 'git' && !url.password);
     }
     const scp = /^([^@/:]+)@[^/:]+:/.exec(value);
     return !!scp && scp[1] !== 'git';
-  } catch { return true; }
+  } catch {
+    // Malformed noncredential URLs retain conservative public classification;
+    // canonical identity validation still refuses them during preflight. Even
+    // malformed authorities carrying userinfo must never enter URL output.
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(value);
+  }
 }
 
 // All transports use the same canonical path and authority. Invalid input never
