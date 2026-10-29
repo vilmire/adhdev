@@ -12,17 +12,31 @@ import { idleSessionLifetimeCommand } from '../../src/commands/mesh-idle-session
 function fixture() {
     const meshId = randomUUID(), sessionId = randomUUID(), nodeId = randomUUID(), taskId = randomUUID();
     const store = MeshRuntimeStore.getInstance(), at = Date.now();
+    const hostBootId = `hs:${at}`;
     const state: any = { instanceId: sessionId, status: 'idle', type: 'codex-cli', settings: {
         meshNodeFor: meshId, meshNodeId: nodeId, launchedByCoordinator: true, meshActiveDispatchNonce: 1,
     } };
-    const record: any = { sessionId, lifecycle: 'running', lastActivityAt: at, meta: state.settings };
+    const record: any = { sessionId, lifecycle: 'running', lastActivityAt: at, runtimeKey: `rt-${sessionId}`, startedAt: at, hostBootId, meta: state.settings };
+    const claimFence = { taskId: null, attemptId: null, generation: null, dispatchNonce: 1 };
+    const expected = { sessionId, hostBootId, runtimeKey: record.runtimeKey, startedAt: at, ...claimFence };
     const task: any = { id: taskId, meshId, status: 'pending', readonly: true, taskMode: 'live_debug_readonly', message: 'review without a session pin', createdAt: new Date(at).toISOString(), updatedAt: new Date(at).toISOString() };
     const args: any = { action: 'mesh_idle_session_stop', targetSessionId: sessionId, meshContext: { meshId },
-        idleSessionLifetime: { lastActivityAt: at, stopId: randomUUID(), claimFence: { taskId: null, attemptId: null, generation: null, dispatchNonce: 1 } } };
+        idleSessionLifetime: { lastActivityAt: at, stopId: randomUUID(), claimFence, expected } };
     let stops = 0;
-    const control = { listSessions: async () => [record], stopSession: async () => { stops++; return { ...record, lifecycle: 'stopped' }; } };
+    const control = {
+        listSessions: async () => [record],
+        getDiagnostics: async () => ({ hostStartedAt: at }),
+        stopSession: async () => { stops++; return { ...record, lifecycle: 'stopped' }; },
+        stopSessionIfExpected: async (_id: string, exp: any) => {
+            if (exp.hostBootId !== hostBootId || exp.runtimeKey !== record.runtimeKey || exp.startedAt !== record.startedAt) {
+                throw new Error('cleanup_native_incarnation_mismatch');
+            }
+            if (exp.taskId === null && record.meta?.meshActiveAssignment?.taskId) throw new Error('cleanup_expected_unbound_now_bound');
+            stops++; return { ...record, lifecycle: 'stopped' };
+        },
+    };
     const host: any = { deps: { idleSessionLifetimeControl: control, getInstanceManager: () => ({ getByCategory: () => [{ getState: () => state }] }) } };
-    return { meshId, sessionId, nodeId, taskId, store, state, record, task, args, host, control, stops: () => stops };
+    return { meshId, sessionId, nodeId, taskId, store, state, record, task, args, host, control, hostBootId, expected, stops: () => stops };
 }
 
 describe('review finding 1: stop/claim exclusion', () => {
@@ -46,7 +60,7 @@ describe('review finding 1: stop/claim exclusion', () => {
         let entered!: () => void, finish!: () => void;
         const started = new Promise<void>(resolve => { entered = resolve; });
         const released = new Promise<void>(resolve => { finish = resolve; });
-        f.control.stopSession = async () => { entered(); await released; return { ...f.record, lifecycle: 'stopped' }; };
+        f.control.stopSessionIfExpected = async () => { entered(); await released; return { ...f.record, lifecycle: 'stopped' }; };
         const stopping = idleSessionLifetimeCommand(f.host, f.args);
         await started;
         try {
@@ -67,11 +81,13 @@ describe('owner reservation and host delivery fence', () => {
         f.store.setRemoteIdleSession(f.meshId, f.nodeId, f.sessionId, 'codex-cli', Date.now() + 60_000);
         let claimed: any = 'not attempted', stopArgs: any;
         const components: any = {
-            router: { deps: { sessionHostControl: { listSessions: async () => [] } }, recordIntentionalMeshSessionStop: async () => {
+            router: { deps: { sessionHostControl: { listSessions: async () => [], getDiagnostics: async () => ({ hostStartedAt: f.record.startedAt }) } }, recordIntentionalMeshSessionStop: async () => {
                 claimed = claimNextTask(f.meshId, f.nodeId, f.sessionId, [], { nodeIsWorktree: true });
             } },
             dispatchMeshCommand: async (_peer: string, _command: string, args: any) => {
-                if (args.action === 'mesh_idle_session_inventory') return { success: true, sessions: [{ ...f.record, state: f.state, claimFence: f.args.idleSessionLifetime.claimFence }] };
+                if (args.action === 'mesh_idle_session_inventory') {
+                    return { success: true, hostBootId: f.hostBootId, sessions: [{ ...f.record, state: f.state, claimFence: f.args.idleSessionLifetime.claimFence, hostBootId: f.hostBootId }] };
+                }
                 stopArgs = args;
                 return { success: true, stoppedSessionIds: [f.sessionId] };
             },
@@ -81,6 +97,7 @@ describe('owner reservation and host delivery fence', () => {
         const result = await deps.cleanupMeshSessions({ meshId: f.meshId, sessionIds: [f.sessionId], nodeId: '', node: undefined, mode: 'stop', source: 'mesh_cleanup_sessions' });
         expect(result.success).toBe(true); expect(claimed).toBeNull();
         expect(stopArgs.idleSessionLifetime.claimFence).toEqual(f.args.idleSessionLifetime.claimFence);
+        expect(stopArgs.idleSessionLifetime.expected).toEqual(f.expected);
         expect(typeof stopArgs.idleSessionLifetime.stopId).toBe('string');
     });
     it('refuses a send_chat to the host while stopSession acknowledgement is pending', async () => {
@@ -88,7 +105,7 @@ describe('owner reservation and host delivery fence', () => {
         let entered!: () => void, finish!: () => void;
         const started = new Promise<void>(resolve => { entered = resolve; });
         const released = new Promise<void>(resolve => { finish = resolve; });
-        f.control.stopSession = async () => { entered(); await released; return { ...f.record, lifecycle: 'stopped' }; };
+        f.control.stopSessionIfExpected = async () => { entered(); await released; return { ...f.record, lifecycle: 'stopped' }; };
         const stopping = idleSessionLifetimeCommand(f.host, f.args);
         await started;
         f.host.findAdapter = () => ({ adapter: {}, key: f.sessionId });
@@ -101,7 +118,7 @@ describe('owner reservation and host delivery fence', () => {
 
 describe('pending stop intent recovery', () => {
     it('keeps a failed stop eligible when idle count falls below the cap', async () => {
-        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId);
+        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId, f.expected);
         const instance = { getState: () => f.state };
         const components: any = { instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
             router: { deps: { sessionHostControl: f.control } } };
@@ -110,7 +127,7 @@ describe('pending stop intent recovery', () => {
         expect(plan.plan.reap.map(r => r.sessionId)).toEqual([f.sessionId]);
     });
     it('finishes outstanding stop intent even if new stop policies were disabled', async () => {
-        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId);
+        const f = fixture(); reserveSessionStop(f.store.db, f.meshId, f.sessionId, f.args.idleSessionLifetime.stopId, f.expected);
         const instance = { getState: () => f.state };
         const components: any = { instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
             router: { deps: { sessionHostControl: f.control } } };
@@ -127,10 +144,13 @@ describe('pre-send stop reservation cleanup', () => {
         const stop = vi.fn(async () => ({ success: true, stoppedSessionIds: [f.sessionId] }));
         const components: any = {
             instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
-            router: { deps: { sessionHostControl: { listSessions: async () => remote ? [] : [f.record] } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) },
+            router: { deps: { sessionHostControl: {
+                listSessions: async () => remote ? [] : [f.record],
+                getDiagnostics: async () => ({ hostStartedAt: f.record.startedAt }),
+            } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) },
             cliManager: { agentCommand: stop },
             dispatchMeshCommand: vi.fn(async (_peer, _command, args) => args.action === 'mesh_idle_session_inventory'
-                ? { success: true, sessions: [{ ...f.record, state: f.state, ...(withFence ? { claimFence: f.args.idleSessionLifetime.claimFence } : {}) }] }
+                ? { success: true, hostBootId: f.hostBootId, sessions: [{ ...f.record, state: f.state, hostBootId: f.hostBootId, ...(withFence ? { claimFence: f.args.idleSessionLifetime.claimFence } : {}) }] }
                 : stop()),
         };
         if (remote) f.store.setRemoteIdleSession(f.meshId, f.nodeId, f.sessionId, 'codex-cli', Date.now() + 60_000);

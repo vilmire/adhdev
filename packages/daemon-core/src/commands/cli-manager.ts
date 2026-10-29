@@ -61,6 +61,12 @@ export interface CliManagerDeps {
     idleSessionLifetimeControl?: {
         listSessions(): Promise<import('@adhdev/session-host-core').SessionHostRecord[]>;
         stopSession(sessionId: string): Promise<import('@adhdev/session-host-core').SessionHostRecord | null>;
+        stopSessionIfExpected?(
+            sessionId: string,
+            expected: import('@adhdev/session-host-core').SessionCleanupExpectedAssignment,
+        ): Promise<import('@adhdev/session-host-core').SessionHostRecord | null>;
+        getDiagnostics?(payload?: import('@adhdev/session-host-core').GetHostDiagnosticsPayload): Promise<import('@adhdev/session-host-core').SessionHostDiagnostics>;
+        resolveHostBootId?(): Promise<string | null> | string | null;
     };
  /** P2P — PTY output transmit */
     getP2p(): { broadcastSessionOutput(key: string, data: string): void } | null;

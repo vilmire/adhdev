@@ -31,11 +31,28 @@ vi.mock('../../src/mesh/mesh-session-accepted-read.js', () => ({
     readAcceptedSessionEvents: (_db: any, _mesh: string, session: string) => auditEvents.filter(e => e.sessionId === session),
     readAcceptedOutput: (_store: any, id: string) => outputs.has(id) ? JSON.parse(outputs.get(id).envelopeJson) : null,
 }));
+const hostBootId = `hs:${now - 1000}`;
 const state = (extra: any = {}) => ({ instanceId: 'worker', type: 'codex-cli', status: 'idle',
     settings: { meshNodeFor: meshId, meshNodeId: 'node', launchedByCoordinator: true }, ...extra });
+const claimFence = { taskId: null, attemptId: null, generation: null, dispatchNonce: null };
+const expectedFor = (sessionId = 'worker') => ({
+    sessionId, hostBootId, runtimeKey: `rt-${sessionId}`, startedAt: now - 1000, ...claimFence,
+});
 const record = (extra: any = {}) => ({ sessionId: 'worker', lifecycle: 'running', surfaceKind: 'live_runtime', lastActivityAt: now - 1000,
-    claimFence: { taskId: null, attemptId: null, generation: null, dispatchNonce: null },
+    runtimeKey: 'rt-worker', startedAt: now - 1000, hostBootId, claimFence,
     meta: { meshNodeFor: meshId, meshNodeId: 'node', launchedByCoordinator: true }, state: state(), ...extra });
+const lifetimeArgs = (extra: any = {}) => ({
+    action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId },
+    idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence, expected: expectedFor(), ...extra.idleSessionLifetime },
+    ...extra,
+});
+const lifetimeControl = (over: any = {}) => ({
+    listSessions: async () => [record()],
+    getDiagnostics: async () => ({ hostStartedAt: now - 1000 }),
+    stopSession: vi.fn(),
+    stopSessionIfExpected: vi.fn(async () => ({ lifecycle: 'stopped' })),
+    ...over,
+});
 let store: any;
 beforeEach(() => {
     testDb = new Database(':memory:'); auditEvents = [];
@@ -134,29 +151,27 @@ describe('host safety recheck', () => {
         state({ settings: { ...state().settings, meshCoordinatorFor: meshId } }),
         undefined,
     ])('refuses a stale owner stop when host state changed: %j', async s => {
-        const stop = vi.fn();
-        const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
+        const control = lifetimeControl({ stopSessionIfExpected: vi.fn() });
+        const host: any = { deps: { idleSessionLifetimeControl: control,
             getInstanceManager: () => ({ getByCategory: () => s ? [{ getState: () => s }] : [] }) } };
-        const result = await idleSessionLifetimeCommand(host, { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } });
-        expect(result.success).toBe(false); expect(stop).not.toHaveBeenCalled();
+        const result = await idleSessionLifetimeCommand(host, lifetimeArgs());
+        expect(result.success).toBe(false); expect(control.stopSessionIfExpected).not.toHaveBeenCalled();
     });
     it('wires authenticated agent_command lifetime actions to the guarded host executor', async () => {
-        const stop = vi.fn(async () => ({ lifecycle: 'stopped' }));
-        const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
+        const control = lifetimeControl();
+        const host: any = { deps: { idleSessionLifetimeControl: control,
             getInstanceManager: () => ({ getByCategory: () => [{ getState: () => state() }] }) } };
-        const result = await agentCommand(host, { action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: 'worker',
-            meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } });
+        const result = await agentCommand(host, { ...lifetimeArgs(), agentType: 'mesh' });
         expect(result).toMatchObject({ success: true, stoppedSessionIds: ['worker'] });
-        expect(stop).toHaveBeenCalledWith('worker');
+        expect(control.stopSessionIfExpected).toHaveBeenCalledWith('worker', expectedFor());
     });
     it('requires a confirmed host stop and protects an outstanding physical checkpoint', async () => {
-        const stop = vi.fn(async () => ({ lifecycle: 'running' }));
-        const host: any = { deps: { idleSessionLifetimeControl: { listSessions: async () => [record()], stopSession: stop },
+        const control = lifetimeControl({ stopSessionIfExpected: vi.fn(async () => ({ lifecycle: 'running' })) });
+        const host: any = { deps: { idleSessionLifetimeControl: control,
             getInstanceManager: () => ({ getByCategory: () => [{ getState: () => state() }] }) } };
-        const args: any = { action: 'mesh_idle_session_stop', targetSessionId: 'worker', meshContext: { meshId }, idleSessionLifetime: { lastActivityAt: now - 1000, stopId: 'unit-stop', claimFence: record().claimFence } };
-        expect((await idleSessionLifetimeCommand(host, args)).success).toBe(false);
-        expect(stop).toHaveBeenCalledOnce(); stop.mockClear(); journalPending = true;
-        expect((await idleSessionLifetimeCommand(host, args)).success).toBe(false); expect(stop).not.toHaveBeenCalled();
+        expect((await idleSessionLifetimeCommand(host, lifetimeArgs())).success).toBe(false);
+        expect(control.stopSessionIfExpected).toHaveBeenCalledOnce(); control.stopSessionIfExpected.mockClear(); journalPending = true;
+        expect((await idleSessionLifetimeCommand(host, lifetimeArgs())).success).toBe(false); expect(control.stopSessionIfExpected).not.toHaveBeenCalled();
     });
 });
 
@@ -184,14 +199,16 @@ describe('idle reuse', () => {
 
 describe('peer lifetime retry and acknowledgement', () => {
     const mesh = { id: meshId, nodes: [{ id: 'remote-node', daemonId: 'daemon_mach_peer', machineId: 'mach_peer' }] };
+    const emptyHost = { listSessions: async () => [], getDiagnostics: async () => ({ hostStartedAt: now - 1000 }) };
+    const inventoryOk = { success: true, hostBootId, sessions: [record()] };
     const components = (dispatch: any): any => ({ instanceManager: { getByCategory: () => [] },
-        router: { deps: { sessionHostControl: { listSessions: async () => [] } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) },
+        router: { deps: { sessionHostControl: emptyHost }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) },
         dispatchMeshCommand: dispatch });
     it('retries P2P inventory with backoff, then stops the accepted remote worker', async () => {
         accept(); tasks[0].assignedNodeId = 'remote-node'; tasks[0].assignedProviderType = 'codex-cli'; tasks[0].createdAt = '2026-10-26';
         remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
         const dispatch = vi.fn().mockRejectedValueOnce(new Error('P2P unavailable')).mockImplementation(async (_peer, _command, args) =>
-            args.action === 'mesh_idle_session_inventory' ? { result: { success: true, sessions: [record()] } }
+            args.action === 'mesh_idle_session_inventory' ? { result: inventoryOk }
                 : { success: true, stoppedSessionIds: ['worker'] });
         const c = components(dispatch);
         expect((await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now), { meshId, now, policy: undefined })).stoppedSessionIds).toEqual([]);
@@ -199,12 +216,15 @@ describe('peer lifetime retry and acknowledgement', () => {
         expect(dispatch).toHaveBeenCalledTimes(1);
         const result = await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now + 60_000), { meshId, now: now + 60_000, policy: undefined });
         expect(result.stoppedSessionIds).toEqual(['worker']);
-        expect(dispatch.mock.calls.at(-1)?.[2]).toMatchObject({ action: 'mesh_idle_session_stop', targetSessionId: 'worker', idleSessionLifetime: { lastActivityAt: now - 1000, stopId: expect.any(String), claimFence: record().claimFence } });
+        expect(dispatch.mock.calls.at(-1)?.[2]).toMatchObject({
+            action: 'mesh_idle_session_stop', targetSessionId: 'worker',
+            idleSessionLifetime: { lastActivityAt: now - 1000, stopId: expect.any(String), claimFence: record().claimFence, expected: expectedFor() },
+        });
     });
     it('does not mistake a remote stop refusal for success', async () => {
         accept(); remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
         const dispatch = vi.fn(async (_peer, _command, args) => args.action === 'mesh_idle_session_inventory'
-            ? { success: true, sessions: [record()] } : { success: false, error: 'session host unavailable' });
+            ? inventoryOk : { success: false, error: 'session host unavailable' });
         const c = components(dispatch);
         const result = await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now), { meshId, now, policy: undefined });
         expect(result.stoppedSessionIds).toEqual([]);
@@ -214,7 +234,7 @@ describe('peer lifetime retry and acknowledgement', () => {
     it('tries a newer live anchor after a historical worker was stopped', async () => {
         remotes.push({ nodeId: 'remote-node', sessionId: 'gone', providerType: 'codex-cli' }, { nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
         const dispatch = vi.fn(async (_peer, _command, args) => args.targetSessionId === 'gone'
-            ? { success: false, error: 'mesh_session_not_mesh_owned' } : { success: true, sessions: [record()] });
+            ? { success: false, error: 'mesh_session_not_mesh_owned' } : inventoryOk);
         const records = await sessionLifetimeDeps(components(dispatch), mesh, now).listSessions();
         expect(records.map(r => r.sessionId)).toEqual(['worker']); expect(dispatch).toHaveBeenCalledTimes(2);
     });
@@ -223,9 +243,9 @@ describe('peer lifetime retry and acknowledgement', () => {
 describe('lifetime stop race', () => {
     it('rechecks a follow-up queued while remote inventory was in flight', async () => {
         remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
-        const dispatch = vi.fn(async () => ({ success: true, sessions: [record()] }));
+        const dispatch = vi.fn(async () => ({ success: true, hostBootId, sessions: [record()] }));
         const intentional = vi.fn();
-        const c: any = { router: { deps: { sessionHostControl: { listSessions: async () => [] } }, recordIntentionalMeshSessionStop: intentional },
+        const c: any = { router: { deps: { sessionHostControl: { listSessions: async () => [], getDiagnostics: async () => ({ hostStartedAt: now - 1000 }) } }, recordIntentionalMeshSessionStop: intentional },
             dispatchMeshCommand: dispatch };
         const deps = sessionLifetimeDeps(c, { id: meshId, nodes: [{ id: 'remote-node', daemonId: 'daemon_mach_peer', machineId: 'mach_peer' }] }, now);
         await deps.listSessions();
@@ -257,8 +277,8 @@ describe('remote fence capability', () => {
         accept(); remotes.push({ nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
         const oldRecord = record(); delete (oldRecord as any).claimFence;
         const dispatch = vi.fn(async (_peer, _command, args) => args.action === 'mesh_idle_session_inventory'
-            ? { success: true, sessions: [oldRecord] } : { success: true, stoppedSessionIds: ['worker'] });
-        const c: any = { router: { deps: { sessionHostControl: { listSessions: async () => [] } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) }, dispatchMeshCommand: dispatch };
+            ? { success: true, hostBootId, sessions: [oldRecord] } : { success: true, stoppedSessionIds: ['worker'] });
+        const c: any = { router: { deps: { sessionHostControl: { listSessions: async () => [], getDiagnostics: async () => ({ hostStartedAt: now - 1000 }) } }, recordIntentionalMeshSessionStop: vi.fn(async () => {}) }, dispatchMeshCommand: dispatch };
         const mesh = { id: meshId, nodes: [{ id: 'remote-node', daemonId: 'daemon_mach_peer', machineId: 'mach_peer' }] };
         const result = await runIdleSessionReapPass(sessionLifetimeDeps(c, mesh, now), { meshId, now, policy: undefined });
         expect(result.stoppedSessionIds).toEqual([]);

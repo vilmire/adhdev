@@ -36,6 +36,7 @@ import { acquireHostInstanceLock, type HostInstanceLock } from './host-instance-
 import { OperatorRecoveryFence } from './operator-recovery-fence.js';
 import { resolveInstanceConfigDir } from '@adhdev/session-host-core';
 import { OperatorRecoveryControl } from './operator-recovery-control.js';
+import { refuseCleanupExpectedStop, resolveHostBootId } from './stop-session-if-expected.js';
 
 export {
   sessionHostInstanceArg,
@@ -647,6 +648,19 @@ export class SessionHostServer extends EventEmitter {
           this.emitEvent({ type: 'session_stopped', sessionId: request.payload.sessionId });
           this.recordRuntimeTransition(request.payload.sessionId, 'stop_session', 'stopping', undefined, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
+        }
+        case 'stop_session_if_expected': {
+          const p = request.payload, record = this.registry.getSession(p.sessionId);
+          const refused = refuseCleanupExpectedStop(record, p.expected,
+            resolveHostBootId({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt }), this.runtimes.has(p.sessionId));
+          if (refused) return { success: false, error: refused };
+          this.stopRequests.set(p.sessionId, 'stop');
+          this.registry.setLifecycle(p.sessionId, 'stopping');
+          this.persistNow(p.sessionId);
+          this.requireRuntime(p.sessionId).stop();
+          this.emitEvent({ type: 'session_stopped', sessionId: p.sessionId });
+          this.recordRuntimeTransition(p.sessionId, 'stop_session_if_expected', 'stopping', undefined, true);
+          return { success: true, result: this.registry.getSession(p.sessionId) };
         }
         case 'stop_mesh_writer': {
           const p = request.payload, record = this.registry.getSession(p.sessionId);

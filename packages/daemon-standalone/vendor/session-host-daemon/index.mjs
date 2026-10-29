@@ -1374,6 +1374,13 @@ function observeRecoveryTombstones(tombstones, runtimes) {
   return uncertain ? "unknown" : "absent";
 }
 
+// src/stop-session-if-expected.ts
+import {
+  hostBootIdFromStartedAt,
+  resolveHostBootId,
+  refuseCleanupExpectedStop
+} from "@adhdev/session-host-core";
+
 // src/prior-host-identity.ts
 import { createHash as createHash4 } from "crypto";
 import * as fs8 from "fs";
@@ -2360,6 +2367,23 @@ var SessionHostServer = class extends EventEmitter {
           this.emitEvent({ type: "session_stopped", sessionId: request.payload.sessionId });
           this.recordRuntimeTransition(request.payload.sessionId, "stop_session", "stopping", void 0, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
+        }
+        case "stop_session_if_expected": {
+          const p = request.payload, record = this.registry.getSession(p.sessionId);
+          const refused = refuseCleanupExpectedStop(
+            record,
+            p.expected,
+            resolveHostBootId({ upgradeBootId: this.upgradeLease?.bootId, hostStartedAt: this.startedAt }),
+            this.runtimes.has(p.sessionId)
+          );
+          if (refused) return { success: false, error: refused };
+          this.stopRequests.set(p.sessionId, "stop");
+          this.registry.setLifecycle(p.sessionId, "stopping");
+          this.persistNow(p.sessionId);
+          this.requireRuntime(p.sessionId).stop();
+          this.emitEvent({ type: "session_stopped", sessionId: p.sessionId });
+          this.recordRuntimeTransition(p.sessionId, "stop_session_if_expected", "stopping", void 0, true);
+          return { success: true, result: this.registry.getSession(p.sessionId) };
         }
         case "stop_mesh_writer": {
           const p = request.payload, record = this.registry.getSession(p.sessionId);

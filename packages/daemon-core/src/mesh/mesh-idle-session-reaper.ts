@@ -19,6 +19,10 @@ export interface ReapableSessionRecord {
     sessionId: string;
     state?: any;
     claimFence?: import('./mesh-session-stop-fence.js').SessionClaimFence;
+    /** Host boot + native incarnation captured with the inventory for cleanup CAS. */
+    hostBootId?: string;
+    runtimeKey?: string;
+    startedAt?: number;
     checkpointPending?: boolean;
     stopping?: boolean;
     machineId?: string;

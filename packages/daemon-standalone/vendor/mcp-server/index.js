@@ -2895,6 +2895,7 @@ var require_dist = __commonJS({
       getSessionHostSurfaceKind: () => getSessionHostSurfaceKind2,
       getWorkspaceLabel: () => getWorkspaceLabel,
       hiddenSpawnProcess: () => hiddenSpawn,
+      hostBootIdFromStartedAt: () => hostBootIdFromStartedAt,
       isDefaultInstanceConfigDir: () => isDefaultInstanceConfigDir,
       isRecoveryEndpoint: () => isRecoveryEndpoint,
       isSessionHostLiveRuntime: () => isSessionHostLiveRuntime2,
@@ -2904,8 +2905,10 @@ var require_dist = __commonJS({
       partitionSessionHostDiagnosticsSessions: () => partitionSessionHostDiagnosticsSessions2,
       partitionSessionHostRecords: () => partitionSessionHostRecords2,
       recoveryTargetBytes: () => recoveryTargetBytes,
+      refuseCleanupExpectedStop: () => refuseCleanupExpectedStop,
       replayLaunchEnv: () => replayLaunchEnv,
       resolveAttachableRuntimeRecord: () => resolveAttachableRuntimeRecord,
+      resolveHostBootId: () => resolveHostBootId,
       resolveInstanceConfigDir: () => resolveInstanceConfigDir,
       resolveRuntimeRecord: () => resolveRuntimeRecord,
       resolveSessionHostCols: () => resolveSessionHostCols,
@@ -3050,6 +3053,7 @@ var require_dist = __commonJS({
       "get_input_state",
       "resize_session",
       "stop_session",
+      "stop_session_if_expected",
       "stop_mesh_writer",
       "delete_session",
       "resume_session",
@@ -3068,6 +3072,37 @@ var require_dist = __commonJS({
       "get_session",
       "list_sessions"
     ];
+    function hostBootIdFromStartedAt(hostStartedAt) {
+      return `hs:${hostStartedAt}`;
+    }
+    function resolveHostBootId(opts) {
+      if (typeof opts.upgradeBootId === "string" && opts.upgradeBootId) return opts.upgradeBootId;
+      if (!Number.isFinite(opts.hostStartedAt) || opts.hostStartedAt <= 0) return null;
+      return hostBootIdFromStartedAt(opts.hostStartedAt);
+    }
+    function refuseCleanupExpectedStop(record, expected, currentHostBootId, hasRuntime) {
+      if (!expected || expected.sessionId !== (record?.sessionId ?? "") || typeof expected.hostBootId !== "string" || !expected.hostBootId || typeof expected.runtimeKey !== "string" || !expected.runtimeKey || !Number.isSafeInteger(expected.startedAt) || expected.startedAt <= 0) {
+        return "cleanup_expected_malformed";
+      }
+      if (!currentHostBootId) return "cleanup_host_boot_unknown";
+      if (expected.hostBootId !== currentHostBootId) return "cleanup_host_boot_mismatch";
+      if (!record || record.termination || !hasRuntime || record.lifecycle !== "running") {
+        return "cleanup_session_not_running";
+      }
+      if (record.runtimeKey !== expected.runtimeKey || record.startedAt !== expected.startedAt) {
+        return "cleanup_native_incarnation_mismatch";
+      }
+      const active = record.meta?.meshActiveAssignment;
+      if (expected.taskId === null) {
+        if (active && typeof active.taskId === "string" && active.taskId) return "cleanup_expected_unbound_now_bound";
+        return null;
+      }
+      if (!active || typeof active.taskId !== "string" || !active.taskId) return "cleanup_expected_bound_now_unbound";
+      if (active.taskId !== expected.taskId || active.attemptId !== expected.attemptId || active.generation !== expected.generation || active.dispatchNonce !== expected.dispatchNonce) {
+        return "cleanup_assignment_mismatch";
+      }
+      return null;
+    }
     function classifyTermination(input) {
       const { exitCode, terminatedAt } = input;
       const signal = input.signal ?? null;
@@ -4374,6 +4409,9 @@ var require_dist = __commonJS({
         },
         stopSession(sessionId) {
           return transport.request("stop_session", { sessionId });
+        },
+        stopSessionIfExpected(sessionId, expected) {
+          return transport.request("stop_session_if_expected", { sessionId, expected });
         },
         deleteSession(sessionId, opts = {}) {
           return transport.request("delete_session", { sessionId, force: opts.force === true });
@@ -47595,27 +47633,67 @@ ${error.message || ""}`;
     function claimFenceMatches(expected, state2) {
       return JSON.stringify(expected) === JSON.stringify(sessionClaimFence(state2));
     }
+    function captureCleanupExpected(args) {
+      if (!args.hostBootId || !args.runtimeKey || !Number.isSafeInteger(args.startedAt) || args.startedAt <= 0) return null;
+      return {
+        sessionId: args.sessionId,
+        hostBootId: args.hostBootId,
+        runtimeKey: args.runtimeKey,
+        startedAt: args.startedAt,
+        ...sessionClaimFence(args.state)
+      };
+    }
+    function expectedAssignmentUnchanged(expected, state2, record7) {
+      if (expected.sessionId !== record7.sessionId || expected.runtimeKey !== record7.runtimeKey || expected.startedAt !== record7.startedAt) return false;
+      return claimFenceMatches({
+        taskId: expected.taskId,
+        attemptId: expected.attemptId,
+        generation: expected.generation,
+        dispatchNonce: expected.dispatchNonce
+      }, state2);
+    }
     function ensure(db2) {
       db2.exec(`CREATE TABLE IF NOT EXISTS mesh_session_stop_fences (
-        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL);
+        session_id TEXT PRIMARY KEY, mesh_id TEXT NOT NULL, stop_id TEXT NOT NULL, state TEXT NOT NULL,
+        expected_json TEXT);
         CREATE INDEX IF NOT EXISTS ix_session_stop_pending ON mesh_session_stop_fences(mesh_id, state)`);
+      const cols = db2.prepare("PRAGMA table_info(mesh_session_stop_fences)").all();
+      if (!cols.some((c) => c.name === "expected_json")) {
+        db2.exec("ALTER TABLE mesh_session_stop_fences ADD COLUMN expected_json TEXT");
+      }
     }
     function sessionIsStopping(db2, sessionId) {
       if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return false;
       return !!db2.prepare("SELECT 1 FROM mesh_session_stop_fences WHERE session_id = ?").get(sessionId.trim());
     }
-    function reserveSessionStop(db2, meshId, sessionId, stopId) {
+    function reserveSessionStop(db2, meshId, sessionId, stopId, expected) {
       ensure(db2);
       return db2.transaction(() => {
-        const held = db2.prepare("SELECT mesh_id, stop_id FROM mesh_session_stop_fences WHERE session_id = ?").get(sessionId.trim());
+        const held = db2.prepare("SELECT mesh_id, stop_id, expected_json FROM mesh_session_stop_fences WHERE session_id = ?").get(sessionId.trim());
         if (held) {
           if (held.mesh_id !== meshId || stopId && held.stop_id !== stopId) throw new Error("session_stop_fence_conflict");
+          if (expected && held.expected_json && held.expected_json !== JSON.stringify(expected)) {
+            throw new Error("session_stop_expected_conflict");
+          }
+          if (expected && !held.expected_json) {
+            db2.prepare("UPDATE mesh_session_stop_fences SET expected_json = ? WHERE session_id = ? AND stop_id = ?").run(JSON.stringify(expected), sessionId.trim(), held.stop_id);
+          }
           return held.stop_id;
         }
         const id4 = stopId ?? (0, import_node_crypto6.randomUUID)();
-        db2.prepare("INSERT INTO mesh_session_stop_fences VALUES (?, ?, ?, 'reserved')").run(sessionId.trim(), meshId, id4);
+        db2.prepare("INSERT INTO mesh_session_stop_fences(session_id, mesh_id, stop_id, state, expected_json) VALUES (?, ?, ?, 'reserved', ?)").run(sessionId.trim(), meshId, id4, expected ? JSON.stringify(expected) : null);
         return id4;
       }).immediate();
+    }
+    function readReservedCleanupExpected(db2, sessionId, stopId) {
+      if (!db2.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mesh_session_stop_fences'").get()) return null;
+      const row2 = db2.prepare("SELECT expected_json FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ?").get(sessionId.trim(), stopId);
+      if (!row2?.expected_json) return null;
+      try {
+        return JSON.parse(row2.expected_json);
+      } catch {
+        return null;
+      }
     }
     function markSessionStopSent(db2, sessionId, stopId) {
       const changed = db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopping' WHERE session_id = ? AND stop_id = ? AND state IN ('reserved', 'stopping')").run(sessionId.trim(), stopId);
@@ -47623,6 +47701,9 @@ ${error.message || ""}`;
     }
     function releaseSessionStop(db2, sessionId, stopId) {
       db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ? AND state = 'reserved'").run(sessionId.trim(), stopId);
+    }
+    function abortSessionStopAfterHostRefusal(db2, sessionId, stopId) {
+      db2.prepare("DELETE FROM mesh_session_stop_fences WHERE session_id = ? AND stop_id = ? AND state = 'stopping'").run(sessionId.trim(), stopId);
     }
     function sessionStopPending(db2, sessionId) {
       if (!sessionIsStopping(db2, sessionId)) return false;
@@ -47636,10 +47717,21 @@ ${error.message || ""}`;
       db2.prepare("UPDATE mesh_session_stop_fences SET state = 'stopped' WHERE session_id = ? AND stop_id = ?").run(sessionId.trim(), stopId);
     }
     var import_node_crypto6;
+    var CLEANUP_HOST_REFUSAL_CODES;
     var init_mesh_session_stop_fence = __esm2({
       "src/mesh/mesh-session-stop-fence.ts"() {
         "use strict";
         import_node_crypto6 = require("crypto");
+        CLEANUP_HOST_REFUSAL_CODES = /* @__PURE__ */ new Set([
+          "cleanup_expected_malformed",
+          "cleanup_host_boot_unknown",
+          "cleanup_host_boot_mismatch",
+          "cleanup_session_not_running",
+          "cleanup_native_incarnation_mismatch",
+          "cleanup_expected_unbound_now_bound",
+          "cleanup_expected_bound_now_unbound",
+          "cleanup_assignment_mismatch"
+        ]);
       }
     });
     function pinnedMeshNodeIdMatches(actual, expected) {
@@ -126945,6 +127037,15 @@ ${asText(streams.stderr)}
         reapedSessionCount = 0;
       }
     });
+    async function localHostBootId(control) {
+      if (typeof control.getDiagnostics !== "function") return null;
+      try {
+        const diagnostics = await control.getDiagnostics({});
+        return (0, import_session_host_core16.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
+      } catch {
+        return null;
+      }
+    }
     function sessionLifetimeDeps(components, mesh, now) {
       const router = components.router;
       const routes = /* @__PURE__ */ new Map();
@@ -126956,11 +127057,16 @@ ${asText(streams.stderr)}
         listSessions: async () => {
           if (!router?.deps.sessionHostControl) throw new Error("session_host_unavailable");
           const local = await router.deps.sessionHostControl.listSessions();
+          const hostBootId = await localHostBootId(router.deps.sessionHostControl);
+          if (!hostBootId) throw new Error("lifetime_host_boot_unknown");
           const records = local.map((record7) => ({
             ...record7,
             state: findLocalCliInstance(components, record7.sessionId)?.getState(),
             stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, record7.sessionId),
             claimFence: sessionClaimFence(findLocalCliInstance(components, record7.sessionId)?.getState()),
+            hostBootId,
+            runtimeKey: record7.runtimeKey,
+            startedAt: record7.startedAt,
             checkpointPending: sessionCheckpointPending(record7.sessionId),
             machineId: canonicalDaemonId2(coordinatorDaemonId)
           }));
@@ -126997,8 +127103,8 @@ ${asText(streams.stderr)}
                   targetSessionId: c.sessionId,
                   meshContext: context2
                 }), { command: "agent_command", peerDaemonId: daemonId });
-                if (!result.success || !Array.isArray(result.sessions)) {
-                  failure7 = result.error || "inventory_unconfirmed";
+                if (!result.success || !Array.isArray(result.sessions) || typeof result.hostBootId !== "string" || !result.hostBootId) {
+                  failure7 = result.error || (result.success ? "lifetime_host_boot_unknown" : "inventory_unconfirmed");
                   if (result.error === "mesh_session_not_mesh_owned") continue;
                   throw new Error(String(failure7));
                 }
@@ -127006,7 +127112,13 @@ ${asText(streams.stderr)}
                 failure7 = void 0;
                 for (const r of result.sessions) {
                   if (r.meta?.meshNodeFor !== mesh.id) continue;
-                  const record7 = { ...r, machineId: daemonId, stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
+                  const record7 = {
+                    ...r,
+                    hostBootId: result.hostBootId,
+                    machineId: daemonId,
+                    stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId),
+                    checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId)
+                  };
                   routes.set(record7.sessionId, { daemonId, record: record7, provider: c.providerType || "mesh" });
                   records.push(record7);
                 }
@@ -127032,7 +127144,16 @@ ${asText(streams.stderr)}
           if (!router) return { success: false, error: "router_unavailable" };
           const route = [...routes.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
           const record7 = [...localRecords.entries()].find(([id4]) => sessionIdsEquivalent(id4, sessionId))?.[1];
+          const source2 = route?.record ?? record7;
+          const expected = source2 ? captureCleanupExpected({
+            sessionId: source2.sessionId,
+            hostBootId: source2.hostBootId ?? "",
+            runtimeKey: source2.runtimeKey ?? "",
+            startedAt: source2.startedAt ?? 0,
+            state: source2.state ?? findLocalCliInstance(components, sessionId)?.getState()
+          }) : null;
           const preflight = () => {
+            if (!expected) return "lifetime_expected_assignment_required";
             if (route) {
               if (!route.record.claimFence) return "lifetime_claim_fence_unsupported";
               if (!components.dispatchMeshCommand) return "P2P_unavailable";
@@ -127043,19 +127164,22 @@ ${asText(streams.stderr)}
             return void 0;
           };
           const unavailable3 = preflight();
-          if (unavailable3) return { success: false, error: unavailable3 };
+          if (unavailable3) return { success: false, error: unavailable3, retained: true };
           const db2 = MeshRuntimeStore.getInstance().db;
-          const stopId = reserveSessionStop(db2, args.meshId, sessionId);
+          const stopId = reserveSessionStop(db2, args.meshId, sessionId, void 0, expected);
           try {
             await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: "stop_session" });
             if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
-              return { success: false, error: "session_lifetime_safety_changed" };
+              return { success: false, error: "session_lifetime_safety_changed", retained: true };
             }
             const changed = preflight();
-            if (changed) return { success: false, error: changed };
+            if (changed) return { success: false, error: changed, retained: true };
+            const lifetime = { lastActivityAt: source2.lastActivityAt, stopId, claimFence: source2.claimFence, expected };
             const acknowledged = (result) => {
               if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some((id4) => sessionIdsEquivalent(id4, sessionId))) {
                 confirmSessionStop(db2, sessionId, stopId);
+              } else if (!result.success && typeof result.error === "string" && (CLEANUP_HOST_REFUSAL_CODES.has(result.error) || result.error === "lifetime_expected_stop_unsupported" || result.error === "lifetime_safety_changed" || result.error === "lifetime_assignment_changed" || result.error === "lifetime_expected_assignment_required" || result.error === "cleanup_host_boot_mismatch")) {
+                abortSessionStopAfterHostRefusal(db2, sessionId, stopId);
               }
               return result;
             };
@@ -127065,7 +127189,7 @@ ${asText(streams.stderr)}
                 action: "mesh_idle_session_stop",
                 agentType: route.provider,
                 targetSessionId: sessionId,
-                idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence },
+                idleSessionLifetime: lifetime,
                 meshContext: context2
               }), { command: "agent_command", peerDaemonId: route.daemonId }));
             }
@@ -127073,7 +127197,7 @@ ${asText(streams.stderr)}
               action: "mesh_idle_session_stop",
               agentType: "mesh",
               targetSessionId: sessionId,
-              idleSessionLifetime: { lastActivityAt: record7.lastActivityAt, stopId, claimFence: record7.claimFence },
+              idleSessionLifetime: lifetime,
               meshContext: context2
             }));
           } finally {
@@ -127082,11 +127206,13 @@ ${asText(streams.stderr)}
         }
       };
     }
+    var import_session_host_core16;
     var init_mesh_session_lifetime_runtime = __esm2({
       "src/mesh/mesh-session-lifetime-runtime.ts"() {
         "use strict";
         init_mesh_session_stop_fence();
         init_dist();
+        import_session_host_core16 = require_dist();
         init_config();
         init_logger();
         init_mesh_relay_result();
@@ -141583,7 +141709,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os39;
-    var import_session_host_core17;
+    var import_session_host_core18;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -141593,7 +141719,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os39 = __toESM2(require("os"));
-        import_session_host_core17 = require_dist();
+        import_session_host_core18 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -141641,8 +141767,8 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const launch = (0, import_session_host_core17.niceLaunch)(resolveWin32Executable(command), args, options.env);
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core17.spawnCliChild)(() => pty.spawn(launch.command, launch.args, {
+            const launch = (0, import_session_host_core18.niceLaunch)(resolveWin32Executable(command), args, options.env);
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core18.spawnCliChild)(() => pty.spawn(launch.command, launch.args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -141656,7 +141782,7 @@ ${tail}` : ""
     });
     var import_node_crypto69;
     var import_node_perf_hooks3;
-    var import_session_host_core27;
+    var import_session_host_core29;
     var hash3;
     var OperatorRecoveryAnchors;
     var init_operator_recovery = __esm2({
@@ -141665,7 +141791,7 @@ ${tail}` : ""
         import_node_crypto69 = require("crypto");
         import_node_perf_hooks3 = require("perf_hooks");
         init_worker_bridge_transaction();
-        import_session_host_core27 = require_dist();
+        import_session_host_core29 = require_dist();
         hash3 = (s2) => (0, import_node_crypto69.createHash)("sha256").update(s2).digest("hex");
         OperatorRecoveryAnchors = class {
           constructor(deps) {
@@ -141706,16 +141832,16 @@ ${tail}` : ""
               "nodeId",
               "deliveryId"
             ]) {
-              if (c[key5] !== import_session_host_core27.OPERATOR_RECOVERY_TARGET[key5]) throw new Error("recovery_current_assignment_mismatch");
+              if (c[key5] !== import_session_host_core29.OPERATOR_RECOVERY_TARGET[key5]) throw new Error("recovery_current_assignment_mismatch");
             }
             if (!c.writerStopRequestId?.trim() || c.writerStopConfirmed !== false || c.writerStopTerminalPresent !== false || c.reportPresent !== false || c.reclaimCount !== 0 || !c.holdsRevision || c.state !== "stopping" || c.queueStatus !== "assigned" || // eslint-disable-next-line no-restricted-syntax -- Recovery is pinned to this exact persisted queue node, with no reassociation or alias substitution.
-            c.queueNodeId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
+            c.queueNodeId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.nodeId || c.queueSessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId || !c.ownerRevision || !c.queueRevision) throw new Error("recovery_current_assignment_mismatch");
             return JSON.stringify(Object.fromEntries(Object.entries(c).sort(([a], [b]) => a.localeCompare(b))));
           }
           assertPeer(p) {
-            if (p.peer.peerId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || // canon-ok: captured cloud worker peer identity must match byte for byte
-            p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.workerDaemonId || // canon-ok: worker identity is hashed into the durable signed fence binding
-            p.peer.binding.namespace !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !(0, import_session_host_core27.isRecoveryEndpoint)(p.peer.binding.endpoint) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
+            if (p.peer.peerId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.workerDaemonId || !p.connectionEpoch || // canon-ok: captured cloud worker peer identity must match byte for byte
+            p.peer.connectionEpoch !== p.connectionEpoch || !p.peer.isCurrent() || JSON.stringify(p.peer.binding) !== p.binding || p.peer.fenceDigest !== p.fenceDigest || p.peer.binding.workerDaemonId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.workerDaemonId || // canon-ok: worker identity is hashed into the durable signed fence binding
+            p.peer.binding.namespace !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.namespace || !p.peer.binding.hostBootId || !(0, import_session_host_core29.isRecoveryEndpoint)(p.peer.binding.endpoint) || !/^[a-f0-9]{64}$/.test(p.fenceDigest)) throw new Error("recovery_authenticated_peer_changed");
           }
           revoke() {
             this.pending.clear();
@@ -141742,10 +141868,10 @@ ${tail}` : ""
             (this.deps.withOwnershipFence ?? ((f) => f()))(() => this.deps.db.transaction(() => {
               p.current = this.current();
               this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='revoked' WHERE state='issued'").run();
-              if (this.deps.db.prepare("SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?").get(import_session_host_core27.recoveryTargetBytes)) {
+              if (this.deps.db.prepare("SELECT 1 FROM operator_recovery_anchors_v1 WHERE target=?").get(import_session_host_core29.recoveryTargetBytes)) {
                 throw new Error("recovery_already_consumed");
               }
-              this.deps.db.prepare("INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)").run(nonceHash, import_session_host_core27.recoveryTargetBytes, this.deps.coordinatorBootId, p.current, "issued");
+              this.deps.db.prepare("INSERT INTO operator_recovery_challenges_v1 VALUES (?,?,?,?,?)").run(nonceHash, import_session_host_core29.recoveryTargetBytes, this.deps.coordinatorBootId, p.current, "issued");
             }).immediate());
             this.pending.set(nonceHash, p);
             try {
@@ -141766,8 +141892,8 @@ ${tail}` : ""
                   throw new Error("recovery_expired_revoked_or_reassigned");
                 }
                 const row2 = this.deps.db.prepare("SELECT * FROM operator_recovery_challenges_v1 WHERE nonce_hash=?").get(nonceHash);
-                if (!row2 || row2.state !== "issued" || row2.coordinator_boot !== this.deps.coordinatorBootId || row2.assignment !== p.current || row2.target !== import_session_host_core27.recoveryTargetBytes) throw new Error("recovery_challenge_replayed");
-                if (!proof || proof.protocol !== 1 || proof.verdict !== "ABSENT" || proof.nonce !== nonce || proof.fenceDigest !== p.fenceDigest || proof.sessionId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.sessionId || proof.providerSessionId !== import_session_host_core27.OPERATOR_RECOVERY_TARGET.providerSessionId || proof.namespace !== peer.binding.namespace || proof.hostBootId !== peer.binding.hostBootId || proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) {
+                if (!row2 || row2.state !== "issued" || row2.coordinator_boot !== this.deps.coordinatorBootId || row2.assignment !== p.current || row2.target !== import_session_host_core29.recoveryTargetBytes) throw new Error("recovery_challenge_replayed");
+                if (!proof || proof.protocol !== 1 || proof.verdict !== "ABSENT" || proof.nonce !== nonce || proof.fenceDigest !== p.fenceDigest || proof.sessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId || proof.providerSessionId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.providerSessionId || proof.namespace !== peer.binding.namespace || proof.hostBootId !== peer.binding.hostBootId || proof.workerDaemonId !== peer.peerId || proof.endpoint !== peer.binding.endpoint) {
                   throw new Error("recovery_physical_proof_refused");
                 }
                 const accepted = {
@@ -141776,19 +141902,19 @@ ${tail}` : ""
                   reason: "native_dual_uuid_absence",
                   nonce,
                   fenceDigest: p.fenceDigest,
-                  sessionId: import_session_host_core27.OPERATOR_RECOVERY_TARGET.sessionId,
-                  providerSessionId: import_session_host_core27.OPERATOR_RECOVERY_TARGET.providerSessionId,
+                  sessionId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId,
+                  providerSessionId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.providerSessionId,
                   namespace: proof.namespace,
                   hostBootId: proof.hostBootId,
                   workerDaemonId: proof.workerDaemonId,
                   endpoint: proof.endpoint
                 };
                 this.deps.burnWitness?.(nonceHash, hash3(JSON.stringify(accepted)));
-                this.deps.db.prepare("INSERT INTO operator_recovery_anchors_v1 VALUES (?,?,?,?,?)").run(import_session_host_core27.recoveryTargetBytes, nonceHash, "operator_asserted", JSON.stringify(accepted), p.current);
+                this.deps.db.prepare("INSERT INTO operator_recovery_anchors_v1 VALUES (?,?,?,?,?)").run(import_session_host_core29.recoveryTargetBytes, nonceHash, "operator_asserted", JSON.stringify(accepted), p.current);
                 this.deps.db.prepare("UPDATE operator_recovery_challenges_v1 SET state='consumed' WHERE nonce_hash=?").run(nonceHash);
                 const anchor = Object.freeze({
                   association: "operator_asserted",
-                  target: import_session_host_core27.OPERATOR_RECOVERY_TARGET,
+                  target: import_session_host_core29.OPERATOR_RECOVERY_TARGET,
                   proof: Object.freeze(accepted)
                 });
                 this.deps.settleInTransaction?.(anchor);
@@ -141812,7 +141938,7 @@ ${tail}` : ""
       }
     });
     function readRecoveryCurrentAssignment(db2, selfDaemonId) {
-      if (!db2.inTransaction || selfDaemonId !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_owner_transaction_required");
+      if (!db2.inTransaction || selfDaemonId !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_owner_transaction_required");
       if (!inRecoveryMeshOwnershipFence()) throw new Error("recovery_physical_owner_fence_required");
       const fd = (0, import_node_fs42.openSync)(getMeshConfigPath(), import_node_fs42.constants.O_RDONLY | import_node_fs42.constants.O_NOFOLLOW);
       let ownerBytes;
@@ -141829,19 +141955,19 @@ ${tail}` : ""
       } finally {
         (0, import_node_fs42.closeSync)(fd);
       }
-      const currentMesh = JSON.parse(ownerBytes).meshes?.find((m) => m.id === import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId);
-      const allowedOwnerPins = /* @__PURE__ */ new Set([import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId.slice("daemon_".length)]);
+      const currentMesh = JSON.parse(ownerBytes).meshes?.find((m) => m.id === import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId);
+      const allowedOwnerPins = /* @__PURE__ */ new Set([import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.ownerDaemonId.slice("daemon_".length)]);
       if (currentMesh?.meshHost?.role !== "host" || !allowedOwnerPins.has(currentMesh.meshHost.hostDaemonId)) throw new Error("recovery_current_mesh_owner_mismatch");
       const a = db2.prepare(`SELECT * FROM turn_attempts WHERE mesh_id=? AND task_id=?
-        ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId);
-      const q2 = db2.prepare("SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?").get(import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId);
+        ORDER BY attempt_no DESC, accepted_at DESC LIMIT 1`).get(import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId);
+      const q2 = db2.prepare("SELECT * FROM mesh_queue WHERE id=? AND mesh_id=?").get(import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId, import_session_host_core30.OPERATOR_RECOVERY_TARGET.meshId);
       if (!a || !q2 || a.owner_daemon_id !== selfDaemonId || a.terminal_outcome !== null) throw new Error("recovery_current_assignment_missing");
       const data = JSON.parse(a.data_json);
       const stop = data?.writerStop;
       if (a.state !== "stopping" || a.reclaim_count !== 0 || !stop || typeof stop.requestId !== "string" || !stop.requestId.trim() || stop.confirmed === true || stop.terminal !== void 0 || data.report !== void 0) throw new Error("recovery_stopping_state_unsafe");
       const holds = db2.prepare("SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id").all(a.attempt_id);
       const payload = JSON.parse(q2.payload);
-      if (payload.id !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
+      if (payload.id !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core30.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
       const hash4 = (s2) => (0, import_node_crypto70.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
       return {
         ownerDaemonId: a.owner_daemon_id,
@@ -141869,14 +141995,14 @@ ${tail}` : ""
     }
     var import_node_fs42;
     var import_node_crypto70;
-    var import_session_host_core28;
+    var import_session_host_core30;
     var init_operator_recovery_store = __esm2({
       "src/mesh/turn-ledger/operator-recovery-store.ts"() {
         "use strict";
         import_node_fs42 = require("fs");
         init_mesh_config_store();
         import_node_crypto70 = require("crypto");
-        import_session_host_core28 = require_dist();
+        import_session_host_core30 = require_dist();
       }
     });
     function isPublishableAttempt(attempt) {
@@ -142572,7 +142698,7 @@ ${tail}` : ""
       }
       return {
         async recoverOperatorAssertedLegacy(input) {
-          if (deps.selfDaemonId !== import_session_host_core29.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_wrong_coordinator");
+          if (deps.selfDaemonId !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_wrong_coordinator");
           const recovery2 = new OperatorRecoveryAnchors({
             db: deps.db,
             owner: input.owner,
@@ -142591,8 +142717,8 @@ ${tail}` : ""
                   source: "scheduler",
                   at: now(),
                   observedBy: deps.selfDaemonId,
-                  sessionId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.sessionId,
-                  attemptRef: { attemptId: import_session_host_core29.OPERATOR_RECOVERY_TARGET.attemptId, generation: import_session_host_core29.OPERATOR_RECOVERY_TARGET.generation },
+                  sessionId: import_session_host_core31.OPERATOR_RECOVERY_TARGET.sessionId,
+                  attemptRef: { attemptId: import_session_host_core31.OPERATOR_RECOVERY_TARGET.attemptId, generation: import_session_host_core31.OPERATOR_RECOVERY_TARGET.generation },
                   status: "failed",
                   reason: "operator_update"
                 });
@@ -142661,7 +142787,7 @@ ${tail}` : ""
     }
     var import_node_util16;
     var import_crypto47;
-    var import_session_host_core29;
+    var import_session_host_core31;
     var REPORT_GATE_RULES;
     var DEFAULT_LOG;
     var PUBLISH_BATCH;
@@ -142682,7 +142808,7 @@ ${tail}` : ""
         init_store();
         init_operator_recovery();
         init_operator_recovery_store();
-        import_session_host_core29 = require_dist();
+        import_session_host_core31 = require_dist();
         init_effects();
         REPORT_GATE_RULES = /* @__PURE__ */ new Set(["R9r", "R15p", "R12r", "R13r", "R13d", "R13u", "R13x", "R13z", "R13c", "R17c", "R17g", "R9t", "R13t"]);
         DEFAULT_LOG = { info: () => {
@@ -185768,7 +185894,7 @@ ${lines.join("\n")}
     var import_node_path33 = require("path");
     init_dist();
     init_owned_lock();
-    var import_session_host_core16 = require_dist();
+    var import_session_host_core17 = require_dist();
     var import_node_fs34 = require("fs");
     async function readPersistedRuntimeRecord(file) {
       const stream = (0, import_node_fs34.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
@@ -185817,10 +185943,10 @@ ${lines.join("\n")}
       return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
     }
     async function verifiedHostAssistants(configDir, namespace, ipcKey, candidates) {
-      const endpoint2 = (0, import_session_host_core16.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
+      const endpoint2 = (0, import_session_host_core17.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
       if (candidates.size > 128 || [...candidates].some((id4) => id4.length > 256)) return void 0;
       const budgetMs = 2e3;
-      const client = new import_session_host_core16.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: budgetMs, registerAsShared: false });
+      const client = new import_session_host_core17.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: budgetMs, registerAsShared: false });
       let timer;
       try {
         const response = await Promise.race([
@@ -193804,7 +193930,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
-    var import_session_host_core22 = require_dist();
+    var import_session_host_core24 = require_dist();
     var import_node_crypto63 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
@@ -194038,7 +194164,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os44 = __toESM2(require("os"));
     var path114 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core18 = require_dist();
+    var import_session_host_core19 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -194059,8 +194185,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers2) {
         this.opts = opts;
         this.handlers = handlers2;
-        this.cols = opts.cols ?? import_session_host_core18.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core18.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core19.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core19.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -194867,7 +194993,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core19 = require_dist();
+    var import_session_host_core20 = require_dist();
     var fs114 = __toESM2(require("fs"));
     var path113 = __toESM2(require("path"));
     var fs110 = __toESM2(require("fs"));
@@ -195284,8 +195410,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core19.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core19.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core20.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core20.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -206670,7 +206796,7 @@ ${buttons.join("\n")}`;
       if (typeof dir !== "string") return "";
       return dir.trim().replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
     }
-    var import_session_host_core20 = require_dist();
+    var import_session_host_core21 = require_dist();
     init_validate();
     init_ports();
     init_cooperative_gate();
@@ -206783,7 +206909,7 @@ ${buttons.join("\n")}`;
     init_standalone_mcp_auth();
     init_mcp_command_ingress();
     async function startSession(host, cliType, workingDir, cliArgs, initialModel, options) {
-      (0, import_session_host_core20.assertRecoveryLaunchIdentity)({ cliArgs, options });
+      (0, import_session_host_core21.assertRecoveryLaunchIdentity)({ cliArgs, options });
       assertNewWorkHoldAdmission({ settings: options?.settingsOverride, command: "start_session" });
       assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
       const plan = planSessionStart(host, cliType, workingDir, options);
@@ -206910,7 +207036,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         LOG.warn("CLI", `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template \u2014 launching without thinking-level selection.`);
       }
       const sessionBinding = options?.restartBinding ?? resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
-      (0, import_session_host_core20.assertRecoveryLaunchIdentity)({ key: key5, sessionBinding, cliArgsWithBrain });
+      (0, import_session_host_core21.assertRecoveryLaunchIdentity)({ key: key5, sessionBinding, cliArgsWithBrain });
       const resolvedCliArgs = sessionBinding.cliArgs;
       const cliLaunchRecord = options?.restartRecord ? { ...structuredClone(options.restartRecord), sessionId: key5, launchedAt: Date.now() } : buildSessionLaunchRecord({
         roleLaunch: options?.launchProvenance?.roleLaunch,
@@ -207293,7 +207419,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return false;
     }
-    var import_session_host_core21 = require_dist();
+    var import_session_host_core22 = require_dist();
     init_dist();
     init_binding_owner();
     init_coordinator_registry();
@@ -207456,7 +207582,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       signal?.throwIfAborted();
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       for (const r of sessions) {
-        (0, import_session_host_core21.assertRecoveryLaunchIdentity)({ runtimeId: r.runtimeId, providerSessionId: r.providerSessionId, cliArgs: r.cliArgs });
+        (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ runtimeId: r.runtimeId, providerSessionId: r.providerSessionId, cliArgs: r.cliArgs });
       }
       const owner = host.deps.getHostedBindingOwner?.();
       const registry = getAssistantRegistry();
@@ -207690,8 +207816,24 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_mesh_session_lifetime();
     init_mesh_session_stop_fence();
     init_dist();
+    var import_session_host_core23 = require_dist();
     init_mesh_session_lifetime();
     init_command_args();
+    async function resolveLifetimeHostBootId(control) {
+      if (typeof control.resolveHostBootId === "function") return control.resolveHostBootId();
+      if (typeof control.getDiagnostics !== "function") return null;
+      try {
+        const diagnostics = await control.getDiagnostics({});
+        return (0, import_session_host_core23.resolveHostBootId)({ hostStartedAt: diagnostics.hostStartedAt });
+      } catch {
+        return null;
+      }
+    }
+    function sanitizeLifetimeError(error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "lifetime_stop_failed");
+      const code = CLEANUP_HOST_REFUSAL_CODES.has(raw) ? raw : raw.includes("Unsupported") || raw.includes("Unknown request") || raw.includes("stop_session_if_expected") ? "lifetime_expected_stop_unsupported" : "lifetime_stop_unconfirmed";
+      return { code, retained: true };
+    }
     async function idleSessionLifetimeCommand(host, args) {
       const control = host.deps.idleSessionLifetimeControl;
       const meshId = readMeshContext(args)?.meshId;
@@ -207699,13 +207841,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const records = await control.listSessions();
       const stateFor = (id4) => host.deps.getInstanceManager()?.getByCategory("cli").find((inst) => sessionIdsEquivalent(inst.getState().instanceId, id4))?.getState();
       if (args.action === "mesh_idle_session_inventory") {
-        return { success: true, sessions: records.filter((r2) => r2.meta.meshNodeFor === meshId).map((r2) => {
+        const hostBootId2 = await resolveLifetimeHostBootId(control);
+        if (!hostBootId2) return { success: false, error: "lifetime_host_boot_unknown" };
+        return { success: true, hostBootId: hostBootId2, sessions: records.filter((r2) => r2.meta.meshNodeFor === meshId).map((r2) => {
           const state2 = stateFor(r2.sessionId);
           return {
             sessionId: r2.sessionId,
             lastActivityAt: r2.lastActivityAt,
             lifecycle: r2.lifecycle,
             surfaceKind: r2.surfaceKind,
+            runtimeKey: r2.runtimeKey,
+            startedAt: r2.startedAt,
+            hostBootId: hostBootId2,
             stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, r2.sessionId),
             claimFence: sessionClaimFence(state2),
             meta: { meshNodeFor: r2.meta.meshNodeFor, meshNodeId: r2.meta.meshNodeId, launchedByCoordinator: r2.meta.launchedByCoordinator },
@@ -207716,21 +207863,47 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const r = records.find((r2) => sessionIdsEquivalent(r2.sessionId, args.targetSessionId));
       const fence = args.idleSessionLifetime;
-      if (!fence?.stopId || !fence.claimFence) return { success: false, error: "lifetime_claim_fence_required" };
-      if (!r || r.meta.meshNodeFor !== meshId || r.meta.launchedByCoordinator !== true || r.lastActivityAt !== args.idleSessionLifetime?.lastActivityAt || r.lifecycle !== "running" || !isSafeIdleTaskSession(stateFor(r.sessionId), r.meta) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
-        return { success: false, error: "lifetime_safety_changed" };
+      const expected = fence?.expected;
+      if (!fence?.stopId || !fence.claimFence || !expected) {
+        return { success: false, error: "lifetime_expected_assignment_required", retained: true };
+      }
+      const hostBootId = await resolveLifetimeHostBootId(control);
+      if (!hostBootId || expected.hostBootId !== hostBootId) {
+        return { success: false, error: "cleanup_host_boot_mismatch", retained: true };
+      }
+      if (!r || r.meta.meshNodeFor !== meshId || r.meta.launchedByCoordinator !== true || r.lastActivityAt !== args.idleSessionLifetime?.lastActivityAt || r.lifecycle !== "running" || !isSafeIdleTaskSession(stateFor(r.sessionId), r.meta) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId)) || !expectedAssignmentUnchanged(expected, stateFor(r.sessionId), r) || JSON.stringify(captureCleanupExpected({
+        sessionId: r.sessionId,
+        hostBootId,
+        runtimeKey: r.runtimeKey,
+        startedAt: r.startedAt,
+        state: stateFor(r.sessionId)
+      })) !== JSON.stringify(expected)) {
+        return { success: false, error: "lifetime_safety_changed", retained: true };
+      }
+      if (typeof control.stopSessionIfExpected !== "function") {
+        return { success: false, error: "lifetime_expected_stop_unsupported", retained: true };
       }
       const db2 = MeshRuntimeStore.getInstance().db;
-      reserveSessionStop(db2, meshId, r.sessionId, fence.stopId);
+      reserveSessionStop(db2, meshId, r.sessionId, fence.stopId, expected);
       try {
-        if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId) || !claimFenceMatches(fence.claimFence, stateFor(r.sessionId))) {
-          return { success: false, error: "lifetime_assignment_changed" };
+        if (includesSession(collectSessionIdsWithActiveWork(meshId, records), r.sessionId) || sessionCheckpointPending(r.sessionId) || !expectedAssignmentUnchanged(expected, stateFor(r.sessionId), r) || JSON.stringify(readReservedCleanupExpected(db2, r.sessionId, fence.stopId)) !== JSON.stringify(expected)) {
+          return { success: false, error: "lifetime_assignment_changed", retained: true };
         }
         markSessionStopSent(db2, r.sessionId, fence.stopId);
-        const stopped = await control.stopSession(r.sessionId);
-        if (!stopped || stopped.lifecycle !== "stopped") return { success: false, error: "lifetime_stop_unconfirmed" };
-        confirmSessionStop(db2, r.sessionId, fence.stopId);
-        return { success: true, stoppedSessionIds: [r.sessionId] };
+        try {
+          const stopped = await control.stopSessionIfExpected(r.sessionId, expected);
+          if (!stopped || stopped.lifecycle !== "stopped" && stopped.lifecycle !== "stopping") {
+            return { success: false, error: "lifetime_stop_unconfirmed", retained: true };
+          }
+          confirmSessionStop(db2, r.sessionId, fence.stopId);
+          return { success: true, stoppedSessionIds: [r.sessionId], expected };
+        } catch (error) {
+          const sanitized = sanitizeLifetimeError(error);
+          if (CLEANUP_HOST_REFUSAL_CODES.has(sanitized.code) || sanitized.code === "lifetime_expected_stop_unsupported") {
+            abortSessionStopAfterHostRefusal(db2, r.sessionId, fence.stopId);
+          }
+          return { success: false, error: sanitized.code, retained: true };
+        }
       } finally {
         releaseSessionStop(db2, r.sessionId, fence.stopId);
       }
@@ -208058,7 +208231,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }) || void 0;
       }
       createAdapter(cliType, workingDir, cliArgs, runtimeId, providerSessionId, attachExisting = false, extraEnv, removeSpawnArgs, resolvedTrustPlan) {
-        (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ runtimeId, providerSessionId, cliArgs });
+        (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ runtimeId, providerSessionId, cliArgs });
         const normalizedType = this.providerLoader.resolveAlias(cliType);
         const provider = this.providerLoader.getMeta(normalizedType);
         if (provider && provider.category === "cli" && provider.patterns && provider.spawn) {
@@ -208126,7 +208299,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }, 3e3);
       }
       async registerCliInstance(key5, normalizedType, cliType, resolvedDir, cliArgs, provider, settings2, attachExisting = false, options) {
-        (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ key: key5, cliArgs, options });
+        (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ key: key5, cliArgs, options });
         return withMaintenanceAdmission(async () => {
           options = options ? { ...options } : void 0;
           if (attachExisting) await verifyHeldObservationPromotion(this, { runtimeId: key5, providerType: normalizedType, workspace: resolvedDir, providerSessionId: options?.providerSessionId, startedAt: options?.attachStartedAtMs, binding: { meshId: settings2.meshNodeFor || "", nodeId: settings2.meshNodeId || "", coordinatorMeshId: settings2.meshCoordinatorFor || "", workOwner: settings2.meshCoordinatorDaemonId || "" } });
@@ -208294,7 +208467,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         for (const [runtimeId, adapter] of this.adapters) {
           try {
             const meta2 = adapter.getRuntimeMetadata?.();
-            (0, import_session_host_core22.assertRecoveryLaunchIdentity)({ runtimeId, meta: meta2 });
+            (0, import_session_host_core24.assertRecoveryLaunchIdentity)({ runtimeId, meta: meta2 });
             if (!meta2) adapterCensus = "unknown";
           } catch {
             adapterCensus = "live";
@@ -213285,7 +213458,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core23 = require_dist();
+    var import_session_host_core25 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record7) {
@@ -213298,7 +213471,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core23.SessionHostClient({
+        this.client = new import_session_host_core25.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -214138,7 +214311,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && (/^(?:Runtime not found for session|Unknown session):/.test(error) || error === "session_absent");
     }
     var import_crypto45 = require("crypto");
-    var import_session_host_core24 = require_dist();
+    var import_session_host_core26 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -214236,7 +214409,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto45.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core24.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core26.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -214331,7 +214504,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     var fs127 = __toESM2(require("fs"));
-    var import_session_host_core25 = require_dist();
+    var import_session_host_core27 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -214489,7 +214662,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function probeHost(endpoint2, requiredRequestTypes, timeoutMs, identity4, invocation) {
-      const client = new import_session_host_core25.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: timeoutMs, registerAsShared: false });
+      const client = new import_session_host_core27.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
       let requestTimeoutMs = timeoutMs;
@@ -214532,7 +214705,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function ensureSessionHostReady(options) {
-      const endpoint2 = options.endpoint || (0, import_session_host_core25.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint2 = options.endpoint || (0, import_session_host_core27.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const key5 = endpointKey(endpoint2);
       const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
@@ -214610,7 +214783,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await options.beforeSpawnHost?.(endpoint2);
         if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint2, lastError);
         assertStartAdmission();
-        import_session_host_core25.SessionHostClient.disconnectClients?.(endpoint2);
+        import_session_host_core27.SessionHostClient.disconnectClients?.(endpoint2);
         assertStartAdmission();
         options.spawnHost();
         probeEvidence2.delete(key5);
@@ -214637,7 +214810,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function listHostedCliRuntimes(endpoint2, options) {
-      const client = new import_session_host_core25.SessionHostClient({ endpoint: endpoint2, registerAsShared: false, requestTimeoutMs: 5e3 });
+      const client = new import_session_host_core27.SessionHostClient({ endpoint: endpoint2, registerAsShared: false, requestTimeoutMs: 5e3 });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -214700,7 +214873,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs128 = __toESM2(require("fs"));
     var os48 = __toESM2(require("os"));
     var path125 = __toESM2(require("path"));
-    var import_session_host_core26 = require_dist();
+    var import_session_host_core28 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -214710,9 +214883,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => false);
       const canSignalPid = (pid) => pid > 0 && pid !== process.pid && isManagedPid(pid) && isManagedSessionHostCommandLine(getProcessCommandLine(pid), instance().configDir);
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core26.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core28.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core26.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core28.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         if (typeof baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE === "string" && baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim()) {
@@ -215083,7 +215256,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const endpoint2 = getEndpoint();
         const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
         const probeDeadline = Date.now() + probeTimeoutMs;
-        const client = new import_session_host_core26.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
+        const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported;
         let connected = false;
         let requestTimeoutMs = probeTimeoutMs;
@@ -215142,7 +215315,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint2.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core26.SessionHostClient({ endpoint: endpoint2, registerAsShared: false });
+          const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, registerAsShared: false });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -220429,13 +220602,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core30 = require_dist();
+    var import_session_host_core32 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint2, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core30.SessionHostClient({ endpoint: endpoint2 });
-        this.plane = (0, import_session_host_core30.createSessionHostControlPlane)({
+        this.client = new import_session_host_core32.SessionHostClient({ endpoint: endpoint2 });
+        this.plane = (0, import_session_host_core32.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }
@@ -220506,6 +220679,9 @@ ${notice.notice}${supersededHint}`;
       }
       stopSession(sessionId) {
         return this.plane.stopSession(sessionId);
+      }
+      stopSessionIfExpected(sessionId, expected) {
+        return this.plane.stopSessionIfExpected(sessionId, expected);
       }
       deleteSession(sessionId, opts = {}) {
         return this.plane.deleteSession(sessionId, opts);

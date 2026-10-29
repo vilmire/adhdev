@@ -4,6 +4,7 @@ import type {
   GetSnapshotPayload,
   PruneDuplicateSessionsPayload,
   ReleaseWritePayload,
+  SessionCleanupExpectedAssignment,
   SessionHostDiagnostics,
   SessionHostPruneDuplicatesResult,
   SessionHostRecord,
@@ -30,6 +31,8 @@ export interface SessionHostControlPlane {
   getDiagnostics(payload?: GetHostDiagnosticsPayload): Promise<SessionHostDiagnostics>;
   listSessions(): Promise<SessionHostRecord[]>;
   stopSession(sessionId: string): Promise<SessionHostRecord | null>;
+  /** Host CAS stop: refuses without mutating when expected assignment/boot/incarnation drift. */
+  stopSessionIfExpected(sessionId: string, expected: SessionCleanupExpectedAssignment): Promise<SessionHostRecord | null>;
   deleteSession(sessionId: string, opts?: { force?: boolean }): Promise<SessionHostRecord | null>;
   resumeSession(sessionId: string): Promise<SessionHostRecord | null>;
   restartSession(sessionId: string): Promise<SessionHostRecord | null>;
@@ -81,6 +84,9 @@ export function createSessionHostControlPlane(
     },
     stopSession(sessionId: string): Promise<SessionHostRecord | null> {
       return transport.request<SessionHostRecord | null>('stop_session', { sessionId });
+    },
+    stopSessionIfExpected(sessionId: string, expected: SessionCleanupExpectedAssignment): Promise<SessionHostRecord | null> {
+      return transport.request<SessionHostRecord | null>('stop_session_if_expected', { sessionId, expected });
     },
     deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<SessionHostRecord | null> {
       return transport.request<SessionHostRecord | null>('delete_session', { sessionId, force: opts.force === true });

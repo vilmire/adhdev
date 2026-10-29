@@ -132,6 +132,13 @@ export class SessionHostController implements SessionHostControlPlane {
         return this.plane.stopSession(sessionId);
     }
 
+    stopSessionIfExpected(
+        sessionId: string,
+        expected: import('@adhdev/session-host-core').SessionCleanupExpectedAssignment,
+    ): Promise<SessionHostRecord | null> {
+        return this.plane.stopSessionIfExpected(sessionId, expected);
+    }
+
     deleteSession(sessionId: string, opts: { force?: boolean } = {}): Promise<SessionHostRecord | null> {
         return this.plane.deleteSession(sessionId, opts);
     }

@@ -195,6 +195,26 @@ export interface ResizeSessionPayload {
 export interface StopSessionPayload {
   sessionId: string;
 }
+/**
+ * Expected logical + physical identity for a cleanup stop. Captured before any
+ * async host RPC and re-checked inside the host stop critical section.
+ * All of taskId/attemptId/generation/dispatchNonce null means expected unbound
+ * (no meshActiveAssignment) so a later claim cannot be stopped by stale cleanup.
+ */
+export interface SessionCleanupExpectedAssignment {
+  sessionId: string;
+  hostBootId: string;
+  runtimeKey: string;
+  startedAt: number;
+  taskId: string | null;
+  attemptId: string | null;
+  generation: number | null;
+  dispatchNonce: number | null;
+}
+export interface StopSessionIfExpectedPayload {
+  sessionId: string;
+  expected: SessionCleanupExpectedAssignment;
+}
 export interface MeshWriterAssignment {
   meshId: string; nodeId: string; taskId: string; attemptId: string;
   generation: number; dispatchNonce: number; ownerDaemonId: string;
@@ -382,6 +402,8 @@ export type SessionHostRequest =
   | { type: 'get_input_state'; payload: GetInputStatePayload }
   | { type: 'resize_session'; payload: ResizeSessionPayload }
   | { type: 'stop_session'; payload: StopSessionPayload }
+  /** Distinct kind: old hosts must refuse instead of stopping by session id alone. */
+  | { type: 'stop_session_if_expected'; payload: StopSessionIfExpectedPayload }
   | { type: 'stop_mesh_writer'; payload: StopMeshWriterPayload }
   | { type: 'delete_session'; payload: DeleteSessionPayload }
   | { type: 'resume_session'; payload: ResumeSessionPayload }
@@ -420,6 +442,7 @@ export const SESSION_HOST_SUPPORTED_REQUEST_TYPES: readonly SessionHostRequestTy
   'get_input_state',
   'resize_session',
   'stop_session',
+  'stop_session_if_expected',
   'stop_mesh_writer',
   'delete_session',
   'resume_session',

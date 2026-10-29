@@ -1,6 +1,7 @@
-import { sessionClaimFence, reserveSessionStop, releaseSessionStop, markSessionStopSent, sessionStopPending, hasPendingSessionStops, confirmSessionStop } from './mesh-session-stop-fence.js';
+import { sessionClaimFence, captureCleanupExpected, reserveSessionStop, releaseSessionStop, markSessionStopSent, sessionStopPending, hasPendingSessionStops, confirmSessionStop, abortSessionStopAfterHostRefusal, CLEANUP_HOST_REFUSAL_CODES } from './mesh-session-stop-fence.js';
 /** Local and peer lifetime binding; peer actions use the existing session-coordinator ACL. */
 import { canonicalDaemonId, sessionIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import { resolveHostBootId } from '@adhdev/session-host-core';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
@@ -13,6 +14,16 @@ import { getQueueHeads } from './mesh-work-queue.js';
 import { isLocalAutoLaunchNode } from './mesh-candidacy-predicates.js';
 import { readMeshNodeDaemonId } from './mesh-node-identity.js';
 
+async function localHostBootId(control: { getDiagnostics?: (payload?: object) => Promise<{ hostStartedAt: number }> }): Promise<string | null> {
+    if (typeof control.getDiagnostics !== 'function') return null;
+    try {
+        const diagnostics = await control.getDiagnostics({});
+        return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt });
+    } catch {
+        return null;
+    }
+}
+
 export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now: number): IdleSessionReaperDeps {
     const router = components.router;
     const routes = new Map<string, { daemonId: string; record: ReapableSessionRecord; provider: string }>();
@@ -24,10 +35,15 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
         listSessions: async () => {
             if (!router?.deps.sessionHostControl) throw new Error('session_host_unavailable');
             const local = await router.deps.sessionHostControl.listSessions();
+            const hostBootId = await localHostBootId(router.deps.sessionHostControl);
+            if (!hostBootId) throw new Error('lifetime_host_boot_unknown');
             const records: ReapableSessionRecord[] = local.map(record => ({ ...record,
                 state: findLocalCliInstance(components, record.sessionId)?.getState(),
                 stopping: sessionStopPending(MeshRuntimeStore.getInstance().db, record.sessionId),
                 claimFence: sessionClaimFence(findLocalCliInstance(components, record.sessionId)?.getState()),
+                hostBootId,
+                runtimeKey: record.runtimeKey,
+                startedAt: record.startedAt,
                 checkpointPending: sessionCheckpointPending(record.sessionId),
                 machineId: canonicalDaemonId(coordinatorDaemonId),
             }));
@@ -60,8 +76,8 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                             action: 'mesh_idle_session_inventory', agentType: c.providerType || 'mesh', targetSessionId: c.sessionId,
                             meshContext: context,
                         }), { command: 'agent_command', peerDaemonId: daemonId });
-                        if (!result.success || !Array.isArray(result.sessions)) {
-                            failure = result.error || 'inventory_unconfirmed';
+                        if (!result.success || !Array.isArray(result.sessions) || typeof result.hostBootId !== 'string' || !result.hostBootId) {
+                            failure = result.error || (result.success ? 'lifetime_host_boot_unknown' : 'inventory_unconfirmed');
                             // A stopped historical anchor is not proof the peer is down.
                             if (result.error === 'mesh_session_not_mesh_owned') continue;
                             throw new Error(String(failure));
@@ -70,7 +86,11 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                         failure = undefined;
                         for (const r of result.sessions as ReapableSessionRecord[]) {
                             if (r.meta?.meshNodeFor !== mesh.id) continue;
-                            const record = { ...r, machineId: daemonId, stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId), checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId) };
+                            const record = {
+                                ...r, hostBootId: result.hostBootId as string, machineId: daemonId,
+                                stopping: r.stopping || sessionStopPending(MeshRuntimeStore.getInstance().db, r.sessionId),
+                                checkpointPending: r.checkpointPending || sessionCheckpointPending(r.sessionId),
+                            };
                             routes.set(record.sessionId, { daemonId, record, provider: c.providerType || 'mesh' });
                             records.push(record);
                         }
@@ -94,7 +114,16 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
             if (!router) return { success: false, error: 'router_unavailable' };
             const route = [...routes.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
             const record = [...localRecords.entries()].find(([id]) => sessionIdsEquivalent(id, sessionId))?.[1];
+            const source = route?.record ?? record;
+            const expected = source ? captureCleanupExpected({
+                sessionId: source.sessionId,
+                hostBootId: source.hostBootId ?? '',
+                runtimeKey: source.runtimeKey ?? '',
+                startedAt: source.startedAt ?? 0,
+                state: source.state ?? findLocalCliInstance(components, sessionId)?.getState(),
+            }) : null;
             const preflight = () => {
+                if (!expected) return 'lifetime_expected_assignment_required';
                 if (route) {
                     if (!route.record.claimFence) return 'lifetime_claim_fence_unsupported';
                     if (!components.dispatchMeshCommand) return 'P2P_unavailable';
@@ -105,19 +134,26 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                 return undefined;
             };
             const unavailable = preflight();
-            if (unavailable) return { success: false, error: unavailable };
+            if (unavailable) return { success: false, error: unavailable, retained: true };
             const db = MeshRuntimeStore.getInstance().db;
-            const stopId = reserveSessionStop(db, args.meshId, sessionId);
+            const stopId = reserveSessionStop(db, args.meshId, sessionId, undefined, expected!);
             try {
                 await router.recordIntentionalMeshSessionStop({ ...args, sessionId, action: 'stop_session' });
                 if (includesSession(collectSessionIdsWithActiveWork(args.meshId, knownRecords), sessionId) || sessionCheckpointPending(sessionId)) {
-                    return { success: false, error: 'session_lifetime_safety_changed' };
+                    return { success: false, error: 'session_lifetime_safety_changed', retained: true };
                 }
                 const changed = preflight();
-                if (changed) return { success: false, error: changed };
+                if (changed) return { success: false, error: changed, retained: true };
+                const lifetime = { lastActivityAt: source!.lastActivityAt!, stopId, claimFence: source!.claimFence!, expected: expected! };
                 const acknowledged = (result: { success: boolean; [key: string]: unknown }) => {
                     if (result.success && Array.isArray(result.stoppedSessionIds) && result.stoppedSessionIds.some(id => sessionIdsEquivalent(id, sessionId))) {
                         confirmSessionStop(db, sessionId, stopId);
+                    } else if (!result.success && typeof result.error === 'string'
+                        && (CLEANUP_HOST_REFUSAL_CODES.has(result.error) || result.error === 'lifetime_expected_stop_unsupported'
+                            || result.error === 'lifetime_safety_changed' || result.error === 'lifetime_assignment_changed'
+                            || result.error === 'lifetime_expected_assignment_required' || result.error === 'cleanup_host_boot_mismatch')) {
+                        // Host proved it did not mutate; unlock so a replacement claim can proceed.
+                        abortSessionStopAfterHostRefusal(db, sessionId, stopId);
                     }
                     return result;
                 };
@@ -126,11 +162,11 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                 if (route) {
                     return acknowledged(unwrapMeshRelayResult(await components.dispatchMeshCommand!(route.daemonId, 'agent_command', {
                         action: 'mesh_idle_session_stop', agentType: route.provider, targetSessionId: sessionId,
-                        idleSessionLifetime: { lastActivityAt: route.record.lastActivityAt, stopId, claimFence: route.record.claimFence! }, meshContext: context,
+                        idleSessionLifetime: lifetime, meshContext: context,
                     }), { command: 'agent_command', peerDaemonId: route.daemonId }));
                 }
                 return acknowledged(await components.cliManager!.agentCommand({ action: 'mesh_idle_session_stop', agentType: 'mesh', targetSessionId: sessionId,
-                    idleSessionLifetime: { lastActivityAt: record!.lastActivityAt!, stopId, claimFence: record!.claimFence! }, meshContext: context }));
+                    idleSessionLifetime: lifetime, meshContext: context }));
             } finally {
                 // Releases every pre-send refusal/exception, but never a prior sent retry.
                 releaseSessionStop(db, sessionId, stopId);
