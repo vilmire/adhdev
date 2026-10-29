@@ -14,13 +14,25 @@ export interface CompletionBindingHost {
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
 }
 export function captureCompletionIdentity(host: CompletionBindingHost, pending: CompletedDebouncePending): void {
-    const current = host.currentAttemptRef?.();
-    pending.capturedAttemptRef = current ? { ...current } : null;
-    if (!host.providerSessionId || !host.lastAcknowledgedInputDigest || !pending.turnStartedAt
-        || !(host.lastAcknowledgedUserInputAt > 0 && host.lastAcknowledgedUserInputAt <= pending.turnStartedAt)) return;
+    if (pending.capturedAttemptRef === undefined) {
+        const current = host.currentAttemptRef?.();
+        pending.capturedAttemptRef = current ? { ...current } : null;
+        if (host.lastAcknowledgedInputDigest) pending.capturedCompletionInput = {
+            inputAt: host.lastAcknowledgedUserInputAt, inputDigest: host.lastAcknowledgedInputDigest,
+            taskId: host.completingTurnTaskId?.(),
+        };
+    }
+    const input = pending.capturedCompletionInput;
+    if (pending.completionBinding || !input || !host.providerSessionId || !pending.turnStartedAt
+        || host.disposed || pending.turnStartedAt !== host.generatingStartedAt
+        || input.inputAt !== host.lastAcknowledgedUserInputAt || input.inputDigest !== host.lastAcknowledgedInputDigest
+        || input.taskId !== host.completingTurnTaskId?.()
+        || JSON.stringify(pending.capturedAttemptRef) !== JSON.stringify(host.currentAttemptRef?.() ?? null)
+        || !(input.inputAt > 0 && input.inputAt <= pending.turnStartedAt)) return;
     pending.completionBinding = { sessionId: host.instanceId, nativeSessionId: host.providerSessionId,
-        turnStartedAt: pending.turnStartedAt, inputAt: host.lastAcknowledgedUserInputAt,
-        inputDigest: host.lastAcknowledgedInputDigest, attemptRef: pending.capturedAttemptRef };
+        turnStartedAt: pending.turnStartedAt, inputAt: input.inputAt,
+        inputDigest: input.inputDigest, attemptRef: pending.capturedAttemptRef };
+
 }
 export function completionIdentityCurrent(host: CompletionBindingHost, pending: CompletedDebouncePending): boolean {
     const b = pending.completionBinding;
@@ -31,6 +43,7 @@ export function completionIdentityCurrent(host: CompletionBindingHost, pending: 
         && JSON.stringify(b.attemptRef) === JSON.stringify(host.currentAttemptRef?.() ?? null);
 }
 export function boundCompletionMarker(host: CompletionBindingHost, pending: CompletedDebouncePending): NativeTurnTerminalMarker | null {
+    captureCompletionIdentity(host, pending);
     if (!completionIdentityCurrent(host, pending)) return null;
     const marker = selectTurnTerminalMarker(host.lastNativeTurnTerminalMarkers, pending.turnStartedAt, pending.completionBinding);
     if (marker && marker.receivedAt > Date.now()) return null;

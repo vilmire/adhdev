@@ -85,6 +85,7 @@ export interface NativeHistoryMessage {
   content: string;
   kind: NativeHistoryKind;
   senderName?: string;
+  bubbleState?: 'final';
   /** The tool a function_call invoked (e.g. 'shell'); the dashboard tool card label. */
   toolName?: string;
   agent: 'codex-cli';
@@ -269,10 +270,10 @@ export function readCodexToolBlockAt(
   return null;
 }
 
-function hasAssistantStandardMessageSinceLastUser(records: NativeHistoryMessage[], content: string): boolean {
+function hasAssistantStandardMessageSinceLastUser(records: NativeHistoryMessage[], content: string, floor = 0): boolean {
   const normalized = content.trim();
   if (!normalized) return false;
-  for (let i = records.length - 1; i >= 0; i--) {
+  for (let i = records.length - 1; i >= floor; i--) {
     const record = records[i];
     if (record.kind === 'session_start') continue;
     if (record.role === 'user') return false;
@@ -290,10 +291,15 @@ function pushAssistantStandardMessage(
   content: string,
   workspace?: string,
   recordIndex = -1,
+  turnMessageStart = 0,
 ): void {
   const text = content.trim();
   if (!text) return;
-  if (hasAssistantStandardMessageSinceLastUser(records, text)) return;
+  if (hasAssistantStandardMessageSinceLastUser(records, text, turnMessageStart)) {
+    const existing = records.slice(turnMessageStart).reverse().find(m => m.role === 'assistant' && m.kind === 'standard' && m.content.trim() === text);
+    if (existing) existing.bubbleState = 'final';
+    return;
+  }
 
   const msg: NativeHistoryMessage = {
     ts: new Date(receivedAt).toISOString(),
@@ -301,6 +307,7 @@ function pushAssistantStandardMessage(
     role: 'assistant',
     content: text,
     kind: 'standard',
+    bubbleState: 'final',
     agent: 'codex-cli',
     historySessionId: sessionId,
   };
@@ -447,6 +454,7 @@ function parseSessionFile(
   // Counts records that PARSE, matching `readJsonlRecords` exactly — see the
   // note there on why the expand path re-parses instead of sharing a cache.
   let recordIndex = -1;
+  let turnMessageStart = 0;
   for (const line of lines) {
     let parsed: unknown = null;
     try { parsed = JSON.parse(line); } catch { continue; }
@@ -492,6 +500,7 @@ function parseSessionFile(
 
     if (type === 'event_msg') {
       const nativeAt = extractTimestampValue(record.timestamp) || 0;
+      if (payloadType === 'task_started') turnMessageStart = records.length;
       if (payloadType === 'task_started' || payloadType === 'error' || payloadType === 'user_message') provenance(payload, nativeAt);
       // (NATIVE-TURN-SIGNAL) Record the provider's own turn-terminal marker BEFORE
       // the message-building below. This runs for EVERY terminal record, including
@@ -525,6 +534,7 @@ function parseSessionFile(
           flattenCodexContent(payload.last_agent_message) || codexTurnErrorText(payload),
           detectedWorkspace,
           recordIndex,
+          turnMessageStart,
         );
       } else if (payloadType === 'agent_message' && String(payload.phase ?? '').trim() === 'final_answer') {
         pushAssistantStandardMessage(
@@ -534,6 +544,7 @@ function parseSessionFile(
           flattenCodexContent(payload.message),
           detectedWorkspace,
           recordIndex,
+          turnMessageStart,
         );
       } else if (payloadType === 'token_count') {
         const usageRecord = extractCodexUsage(payload, receivedAt);
@@ -550,7 +561,11 @@ function parseSessionFile(
 
       const content = flattenCodexContent(payload.content);
       if (!content) continue;
-      if (role === 'assistant' && hasAssistantStandardMessageSinceLastUser(records, content)) continue;
+      if (role === 'assistant' && String(payload.phase ?? '') === 'final_answer') {
+        pushAssistantStandardMessage(records, sessionId, receivedAt, content, detectedWorkspace, recordIndex, turnMessageStart);
+        continue;
+      }
+      if (role === 'assistant' && hasAssistantStandardMessageSinceLastUser(records, content, turnMessageStart)) continue;
 
       const msg: NativeHistoryMessage = {
         ts: new Date(receivedAt).toISOString(),

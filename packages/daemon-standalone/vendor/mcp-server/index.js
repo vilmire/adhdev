@@ -161801,10 +161801,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return null;
     }
-    function hasAssistantStandardMessageSinceLastUser(records, content) {
+    function hasAssistantStandardMessageSinceLastUser(records, content, floor = 0) {
       const normalized = content.trim();
       if (!normalized) return false;
-      for (let i = records.length - 1; i >= 0; i--) {
+      for (let i = records.length - 1; i >= floor; i--) {
         const record7 = records[i];
         if (record7.kind === "session_start") continue;
         if (record7.role === "user") return false;
@@ -161814,16 +161814,21 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return false;
     }
-    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
+    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1, turnMessageStart = 0) {
       const text5 = content.trim();
       if (!text5) return;
-      if (hasAssistantStandardMessageSinceLastUser(records, text5)) return;
+      if (hasAssistantStandardMessageSinceLastUser(records, text5, turnMessageStart)) {
+        const existing = records.slice(turnMessageStart).reverse().find((m) => m.role === "assistant" && m.kind === "standard" && m.content.trim() === text5);
+        if (existing) existing.bubbleState = "final";
+        return;
+      }
       const msg = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
         role: "assistant",
         content: text5,
         kind: "standard",
+        bubbleState: "final",
         agent: "codex-cli",
         historySessionId: sessionId
       };
@@ -161894,6 +161899,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
+      let turnMessageStart = 0;
       for (const line of lines) {
         let parsed = null;
         try {
@@ -161932,6 +161938,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const payloadType = String(payload.type ?? "").trim();
         if (type2 === "event_msg") {
           const nativeAt = extractTimestampValue(record7.timestamp) || 0;
+          if (payloadType === "task_started") turnMessageStart = records.length;
           if (payloadType === "task_started" || payloadType === "error" || payloadType === "user_message") provenance(payload, nativeAt);
           if (completionSignal) {
             const isComplete = payloadType === completionSignal.recordType;
@@ -161956,7 +161963,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               receivedAt,
               flattenCodexContent(payload.last_agent_message) || codexTurnErrorText(payload),
               detectedWorkspace,
-              recordIndex
+              recordIndex,
+              turnMessageStart
             );
           } else if (payloadType === "agent_message" && String(payload.phase ?? "").trim() === "final_answer") {
             pushAssistantStandardMessage(
@@ -161965,7 +161973,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               receivedAt,
               flattenCodexContent(payload.message),
               detectedWorkspace,
-              recordIndex
+              recordIndex,
+              turnMessageStart
             );
           } else if (payloadType === "token_count") {
             const usageRecord = extractCodexUsage(payload, receivedAt);
@@ -161979,7 +161988,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (role !== "user" && role !== "assistant") continue;
           const content = flattenCodexContent(payload.content);
           if (!content) continue;
-          if (role === "assistant" && hasAssistantStandardMessageSinceLastUser(records, content)) continue;
+          if (role === "assistant" && String(payload.phase ?? "") === "final_answer") {
+            pushAssistantStandardMessage(records, sessionId, receivedAt, content, detectedWorkspace, recordIndex, turnMessageStart);
+            continue;
+          }
+          if (role === "assistant" && hasAssistantStandardMessageSinceLastUser(records, content, turnMessageStart)) continue;
           const msg = {
             ts: new Date(receivedAt).toISOString(),
             receivedAt,
@@ -163601,6 +163614,7 @@ ${output}` : "";
         content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
         receivedAt: typeof m.receivedAt === "number" ? m.receivedAt : Date.parse(m.timestamp || "") || Date.now(),
         kind: typeof m.kind === "string" ? m.kind : "standard",
+        ...m.bubbleState === "final" ? { bubbleState: "final" } : {},
         workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0,
         // (TOOL-EXPAND) Forward the reader's ref. This projection is an
         // allow-list, so a ref the reader stamped is dropped here unless
@@ -163638,7 +163652,7 @@ ${output}` : "";
         const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir2);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
-        const ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
+        let ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
           try {
             fs66.statSync(sourcePath);
@@ -163648,6 +163662,16 @@ ${output}` : "";
         const readSessionId = reader === "antigravity-cli" ? extractAntigravityConversationUuid(sourcePath) || sessionId : sessionId;
         const session = readByReader(reader, sourcePath, readSessionId, workspace);
         if (!session) return null;
+        if (reader === "codex-cli" && !requestedProviderSid && !isUuidLike(sessionId) && instanceId) {
+          ownerConfirmed = !!instanceId && sessionStartedAtMs > 0 && hasExclusiveSentInput(instanceId, session.messages.filter((m) => m.role === "user").map((m) => m.content));
+          if (!ownerConfirmed) return {
+            messages: [],
+            sourcePath: "",
+            sourceMtimeMs: 0,
+            ownerConfirmed: false,
+            unavailableReason: "native_owner_unverified"
+          };
+        }
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
           return null;
         }
@@ -163678,7 +163702,7 @@ ${output}` : "";
           return p ? { path: p } : null;
         }
         case "codex-cli": {
-          const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
+          const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId, homeDir2);
           return p ? { path: p } : null;
         }
         case "antigravity-cli":
@@ -163716,12 +163740,13 @@ ${output}` : "";
       if (!workspace || !(sessionStartedAtMs > 0)) return null;
       return `${resolveRealPath(workspace)}::${sessionStartedAtMs}`;
     }
-    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs) {
-      const root = codexSessionsRoot();
+    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId = "", homeDir2) {
+      const root = homeDir2 ? path78.join(homeDir2, ".codex", "sessions") : codexSessionsRoot();
       if (sessionId && isUuidLike(sessionId)) {
         return findCodexPathBySessionId(root, sessionId);
       }
-      const key5 = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+      const baseKey = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+      const key5 = baseKey ? [root, instanceId, baseKey].join("\0") : null;
       if (key5) {
         const pinned = codexRuntimeBindings.get(key5);
         if (pinned) {
@@ -163729,7 +163754,7 @@ ${output}` : "";
           codexRuntimeBindings.delete(key5);
         }
       }
-      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId);
       if (resolved && key5) codexRuntimeBindings.set(key5, resolved);
       return resolved;
     }
@@ -163761,7 +163786,7 @@ ${output}` : "";
       matches.sort((a, b) => b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
-    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs) {
+    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId) {
       if (!fs66.existsSync(root) || !workspace) return null;
       const workspaceResolved = resolveRealPath(workspace);
       const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -163788,9 +163813,14 @@ ${output}` : "";
           if (!meta2?.cwd || resolveRealPath(meta2.cwd) !== workspaceResolved) continue;
           const diff = sessionStartedAtMs > 0 && meta2.timestampMs != null ? Math.abs(meta2.timestampMs - sessionStartedAtMs) : 0;
           if (sessionStartedAtMs > 0 && (meta2.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
+          if (instanceId) {
+            const candidate = readSession2(entryPath);
+            if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter((m) => m.role === "user").map((m) => m.content))) continue;
+          }
           matches.push({ p: entryPath, mtime, diff });
         }
       }
+      if (instanceId && matches.length !== 1) return null;
       matches.sort((a, b) => sessionStartedAtMs > 0 ? a.diff - b.diff || b.mtime - a.mtime : b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
@@ -201434,15 +201464,23 @@ ${JSON.stringify(replies)}
     init_summary_metadata();
     init_native_turn_signal();
     function captureCompletionIdentity(host, pending) {
-      const current4 = host.currentAttemptRef?.();
-      pending.capturedAttemptRef = current4 ? { ...current4 } : null;
-      if (!host.providerSessionId || !host.lastAcknowledgedInputDigest || !pending.turnStartedAt || !(host.lastAcknowledgedUserInputAt > 0 && host.lastAcknowledgedUserInputAt <= pending.turnStartedAt)) return;
+      if (pending.capturedAttemptRef === void 0) {
+        const current4 = host.currentAttemptRef?.();
+        pending.capturedAttemptRef = current4 ? { ...current4 } : null;
+        if (host.lastAcknowledgedInputDigest) pending.capturedCompletionInput = {
+          inputAt: host.lastAcknowledgedUserInputAt,
+          inputDigest: host.lastAcknowledgedInputDigest,
+          taskId: host.completingTurnTaskId?.()
+        };
+      }
+      const input = pending.capturedCompletionInput;
+      if (pending.completionBinding || !input || !host.providerSessionId || !pending.turnStartedAt || host.disposed || pending.turnStartedAt !== host.generatingStartedAt || input.inputAt !== host.lastAcknowledgedUserInputAt || input.inputDigest !== host.lastAcknowledgedInputDigest || input.taskId !== host.completingTurnTaskId?.() || JSON.stringify(pending.capturedAttemptRef) !== JSON.stringify(host.currentAttemptRef?.() ?? null) || !(input.inputAt > 0 && input.inputAt <= pending.turnStartedAt)) return;
       pending.completionBinding = {
         sessionId: host.instanceId,
         nativeSessionId: host.providerSessionId,
         turnStartedAt: pending.turnStartedAt,
-        inputAt: host.lastAcknowledgedUserInputAt,
-        inputDigest: host.lastAcknowledgedInputDigest,
+        inputAt: input.inputAt,
+        inputDigest: input.inputDigest,
         attemptRef: pending.capturedAttemptRef
       };
     }
@@ -201451,6 +201489,7 @@ ${JSON.stringify(replies)}
       return !!b && !host.disposed && b.sessionId === host.instanceId && b.nativeSessionId === host.providerSessionId && b.turnStartedAt === host.generatingStartedAt && b.inputAt === host.lastAcknowledgedUserInputAt && b.inputDigest === host.lastAcknowledgedInputDigest && (!pending.taskId || !host.completingTurnTaskId || host.completingTurnTaskId() === pending.taskId) && JSON.stringify(b.attemptRef) === JSON.stringify(host.currentAttemptRef?.() ?? null);
     }
     function boundCompletionMarker(host, pending) {
+      captureCompletionIdentity(host, pending);
       if (!completionIdentityCurrent(host, pending)) return null;
       const marker2 = selectTurnTerminalMarker(host.lastNativeTurnTerminalMarkers, pending.turnStartedAt, pending.completionBinding);
       if (marker2 && marker2.receivedAt > Date.now()) return null;
@@ -201478,7 +201517,7 @@ ${JSON.stringify(replies)}
       "agent:ready"
     ]);
     function armCancelledCompletionRecheck(host, pending, reason) {
-      if (reason === "new_pty_output" && !pending.completionBinding) return;
+      if (reason === "new_pty_output" && !pending.completionBinding && !pending.capturedCompletionInput) return;
       const now = Date.now();
       let prior = host.cancelledCompletionRecheck;
       if (prior && (prior.pending.turnStartedAt !== pending.turnStartedAt || prior.pending.completionBinding?.inputAt !== pending.completionBinding?.inputAt || JSON.stringify(prior.pending.capturedAttemptRef) !== JSON.stringify(pending.capturedAttemptRef))) {
@@ -201487,7 +201526,7 @@ ${JSON.stringify(replies)}
       }
       const carriedPending = prior?.pending ?? pending;
       const attempts = prior ? prior.attempts : 0;
-      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding) {
+      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding && !carriedPending.capturedCompletionInput) {
         clearCancelledCompletionRecheck(host);
         LOG.debug("CLI", `[${host.type}] cancelled-completion recheck budget exhausted (${reason}) \u2014 deferring to the next FSM completion edge`);
         return;
@@ -201523,8 +201562,10 @@ ${JSON.stringify(replies)}
         clearCancelledCompletionRecheck(host);
         return;
       }
-      if (watch6.pending.completionBinding) {
-        if (Date.now() - watch6.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch6.pending)) {
+      if (watch6.pending.completionBinding || watch6.pending.capturedCompletionInput) {
+        host.readExternalCompletionMessages?.();
+        captureCompletionIdentity(host, watch6.pending);
+        if (Date.now() - watch6.firstCancelledAt > 12e4 || watch6.pending.completionBinding && !completionIdentityCurrent(host, watch6.pending)) {
           clearCancelledCompletionRecheck(host);
           return;
         }
@@ -201563,7 +201604,8 @@ ${JSON.stringify(replies)}
     }
     function observeCancelledNativeCompletion(host) {
       const watch6 = host.cancelledCompletionRecheck;
-      if (!watch6?.pending.completionBinding || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+      if (!watch6 || !watch6.pending.completionBinding && !watch6.pending.capturedCompletionInput || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+      captureCompletionIdentity(host, watch6.pending);
       if (Date.now() - watch6.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch6.pending)) {
         clearCancelledCompletionRecheck(host);
         return;
@@ -202527,6 +202569,11 @@ ${buttons.join("\n")}`;
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
       });
+      const reason = restoredHistory.stale ? "native_history_loading" : restoredHistory.source !== "provider-native" ? "native_history_unavailable" : !resolvedHandle && restoredHistory.ownerConfirmed !== true ? "native_owner_unverified" : "native_history_ready";
+      if (host.nativeCaptureReason !== reason) {
+        host.nativeCaptureReason = reason;
+        host.recordCompletionGateTrace?.("native_discovery", { reason, bound: !!resolvedHandle });
+      }
       if (restoredHistory.stale || restoredHistory.unavailableReason === "native_history_loading") {
         host.nativeHistoryReadPending = true;
         const previous = host.lastExternalCompletionMessages;
@@ -202538,6 +202585,10 @@ ${buttons.join("\n")}`;
         host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
+      }
+      if (!resolvedHandle && restoredHistory.ownerConfirmed === true && restoredHistory.providerSessionId) {
+        host.promoteProviderSessionId?.(restoredHistory.providerSessionId);
+        resolvedHandle = host.providerSessionId || restoredHistory.providerSessionId;
       }
       host.lastNativeTurnTerminalMarkers = Array.isArray(restoredHistory.turnTerminalMarkers) ? restoredHistory.turnTerminalMarkers : null;
       if (restoredHistory.source !== "provider-native") {
@@ -205737,7 +205788,7 @@ ${buttons.join("\n")}`;
       }
       nativeTurnTerminalMarker(turnStartedAt) {
         const pending = this.completedDebouncePending ?? this.cancelledCompletionRecheck?.pending;
-        if (pending?.completionBinding && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
+        if (pending && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
         return nativeTurnTerminalMarker(this, turnStartedAt);
       }
       isAutonomousMeshSession() {
