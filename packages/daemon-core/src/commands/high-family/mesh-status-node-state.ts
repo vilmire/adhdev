@@ -307,6 +307,8 @@ function overlayHeldRuntime(
 ): void {
     const runtime = entry?.runtime ?? null;
     const held: RepoMeshNodeHeldRuntime = {
+        freshness: !runtime ? 'not_observed' : isHeldRuntimeLive(entry) ? 'fresh' : 'stale',
+        handshakePending: entry?.handshakePendingSince != null,
         source: runtime ? (entry?.runtimeSource ?? 'member_push') : 'none',
         observedAt: runtime ? (entry?.runtimeObservedAt ?? null) : null,
         refreshing,

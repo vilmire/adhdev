@@ -144,12 +144,12 @@ export interface AssistantProjectPorts {
     /**
      * Live CLI instance states for `project_status.sessions` (A2 session
      * visibility). Returns the states VERBATIM; the allow-list projection is
-     * `sessionRows()` in project-views.ts, so this port never decides the
-     * content boundary. Deliberately NOT filtered to coordinators — that is
-     * what `coordinators()` is for, and an orphan worker is exactly the thing
-     * a coordinator-only view cannot show. Daemon-wide and read-only.
+     * `projectSessionView()` in project-session-view.ts, so this port never decides the
+     * content boundary. Daemon-wide and read-only here; project_status joins only positively
+     * task-bound workers and registered project coordinators. The separate
+     * sessionRows helper retains its daemon-wide orphan semantics.
      * Optional like `refreshMemberMeshes` so existing fakes stay valid; absent
-     * ⇒ `sessions: []` rather than a throw.
+     * ⇒ local observation is unknown; held project workers remain available.
      */
     liveSessionStates?(): unknown[];
 }

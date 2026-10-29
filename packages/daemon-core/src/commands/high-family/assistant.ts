@@ -1,4 +1,5 @@
 import { remoteProjectHandlers, remoteProjectSpecs, attachRemoteProject } from './remote-project-attach.js';
+import { projectSessionView } from '../../assistant/project-session-view.js';
 import { decisionStatusFields, openDecisionCountsField } from './assistant-decisions-core.js';
 import { readTaskReportPage } from '../../assistant/task-report-continuation.js';
 import { recoverAttemptReport, verifiedNativeRead } from '../../assistant/attempt-report-recovery.js';
@@ -52,8 +53,7 @@ import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
     PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL, PROJECT_STATUS_ROUTING_DIFFICULTY,
     compactProjectStatus, compactTranscriptTail, coordinatorState, followerStatusView, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
-    sessionRows,
-    type ProjectRoutingView, type ProjectRow, type RemoteHostMachine, type SessionRow,
+    type ProjectRoutingView, type ProjectRow, type RemoteHostMachine,
 } from '../../assistant/project-views.js';
 import { getAssistantRegistry, isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
@@ -674,24 +674,20 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
     const routing: ProjectRoutingView = preview
         ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels)
         : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: 'route_preview_unavailable' };
-    // A2 session visibility: the live sessions of THIS daemon, so the assistant
-    // can spot an orphan (messageCount 0 + spawnedForTaskId null) itself rather
-    // than waiting for the owner to find it. Scoped to this mesh plus sessions
-    // carrying no mesh stamp — see `sessionRows`. Like `routing`, this is
-    // computed wherever localProjectStatus runs, so the HOST's sessions reach
-    // the assistant for a remote project too.
-    const sessions: SessionRow[] = ports.liveSessionStates
-        ? sessionRows(ports.liveSessionStates(), { meshId })
-        : [];
+    const sessionView = projectSessionView(view.success ? view : {}, {
+        meshId, selfDaemonId: ports.selfDaemonId(),
+        localStates: ports.liveSessionStates?.(), members: mesh.nodes,
+        coordinatorSessionIds: coords.map(c => c.sessionId),
+    });
     return {
         name: mesh.name,
         repo: mesh.repoIdentity,
         ...status,
         coordinatorSessionId: liveCoord?.sessionId ?? null,
         routing,
-        sessions,
+        ...sessionView,
         ...decisionStatusFields(meshId),
-        ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }),
+        ...(view.success ? {} : { statusError: 'mesh_status_view failed' }),
     };
 }
 

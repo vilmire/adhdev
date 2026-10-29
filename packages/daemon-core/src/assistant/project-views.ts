@@ -1,4 +1,5 @@
 import { sanitizeDecisionFields } from './decision-views.js';
+import { sessionProvider, sessionStatus, sessionEvidence, sessionCoverage, nodeProviderQuota, type ProjectSessionEvidence } from './project-session-view.js';
 import { createHash } from 'crypto';
 /**
  * Compact projections for the assistant project verbs (design
@@ -520,6 +521,8 @@ export const PROJECT_STATUS_ROUTING_DIFFICULTY = 'medium';
  * asserting it is non-content.
  */
 export interface SessionRow {
+    /** Present for project task-scoped sessions; absent on legacy daemon-wide orphan rows. */
+    evidence?: ProjectSessionEvidence;
     sessionId: string;
     /** Provider type enum (`claude-cli`, `antigravity-cli`, …). */
     provider: string;
@@ -745,8 +748,8 @@ export function followerStatusView(
             if (!sessionId || sessionMeshId !== mesh.id || s.assistant === true) return null;
             return {
                 sessionId,
-                provider: readText(s.provider),
-                status: readText(s.status),
+                provider: sessionProvider(s.provider),
+                status: sessionStatus(s.status),
                 meshId: mesh.id,
                 nodeId: readText(s.nodeId) || null,
                 ageMs: typeof s.ageMs === 'number' && Number.isFinite(s.ageMs) ? s.ageMs : null,
@@ -756,6 +759,7 @@ export function followerStatusView(
                 assistant: false,
                 spawnedForTaskId: readText(s.spawnedForTaskId) || null,
                 launchedBy: readText(s.launchedBy) || null,
+                ...(sessionEvidence(s.evidence) ? { evidence: sessionEvidence(s.evidence) } : {}),
             };
         })
         .filter((s): s is SessionRow => s !== null);
@@ -802,6 +806,8 @@ export function followerStatusView(
         ...(routing ? { routing } : {}),
         ...sanitizeDecisionFields(raw),
         sessions,
+        sessionCoverage: sessionCoverage(raw.sessionCoverage),
+        nodeProviderQuota: nodeProviderQuota(raw.nodeProviderQuota),
         ...(readText(raw.statusError) ? { statusError: 'mesh_status_view failed' } : {}),
     };
 }

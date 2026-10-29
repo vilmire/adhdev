@@ -180,7 +180,7 @@ describe('assistant_project_status', () => {
         expect(JSON.stringify(r)).not.toContain('SHOULD-NOT-LEAK-PROSE');
     });
 
-    it('carries the live sessions, so the assistant can see an orphan itself (A2)', async () => {
+    it('carries only positively task-bound project workers, excluding daemon orphans', async () => {
         liveSessionStates = [
             // The orphan: started, never given work (the live 2026-10-10 shape).
             {
@@ -197,13 +197,13 @@ describe('assistant_project_status', () => {
                 launch: { launchedBy: 'auto_launch', launchedAt: Date.now() - 10_000 },
             },
         ];
-        const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'main' });
-        expect(r.result.sessions).toHaveLength(2);
-        const orphan = r.result.sessions.find((s: any) => s.sessionId === 'bbd6c422');
-        expect(orphan).toMatchObject({
-            provider: 'claude-cli', status: 'idle', messageCount: 0, spawnedForTaskId: null,
-            meshId: 'mesh_a', nodeId: 'node_1', launchedBy: 'mesh_launch_session', isCoordinator: false,
+        responses.mesh_status_view = () => ({ success: true,
+            membership: { mesh: { nodes: [{ id: 'node_1', daemonId: SELF }] } },
+            activeWork: { success: true, activeWork: { activeWork: [{ taskId: 'task_33c4', nodeId: 'node_1', sessionId: 'a34e7359' }] } },
         });
+        const r: any = await run(ASSISTANT_VERB.projectStatus, { project: 'main' });
+        expect(r.result.sessions).toHaveLength(1);
+        expect(r.result.sessions.some((s: any) => s.sessionId === 'bbd6c422')).toBe(false);
         expect(r.result.sessions.find((s: any) => s.sessionId === 'a34e7359'))
             .toMatchObject({ messageCount: 2, spawnedForTaskId: 'task_33c4' });
         // The content boundary holds through the verb, not just the projection.

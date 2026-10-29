@@ -24591,7 +24591,7 @@ var require_dist3 = __commonJS({
       return coreA === coreB;
     }
     function expandDaemonIdForms(ids) {
-      const list3 = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
+      const list4 = Array.isArray(ids) ? ids : ids != null ? [ids] : [];
       const out = [];
       const seen2 = /* @__PURE__ */ new Set();
       const add = (value) => {
@@ -24599,8 +24599,8 @@ var require_dist3 = __commonJS({
         seen2.add(value);
         out.push(value);
       };
-      for (const raw of list3) add(readString2(raw));
-      for (const raw of list3) {
+      for (const raw of list4) add(readString2(raw));
+      for (const raw of list4) {
         const core2 = machineCoreFromDaemonId(readString2(raw));
         if (!core2 || !core2.startsWith("mach_")) continue;
         add(core2);
@@ -24642,19 +24642,19 @@ var require_dist3 = __commonJS({
         submodules
       };
     }
-    function truncateDiffText2(text5, maxLines) {
-      const lines = text5.split("\n");
+    function truncateDiffText2(text6, maxLines) {
+      const lines = text6.split("\n");
       const truncated = lines.length > maxLines;
       return {
-        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text5,
+        diff: truncated ? lines.slice(0, maxLines).join("\n") + "\n... (truncated)" : text6,
         truncated
       };
     }
     function projectFileDiffRow2(file, rawResult, maxLines) {
       const raw = readRecord2(rawResult);
       const d = readRecord2(raw.diff ?? rawResult);
-      const text5 = typeof d.diff === "string" ? d.diff : "";
-      const { diff, truncated } = truncateDiffText2(text5, maxLines);
+      const text6 = typeof d.diff === "string" ? d.diff : "";
+      const { diff, truncated } = truncateDiffText2(text6, maxLines);
       return {
         path: file.path,
         old_path: file.oldPath ?? null,
@@ -24730,9 +24730,9 @@ var require_dist3 = __commonJS({
         if (!b) continue;
         const entry = { difficulty: diff, model: b.model, thinkingLevel: b.thinkingLevel };
         if (b.provider) {
-          const list3 = byProvider.get(b.provider) ?? [];
-          list3.push(entry);
-          byProvider.set(b.provider, list3);
+          const list4 = byProvider.get(b.provider) ?? [];
+          list4.push(entry);
+          byProvider.set(b.provider, list4);
         } else {
           shared2.push(entry);
         }
@@ -25136,15 +25136,15 @@ var require_dist3 = __commonJS({
     function normalizeAuthOkLimits(raw) {
       if (!raw || typeof raw !== "object") return null;
       const src = raw;
-      const num3 = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
+      const num4 = (value, fallback) => typeof value === "number" && Number.isFinite(value) ? value : fallback;
       return {
-        maxP2Pconnections: num3(
+        maxP2Pconnections: num4(
           src.maxP2Pconnections !== void 0 ? src.maxP2Pconnections : src.maxP2PConnections,
           -1
         ),
-        screenshotIntervalSeconds: num3(src.screenshotIntervalSeconds, 0),
-        dailyScreenshotMinutes: num3(src.dailyScreenshotMinutes, -1),
-        maxMachines: num3(src.maxMachines, -1)
+        screenshotIntervalSeconds: num4(src.screenshotIntervalSeconds, 0),
+        dailyScreenshotMinutes: num4(src.dailyScreenshotMinutes, -1),
+        maxMachines: num4(src.maxMachines, -1)
       };
     }
     function isSessionStatus(value) {
@@ -25248,10 +25248,10 @@ var require_dist3 = __commonJS({
       const candidate = value;
       return isMessageId(candidate.messageId) && typeof candidate.sessionId === "string" && candidate.sessionId.length > 0 && isInputEnvelopeWire(candidate.input) && isOutboundMessageOrigin(candidate.origin) && isSendPolicy(candidate.policy) && typeof candidate.createdAt === "number";
     }
-    function unwrapPastedContent(text5) {
-      const lines = text5.replace(/\r\n?/g, "\n").split("\n");
+    function unwrapPastedContent(text6) {
+      const lines = text6.replace(/\r\n?/g, "\n").split("\n");
       const first = lines.findIndex((line) => line.trim());
-      if (first < 0 || !PASTED_OPEN_RE.test(lines[first])) return text5;
+      if (first < 0 || !PASTED_OPEN_RE.test(lines[first])) return text6;
       return lines.filter((line) => !PASTED_OPEN_RE.test(line) && !PASTED_CLOSE_RE.test(line)).join("\n");
     }
     function truncateString2(value, max) {
@@ -25976,8 +25976,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (value.carryOverTo !== void 0 && !isEvidenceIdentifier2(value.carryOverTo)) return false;
       for (const k of ["itemsAdd", "itemsUpdate"]) {
-        const list3 = value[k];
-        if (list3 !== void 0 && (!Array.isArray(list3) || list3.length > 500 || !list3.every(isRecord2))) return false;
+        const list4 = value[k];
+        if (list4 !== void 0 && (!Array.isArray(list4) || list4.length > 500 || !list4.every(isRecord2))) return false;
       }
       if (value.goal !== void 0 && typeof value.goal !== "string") return false;
       if (value.status !== void 0 && !isMeshMissionStatusValue3(value.status)) return false;
@@ -26562,13 +26562,13 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeMissionSummary(value) {
       if (typeof value !== "string") return null;
-      const text5 = collapse(value);
-      return { value: truncateMissionText(text5, MISSION_LIMITS2.summary), truncated: text5.length > MISSION_LIMITS2.summary };
+      const text6 = collapse(value);
+      return { value: truncateMissionText(text6, MISSION_LIMITS2.summary), truncated: text6.length > MISSION_LIMITS2.summary };
     }
     function normalizeOutcomeReason(value) {
       if (typeof value !== "string") return null;
-      const text5 = value.trim();
-      return { value: truncateMissionText(text5, MISSION_LIMITS2.outcomeReason), truncated: text5.length > MISSION_LIMITS2.outcomeReason };
+      const text6 = value.trim();
+      return { value: truncateMissionText(text6, MISSION_LIMITS2.outcomeReason), truncated: text6.length > MISSION_LIMITS2.outcomeReason };
     }
     function normalizeMissionRefs(value) {
       if (!Array.isArray(value)) return { refs: [], truncated: false };
@@ -26655,8 +26655,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         urgency: urgencyRaw === "blocking" ? "blocking" : "normal"
       };
     }
-    function normalizeForDedupe(text5) {
-      return collapse(text5).toLowerCase().replace(/[\s.!?。]+$/u, "");
+    function normalizeForDedupe(text6) {
+      return collapse(text6).toLowerCase().replace(/[\s.!?。]+$/u, "");
     }
     function deriveItemDedupeKey(kind, parts) {
       const explicit = str2(parts.explicit);
@@ -26701,14 +26701,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       const textSource = collapse(str2(r.text));
       if (!textSource && !(kind === "evidence" && refs.length > 0)) return { error: `${kind} item needs text` };
       if (textSource.length > MISSION_LIMITS2.itemText) truncated.push("text");
-      const text5 = truncateMissionText(textSource || `${refs[0].kind}: ${refs[0].value}`, MISSION_LIMITS2.itemText);
+      const text6 = truncateMissionText(textSource || `${refs[0].kind}: ${refs[0].value}`, MISSION_LIMITS2.itemText);
       return {
         item: {
           kind,
-          text: text5,
+          text: text6,
           ...machine ? { machine } : {},
           refs,
-          dedupeKey: deriveItemDedupeKey(kind, { text: text5, machine, refs, explicit: explicitKey }),
+          dedupeKey: deriveItemDedupeKey(kind, { text: text6, machine, refs, explicit: explicitKey }),
           truncated
         }
       };
@@ -26726,9 +26726,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         update.state = state2;
       }
       if (typeof r.text === "string") {
-        const text5 = collapse(r.text);
-        if (text5.length > MISSION_LIMITS2.itemText) truncated.push("text");
-        if (text5) update.text = truncateMissionText(text5, MISSION_LIMITS2.itemText);
+        const text6 = collapse(r.text);
+        if (text6.length > MISSION_LIMITS2.itemText) truncated.push("text");
+        if (text6) update.text = truncateMissionText(text6, MISSION_LIMITS2.itemText);
       }
       if (r.machine === null) update.machine = null;
       else if (typeof r.machine === "string") {
@@ -26842,11 +26842,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       const collections = /* @__PURE__ */ new Map();
       for (const [path126, idField] of Object.entries(spec.collections)) {
-        const list3 = readPath(doc, path126);
-        if (!Array.isArray(list3)) continue;
+        const list4 = readPath(doc, path126);
+        if (!Array.isArray(list4)) continue;
         const rows = /* @__PURE__ */ new Map();
         const order = [];
-        for (const row2 of list3) {
+        for (const row2 of list4) {
           if (!isRecord3(row2)) continue;
           const id222 = row2[idField];
           if (typeof id222 !== "string" || !id222 || rows.has(id222)) continue;
@@ -27004,14 +27004,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           continue;
         }
         if (!change && heldList === void 0) continue;
-        const list3 = change ? foldCollection(heldList, change, idField) : heldList;
+        const list4 = change ? foldCollection(heldList, change, idField) : heldList;
         const [head, tail] = splitPath(path126);
         if (!tail) {
-          next[head] = list3;
+          next[head] = list4;
           continue;
         }
         const parent = isRecord3(next[head]) ? { ...next[head] } : {};
-        parent[tail] = list3;
+        parent[tail] = list4;
         next[head] = parent;
       }
       return next;
@@ -28560,11 +28560,11 @@ ${renderWorkerProtocolFooter2(input)}`;
         };
       }
     });
-    function stripAnsi(text5) {
-      return text5.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+    function stripAnsi(text6) {
+      return text6.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
     }
-    function normalizeAntigravityPromptText(text5) {
-      return stripAnsi(text5).replace(/\s+/g, " ").trim();
+    function normalizeAntigravityPromptText(text6) {
+      return stripAnsi(text6).replace(/\s+/g, " ").trim();
     }
     function parseAntigravityChoiceScreen(rawSectionText) {
       if (!rawSectionText || !rawSectionText.trim()) return null;
@@ -29104,9 +29104,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function interactivePromptContentFingerprint(questions) {
       let hash4 = 2166136261;
-      const mix = (text5) => {
-        for (let i = 0; i < text5.length; i += 1) {
-          hash4 ^= text5.charCodeAt(i);
+      const mix = (text6) => {
+        for (let i = 0; i < text6.length; i += 1) {
+          hash4 ^= text6.charCodeAt(i);
           hash4 = Math.imul(hash4, 16777619) >>> 0;
         }
       };
@@ -29199,9 +29199,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return headers;
     }
-    function isClaudeTuiSelectFooter(text5) {
-      if (/Enter to select/i.test(text5)) return true;
-      return claudeTuiChecklistOptionPattern().test(text5);
+    function isClaudeTuiSelectFooter(text6) {
+      if (/Enter to select/i.test(text6)) return true;
+      return claudeTuiChecklistOptionPattern().test(text6);
     }
     function claudeTuiChecklistOptionPattern() {
       const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
@@ -30034,9 +30034,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         init_repo_mesh_status_types();
       }
     });
-    function parseConfigText(path126, text5) {
-      if (/\.json$/i.test(path126)) return JSON.parse(text5);
-      return yaml.load(text5);
+    function parseConfigText(path126, text6) {
+      if (/\.json$/i.test(path126)) return JSON.parse(text6);
+      return yaml.load(text6);
     }
     var yaml;
     var init_config_text = __esm2({
@@ -30064,11 +30064,11 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeOperatingNote(value) {
       if (!isRecord4(value)) return null;
-      const text5 = typeof value.text === "string" ? value.text.trim() : "";
-      if (!text5) return null;
+      const text6 = typeof value.text === "string" ? value.text.trim() : "";
+      if (!text6) return null;
       const category = value.category === "provider_quirk" || value.category === "pattern_to_avoid" || value.category === "recovery_lesson" ? value.category : void 0;
       return {
-        text: text5,
+        text: text6,
         ...category ? { category } : {},
         ...typeof value.createdAt === "string" ? { createdAt: value.createdAt } : {},
         ...typeof value.sourceCoordinator === "string" ? { sourceCoordinator: value.sourceCoordinator } : {},
@@ -30701,14 +30701,14 @@ ${renderWorkerProtocolFooter2(input)}`;
         const configPath = (0, import_path2.join)(repoRoot, relative25);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
-          const text5 = (0, import_fs2.readFileSync)(configPath, "utf-8");
+          const text6 = (0, import_fs2.readFileSync)(configPath, "utf-8");
           let mtimeMs = 0;
           try {
             mtimeMs = (0, import_fs2.statSync)(configPath).mtimeMs;
           } catch {
-            mtimeMs = text5.length;
+            mtimeMs = text6.length;
           }
-          const parsed = parseConfigText(configPath, text5);
+          const parsed = parseConfigText(configPath, text6);
           const validation = validateChangeImpactConfig(parsed, relative25);
           if (!validation.valid) {
             return {
@@ -31650,9 +31650,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     async function readHead(repo, options) {
       try {
         const result = await runGit(repo, ["log", "-1", "--pretty=%h%x00%s"], options);
-        const text5 = result.stdout.trimEnd();
-        if (!text5) return { commit: null, message: null };
-        const [commit2, ...messageParts] = text5.split("\0");
+        const text6 = result.stdout.trimEnd();
+        if (!text6) return { commit: null, message: null };
+        const [commit2, ...messageParts] = text6.split("\0");
         return {
           commit: commit2 || null,
           message: messageParts.join("\0") || null
@@ -32071,12 +32071,12 @@ ${renderWorkerProtocolFooter2(input)}`;
         plusLines
       ].filter((line) => line.length > 0).join("\n");
     }
-    function truncateText(text5, maxBytes) {
-      if (byteLength(text5) <= maxBytes) return { text: text5, truncated: false };
-      return { text: Buffer.from(text5, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
+    function truncateText(text6, maxBytes) {
+      if (byteLength(text6) <= maxBytes) return { text: text6, truncated: false };
+      return { text: Buffer.from(text6, "utf8").subarray(0, maxBytes).toString("utf8"), truncated: true };
     }
-    function byteLength(text5) {
-      return Buffer.byteLength(text5, "utf8");
+    function byteLength(text6) {
+      return Buffer.byteLength(text6, "utf8");
     }
     function normalizePositiveInteger(value, fallback) {
       if (!Number.isFinite(value) || value == null || value <= 0) return fallback;
@@ -32874,10 +32874,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return out;
     }
-    function findLeaks(text5, extraNames = currentUserNames(), runtimeHosts = [...currentHostLabels()], knownHosts = []) {
+    function findLeaks(text6, extraNames = currentUserNames(), runtimeHosts = [...currentHostLabels()], knownHosts = []) {
       const leaks = [];
       const hostPats = hostPatterns(knownHosts, runtimeHosts);
-      const lines = text5.split("\n");
+      const lines = text6.split("\n");
       lines.forEach((line, i) => {
         const hostOptOut = line.includes(HOST_OPT_OUT);
         if (!hostOptOut) for (const re of hostPats) {
@@ -32917,9 +32917,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       for (const v of [process.env.HOME, process.env.USERPROFILE]) if (v) add((0, import_node_path4.basename)(v.replace(/[\\/]+$/, "")));
       return names;
     }
-    function findLeaksWithPatterns(text5, patterns, extraNames = currentUserNames(), runtimeHosts) {
-      const leaks = findLeaks(text5, /* @__PURE__ */ new Set([...extraNames, ...patterns.ownerNames]), runtimeHosts, patterns.knownHosts);
-      for (const [index, line] of text5.split("\n").entries()) {
+    function findLeaksWithPatterns(text6, patterns, extraNames = currentUserNames(), runtimeHosts) {
+      const leaks = findLeaks(text6, /* @__PURE__ */ new Set([...extraNames, ...patterns.ownerNames]), runtimeHosts, patterns.knownHosts);
+      for (const [index, line] of text6.split("\n").entries()) {
         for (const literal of patterns.blockedText || []) {
           if (line.toLowerCase().includes(literal.toLowerCase())) leaks.push({ line: index + 1, match: literal, name: literal });
         }
@@ -33268,10 +33268,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     async function identityViolations(cwd, shas) {
       const out = [];
-      for (const rec6 of await readCommits(cwd, shas)) {
-        for (const [role, n, e] of [["author", rec6.an, rec6.ae], ["committer", rec6.cn, rec6.ce]]) {
+      for (const rec7 of await readCommits(cwd, shas)) {
+        for (const [role, n, e] of [["author", rec7.an, rec7.ae], ["committer", rec7.cn, rec7.ce]]) {
           if (n !== REQUIRED_NAME || e !== REQUIRED_EMAIL) {
-            out.push({ kind: "identity", sha: rec6.sha, detail: `${role} is "${n} <${e}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+            out.push({ kind: "identity", sha: rec7.sha, detail: `${role} is "${n} <${e}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
           }
         }
       }
@@ -33288,15 +33288,15 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (recs.length !== shas.length) throw new Error(`commit metadata parse mismatch: expected ${shas.length}, got ${recs.length}`);
       return recs;
     }
-    function scanText(scan, text5) {
-      const hits = scan(text5);
-      if (text5.includes("\0")) hits.push(...scan(text5.replaceAll("\0", "")));
+    function scanText(scan, text6) {
+      const hits = scan(text6);
+      if (text6.includes("\0")) hits.push(...scan(text6.replaceAll("\0", "")));
       return hits;
     }
     async function messageViolations(cwd, shas, scan) {
       const out = [];
-      for (const rec6 of await readCommits(cwd, shas)) {
-        for (const l of scanText(scan, rec6.message)) out.push({ kind: "path", sha: rec6.sha, file: "(commit message)", line: l.line, detail: l.name || l.match });
+      for (const rec7 of await readCommits(cwd, shas)) {
+        for (const l of scanText(scan, rec7.message)) out.push({ kind: "path", sha: rec7.sha, file: "(commit message)", line: l.line, detail: l.name || l.match });
       }
       out.push(...await headerViolations(cwd, shas, scan));
       return out;
@@ -33545,7 +33545,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         for (const e of entries2) {
           if (!e.localSha || ZERO.test(e.localSha)) continue;
           const ref2 = e.localRef || e.localSha;
-          const add = (list3) => list3.forEach((v) => violations.push({ ...v, ref: ref2 }));
+          const add = (list4) => list4.forEach((v) => violations.push({ ...v, ref: ref2 }));
           const phaseMarkers = await runGit2(cwd, ["ls-tree", "-z", e.localSha, "--", "scripts/refine-source-phase.json", "scripts/lib/refine-source-phase.json", ".adhdev-source-candidate.json"]);
           if (phaseMarkers.trim()) add([{ kind: "source_phase", sha: e.localSha, file: "(source phase)", line: 1, detail: "source_not_publishable: combined generation and final gates required" }]);
           for (const l of scanRef(e.remoteRef || "")) add([{ kind: "path", sha: e.localSha, file: "(destination ref)", line: l.line, detail: l.name || l.match }]);
@@ -33728,20 +33728,20 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v.trim() && !/[\n\r\0]/.test(v))) {
         return { error: "must be an array of non-empty path strings" };
       }
-      const list3 = [];
+      const list4 = [];
       for (const raw of value) {
         const v = raw.trim().replace(/\/+$/, "");
         if (v === REFINE_SCHEDULE_WILDCARD) {
-          list3.push(v);
+          list4.push(v);
           continue;
         }
         const segments = v.split("/");
         if (!v || v.startsWith("/") || /^[A-Za-z]:/.test(v) || v.includes("\\") || segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
           return { error: `path "${raw}" is not a canonical repo-relative POSIX path (no leading '/', drive letter, backslash, or '.', '..', empty segments)` };
         }
-        list3.push(v);
+        list4.push(v);
       }
-      return { list: [...new Set(list3)] };
+      return { list: [...new Set(list4)] };
     }
     function overlaps(a, b) {
       if (a === REFINE_SCHEDULE_WILDCARD || b === REFINE_SCHEDULE_WILDCARD) return true;
@@ -34096,11 +34096,11 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       const baseRefs = (options?.baseRefs || []).filter((ref2) => typeof ref2 === "string" && ref2.trim().length > 0);
       for (const ref2 of baseRefs) {
         for (const relative25 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text5 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative25);
-          if (text5 === void 0) continue;
+          const text6 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative25);
+          if (text6 === void 0) continue;
           const source2 = `${ref2.trim()}:${relative25}`;
           try {
-            const parsed = parseConfigText(relative25, text5);
+            const parsed = parseConfigText(relative25, text6);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref2.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref2.trim() };
@@ -34526,10 +34526,10 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       return !(isWorktreeBootstrapStaleRunning(node, nowMs2) || isRemoteWorktreeBootstrapStaleRunning(node, nowMs2));
     }
     function truncateOutput(value) {
-      const text5 = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text5.length <= OUTPUT_SUMMARY_CHARS) return text5;
-      return `${text5.slice(0, OUTPUT_SUMMARY_CHARS)}
-[truncated ${text5.length - OUTPUT_SUMMARY_CHARS} chars]`;
+      const text6 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text6.length <= OUTPUT_SUMMARY_CHARS) return text6;
+      return `${text6.slice(0, OUTPUT_SUMMARY_CHARS)}
+[truncated ${text6.length - OUTPUT_SUMMARY_CHARS} chars]`;
     }
     function isWorkspaceRelativePath(value) {
       if (typeof value !== "string" || !value.trim()) return false;
@@ -34892,11 +34892,11 @@ if (command) {
       }
     });
     function truncateValidationOutput(value) {
-      const text5 = typeof value === "string" ? value : value == null ? "" : String(value);
-      if (text5.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text5;
-      const head = text5.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
-      const tail = text5.slice(text5.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
-      const omitted = text5.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
+      const text6 = typeof value === "string" ? value : value == null ? "" : String(value);
+      if (text6.length <= REFINE_VALIDATION_SUMMARY_CHARS) return text6;
+      const head = text6.slice(0, REFINE_VALIDATION_SUMMARY_HEAD_CHARS);
+      const tail = text6.slice(text6.length - REFINE_VALIDATION_SUMMARY_TAIL_CHARS);
+      const omitted = text6.length - REFINE_VALIDATION_SUMMARY_HEAD_CHARS - REFINE_VALIDATION_SUMMARY_TAIL_CHARS;
       return `${head}
 [... ${omitted} chars omitted ...]
 ${tail}`;
@@ -35226,9 +35226,9 @@ ${tail}`;
             { cwd: submodulePath, remoteName, remoteUrl, patterns: await loadPublicPushPatternsForRepo(patternRepo), integrationBase }
           );
           for (const v of violations) {
-            const list3 = violationsBySha.get(v.sha) || [];
-            list3.push(v.kind === "identity" ? `identity: ${v.detail}` : `${v.file}:${v.line} personal path: ${v.detail}`);
-            violationsBySha.set(v.sha, list3);
+            const list4 = violationsBySha.get(v.sha) || [];
+            list4.push(v.kind === "identity" ? `identity: ${v.detail}` : `${v.file}:${v.line} personal path: ${v.detail}`);
+            violationsBySha.set(v.sha, list4);
           }
         }
       } catch (e) {
@@ -35763,12 +35763,12 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       let textBytes = 0;
       for (const item of items) {
         if (item && typeof item.text === "string") {
-          const text5 = item.text;
-          textBytes += Buffer.byteLength(text5, "utf8");
+          const text6 = item.text;
+          textBytes += Buffer.byteLength(text6, "utf8");
           if (textBytes > MESH_SEND_KEYS_MAX_TEXT_BYTES) {
             throw new Error(`send_keys: total literal text exceeds ${MESH_SEND_KEYS_MAX_TEXT_BYTES} bytes`);
           }
-          parts.push(text5);
+          parts.push(text6);
           submits = false;
           continue;
         }
@@ -35784,8 +35784,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       }
       return { sequence: parts.join(""), keys: keys2, hasDestructive, submits };
     }
-    function truncateToByteTailByLine(text5, maxBytes) {
-      const input = String(text5 ?? "");
+    function truncateToByteTailByLine(text6, maxBytes) {
+      const input = String(text6 ?? "");
       const originalBytes = Buffer.byteLength(input, "utf8");
       if (originalBytes <= maxBytes) {
         return { text: input, truncated: false, originalBytes, returnedBytes: originalBytes };
@@ -36005,16 +36005,16 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       }
     });
     async function runAsyncBatch(items, worker, options = {}) {
-      const list3 = Array.from(items);
-      if (list3.length === 0) return;
-      const concurrency = Math.max(1, Math.min(list3.length, Math.floor(options.concurrency || 1)));
+      const list4 = Array.from(items);
+      if (list4.length === 0) return;
+      const concurrency = Math.max(1, Math.min(list4.length, Math.floor(options.concurrency || 1)));
       let nextIndex = 0;
       const runners = Array.from({ length: concurrency }, async () => {
         while (true) {
           const currentIndex = nextIndex;
           nextIndex += 1;
-          if (currentIndex >= list3.length) return;
-          await worker(list3[currentIndex], currentIndex);
+          if (currentIndex >= list4.length) return;
+          await worker(list4[currentIndex], currentIndex);
         }
       });
       await Promise.all(runners);
@@ -36228,8 +36228,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function getCliInventorySignature(providerLoader) {
       const loader2 = providerLoader;
       const revision = typeof loader2?.getCliDetectionRevision === "function" ? loader2.getCliDetectionRevision() : 0;
-      const list3 = loader2?.getCliDetectionList?.() ?? [];
-      const signature = list3.map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ""}:${c.enabled !== false ? "1" : "0"}`).join("|");
+      const list4 = loader2?.getCliDetectionList?.() ?? [];
+      const signature = list4.map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ""}:${c.enabled !== false ? "1" : "0"}`).join("|");
       return { revision, signature };
     }
     function readCliInventorySlot(providerLoader) {
@@ -38767,8 +38767,8 @@ child.on('exit', () => process.exit(0));
           consumed += length;
           const buffer = Buffer.alloc(length);
           fs9.readSync(fd, buffer, 0, length, position);
-          const text5 = buffer.toString("utf-8") + carry;
-          const lines = text5.split("\n");
+          const text6 = buffer.toString("utf-8") + carry;
+          const lines = text6.split("\n");
           carry = position > 0 ? lines.shift() ?? "" : "";
           for (let i = lines.length - 1; i >= 0; i -= 1) {
             const parsed = parseRolloutLine(lines[i]);
@@ -38924,8 +38924,8 @@ child.on('exit', () => process.exit(0));
       if (status >= 500 && status <= 599) return "server";
       return null;
     }
-    function extractEmbeddedHttpStatus(text5) {
-      const bodyEq = text5.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
+    function extractEmbeddedHttpStatus(text6) {
+      const bodyEq = text6.match(/\bbody\s*=\s*(\{[\s\S]*\})\s*;?/);
       if (bodyEq?.[1]) {
         try {
           const parsed = JSON.parse(bodyEq[1]);
@@ -38935,48 +38935,48 @@ child.on('exit', () => process.exit(0));
         } catch {
         }
       }
-      const jsonStatus = text5.match(/"status"\s*:\s*(\d{3})/);
+      const jsonStatus = text6.match(/"status"\s*:\s*(\d{3})/);
       if (jsonStatus) {
         const n = Number(jsonStatus[1]);
         if (kindFromHttpStatus(n)) return n;
       }
-      const labelled = text5.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
+      const labelled = text6.match(/\b(?:HTTP\s+|failed:\s*)(401|403|429|5\d{2})\b/i);
       if (labelled) return Number(labelled[1]);
-      const phrase = text5.match(/\b(401|403)\s+Unauthorized\b/i) ?? text5.match(/\b(429)\s+Too Many Requests\b/i);
+      const phrase = text6.match(/\b(401|403)\s+Unauthorized\b/i) ?? text6.match(/\b(429)\s+Too Many Requests\b/i);
       if (phrase) return Number(phrase[1]);
       return null;
     }
-    function extractEmbeddedErrorCode(text5) {
-      const match = text5.match(/"code"\s*:\s*"([^"]+)"/);
+    function extractEmbeddedErrorCode(text6) {
+      const match = text6.match(/"code"\s*:\s*"([^"]+)"/);
       return match?.[1] ?? null;
     }
     function classifyCodexAppServerError(message) {
-      const text5 = message.trim();
-      const http4 = extractEmbeddedHttpStatus(text5);
+      const text6 = message.trim();
+      const http4 = extractEmbeddedHttpStatus(text6);
       if (http4 !== null) {
         const kind = kindFromHttpStatus(http4);
         if (kind) return kind;
       }
-      const code = extractEmbeddedErrorCode(text5);
+      const code = extractEmbeddedErrorCode(text6);
       if (code && UNAUTHORIZED_ERROR_CODES.has(code)) return "unauthorized";
-      if (/\bunauthorized\b/i.test(text5)) return "unauthorized";
-      if (NETWORK_PATTERN.test(text5)) return "network";
-      if (RATE_LIMIT_TEXT_PATTERN.test(text5)) return "rate-limited";
-      if (MISSING_CREDENTIALS_PATTERN.test(text5)) return "missing-credentials";
+      if (/\bunauthorized\b/i.test(text6)) return "unauthorized";
+      if (NETWORK_PATTERN.test(text6)) return "network";
+      if (RATE_LIMIT_TEXT_PATTERN.test(text6)) return "rate-limited";
+      if (MISSING_CREDENTIALS_PATTERN.test(text6)) return "missing-credentials";
       return "server";
     }
-    function describeCodexRateLimitFailure(kind, text5) {
+    function describeCodexRateLimitFailure(kind, text6) {
       switch (kind) {
         case "missing-credentials":
-          return `Not signed in to Codex (${text5}) \u2014 run codex on this machine to sign in, then retry`;
+          return `Not signed in to Codex (${text6}) \u2014 run codex on this machine to sign in, then retry`;
         case "unauthorized":
-          return `Codex usage lookup by the background quota collector was refused (${text5}) \u2014 this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
+          return `Codex usage lookup by the background quota collector was refused (${text6}) \u2014 this is the daemon's own probe, not a running Codex session, so it says nothing about that session's sign-in; usage is unknown until Codex writes a local usage reading`;
         case "rate-limited":
-          return `Codex rate-limit lookup was rate limited: ${text5}`;
+          return `Codex rate-limit lookup was rate limited: ${text6}`;
         case "network":
-          return `Codex rate-limit lookup failed: ${text5}`;
+          return `Codex rate-limit lookup failed: ${text6}`;
         default:
-          return `Codex rate-limit request failed: ${text5}`;
+          return `Codex rate-limit request failed: ${text6}`;
       }
     }
     function codexCommand(env2) {
@@ -39140,13 +39140,13 @@ child.on('exit', () => process.exit(0));
           }
           if (message.id === RATE_LIMITS_ID) {
             if (message.error) {
-              const text5 = message.error.message ?? "unknown error";
-              const failureKind = classifyCodexAppServerError(text5);
+              const text6 = message.error.message ?? "unknown error";
+              const failureKind = classifyCodexAppServerError(text6);
               finish(
                 quotaFailure(
                   "codex-cli",
                   failureKind === "missing-credentials" ? "unavailable" : "error",
-                  describeCodexRateLimitFailure(failureKind, text5),
+                  describeCodexRateLimitFailure(failureKind, text6),
                   { source: "app-server", collectorScope: "background-collector", failureKind }
                 )
               );
@@ -41667,11 +41667,11 @@ ${error.message || ""}`;
       }
       const v = validateWorkspacePath(abs);
       if (v.ok !== true) return { error: v.error };
-      const list3 = [...config.workspaces || []];
-      if (list3.some((w) => path25.resolve(w.path) === abs)) {
+      const list4 = [...config.workspaces || []];
+      if (list4.some((w) => path25.resolve(w.path) === abs)) {
         return { error: "Workspace already in list" };
       }
-      if (list3.length >= MAX_WORKSPACES) {
+      if (list4.length >= MAX_WORKSPACES) {
         return { error: `Maximum ${MAX_WORKSPACES} workspaces` };
       }
       const entry = {
@@ -41680,15 +41680,15 @@ ${error.message || ""}`;
         label: (label2 || "").trim() || defaultWorkspaceLabel(abs),
         addedAt: Date.now()
       };
-      list3.push(entry);
-      return { config: { ...config, workspaces: list3 }, entry };
+      list4.push(entry);
+      return { config: { ...config, workspaces: list4 }, entry };
     }
     function removeWorkspaceEntry(config, id4) {
-      const list3 = (config.workspaces || []).filter((w) => w.id !== id4);
-      if (list3.length === (config.workspaces || []).length) return { error: "Workspace not found" };
+      const list4 = (config.workspaces || []).filter((w) => w.id !== id4);
+      if (list4.length === (config.workspaces || []).length) return { error: "Workspace not found" };
       let defaultWorkspaceId = config.defaultWorkspaceId;
       if (defaultWorkspaceId === id4) defaultWorkspaceId = null;
-      return { config: { ...config, workspaces: list3, defaultWorkspaceId } };
+      return { config: { ...config, workspaces: list4, defaultWorkspaceId } };
     }
     function setDefaultWorkspaceId(config, id4) {
       if (id4 === null) {
@@ -41711,10 +41711,10 @@ ${error.message || ""}`;
       const existing = findWorkspaceByPath(config, rawPath);
       if (!existing) return { error: "Workspace not found" };
       const nextLabel = normalizeWorkspaceLabel(label2) || defaultWorkspaceLabel(expandPath(existing.path));
-      const list3 = (config.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
-      const entry = list3.find((w) => w.id === existing.id);
+      const list4 = (config.workspaces || []).map((w) => w.id === existing.id ? { ...w, label: nextLabel } : w);
+      const entry = list4.find((w) => w.id === existing.id);
       if (!entry) return { error: "Workspace not found" };
-      return { config: { ...config, workspaces: list3 }, entry };
+      return { config: { ...config, workspaces: list4 }, entry };
     }
     var fs15;
     var os16;
@@ -42509,10 +42509,10 @@ ${error.message || ""}`;
       const roleCap = /* @__PURE__ */ new Map();
       for (const entry of rawRoles) {
         if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-        const rec6 = entry;
-        const provider = typeof rec6.providerType === "string" ? rec6.providerType.trim() : "";
+        const rec7 = entry;
+        const provider = typeof rec7.providerType === "string" ? rec7.providerType.trim() : "";
         if (!provider) continue;
-        const cap = Number(rec6.maxParallel);
+        const cap = Number(rec7.maxParallel);
         if (!Number.isFinite(cap) || cap < 0) continue;
         roleCap.set(provider.toLowerCase(), { provider, cap: Math.floor(cap) });
       }
@@ -42731,14 +42731,14 @@ ${error.message || ""}`;
     });
     function normalizeAssistantRemoteAccessBinding(raw, expectedMeshId) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-      const rec6 = raw;
-      const rawHostDaemonId = typeof rec6.hostDaemonId === "string" ? rec6.hostDaemonId.trim() : "";
-      const meshId = typeof rec6.meshId === "string" ? rec6.meshId.trim() : "";
-      const rawActiveDaemonId = typeof rec6.activeDaemonId === "string" ? rec6.activeDaemonId.trim() : "";
+      const rec7 = raw;
+      const rawHostDaemonId = typeof rec7.hostDaemonId === "string" ? rec7.hostDaemonId.trim() : "";
+      const meshId = typeof rec7.meshId === "string" ? rec7.meshId.trim() : "";
+      const rawActiveDaemonId = typeof rec7.activeDaemonId === "string" ? rec7.activeDaemonId.trim() : "";
       if (!rawHostDaemonId || !meshId || !rawActiveDaemonId) return null;
       if (expectedMeshId && meshId !== expectedMeshId) return null;
-      if (rec6.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
-      const status = rec6.status === "active" || rec6.status === "revoked" ? rec6.status : null;
+      if (rec7.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
+      const status = rec7.status === "active" || rec7.status === "revoked" ? rec7.status : null;
       if (!status) return null;
       const hostDaemonId = canonicalDaemonId2(rawHostDaemonId);
       const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
@@ -42747,17 +42747,17 @@ ${error.message || ""}`;
         if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return null;
         if (daemonIdsEquivalent4(hostDaemonId, activeDaemonId)) return null;
       }
-      const bindingRevision = typeof rec6.bindingRevision === "number" && Number.isInteger(rec6.bindingRevision) && rec6.bindingRevision >= 1 ? rec6.bindingRevision : null;
-      const grantRevision = typeof rec6.grantRevision === "number" && Number.isInteger(rec6.grantRevision) && rec6.grantRevision >= 1 ? rec6.grantRevision : null;
+      const bindingRevision = typeof rec7.bindingRevision === "number" && Number.isInteger(rec7.bindingRevision) && rec7.bindingRevision >= 1 ? rec7.bindingRevision : null;
+      const grantRevision = typeof rec7.grantRevision === "number" && Number.isInteger(rec7.grantRevision) && rec7.grantRevision >= 1 ? rec7.grantRevision : null;
       if (bindingRevision === null || grantRevision === null) return null;
-      const grantedAt = typeof rec6.grantedAt === "number" && Number.isFinite(rec6.grantedAt) && rec6.grantedAt > 0 ? rec6.grantedAt : null;
+      const grantedAt = typeof rec7.grantedAt === "number" && Number.isFinite(rec7.grantedAt) && rec7.grantedAt > 0 ? rec7.grantedAt : null;
       if (grantedAt === null) return null;
-      const revokedAt = typeof rec6.revokedAt === "number" && Number.isFinite(rec6.revokedAt) && rec6.revokedAt > 0 ? rec6.revokedAt : void 0;
-      const rawOps = Array.isArray(rec6.allowedOps) ? rec6.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS2;
-      const allowArtifactRead = rec6.allowArtifactRead === true;
+      const revokedAt = typeof rec7.revokedAt === "number" && Number.isFinite(rec7.revokedAt) && rec7.revokedAt > 0 ? rec7.revokedAt : void 0;
+      const rawOps = Array.isArray(rec7.allowedOps) ? rec7.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS2;
+      const allowArtifactRead = rec7.allowArtifactRead === true;
       const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
       if (allowedOps.length === 0) return null;
-      const allowCoordinatorLaunch = rec6.allowCoordinatorLaunch !== false;
+      const allowCoordinatorLaunch = rec7.allowCoordinatorLaunch !== false;
       if (allowArtifactRead && allowedOps.includes("read")) {
         if (!allowedOps.includes("artifact_list")) allowedOps.push("artifact_list");
         if (!allowedOps.includes("artifact_read")) allowedOps.push("artifact_read");
@@ -43153,24 +43153,24 @@ ${error.message || ""}`;
       if (!workspace) return bundled;
       const rulesPath = path28.join(workspace, ".adhdev", "coordinator-rules.md");
       try {
-        const text5 = fs16.readFileSync(rulesPath, "utf8");
-        if (text5.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
+        const text6 = fs16.readFileSync(rulesPath, "utf8");
+        if (text6.trim().length < MIN_MEANINGFUL_RULES_CHARS) return bundled;
         return {
-          text: text5,
+          text: text6,
           source: "repo",
           path: rulesPath,
-          differsFromBundled: text5 !== DEFAULT_COORDINATOR_RULES
+          differsFromBundled: text6 !== DEFAULT_COORDINATOR_RULES
         };
       } catch {
         return bundled;
       }
     }
-    function splitRulesLayer(text5) {
-      const match = /^## Rules\b/m.exec(text5);
-      if (!match || match.index === void 0) return { workflow: "", rules: text5.trim() };
+    function splitRulesLayer(text6) {
+      const match = /^## Rules\b/m.exec(text6);
+      if (!match || match.index === void 0) return { workflow: "", rules: text6.trim() };
       return {
-        workflow: text5.slice(0, match.index).trim(),
-        rules: text5.slice(match.index).trim()
+        workflow: text6.slice(0, match.index).trim(),
+        rules: text6.slice(match.index).trim()
       };
     }
     var fs16;
@@ -43377,18 +43377,18 @@ ${error.message || ""}`;
         ];
       }
     });
-    function parseJsonObject(text5) {
-      if (!text5) return {};
+    function parseJsonObject(text6) {
+      if (!text6) return {};
       try {
-        const parsed = JSON.parse(text5);
+        const parsed = JSON.parse(text6);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
       }
     }
-    function parseSummary(text5) {
-      if (!text5) return void 0;
-      const parsed = parseJsonObject(text5);
+    function parseSummary(text6) {
+      if (!text6) return void 0;
+      const parsed = parseJsonObject(text6);
       return typeof parsed.topic === "string" && typeof parsed.writer === "string" && typeof parsed.seq === "number" ? { topic: parsed.topic, writer: parsed.writer, seq: parsed.seq } : void 0;
     }
     function attemptFromRow(row2) {
@@ -44512,18 +44512,18 @@ ${error.message || ""}`;
             result.linesSkipped++;
             continue;
           }
-          const text5 = (v) => typeof v === "string" && v ? v : null;
+          const text6 = (v) => typeof v === "string" && v ? v : null;
           try {
             insert.run(
               (0, import_crypto5.randomUUID)(),
               meshId,
-              text5(event.targetCoordinatorDaemonId),
+              text6(event.targetCoordinatorDaemonId),
               eventName,
               JSON.stringify(event),
               typeof event.queuedAt === "number" ? event.queuedAt : Date.now(),
-              text5(event.protocolVersion),
-              text5(event.eventId),
-              text5(event.scope),
+              text6(event.protocolVersion),
+              text6(event.eventId),
+              text6(event.scope),
               event.dispatchedBy ? JSON.stringify(event.dispatchedBy) : null,
               event.intendedFor ? JSON.stringify(event.intendedFor) : null
             );
@@ -44551,10 +44551,10 @@ ${error.message || ""}`;
     function turnLedgerExportPath(ledgerDir, nowMs2) {
       return `${ledgerDir.replace(/[\\/]+$/, "")}/turn-ledger-premigrate-${nowMs2}.jsonl`;
     }
-    function parseObject(text5) {
-      if (typeof text5 !== "string" || !text5) return {};
+    function parseObject(text6) {
+      if (typeof text6 !== "string" || !text6) return {};
       try {
-        const parsed = JSON.parse(text5);
+        const parsed = JSON.parse(text6);
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
       } catch {
         return {};
@@ -44868,11 +44868,11 @@ ${error.message || ""}`;
           const payload = parseObject(row2.payload);
           const at = ms22(row2.timestamp) ?? nowMs2;
           if (row2.kind === OPERATOR_CANCEL_KIND) {
-            const text5 = typeof payload.text === "string" ? payload.text.trim() : "";
-            if (!text5) continue;
-            if (store4.insertOperatingNote({ noteId: row2.id, meshId, text: text5, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
+            const text6 = typeof payload.text === "string" ? payload.text.trim() : "";
+            if (!text6) continue;
+            if (store4.insertOperatingNote({ noteId: row2.id, meshId, text: text6, category: typeof payload.category === "string" ? payload.category : null, callerSessionId: row2.session_id, createdAt: at })) {
               report.operatingNotes++;
-              byText.set(text5, [...byText.get(text5) ?? [], row2.id]);
+              byText.set(text6, [...byText.get(text6) ?? [], row2.id]);
             }
           } else {
             report.operatingNoteTombstones++;
@@ -44948,10 +44948,10 @@ ${error.message || ""}`;
         PENDING_EVENTS_JSONL_SUFFIX = ".pending-events.jsonl";
       }
     });
-    function parseObject2(text5) {
-      if (typeof text5 !== "string" || !text5) return {};
+    function parseObject2(text6) {
+      if (typeof text6 !== "string" || !text6) return {};
       try {
-        const v = JSON.parse(text5);
+        const v = JSON.parse(text6);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -44994,8 +44994,8 @@ ${error.message || ""}`;
         const at = Date.parse(row2.timestamp);
         const atMs = Number.isFinite(at) ? at : Date.now();
         if (row2.kind === NOTE_KIND) {
-          const text5 = str22(payload.text);
-          if (!text5) continue;
+          const text6 = str22(payload.text);
+          if (!text6) continue;
           const meta2 = {
             ...payload.pinned === true ? { pinned: true } : {},
             ...str22(payload.expiresAt) ? { expiresAt: str22(payload.expiresAt) } : {},
@@ -45007,14 +45007,14 @@ ${error.message || ""}`;
           if (store4.insertOperatingNote({
             noteId: row2.id,
             meshId: row2.mesh_id,
-            text: text5,
+            text: text6,
             category: str22(payload.category) ?? null,
             callerSessionId: row2.session_id,
             createdAt: Number.isFinite(created) ? created : atMs,
             meta: meta2
           })) {
             report.notesFolded++;
-            const key5 = `${row2.mesh_id}\0${text5}`;
+            const key5 = `${row2.mesh_id}\0${text6}`;
             idsByText.set(key5, [...idsByText.get(key5) ?? [], row2.id]);
           }
         } else {
@@ -45096,10 +45096,10 @@ ${error.message || ""}`;
         NOTE_TOMBSTONE_KIND = "coordinator_operating_note_tombstone";
       }
     });
-    function parsePayload(text5) {
-      if (!text5) return {};
+    function parsePayload(text6) {
+      if (!text6) return {};
       try {
-        const value = JSON.parse(text5);
+        const value = JSON.parse(text6);
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
       } catch {
         return {};
@@ -45165,20 +45165,20 @@ ${error.message || ""}`;
             return s2;
           }
           /** Insert one record. Idempotent on `event_id`: true only when a row was inserted. A blank kind is refused. */
-          insert(rec6) {
-            if (!rec6.kind || !String(rec6.kind).trim()) return false;
+          insert(rec7) {
+            if (!rec7.kind || !String(rec7.kind).trim()) return false;
             const info = this.stmt(`INSERT OR IGNORE INTO mesh_local_records
                 (event_id, mesh_id, kind, node_id, session_id, provider_type, task_id, at_ms, payload_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-              rec6.eventId,
-              rec6.meshId,
-              rec6.kind,
-              rec6.nodeId ?? null,
-              rec6.sessionId ?? null,
-              rec6.providerType ?? null,
-              rec6.taskId ?? null,
-              Math.floor(rec6.atMs),
-              JSON.stringify(rec6.payload ?? {})
+              rec7.eventId,
+              rec7.meshId,
+              rec7.kind,
+              rec7.nodeId ?? null,
+              rec7.sessionId ?? null,
+              rec7.providerType ?? null,
+              rec7.taskId ?? null,
+              Math.floor(rec7.atMs),
+              JSON.stringify(rec7.payload ?? {})
             );
             return info.changes > 0;
           }
@@ -45274,10 +45274,10 @@ ${error.message || ""}`;
         };
       }
     });
-    function parseObject3(text5) {
-      if (typeof text5 !== "string" || !text5) return {};
+    function parseObject3(text6) {
+      if (typeof text6 !== "string" || !text6) return {};
       try {
-        const v = JSON.parse(text5);
+        const v = JSON.parse(text6);
         return v && typeof v === "object" && !Array.isArray(v) ? v : {};
       } catch {
         return {};
@@ -45301,13 +45301,13 @@ ${error.message || ""}`;
           continue;
         }
         report.jsonlFilesScanned++;
-        let text5 = "";
+        let text6 = "";
         try {
-          text5 = (0, import_fs12.readFileSync)(path126, "utf8");
+          text6 = (0, import_fs12.readFileSync)(path126, "utf8");
         } catch {
           continue;
         }
-        for (const line of text5.split("\n")) {
+        for (const line of text6.split("\n")) {
           if (!line.trim()) continue;
           let entry;
           try {
@@ -45455,10 +45455,10 @@ ${error.message || ""}`;
         ...row2.is_carry_over === 1 ? { isCarryOver: true } : {}
       };
     }
-    function parseJson2(text5, fallback) {
-      if (typeof text5 !== "string" || !text5) return fallback;
+    function parseJson2(text6, fallback) {
+      if (typeof text6 !== "string" || !text6) return fallback;
       try {
-        return JSON.parse(text5);
+        return JSON.parse(text6);
       } catch {
         return fallback;
       }
@@ -46139,13 +46139,13 @@ ${error.message || ""}`;
       }
       return parseQueuePayloadByRowid(self, keyed[0].rid);
     }
-    function getQueueHeads(self, meshId, statuses) {
+    function getQueueHeads(self, meshId, statuses2) {
       self.ensureLegacyQueueMigrated(meshId);
-      const statusClause = statuses?.length ? ` AND status IN (${statuses.map(() => "?").join(", ")})` : "";
+      const statusClause = statuses2?.length ? ` AND status IN (${statuses2.map(() => "?").join(", ")})` : "";
       const rows = self.db.prepare(
         `SELECT id, status, assigned_node_id, assigned_session_id FROM mesh_queue
          WHERE mesh_id = ?${statusClause} ORDER BY created_at ASC`
-      ).all(meshId, ...statuses ?? []);
+      ).all(meshId, ...statuses2 ?? []);
       return rows.map((r) => ({
         id: r.id,
         status: r.status,
@@ -47917,15 +47917,15 @@ ${error.message || ""}`;
     function findMeshRelayAnswer(raw) {
       let cursor = raw;
       for (let depth = 0; depth <= MAX_RELAY_UNWRAP_DEPTH && cursor && typeof cursor === "object" && !Array.isArray(cursor); depth++) {
-        const rec6 = cursor;
-        if (typeof rec6.success === "boolean") return rec6;
+        const rec7 = cursor;
+        if (typeof rec7.success === "boolean") return rec7;
         if (depth === MAX_RELAY_UNWRAP_DEPTH) break;
-        if (rec6.result && typeof rec6.result === "object") {
-          cursor = rec6.result;
+        if (rec7.result && typeof rec7.result === "object") {
+          cursor = rec7.result;
           continue;
         }
-        if (rec6.payload && typeof rec6.payload === "object") {
-          cursor = rec6.payload;
+        if (rec7.payload && typeof rec7.payload === "object") {
+          cursor = rec7.payload;
           continue;
         }
         break;
@@ -50624,15 +50624,15 @@ ${error.message || ""}`;
       const included = [];
       const forget = [];
       for (const node of [...names].sort()) {
-        const rec6 = recorded.get(node);
-        let firstAt = rec6?.firstAt;
+        const rec7 = recorded.get(node);
+        let firstAt = rec7?.firstAt;
         if (firstAt === void 0 && o.members !== void 0) {
           if (!o.dryRun)
             store4.ackNodeName(topic, node, now);
           firstAt = now;
         }
         let evidence = null;
-        for (const t of [rec6?.seenAt ?? null, firstAt ?? null, writerNewest.get(node) ?? null])
+        for (const t of [rec7?.seenAt ?? null, firstAt ?? null, writerNewest.get(node) ?? null])
           if (t !== null && (evidence === null || t > evidence))
             evidence = t;
         let why = null;
@@ -50640,10 +50640,10 @@ ${error.message || ""}`;
           why = "excluded";
         else if (evidence === null || now - evidence > o.maxLagMs)
           why = "lagging";
-        members.push({ node, lastSeenAt: rec6?.seenAt ?? null, excluded: why });
+        members.push({ node, lastSeenAt: rec7?.seenAt ?? null, excluded: why });
         if (why === null)
           included.push(node);
-        if (rec6 !== void 0 && (why === "excluded" || evidence !== null && now - evidence > o.maxLagMs * ACK_FORGET_LAG_MULTIPLE))
+        if (rec7 !== void 0 && (why === "excluded" || evidence !== null && now - evidence > o.maxLagMs * ACK_FORGET_LAG_MULTIPLE))
           forget.push(node);
       }
       return { members, included, forget };
@@ -51098,9 +51098,9 @@ ${error.message || ""}`;
               snapCache: null
             };
             this.groups.set(key5, group);
-            const list3 = this.groupsByView.get(handle.name) ?? [];
-            list3.push(group);
-            this.groupsByView.set(handle.name, list3);
+            const list4 = this.groupsByView.get(handle.name) ?? [];
+            list4.push(group);
+            this.groupsByView.set(handle.name, list4);
             return group;
           }
           selectTail(topic, mode, defaultLimit, keyed) {
@@ -55997,9 +55997,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
                   appliedB += costs[i];
                   continue;
                 }
-                const rec6 = this.rejects.get(m.topic) ?? {};
-                rec6[r] = (rec6[r] ?? 0) + 1;
-                this.rejects.set(m.topic, rec6);
+                const rec7 = this.rejects.get(m.topic) ?? {};
+                rec7[r] = (rec7[r] ?? 0) + 1;
+                this.rejects.set(m.topic, rec7);
               }
               if (appliedN > 0)
                 this.noteThroughput(m.topic, ps.session.peerId, appliedN, appliedB, "applied");
@@ -56209,9 +56209,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               this.deps.store.raw().run(`CREATE VIRTUAL TABLE IF NOT EXISTS "${inst.ftsTable}" USING fts5(${ftsCols.join(", ")})`);
             }
             this.views.set(name, inst);
-            const list3 = this.byTopic.get(topic) ?? [];
-            list3.push(inst);
-            this.byTopic.set(topic, list3);
+            const list4 = this.byTopic.get(topic) ?? [];
+            list4.push(inst);
+            this.byTopic.set(topic, list4);
             this.restore(inst);
             this.schedule(inst);
             return {
@@ -58664,7 +58664,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!report) return {};
       return { ...report.summary ? { summary: report.summary } : {}, textEventId: report.eventId };
     }
-    function commit(draft, outcome, strength, reason, text5) {
+    function commit(draft, outcome, strength, reason, text6) {
       const attempt = draft.attempt;
       if (isMeshScope(attempt) && !attempt.data.writerStop?.confirmed && !draft.ctx.operatorRecoveryConfirmed && (reason === "hard_ceiling" || draft.ctx.evidence.kind === "cancel" || draft.ctx.evidence.kind === "operator_status" || draft.ctx.evidence.kind === "session_error" || draft.ctx.evidence.kind === "process_exit")) {
         beginWriterStop(draft, reason);
@@ -58678,8 +58678,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return;
       }
       const ev = draft.ctx.evidence;
-      const held = text5 ?? heldText(draft);
-      const summary = text5 ? text5.summary : summaryOf(ev) ?? held.summary;
+      const held = text6 ?? heldText(draft);
+      const summary = text6 ? text6.summary : summaryOf(ev) ?? held.summary;
       attempt.state = outcome;
       attempt.suspension = null;
       const source2 = draft.ctx.operatorRecoveryConfirmed ? ev.source : attempt.data.writerStop?.terminal?.source ?? ev.source;
@@ -59470,15 +59470,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function resolve15(ref2, resolveRef, missing) {
       if (!ref2) return null;
-      const text5 = resolveRef(ref2);
-      if (text5 === null) missing.push(ref2);
-      return text5;
+      const text6 = resolveRef(ref2);
+      if (text6 === null) missing.push(ref2);
+      return text6;
     }
-    function truncate(text5, maxChars, suffix) {
-      return text5.length > maxChars ? `${text5.slice(0, maxChars - suffix.length)}${suffix}` : text5;
+    function truncate(text6, maxChars, suffix) {
+      return text6.length > maxChars ? `${text6.slice(0, maxChars - suffix.length)}${suffix}` : text6;
     }
-    function truncateAppend(text5, maxChars, suffix) {
-      return text5.length > maxChars ? `${text5.slice(0, maxChars)}${suffix}` : text5;
+    function truncateAppend(text6, maxChars, suffix) {
+      return text6.length > maxChars ? `${text6.slice(0, maxChars)}${suffix}` : text6;
     }
     function formatMetadataSuffix(s2) {
       const m = s2.completionMetadata;
@@ -59493,9 +59493,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       ].filter(Boolean);
       return parts.length > 0 ? ` (${parts.join("; ")})` : "";
     }
-    function appendStatusLine(text5, statusLine) {
-      return statusLine ? `${text5}
-${statusLine}` : text5;
+    function appendStatusLine(text6, statusLine) {
+      return statusLine ? `${text6}
+${statusLine}` : text6;
     }
     function renderCompleted(input, missing) {
       const s2 = input.scalars;
@@ -59738,8 +59738,8 @@ ${summary}`;
       const renderer = RENDERERS[input.notify];
       const recovery2 = input.notify === "candidate" ? " Have the worker inspect any refusal and submit a corrected report_completion for this attempt. Retain quarantined reports for review; task success remains unconfirmed." : "";
       const rendered = renderer(input, missing) + recovery2;
-      const text5 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
-      return { text: text5, kind: input.notify, contentRefsMissing: missing };
+      const text6 = input.notify === "approval_resolved" ? rendered : appendStatusLine(rendered, input.statusLine);
+      return { text: text6, kind: input.notify, contentRefsMissing: missing };
     }
     var MESH_COMPLETION_SURFACE_MAX_CHARS;
     var RECOVERY_PROMPT_TRUNCATE_CHARS;
@@ -59883,9 +59883,9 @@ ${resolve15(input.refs.summary, input.resolveRef, missing) ?? ""}`,
       const resultRecord = readOptionalRecord2(metadataEvent.result);
       return readText(metadataEvent.finalSummary) || readText(workerResult?.summary) || readText(workerResult?.finalSummary) || readText(resultRecord?.summary) || readText(resultRecord?.finalSummary);
     }
-    function truncateSurfacedPreview(text5) {
+    function truncateSurfacedPreview(text6) {
       const truncationSuffix = "...[truncated]";
-      return text5.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text5.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text5;
+      return text6.length > MESH_SURFACED_PREVIEW_MAX_CHARS ? `${text6.slice(0, MESH_SURFACED_PREVIEW_MAX_CHARS - truncationSuffix.length)}${truncationSuffix}` : text6;
     }
     function resolveMeshSurfacedSessionPreview2(metadataEvent) {
       const summaryText = readMeshCompletionSummary(metadataEvent);
@@ -60444,25 +60444,25 @@ Next step: ${nextStep}`;
         const source2 = localPayload2 && !str5(localPayload2.relayedFrom) ? localPayload2 : handoff;
         const eventName = str5(source2?.event) ?? (event && event !== "relayed" ? event : null);
         const nodeLabel = str5(source2?.nodeLabel) ?? "Mesh";
-        let text5 = str5(source2?.coordinatorMessage) ?? null;
-        if (!text5 && source2 && eventName) {
-          text5 = buildMeshSystemMessage({
+        let text6 = str5(source2?.coordinatorMessage) ?? null;
+        if (!text6 && source2 && eventName) {
+          text6 = buildMeshSystemMessage({
             event: eventName,
             nodeLabel,
             metadataEvent: isRecord8(source2.metadataEvent) ? source2.metadataEvent : {},
             worktreeHasQueuedTask: source2.worktreeHasQueuedTask === true
           }) || null;
         }
-        if (!text5) {
-          text5 = missing ? `[System] A mesh notice${str5(entry.taskId) ? ` for task ${str5(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str5(entry.taskId) ? ` for task ${str5(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
+        if (!text6) {
+          text6 = missing ? `[System] A mesh notice${str5(entry.taskId) ? ` for task ${str5(entry.taskId)}` : ""} is not yet available on this daemon \u2014 call mesh_task_report once it replicates; do not poll repeatedly.` : `[System] ${nodeLabel} reported a mesh event${str5(entry.taskId) ? ` for task ${str5(entry.taskId)}` : ""}. Use mesh_status or mesh_read_chat once if you need details.`;
         }
         if (eventName && shouldForceInjectMeshEvent(eventName)) {
           const line = ctx.statusLine?.(meshId);
-          if (line) text5 = `${text5}
+          if (line) text6 = `${text6}
 
 ${line}`;
         }
-        return { text: text5, notify: notify2, event: eventName, missing };
+        return { text: text6, notify: notify2, event: eventName, missing };
       }
       const attemptId = str5(entry.attemptId);
       const attempt = attemptId ? ctx.ledger.getAttempt(attemptId) : null;
@@ -60979,10 +60979,10 @@ ${line}`;
       return out;
     }
     function filterProvidersByRequiredTags2(candidates, requiredTags) {
-      const list3 = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
+      const list4 = Array.isArray(candidates) ? candidates.map((c) => typeof c === "string" ? c.trim() : "").filter(Boolean) : [];
       const pins = providerPinsFromRequiredTags4(requiredTags);
-      if (pins.length === 0) return list3;
-      return list3.filter((type2) => pins.includes(type2));
+      if (pins.length === 0) return list4;
+      return list4.filter((type2) => pins.includes(type2));
     }
     var extraTagProviders;
     var init_mesh_node_capability_tags = __esm2({
@@ -62166,9 +62166,9 @@ ${line}`;
       if (format === "opencode_json") return "mcp";
       return "mcpServers";
     }
-    function parseMeshCoordinatorMcpConfig(text5, _format) {
-      if (!text5.trim()) return {};
-      return JSON.parse(text5);
+    function parseMeshCoordinatorMcpConfig(text6, _format) {
+      if (!text6.trim()) return {};
+      return JSON.parse(text6);
     }
     function serializeMeshCoordinatorMcpConfig(config, _format) {
       return JSON.stringify(config, null, 2);
@@ -63208,11 +63208,11 @@ ${pattern}
            * Returns 'written' or 'kept' (agent-modified copy preserved).
            */
           sync(rel, target4, sourceBytes, desired) {
-            const rec6 = this.manifest[rel];
+            const rec7 = this.manifest[rel];
             const srcHash = sha(sourceBytes);
             const current4 = regularFileHash(target4);
-            if (rec6 && current4 !== null && current4 !== rec6.copy) {
-              if (srcHash !== rec6.source) {
+            if (rec7 && current4 !== null && current4 !== rec7.copy) {
+              if (srcHash !== rec7.source) {
                 LOG.warn("WorkerMcp", `[${this.label}] ${rel}: source changed but the private copy was modified in-session \u2014 keeping the private copy`);
               }
               return "kept";
@@ -63224,13 +63224,13 @@ ${pattern}
           }
           /** Source is gone: drop the copy only if still exactly what we wrote. */
           sourceGone(rel, target4) {
-            const rec6 = this.manifest[rel];
-            if (!rec6) return;
+            const rec7 = this.manifest[rel];
+            if (!rec7) return;
             const current4 = regularFileHash(target4);
             if (current4 === null) {
               delete this.manifest[rel];
               this.dirty = true;
-            } else if (current4 === rec6.copy) {
+            } else if (current4 === rec7.copy) {
               (0, import_fs18.rmSync)(target4, { force: true });
               delete this.manifest[rel];
               this.dirty = true;
@@ -63927,52 +63927,52 @@ ${pattern}
     function depositWorkerMailboxMessage(input) {
       const meshId = String(input.meshId || "").trim();
       const taskId = String(input.taskId || "").trim();
-      const text5 = String(input.text || "").trim();
-      if (!meshId || !taskId || !text5) {
+      const text6 = String(input.text || "").trim();
+      if (!meshId || !taskId || !text6) {
         return { ok: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
       }
-      if (text5.length > MAILBOX_TEXT_MAX_CHARS) {
+      if (text6.length > MAILBOX_TEXT_MAX_CHARS) {
         return {
           ok: false,
           error: "text_too_long",
-          detail: `message is ${text5.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
+          detail: `message is ${text6.length} chars, over the ${MAILBOX_TEXT_MAX_CHARS} limit \u2014 shorten it`
         };
       }
       const key5 = mailboxKey(meshId, taskId);
-      const list3 = PENDING.get(key5) || [];
-      if (list3.length >= MAILBOX_MAX_PENDING_PER_TASK) {
+      const list4 = PENDING.get(key5) || [];
+      if (list4.length >= MAILBOX_MAX_PENDING_PER_TASK) {
         return {
           ok: false,
           error: "mailbox_full",
-          detail: `task ${taskId} already holds ${list3.length} undelivered message(s) \u2014 it is not reading its tool responses`
+          detail: `task ${taskId} already holds ${list4.length} undelivered message(s) \u2014 it is not reading its tool responses`
         };
       }
-      const message = { id: (0, import_crypto12.randomUUID)(), meshId, taskId, text: text5, mintedAtMs: Date.now() };
-      list3.push(message);
-      PENDING.set(key5, list3);
-      return { ok: true, id: message.id, pending: list3.length };
+      const message = { id: (0, import_crypto12.randomUUID)(), meshId, taskId, text: text6, mintedAtMs: Date.now() };
+      list4.push(message);
+      PENDING.set(key5, list4);
+      return { ok: true, id: message.id, pending: list4.length };
     }
     function drainWorkerMailboxForTask(meshId, taskId) {
       const key5 = mailboxKey(String(meshId || "").trim(), String(taskId || "").trim());
-      const list3 = PENDING.get(key5);
-      if (!list3 || !list3.length) return [];
+      const list4 = PENDING.get(key5);
+      if (!list4 || !list4.length) return [];
       PENDING.delete(key5);
-      return list3;
+      return list4;
     }
     function peekWorkerMailboxCount(meshId, taskId) {
       return PENDING.get(mailboxKey(String(meshId || "").trim(), String(taskId || "").trim()))?.length ?? 0;
     }
     function discardWorkerMailboxForTask(meshId, taskId) {
       const key5 = mailboxKey(String(meshId || "").trim(), String(taskId || "").trim());
-      const list3 = PENDING.get(key5);
-      if (!list3) return 0;
+      const list4 = PENDING.get(key5);
+      if (!list4) return 0;
       PENDING.delete(key5);
-      return list3.length;
+      return list4.length;
     }
     function pruneWorkerMailboxes(keep) {
       let dropped = 0;
-      for (const [key5, list3] of [...PENDING.entries()]) {
-        const first = list3[0];
+      for (const [key5, list4] of [...PENDING.entries()]) {
+        const first = list4[0];
         if (!first) {
           PENDING.delete(key5);
           continue;
@@ -63985,7 +63985,7 @@ ${pattern}
         }
         if (!kept) {
           PENDING.delete(key5);
-          dropped += list3.length;
+          dropped += list4.length;
         }
       }
       return dropped;
@@ -64102,8 +64102,8 @@ ${lines.join("\n")}
       const keys2 = Object.keys(obj).filter((k) => obj[k] !== void 0).sort();
       return `{${keys2.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
     }
-    function stripControlCharacters(text5) {
-      return text5.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+    function stripControlCharacters(text6) {
+      return text6.replace(/\r\n?/g, "\n").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
     }
     function escapeAttribute(value) {
       return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -64283,19 +64283,19 @@ ${rendered.join("\n\n")}`,
     function buildMeshTaskModeViolationError2(result) {
       return `live_debug_readonly_guardrail_violation: forbidden operations (${result.violations.join(", ")}) \u2014 ${formatMeshTaskModeViolations(result)}`;
     }
-    function locateOffset(text5, index) {
-      const before = text5.slice(0, index);
+    function locateOffset(text6, index) {
+      const before = text6.slice(0, index);
       const line = before.split("\n").length;
       const lastNl = before.lastIndexOf("\n");
       return { line, column: index - lastNl };
     }
-    function buildViolationDetail(label2, text5, start, end) {
-      const raw = text5.slice(start, end);
+    function buildViolationDetail(label2, text6, start, end) {
+      const raw = text6.slice(start, end);
       const match = raw.length > MAX_REPORTED_MATCH_LEN ? `${raw.slice(0, MAX_REPORTED_MATCH_LEN)}\u2026` : raw;
-      return { label: label2, match, ...locateOffset(text5, start) };
+      return { label: label2, match, ...locateOffset(text6, start) };
     }
-    function hasNegationBefore(text5, matchIndex) {
-      const before = text5.slice(0, matchIndex);
+    function hasNegationBefore(text6, matchIndex) {
+      const before = text6.slice(0, matchIndex);
       const clauseStart = Math.max(
         before.lastIndexOf("\n"),
         before.lastIndexOf(". "),
@@ -64318,8 +64318,8 @@ ${rendered.join("\n\n")}`,
       }
       return false;
     }
-    function hasTrailingNegation(text5, matchEnd) {
-      const after = text5.slice(matchEnd);
+    function hasTrailingNegation(text6, matchEnd) {
+      const after = text6.slice(matchEnd);
       const clauseEnd = (() => {
         const stops = [after.indexOf("\n"), after.indexOf(". "), after.indexOf("; ")].filter((i) => i >= 0);
         return stops.length ? Math.min(...stops) : after.length;
@@ -64365,11 +64365,11 @@ ${rendered.join("\n\n")}`,
       if (sawEvidenceOnlyWrapper && !sawEvidence) return null;
       return head + rest;
     }
-    function isMutationKeywordInCommandContext(text5, matchStart, matchEnd) {
-      if (isInsideBackticksOrFence(text5, matchStart, matchEnd)) return true;
-      const lineStart = text5.lastIndexOf("\n", matchStart - 1) + 1;
-      const linePrefix = text5.slice(lineStart, matchStart);
-      if (/^\s*[$>]\s/.test(text5.slice(lineStart))) return true;
+    function isMutationKeywordInCommandContext(text6, matchStart, matchEnd) {
+      if (isInsideBackticksOrFence(text6, matchStart, matchEnd)) return true;
+      const lineStart = text6.lastIndexOf("\n", matchStart - 1) + 1;
+      const linePrefix = text6.slice(lineStart, matchStart);
+      if (/^\s*[$>]\s/.test(text6.slice(lineStart))) return true;
       if (/^\s*$/.test(linePrefix)) return true;
       const unwrapped = stripCommandWrappers(linePrefix);
       if (unwrapped !== null) {
@@ -64377,28 +64377,28 @@ ${rendered.join("\n\n")}`,
         if (/(?:&&|\|\||\||;)\s*$/.test(unwrapped)) return true;
       }
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text5[tokStart - 1])) tokStart--;
-      const beforeToken = text5.slice(lineStart, tokStart);
-      const tokenLead = text5.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text6[tokStart - 1])) tokStart--;
+      const beforeToken = text6.slice(lineStart, tokStart);
+      const tokenLead = text6.slice(tokStart, matchStart);
       const atCmdPos = /^\s*$/.test(beforeToken) || /(?:&&|\|\||\||;)\s*$/.test(beforeToken);
       if (atCmdPos && /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenLead)) return true;
       if (/(?:&&|\|\||\||;)\s*$/.test(linePrefix)) return true;
       if (/(?:^|[\s,])(?:then|run|first)\s+$/i.test(linePrefix)) return true;
       return false;
     }
-    function isInsideBackticksOrFence(text5, matchStart, matchEnd) {
+    function isInsideBackticksOrFence(text6, matchStart, matchEnd) {
       const fenceRe = /```/g;
       let fenceCount = 0;
       let m;
-      while ((m = fenceRe.exec(text5)) !== null) {
+      while ((m = fenceRe.exec(text6)) !== null) {
         if (m.index >= matchStart) break;
         fenceCount++;
       }
       if (fenceCount % 2 === 1) return true;
       let inlineCount = 0;
       for (let i = 0; i < matchStart; i++) {
-        if (text5[i] === "`") {
-          if (text5[i + 1] === "`" && text5[i + 2] === "`") {
+        if (text6[i] === "`") {
+          if (text6[i + 1] === "`" && text6[i + 2] === "`") {
             i += 2;
             continue;
           }
@@ -64407,25 +64407,25 @@ ${rendered.join("\n\n")}`,
       }
       return inlineCount % 2 === 1;
     }
-    function isInsidePathSegment(text5, matchStart, matchEnd) {
-      const prev = matchStart > 0 ? text5[matchStart - 1] : "";
-      const next = matchEnd < text5.length ? text5[matchEnd] : "";
+    function isInsidePathSegment(text6, matchStart, matchEnd) {
+      const prev = matchStart > 0 ? text6[matchStart - 1] : "";
+      const next = matchEnd < text6.length ? text6[matchEnd] : "";
       const isSep = (c) => c === "/" || c === "\\";
       const segChar = (c) => /[A-Za-z0-9._~-]/.test(c);
       const inPath = isSep(prev) && (next === "" || isSep(next) || segChar(next) || /\s/.test(next)) || isSep(next) && (prev === "" || isSep(prev) || segChar(prev) || /\s/.test(prev));
       if (!inPath) return false;
-      const lineStart = text5.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text6.lastIndexOf("\n", matchStart - 1) + 1;
       let tokStart = matchStart;
-      while (tokStart > lineStart && !/\s/.test(text5[tokStart - 1])) tokStart--;
-      const linePrefixBeforeToken = text5.slice(lineStart, tokStart);
-      const tokenPrefix = text5.slice(tokStart, matchStart);
+      while (tokStart > lineStart && !/\s/.test(text6[tokStart - 1])) tokStart--;
+      const linePrefixBeforeToken = text6.slice(lineStart, tokStart);
+      const tokenPrefix = text6.slice(tokStart, matchStart);
       const atLineStart = /^\s*$/.test(linePrefixBeforeToken);
       const afterConnective = /(?:&&|\|\||\||;)\s*$/.test(linePrefixBeforeToken);
       const isRunPrefixPath = /^(?:\.\/|\.\.\/|~\/|\/)/.test(tokenPrefix);
       if ((atLineStart || afterConnective) && isRunPrefixPath) return false;
       return true;
     }
-    function isInsideQuotedSpan(text5, matchStart, matchEnd) {
+    function isInsideQuotedSpan(text6, matchStart, matchEnd) {
       const pairs2 = [
         ["\u201C", "\u201D"],
         ["\u2018", "\u2019"],
@@ -64434,54 +64434,54 @@ ${rendered.join("\n\n")}`,
         ["\u300A", "\u300B"]
       ];
       for (const [open, close3] of pairs2) {
-        const openIdx = text5.lastIndexOf(open, matchStart - 1);
+        const openIdx = text6.lastIndexOf(open, matchStart - 1);
         if (openIdx < 0) continue;
-        if (text5.indexOf(close3, openIdx + open.length) >= matchEnd) return true;
+        if (text6.indexOf(close3, openIdx + open.length) >= matchEnd) return true;
       }
-      const lineStart = text5.lastIndexOf("\n", matchStart - 1) + 1;
+      const lineStart = text6.lastIndexOf("\n", matchStart - 1) + 1;
       const lineEnd = (() => {
-        const i = text5.indexOf("\n", matchEnd);
-        return i < 0 ? text5.length : i;
+        const i = text6.indexOf("\n", matchEnd);
+        return i < 0 ? text6.length : i;
       })();
       for (const q2 of ['"', "'"]) {
         let count = 0;
-        for (let i = lineStart; i < matchStart; i++) if (text5[i] === q2) count++;
-        if (count % 2 === 1 && text5.indexOf(q2, matchEnd) >= 0 && text5.indexOf(q2, matchEnd) < lineEnd) {
+        for (let i = lineStart; i < matchStart; i++) if (text6[i] === q2) count++;
+        if (count % 2 === 1 && text6.indexOf(q2, matchEnd) >= 0 && text6.indexOf(q2, matchEnd) < lineEnd) {
           if (q2 === '"') return true;
           let openPos = -1, c = 0;
           for (let i = lineStart; i < matchStart; i++) {
-            if (text5[i] === q2) {
+            if (text6[i] === q2) {
               c++;
               if (c % 2 === 1) openPos = i;
             }
           }
-          const beforeOpen = openPos > lineStart ? text5[openPos - 1] : " ";
+          const beforeOpen = openPos > lineStart ? text6[openPos - 1] : " ";
           if (/[\s(\[{>]/.test(beforeOpen) || openPos === lineStart) return true;
         }
       }
       return false;
     }
-    function isGluedToLetterSuffix(text5, matchStart, matchEnd) {
+    function isGluedToLetterSuffix(text6, matchStart, matchEnd) {
       const letterOrMark = /[\p{L}\p{M}]/u;
-      const next = matchEnd < text5.length ? text5[matchEnd] : "";
-      const prev = matchStart > 0 ? text5[matchStart - 1] : "";
+      const next = matchEnd < text6.length ? text6[matchEnd] : "";
+      const prev = matchStart > 0 ? text6[matchStart - 1] : "";
       return letterOrMark.test(next) || letterOrMark.test(prev);
     }
-    function isRealMutationMatch(text5, matchStart, matchEnd) {
-      if (hasNegationBefore(text5, matchStart)) return false;
-      if (hasTrailingNegation(text5, matchEnd)) return false;
-      if (isGluedToLetterSuffix(text5, matchStart, matchEnd)) return false;
-      if (isInsidePathSegment(text5, matchStart, matchEnd)) return false;
-      if (isInsideQuotedSpan(text5, matchStart, matchEnd)) return false;
-      return isMutationKeywordInCommandContext(text5, matchStart, matchEnd);
+    function isRealMutationMatch(text6, matchStart, matchEnd) {
+      if (hasNegationBefore(text6, matchStart)) return false;
+      if (hasTrailingNegation(text6, matchEnd)) return false;
+      if (isGluedToLetterSuffix(text6, matchStart, matchEnd)) return false;
+      if (isInsidePathSegment(text6, matchStart, matchEnd)) return false;
+      if (isInsideQuotedSpan(text6, matchStart, matchEnd)) return false;
+      return isMutationKeywordInCommandContext(text6, matchStart, matchEnd);
     }
-    function findRealMutation(pattern, text5) {
+    function findRealMutation(pattern, text6) {
       const re = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
       let match;
-      while ((match = re.exec(text5)) !== null) {
+      while ((match = re.exec(text6)) !== null) {
         const start = match.index;
         const end = match.index + match[0].length;
-        if (isRealMutationMatch(text5, start, end)) return { start, end };
+        if (isRealMutationMatch(text6, start, end)) return { start, end };
         if (match.index === re.lastIndex) re.lastIndex++;
       }
       return null;
@@ -64530,15 +64530,15 @@ ${rendered.join("\n\n")}`,
       if (!isReadonly) {
         return taskMode ? { valid: true, taskMode, violations: [] } : { valid: true, violations: [] };
       }
-      const text5 = message || "";
+      const text6 = message || "";
       const violationDetails = [];
       for (const rule of LIVE_DEBUG_READONLY_FORBIDDEN) {
-        const hit = findRealMutation(rule.pattern, text5);
-        if (hit) violationDetails.push(buildViolationDetail(rule.label, text5, hit.start, hit.end));
+        const hit = findRealMutation(rule.pattern, text6);
+        if (hit) violationDetails.push(buildViolationDetail(rule.label, text6, hit.start, hit.end));
       }
-      const gitHit = detectGitMutation(text5);
+      const gitHit = detectGitMutation(text6);
       if (gitHit) {
-        violationDetails.push(buildViolationDetail("git_mutation", text5, gitHit.start, gitHit.end));
+        violationDetails.push(buildViolationDetail("git_mutation", text6, gitHit.start, gitHit.end));
       }
       const violations = violationDetails.map((d) => d.label);
       return {
@@ -68130,11 +68130,11 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const byType = /* @__PURE__ */ new Map();
       for (const raw of value) {
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-        const rec6 = raw;
-        const providerType = typeof rec6.providerType === "string" ? rec6.providerType.trim() : "";
+        const rec7 = raw;
+        const providerType = typeof rec7.providerType === "string" ? rec7.providerType.trim() : "";
         if (!providerType) continue;
         const entry = { providerType };
-        const maxParallel = Number(rec6.maxParallel);
+        const maxParallel = Number(rec7.maxParallel);
         if (Number.isFinite(maxParallel) && maxParallel >= 0) entry.maxParallel = Math.floor(maxParallel);
         byType.set(providerType.toLowerCase(), entry);
       }
@@ -69226,18 +69226,18 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function resolveDaemonSiblingNodeIds(nodeId, nodes) {
       const self = readNonEmpty(nodeId);
-      const list3 = Array.isArray(nodes) ? nodes : [];
-      if (!self || list3.length === 0) return self ? [self] : [];
-      const selfNode = list3.find(
+      const list4 = Array.isArray(nodes) ? nodes : [];
+      if (!self || list4.length === 0) return self ? [self] : [];
+      const selfNode = list4.find(
         (candidate) => candidate && typeof candidate === "object" && meshNodeIdMatches7(candidate, self)
       );
       if (!selfNode) return [self];
-      const selfKey = resolveNodeDaemonKey(selfNode, list3);
+      const selfKey = resolveNodeDaemonKey(selfNode, list4);
       const out = [self];
       const seen2 = /* @__PURE__ */ new Set([normalizeMeshNodeId({ id: self }) || self]);
-      for (const candidate of list3) {
+      for (const candidate of list4) {
         if (!candidate || typeof candidate !== "object") continue;
-        if (resolveNodeDaemonKey(candidate, list3) !== selfKey) continue;
+        if (resolveNodeDaemonKey(candidate, list4) !== selfKey) continue;
         const id4 = normalizeMeshNodeId(candidate);
         if (!id4 || seen2.has(id4)) continue;
         seen2.add(id4);
@@ -70838,8 +70838,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const head = tryGit3(binding.repoPath, ["rev-parse", "--verify", "-q", "HEAD"])?.toString("utf8").trim() || null;
             const statusRaw = tryGit3(binding.repoPath, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...paths.map(validateContractPath)])?.toString("utf8") ?? "";
             const statusByPath = /* @__PURE__ */ new Map();
-            for (const rec6 of statusRaw.split("\0").filter(Boolean)) {
-              if (rec6.length > 3) statusByPath.set(rec6.slice(3), rec6.slice(0, 2));
+            for (const rec7 of statusRaw.split("\0").filter(Boolean)) {
+              if (rec7.length > 3) statusByPath.set(rec7.slice(3), rec7.slice(0, 2));
             }
             const entries2 = paths.map((p) => {
               const abs = path36.join(binding.repoPath, p);
@@ -72049,8 +72049,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         insert("served");
         const slice = body.subarray(start, end);
         const decoded = slice.toString("utf8");
-        const text5 = !slice.includes(0) && Buffer.from(decoded, "utf8").equals(slice) ? decoded : null;
-        const isText = text5 !== null;
+        const text6 = !slice.includes(0) && Buffer.from(decoded, "utf8").equals(slice) ? decoded : null;
+        const isText = text6 !== null;
         return {
           readId: readId3,
           unitId: pin.unitId,
@@ -72060,7 +72060,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           rangeStart: start,
           rangeEnd: end,
           encoding: isText ? "utf8" : "base64",
-          content: isText ? text5 : slice.toString("base64"),
+          content: isText ? text6 : slice.toString("base64"),
           fullCoverage: rangesCoverAll(servedRanges(ctx, b.bindingId, pin.unitId, pin.unitDigest), pin.byteLength)
         };
       }) ?? (() => {
@@ -73033,8 +73033,8 @@ ${body}`;
       } catch {
       }
     }
-    function getMeshMissions(meshId, statuses) {
-      return MeshRuntimeStore.getInstance().getMissions(meshId, statuses).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), brief: parseStoredMissionBrief(m.briefJson) }));
+    function getMeshMissions(meshId, statuses2) {
+      return MeshRuntimeStore.getInstance().getMissions(meshId, statuses2).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), brief: parseStoredMissionBrief(m.briefJson) }));
     }
     function getMeshMission(meshId, missionId) {
       const record7 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
@@ -73187,8 +73187,8 @@ ${body}`;
       return { live, historyFold };
     }
     function listMeshMissionSummaries(meshId, options) {
-      const statuses = options?.statuses && options.statuses.length > 0 ? options.statuses : void 0;
-      const missions = getMeshMissions(meshId, statuses).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+      const statuses2 = options?.statuses && options.statuses.length > 0 ? options.statuses : void 0;
+      const missions = getMeshMissions(meshId, statuses2).sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
       const full = summarizeMeshMissions(meshId, missions);
       return options?.verbose ? full : full.map((summary) => slimMissionSummary(summary));
     }
@@ -73645,10 +73645,10 @@ ${body}`;
       if (!candidates.length) return 0;
       for (const c of candidates) items.updateItem(meshId, c.id, { state: "dropped" });
       const prevCount = existingFold ? Number(/(\d+)/.exec(existingFold.text)?.[1] ?? 0) : 0;
-      const text5 = `${prevCount + candidates.length} earlier remaining items folded (limit: ${MISSION_LIMITS2.openItemsPerMission} open items per mission)`;
-      if (existingFold) items.updateItem(meshId, existingFold.id, { text: text5 });
-      else items.insertItem({ id: newMissionItemId(), missionId, meshId, kind: "remaining", state: "open", text: text5, refs: [], dedupeKey: FOLD_KEY, createdBy: "daemon:fold" });
-      items.appendEvent(meshId, missionId, "item_state_changed", "daemon", { folded: candidates.map((c) => c.id), foldItemText: text5 });
+      const text6 = `${prevCount + candidates.length} earlier remaining items folded (limit: ${MISSION_LIMITS2.openItemsPerMission} open items per mission)`;
+      if (existingFold) items.updateItem(meshId, existingFold.id, { text: text6 });
+      else items.insertItem({ id: newMissionItemId(), missionId, meshId, kind: "remaining", state: "open", text: text6, refs: [], dedupeKey: FOLD_KEY, createdBy: "daemon:fold" });
+      items.appendEvent(meshId, missionId, "item_state_changed", "daemon", { folded: candidates.map((c) => c.id), foldItemText: text6 });
       return candidates.length;
     }
     function addNormalizedItem(meshId, missionId, n, createdBy, actor) {
@@ -73673,7 +73673,7 @@ ${body}`;
         return { ...base, id: same.id, state: same.state, deduped: true, ...same.decision?.answer ? { answer: same.decision.answer } : {} };
       }
       const state2 = n.kind === "evidence" ? "done" : "open";
-      const rec6 = items.insertItem({
+      const rec7 = items.insertItem({
         id: newMissionItemId(),
         missionId,
         meshId,
@@ -73686,9 +73686,9 @@ ${body}`;
         dedupeKey: n.dedupeKey,
         createdBy
       });
-      items.appendEvent(meshId, missionId, "item_added", actor, { itemId: rec6.id, kind: rec6.kind, text: truncateMissionText(rec6.text, 120), createdBy });
-      if (rec6.kind === "decision") notifyDecisionPush({ meshId, missionId, itemId: rec6.id, reason: "new" });
-      return { ...base, id: rec6.id, state: state2 };
+      items.appendEvent(meshId, missionId, "item_added", actor, { itemId: rec7.id, kind: rec7.kind, text: truncateMissionText(rec7.text, 120), createdBy });
+      if (rec7.kind === "decision") notifyDecisionPush({ meshId, missionId, itemId: rec7.id, reason: "new" });
+      return { ...base, id: rec7.id, state: state2 };
     }
     function updateItem(meshId, rawUpdate, actor) {
       const parsed = normalizeMissionItemUpdate(rawUpdate);
@@ -76286,24 +76286,24 @@ ${block2.text}`,
       const [before, after] = w.split("{prompt}");
       return { open: (before ?? "").trim(), close: (after ?? "").trim() };
     }
-    function escapeRegExp(text5) {
-      return text5.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    function escapeRegExp(text6) {
+      return text6.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
     function wrapperBlockPattern(sentinels) {
       const open = escapeRegExp(sentinels.open);
       return sentinels.close ? new RegExp(`${open}[\\s\\S]*?${escapeRegExp(sentinels.close)}`, "g") : new RegExp(`${open}[\\s\\S]*$`, "g");
     }
-    function removeWrapperBlock(text5, sentinels) {
-      if (!sentinels.open) return text5;
-      return text5.replace(wrapperBlockPattern(sentinels), "");
+    function removeWrapperBlock(text6, sentinels) {
+      if (!sentinels.open) return text6;
+      return text6.replace(wrapperBlockPattern(sentinels), "");
     }
-    function stripSentinelBlockPreservingSurroundingBytes(text5, sentinels, recordedSeparators) {
-      if (!sentinels.open) return text5;
+    function stripSentinelBlockPreservingSurroundingBytes(text6, sentinels, recordedSeparators) {
+      if (!sentinels.open) return text6;
       const pattern = wrapperBlockPattern(sentinels);
-      const match = pattern.exec(text5);
-      if (!match || match.index === void 0) return text5;
-      let before = text5.slice(0, match.index);
-      let after = text5.slice(match.index + match[0].length);
+      const match = pattern.exec(text6);
+      if (!match || match.index === void 0) return text6;
+      let before = text6.slice(0, match.index);
+      let after = text6.slice(match.index + match[0].length);
       if (recordedSeparators) {
         const { leading, trailing } = recordedSeparators;
         if (leading && before.endsWith(leading)) {
@@ -76386,10 +76386,10 @@ ${chunk}
         hasUnresolvedInclude
       };
     }
-    function splitPromptByUtf8ByteBudget(text5, firstMaxBytes, restMaxBytes = ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES) {
-      if (!text5) return [];
+    function splitPromptByUtf8ByteBudget(text6, firstMaxBytes, restMaxBytes = ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES) {
+      if (!text6) return [];
       const chunks = [];
-      let remaining = text5;
+      let remaining = text6;
       let isFirst = true;
       while (remaining.length > 0) {
         const budget = isFirst && firstMaxBytes > 0 ? firstMaxBytes : restMaxBytes;
@@ -76404,25 +76404,25 @@ ${chunk}
       }
       return chunks;
     }
-    function findUtf8SafeSplitIndex(text5, maxBytes) {
+    function findUtf8SafeSplitIndex(text6, maxBytes) {
       let lo = 1;
-      let hi = text5.length;
+      let hi = text6.length;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (Buffer.byteLength(text5.slice(0, mid), "utf-8") <= maxBytes) {
+        if (Buffer.byteLength(text6.slice(0, mid), "utf-8") <= maxBytes) {
           lo = mid;
         } else {
           hi = mid - 1;
         }
       }
       let charIdx = lo;
-      if (charIdx > 1 && charIdx < text5.length) {
-        const prevCode = text5.charCodeAt(charIdx - 1);
+      if (charIdx > 1 && charIdx < text6.length) {
+        const prevCode = text6.charCodeAt(charIdx - 1);
         if (prevCode >= 55296 && prevCode <= 56319) {
           charIdx -= 1;
         }
       }
-      const lastNewline = text5.lastIndexOf("\n", charIdx - 1);
+      const lastNewline = text6.lastIndexOf("\n", charIdx - 1);
       if (lastNewline >= Math.floor(charIdx * 0.5) && lastNewline > 0) {
         return lastNewline + 1;
       }
@@ -76620,17 +76620,17 @@ ${record7.renderedWrapperBlock}`, "utf-8");
       if (!state2) return;
       const expectedScope = opts.systemPrompt ? computeAntigravityCoordinatorScope(opts.workspace, opts.systemPrompt) : void 0;
       for (let i = state2.records.length - 1; i >= 0; i--) {
-        const rec6 = state2.records[i];
-        if (rec6.status === "failed" || rec6.status === "terminated") continue;
-        if (rec6.sessionId && rec6.sessionId !== opts.sessionId) continue;
-        if (expectedScope && rec6.scope === expectedScope) {
-          rec6.status = "registered";
-          rec6.sessionId = opts.sessionId;
+        const rec7 = state2.records[i];
+        if (rec7.status === "failed" || rec7.status === "terminated") continue;
+        if (rec7.sessionId && rec7.sessionId !== opts.sessionId) continue;
+        if (expectedScope && rec7.scope === expectedScope) {
+          rec7.status = "registered";
+          rec7.sessionId = opts.sessionId;
           return;
         }
-        if (opts.additionalOwnedFiles?.length && opts.additionalOwnedFiles.every((f) => rec6.writtenFiles.includes(f))) {
-          rec6.status = "registered";
-          rec6.sessionId = opts.sessionId;
+        if (opts.additionalOwnedFiles?.length && opts.additionalOwnedFiles.every((f) => rec7.writtenFiles.includes(f))) {
+          rec7.status = "registered";
+          rec7.sessionId = opts.sessionId;
           return;
         }
       }
@@ -76656,24 +76656,24 @@ ${record7.renderedWrapperBlock}`, "utf-8");
       const survivingIds = new Set(survivingRegistered.map((s2) => s2.sessionId));
       let marked = false;
       for (let i = state2.records.length - 1; i >= 0; i--) {
-        const rec6 = state2.records[i];
-        if (rec6.status === "failed" || rec6.status === "terminated") continue;
-        if (rec6.sessionId === departing.sessionId) {
-          rec6.status = "terminated";
-          for (const f of rec6.writtenFiles) departingFiles.add(f);
+        const rec7 = state2.records[i];
+        if (rec7.status === "failed" || rec7.status === "terminated") continue;
+        if (rec7.sessionId === departing.sessionId) {
+          rec7.status = "terminated";
+          for (const f of rec7.writtenFiles) departingFiles.add(f);
           marked = true;
-        } else if (rec6.status === "registered" && rec6.sessionId && !survivingIds.has(rec6.sessionId)) {
-          rec6.status = "terminated";
-          for (const f of rec6.writtenFiles) departingFiles.add(f);
+        } else if (rec7.status === "registered" && rec7.sessionId && !survivingIds.has(rec7.sessionId)) {
+          rec7.status = "terminated";
+          for (const f of rec7.writtenFiles) departingFiles.add(f);
         }
       }
       if (!marked && departingScope) {
         for (let i = state2.records.length - 1; i >= 0; i--) {
-          const rec6 = state2.records[i];
-          if (rec6.status === "failed" || rec6.status === "terminated") continue;
-          if (!rec6.sessionId && rec6.scope === departingScope) {
-            rec6.status = "terminated";
-            for (const f of rec6.writtenFiles) departingFiles.add(f);
+          const rec7 = state2.records[i];
+          if (rec7.status === "failed" || rec7.status === "terminated") continue;
+          if (!rec7.sessionId && rec7.scope === departingScope) {
+            rec7.status = "terminated";
+            for (const f of rec7.writtenFiles) departingFiles.add(f);
             break;
           }
         }
@@ -76979,9 +76979,9 @@ ${includeRefs[0]}`;
       const state2 = _stateByTarget.get(resolvedTarget);
       if (state2 && liveRegisteredOwners) {
         const liveIds = new Set(liveRegisteredOwners.map((o) => o.sessionId));
-        for (const rec6 of state2.records) {
-          if (rec6.status === "registered" && rec6.sessionId && !liveIds.has(rec6.sessionId)) {
-            rec6.status = "terminated";
+        for (const rec7 of state2.records) {
+          if (rec7.status === "registered" && rec7.sessionId && !liveIds.has(rec7.sessionId)) {
+            rec7.status = "terminated";
           }
         }
       }
@@ -77102,9 +77102,9 @@ ${includeRefs[0]}`;
       }
       try {
         if (state2) {
-          for (const rec6 of state2.records) {
-            if (rec6.status === "provisional" || rec6.status === "registered") {
-              rec6.status = "terminated";
+          for (const rec7 of state2.records) {
+            if (rec7.status === "provisional" || rec7.status === "registered") {
+              rec7.status = "terminated";
             }
           }
           state2.wrapperSeparators = void 0;
@@ -78242,21 +78242,21 @@ ${includeRefs[0]}`;
       if (s2 && nodeId && !s2.nodeRoster.some((n) => meshIds.includes(n.meshId) && meshNodeIdMatches7(n, nodeId) && daemonIdsEquivalent4(n.daemonId, daemonId || s2.daemonId))) throw new Error("maintenance_unknown_node_or_owner");
     }
     function assertMaintenanceCommandIdentity(args) {
-      const text5 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+      const text6 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
       const settings2 = args?.settings || {}, member = args?.memberNode || {}, context2 = args?.meshContext || {};
-      const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context2.meshId, settings2.meshNodeFor, settings2.meshCoordinatorFor].map(text5).filter((v) => !!v);
+      const meshes = [args?.meshId, args?.meshNodeFor, args?.meshCoordinatorFor, context2.meshId, settings2.meshNodeFor, settings2.meshCoordinatorFor].map(text6).filter((v) => !!v);
       assertMaintenanceAdmission(meshes);
-      const rootMesh = text5(args?.meshId) || text5(args?.meshNodeFor);
+      const rootMesh = text6(args?.meshId) || text6(args?.meshNodeFor);
       for (const [node, owner, mesh] of [
         [args?.nodeId, args?.daemonId, rootMesh],
         [args?.meshNodeId, args?.daemonId, rootMesh],
-        [context2.nodeId, context2.daemonId, text5(context2.meshId) || rootMesh],
-        [settings2.meshNodeId, settings2.daemonId, text5(settings2.meshNodeFor) || text5(settings2.meshCoordinatorFor) || rootMesh],
-        [text5(settings2.meshCoordinatorFor) ? settings2.meshNodeId : void 0, settings2.daemonId, text5(settings2.meshCoordinatorFor)],
+        [context2.nodeId, context2.daemonId, text6(context2.meshId) || rootMesh],
+        [settings2.meshNodeId, settings2.daemonId, text6(settings2.meshNodeFor) || text6(settings2.meshCoordinatorFor) || rootMesh],
+        [text6(settings2.meshCoordinatorFor) ? settings2.meshNodeId : void 0, settings2.daemonId, text6(settings2.meshCoordinatorFor)],
         [args?.memberNodeId, member.daemonId, rootMesh],
         [member.id, member.daemonId, rootMesh]
       ]) {
-        assertMaintenanceCommandNode(text5(mesh) ? [text5(mesh)] : [], text5(node), text5(owner));
+        assertMaintenanceCommandNode(text6(mesh) ? [text6(mesh)] : [], text6(node), text6(owner));
       }
     }
     function assertMaintenanceJoin(meshId, nodeId, daemonId) {
@@ -79587,8 +79587,8 @@ ${includeRefs[0]}`;
         if (!msg) continue;
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text5 = flattenContent(msg.content).trim();
-          if (text5) return text5.slice(0, maxChars);
+          const text6 = flattenContent(msg.content).trim();
+          if (text6) return text6.slice(0, maxChars);
         }
       }
       return "";
@@ -79623,8 +79623,8 @@ ${includeRefs[0]}`;
         }
         const classification = classifyChatMessageVisibility(msg);
         if (classification.isUserFacing && (msg.role === "assistant" || msg.role === "model")) {
-          const text5 = flattenContent(msg.content).trim();
-          if (text5) return text5.slice(0, maxChars);
+          const text6 = flattenContent(msg.content).trim();
+          if (text6) return text6.slice(0, maxChars);
         }
       }
       return "";
@@ -79646,9 +79646,9 @@ ${includeRefs[0]}`;
         const classification = classifyChatMessageVisibility(msg);
         if (!classification.isUserFacing) continue;
         if (msg.role === "assistant" || msg.role === "model") {
-          const text5 = flattenContent(msg.content).trim();
-          if (!text5) return null;
-          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text5)) {
+          const text6 = flattenContent(msg.content).trim();
+          if (!text6) return null;
+          if (chromeFallbacks < FINAL_SUMMARY_CHROME_FALLBACK_MAX_DEPTH && isTranscriptChromeOnlyText(text6)) {
             chromeFallbacks++;
             continue;
           }
@@ -79665,8 +79665,8 @@ ${includeRefs[0]}`;
       }
       return null;
     }
-    function isTranscriptChromeOnlyText(text5) {
-      const lines = (typeof text5 === "string" ? text5 : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    function isTranscriptChromeOnlyText(text6) {
+      const lines = (typeof text6 === "string" ? text6 : "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
       if (lines.length === 0) return false;
       let sawHardChrome = false;
       let previousWasPanelLine = false;
@@ -80776,8 +80776,8 @@ ${includeRefs[0]}`;
         savedHistoryRollupInFlight = /* @__PURE__ */ new Set();
       }
     });
-    function normalizeHistoryComparable(text5) {
-      return String(text5 || "").replace(/\s+/g, " ").trim();
+    function normalizeHistoryComparable(text6) {
+      return String(text6 || "").replace(/\s+/g, " ").trim();
     }
     function cleanupHistoryContent(agentType, role, content, historyBehavior) {
       let value = String(content || "").replace(/\r\n/g, "\n").trim();
@@ -81639,8 +81639,8 @@ ${includeRefs[0]}`;
     }
     function normalizeNativeIdToken(raw) {
       if (typeof raw !== "string" && typeof raw !== "number") return "";
-      const text5 = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
-      return text5.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
+      const text6 = String(raw).trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+      return text6.slice(0, NATIVE_ID_TOKEN_MAX_BYTES);
     }
     function nativeSourceAddress(historySessionId, addr) {
       const session = typeof historySessionId === "string" ? historySessionId.trim() : "";
@@ -82389,10 +82389,10 @@ ${includeRefs[0]}`;
       }
     });
     function extractJsonObjectFromSummary(summary) {
-      const text5 = readString2(summary);
-      if (!text5) return void 0;
-      const fenced = text5.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text5].filter(Boolean);
+      const text6 = readString2(summary);
+      if (!text6) return void 0;
+      const fenced = text6.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text6].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -82522,10 +82522,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       };
     }
     function summaryHasParseableJsonAnswer(summary) {
-      const text5 = readString2(summary);
-      if (!text5) return false;
-      const fenced = text5.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidates = [fenced?.[1], text5].filter(Boolean);
+      const text6 = readString2(summary);
+      if (!text6) return false;
+      const fenced = text6.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidates = [fenced?.[1], text6].filter(Boolean);
       for (const candidate of candidates) {
         const trimmed2 = candidate.trim();
         if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
@@ -83491,9 +83491,9 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       }
       return { taskId, atMs };
     }
-    function truncateChars(text5, max) {
-      const chars = Array.from(text5);
-      if (chars.length <= max) return { text: text5, truncated: false };
+    function truncateChars(text6, max) {
+      const chars = Array.from(text6);
+      if (chars.length <= max) return { text: text6, truncated: false };
       return { text: `${chars.slice(0, max - 1).join("")}\u2026`, truncated: true };
     }
     function render(taskId, items, omitted) {
@@ -83502,7 +83502,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const segmentKinds = [];
       for (const item of items) {
         if (item.summary) {
-          const { text: text5, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
+          const { text: text6, truncated } = truncateChars(item.summary, UPSTREAM_RESULT_MAX_CHARS);
           blocks.push({
             attributes: {
               kind: "upstream_result",
@@ -83512,7 +83512,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
               sha256: sha256Hex(item.summary),
               ...truncated ? { truncated: true } : {}
             },
-            text: text5
+            text: text6
           });
           segmentKinds.push("block");
         } else {
@@ -83542,8 +83542,8 @@ ${preamble ? `${preamble}
       const all = predecessorIds.map((id4) => loadPredecessor(meshId, id4)).sort((a, b) => a.atMs - b.atMs || a.taskId.localeCompare(b.taskId));
       for (let drop = 0; drop < all.length; drop += 1) {
         const kept = all.slice(drop);
-        const text5 = render(task.id, kept, drop);
-        if (Buffer.byteLength(text5, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text5;
+        const text6 = render(task.id, kept, drop);
+        if (Buffer.byteLength(text6, "utf8") <= UPSTREAM_RESULTS_MAX_BYTES || kept.length === 1) return text6;
       }
       return null;
     }
@@ -86045,8 +86045,8 @@ ${continuationNotice}` } : task,
     }
     function localEnabledCliProviders(providerLoader) {
       try {
-        const list3 = typeof providerLoader?.getCliDetectionList === "function" ? providerLoader.getCliDetectionList() : [];
-        return Array.isArray(list3) ? list3.filter((e) => e && e.enabled !== false && typeof e.id === "string").map((e) => e.id) : [];
+        const list4 = typeof providerLoader?.getCliDetectionList === "function" ? providerLoader.getCliDetectionList() : [];
+        return Array.isArray(list4) ? list4.filter((e) => e && e.enabled !== false && typeof e.id === "string").map((e) => e.id) : [];
       } catch {
         return [];
       }
@@ -87941,10 +87941,10 @@ ${continuationNotice}` } : task,
           };
         }
       }
-      const text5 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
-      const match = TOKEN_RE.exec(text5);
+      const text6 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
+      const match = TOKEN_RE.exec(text6);
       if (!match) {
-        if (text5 === NEW_WORK_HELD_CODE2 || text5.startsWith(`${NEW_WORK_HELD_CODE2}:`)) {
+        if (text6 === NEW_WORK_HELD_CODE2 || text6.startsWith(`${NEW_WORK_HELD_CODE2}:`)) {
           return { holdId: "active", revision: 1, expiresAt: 0 };
         }
         return null;
@@ -88717,11 +88717,11 @@ ${continuationNotice}` } : task,
               return;
             }
           }
-          getQueueEntries(meshId, statuses) {
+          getQueueEntries(meshId, statuses2) {
             this.ensureLegacyQueueMigrated(meshId);
-            if (statuses?.length) {
-              const placeholders = statuses.map(() => "?").join(", ");
-              const rows2 = this.db.prepare(`SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status IN (${placeholders}) ORDER BY created_at ASC`).all(meshId, ...statuses);
+            if (statuses2?.length) {
+              const placeholders = statuses2.map(() => "?").join(", ");
+              const rows2 = this.db.prepare(`SELECT payload FROM mesh_queue WHERE mesh_id = ? AND status IN (${placeholders}) ORDER BY created_at ASC`).all(meshId, ...statuses2);
               return rows2.map((row2) => JSON.parse(row2.payload));
             }
             const rows = this.db.prepare("SELECT payload FROM mesh_queue WHERE mesh_id = ? ORDER BY created_at ASC").all(meshId);
@@ -89079,8 +89079,8 @@ ${continuationNotice}` } : task,
             return findAssignedBySession(this, meshId, sessionId, occurredAtIso, taskId);
           }
           /** Column-only queue rows (id/status/assignment) — no payload parse. */
-          getQueueHeads(meshId, statuses) {
-            return getQueueHeads(this, meshId, statuses);
+          getQueueHeads(meshId, statuses2) {
+            return getQueueHeads(this, meshId, statuses2);
           }
           /** Per-row mission/stats scalars via json_extract — no JS payload parse (see queue-reads). */
           getQueueFacts(meshId) {
@@ -89266,13 +89266,13 @@ ${continuationNotice}` } : task,
             if (!row2) return null;
             return missionRowFromSql(row2);
           }
-          getMissions(meshId, statuses) {
+          getMissions(meshId, statuses2) {
             let rows;
-            if (statuses?.length) {
-              const placeholders = statuses.map(() => "?").join(", ");
+            if (statuses2?.length) {
+              const placeholders = statuses2.map(() => "?").join(", ");
               rows = this.db.prepare(
                 `SELECT * FROM mesh_missions WHERE mesh_id = ? AND status IN (${placeholders}) ORDER BY updated_at DESC`
-              ).all(meshId, ...statuses);
+              ).all(meshId, ...statuses2);
             } else {
               rows = this.db.prepare(
                 "SELECT * FROM mesh_missions WHERE mesh_id = ? ORDER BY updated_at DESC"
@@ -89350,8 +89350,8 @@ ${continuationNotice}` } : task,
       resolveNoteExpiry: () => resolveNoteExpiry,
       resolveOperatingNoteScope: () => resolveOperatingNoteScope
     });
-    function previewOperatingNoteText(text5, maxChars = OPERATING_NOTE_PREVIEW_MAX_CHARS) {
-      const normalized = typeof text5 === "string" ? text5.replace(/\s+/g, " ").trim() : "";
+    function previewOperatingNoteText(text6, maxChars = OPERATING_NOTE_PREVIEW_MAX_CHARS) {
+      const normalized = typeof text6 === "string" ? text6.replace(/\s+/g, " ").trim() : "";
       if (normalized.length <= maxChars) return { preview: normalized, truncated: false };
       return { preview: `${normalized.slice(0, maxChars).trimEnd()}\u2026`, truncated: true };
     }
@@ -89398,11 +89398,11 @@ ${continuationNotice}` } : task,
       return row2 ? toEntry(row2) : null;
     }
     function recordOperatingNote(meshId, input) {
-      const text5 = input.text.trim();
-      if (!text5) throw new Error("recordOperatingNote requires non-empty text");
+      const text6 = input.text.trim();
+      if (!text6) throw new Error("recordOperatingNote requires non-empty text");
       const store4 = turnStore();
       const live = store4.listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
-      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text5);
+      const existing = live.slice(-OPERATING_NOTE_DEDUPE_WINDOW).find((r) => r.text.trim() === text6);
       if (existing) return toEntry(existing);
       const nowMs2 = input.createdAtMs ?? Date.now();
       const meta2 = {
@@ -89415,14 +89415,14 @@ ${continuationNotice}` } : task,
       const row2 = {
         noteId: (0, import_crypto22.randomUUID)(),
         meshId,
-        text: text5,
+        text: text6,
         category: input.category ?? null,
         callerSessionId: input.callerSessionId ?? null,
         createdAt: nowMs2,
         meta: meta2
       };
       store4.insertOperatingNote(row2);
-      const retracted = store4.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text5);
+      const retracted = store4.listOperatingNotes(meshId, { includeTombstoned: true }).some((r) => r.meta.textTombstone && r.text.trim() === text6);
       if (retracted) store4.tombstoneOperatingNote(meshId, row2.noteId, nowMs2);
       try {
         pruneOperatingNotes(meshId);
@@ -89432,23 +89432,23 @@ ${continuationNotice}` } : task,
     }
     function forgetOperatingNote(meshId, target4) {
       const noteId = typeof target4.noteId === "string" ? target4.noteId.trim() : "";
-      const text5 = typeof target4.text === "string" ? target4.text.trim() : "";
-      if (!noteId && !text5) throw new Error("forgetOperatingNote requires a noteId or text target");
+      const text6 = typeof target4.text === "string" ? target4.text.trim() : "";
+      if (!noteId && !text6) throw new Error("forgetOperatingNote requires a noteId or text target");
       const store4 = turnStore();
       const nowMs2 = Date.now();
       let matched = 0;
       for (const note2 of store4.listOperatingNotes(meshId)) {
         if (note2.meta.textTombstone) continue;
-        if (noteId && note2.noteId === noteId || text5 && note2.text.trim() === text5) {
+        if (noteId && note2.noteId === noteId || text6 && note2.text.trim() === text6) {
           if (store4.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
       const tombstoneId = (0, import_crypto22.randomUUID)();
-      if (text5) {
+      if (text6) {
         store4.insertOperatingNote({
           noteId: tombstoneId,
           meshId,
-          text: text5,
+          text: text6,
           category: null,
           callerSessionId: null,
           createdAt: nowMs2,
@@ -89728,19 +89728,19 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       lines.push("", "_Use `mesh_status` for node health and capacity before delegating work \u2014 never to check on a running worker's progress; completion, progress and blocked reports arrive as events (see Workers)._");
       return lines.join("\n");
     }
-    function indentFollowing(text5, pad) {
-      const lines = text5.split("\n");
+    function indentFollowing(text6, pad) {
+      const lines = text6.split("\n");
       if (lines.length === 1) return lines[0];
       return [lines[0], ...lines.slice(1).map((l) => pad + l)].join("\n");
     }
-    function buildRecentActivitySection(activity, nodeLabelById) {
-      if (!activity) return "";
-      const failures = Array.isArray(activity.recentFailures) ? activity.recentFailures : [];
-      const pending = Number.isFinite(activity.pendingTasks) ? Number(activity.pendingTasks) : 0;
-      const assigned = Number.isFinite(activity.assignedTasks) ? Number(activity.assignedTasks) : 0;
-      const stalled = Number.isFinite(activity.stalledTasks) ? Number(activity.stalledTasks) : 0;
-      const recentFailureCount = Number.isFinite(activity.recentFailureCount) ? Number(activity.recentFailureCount) : failures.length;
-      const windowMinutes3 = Number.isFinite(activity.windowMinutes) && Number(activity.windowMinutes) > 0 ? Math.floor(Number(activity.windowMinutes)) : 30;
+    function buildRecentActivitySection(activity2, nodeLabelById) {
+      if (!activity2) return "";
+      const failures = Array.isArray(activity2.recentFailures) ? activity2.recentFailures : [];
+      const pending = Number.isFinite(activity2.pendingTasks) ? Number(activity2.pendingTasks) : 0;
+      const assigned = Number.isFinite(activity2.assignedTasks) ? Number(activity2.assignedTasks) : 0;
+      const stalled = Number.isFinite(activity2.stalledTasks) ? Number(activity2.stalledTasks) : 0;
+      const recentFailureCount = Number.isFinite(activity2.recentFailureCount) ? Number(activity2.recentFailureCount) : failures.length;
+      const windowMinutes3 = Number.isFinite(activity2.windowMinutes) && Number(activity2.windowMinutes) > 0 ? Math.floor(Number(activity2.windowMinutes)) : 30;
       if (failures.length === 0 && pending === 0 && assigned === 0 && stalled === 0 && recentFailureCount === 0) {
         return "";
       }
@@ -89753,7 +89753,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       if (stalled > 0) counts.push(`**${stalled}** stalled (all-time ledger total, not current backlog)`);
       if (recentFailureCount > 0) counts.push(`**${recentFailureCount}** failed in the last ${windowMinutes3} min`);
       if (counts.length) lines.push(`- Queue/ledger: ${counts.join(", ")}.`);
-      if (activity.lastActivityAt) lines.push(`- Last ledger activity: ${activity.lastActivityAt}.`);
+      if (activity2.lastActivityAt) lines.push(`- Last ledger activity: ${activity2.lastActivityAt}.`);
       if (failures.length > 0) {
         const recent = failures.slice(-5).reverse();
         lines.push("", "Recent failures (newest first):");
@@ -89775,8 +89775,8 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
     function deriveSubjectKey(note2) {
       const explicit = typeof note2.subjectKey === "string" ? note2.subjectKey.trim().toLowerCase() : "";
       if (explicit) return explicit;
-      const text5 = typeof note2.text === "string" ? note2.text.trimStart() : "";
-      const m = /^\[([^\]]{1,80})\]/.exec(text5);
+      const text6 = typeof note2.text === "string" ? note2.text.trimStart() : "";
+      const m = /^\[([^\]]{1,80})\]/.exec(text6);
       const tag = m ? m[1].trim().toLowerCase() : "";
       return tag || void 0;
     }
@@ -89884,9 +89884,9 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       }
       return lines.join("\n");
     }
-    function truncateNote(text5) {
-      if (text5.length <= OPERATING_NOTE_MAX_CHARS) return text5;
-      return `${text5.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
+    function truncateNote(text6) {
+      if (text6.length <= OPERATING_NOTE_MAX_CHARS) return text6;
+      return `${text6.slice(0, OPERATING_NOTE_MAX_CHARS).trimEnd()}\u2026 [truncated]`;
     }
     function buildBrainPresetsSection() {
       let brains;
@@ -91250,13 +91250,13 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           const out2 = [];
           for (const item of items) {
             if (!item || typeof item !== "object") continue;
-            const rec6 = item;
-            const pid = Number(rec6.ProcessId ?? rec6.Id ?? rec6.pid);
-            const ppid = Number(rec6.ParentProcessId ?? rec6.ppid ?? 0);
-            const name = typeof rec6.Name === "string" ? rec6.Name : typeof rec6.ProcessName === "string" ? rec6.ProcessName : "";
-            const cmd = typeof rec6.CommandLine === "string" ? rec6.CommandLine : name;
-            const startMs = Number(rec6.StartMs);
-            const cpuMs = rec6.CpuMs === null || rec6.CpuMs === void 0 ? Number.NaN : Number(rec6.CpuMs);
+            const rec7 = item;
+            const pid = Number(rec7.ProcessId ?? rec7.Id ?? rec7.pid);
+            const ppid = Number(rec7.ParentProcessId ?? rec7.ppid ?? 0);
+            const name = typeof rec7.Name === "string" ? rec7.Name : typeof rec7.ProcessName === "string" ? rec7.ProcessName : "";
+            const cmd = typeof rec7.CommandLine === "string" ? rec7.CommandLine : name;
+            const startMs = Number(rec7.StartMs);
+            const cpuMs = rec7.CpuMs === null || rec7.CpuMs === void 0 ? Number.NaN : Number(rec7.CpuMs);
             if (Number.isFinite(pid) && pid > 0 && Number.isFinite(ppid) && ppid >= 0) {
               out2.push({
                 pid,
@@ -91298,12 +91298,12 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const childrenByPpid = /* @__PURE__ */ new Map();
       for (const node of table) {
         byPid.set(node.pid, node);
-        let list3 = childrenByPpid.get(node.ppid);
-        if (!list3) {
-          list3 = [];
-          childrenByPpid.set(node.ppid, list3);
+        let list4 = childrenByPpid.get(node.ppid);
+        if (!list4) {
+          list4 = [];
+          childrenByPpid.set(node.ppid, list4);
         }
-        list3.push(node);
+        list4.push(node);
       }
       const index = { byPid, childrenByPpid };
       indexCache.set(table, index);
@@ -91465,9 +91465,9 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       }
       return void 0;
     }
-    function isPendingBackgroundWorkSummary(text5) {
-      if (typeof text5 !== "string") return false;
-      const trimmed2 = text5.trim();
+    function isPendingBackgroundWorkSummary(text6) {
+      if (typeof text6 !== "string") return false;
+      const trimmed2 = text6.trim();
       if (!trimmed2 || trimmed2.length > 600) return false;
       if (trimmed2.startsWith("{") && trimmed2.endsWith("}")) return false;
       const tail = trimmed2.slice(-PENDING_TEXT_TAIL_CHARS);
@@ -92050,7 +92050,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       const procs = params.liveProcessNames.length > 0 ? params.liveProcessNames.map((name) => sanitizeProcessCommandName(name)).join(", ") : "none";
       return `[System] Worker session ${params.sessionId} (task ${taskLabel}): background work still running (live processes: ${procs}), no results yet.`;
     }
-    function defaultNotifyCoordinator(_coordinatorSessionId, text5, meta2) {
+    function defaultNotifyCoordinator(_coordinatorSessionId, text6, meta2) {
       if (!meta2.meshId) return;
       notifyMeshCoordinator({
         event: "mesh:background_work_no_results",
@@ -92066,10 +92066,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           taskId: meta2.taskId,
           liveProcessNames: [...meta2.liveProcessNames],
           resolution: "no_results",
-          coordinatorMessage: text5,
+          coordinatorMessage: text6,
           at: meta2.at
         },
-        coordinatorMessage: text5,
+        coordinatorMessage: text6,
         queuedAt: meta2.at,
         ...meta2.coordinator.daemonId ? { targetCoordinatorDaemonId: meta2.coordinator.daemonId } : {},
         ...meta2.coordinator.sessionId ? { targetCoordinatorSessionId: meta2.coordinator.sessionId } : {}
@@ -94602,18 +94602,18 @@ ${closeSentinel}`;
         const cont = getOrCreateNest(root, key5.slice(0, -1), true);
         const lastKey = key5[key5.length - 1];
         if (lastKey in cont) {
-          const list4 = cont[lastKey];
-          if (!Array.isArray(list4) || !arrayOfTables.has(list4)) {
+          const list5 = cont[lastKey];
+          if (!Array.isArray(list5) || !arrayOfTables.has(list5)) {
             throw invalidToml(`cannot overwrite non-array-of-tables key at [[${key5.join(".")}]]`);
           }
           const elem2 = createTable();
-          list4.push(elem2);
+          list5.push(elem2);
           return elem2;
         }
         const elem = createTable();
-        const list3 = [elem];
-        arrayOfTables.add(list3);
-        cont[lastKey] = list3;
+        const list4 = [elem];
+        arrayOfTables.add(list4);
+        cont[lastKey] = list4;
         return elem;
       };
       const parseEscape = (allowMultilineContinuations) => {
@@ -96072,8 +96072,8 @@ ${closeSentinel}`;
             if (!line?.cells || line.row !== vp.cursorRow || line.cells.length !== vp.cols) return null;
             if (vp.cursorPendingWrap || line.wrapped || line.wrapContinuation) return null;
             if (!Number.isInteger(vp.cursorCol) || vp.cursorCol < 0 || vp.cursorCol > vp.cols) return null;
-            const text5 = (cells) => cells.map((cell) => cell.wideKind === "spacer-tail" || cell.wideKind === "spacer-head" ? "" : cell.text || " ").join("");
-            return { row: vp.cursorRow, col: vp.cursorCol, left: text5(line.cells.slice(0, vp.cursorCol)), right: text5(line.cells.slice(vp.cursorCol)) };
+            const text6 = (cells) => cells.map((cell) => cell.wideKind === "spacer-tail" || cell.wideKind === "spacer-head" ? "" : cell.text || " ").join("");
+            return { row: vp.cursorRow, col: vp.cursorCol, left: text6(line.cells.slice(0, vp.cursorCol)), right: text6(line.cells.slice(vp.cursorCol)) };
           }
           dispose() {
             if (this.disposed) return;
@@ -98543,8 +98543,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           };
         }
       }
-      const text5 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
-      const match = TOKEN_RE2.exec(text5);
+      const text6 = typeof err === "string" ? err : typeof err.message === "string" ? err.message : typeof err.error === "string" ? err.error : "";
+      const match = TOKEN_RE2.exec(text6);
       if (!match) return null;
       return {
         currentTaskId: match[1],
@@ -99077,8 +99077,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if ((0, import_fs27.existsSync)(secretsPath)) {
           const parsed = JSON.parse((0, import_fs27.readFileSync)(secretsPath, "utf8"));
           const records = Array.isArray(parsed?.records) ? parsed.records : [];
-          for (const rec6 of records) {
-            if (rec6 && typeof rec6 === "object" && rec6.meshId === meshId && rec6.role === "member" && typeof rec6.peerDaemonId === "string" && daemonIdsEquivalent4(rec6.peerDaemonId, hostDaemonId)) {
+          for (const rec7 of records) {
+            if (rec7 && typeof rec7 === "object" && rec7.meshId === meshId && rec7.role === "member" && typeof rec7.peerDaemonId === "string" && daemonIdsEquivalent4(rec7.peerDaemonId, hostDaemonId)) {
               return true;
             }
           }
@@ -99301,9 +99301,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             const parsed = JSON.parse((0, import_fs27.readFileSync)(secretsPath, "utf8"));
             if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
               let updated = false;
-              for (const rec6 of parsed.records) {
-                if (rec6 && typeof rec6 === "object" && rec6.meshId === mesh && typeof rec6.peerDaemonId === "string" && daemonIdsEquivalent4(rec6.peerDaemonId, peer) && rec6.originGrantPublicKey !== pubKey) {
-                  rec6.originGrantPublicKey = pubKey;
+              for (const rec7 of parsed.records) {
+                if (rec7 && typeof rec7 === "object" && rec7.meshId === mesh && typeof rec7.peerDaemonId === "string" && daemonIdsEquivalent4(rec7.peerDaemonId, peer) && rec7.originGrantPublicKey !== pubKey) {
+                  rec7.originGrantPublicKey = pubKey;
                   updated = true;
                 }
               }
@@ -99338,9 +99338,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const parsed = JSON.parse((0, import_fs27.readFileSync)(secretsPath, "utf8"));
           if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
             let updated = false;
-            for (const rec6 of parsed.records) {
-              if (rec6 && typeof rec6 === "object" && rec6.meshId === mesh && typeof rec6.peerDaemonId === "string" && daemonIdsEquivalent4(rec6.peerDaemonId, peer) && rec6.originGrantPublicKey !== void 0) {
-                delete rec6.originGrantPublicKey;
+            for (const rec7 of parsed.records) {
+              if (rec7 && typeof rec7 === "object" && rec7.meshId === mesh && typeof rec7.peerDaemonId === "string" && daemonIdsEquivalent4(rec7.peerDaemonId, peer) && rec7.originGrantPublicKey !== void 0) {
+                delete rec7.originGrantPublicKey;
                 updated = true;
               }
             }
@@ -99398,9 +99398,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (fromPeerGrantStore && isValidOriginGrantPublicKey(fromPeerGrantStore)) {
         return fromPeerGrantStore;
       }
-      const rec6 = readAll(configDir)[mesh] ?? null;
-      if (rec6 && rec6.source === "pairing" && daemonIdsEquivalent4(rec6.hostDaemonId, peer) && rec6.originGrantPublicKey && isValidOriginGrantPublicKey(rec6.originGrantPublicKey)) {
-        return rec6.originGrantPublicKey;
+      const rec7 = readAll(configDir)[mesh] ?? null;
+      if (rec7 && rec7.source === "pairing" && daemonIdsEquivalent4(rec7.hostDaemonId, peer) && rec7.originGrantPublicKey && isValidOriginGrantPublicKey(rec7.originGrantPublicKey)) {
+        return rec7.originGrantPublicKey;
       }
       try {
         const secretsPath = (0, import_path20.join)(configDir, "mesh-peer-secrets.json");
@@ -99585,29 +99585,29 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     function isValidRecord(value) {
       if (value === null || typeof value !== "object") return false;
-      const rec6 = value;
-      if (typeof rec6.meshId !== "string" || rec6.meshId.trim() === "") return false;
-      if (typeof rec6.peerDaemonId !== "string" || !canonicalDaemonId2(rec6.peerDaemonId)) return false;
-      if (rec6.role !== "host" && rec6.role !== "member") return false;
-      if (typeof rec6.secret !== "string" || rec6.secret.length === 0) return false;
-      if (rec6.hostAddress !== void 0 && typeof rec6.hostAddress !== "string") return false;
-      if (rec6.originGrantPublicKey !== void 0 && typeof rec6.originGrantPublicKey !== "string") return false;
-      if (typeof rec6.createdAt !== "string" || rec6.createdAt.trim() === "") return false;
+      const rec7 = value;
+      if (typeof rec7.meshId !== "string" || rec7.meshId.trim() === "") return false;
+      if (typeof rec7.peerDaemonId !== "string" || !canonicalDaemonId2(rec7.peerDaemonId)) return false;
+      if (rec7.role !== "host" && rec7.role !== "member") return false;
+      if (typeof rec7.secret !== "string" || rec7.secret.length === 0) return false;
+      if (rec7.hostAddress !== void 0 && typeof rec7.hostAddress !== "string") return false;
+      if (rec7.originGrantPublicKey !== void 0 && typeof rec7.originGrantPublicKey !== "string") return false;
+      if (typeof rec7.createdAt !== "string" || rec7.createdAt.trim() === "") return false;
       return true;
     }
-    function normalizeRecord(rec6) {
+    function normalizeRecord(rec7) {
       const out = {
-        meshId: rec6.meshId.trim(),
-        peerDaemonId: canonicalOrThrow(rec6.peerDaemonId, "peer secret record"),
-        role: rec6.role,
-        secret: rec6.secret,
-        createdAt: rec6.createdAt
+        meshId: rec7.meshId.trim(),
+        peerDaemonId: canonicalOrThrow(rec7.peerDaemonId, "peer secret record"),
+        role: rec7.role,
+        secret: rec7.secret,
+        createdAt: rec7.createdAt
       };
-      if (rec6.hostAddress !== void 0 && rec6.hostAddress.trim() !== "") {
-        out.hostAddress = rec6.hostAddress.trim();
+      if (rec7.hostAddress !== void 0 && rec7.hostAddress.trim() !== "") {
+        out.hostAddress = rec7.hostAddress.trim();
       }
-      if (rec6.originGrantPublicKey !== void 0 && rec6.originGrantPublicKey.trim() !== "") {
-        out.originGrantPublicKey = rec6.originGrantPublicKey.trim();
+      if (rec7.originGrantPublicKey !== void 0 && rec7.originGrantPublicKey.trim() !== "") {
+        out.originGrantPublicKey = rec7.originGrantPublicKey.trim();
       }
       return out;
     }
@@ -99683,13 +99683,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
     }
     function listPeerSecrets(opts = {}) {
-      return readRecords(resolvePeerSecretsPath(opts)).map((rec6) => ({ ...rec6 }));
+      return readRecords(resolvePeerSecretsPath(opts)).map((rec7) => ({ ...rec7 }));
     }
     function getPeerSecret(meshId, peerDaemonId, opts = {}) {
       const canonical2 = canonicalDaemonId2(peerDaemonId);
       const mesh = typeof meshId === "string" ? meshId.trim() : "";
       if (!canonical2 || !mesh) return null;
-      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec6) => rec6.meshId === mesh && daemonIdsEquivalent4(rec6.peerDaemonId, canonical2));
+      const found = readRecords(resolvePeerSecretsPath(opts)).find((rec7) => rec7.meshId === mesh && daemonIdsEquivalent4(rec7.peerDaemonId, canonical2));
       return found ? { ...found } : null;
     }
     function putPeerSecret(record7, opts = {}) {
@@ -99698,7 +99698,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       const normalized = normalizeRecord(record7);
       const path126 = resolvePeerSecretsPath(opts);
-      const others = readRecords(path126).filter((rec6) => !(rec6.meshId === normalized.meshId && daemonIdsEquivalent4(rec6.peerDaemonId, normalized.peerDaemonId)));
+      const others = readRecords(path126).filter((rec7) => !(rec7.meshId === normalized.meshId && daemonIdsEquivalent4(rec7.peerDaemonId, normalized.peerDaemonId)));
       writeRecords(path126, [...others, normalized]);
       if (!opts.filePath && normalized.originGrantPublicKey && isValidOriginGrantPublicKey(normalized.originGrantPublicKey)) {
         recordAuthenticatedPeerOriginGrantPublicKey(
@@ -99722,9 +99722,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!canonical2 || !mesh) return false;
       const path126 = resolvePeerSecretsPath(opts);
       const all = readRecords(path126);
-      const removed = all.find((rec6) => rec6.meshId === mesh && daemonIdsEquivalent4(rec6.peerDaemonId, canonical2));
+      const removed = all.find((rec7) => rec7.meshId === mesh && daemonIdsEquivalent4(rec7.peerDaemonId, canonical2));
       if (!removed) return false;
-      const kept = all.filter((rec6) => !(rec6.meshId === mesh && daemonIdsEquivalent4(rec6.peerDaemonId, canonical2)));
+      const kept = all.filter((rec7) => !(rec7.meshId === mesh && daemonIdsEquivalent4(rec7.peerDaemonId, canonical2)));
       writeRecords(path126, kept);
       if (!opts.filePath) {
         clearAuthenticatedPeerOriginGrantPublicKey(mesh, canonical2, { env: opts.env });
@@ -99776,8 +99776,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     function readMeshSender(args) {
       if (!args || typeof args !== "object" || Array.isArray(args)) return "";
-      const rec6 = args;
-      const value = rec6[MESH_SENDER_DAEMON_ID_ARG] ?? rec6[VERIFIED_MESH_SENDER_SYMBOL];
+      const rec7 = args;
+      const value = rec7[MESH_SENDER_DAEMON_ID_ARG] ?? rec7[VERIFIED_MESH_SENDER_SYMBOL];
       return typeof value === "string" ? value.trim() : "";
     }
     function str7(value) {
@@ -100159,8 +100159,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return nodesOf(mesh).length > 0 ? { inlineMesh: mesh } : {};
     }
     function isMeshSenderRefusalResult(result) {
-      const rec6 = record3(result);
-      return !!rec6 && rec6.success === false && typeof rec6.code === "string" && MESH_SENDER_REFUSALS.has(rec6.code);
+      const rec7 = record3(result);
+      return !!rec7 && rec7.success === false && typeof rec7.code === "string" && MESH_SENDER_REFUSALS.has(rec7.code);
     }
     var MESH_SENDER_DAEMON_ID_ARG;
     var VERIFIED_MESH_SENDER_SYMBOL;
@@ -100370,12 +100370,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           const owner = isRemoteOwner ? resolvedOwner : void 0;
           const envelope = callerOpts?.envelope;
           const opts = owner || envelope ? { ...owner ? { owner } : {}, ...envelope ? { envelope } : {} } : void 0;
-          const text5 = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
-          if (!text5 || !deps.appendHandoff) {
+          const text6 = isRemoteOwner && SUMMARY_REF_KINDS.has(withAttempt.kind) ? handoffTextOf(envelope) : void 0;
+          if (!text6 || !deps.appendHandoff) {
             runObserve(withAttempt, opts);
             return;
           }
-          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text5, notice: envelope?.notice ?? {} }).then(
+          deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text6, notice: envelope?.notice ?? {} }).then(
             (ref2) => runObserve({ ...withAttempt, summary: ref2 }, opts),
             () => runObserve(withAttempt, opts)
           );
@@ -103817,14 +103817,14 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return filePath2;
     }
     function classifyFailure(output, exitCode) {
-      const text5 = output.toLowerCase();
-      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text5)) {
+      const text6 = output.toLowerCase();
+      if (/\b(not logged in|log ?in|sign ?in|unauthenticated|unauthorized|authentication|auth token|expired)\b/.test(text6)) {
         return "unauthenticated";
       }
-      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text5)) {
+      if (/\b(enotfound|econnrefused|etimedout|network|offline|dns|socket hang up|fetch failed)\b/.test(text6)) {
         return "network";
       }
-      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text5)) {
+      if (exitCode === 127 || /\b(command not found|no such file or directory)\b/.test(text6)) {
         return "cli-unavailable";
       }
       return "unknown";
@@ -103840,8 +103840,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         error
       };
     }
-    function redactSample(text5, max = 200) {
-      return text5.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(os322.homedir(), "~").replace(/[A-Za-z0-9_\-.]{32,}/g, "[REDACTED]").slice(0, max);
+    function redactSample(text6, max = 200) {
+      return text6.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(os322.homedir(), "~").replace(/[A-Za-z0-9_\-.]{32,}/g, "[REDACTED]").slice(0, max);
     }
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
@@ -104291,10 +104291,10 @@ ${result.stderr}`, result.code);
       const raw = typeof process.env.ADHDEV_MCP_SESSION_CREDENTIAL === "string" ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL.trim() : "";
       return raw.length >= 8 ? raw : "";
     }
-    function matchesAnyPattern(text5, patterns, liveCred) {
-      if (liveCred && text5.includes(liveCred)) return true;
+    function matchesAnyPattern(text6, patterns, liveCred) {
+      if (liveCred && text6.includes(liveCred)) return true;
       for (const pattern of patterns) {
-        if (pattern.test(text5)) return true;
+        if (pattern.test(text6)) return true;
       }
       return false;
     }
@@ -104505,12 +104505,12 @@ ${result.stderr}`, result.code);
       const digest5 = (0, import_crypto28.createHash)("sha256").update(rawText).digest("base64url");
       return `${depth}:${rawText.length}:${digest5}`;
     }
-    function scanPercentRuns(text5, patterns, liveCred, depth, budget) {
-      if (!text5.includes("%") || !/%[0-9A-Fa-f]{2}/.test(text5)) return false;
+    function scanPercentRuns(text6, patterns, liveCred, depth, budget) {
+      if (!text6.includes("%") || !/%[0-9A-Fa-f]{2}/.test(text6)) return false;
       let pctCount = 0;
       let currentWindowIdx = 0;
       const maxPerScope = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-      for (const match of text5.matchAll(PERCENT_ENCODED_RUN_RE)) {
+      for (const match of text6.matchAll(PERCENT_ENCODED_RUN_RE)) {
         const run4 = match[0];
         if (!run4.includes("%") || !/%[0-9A-Fa-f]{2}/.test(run4)) continue;
         if (depth === 0) {
@@ -104539,11 +104539,11 @@ ${result.stderr}`, result.code);
       }
       return budget.exhausted;
     }
-    function scanBase64Runs(text5, patterns, liveCred, depth, budget) {
+    function scanBase64Runs(text6, patterns, liveCred, depth, budget) {
       let b64Count = 0;
       let currentWindowIdx = 0;
       const maxPerScope = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-      for (const match of text5.matchAll(BASE64_RUN_RE)) {
+      for (const match of text6.matchAll(BASE64_RUN_RE)) {
         const run4 = match[0];
         if (depth === 0) {
           const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
@@ -105136,8 +105136,8 @@ ${result.stderr}`, result.code);
     function newEpochToken() {
       return (0, import_crypto29.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
-    function contentKey(role, kind, text5) {
-      return `${role}\0${kind}\0${text5}`;
+    function contentKey(role, kind, text6) {
+      return `${role}\0${kind}\0${text6}`;
     }
     function sameContent(a, b) {
       return a.role === b.role && a.kind === b.kind && a.text === b.text;
@@ -105562,12 +105562,12 @@ ${result.stderr}`, result.code);
               this.tombstone(entry);
               deletes.push(id4);
             }
-            const list3 = ids;
-            const ordChanged = this.assignOrds(list3, previouslyLive, claimed);
+            const list4 = ids;
+            const ordChanged = this.assignOrds(list4, previouslyLive, claimed);
             const upserts = [];
             const assignments = new Array(count);
             for (let i = 0; i < count; i += 1) {
-              const id4 = list3[i];
+              const id4 = list4[i];
               const entry = this.entries.get(id4);
               const input = inputs[i];
               if (created.has(id4)) {
@@ -105659,14 +105659,14 @@ ${result.stderr}`, result.code);
            * Returns the ids whose `ord` changed (moved or revived; new ids are
            * counted as created, not changed).
            */
-          assignOrds(list3, previouslyLive, claimed) {
+          assignOrds(list4, previouslyLive, claimed) {
             const changed = /* @__PURE__ */ new Set();
             const survivorPositions = [];
-            for (let i2 = 0; i2 < list3.length; i2 += 1) {
-              if (previouslyLive.has(list3[i2]) && this.entries.get(list3[i2]).ord) survivorPositions.push(i2);
+            for (let i2 = 0; i2 < list4.length; i2 += 1) {
+              if (previouslyLive.has(list4[i2]) && this.entries.get(list4[i2]).ord) survivorPositions.push(i2);
             }
             const keep = new Set(
-              longestIncreasingSubsequence(survivorPositions.map((i2) => this.entries.get(list3[i2]).ord)).map((k) => survivorPositions[k])
+              longestIncreasingSubsequence(survivorPositions.map((i2) => this.entries.get(list4[i2]).ord)).map((k) => survivorPositions[k])
             );
             let maxRetainedOrd = null;
             for (const entry of this.entries.values()) {
@@ -105674,19 +105674,19 @@ ${result.stderr}`, result.code);
               if (maxRetainedOrd === null || entry.ord > maxRetainedOrd) maxRetainedOrd = entry.ord;
             }
             let i = 0;
-            while (i < list3.length) {
+            while (i < list4.length) {
               if (keep.has(i)) {
                 i += 1;
                 continue;
               }
               let j = i;
-              while (j < list3.length && !keep.has(j)) j += 1;
-              let lower = i > 0 ? this.entries.get(list3[i - 1]).ord : maxRetainedOrd;
-              const upper = j < list3.length ? this.entries.get(list3[j]).ord : null;
+              while (j < list4.length && !keep.has(j)) j += 1;
+              let lower = i > 0 ? this.entries.get(list4[i - 1]).ord : maxRetainedOrd;
+              const upper = j < list4.length ? this.entries.get(list4[j]).ord : null;
               if (lower !== null && upper !== null && lower >= upper) lower = null;
               const keys2 = generateNKeysBetween(lower || null, upper, j - i);
               for (let k = i; k < j; k += 1) {
-                const entry = this.entries.get(list3[k]);
+                const entry = this.entries.get(list4[k]);
                 const nextOrd = keys2[k - i];
                 if (entry.ord !== nextOrd) {
                   if (entry.ord) changed.add(entry.id);
@@ -105847,8 +105847,8 @@ ${result.stderr}`, result.code);
       if (outgoingReceipt) head.outgoingReceipt = outgoingReceipt;
       return head;
     }
-    function encodeChatPart(id4, k, rev, epoch, frame2, text5) {
-      return { v: 2, id: id4, k, rev, epoch, frame: frame2, text: text5 };
+    function encodeChatPart(id4, k, rev, epoch, frame2, text6) {
+      return { v: 2, id: id4, k, rev, epoch, frame: frame2, text: text6 };
     }
     function encodeChatDel(id4, k, rev, epoch, frame2) {
       return { v: 2, id: id4, k, rev, epoch, frame: frame2 };
@@ -105955,12 +105955,12 @@ ${result.stderr}`, result.code);
       if (cp < 65536) return 3;
       return 4;
     }
-    function chatJcsTextBytes(text5) {
+    function chatJcsTextBytes(text6) {
       let bytes = 0;
-      for (let i = 0; i < text5.length; i += 1) {
-        const c = text5.charCodeAt(i);
-        if (c >= 55296 && c <= 56319 && i + 1 < text5.length) {
-          const d = text5.charCodeAt(i + 1);
+      for (let i = 0; i < text6.length; i += 1) {
+        const c = text6.charCodeAt(i);
+        if (c >= 55296 && c <= 56319 && i + 1 < text6.length) {
+          const d = text6.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             bytes += 4;
             i += 1;
@@ -105971,16 +105971,16 @@ ${result.stderr}`, result.code);
       }
       return bytes;
     }
-    function splitChatBody(text5, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
+    function splitChatBody(text6, maxBytes = CHAT_PART_MAX_JCS_BYTES) {
       const parts = [];
       let start = 0;
       let bytes = 0;
-      for (let i = 0; i < text5.length; ) {
-        const c = text5.charCodeAt(i);
+      for (let i = 0; i < text6.length; ) {
+        const c = text6.charCodeAt(i);
         let width = 1;
         let cpBytes;
-        if (c >= 55296 && c <= 56319 && i + 1 < text5.length) {
-          const d = text5.charCodeAt(i + 1);
+        if (c >= 55296 && c <= 56319 && i + 1 < text6.length) {
+          const d = text6.charCodeAt(i + 1);
           if (d >= 56320 && d <= 57343) {
             width = 2;
             cpBytes = 4;
@@ -105991,14 +105991,14 @@ ${result.stderr}`, result.code);
           cpBytes = jcsCodePointBytes(c);
         }
         if (bytes + cpBytes > maxBytes && i > start) {
-          parts.push(text5.slice(start, i));
+          parts.push(text6.slice(start, i));
           start = i;
           bytes = 0;
         }
         bytes += cpBytes;
         i += width;
       }
-      parts.push(text5.slice(start));
+      parts.push(text6.slice(start));
       return parts;
     }
     function isRev(value) {
@@ -106118,10 +106118,10 @@ ${result.stderr}`, result.code);
         ARTIFACT_PRODUCER_ROLES_WIRE = ["worker", "coordinator", "assistant", "user", "session"];
       }
     });
-    function sha1(text5) {
-      return (0, import_node_crypto35.createHash)("sha1").update(text5).digest("base64");
+    function sha1(text6) {
+      return (0, import_node_crypto35.createHash)("sha1").update(text6).digest("base64");
     }
-    function headChangeKey(head, text5) {
+    function headChangeKey(head, text6) {
       const fields = {
         ord: head.ord,
         role: head.role,
@@ -106137,13 +106137,13 @@ ${result.stderr}`, result.code);
         expandable: head.expandable,
         srcId: head.srcId
       };
-      return sha1(`${jcs(fields)}\0${text5}`);
+      return sha1(`${jcs(fields)}\0${text6}`);
     }
     function metaChangeKey(meta2) {
       return sha1(jcs({ ...meta2, rev: 0, epoch: "", frame: 0 }));
     }
-    function utf8Bytes(text5) {
-      return Buffer.byteLength(text5, "utf8");
+    function utf8Bytes(text6) {
+      return Buffer.byteLength(text6, "utf8");
     }
     function jcsBytesOf(payload) {
       return utf8Bytes(jcs(payload));
@@ -106253,11 +106253,11 @@ ${result.stderr}`, result.code);
             }
             for (const { head, writer } of heads.values()) {
               if (writer !== writerId) this.otherWriterRows = true;
-              let text5;
+              let text6;
               let partHashes = [];
               let partRevs = [];
               if ("text" in head.body) {
-                text5 = head.body.text;
+                text6 = head.body.text;
               } else {
                 const map2 = parts.get(head.id);
                 const pieces = [];
@@ -106267,18 +106267,18 @@ ${result.stderr}`, result.code);
                   if (!piece || piece.rev !== head.body.partRevs[k]) complete = false;
                   pieces.push(piece?.text ?? "");
                 }
-                text5 = pieces.join("");
+                text6 = pieces.join("");
                 partHashes = pieces.map((piece) => sha1(piece));
                 partRevs = [...head.body.partRevs];
                 if (!complete) this.markTorn(head.id, head.rev, map2 ? Array.from(map2.keys()) : []);
               }
               this.bubbles.set(head.id, {
                 rev: head.rev,
-                hash: headChangeKey(head, text5),
+                hash: headChangeKey(head, text6),
                 ord: head.ord,
                 partHashes,
                 partRevs,
-                bytes: utf8Bytes(text5) + HEAD_OVERHEAD_BYTES,
+                bytes: utf8Bytes(text6) + HEAD_OVERHEAD_BYTES,
                 final: head.bubbleState === "final"
               });
               if (head.id.startsWith("artifact:")) {
@@ -106288,7 +106288,7 @@ ${result.stderr}`, result.code);
                   srcId: head.srcId,
                   role: head.role,
                   kind: head.kind,
-                  content: text5,
+                  content: text6,
                   receivedAt: head.receivedAt,
                   timestamp: head.timestamp,
                   turnKey: head.turnKey,
@@ -106372,8 +106372,8 @@ ${result.stderr}`, result.code);
               if (!id4 || !ord) return { status: "unidentified" };
               if (seen2.has(id4)) continue;
               seen2.add(id4);
-              const text5 = typeof message.content === "string" ? message.content : "";
-              observed2.push({ message, id: id4, ord, text: text5, bytes: utf8Bytes(text5) + HEAD_OVERHEAD_BYTES });
+              const text6 = typeof message.content === "string" ? message.content : "";
+              observed2.push({ message, id: id4, ord, text: text6, bytes: utf8Bytes(text6) + HEAD_OVERHEAD_BYTES });
             }
             const retained = /* @__PURE__ */ new Set();
             const windowRetained = /* @__PURE__ */ new Set();
@@ -106390,9 +106390,9 @@ ${result.stderr}`, result.code);
                 if (forceAll && this.artifactMessages.has(id4)) {
                   const artifactMsg = this.artifactMessages.get(id4);
                   const ord = this.bubbles.get(id4).ord;
-                  const text5 = typeof artifactMsg.content === "string" ? artifactMsg.content : "";
+                  const text6 = typeof artifactMsg.content === "string" ? artifactMsg.content : "";
                   seen2.add(id4);
-                  observed2.push({ message: artifactMsg, id: id4, ord, text: text5, bytes: utf8Bytes(text5) + HEAD_OVERHEAD_BYTES });
+                  observed2.push({ message: artifactMsg, id: id4, ord, text: text6, bytes: utf8Bytes(text6) + HEAD_OVERHEAD_BYTES });
                 } else {
                   retained.add(id4);
                 }
@@ -106645,14 +106645,14 @@ ${result.stderr}`, result.code);
             const id4 = `artifact:${attachment.artifactId}`;
             const prior = this.bubbles.get(id4);
             const ord = prior?.ord ?? this.nextArtifactOrd();
-            const text5 = attachment.title;
+            const text6 = attachment.title;
             const message = {
               messageId: id4,
               ord,
               srcId: null,
               role: "system",
               kind: "artifact",
-              content: text5,
+              content: text6,
               bubbleState: "final",
               receivedAt: attachment.createdAt,
               timestamp: attachment.updatedAt,
@@ -106667,7 +106667,7 @@ ${result.stderr}`, result.code);
               srcId: null,
               body: { text: "" }
             });
-            const hash4 = headChangeKey(probe, text5);
+            const hash4 = headChangeKey(probe, text6);
             const torn = this.tornIds.has(id4);
             const needsMeta = this.metaHash === null || this.tornMetaRev !== null;
             if (prior && prior.hash === hash4 && !torn && input.forceUpsert !== true && !needsMeta) {
@@ -106683,12 +106683,12 @@ ${result.stderr}`, result.code);
               epoch,
               frame: frameNo,
               srcId: null,
-              body: { text: text5 }
+              body: { text: text6 }
             });
             const headRows = [
               { key: chatMessageKey(id4), kind: CHAT_MSG_KIND, payload: head }
             ];
-            const bubbleBytes = utf8Bytes(text5) + HEAD_OVERHEAD_BYTES;
+            const bubbleBytes = utf8Bytes(text6) + HEAD_OVERHEAD_BYTES;
             let supersededRows = prior ? 1 : 0;
             const supersededBytes = prior ? prior.bytes : 0;
             let metaRow = null;
@@ -107624,12 +107624,12 @@ ${result.stderr}`, result.code);
         return "";
       }
     }
-    function messageIdentityRevisionKey(message, text5 = flattenedText(message)) {
+    function messageIdentityRevisionKey(message, text6 = flattenedText(message)) {
       const meta2 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
       return JSON.stringify([
         normalizedRole(message),
         normalizedKind(message),
-        text5,
+        text6,
         message.bubbleState ?? null,
         message._turnKey ?? null,
         message.senderName ?? null,
@@ -107640,14 +107640,14 @@ ${result.stderr}`, result.code);
       ]);
     }
     function toMessageIdentityInput(message) {
-      const text5 = flattenedText(message);
+      const text6 = flattenedText(message);
       const src = readMessageSourceAddress(message._src);
       return {
         role: normalizedRole(message),
         kind: normalizedKind(message),
-        text: text5,
+        text: text6,
         ...src ? { src } : {},
-        revisionKey: messageIdentityRevisionKey(message, text5),
+        revisionKey: messageIdentityRevisionKey(message, text6),
         // The tool-block ref an expand request resolves by `messageId` (design
         // §5.9). Kept on the ledger entry, refreshed every read, never emitted.
         ...message.toolBlockRef ? { locator: message.toolBlockRef } : {}
@@ -108186,36 +108186,36 @@ ${result.stderr}`, result.code);
       if (!/[0-9]/.test(run4) || !/[A-Za-z]/.test(run4)) return false;
       return /[A-Za-z0-9]{20,}/.test(run4);
     }
-    function detectCredential(text5) {
+    function detectCredential(text6) {
       for (const p of CREDENTIAL_PATTERNS) {
-        if (p.re.test(text5)) return p.id;
+        if (p.re.test(text6)) return p.id;
       }
-      for (const m of text5.matchAll(BASE64_RUN)) {
+      for (const m of text6.matchAll(BASE64_RUN)) {
         if (looksLikeBase64Secret(m[0])) return "long_base64";
       }
       return null;
     }
-    function detectHiddenChars(text5) {
-      if (BIDI_CONTROL.test(text5)) return "bidi_control";
-      if (TAG_CHAR.test(text5)) return "tag_char";
-      if (ZERO_WIDTH.test(text5.replace(EMOJI_ZWJ, ""))) return "zero_width";
+    function detectHiddenChars(text6) {
+      if (BIDI_CONTROL.test(text6)) return "bidi_control";
+      if (TAG_CHAR.test(text6)) return "tag_char";
+      if (ZERO_WIDTH.test(text6.replace(EMOJI_ZWJ, ""))) return "zero_width";
       return null;
     }
-    function detectInjection(text5) {
-      for (const p of INJECTION_PATTERNS) if (p.re.test(text5)) return p.id;
+    function detectInjection(text6) {
+      for (const p of INJECTION_PATTERNS) if (p.re.test(text6)) return p.id;
       return null;
     }
-    function scanWriteContent(text5) {
-      const hidden = detectHiddenChars(text5);
+    function scanWriteContent(text6) {
+      const hidden = detectHiddenChars(text6);
       if (hidden) return { kind: "hidden_chars", pattern: hidden };
-      const inj = detectInjection(text5);
+      const inj = detectInjection(text6);
       if (inj) return { kind: "injection", pattern: inj };
       return null;
     }
-    function scanStoredContent(text5) {
-      const w = scanWriteContent(text5);
+    function scanStoredContent(text6) {
+      const w = scanWriteContent(text6);
       if (w) return w;
-      const cred = detectCredential(text5);
+      const cred = detectCredential(text6);
       return cred ? { kind: "credential", pattern: cred } : null;
     }
     function classifyWriteOrigin(delivered, opts = {}) {
@@ -108377,7 +108377,7 @@ ${result.stderr}`, result.code);
       const finding = scanStoredContent(entry);
       return finding ? finding.kind : null;
     }
-    function parseMemoryEntries(text5) {
+    function parseMemoryEntries(text6) {
       const entries2 = [];
       let current4 = [];
       const flush = () => {
@@ -108385,7 +108385,7 @@ ${result.stderr}`, result.code);
         if (e) entries2.push(e);
         current4 = [];
       };
-      for (const line of text5.replace(/\r\n?/g, "\n").split("\n")) {
+      for (const line of text6.replace(/\r\n?/g, "\n").split("\n")) {
         if (line.trim() === "\xA7") flush();
         else current4.push(line);
       }
@@ -108553,16 +108553,16 @@ ${result.stderr}`, result.code);
             const empty = { target: target4, entries: [], invalid: [], used: 0, budget: defaultBudget };
             const path126 = this.filePath(target4);
             if (!(0, import_fs31.existsSync)(path126)) return empty;
-            let text5;
+            let text6;
             try {
               const bytes = (0, import_fs31.readFileSync)(path126);
-              text5 = bytes.toString("utf8");
-              if (!Buffer.from(text5, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
-              if (text5.startsWith("\uFEFF")) text5 = text5.slice(1);
+              text6 = bytes.toString("utf8");
+              if (!Buffer.from(text6, "utf8").equals(bytes)) return { ...empty, unreadable: "invalid utf-8" };
+              if (text6.startsWith("\uFEFF")) text6 = text6.slice(1);
             } catch (err) {
               return { ...empty, unreadable: err instanceof Error ? err.message : String(err) };
             }
-            const entries2 = parseMemoryEntries(text5);
+            const entries2 = parseMemoryEntries(text6);
             const invalid = [];
             entries2.forEach((e, index) => {
               const problem = entryProblem(e);
@@ -108623,8 +108623,8 @@ ${result.stderr}`, result.code);
             const out = [];
             for (const name of (0, import_fs31.readdirSync)(this.stagedDir)) {
               if (!name.endsWith(".json")) continue;
-              const rec6 = this.readStaged(name.slice(0, -".json".length));
-              if (rec6) out.push(rec6);
+              const rec7 = this.readStaged(name.slice(0, -".json".length));
+              if (rec7) out.push(rec7);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -108635,25 +108635,25 @@ ${result.stderr}`, result.code);
            * free budget and retry. `discard` removes it.
            */
           resolveStaged(id4, decision) {
-            const rec6 = this.readStaged(id4);
-            if (!rec6) return { result: "staged_not_found", usage: this.usage() };
+            const rec7 = this.readStaged(id4);
+            if (!rec7) return { result: "staged_not_found", usage: this.usage() };
             if (decision === "discard") {
-              this.dropStaged(rec6, "owner");
+              this.dropStaged(rec7, "owner");
               return { result: "discarded", usage: this.usage() };
             }
-            const outcome = this.applyInner(rec6.op, rec6.origin, { stagedId: rec6.id, resolvedBy: "owner" }, rec6.reviewTurnId);
-            if (outcome.result === "applied" || outcome.result === "memory_duplicate") this.unlinkStaged(rec6.id);
+            const outcome = this.applyInner(rec7.op, rec7.origin, { stagedId: rec7.id, resolvedBy: "owner" }, rec7.reviewTurnId);
+            if (outcome.result === "applied" || outcome.result === "memory_duplicate") this.unlinkStaged(rec7.id);
             return { ...outcome, usage: this.usage() };
           }
           /** Discard staged writes older than maxAgeMs (curator housekeeping). Returns ids dropped. */
           expireStaged(maxAgeMs = STAGED_WRITE_MAX_AGE_MS) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec6 of this.listStaged()) {
-              const t = Date.parse(rec6.createdAt);
+            for (const rec7 of this.listStaged()) {
+              const t = Date.parse(rec7.createdAt);
               if (Number.isFinite(t) && t < cutoff) {
-                this.dropStaged(rec6, "expiry");
-                dropped.push(rec6.id);
+                this.dropStaged(rec7, "expiry");
+                dropped.push(rec7.id);
               }
             }
             return dropped;
@@ -108722,7 +108722,7 @@ ${result.stderr}`, result.code);
             journal2("applied");
             return { result: "applied" };
           }
-          journal(rec6) {
+          journal(rec7) {
             const redacted = [];
             const scrub = (field3, v) => {
               if (v !== null && detectCredential(v)) {
@@ -108733,11 +108733,11 @@ ${result.stderr}`, result.code);
             };
             const full = {
               ts: this.now().toISOString(),
-              ...rec6,
-              before: scrub("before", rec6.before),
-              after: scrub("after", rec6.after)
+              ...rec7,
+              before: scrub("before", rec7.before),
+              after: scrub("after", rec7.after)
             };
-            if (REDACT_AFTER_RESULTS.has(rec6.result) && !redacted.includes("after")) {
+            if (REDACT_AFTER_RESULTS.has(rec7.result) && !redacted.includes("after")) {
               full.after = null;
               redacted.push("after");
             }
@@ -108752,8 +108752,8 @@ ${result.stderr}`, result.code);
           }
           stage(op, origin, reviewTurnId) {
             const id4 = `mem-${this.now().getTime()}-${(0, import_crypto31.randomBytes)(4).toString("hex")}`;
-            const rec6 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
-            writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec6, null, 2));
+            const rec7 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
+            writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec7, null, 2));
             return id4;
           }
           readStaged(id4) {
@@ -108773,20 +108773,20 @@ ${result.stderr}`, result.code);
             } catch {
             }
           }
-          dropStaged(rec6, by) {
-            const op = rec6.op;
+          dropStaged(rec7, by) {
+            const op = rec7.op;
             this.journal({
               action: op.action,
               target: op.target,
               before: op.action === "add" ? null : op.match,
               after: op.action === "remove" ? null : op.content,
-              origin: rec6.origin,
+              origin: rec7.origin,
               result: "discarded",
-              stagedId: rec6.id,
+              stagedId: rec7.id,
               resolvedBy: by,
-              reviewTurnId: rec6.reviewTurnId
+              reviewTurnId: rec7.reviewTurnId
             });
-            this.unlinkStaged(rec6.id);
+            this.unlinkStaged(rec7.id);
           }
           readConfiguredBudgets() {
             const out = { ...this.budgetOverride ?? {} };
@@ -108808,10 +108808,10 @@ ${result.stderr}`, result.code);
             if (!(0, import_fs31.existsSync)(path126)) return 0;
             try {
               const bytes = (0, import_fs31.readFileSync)(path126);
-              let text5 = bytes.toString("utf8");
-              if (!Buffer.from(text5, "utf8").equals(bytes)) return 0;
-              if (text5.startsWith("\uFEFF")) text5 = text5.slice(1);
-              return usedOf(parseMemoryEntries(text5));
+              let text6 = bytes.toString("utf8");
+              if (!Buffer.from(text6, "utf8").equals(bytes)) return 0;
+              if (text6.startsWith("\uFEFF")) text6 = text6.slice(1);
+              return usedOf(parseMemoryEntries(text6));
             } catch {
               return 0;
             }
@@ -109217,10 +109217,10 @@ ${result.stderr}`, result.code);
             this.write({ ...prev, reviewAts });
           }
           /** Save the bound session's last exchanges (previous-session note source). */
-          recordContext(sessionId, text5, at) {
+          recordContext(sessionId, text6, at) {
             const prev = this.read();
-            if (!prev || prev.sessionId !== sessionId || !text5 || text5.length > 8e3) return;
-            this.write({ ...prev, lastContext: { sessionId, text: text5, at } });
+            if (!prev || prev.sessionId !== sessionId || !text6 || text6.length > 8e3) return;
+            this.write({ ...prev, lastContext: { sessionId, text: text6, at } });
           }
           /** A daily digest was queued (one per local day). */
           recordDigest(at) {
@@ -109567,8 +109567,8 @@ ${result.stderr}`, result.code);
       const lower = fileName.toLowerCase();
       return SKILL_ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
     }
-    function splitSkillMd(text5) {
-      const t = text5.replace(/\r\n?/g, "\n");
+    function splitSkillMd(text6) {
+      const t = text6.replace(/\r\n?/g, "\n");
       if (!t.startsWith("---\n")) return null;
       const end = t.indexOf("\n---", 3);
       if (end < 0) return null;
@@ -109576,8 +109576,8 @@ ${result.stderr}`, result.code);
       if (after !== "" && !after.startsWith("\n")) return null;
       return { frontmatterRaw: t.slice(4, end), body: after.replace(/^\n/, "") };
     }
-    function parseSkillMd(text5) {
-      const split = splitSkillMd(text5);
+    function parseSkillMd(text6) {
+      const split = splitSkillMd(text6);
       if (!split) return { problem: "no_frontmatter" };
       let meta2;
       try {
@@ -109652,7 +109652,7 @@ ${body}`;
       } catch {
         return null;
       }
-      const text5 = (0, import_fs33.readFileSync)(mdPath, "utf-8");
+      const text6 = (0, import_fs33.readFileSync)(mdPath, "utf-8");
       const files = [];
       const ignoredFiles = [];
       for (const sub of SKILL_SUBDIRS) {
@@ -109661,11 +109661,11 @@ ${body}`;
       for (const n of (0, import_fs33.readdirSync)(dir)) {
         if (n !== SKILL_FILE && !SKILL_SUBDIRS.includes(n)) ignoredFiles.push(n);
       }
-      const parsed = parseSkillMd(text5);
+      const parsed = parseSkillMd(text6);
       const base = { name: expectedName, files, ignoredFiles };
       let out;
       if ("problem" in parsed) {
-        const body = splitSkillMd(text5)?.body ?? text5;
+        const body = splitSkillMd(text6)?.body ?? text6;
         out = { ...base, problem: parsed.problem, frontmatterRaw: "", meta: {}, description: "", body, bodyChars: charCount(body), overLimit: [] };
       } else {
         let problem = parsed.meta.name !== expectedName ? "name_mismatch" : !validateDescription(parsed.meta.description) ? "bad_description" : void 0;
@@ -109774,12 +109774,12 @@ ${body}`;
       if (!raw || typeof raw !== "object") return null;
       const r = raw;
       const base = newSkillState(ORIGINS.includes(r.origin) ? r.origin : "owner", fallbackIso);
-      const num3 = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+      const num4 = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
       const str222 = (v) => typeof v === "string" ? v : null;
       const counters4 = (v) => {
         const out = {};
         if (v && typeof v === "object") {
-          for (const [k, n] of Object.entries(v)) if (num3(n) > 0) out[k] = num3(n);
+          for (const [k, n] of Object.entries(v)) if (num4(n) > 0) out[k] = num4(n);
         }
         return out;
       };
@@ -109789,11 +109789,11 @@ ${body}`;
         pinned: r.pinned === true,
         createdAt: str222(r.createdAt) ?? fallbackIso,
         statusChangedAt: str222(r.statusChangedAt) ?? str222(r.createdAt) ?? fallbackIso,
-        viewCount: num3(r.viewCount),
+        viewCount: num4(r.viewCount),
         lastViewedAt: str222(r.lastViewedAt),
-        patchCount: num3(r.patchCount),
+        patchCount: num4(r.patchCount),
         lastPatchedAt: str222(r.lastPatchedAt),
-        patchesSinceReview: num3(r.patchesSinceReview),
+        patchesSinceReview: num4(r.patchesSinceReview),
         sessionPatches: counters4(r.sessionPatches),
         turnPatches: counters4(r.turnPatches)
       };
@@ -109873,12 +109873,12 @@ ${body}`;
         };
       }
       if (!isStr2(op.new)) return bad2;
-      const replace = (text5) => {
+      const replace = (text6) => {
         if (!isStr2(op.old) || !op.old) return bad2;
-        const count = text5.split(op.old).length - 1;
+        const count = text6.split(op.old).length - 1;
         if (count === 0) return { result: "skill_no_match" };
         if (count > 1) return { result: "skill_ambiguous", count };
-        return text5.replace(op.old, () => op.new);
+        return text6.replace(op.old, () => op.new);
       };
       if (op.file === void 0) {
         const body = replace(d.body);
@@ -109939,12 +109939,12 @@ ${body}`;
             this.path = path126;
             this.now = now;
           }
-          append(rec6) {
-            const full = { ts: this.now().toISOString(), ...rec6 };
+          append(rec7) {
+            const full = { ts: this.now().toISOString(), ...rec7 };
             const redacted = [];
             for (const f of ["before", "after"]) {
               const v = full[f];
-              if (typeof v === "string" && (detectCredential(v) || REDACT_RESULTS.has(rec6.result))) {
+              if (typeof v === "string" && (detectCredential(v) || REDACT_RESULTS.has(rec7.result))) {
                 full[f] = null;
                 redacted.push(f);
               }
@@ -109976,9 +109976,9 @@ ${body}`;
           path(id4) {
             return (0, import_path27.join)(this.dir, `${id4}.json`);
           }
-          write(rec6) {
+          write(rec7) {
             const id4 = `skl-${this.now().getTime()}-${(0, import_crypto32.randomBytes)(4).toString("hex")}`;
-            const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec6 };
+            const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec7 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
           }
@@ -109996,8 +109996,8 @@ ${body}`;
             const out = [];
             for (const n of (0, import_fs36.readdirSync)(this.dir)) {
               if (!n.startsWith("skl-") || !n.endsWith(".json")) continue;
-              const rec6 = this.read(n.slice(0, -".json".length));
-              if (rec6) out.push(rec6);
+              const rec7 = this.read(n.slice(0, -".json".length));
+              if (rec7) out.push(rec7);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -110241,31 +110241,31 @@ ${body}`;
           }
           /** Apply re-runs every check except caps/staging against the current files; a failure keeps the staged write. */
           resolveStaged(id4, decision) {
-            const rec6 = this.staging.read(id4);
-            if (!rec6) return { result: "staged_not_found" };
+            const rec7 = this.staging.read(id4);
+            if (!rec7) return { result: "staged_not_found" };
             if (decision === "discard") {
-              this.dropStaged(rec6, "owner");
+              this.dropStaged(rec7, "owner");
               return { result: "discarded" };
             }
-            const out = this.manageInner(rec6.op, rec6.origin, rec6.ctx, rec6.id);
-            if (out.result === "applied") this.staging.remove(rec6.id);
-            else this.journal.append({ action: rec6.op.action, name: rec6.op.name, origin: rec6.origin, result: out.result, stagedId: rec6.id, resolvedBy: "owner" });
+            const out = this.manageInner(rec7.op, rec7.origin, rec7.ctx, rec7.id);
+            if (out.result === "applied") this.staging.remove(rec7.id);
+            else this.journal.append({ action: rec7.op.action, name: rec7.op.name, origin: rec7.origin, result: out.result, stagedId: rec7.id, resolvedBy: "owner" });
             return out;
           }
           expireStaged(maxAgeMs) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec6 of this.staging.list()) {
-              if (Date.parse(rec6.createdAt) < cutoff) {
-                this.dropStaged(rec6, "expiry");
-                dropped.push(rec6.id);
+            for (const rec7 of this.staging.list()) {
+              if (Date.parse(rec7.createdAt) < cutoff) {
+                this.dropStaged(rec7, "expiry");
+                dropped.push(rec7.id);
               }
             }
             return dropped;
           }
-          dropStaged(rec6, by) {
-            this.journal.append({ action: rec6.op.action, name: rec6.op.name, origin: rec6.origin, result: "discarded", stagedId: rec6.id, resolvedBy: by });
-            this.staging.remove(rec6.id);
+          dropStaged(rec7, by) {
+            this.journal.append({ action: rec7.op.action, name: rec7.op.name, origin: rec7.origin, result: "discarded", stagedId: rec7.id, resolvedBy: by });
+            this.staging.remove(rec7.id);
           }
           // ── owner admin ─────────────────────────────────────────────────────────
           pin(name) {
@@ -110365,13 +110365,13 @@ ${body}`;
         const raw = JSON.parse((0, import_fs38.readFileSync)((0, import_path29.join)(skillsRoot, ".usage.json"), "utf-8"));
         for (const [name, u] of Object.entries(raw ?? {})) {
           if (!u || typeof u !== "object") continue;
-          const num3 = (v) => typeof v === "number" ? v : void 0;
+          const num4 = (v) => typeof v === "number" ? v : void 0;
           const str222 = (v) => typeof v === "string" ? v : void 0;
           out.set(name, {
             state: str222(u.state),
             pinned: u.pinned === true,
-            viewCount: num3(u.view_count),
-            patchCount: num3(u.patch_count),
+            viewCount: num4(u.view_count),
+            patchCount: num4(u.patch_count),
             createdAt: str222(u.created_at),
             lastUsedAt: str222(u.last_used_at)
           });
@@ -110454,13 +110454,13 @@ ${body}`;
     function scanMemory(hermesHome) {
       const out = [];
       for (const [source2, file] of [["memory", "MEMORY.md"], ["user", "USER.md"]]) {
-        let text5;
+        let text6;
         try {
-          text5 = (0, import_fs38.readFileSync)((0, import_path29.join)(hermesHome, "memories", file), "utf-8");
+          text6 = (0, import_fs38.readFileSync)((0, import_path29.join)(hermesHome, "memories", file), "utf-8");
         } catch {
           continue;
         }
-        parseMemoryEntries(text5).forEach((entry, i) => {
+        parseMemoryEntries(text6).forEach((entry, i) => {
           out.push({ id: `${source2}:${i}`, source: source2, text: entry, forcedDiscard: detectCredential(entry) !== null });
         });
       }
@@ -110704,7 +110704,7 @@ ${body}`;
           }
           saveRecord(rows, module22, digest5, approvedBy, disabled = false) {
             if (!validDriverDigest(digest5) || module22.category !== "driver") throw new Error("Invalid driver activation identity");
-            const rec6 = {
+            const rec7 = {
               type: module22.type,
               treeDigest: digest5,
               approvedBy,
@@ -110714,8 +110714,8 @@ ${body}`;
               ...disabled ? { disabled: true } : {}
             };
             const kept = rows.filter((r) => r.type !== module22.type || r.treeDigest !== digest5);
-            writeFileAtomic600(this.path, JSON.stringify({ version: 1, activations: [...kept, rec6] }, null, 2));
-            return rec6;
+            writeFileAtomic600(this.path, JSON.stringify({ version: 1, activations: [...kept, rec7] }, null, 2));
+            return rec7;
           }
         };
       }
@@ -110756,7 +110756,7 @@ ${body}`;
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest5);
             if (existing) return existing.id;
             const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto40.randomBytes)(8).toString("hex")}`;
-            const rec6 = {
+            const rec7 = {
               kind: "driver_activation",
               id: id4,
               createdAt: this.now().toISOString(),
@@ -110771,7 +110771,7 @@ ${body}`;
               runtime: structuredClone(module22.runtime),
               ...deriveDriverRiskClass(module22)
             };
-            writeFileAtomic600(this.path(id4), JSON.stringify(rec6, null, 2));
+            writeFileAtomic600(this.path(id4), JSON.stringify(rec7, null, 2));
             return id4;
           }
           read(id4) {
@@ -110798,10 +110798,10 @@ ${body}`;
           /** Same retention window as the existing assistant staged-write stores. */
           expire(maxAgeMs = MAX_AGE) {
             const dropped = [];
-            for (const rec6 of this.list()) {
-              if (this.now().getTime() - Date.parse(rec6.createdAt) >= maxAgeMs) {
-                this.remove(rec6.id);
-                dropped.push(rec6.id);
+            for (const rec7 of this.list()) {
+              if (this.now().getTime() - Date.parse(rec7.createdAt) >= maxAgeMs) {
+                this.remove(rec7.id);
+                dropped.push(rec7.id);
               }
             }
             return dropped;
@@ -110822,21 +110822,21 @@ ${body}`;
           resolve(id4, decision, store4, readCurrent) {
             const fail10 = (code) => ({ success: false, code });
             if (decision !== "apply" && decision !== "discard") return fail10("invalid_args");
-            const rec6 = this.read(id4);
-            if (!rec6) return fail10("staged_not_found");
+            const rec7 = this.read(id4);
+            if (!rec7) return fail10("staged_not_found");
             if (decision === "discard") {
-              this.discarded.add(`${rec6.type}\0${rec6.treeDigest}`);
+              this.discarded.add(`${rec7.type}\0${rec7.treeDigest}`);
               this.remove(id4);
               return { success: true, result: "discarded" };
             }
-            if (this.now().getTime() - Date.parse(rec6.createdAt) >= MAX_AGE) return fail10("expired");
-            const current4 = readCurrent(rec6.type);
+            if (this.now().getTime() - Date.parse(rec7.createdAt) >= MAX_AGE) return fail10("expired");
+            const current4 = readCurrent(rec7.type);
             if (!current4) return fail10("driver_not_installed");
             const risk = deriveDriverRiskClass(current4.module);
-            if (current4.module.type !== rec6.type || current4.module.name !== rec6.name || current4.module.providerVersion !== rec6.providerVersion || (current4.module.publisher ?? void 0) !== (rec6.publisher ?? void 0) || current4.treeDigest !== rec6.treeDigest || risk.riskClass !== rec6.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec6.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec6.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec6.runtime)) return fail10("stale");
-            if (!store4.approve(current4.module, rec6.treeDigest)) return fail10("driver_disabled");
+            if (current4.module.type !== rec7.type || current4.module.name !== rec7.name || current4.module.providerVersion !== rec7.providerVersion || (current4.module.publisher ?? void 0) !== (rec7.publisher ?? void 0) || current4.treeDigest !== rec7.treeDigest || risk.riskClass !== rec7.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec7.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec7.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec7.runtime)) return fail10("stale");
+            if (!store4.approve(current4.module, rec7.treeDigest)) return fail10("driver_disabled");
             this.remove(id4);
-            return { success: true, result: "applied", type: rec6.type, treeDigest: rec6.treeDigest };
+            return { success: true, result: "applied", type: rec7.type, treeDigest: rec7.treeDigest };
           }
         };
       }
@@ -110867,9 +110867,9 @@ ${body}`;
           path(id4) {
             return (0, import_path30.join)(this.dir, `${id4}.json`);
           }
-          write(rec6) {
+          write(rec7) {
             const id4 = `note-${this.now().getTime()}-${(0, import_crypto33.randomBytes)(4).toString("hex")}`;
-            const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec6 };
+            const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec7 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
           }
@@ -110887,8 +110887,8 @@ ${body}`;
             const out = [];
             for (const n of (0, import_fs39.readdirSync)(this.dir)) {
               if (!n.startsWith("note-") || !n.endsWith(".json")) continue;
-              const rec6 = this.read(n.slice(0, -".json".length));
-              if (rec6) out.push(rec6);
+              const rec7 = this.read(n.slice(0, -".json".length));
+              if (rec7) out.push(rec7);
             }
             return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
@@ -110903,10 +110903,10 @@ ${body}`;
           expire(maxAgeMs) {
             const cutoff = this.now().getTime() - maxAgeMs;
             const dropped = [];
-            for (const rec6 of this.list()) {
-              if (Date.parse(rec6.createdAt) < cutoff) {
-                this.remove(rec6.id);
-                dropped.push(rec6.id);
+            for (const rec7 of this.list()) {
+              if (Date.parse(rec7.createdAt) < cutoff) {
+                this.remove(rec7.id);
+                dropped.push(rec7.id);
               }
             }
             return dropped;
@@ -111356,11 +111356,11 @@ ${body}`;
               return lock.errno === "ENOENT" ? failure4("staged_not_found", "Launch-default proposal not found.") : failure4("staged_busy", "Proposal resolution lock unavailable.", { reason: lock.reason });
             }
             try {
-              const rec6 = this.read(id4);
-              if (!rec6) return failure4("staged_not_found", "Launch-default proposal not found.");
+              const rec7 = this.read(id4);
+              if (!rec7) return failure4("staged_not_found", "Launch-default proposal not found.");
               let applied;
               if (decision === "apply") {
-                const { version: _v, id: _id, createdAt: _at, generation: _g, documentRevision, ...proposal } = rec6;
+                const { version: _v, id: _id, createdAt: _at, generation: _g, documentRevision, ...proposal } = rec7;
                 applied = await apply(proposal, documentRevision);
                 if (!applied.success) return { ...applied };
                 if (applied.result !== "applied" || applied.durable !== true) {
@@ -112199,13 +112199,13 @@ ${body}`;
             errs.push("startup_dismiss.patterns must be a non-empty array");
           } else {
             d.patterns.forEach((p, i) => {
-              const rec6 = p && typeof p === "object" ? p : {};
-              if (typeof rec6.regex !== "string" || !rec6.regex) {
+              const rec7 = p && typeof p === "object" ? p : {};
+              if (typeof rec7.regex !== "string" || !rec7.regex) {
                 errs.push(`startup_dismiss.patterns[${i}].regex is required`);
                 return;
               }
               try {
-                new RegExp(rec6.regex, typeof rec6.flags === "string" ? rec6.flags : void 0);
+                new RegExp(rec7.regex, typeof rec7.flags === "string" ? rec7.flags : void 0);
               } catch {
                 errs.push(`startup_dismiss.patterns[${i}].regex does not compile`);
               }
@@ -112531,8 +112531,8 @@ ${body}`;
           }
         }
         if (toLine < fromLine) toLine = fromLine;
-        const text5 = lines.slice(fromLine, toLine).join("\n");
-        resolved.push({ id: id4, fromLine, toLine, text: text5 });
+        const text6 = lines.slice(fromLine, toLine).join("\n");
+        resolved.push({ id: id4, fromLine, toLine, text: text6 });
       }
       return resolved;
     }
@@ -112792,9 +112792,9 @@ ${detail.join("\n")}` : stripped;
       }
       return entries2.slice(start);
     }
-    function hasCursorMarker(text5, markerClass) {
+    function hasCursorMarker(text6, markerClass) {
       const cls = markerClass ?? DEFAULT_CURSOR_MARKER_CLASS;
-      return new RegExp("^\\s*[" + cls + "]").test(text5);
+      return new RegExp("^\\s*[" + cls + "]").test(text6);
     }
     var TITLE_DETAIL_MAX_LINES;
     var SIDE_PANEL_COLUMN_RE;
@@ -112807,13 +112807,13 @@ ${detail.join("\n")}` : stripped;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
-    function stripAnsi3(text5) {
-      const s2 = String(text5 || "");
+    function stripAnsi3(text6) {
+      const s2 = String(text6 || "");
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
     }
-    function hasProviderFailureEnvelope(text5) {
-      return /\bprovider\.[a-z_]*error\b/.test(text5) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text5) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text5);
+    function hasProviderFailureEnvelope(text6) {
+      return /\bprovider\.[a-z_]*error\b/.test(text6) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text6) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text6);
     }
     function findMatchingClosingFence(lines, openIdx, ch, openLen = 3) {
       const closeRe = new RegExp(`^${ch}{${openLen},}\\s*$`);
@@ -113031,13 +113031,13 @@ ${detail.join("\n")}` : stripped;
       const stripped = stripAnsi3(output).replace(/\r\n?/g, "\n");
       const filtered = stripToolAndCodeLines(stripped);
       const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
-      const text5 = linesText.replace(/\s+/g, " ").trim();
-      if (!text5) return null;
-      const quota = hasProviderFailureEnvelope(text5) && [
+      const text6 = linesText.replace(/\s+/g, " ").trim();
+      if (!text6) return null;
+      const quota = hasProviderFailureEnvelope(text6) && [
         /\b(?:usage|quota|credit)\s+limit\b/,
         /\bquota\s*(?:exhausted|refresh)/,
         /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text5));
+      ].some((pattern) => pattern.test(text6));
       if (quota) {
         return {
           errorReason: "quota_exceeded",
@@ -113050,7 +113050,7 @@ ${detail.join("\n")}` : stripped;
         /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
         /\bpayment_required\b/,
         /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text5));
+      ].some((pattern) => pattern.test(text6));
       if (billing) {
         return {
           errorReason: "billing_failed",
@@ -113101,12 +113101,12 @@ ${detail.join("\n")}` : stripped;
       return null;
     }
     function detectAuthFailureOnlyReply(reply) {
-      const text5 = stripAnsi3(reply).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text5 || text5.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-      const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text5);
-      const segments = (isJsonOrRaw401 ? text5.split(/\s*·\s*/) : text5.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      const text6 = stripAnsi3(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text6 || text6.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text6);
+      const segments = (isJsonOrRaw401 ? text6.split(/\s*·\s*/) : text6.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
       if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
-      const failure7 = detectProviderFailure(text5);
+      const failure7 = detectProviderFailure(text6);
       return failure7?.failureKind === "auth" ? failure7 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
     }
     var ANSI_OSC_DCS_RE;
@@ -113158,17 +113158,17 @@ ${detail.join("\n")}` : stripped;
         AUTH_ONLY_REPLY_MAX_CHARS = 600;
       }
     });
-    function chunkPreservingSurrogates(text5, size) {
+    function chunkPreservingSurrogates(text6, size) {
       const chunks = [];
       let offset = 0;
-      while (offset < text5.length) {
-        let end = Math.min(text5.length, offset + size);
-        if (end < text5.length) {
-          const code = text5.charCodeAt(end - 1);
+      while (offset < text6.length) {
+        let end = Math.min(text6.length, offset + size);
+        if (end < text6.length) {
+          const code = text6.charCodeAt(end - 1);
           if (code >= 55296 && code <= 56319) end -= 1;
         }
-        if (end <= offset) end = Math.min(text5.length, offset + size);
-        chunks.push(text5.slice(offset, end));
+        if (end <= offset) end = Math.min(text6.length, offset + size);
+        chunks.push(text6.slice(offset, end));
         offset = end;
       }
       return chunks;
@@ -113187,9 +113187,9 @@ ${detail.join("\n")}` : stripped;
       for (let i = 0; i < s2.length; i += 1) if (s2.charCodeAt(i) === 10) n += 1;
       return n;
     }
-    function shouldUseVerifiedSubmit(text5, platform10 = process.platform) {
+    function shouldUseVerifiedSubmit(text6, platform10 = process.platform) {
       if (platform10 === "win32") return true;
-      return text5.length >= VERIFIED_SUBMIT_MIN_CHARS;
+      return text6.length >= VERIFIED_SUBMIT_MIN_CHARS;
     }
     function resolveWin32SubmitMode(env2 = process.env) {
       return env2.ADHDEV_WIN32_SUBMIT_MODE === "soft_newline" ? "soft_newline" : "paste";
@@ -113197,10 +113197,10 @@ ${detail.join("\n")}` : stripped;
     function normalizeForEcho(s2) {
       return s2.replace(/\s+/g, "");
     }
-    function resolveSubmitDelayMs(specBeforeSubmit, text5, manifestSendDelayMs) {
-      const lines = countNewlines(text5);
+    function resolveSubmitDelayMs(specBeforeSubmit, text6, manifestSendDelayMs) {
+      const lines = countNewlines(text6);
       const linesBonus = Math.min(800, lines * 80);
-      const lengthBonus = Math.min(800, Math.floor(text5.length / 1e3) * 200);
+      const lengthBonus = Math.min(800, Math.floor(text6.length / 1e3) * 200);
       const spec = typeof specBeforeSubmit === "number" && specBeforeSubmit > 0 ? specBeforeSubmit : 0;
       const manifest = typeof manifestSendDelayMs === "number" && Number.isFinite(manifestSendDelayMs) && manifestSendDelayMs > 0 ? manifestSendDelayMs : 0;
       return Math.max(spec, manifest, SUBMIT_DELAY_FLOOR_MS + linesBonus + lengthBonus);
@@ -113270,7 +113270,7 @@ ${detail.join("\n")}` : stripped;
       for (let i = 0; i < char.length; i += 1) units.push(char.charCodeAt(i));
       return units.map((u) => keyRecord(u, true)).join("") + units.slice().reverse().map((u) => keyRecord(u, false)).join("");
     }
-    function win32InputModeTokens(text5) {
+    function win32InputModeTokens(text6) {
       const tokens = [];
       let ascii = "";
       const pushAscii = () => {
@@ -113284,7 +113284,7 @@ ${detail.join("\n")}` : stripped;
         if (last < ascii.length) tokens.push({ text: ascii.slice(last), atomic: false });
         ascii = "";
       };
-      for (const ch of text5) {
+      for (const ch of text6) {
         if (ch.charCodeAt(0) < 128) {
           ascii += ch;
           continue;
@@ -113295,8 +113295,8 @@ ${detail.join("\n")}` : stripped;
       pushAscii();
       return tokens;
     }
-    function chunkWin32InputMode(text5, maxChars) {
-      return chunkWin32Tokens(win32InputModeTokens(text5), maxChars);
+    function chunkWin32InputMode(text6, maxChars) {
+      return chunkWin32Tokens(win32InputModeTokens(text6), maxChars);
     }
     function chunkWin32Tokens(tokens, maxChars) {
       const size = Math.max(1, Math.floor(maxChars));
@@ -113433,10 +113433,10 @@ ${detail.join("\n")}` : stripped;
         const lead = LEAD_RE.exec(cur.left);
         if (!lead) return { kind: "unknown" };
         const cells = { row: cur.row, col: cur.col, left: cur.left, right: cur.right };
-        const text5 = cur.left.slice(lead[0].length);
-        if (BLANK_RE.test(text5)) return { kind: "empty", row: cur.row, cells };
-        if (CHIPS_ONLY_RE.test(text5)) return { kind: "chip", row: cur.row, text: text5, cells };
-        return { kind: "text", row: cur.row, text: text5, cells };
+        const text6 = cur.left.slice(lead[0].length);
+        if (BLANK_RE.test(text6)) return { kind: "empty", row: cur.row, cells };
+        if (CHIPS_ONLY_RE.test(text6)) return { kind: "chip", row: cur.row, text: text6, cells };
+        return { kind: "text", row: cur.row, text: text6, cells };
       } catch {
         return { kind: "unknown" };
       }
@@ -113556,7 +113556,7 @@ ${detail.join("\n")}` : stripped;
             return !!send?.messageId && this.observers.has(send.messageId);
           }
           /** The send is about to be written (beginSend). Only an opted-in send reads the composer. */
-          begin(messageId, text5, bracketedPaste) {
+          begin(messageId, text6, bracketedPaste) {
             this.stopWatching();
             this.lastOwnWrites = this.writes();
             this.provenanceAtBegin = this.provenance();
@@ -113567,7 +113567,7 @@ ${detail.join("\n")}` : stripped;
               firstWrittenAt = this.firstWrites.get(messageId) ?? firstWrittenAt;
               bounded(this.firstWrites, messageId, firstWrittenAt);
             }
-            const send = { ...messageId ? { messageId } : {}, text: text5, ...bracketedPaste ? { bracketedPaste } : {}, epoch: this.epoch, ownsComposer: false, phase: "watch", repasted: false, firstWrittenAt };
+            const send = { ...messageId ? { messageId } : {}, text: text6, ...bracketedPaste ? { bracketedPaste } : {}, epoch: this.epoch, ownsComposer: false, phase: "watch", repasted: false, firstWrittenAt };
             this.current = send;
             if (this.isObserved(send)) {
               const read2 = readComposer(this.host.adapter);
@@ -113580,8 +113580,8 @@ ${detail.join("\n")}` : stripped;
             return send;
           }
           /** The FIFO drain owns the slot from this tick on (the write follows 50 ms later). */
-          reserve(messageId, text5) {
-            this.current = { messageId, text: text5, epoch: this.epoch, ownsComposer: false, phase: "done", repasted: false, firstWrittenAt: Date.now() };
+          reserve(messageId, text6) {
+            this.current = { messageId, text: text6, epoch: this.epoch, ownsComposer: false, phase: "done", repasted: false, firstWrittenAt: Date.now() };
           }
           /** Any driver input into this PTY that is not the engine's own. */
           noteForeignInput() {
@@ -114119,22 +114119,22 @@ ${detail.join("\n")}` : stripped;
           }
           /** A recovery write: only if the session host's input stream is still the
            *  one captured at this call (review R9-1/R9-2). False = refused, or no host guard. */
-          writeKeysGuarded(text5) {
+          writeKeysGuarded(text6) {
             const write = this.host.adapter.writeIfInputUnchanged;
             if (typeof write !== "function") return Promise.resolve(false);
             let result;
             try {
-              result = Promise.resolve(write.call(this.host.adapter, text5)).then((ok) => ok === true, () => false);
+              result = Promise.resolve(write.call(this.host.adapter, text6)).then((ok) => ok === true, () => false);
             } catch {
               return Promise.resolve(false);
             }
             this.verdicts.noteOwnWrite();
             return result;
           }
-          writeKeys(text5, submit = false, attempt = this.writeAttempt) {
+          writeKeys(text6, submit = false, attempt = this.writeAttempt) {
             let result;
             try {
-              result = this.host.adapter.send_keys(text5);
+              result = this.host.adapter.send_keys(text6);
             } catch (error) {
               if (attempt) this.notifyWrite(attempt, "uncertain");
               throw error;
@@ -114243,7 +114243,7 @@ ${detail.join("\n")}` : stripped;
             }
           }
           /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-          sendMessageDuringGeneration(text5, bracketedPaste, messageId) {
+          sendMessageDuringGeneration(text6, bracketedPaste, messageId) {
             if (process.platform === "win32") {
               LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
               return { accepted: false, reason: "platform_unsupported" };
@@ -114253,11 +114253,11 @@ ${detail.join("\n")}` : stripped;
             if (this.isSendInFlight()) return { accepted: false, reason: "send_in_flight" };
             LOG.info(
               "FsmDriver",
-              `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text5.length})`
+              `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text6.length})`
             );
             const attempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
             if (attempt) this.notifyWrite(attempt, "started");
-            this.actuallySendMessage(text5, bracketedPaste, { midGeneration: true, attempt });
+            this.actuallySendMessage(text6, bracketedPaste, { midGeneration: true, attempt });
             return { accepted: true };
           }
           /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
@@ -114338,18 +114338,18 @@ ${detail.join("\n")}` : stripped;
            * on top of a still-generating turn, braiding the two bodies in the composer
            * (see the SEND-OVERLAP note above the constants).
            */
-          handleSendMessage(text5, bracketedPaste, messageId) {
+          handleSendMessage(text6, bracketedPaste, messageId) {
             if (!this.canSendNow()) {
               const id4 = messageId || `anon:${++this.anonymousSendCounter}`;
-              this.pendingSends.push({ messageId: id4, text: text5, bracketedPaste });
+              this.pendingSends.push({ messageId: id4, text: text6, bracketedPaste });
               const reason = this.sendBlockedReason();
               LOG.info(
                 "FsmDriver",
-                `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text5.length}, queued=${this.pendingSends.length})`
+                `[${this.host.specTag()}] send queued \u2014 ${reason} (len=${text6.length}, queued=${this.pendingSends.length})`
               );
               return { status: "queued", queueDepth: this.pendingSends.length, reason };
             }
-            this.beginSend(text5, bracketedPaste, messageId);
+            this.beginSend(text6, bracketedPaste, messageId);
             return { status: "delivered" };
           }
           /** True when the most recent canSendNow() check blocked on an anchored
@@ -114402,14 +114402,14 @@ ${detail.join("\n")}` : stripped;
             return true;
           }
           /** Mark a send as in flight and write it. */
-          beginSend(text5, bracketedPaste, messageId) {
+          beginSend(text6, bracketedPaste, messageId) {
             this.writeAttempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
             if (this.writeAttempt) this.notifyWrite(this.writeAttempt, "started");
             this.sendInFlight = true;
             this.sendInFlightAt = Date.now();
             this.armLatchWatchdog(SEND_IN_FLIGHT_MAX_MS + LATCH_WATCHDOG_SLACK_MS);
-            this.verdicts.begin(messageId, text5, bracketedPaste);
-            this.actuallySendMessage(text5, bracketedPaste);
+            this.verdicts.begin(messageId, text6, bracketedPaste);
+            this.actuallySendMessage(text6, bracketedPaste);
           }
           /**
            * QUEUE-WEDGE (live 2026-10-10, claude-cli/win32). The in-flight latch
@@ -114553,15 +114553,15 @@ ${detail.join("\n")}` : stripped;
               setTimeout(poll2, 100);
             });
           }
-          actuallySendMessage(text5, bracketedPaste, opts) {
+          actuallySendMessage(text6, bracketedPaste, opts) {
             const attempt = opts?.midGeneration ? opts.attempt ?? null : this.writeAttempt;
             const sm = this.host.spec.send_message;
             this.submitUnconfirmed = false;
             const perChar = sm.delay_ms_per_char ?? 0;
-            const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text5, this.host.opts.manifestSendDelayMs);
+            const beforeSubmit = resolveSubmitDelayMs(sm.delay_ms_before_submit, text6, this.host.opts.manifestSendDelayMs);
             const wrapInPaste = process.platform !== "win32" && (bracketedPaste === true && sm.posix_bracketed_paste_for_images === true || sm.posix_bracketed_paste_text === true);
             if (opts?.guardedRecovery) {
-              const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text5}${BRACKETED_PASTE_CLOSE}` : text5;
+              const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text6}${BRACKETED_PASTE_CLOSE}` : text6;
               const pasteGate = sm.posix_bracketed_paste_text === true && this.verdicts.isObserved(this.verdicts.current);
               void this.writeKeysGuarded(body).then((ok) => {
                 if (!ok) {
@@ -114570,39 +114570,39 @@ ${detail.join("\n")}` : stripped;
                 }
                 if (this.verdicts.current?.phase === "done") return;
                 this.markBodyWrite();
-                this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text5, { ...pasteGate ? { pasteGate: true } : { skipEchoGate: true }, guarded: true });
+                this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text6, { ...pasteGate ? { pasteGate: true } : { skipEchoGate: true }, guarded: true });
               });
               return;
             }
             if (opts?.midGeneration) {
-              const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text5}${BRACKETED_PASTE_CLOSE}` : text5;
+              const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text6}${BRACKETED_PASTE_CLOSE}` : text6;
               this.writeKeys(body, false, attempt);
               if (attempt) attempt.bodyFinished = true;
               this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), attempt);
               return;
             }
             if (wrapInPaste) {
-              this.writeKeys(`${BRACKETED_PASTE_OPEN}${text5}${BRACKETED_PASTE_CLOSE}`, false, attempt);
+              this.writeKeys(`${BRACKETED_PASTE_OPEN}${text6}${BRACKETED_PASTE_CLOSE}`, false, attempt);
               if (attempt) attempt.bodyFinished = true;
               this.markBodyWrite();
               const pasteGate = sm.posix_bracketed_paste_text === true && this.verdicts.isObserved(this.verdicts.current);
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text5, pasteGate ? { pasteGate: true } : { skipEchoGate: true });
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text6, pasteGate ? { pasteGate: true } : { skipEchoGate: true });
               return;
             }
             if (process.platform === "win32") {
-              this.writeWin32Body(text5);
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text5);
+              this.writeWin32Body(text6);
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text6);
               return;
             }
-            if (perChar === 0 && shouldUseVerifiedSubmit(text5)) {
-              this.writeKeys(text5, false, attempt);
+            if (perChar === 0 && shouldUseVerifiedSubmit(text6)) {
+              this.writeKeys(text6, false, attempt);
               if (attempt) attempt.bodyFinished = true;
               this.markBodyWrite();
-              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text5);
+              this.scheduleVerifiedSubmit(sm.submit_key, beforeSubmit, text6);
               return;
             }
             if (perChar === 0) {
-              this.writeKeys(text5, false, attempt);
+              this.writeKeys(text6, false, attempt);
               if (attempt) attempt.bodyFinished = true;
               if (beforeSubmit > 0) this.schedulePlainSubmit(sm.submit_key, beforeSubmit);
               else this.writeKeys(sm.submit_key, true, attempt);
@@ -114610,13 +114610,13 @@ ${detail.join("\n")}` : stripped;
             }
             let i = 0;
             const iv = setInterval(() => {
-              if (i >= text5.length) {
+              if (i >= text6.length) {
                 clearInterval(iv);
                 if (attempt) attempt.bodyFinished = true;
                 this.schedulePlainSubmit(sm.submit_key, beforeSubmit, attempt);
                 return;
               }
-              this.writeKeys(text5[i], false, attempt);
+              this.writeKeys(text6[i], false, attempt);
               i += 1;
             }, perChar);
           }
@@ -114651,31 +114651,31 @@ ${detail.join("\n")}` : stripped;
            * written as their own atomic segments (never chunked), so chunking can never
            * split ESC[200~ / ESC[201~ mid-sequence regardless of body length.
            */
-          writeWin32Body(text5) {
+          writeWin32Body(text6) {
             const attempt = this.writeAttempt;
             if (this.win32WriteTimer) {
               clearTimeout(this.win32WriteTimer);
               this.win32WriteTimer = null;
             }
-            const hasNewline = /\r?\n/.test(text5);
+            const hasNewline = /\r?\n/.test(text6);
             const mode = resolveWin32SubmitMode();
             const chunkBody = this.host.spec.send_message.win32_input_mode_non_ascii === true ? chunkWin32InputMode : chunkPreservingSurrogates2;
             let segments;
             if (!hasNewline) {
-              segments = chunkBody(text5, WIN32_PTY_WRITE_CHUNK_CHARS);
+              segments = chunkBody(text6, WIN32_PTY_WRITE_CHUNK_CHARS);
             } else if (mode === "soft_newline") {
-              const rewritten = text5.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
+              const rewritten = text6.split(/\r?\n/).join(WIN32_SOFT_NEWLINE);
               segments = chunkBody(rewritten, WIN32_PTY_WRITE_CHUNK_CHARS);
             } else {
               segments = [
                 WIN32_BRACKETED_PASTE_OPEN,
-                ...chunkBody(text5, WIN32_PTY_WRITE_CHUNK_CHARS),
+                ...chunkBody(text6, WIN32_PTY_WRITE_CHUNK_CHARS),
                 WIN32_BRACKETED_PASTE_CLOSE
               ];
             }
             if (segments.length <= 1) {
               this.markBodyWrite();
-              this.writeKeys(segments[0] ?? text5, false, attempt);
+              this.writeKeys(segments[0] ?? text6, false, attempt);
               if (attempt) attempt.bodyFinished = true;
               return;
             }
@@ -117583,8 +117583,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (buffer.byteLength === 0) {
         return;
       }
-      const text5 = buffer.toString("utf8");
-      if (containsEncodedOrRawSecret(text5, SECRET_CONTENT_PATTERNS)) {
+      const text6 = buffer.toString("utf8");
+      if (containsEncodedOrRawSecret(text6, SECRET_CONTENT_PATTERNS)) {
         throw new ArtifactGuardError(
           "secret_file_refused",
           "Artifact content matches a secret or token pattern and is refused (secret_file_refused)"
@@ -120077,9 +120077,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           const store4 = getArtifactStore(ctx);
           const targetArtifactId = trimString3(opts.artifactId);
           if (targetArtifactId) {
-            const rec6 = store4.get(targetArtifactId);
-            if (rec6 && sessionIdsEquivalent(rec6.sessionId, sessionId) && trimString3(rec6.workspaceRoot)) {
-              sessionWorkspace = trimString3(rec6.workspaceRoot);
+            const rec7 = store4.get(targetArtifactId);
+            if (rec7 && sessionIdsEquivalent(rec7.sessionId, sessionId) && trimString3(rec7.workspaceRoot)) {
+              sessionWorkspace = trimString3(rec7.workspaceRoot);
               status = "stopped";
             }
           }
@@ -120176,7 +120176,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       try {
         const store4 = getArtifactStore(ctx);
         const existing = store4.listBySession(sessionId, { limit: 10 });
-        if (existing.some((rec6) => rec6.meshId === meshId)) return true;
+        if (existing.some((rec7) => rec7.meshId === meshId)) return true;
       } catch {
       }
       return false;
@@ -120381,9 +120381,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const taskPayload = taskEntry?.payload ?? {};
       const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
       const remoteArtifactById = new Map(
-        (authority.remoteInputArtifacts ?? []).map((rec6) => [rec6.artifactId, rec6])
+        (authority.remoteInputArtifacts ?? []).map((rec7) => [rec7.artifactId, rec7])
       );
-      const seen2 = new Set(own2.map((rec6) => rec6.artifactId));
+      const seen2 = new Set(own2.map((rec7) => rec7.artifactId));
       const merged = [...own2];
       for (const rawId of rawInputIds) {
         const id4 = trimString3(rawId);
@@ -120396,7 +120396,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           merged.push(record7);
         }
       }
-      const filtered = options?.filterMissionId ? merged.filter((rec6) => rec6.missionId === options.filterMissionId) : merged;
+      const filtered = options?.filterMissionId ? merged.filter((rec7) => rec7.missionId === options.filterMissionId) : merged;
       return options?.limit !== void 0 ? filtered.slice(0, options.limit) : filtered;
     }
     async function fetchArtifactFromOriginDaemon(ctx, authority, record7, args, isReadCommand) {
@@ -120657,12 +120657,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             if (resolveScopeOnly) {
               const rawInputIds = Array.isArray(queueEntry.inputArtifactIds) ? queueEntry.inputArtifactIds : Array.isArray(queuePayload.inputArtifactIds) ? queuePayload.inputArtifactIds : [];
               const inputArtifactIds = rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0);
-              const resolveRecMission = (rec6) => {
-                const direct = trimString3(rec6.missionId);
+              const resolveRecMission = (rec7) => {
+                const direct = trimString3(rec7.missionId);
                 if (direct) return direct;
-                if (!rec6.taskId) return "";
+                if (!rec7.taskId) return "";
                 try {
-                  const pe = meshStore.findQueueEntryById(rec6.meshId || meshId, rec6.taskId);
+                  const pe = meshStore.findQueueEntryById(rec7.meshId || meshId, rec7.taskId);
                   return trimString3(pe?.missionId) || trimString3(pe?.payload?.missionId);
                 } catch {
                   return "";
@@ -120671,15 +120671,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const inputArtifacts = [];
               const allowedSet = new Set(inputArtifactIds);
               for (const id4 of inputArtifactIds) {
-                const rec6 = store4.get(id4);
-                if (!rec6) continue;
-                const recMissionId = resolveRecMission(rec6);
-                const sameMesh = isSameBoundMesh(rec6.meshId, meshId);
+                const rec7 = store4.get(id4);
+                if (!rec7) continue;
+                const recMissionId = resolveRecMission(rec7);
+                const sameMesh = isSameBoundMesh(rec7.meshId, meshId);
                 if (sameMesh) {
                   inputArtifacts.push({
-                    ...rec6,
+                    ...rec7,
                     ...recMissionId ? { missionId: recMissionId } : {},
-                    originDaemonId: rec6.originDaemonId || selfDaemonId || null
+                    originDaemonId: rec7.originDaemonId || selfDaemonId || null
                   });
                 }
               }
@@ -120898,12 +120898,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return !hasWorkerCredentialInput(args);
     }
     function parseCursor(raw) {
-      const text5 = str9(raw);
-      if (!text5) return null;
-      const sep23 = text5.indexOf(":");
+      const text6 = str9(raw);
+      if (!text6) return null;
+      const sep23 = text6.indexOf(":");
       if (sep23 <= 0) return null;
-      const createdAt = Number(text5.slice(0, sep23));
-      const artifactId = text5.slice(sep23 + 1);
+      const createdAt = Number(text6.slice(0, sep23));
+      const artifactId = text6.slice(sep23 + 1);
       if (!Number.isFinite(createdAt) || !artifactId) return null;
       return { createdAt, artifactId };
     }
@@ -120922,10 +120922,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const cursor = parseCursor(args.cursor);
       const store4 = getArtifactStore(ctx);
       let records = store4.listByMesh(meshId, { ...missionId ? { missionId } : {} });
-      if (kind) records = records.filter((rec6) => rec6.kind === kind);
+      if (kind) records = records.filter((rec7) => rec7.kind === kind);
       if (cursor) {
-        const at = records.findIndex((rec6) => rec6.artifactId === cursor.artifactId);
-        records = at >= 0 ? records.slice(0, at) : records.filter((rec6) => rec6.createdAt <= cursor.createdAt);
+        const at = records.findIndex((rec7) => rec7.artifactId === cursor.artifactId);
+        records = at >= 0 ? records.slice(0, at) : records.filter((rec7) => rec7.createdAt <= cursor.createdAt);
       }
       const hasMore = records.length > limit;
       const page = hasMore ? records.slice(records.length - limit) : records;
@@ -121834,7 +121834,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store4, { filterMissionId, limit });
             } else {
               artifacts = store4.listBySession(authority.sessionId, { limit });
-              if (filterMissionId) artifacts = artifacts.filter((rec6) => rec6.missionId === filterMissionId);
+              if (filterMissionId) artifacts = artifacts.filter((rec7) => rec7.missionId === filterMissionId);
             }
             const attachments = artifacts.map((record7) => toChatAttachmentMeta(record7));
             return { success: true, sessionId: authority.sessionId, artifacts, attachments };
@@ -125814,11 +125814,11 @@ ${asText(streams.stderr)}
           return mesh ? mesh.policy?.drivers ?? {} : void 0;
         },
         relay: (identity4, result) => {
-          const text5 = JSON.stringify({ kind: "driver_action_result", ...result });
+          const text6 = JSON.stringify({ kind: "driver_action_result", ...result });
           return depositWorkerMailboxMessage({
             meshId: identity4.meshId,
             taskId: identity4.taskId,
-            text: text5.length <= 2e3 ? text5 : JSON.stringify({
+            text: text6.length <= 2e3 ? text6 : JSON.stringify({
               kind: "driver_action_result",
               stagedId: result.stagedId,
               invocationId: result.invocationId,
@@ -125880,16 +125880,16 @@ ${asText(streams.stderr)}
     }
     function hasSessionHostRuntimeEvidence(runtime2) {
       if (!runtime2 || typeof runtime2 !== "object") return false;
-      const rec6 = runtime2;
-      return rec6.surfaceKind != null || rec6.lifecycle != null || rec6.termination != null;
+      const rec7 = runtime2;
+      return rec7.surfaceKind != null || rec7.lifecycle != null || rec7.termination != null;
     }
     function isLiveSessionHostRuntimeMetadata(runtime2) {
       if (!runtime2 || typeof runtime2 !== "object") return false;
-      const rec6 = runtime2;
-      const lifecycle = readText2(rec6.lifecycle).toLowerCase();
+      const rec7 = runtime2;
+      const lifecycle = readText2(rec7.lifecycle).toLowerCase();
       if (TERMINAL_RUNTIME_LIFECYCLES.has(lifecycle)) return false;
-      if ((0, import_session_host_core15.isTerminalRecord)(rec6)) return false;
-      return (0, import_session_host_core15.isSessionHostLiveRuntime)(rec6);
+      if ((0, import_session_host_core15.isTerminalRecord)(rec7)) return false;
+      return (0, import_session_host_core15.isSessionHostLiveRuntime)(rec7);
     }
     function isConfirmedTerminalCoordinator(candidate, sessionRegistry) {
       if (!candidate || typeof candidate !== "object") return true;
@@ -126368,9 +126368,9 @@ ${asText(streams.stderr)}
           const st = (0, import_fs42.statSync)(path126);
           if (!st.isFile()) continue;
           const pid = Number(match[1]);
-          const list3 = sets.get(pid) ?? [];
-          list3.push({ path: path126, mtimeMs: st.mtimeMs });
-          sets.set(pid, list3);
+          const list4 = sets.get(pid) ?? [];
+          list4.push({ path: path126, mtimeMs: st.mtimeMs });
+          sets.set(pid, list4);
         } catch {
         }
       }
@@ -126506,8 +126506,8 @@ ${asText(streams.stderr)}
           let record7 = null;
           try {
             const parsed = JSON.parse((0, import_fs43.readFileSync)(f.path, "utf-8"));
-            const rec6 = parsed && typeof parsed === "object" ? parsed.record : null;
-            record7 = rec6 && typeof rec6 === "object" ? rec6 : null;
+            const rec7 = parsed && typeof parsed === "object" ? parsed.record : null;
+            record7 = rec7 && typeof rec7 === "object" ? rec7 : null;
           } catch {
             record7 = null;
           }
@@ -127123,8 +127123,8 @@ ${asText(streams.stderr)}
         if (actor.via === "assistant" && !interpretedFrom) {
           return fail4("interpreted_from_required", "an assistant answer must carry the owner's words (interpretedFrom)");
         }
-        const text5 = rawText ? truncateMissionText(rawText, DECISION_ANSWER_TEXT_MAX) : "";
-        const same = item.state === "answered" && d.answer && (d.answer.optionId ?? "") === optionId && (d.answer.text ?? "") === text5;
+        const text6 = rawText ? truncateMissionText(rawText, DECISION_ANSWER_TEXT_MAX) : "";
+        const same = item.state === "answered" && d.answer && (d.answer.optionId ?? "") === optionId && (d.answer.text ?? "") === text6;
         if (same) {
           return { ok: true, action: "unchanged", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision: prevRevision, answer: d.answer };
         }
@@ -127136,7 +127136,7 @@ ${asText(streams.stderr)}
         const revision = prevRevision + 1;
         const answer2 = {
           ...optionId ? { optionId } : {},
-          ...text5 ? { text: text5 } : {},
+          ...text6 ? { text: text6 } : {},
           by: actor.by,
           via: actor.via,
           ..."ingress" in actor && actor.ingress ? { ingress: actor.ingress } : {},
@@ -127153,7 +127153,7 @@ ${asText(streams.stderr)}
           itemId: item.id,
           revision,
           ...optionId ? { optionId } : {},
-          ...text5 ? { text: truncateMissionText(text5, 200) } : {},
+          ...text6 ? { text: truncateMissionText(text6, 200) } : {},
           via: actor.via,
           ..."ingress" in actor && actor.ingress ? { ingress: actor.ingress } : {},
           ...interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, 200) } : {},
@@ -127216,8 +127216,8 @@ ${asText(streams.stderr)}
       for (const item of items) {
         let m = missionCache.get(item.missionId);
         if (!m) {
-          const rec6 = getMeshMission(meshId, item.missionId);
-          m = { title: rec6?.title ?? item.missionId, carryOver: rec6 ? isCarryOverMissionRecord(rec6) : false };
+          const rec7 = getMeshMission(meshId, item.missionId);
+          m = { title: rec7?.title ?? item.missionId, carryOver: rec7 ? isCarryOverMissionRecord(rec7) : false };
           missionCache.set(item.missionId, m);
         }
         const e = toEntry2(item, m.title, m.carryOver);
@@ -127230,8 +127230,8 @@ ${asText(streams.stderr)}
       return store3().missionItems().listOpenByKind(meshId, "live_check").map((item) => {
         let m = missionCache.get(item.missionId);
         if (!m) {
-          const rec6 = getMeshMission(meshId, item.missionId);
-          m = { title: rec6?.title ?? item.missionId, carryOver: rec6 ? isCarryOverMissionRecord(rec6) : false };
+          const rec7 = getMeshMission(meshId, item.missionId);
+          m = { title: rec7?.title ?? item.missionId, carryOver: rec7 ? isCarryOverMissionRecord(rec7) : false };
           missionCache.set(item.missionId, m);
         }
         return {
@@ -127901,6 +127901,207 @@ ${grant.exp}`).digest("hex");
         };
       }
     });
+    function sessionEvidence(raw) {
+      const r = rec2(raw);
+      if (!text3(r.ownerDaemonId)) return void 0;
+      return {
+        taskId: text3(r.taskId) || null,
+        attemptId: text3(r.attemptId) || null,
+        ownerDaemonId: text3(r.ownerDaemonId),
+        source: choice(r.source, ["local", "member_push", "coordinator_probe", "none"], "none"),
+        freshness: choice(r.freshness, freshnesses, "unknown"),
+        observedAt: num(r.observedAt),
+        lastActivityAt: num(r.lastActivityAt),
+        lastActivitySource: choice(r.lastActivitySource, ["session_record", "last_message", "unknown"], "unknown"),
+        sessionError: "unknown",
+        observedStatus: sessionStatus(r.observedStatus)
+      };
+    }
+    function sessionCoverage(raw) {
+      return list(raw).filter((r) => text3(r.nodeId)).map((r) => ({
+        nodeId: text3(r.nodeId),
+        ownerDaemonId: text3(r.ownerDaemonId) || null,
+        source: choice(r.source, ["local", "member_push", "coordinator_probe", "none"], "none"),
+        freshness: choice(r.freshness, freshnesses, "unknown"),
+        observedAt: num(r.observedAt),
+        coverage: choice(r.coverage, ["observed", "partial", "not_observed", "unknown"], "unknown"),
+        handshakePending: r.handshakePending === true
+      }));
+    }
+    function nodeProviderQuota(raw) {
+      return list(raw).filter((r) => text3(r.nodeId)).map((r) => ({
+        nodeId: text3(r.nodeId),
+        ownerDaemonId: text3(r.ownerDaemonId) || null,
+        provider: sessionProvider(r.provider),
+        scope: "node_provider",
+        status: choice(r.status, ["ok", "error", "unavailable", "unknown"], "unknown"),
+        failureKind: choice(r.failureKind, quotaFailures, "unknown"),
+        updatedAt: num(r.updatedAt)
+      }));
+    }
+    function activity(v) {
+      if (typeof v === "number") return num(v);
+      const t = typeof v === "string" ? Date.parse(v) : NaN;
+      return Number.isFinite(t) && t >= 0 ? t : null;
+    }
+    function projectSessionView(view2, opts) {
+      const now = opts.now ?? Date.now();
+      const reportedMembers = list(rec2(rec2(view2.membership).mesh).nodes);
+      const members = reportedMembers.length ? reportedMembers : list(opts.members);
+      const nodes = list(rec2(view2.status).nodes);
+      const tasks = rec2(view2.activeWork).success === false || view2.meshId && view2.meshId !== opts.meshId ? [] : list(rec2(rec2(view2.activeWork).activeWork).activeWork);
+      const sessions = [];
+      const coverage = [];
+      const quota = [];
+      for (const member of members) {
+        const nodeId = text3(member.id) || text3(member.nodeId);
+        if (!nodeId) continue;
+        const node = nodes.find((n) => (text3(n.nodeId) || text3(n.id)) === nodeId) ?? {};
+        const route = rec2(rec2(view2.routes)[nodeId]);
+        const owner = text3(route.ownerDaemonId) || text3(node.daemonId) || text3(member.daemonId) || (route.route === "local" ? opts.selfDaemonId : "");
+        const ownershipConsistent = [node.daemonId, member.daemonId, route.ownerDaemonId].map(text3).filter(Boolean).every((id4) => daemonIdsEquivalent4(id4, owner));
+        const local = ownershipConsistent && !!owner && daemonIdsEquivalent4(owner, opts.selfDaemonId);
+        const held = rec2(node.heldRuntime);
+        const ownerMatches = ownershipConsistent && !!owner && !!text3(held.daemonId) && daemonIdsEquivalent4(owner, text3(held.daemonId));
+        const source2 = local ? "local" : ownerMatches ? choice(held.source, ["member_push", "coordinator_probe", "none"], "none") : "none";
+        const observedAt = local && opts.localStates ? now : ownerMatches ? num(held.observedAt) : null;
+        const offline = !local && (route.route === "unreachable" || ["disconnected", "closed", "offline", "unreachable"].includes(text3(rec2(node.connection).state)));
+        const freshness2 = offline ? "unreachable" : local ? opts.localStates ? "fresh" : "unknown" : !ownerMatches || source2 === "none" || observedAt === null ? "not_observed" : held.handshakePending === true ? "stale" : choice(held.freshness, freshnesses, "unknown");
+        coverage.push({
+          nodeId,
+          ownerDaemonId: owner || null,
+          source: source2,
+          freshness: freshness2,
+          observedAt,
+          coverage: source2 === "none" ? "not_observed" : held.sessionsTruncated === true ? "partial" : freshness2 === "fresh" ? "observed" : "unknown",
+          handshakePending: held.handshakePending === true
+        });
+        if (local || ownerMatches) for (const [key5, value] of Object.entries(rec2(rec2(node.nodeFacts).quota))) {
+          const q2 = rec2(value);
+          quota.push({
+            nodeId,
+            ownerDaemonId: owner,
+            provider: q2.provider ?? key5,
+            status: q2.status,
+            failureKind: rec2(q2.metadata).failureKind,
+            updatedAt: q2.updatedAt
+          });
+        }
+        for (const task of tasks.filter((t) => text3(t.nodeId) === nodeId && text3(t.taskId) && text3(t.sessionId))) {
+          const sid = text3(task.sessionId);
+          if (!owner || !ownershipConsistent || text3(task.ownerDaemonId) && !daemonIdsEquivalent4(owner, text3(task.ownerDaemonId))) continue;
+          const localState = local ? (opts.localStates ?? []).map(rec2).find((s2) => sessionIdsEquivalent(text3(s2.instanceId), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && text3(rec2(s2.settings).meshNodeId) === nodeId && rec2(s2.settings).assistant !== true) : void 0;
+          const remoteState = !local && ownerMatches ? list(held.sessions).find((s2) => sessionIdsEquivalent(text3(s2.id), sid) && text3(rec2(s2.settings).meshNodeFor) === opts.meshId && text3(rec2(s2.settings).meshNodeId) === nodeId) : void 0;
+          const detail = list(node.activeSessionDetails).find((s2) => sessionIdsEquivalent(text3(s2.sessionId), sid));
+          const state2 = localState ? detail ?? localState : remoteState ? detail ?? remoteState : void 0;
+          const attemptId = text3(task.attemptId) || null;
+          const stateAttempts = [
+            state2?.attemptId,
+            rec2(state2?.turn).attemptId,
+            rec2(remoteState?.turn).attemptId,
+            rec2(localState?.turn).attemptId
+          ].map(text3).filter(Boolean);
+          const attemptMatches = attemptId ? stateAttempts.length > 0 && stateAttempts.every((id4) => id4 === attemptId) : new Set(stateAttempts).size <= 1;
+          const effectiveFreshness = !attemptMatches ? "unknown" : freshness2;
+          const activityValue = local ? state2?.lastActivityAt ?? state2?.lastMessageAt : remoteState?.lastMessageAt ?? state2?.lastActivityAt;
+          const lastActivityAt = state2 && attemptMatches ? activity(activityValue) : null;
+          const lastActivitySource = lastActivityAt === null ? "unknown" : local ? state2?.lastActivityAt !== void 0 ? "session_record" : "last_message" : remoteState?.lastMessageAt !== void 0 ? "last_message" : "session_record";
+          const observedStatus = state2 && attemptMatches ? sessionStatus(rec2(state2.activeChat).status ?? state2.chatStatus ?? state2.status ?? state2.state) : "unknown";
+          const evidence = {
+            taskId: text3(task.taskId),
+            attemptId,
+            ownerDaemonId: owner,
+            source: source2,
+            freshness: state2 ? effectiveFreshness : freshness2 === "fresh" ? "not_observed" : freshness2,
+            observedAt,
+            lastActivityAt,
+            lastActivitySource,
+            sessionError: "unknown",
+            observedStatus
+          };
+          const row2 = {
+            sessionId: sid,
+            provider: sessionProvider(state2?.providerType ?? state2?.type ?? task.providerType),
+            status: state2 && attemptMatches && freshness2 === "fresh" ? observedStatus : "unknown",
+            meshId: opts.meshId,
+            nodeId,
+            ageMs: null,
+            messageCount: localState && Array.isArray(rec2(localState.activeChat).messages) ? rec2(localState.activeChat).messages.length : 0,
+            workspace: null,
+            isCoordinator: false,
+            assistant: false,
+            spawnedForTaskId: text3(task.taskId),
+            launchedBy: null,
+            evidence
+          };
+          const prior = sessions.findIndex((s2) => canonicalDaemonId2(s2.evidence.ownerDaemonId) === canonicalDaemonId2(owner) && sessionIdsEquivalent(s2.sessionId, sid));
+          if (prior < 0) sessions.push(row2);
+          else if (JSON.stringify(sessions[prior].evidence) !== JSON.stringify(evidence)) {
+            sessions[prior].status = "unknown";
+            sessions[prior].evidence.freshness = "unknown";
+          }
+        }
+      }
+      for (const raw of opts.localStates ?? []) {
+        const state2 = rec2(raw), settings2 = rec2(state2.settings);
+        const sid = text3(state2.instanceId);
+        if (settings2.meshCoordinatorFor !== opts.meshId || settings2.assistant === true || !opts.coordinatorSessionIds?.some((id4) => sessionIdsEquivalent(id4, sid))) continue;
+        const observedStatus = sessionStatus(state2.status);
+        sessions.push({
+          sessionId: sid,
+          provider: sessionProvider(state2.type),
+          status: observedStatus,
+          meshId: opts.meshId,
+          nodeId: text3(settings2.meshNodeId) || null,
+          ageMs: null,
+          messageCount: Array.isArray(rec2(state2.activeChat).messages) ? rec2(state2.activeChat).messages.length : 0,
+          workspace: null,
+          isCoordinator: true,
+          assistant: false,
+          spawnedForTaskId: null,
+          launchedBy: null,
+          evidence: {
+            taskId: null,
+            attemptId: null,
+            ownerDaemonId: opts.selfDaemonId,
+            source: "local",
+            freshness: "fresh",
+            observedAt: now,
+            lastActivityAt: activity(state2.lastActivityAt),
+            lastActivitySource: activity(state2.lastActivityAt) === null ? "unknown" : "session_record",
+            sessionError: "unknown",
+            observedStatus
+          }
+        });
+      }
+      return { sessions: sessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId)), sessionCoverage: coverage, nodeProviderQuota: nodeProviderQuota(quota) };
+    }
+    var rec2;
+    var list;
+    var text3;
+    var num;
+    var choice;
+    var sessionProvider;
+    var statuses;
+    var sessionStatus;
+    var freshnesses;
+    var quotaFailures;
+    var init_project_session_view = __esm2({
+      "src/assistant/project-session-view.ts"() {
+        "use strict";
+        init_dist();
+        rec2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+        list = (v) => Array.isArray(v) ? v.map(rec2) : [];
+        text3 = (v) => typeof v === "string" ? v.trim() : "";
+        num = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+        choice = (v, values, fallback) => values.includes(v) ? v : fallback;
+        sessionProvider = (v) => /^[a-z][a-z0-9_-]{0,63}$/.test(text3(v)) ? text3(v) : "unknown";
+        statuses = ["idle", "generating", "working", "running", "waiting_approval", "waiting_choice", "awaiting_approval", "starting", "initializing", "stopping", "stopped", "exited", "terminated", "completed", "failed", "error", "disconnected", "unknown"];
+        sessionStatus = (v) => choice(v, statuses, "unknown");
+        freshnesses = ["fresh", "stale", "unreachable", "not_observed", "unknown"];
+        quotaFailures = ["missing-credentials", "expired-token", "unauthorized", "quota-exhausted", "rate-limited", "network", "server", "parse", "cli-unavailable", "unsupported", "setup-required", "no-data", "unknown"];
+      }
+    });
     function describeDueIn(dueAt, nowMs2 = Date.now()) {
       const t = dueAt ? Date.parse(dueAt) : NaN;
       if (!Number.isFinite(t)) return void 0;
@@ -128087,31 +128288,31 @@ ${grant.exp}`).digest("hex");
         RECENT_ROWS_MAX = 10;
       }
     });
-    function rec2(v) {
+    function rec3(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : null;
     }
-    function text3(v, max) {
+    function text4(v, max) {
       return typeof v === "string" ? v.trim().slice(0, max) : "";
     }
-    function num(v) {
+    function num2(v) {
       return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
     }
     function sanitizeRow(raw) {
-      const r = rec2(raw);
+      const r = rec3(raw);
       if (!r) return null;
-      const itemId = text3(r.itemId, 100);
-      const question = text3(r.question, 300);
+      const itemId = text4(r.itemId, 100);
+      const question = text4(r.question, 300);
       if (!itemId || !question) return null;
       const options = (Array.isArray(r.options) ? r.options : []).slice(0, 5).flatMap((o) => {
-        const x = rec2(o);
-        const id4 = text3(x?.id, 8);
-        const label2 = text3(x?.label, 60);
+        const x = rec3(o);
+        const id4 = text4(x?.id, 8);
+        const label2 = text4(x?.label, 60);
         return id4 && label2 ? [{ id: id4, label: label2, ...x?.recommended === true ? { recommended: true } : {} }] : [];
       });
-      const recommended = text3(r.recommended, 8);
-      const dueAt = text3(r.dueAt, 40);
-      const dueIn = text3(r.dueIn, 40);
-      const remindedAt = text3(r.remindedAt, 40);
+      const recommended = text4(r.recommended, 8);
+      const dueAt = text4(r.dueAt, 40);
+      const dueIn = text4(r.dueIn, 40);
+      const remindedAt = text4(r.remindedAt, 40);
       const source2 = r.source === "worker" || r.source === "daemon" ? r.source : "coordinator";
       return {
         itemId,
@@ -128124,31 +128325,31 @@ ${grant.exp}`).digest("hex");
         ...dueIn ? { dueIn } : {},
         onDue: r.onDue === "apply_recommended" ? "apply_recommended" : "remind",
         source: source2,
-        missionId: text3(r.missionId, 100),
+        missionId: text4(r.missionId, 100),
         ...r.carryOver === true ? { carryOver: true } : {},
         ...remindedAt ? { remindedAt } : {}
       };
     }
     function sanitizeRecent(raw) {
-      const r = rec2(raw);
-      const itemId = text3(r?.itemId, 100);
+      const r = rec3(raw);
+      const itemId = text4(r?.itemId, 100);
       if (!r || !itemId) return null;
       return {
         itemId,
-        question: text3(r.question, 300),
-        answer: text3(r.answer, 200),
+        question: text4(r.question, 300),
+        answer: text4(r.answer, 200),
         by: r.by === "owner" ? "owner" : "auto_recommended",
-        at: text3(r.at, 40)
+        at: text4(r.at, 40)
       };
     }
     function sanitizeDecisionFields(raw) {
-      const counts = rec2(raw.openDecisions);
+      const counts = rec3(raw.openDecisions);
       const rows = (Array.isArray(raw.ownerDecisions) ? raw.ownerDecisions : []).slice(0, ROWS_MAX).map(sanitizeRow).filter((x) => x !== null);
       const auto = (Array.isArray(raw.autoApplied) ? raw.autoApplied : []).slice(0, ROWS_MAX).map(sanitizeRecent).filter((x) => x !== null);
       if (!counts && rows.length === 0 && auto.length === 0) return {};
-      const count = Math.max(num(counts?.count), rows.length);
+      const count = Math.max(num2(counts?.count), rows.length);
       return {
-        openDecisions: { count, blocking: Math.min(count, num(counts?.blocking)) },
+        openDecisions: { count, blocking: Math.min(count, num2(counts?.blocking)) },
         ownerDecisions: rows,
         ...auto.length ? { autoApplied: auto } : {}
       };
@@ -128244,7 +128445,7 @@ ${grant.exp}`).digest("hex");
         self: f.self
       })).sort((a, b) => Number(b.self) - Number(a.self) || a.label.localeCompare(b.label));
     }
-    function rec3(v) {
+    function rec4(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : null;
     }
     function firstText(sources, pick) {
@@ -128257,10 +128458,10 @@ ${grant.exp}`).digest("hex");
       return "";
     }
     function nodeMachineLabel(sources) {
-      const nick = firstText(sources, (x) => [x?.machineNickname, rec3(x?.nodeFacts)?.machineNickname]);
+      const nick = firstText(sources, (x) => [x?.machineNickname, rec4(x?.nodeFacts)?.machineNickname]);
       if (nick) return nick;
       for (const x of sources) {
-        const machine = rec3(x?.machine);
+        const machine = rec4(x?.machine);
         const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
         for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
           const t = readText3(v);
@@ -128270,9 +128471,9 @@ ${grant.exp}`).digest("hex");
       return "";
     }
     function osTag(x) {
-      for (const list3 of [x?.capabilities, x?.capabilityTags]) {
-        if (!Array.isArray(list3)) continue;
-        for (const tag of list3) {
+      for (const list4 of [x?.capabilities, x?.capabilityTags]) {
+        if (!Array.isArray(list4)) continue;
+        for (const tag of list4) {
           const m = /^os=(.+)$/.exec(readText3(tag));
           if (m && m[1].trim()) return m[1].trim();
         }
@@ -128280,12 +128481,12 @@ ${grant.exp}`).digest("hex");
       return "";
     }
     function nodePlatform(sources) {
-      return firstText(sources, (x) => [x?.reportedPlatform, rec3(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
+      return firstText(sources, (x) => [x?.reportedPlatform, rec4(x?.nodeFacts)?.platform]) || firstText(sources, (x) => [osTag(x)]);
     }
     function compactProjectStatus(view2, extras) {
-      const routes = rec3(view2.routes) ?? {};
-      const statusNodes = Array.isArray(rec3(view2.status)?.nodes) ? rec3(view2.status).nodes : [];
-      const memberNodes = Array.isArray(rec3(rec3(view2.membership)?.mesh)?.nodes) ? rec3(rec3(view2.membership).mesh).nodes : [];
+      const routes = rec4(view2.routes) ?? {};
+      const statusNodes = Array.isArray(rec4(view2.status)?.nodes) ? rec4(view2.status).nodes : [];
+      const memberNodes = Array.isArray(rec4(rec4(view2.membership)?.mesh)?.nodes) ? rec4(rec4(view2.membership).mesh).nodes : [];
       const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
       const memberById = /* @__PURE__ */ new Map();
       for (const m of memberNodes) {
@@ -128294,33 +128495,33 @@ ${grant.exp}`).digest("hex");
       }
       const machines = nodes.map((n) => {
         const id4 = readText3(n?.id) || readText3(n?.nodeId);
-        const local = rec3(routes[id4])?.route === "local";
+        const local = rec4(routes[id4])?.route === "local";
         const sources = [n, memberById.get(id4)].filter(Boolean);
         return {
           node: id4,
           label: nodeMachineLabel(sources) || null,
           os: nodePlatform(sources) || null,
-          build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec3(rec3(x?.nodeFacts)?.daemonBuild)?.version]) || null,
+          build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec4(rec4(x?.nodeFacts)?.daemonBuild)?.version]) || null,
           online: local || readText3(n?.machineStatus) === "online",
           ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
         };
       });
-      const missionList = Array.isArray(rec3(rec3(view2.missions)?.list)?.missions) ? rec3(rec3(view2.missions).list).missions : [];
+      const missionList = Array.isArray(rec4(rec4(view2.missions)?.list)?.missions) ? rec4(rec4(view2.missions).list).missions : [];
       const activeMissions = missionList.filter((m) => readText3(m?.status) === "active" || readText3(m?.status) === "paused").map((m) => ({ id: readText3(m?.id), title: readText3(m?.title), status: readText3(m?.status) }));
       const now = extras.now ?? Date.now();
       const staleMissions = missionList.filter((m) => readText3(m?.status) === "active").filter((m) => !isCarryOverMissionRecord({ title: readText3(m?.title) })).map((m) => {
-        const last = Date.parse(readText3(rec3(m?.tasks)?.lastActivityAt) || readText3(m?.updatedAt) || readText3(m?.createdAt));
+        const last = Date.parse(readText3(rec4(m?.tasks)?.lastActivityAt) || readText3(m?.updatedAt) || readText3(m?.createdAt));
         return { id: readText3(m?.id), title: readText3(m?.title), last };
       }).filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS).sort((a, b) => a.last - b.last).map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 864e5) }));
-      const activeWork = rec3(rec3(view2.activeWork)?.activeWork);
+      const activeWork = rec4(rec4(view2.activeWork)?.activeWork);
       const heldTasks = (Array.isArray(activeWork?.activeWork) ? activeWork.activeWork : []).filter((task) => task.status === "pending" && task.hold);
       return {
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
         queue: extras.queue,
         heldTasks: heldTasks.map((task) => ({ taskId: task.taskId, title: task.taskTitle, hold: task.hold })),
-        heldCount: rec3(activeWork?.summary)?.heldCount ?? heldTasks.length,
-        heldReasons: rec3(activeWork?.summary)?.heldReasons ?? {},
+        heldCount: rec4(activeWork?.summary)?.heldCount ?? heldTasks.length,
+        heldReasons: rec4(activeWork?.summary)?.heldReasons ?? {},
         activeMissions,
         failedTasks: extras.queue?.failed ?? null,
         pendingApprovals: extras.pendingApprovals,
@@ -128337,7 +128538,7 @@ ${grant.exp}`).digest("hex");
       return typeof v === "number" && Number.isFinite(v) ? v : void 0;
     }
     function routingSlot(v) {
-      const r = rec3(v);
+      const r = rec4(v);
       const providerType = readText3(r?.providerType);
       if (!providerType) return null;
       const model = readText3(r?.model);
@@ -128348,12 +128549,12 @@ ${grant.exp}`).digest("hex");
       return t === "weekly" || t === "session" || t === "monthly" ? t : void 0;
     }
     function quotaRow(v) {
-      const r = rec3(v);
+      const r = rec4(v);
       const providerType = readText3(r?.providerType);
       if (!providerType) return null;
-      const bonus = rec3(r?.bonus) ?? {};
-      const gate = rec3(r?.gate) ?? {};
-      const ranking = rec3(r?.ranking);
+      const bonus = rec4(r?.bonus) ?? {};
+      const gate = rec4(r?.gate) ?? {};
+      const ranking = rec4(r?.ranking);
       const snapshotStatus = readText3(bonus.snapshotStatus);
       const failureKind = readText3(bonus.failureKind);
       const zeroReason = readText3(bonus.zeroReason);
@@ -128373,13 +128574,13 @@ ${grant.exp}`).digest("hex");
       };
     }
     function routingNodeRow(v, labelOf) {
-      const r = rec3(v);
+      const r = rec4(v);
       const nodeId = readText3(r?.nodeId);
       if (!nodeId) return null;
-      const stages = rec3(r?.stages) ?? {};
-      const floor = rec3(stages.difficultyFloor) ?? {};
-      const quotaStage = rec3(stages.quota) ?? {};
-      const winner = rec3(r?.predictedWinner);
+      const stages = rec4(r?.stages) ?? {};
+      const floor = rec4(stages.difficultyFloor) ?? {};
+      const quotaStage = rec4(stages.quota) ?? {};
+      const winner = rec4(r?.predictedWinner);
       const winnerProvider = readText3(winner?.providerType);
       const winnerModel = readText3(winner?.model);
       const reason = readText3(r?.reason);
@@ -128392,7 +128593,7 @@ ${grant.exp}`).digest("hex");
         admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText3(rec3(e)?.reason);
+          const er = readText3(rec4(e)?.reason);
           return s2 && er ? { ...s2, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q2) => !!q2),
@@ -128401,9 +128602,9 @@ ${grant.exp}`).digest("hex");
       };
     }
     function projectRoutingView(preview, difficulty, machineLabels = /* @__PURE__ */ new Map()) {
-      const p = rec3(preview) ?? {};
+      const p = rec4(preview) ?? {};
       const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
-      const winner = rec3(p.predictedWinner);
+      const winner = rec4(p.predictedWinner);
       const winnerNode = readText3(winner?.nodeId);
       const winnerProvider = readText3(winner?.providerType);
       const winnerModel = readText3(winner?.model);
@@ -128415,7 +128616,7 @@ ${grant.exp}`).digest("hex");
       };
     }
     function countVisibleBubbles(activeChat) {
-      const messages = rec3(activeChat)?.messages;
+      const messages = rec4(activeChat)?.messages;
       return Array.isArray(messages) ? messages.length : 0;
     }
     function sessionRows(states, opts = {}) {
@@ -128423,12 +128624,12 @@ ${grant.exp}`).digest("hex");
       const want = readText3(opts.meshId);
       const out = [];
       for (const raw of states) {
-        const state2 = rec3(raw);
+        const state2 = rec4(raw);
         if (!state2) continue;
         const sessionId = readText3(state2.instanceId);
         if (!sessionId) continue;
-        const settings2 = rec3(state2.settings) ?? {};
-        const launch = rec3(state2.launch);
+        const settings2 = rec4(state2.settings) ?? {};
+        const launch = rec4(state2.launch);
         const meshId = readText3(settings2.meshNodeFor) || readText3(settings2.meshCoordinatorFor);
         if (want && meshId && meshId !== want) continue;
         const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
@@ -128450,7 +128651,7 @@ ${grant.exp}`).digest("hex");
       return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
     }
     function followerRoutingQuotaRow(v) {
-      const r = rec3(v);
+      const r = rec4(v);
       const providerType = readText3(r?.providerType);
       if (!providerType) return null;
       const snapshotStatus = readText3(r?.snapshotStatus);
@@ -128472,10 +128673,10 @@ ${grant.exp}`).digest("hex");
       };
     }
     function followerRoutingNodeRow(v) {
-      const r = rec3(v);
+      const r = rec4(v);
       const nodeId = readText3(r?.nodeId);
       if (!nodeId) return null;
-      const winner = rec3(r?.predictedWinner);
+      const winner = rec4(r?.predictedWinner);
       const winnerProvider = readText3(winner?.providerType);
       const winnerModel = readText3(winner?.model);
       const reason = readText3(r?.reason);
@@ -128488,7 +128689,7 @@ ${grant.exp}`).digest("hex");
         admitted: (Array.isArray(r?.admitted) ? r.admitted : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(r?.excluded) ? r.excluded : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText3(rec3(e)?.reason);
+          const er = readText3(rec4(e)?.reason);
           return s2 && er ? { providerType: s2.providerType, ...s2.model ? { model: s2.model } : {}, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quota) ? r.quota : []).map(followerRoutingQuotaRow).filter((q2) => !!q2),
@@ -128499,7 +128700,7 @@ ${grant.exp}`).digest("hex");
     function followerStatusView(raw, mesh) {
       const rawRepo = readText3(mesh.repoRemoteUrl) || readText3(mesh.repoIdentity) || readText3(raw.repo);
       const machines = (Array.isArray(raw.machines) ? raw.machines : []).map((item) => {
-        const m = rec3(item);
+        const m = rec4(item);
         const node = readText3(m?.node);
         if (!node) return null;
         const branch = readText3(m?.branch);
@@ -128512,14 +128713,14 @@ ${grant.exp}`).digest("hex");
           ...branch ? { branch } : {}
         };
       }).filter((m) => m !== null);
-      const rawQueue = rec3(raw.queue);
+      const rawQueue = rec4(raw.queue);
       const queue = rawQueue ? {
         pending: typeof rawQueue.pending === "number" && Number.isFinite(rawQueue.pending) ? rawQueue.pending : 0,
         assigned: typeof rawQueue.assigned === "number" && Number.isFinite(rawQueue.assigned) ? rawQueue.assigned : 0,
         failed: typeof rawQueue.failed === "number" && Number.isFinite(rawQueue.failed) ? rawQueue.failed : 0
       } : null;
       const heldTasks = (Array.isArray(raw.heldTasks) ? raw.heldTasks : []).map((item) => {
-        const t = rec3(item);
+        const t = rec4(item);
         const taskId = readText3(t?.taskId);
         if (!taskId) return null;
         return {
@@ -128528,7 +128729,7 @@ ${grant.exp}`).digest("hex");
           hold: readText3(t?.hold) || null
         };
       }).filter((t) => t !== null);
-      const heldReasonsRaw = rec3(raw.heldReasons);
+      const heldReasonsRaw = rec4(raw.heldReasons);
       const heldReasons = {};
       if (heldReasonsRaw) {
         for (const [k, v] of Object.entries(heldReasonsRaw)) {
@@ -128536,7 +128737,7 @@ ${grant.exp}`).digest("hex");
         }
       }
       const activeMissions = (Array.isArray(raw.activeMissions) ? raw.activeMissions : []).map((item) => {
-        const m = rec3(item);
+        const m = rec4(item);
         const id4 = readText3(m?.id);
         if (!id4) return null;
         return {
@@ -128546,7 +128747,7 @@ ${grant.exp}`).digest("hex");
         };
       }).filter((m) => m !== null);
       const staleMissions = (Array.isArray(raw.staleMissions) ? raw.staleMissions : []).map((item) => {
-        const m = rec3(item);
+        const m = rec4(item);
         const id4 = readText3(m?.id);
         if (!id4) return null;
         return {
@@ -128556,15 +128757,15 @@ ${grant.exp}`).digest("hex");
         };
       }).filter((m) => m !== null);
       const sessions = (Array.isArray(raw.sessions) ? raw.sessions : []).map((item) => {
-        const s2 = rec3(item);
+        const s2 = rec4(item);
         if (!s2) return null;
         const sessionId = readText3(s2.sessionId);
         const sessionMeshId = readText3(s2.meshId);
         if (!sessionId || sessionMeshId !== mesh.id || s2.assistant === true) return null;
         return {
           sessionId,
-          provider: readText3(s2.provider),
-          status: readText3(s2.status),
+          provider: sessionProvider(s2.provider),
+          status: sessionStatus(s2.status),
           meshId: mesh.id,
           nodeId: readText3(s2.nodeId) || null,
           ageMs: typeof s2.ageMs === "number" && Number.isFinite(s2.ageMs) ? s2.ageMs : null,
@@ -128573,18 +128774,19 @@ ${grant.exp}`).digest("hex");
           isCoordinator: s2.isCoordinator === true,
           assistant: false,
           spawnedForTaskId: readText3(s2.spawnedForTaskId) || null,
-          launchedBy: readText3(s2.launchedBy) || null
+          launchedBy: readText3(s2.launchedBy) || null,
+          ...sessionEvidence(s2.evidence) ? { evidence: sessionEvidence(s2.evidence) } : {}
         };
       }).filter((s2) => s2 !== null);
-      const rawRouting = rec3(raw.routing);
+      const rawRouting = rec4(raw.routing);
       const routing = rawRouting ? {
         strategy: readText3(rawRouting.strategy) || "unknown",
         difficulty: readText3(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
-        predictedWinner: rec3(rawRouting.predictedWinner) && readText3(rec3(rawRouting.predictedWinner).nodeId) && readText3(rec3(rawRouting.predictedWinner).providerType) ? {
-          nodeId: readText3(rec3(rawRouting.predictedWinner).nodeId),
-          providerType: readText3(rec3(rawRouting.predictedWinner).providerType),
-          ...readText3(rec3(rawRouting.predictedWinner).model) ? { model: readText3(rec3(rawRouting.predictedWinner).model) } : {},
-          fitnessScore: routingNum(rec3(rawRouting.predictedWinner).fitnessScore) ?? 0
+        predictedWinner: rec4(rawRouting.predictedWinner) && readText3(rec4(rawRouting.predictedWinner).nodeId) && readText3(rec4(rawRouting.predictedWinner).providerType) ? {
+          nodeId: readText3(rec4(rawRouting.predictedWinner).nodeId),
+          providerType: readText3(rec4(rawRouting.predictedWinner).providerType),
+          ...readText3(rec4(rawRouting.predictedWinner).model) ? { model: readText3(rec4(rawRouting.predictedWinner).model) } : {},
+          fitnessScore: routingNum(rec4(rawRouting.predictedWinner).fitnessScore) ?? 0
         } : null,
         perNode: (Array.isArray(rawRouting.perNode) ? rawRouting.perNode : []).map(followerRoutingNodeRow).filter((n) => !!n),
         ...readText3(rawRouting.error) ? { error: readText3(rawRouting.error) } : {}
@@ -128613,6 +128815,8 @@ ${grant.exp}`).digest("hex");
         ...routing ? { routing } : {},
         ...sanitizeDecisionFields(raw),
         sessions,
+        sessionCoverage: sessionCoverage(raw.sessionCoverage),
+        nodeProviderQuota: nodeProviderQuota(raw.nodeProviderQuota),
         ...readText3(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
       };
     }
@@ -128635,18 +128839,18 @@ ${grant.exp}`).digest("hex");
       const messages = Array.isArray(readChat2.messages) ? readChat2.messages : [];
       const visible = messages.filter(isVisible);
       const picked = visible.slice(-tail).map((m) => {
-        const text5 = messageText(m);
-        const truncated = text5.length > maxChars;
+        const text6 = messageText(m);
+        const truncated = text6.length > maxChars;
         const time = m.timestamp ?? m.receivedAt ?? m.createdAt;
         const at = typeof time === "number" ? new Date(time).toISOString() : readText3(time) || void 0;
         return {
           messageId: reportMessageId(m),
-          totalChars: text5.length,
+          totalChars: text6.length,
           complete: !truncated && m.bubbleState !== "streaming" && m.isStreaming !== true && m.meta?.streaming !== true,
           nextOffset: truncated ? maxChars : null,
           role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
           kind: readText3(m.kind ?? m.messageKind) || "standard",
-          text: truncated ? `${text5.slice(0, maxChars)}\u2026` : text5,
+          text: truncated ? `${text6.slice(0, maxChars)}\u2026` : text6,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
         };
@@ -128680,6 +128884,7 @@ ${grant.exp}`).digest("hex");
       "src/assistant/project-views.ts"() {
         "use strict";
         init_decision_views();
+        init_project_session_view();
         import_crypto37 = require("crypto");
         init_dist();
         init_mesh_host_ownership();
@@ -129316,7 +129521,7 @@ ${grant.exp}`).digest("hex");
       }
     });
     function bubbleTimestamp(m) {
-      const r = rec4(m);
+      const r = rec5(m);
       if (!r) return null;
       for (const v of [r.timestamp, r.receivedAt]) {
         if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
@@ -129326,17 +129531,17 @@ ${grant.exp}`).digest("hex");
     }
     function standardAssistantBubble(m) {
       if (!isVisible(m)) return null;
-      const r = rec4(m);
+      const r = rec5(m);
       if (!r) return null;
       const role = String(r.role ?? "").toLowerCase();
       if (role !== "assistant" && role !== "agent") return null;
       const kind = String(r.kind ?? r.messageKind ?? "").toLowerCase();
       if (kind && kind !== "standard") return null;
-      const text5 = messageText(r).trim();
-      if (!text5) return null;
+      const text6 = messageText(r).trim();
+      if (!text6) return null;
       const at = bubbleTimestamp(r);
       if (at === null) return null;
-      return { at, text: text5 };
+      return { at, text: text6 };
     }
     function selectNativeWindow(messages, start, end) {
       const seen2 = /* @__PURE__ */ new Set();
@@ -129367,20 +129572,20 @@ ${b.text}`).join("\n\n");
     function partsOf(bubbles) {
       return bubbles.map((b) => ({ at: b.at, chars: b.chars }));
     }
-    var rec4;
+    var rec5;
     var init_assistant_native_window = __esm2({
       "src/assistant/assistant-native-window.ts"() {
         "use strict";
         init_project_views();
-        rec4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+        rec5 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
       }
     });
     function isTimestampedNativeProvider(cliType) {
       return typeof cliType === "string" && TIMESTAMPED_PROVIDERS.has(cliType.trim().toLowerCase());
     }
     function isUnsupportedNativeProvider(read2, sessionId) {
-      const source2 = rec5(read2?.messageSource) ?? rec5(read2?.transcriptProvenance);
-      const providers = [read2?.agent, rec5(read2?.debugReadChat)?.provider, source2?.provider, source2?.providerType, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.trim().length > 0).map(normalizeProvider);
+      const source2 = rec6(read2?.messageSource) ?? rec6(read2?.transcriptProvenance);
+      const providers = [read2?.agent, rec6(read2?.debugReadChat)?.provider, source2?.provider, source2?.providerType, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.trim().length > 0).map(normalizeProvider);
       return providers.length > 0 && new Set(providers).size === 1 && !TIMESTAMPED_PROVIDERS.has(providers[0]);
     }
     function isAdapterEvidenceRef(reference, body, generation) {
@@ -129409,7 +129614,7 @@ ${b.text}`).join("\n\n");
       const bubbles = [];
       let offset = 0;
       for (let i = 0; i < parts.length; i++) {
-        const part = rec5(parts[i]);
+        const part = rec6(parts[i]);
         const at = part?.at, chars = part?.chars;
         if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref2[8] ?? ref2[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
         if (parts.length > 1) {
@@ -129418,37 +129623,37 @@ ${b.text}`).join("\n\n");
           if (points.slice(offset, offset + label2.length).join("") !== label2.join("")) return null;
           offset += label2.length;
         }
-        const text5 = points.slice(offset, offset + chars).join("");
+        const text6 = points.slice(offset, offset + chars).join("");
         offset += chars;
-        if (Array.from(text5).length !== chars || text5.trim() !== text5) return null;
-        bubbles.push({ at, chars, text: text5 });
+        if (Array.from(text6).length !== chars || text6.trim() !== text6) return null;
+        bubbles.push({ at, chars, text: text6 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
       const digest5 = (0, import_node_crypto58.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest5 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
-      const source2 = rec5(read2.messageSource) ?? rec5(read2.transcriptProvenance);
-      const providers = [read2.agent, rec5(read2.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.length > 0).map((p) => p.toLowerCase());
+      const source2 = rec6(read2.messageSource) ?? rec6(read2.transcriptProvenance);
+      const providers = [read2.agent, rec6(read2.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.length > 0).map((p) => p.toLowerCase());
       if (!providers.length || providers.some((p) => !TIMESTAMPED_PROVIDERS.has(p)) || new Set(providers).size !== 1) return false;
       if (read2.success !== true || read2.source === "pty-parser") return false;
       if (source2?.selected === "pty-parser" && source2.nativeOnlyContentPreserved !== true) return false;
       return read2.source === "provider-native" || source2?.selected === "native-history" || source2?.nativeOnlyContentPreserved === true;
     }
     function finalized(message, storedHistory = false) {
-      const r = rec5(message);
+      const r = rec6(message);
       if (!r || r.isStreaming === true || r.truncated === true) return false;
       return r.bubbleState === "final" || storedHistory && (r.bubbleState === void 0 || r.bubbleState === null);
     }
     function selectAdapterFinal(chat, sessionId, windowStart, terminalAt, nextAttemptAt, envelopeText, envelopeTruncated) {
       if (!chat || chat.success !== true || !isUnsupportedNativeProvider(chat, sessionId)) return null;
       const status = String(chat.providerObservedStatus ?? chat.status ?? "idle").trim().toLowerCase();
-      if (status !== "idle" || rec5(chat.turn)?.inProgress === true || chat.activeModal != null) return null;
+      if (status !== "idle" || rec6(chat.turn)?.inProgress === true || chat.activeModal != null) return null;
       const rawMessages = Array.isArray(chat.messages) ? chat.messages : [];
       const visible = rawMessages.filter(isVisible);
       let lastUserIndex = -1;
       for (let i = visible.length - 1; i >= 0; i--) {
-        if (String(rec5(visible[i])?.role ?? "").toLowerCase() === "user") {
+        if (String(rec6(visible[i])?.role ?? "").toLowerCase() === "user") {
           lastUserIndex = i;
           break;
         }
@@ -129456,16 +129661,16 @@ ${b.text}`).join("\n\n");
       const scope = nextAttemptAt === null ? visible.slice(lastUserIndex + 1) : visible;
       const candidates = [];
       for (const m of scope) {
-        const r = rec5(m);
+        const r = rec6(m);
         if (!r) continue;
         const role = String(r.role ?? "").toLowerCase();
         if (role !== "assistant" && role !== "agent") continue;
         const kind = String(r.kind ?? r.messageKind ?? "").toLowerCase();
         if (kind && kind !== "standard") continue;
-        const text5 = messageText(r).trim();
-        if (!text5) continue;
+        const text6 = messageText(r).trim();
+        if (!text6) continue;
         const isFinal = r.isStreaming !== true && r.truncated !== true && (r.bubbleState === void 0 || r.bubbleState === null || r.bubbleState === "final");
-        candidates.push({ text: text5, at: bubbleTimestamp(r), finalized: isFinal });
+        candidates.push({ text: text6, at: bubbleTimestamp(r), finalized: isFinal });
       }
       const needle = envelopeText?.trim() ?? "";
       if (nextAttemptAt !== null) {
@@ -129483,9 +129688,9 @@ ${b.text}`).join("\n\n");
       if (tail) {
         if (!needle && (tail.at === null || tail.at < windowStart || tail.at > terminalAt)) return null;
         if (needle && !tail.text.startsWith(needle) && !needle.startsWith(tail.text)) return null;
-        const text5 = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
+        const text6 = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
         const at = tail.at !== null && tail.at >= windowStart && tail.at <= terminalAt ? tail.at : terminalAt;
-        return { text: text5, at };
+        return { text: text6, at };
       }
       if (candidates.length === 0 && needle && !envelopeTruncated) {
         return { text: needle, at: terminalAt };
@@ -129524,7 +129729,7 @@ ${b.text}`).join("\n\n");
       const take = (read2, storedHistory = false) => {
         if (!read2 || !verifiedNativeRead(read2, sessionId) || !Array.isArray(read2.messages)) return false;
         const nativeSessionId = typeof read2.providerSessionId === "string" ? read2.providerSessionId : "";
-        const provider = read2.agent ?? rec5(read2.debugReadChat)?.provider;
+        const provider = read2.agent ?? rec6(read2.debugReadChat)?.provider;
         const source2 = nativeSessionId ? JSON.stringify([provider, nativeSessionId]) : "";
         if (provenance && source2 !== provenance) {
           scan?.checkpoints.reset(sessionId);
@@ -129537,7 +129742,7 @@ ${b.text}`).join("\n\n");
         const wanted = new Set(read2.messages.map(standardAssistantBubble).filter((b) => b !== null).map((b) => b.text));
         const bySummary = /* @__PURE__ */ new Map();
         for (const raw of Array.isArray(read2.turnTerminalMarkers) ? read2.turnTerminalMarkers : []) {
-          const value = rec5(raw);
+          const value = rec6(raw);
           if (!value || typeof value.summary !== "string" || !wanted.has(value.summary.trim())) continue;
           const marker2 = value;
           const group = bySummary.get(marker2.summary.trim()) ?? [];
@@ -129577,13 +129782,13 @@ ${b.text}`).join("\n\n");
         const visible = Array.isArray(chat.messages) ? chat.messages.filter(isVisible) : [];
         let lastUser = -1;
         for (let i = visible.length - 1; i >= 0; i--) {
-          if (String(rec5(visible[i])?.role ?? "").toLowerCase() === "user") {
+          if (String(rec6(visible[i])?.role ?? "").toLowerCase() === "user") {
             lastUser = i;
             break;
           }
         }
         const hasAssistantAfterUser = visible.slice(lastUser + 1).some((m) => {
-          const role = String(rec5(m)?.role ?? "").toLowerCase();
+          const role = String(rec6(m)?.role ?? "").toLowerCase();
           return role === "assistant" || role === "agent";
         });
         if (!hasAssistantAfterUser) {
@@ -129686,7 +129891,7 @@ ${b.text}`).join("\n\n");
       if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: "unavailable", reason: "attempt_mesh_mismatch" };
       const payloadOf = (row2) => {
         try {
-          return row2 ? rec5(JSON.parse(row2.payload_json)) : null;
+          return row2 ? rec6(JSON.parse(row2.payload_json)) : null;
         } catch {
           return null;
         }
@@ -129701,9 +129906,9 @@ ${b.text}`).join("\n\n");
       const owns = (row2) => row2.session_id === sessionId && row2.generation === attempt.generation;
       const commitPayload = payloadOf(committed);
       let payload = payloadOf(terminal);
-      let evidence = rec5(payload?.evidence);
+      let evidence = rec6(payload?.evidence);
       const matchesEvidence = (row2, e) => {
-        const ref2 = rec5(e?.attemptRef);
+        const ref2 = rec6(e?.attemptRef);
         return owns(row2) && e?.eventId === row2.event_id && e?.kind === row2.kind && e?.sessionId === sessionId && e?.at === row2.at_ms && (!ref2 || ref2.attemptId === attempt.attemptId && ref2.generation === attempt.generation);
       };
       if (!matchesEvidence(terminal, evidence) || !owns(committed) || terminal.to_state !== attempt.terminal.outcome || terminal.at_ms !== attempt.terminal.at || committed.event_id !== terminal.event_id + "#committed" || committed.verdict !== "applied" || committed.from_state !== null || committed.source !== terminal.source || committed.to_state !== attempt.terminal.outcome || committed.at_ms !== terminal.at_ms || commitPayload?.outcome !== attempt.terminal.outcome || commitPayload?.reason !== attempt.terminal.reason || commitPayload?.strength !== attempt.terminal.strength || evidence?.source !== attempt.terminal.source) {
@@ -129711,17 +129916,17 @@ ${b.text}`).join("\n\n");
       }
       let sourceEvent = terminal;
       const isNativeReference = (e) => e?.kind === "turn_end" || e?.kind === "transcript_final";
-      const directEnvelope = rec5(rec5(payload?.local)?.envelope);
+      const directEnvelope = rec6(rec6(payload?.local)?.envelope);
       if (!isNativeReference(evidence) && !(typeof directEnvelope?.finalSummary === "string" && directEnvelope.finalSummary)) {
         const hold = evidence?.kind === "hold_expired" && typeof evidence.holdId === "string" && ["weak_candidate", "await_report", "await_end"].includes(String(evidence.reason)) ? db2.prepare(`SELECT * FROM turn_holds WHERE hold_id=? AND attempt_id=? AND generation=?
                 AND reason=? AND status='resolved' AND until_ms<=?`).get(evidence.holdId, attempt.attemptId, attempt.generation, evidence.reason, terminal.at_ms) : void 0;
         let textEventId;
         try {
-          textEventId = hold ? rec5(JSON.parse(hold.data_json))?.textEventId : void 0;
+          textEventId = hold ? rec6(JSON.parse(hold.data_json))?.textEventId : void 0;
         } catch {
         }
         const original2 = typeof textEventId === "string" ? db2.prepare("SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?").get(textEventId, attempt.attemptId) : void 0;
-        const originalPayload = payloadOf(original2), originalEvidence = rec5(originalPayload?.evidence);
+        const originalPayload = payloadOf(original2), originalEvidence = rec6(originalPayload?.evidence);
         if (!original2 || !matchesEvidence(original2, originalEvidence) || original2.verdict !== "applied" || !isNativeReference(originalEvidence) || original2.at_ms > terminal.at_ms) {
           return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
         }
@@ -129729,7 +129934,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash4 = (text5) => (0, import_node_crypto58.createHash)("sha256").update(text5).digest("hex");
+      const hash4 = (text6) => (0, import_node_crypto58.createHash)("sha256").update(text6).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -129748,7 +129953,7 @@ ${b.text}`).join("\n\n");
         evidenceRef
       });
       const envelopeText = (() => {
-        const envelope = rec5(rec5(payload?.local)?.envelope);
+        const envelope = rec6(rec6(payload?.local)?.envelope);
         return typeof envelope?.finalSummary === "string" && envelope.finalSummary.trim() ? envelope.finalSummary : null;
       })();
       const windowStart = attempt.acceptedAt;
@@ -129788,7 +129993,7 @@ ${b.text}`).join("\n\n");
         parts: durable2.parts,
         provenance: provenanceFor(durable2.evidenceRef)
       };
-      const envelopeObj = rec5(rec5(payload?.local)?.envelope);
+      const envelopeObj = rec6(rec6(payload?.local)?.envelope);
       const envelopeTruncated = envelopeObj?.summaryMayBeTruncated === true || envelopeObj?.finalSummarySource === "parsed_screen_fallback";
       const adapterFinal = selectAdapterFinal(selected2.chat, sessionId, windowStart, attempt.terminal.at, next.at, envelopeText, envelopeTruncated);
       if (adapterFinal) {
@@ -129807,7 +130012,7 @@ ${b.text}`).join("\n\n");
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
     var import_node_crypto58;
-    var rec5;
+    var rec6;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
     var ADAPTER_FINAL_REF;
@@ -129825,7 +130030,7 @@ ${b.text}`).join("\n\n");
         init_project_views();
         init_coordinator_registry();
         init_assistant_native_window();
-        rec5 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+        rec6 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
         ATTEMPT_EVIDENCE_VERSION = 2;
         VERIFIED_WINDOW_REF = "verified-native-window:";
         ADAPTER_FINAL_REF = "unverified-adapter-final:";
@@ -130038,11 +130243,11 @@ ${b.text}`).join("\n\n");
       }
       return `${prefix}${suffix}`;
     }
-    function defangRelayBody(text5) {
-      return text5.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, "[/UNTRUSTED_RELAY_NOTICE (quoted)]").replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, "[$1quoted $2").replace(/\[(\s*)(project)\b/gi, "[$1quoted $2").replace(/\[(\s*)(System)\b/gi, "[$1quoted $2");
+    function defangRelayBody(text6) {
+      return text6.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, "[/UNTRUSTED_RELAY_NOTICE (quoted)]").replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, "[$1quoted $2").replace(/\[(\s*)(project)\b/gi, "[$1quoted $2").replace(/\[(\s*)(System)\b/gi, "[$1quoted $2");
     }
-    function compactRelayBody(text5, max = RELAY_BODY_MAX_CHARS, preserveWhitespace = false) {
-      const normalized = String(text5 ?? "").replace(/\r\n?/g, "\n");
+    function compactRelayBody(text6, max = RELAY_BODY_MAX_CHARS, preserveWhitespace = false) {
+      const normalized = String(text6 ?? "").replace(/\r\n?/g, "\n");
       const body = preserveWhitespace ? normalized : normalized.trim();
       if (!body) return "(no coordinator message found \u2014 use project_read)";
       const points = Array.from(body);
@@ -130088,8 +130293,8 @@ ${b.text}`).join("\n\n");
       const s2 = safeSlug(slug);
       return `[project ${s2}] ${count} earlier turn${count === 1 ? "" : "s"} older than 24 h were not relayed \u2014 use project_read ${s2} if they matter.`;
     }
-    function oneLine3(text5, max) {
-      const flat = String(text5 ?? "").replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim();
+    function oneLine3(text6, max) {
+      const flat = String(text6 ?? "").replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim();
       const safe = defangRelayBody(flat).replace(/\[(\s*)(project)\b/gi, "[$1quoted $2");
       const points = Array.from(safe);
       if (points.length <= max) return safe;
@@ -130331,9 +130536,9 @@ ${b.text}`).join("\n\n");
         return { ok: false, code: "skill_attach_too_large", error: "skill_attach_too_large", chars, limit: PROJECT_SEND_ATTACH_MAX_CHARS };
       }
       const supplement = input.supplement?.trim();
-      const text5 = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
+      const text6 = [input.message, ...supplement ? [`${SUPPLEMENT_LABEL}
 ${supplement}`] : [], ...blocks].join("\n\n");
-      return { ok: true, text: text5, attached: names };
+      return { ok: true, text: text6, attached: names };
     }
     var PROJECT_SEND_MAX_SKILLS;
     var PROJECT_SEND_ATTACH_MAX_CHARS;
@@ -130396,15 +130601,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
     }
     function readRepoIdentity(commonDir) {
-      let text5;
+      let text6;
       try {
-        text5 = (0, import_fs44.readFileSync)((0, import_path42.join)(commonDir, "config"), "utf-8");
+        text6 = (0, import_fs44.readFileSync)((0, import_path42.join)(commonDir, "config"), "utf-8");
       } catch {
         return null;
       }
       let section2 = "";
       const urls = [];
-      for (const line of text5.split(/\r?\n/)) {
+      for (const line of text6.split(/\r?\n/)) {
         const head = /^\s*\[\s*remote\s+"([^"]+)"\s*\]/.exec(line);
         if (head) {
           section2 = head[1];
@@ -130924,19 +131129,25 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       );
       const preview = await ports.routePreview(meshId, PROJECT_STATUS_ROUTING_DIFFICULTY);
       const routing = preview ? projectRoutingView(preview, PROJECT_STATUS_ROUTING_DIFFICULTY, labels) : { ...projectRoutingView(null, PROJECT_STATUS_ROUTING_DIFFICULTY, labels), error: "route_preview_unavailable" };
-      const sessions = ports.liveSessionStates ? sessionRows(ports.liveSessionStates(), { meshId }) : [];
+      const sessionView = projectSessionView(view2.success ? view2 : {}, {
+        meshId,
+        selfDaemonId: ports.selfDaemonId(),
+        localStates: ports.liveSessionStates?.(),
+        members: mesh.nodes,
+        coordinatorSessionIds: coords.map((c) => c.sessionId)
+      });
       return {
         name: mesh.name,
         repo: mesh.repoIdentity,
         ...status,
         coordinatorSessionId: liveCoord?.sessionId ?? null,
         routing,
-        sessions,
+        ...sessionView,
         ...decisionStatusFields(meshId),
-        ...view2.success ? {} : { statusError: str12(view2.error) || "mesh_status_view failed" }
+        ...view2.success ? {} : { statusError: "mesh_status_view failed" }
       };
     }
-    async function localProjectSend(ports, mesh, text5, clientId) {
+    async function localProjectSend(ports, mesh, text6, clientId) {
       const meshId = mesh.id;
       const coord = await ensureCoordinator(meshId, coordinatorPorts(ports));
       if (!coord.ok) return { ok: false, code: coord.code, error: coord.error, detail: coord.detail };
@@ -130944,7 +131155,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const messageId = `assistant:${meshId}:${clientId}`;
       const sent = await ports.execute("send_chat", {
         targetSessionId: coord.sessionId,
-        text: text5,
+        text: text6,
         origin: "assistant",
         policy: { mode: "queue" },
         messageId
@@ -131118,6 +131329,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/commands/high-family/assistant.ts"() {
         "use strict";
         init_remote_project_attach();
+        init_project_session_view();
         init_assistant_decisions_core();
         init_task_report_continuation();
         init_attempt_report_recovery();
@@ -131587,10 +131799,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (inFlight4.has(messageId)) return "skipped";
       inFlight4.add(messageId);
       try {
-        const text5 = formatDecisionDelivery(item.id, d);
+        const text6 = formatDecisionDelivery(item.id, d);
         let result;
         try {
-          result = await send({ meshId, text: text5, messageId });
+          result = await send({ meshId, text: text6, messageId });
         } catch (e) {
           result = { ok: false, code: "send_threw", error: e?.message || String(e) };
         }
@@ -131649,11 +131861,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return delivered ? "sent" : "rearmed";
     }
     function createCoordinatorDecisionSender(getPorts) {
-      return async ({ meshId, text: text5, messageId }) => {
+      return async ({ meshId, text: text6, messageId }) => {
         const mesh = getMesh(meshId);
         if (!mesh) return { ok: false, code: "mesh_not_hosted", error: `mesh ${meshId} is not configured on this daemon` };
         const { localProjectSend: localProjectSend2 } = await Promise.resolve().then(() => (init_assistant(), assistant_exports));
-        const sent = await localProjectSend2(await getPorts(), mesh, text5, messageId);
+        const sent = await localProjectSend2(await getPorts(), mesh, text6, messageId);
         if (!sent.ok) return { ok: false, code: sent.code, error: sent.error };
         return {
           ok: true,
@@ -131665,7 +131877,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       };
     }
     function createDecisionReceiptChecker(getPorts) {
-      return async (sessionId, wireMessageId, text5) => {
+      return async (sessionId, wireMessageId, text6) => {
         const ports = await getPorts();
         const out = await ports.execute("outgoing_receipts", { targetSessionId: sessionId, messageIds: [wireMessageId] });
         if (!out?.success) throw new Error(out?.error || "outgoing_receipts failed");
@@ -131675,7 +131887,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: TRANSCRIPT_SCAN_LIMIT });
         if (!chat?.success) throw new Error(chat?.error || "read_chat failed");
         const messages = Array.isArray(chat.messages) ? chat.messages : [];
-        const needle = text5.trim();
+        const needle = text6.trim();
         const seen2 = messages.some((m) => m?.role === "user" && (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")).includes(needle));
         if (seen2) return "seen";
         return chat.status === "idle" ? "lost" : "busy";
@@ -132744,10 +132956,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       });
     }
-    function noteTextRefusal(text5) {
-      if (!text5) return null;
-      if (detectCredential(text5)) return { result: "note_secret_rejected" };
-      const f = scanWriteContent(text5);
+    function noteTextRefusal(text6) {
+      if (!text6) return null;
+      if (detectCredential(text6)) return { result: "note_secret_rejected" };
+      const f = scanWriteContent(text6);
       if (!f) return null;
       return { result: f.kind === "hidden_chars" ? "note_hidden_chars_rejected" : "note_injection_rejected", pattern: f.pattern };
     }
@@ -132839,19 +133051,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     function parseNoteOp(args) {
       const action2 = str13(args?.action);
-      const text5 = str13(args?.text);
+      const text6 = str13(args?.text);
       if (action2 === "record") {
-        if (!text5) return "text required for record";
+        if (!text6) return "text required for record";
         const category = str13(args?.category);
         if (category && !PROJECT_NOTE_CATEGORIES.includes(category)) {
           return `category must be one of ${PROJECT_NOTE_CATEGORIES.join(", ")}`;
         }
-        return { action: action2, text: text5, ...category ? { category } : {} };
+        return { action: action2, text: text6, ...category ? { category } : {} };
       }
       if (action2 === "forget") {
         const noteId = str13(args?.note_id) || str13(args?.noteId);
-        if (!noteId && !text5) return "note_id or text required for forget";
-        return { action: action2, ...noteId ? { noteId } : {}, ...text5 ? { text: text5 } : {} };
+        if (!noteId && !text6) return "note_id or text required for forget";
+        return { action: action2, ...noteId ? { noteId } : {}, ...text6 ? { text: text6 } : {} };
       }
       if (action2 === "list") {
         return { action: action2 };
@@ -132889,14 +133101,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const entries2 = svc.operatingNotes.list ? await svc.operatingNotes.list(meshId, { tail: 100 }) : readOperatingNotes2(meshId, { tail: 100 });
         const notes = entries2.map((e) => {
           const p2 = e.payload || {};
-          const text6 = typeof p2.text === "string" ? p2.text : "";
+          const text7 = typeof p2.text === "string" ? p2.text : "";
           const createdAt2 = typeof p2.createdAt === "string" ? p2.createdAt : e.timestamp;
           const pinned2 = p2.pinned === true;
           const category2 = typeof p2.category === "string" ? p2.category : void 0;
           const sourceCoordinator2 = typeof p2.sourceCoordinator === "string" ? p2.sourceCoordinator : void 0;
           const explicitExpiry2 = typeof p2.expiresAt === "string" ? p2.expiresAt : void 0;
           const lifetime2 = resolveNoteExpiry2({ category: category2, pinned: pinned2, createdAt: createdAt2, ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {} }, nowMs2);
-          const { preview, truncated } = previewOperatingNoteText2(text6);
+          const { preview, truncated } = previewOperatingNoteText2(text7);
           const scope2 = resolveOperatingNoteScope2({ pinned: pinned2, sourceCoordinator: sourceCoordinator2 }, "project");
           return {
             id: e.id,
@@ -132926,7 +133138,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
       const p = entry.payload || {};
-      const text5 = typeof p.text === "string" ? p.text : "";
+      const text6 = typeof p.text === "string" ? p.text : "";
       const createdAt = typeof p.createdAt === "string" ? p.createdAt : entry.timestamp;
       const pinned = p.pinned === true;
       const category = typeof p.category === "string" ? p.category : void 0;
@@ -132938,7 +133150,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         id: entry.id,
         noteId: entry.id,
         scope,
-        text: text5,
+        text: text6,
         pinned,
         category: category ?? null,
         createdAt,
@@ -132960,10 +133172,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const action2 = str13(args?.action);
       const target4 = str13(args?.target);
       if (target4 !== "memory" && target4 !== "user") return "target must be memory or user";
-      const text5 = rawStr(args?.text);
+      const text6 = rawStr(args?.text);
       const match = rawStr(args?.match);
-      if (action2 === "add") return { action: action2, target: target4, content: text5 ?? "" };
-      if (action2 === "replace") return { action: action2, target: target4, match: match ?? "", content: text5 ?? "" };
+      if (action2 === "add") return { action: action2, target: target4, content: text6 ?? "" };
+      if (action2 === "replace") return { action: action2, target: target4, match: match ?? "", content: text6 ?? "" };
       if (action2 === "remove") return { action: action2, target: target4, match: match ?? "" };
       return "action must be add, replace or remove";
     }
@@ -133062,27 +133274,27 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       };
     }
     async function resolveStagedNote(ctx, svc, id4, decision) {
-      const rec6 = svc.notes.read(id4);
-      if (!rec6) return respond({ result: "staged_not_found" });
+      const rec7 = svc.notes.read(id4);
+      if (!rec7) return respond({ result: "staged_not_found" });
       if (decision === "discard") {
         svc.notes.remove(id4);
         return respond({ result: "discarded" });
       }
-      const project = await resolveNoteProject(ctx, svc, rec6.meshId);
+      const project = await resolveNoteProject(ctx, svc, rec7.meshId);
       if (!project.ok) return project.result;
       const wrap2 = { project: project.slug, meshId: project.mesh.id };
-      const refusal2 = noteTextRefusal(rec6.op.text);
+      const refusal2 = noteTextRefusal(rec7.op.text);
       if (refusal2) return respond(refusal2, wrap2);
       if (project.remote) {
-        const remote = await applyRemoteNote(project, rec6.op, "owner", rec6.callerSessionId);
+        const remote = await applyRemoteNote(project, rec7.op, "owner", rec7.callerSessionId);
         if (remote.result !== "applied") return respond(remote, wrap2);
         svc.notes.remove(id4);
-        creditReview(svc, rec6.reviewTurnId, remote.result, "approved");
+        creditReview(svc, rec7.reviewTurnId, remote.result, "approved");
         return respond(remote, wrap2);
       }
-      const applied = await applyNote(svc, rec6.meshId, rec6.op, "owner", rec6.callerSessionId);
+      const applied = await applyNote(svc, rec7.meshId, rec7.op, "owner", rec7.callerSessionId);
       svc.notes.remove(id4);
-      creditReview(svc, rec6.reviewTurnId, applied.result, "approved");
+      creditReview(svc, rec7.reviewTurnId, applied.result, "approved");
       return respond(applied, wrap2);
     }
     function applyMemoryLimitsUpdate(svc, args) {
@@ -133563,16 +133775,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 } catch {
                   continue;
                 }
-                await deliverTerminalEvents(events, watch6, async (id4, text5) => {
+                await deliverTerminalEvents(events, watch6, async (id4, text6) => {
                   if (!this.ready(sid) || this.recipient() !== sid) return false;
-                  return this.submit(sid, id4, text5);
+                  return this.submit(sid, id4, text6);
                 }, this.store, { recipient: sid, confirm: (intent) => confirmTerminalDelivery(ports, intent), uncertain: async (intent) => {
                   const key5 = JSON.stringify([intent.watch_id, intent.event_id, sid, intent.token]);
                   for (const [stamp2, at] of this.uncertaintyNotices) if (Date.now() - at >= 24 * 60 * 6e4) this.uncertaintyNotices.delete(stamp2);
                   if (this.uncertaintyNotices.has(key5) || this.recipient() !== sid || !this.ready(sid)) return;
                   if (this.uncertaintyNotices.size >= 256) this.uncertaintyNotices.delete(this.uncertaintyNotices.keys().next().value);
-                  const text5 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch6.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
-                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text5)) this.uncertaintyNotices.set(key5, Date.now());
+                  const text6 = `[ADHDev terminal delivery uncertainty] ${JSON.stringify({ project: watch6.mesh_id, watchId: intent.watch_id, eventId: intent.event_id, originalRecipient: intent.recipient_session_id, startedAt: intent.started_at, deliveryState: "unconfirmed_original_recipient", retryAction: "project_watch retry_delivery", retryIdentity: terminalRetryIdentity(intent), warning: "Original delivery could not be confirmed. Read pending metadata and explicitly retry this exact watch/event only if needed; retry may repeat the notice. Later notices remain ordered behind this event." })}`;
+                  if (await this.submit(sid, `assistant-terminal-uncertain:${intent.watch_id}:${intent.event_id}:${sid}`, text6)) this.uncertaintyNotices.set(key5, Date.now());
                 } });
               }
             } finally {
@@ -133613,8 +133825,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         init_report_continuation();
         init_project_views();
-        normalize6 = (text5) => text5.replace(/\r\n?/g, "\n");
-        referenceable = (role, kind, text5) => ["assistant", "agent"].includes(String(role)) && (kind === void 0 || kind === null || kind === "" || kind === "standard") && !!text5.trim();
+        normalize6 = (text6) => text6.replace(/\r\n?/g, "\n");
+        referenceable = (role, kind, text6) => ["assistant", "agent"].includes(String(role)) && (kind === void 0 || kind === null || kind === "" || kind === "standard") && !!text6.trim();
       }
     });
     var NativeScanCheckpoints;
@@ -134056,8 +134268,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text5) => (0, import_node_crypto61.createHash)("sha256").update(text5.replace(/\r\n?/g, "\n").trim()).digest("hex");
-        coverageKey = (sessionId, attemptId, at, text5) => JSON.stringify([sessionId, attemptId, at, replyHash(text5)]);
+        replyHash = (text6) => (0, import_node_crypto61.createHash)("sha256").update(text6.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        coverageKey = (sessionId, attemptId, at, text6) => JSON.stringify([sessionId, attemptId, at, replyHash(text6)]);
         RELAY_THREAD_STALE_CLOSE_MS = 7 * 24 * 60 * 6e4;
         AssistantRelay = class {
           constructor(ports) {
@@ -134242,10 +134454,10 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
            * Human input into the assistant under `busyInputMode` (§4.3 table).
            * Refusals are returned as is — never retried under another mode.
            */
-          async submitHuman(text5, opts) {
+          async submitHuman(text6, opts) {
             const sid = this.ports.assistantSessionId();
             if (!sid) return { kind: "refused", reason: "no_target" };
-            const outcome = await this.ports.submit(sid, { text: text5, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
+            const outcome = await this.ports.submit(sid, { text: text6, messageId: opts.messageId, policy: busyInputModeToSendPolicy(opts.busyInputMode) });
             this.recordHumanSubmit([sid], opts.messageId, outcome);
             return outcome;
           }
@@ -134651,14 +134863,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             });
           }
           noteUncoveredReply(reply, now) {
-            const text5 = reply.text?.trim() ?? "";
+            const text6 = reply.text?.trim() ?? "";
             const proof = reply.nativeTurnProof;
-            const closedNativeTurn = !!proof && proof.sessionId === reply.sessionId && proof.messageId === reply.messageId && !!proof.nativeSessionId && !!proof.turnId && proof.startedAt > 0 && proof.startedAt <= reply.messageAt && proof.endedAt >= reply.messageAt && proof.contentHash === replyHash(text5);
-            if (!text5 || !reply.chars || reply.attemptOpen && !closedNativeTurn || !reply.messageId || !this.ports.hasAssistant()) return;
+            const closedNativeTurn = !!proof && proof.sessionId === reply.sessionId && proof.messageId === reply.messageId && !!proof.nativeSessionId && !!proof.turnId && proof.startedAt > 0 && proof.startedAt <= reply.messageAt && proof.endedAt >= reply.messageAt && proof.contentHash === replyHash(text6);
+            if (!text6 || !reply.chars || reply.attemptOpen && !closedNativeTurn || !reply.messageId || !this.ports.hasAssistant()) return;
             if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId) || [...this.batches.values()].some((b) => b.attemptIds.includes(reply.attemptId)) || this.queue.some((i) => i.kind === "relay" && i.attemptIds.includes(reply.attemptId)))) return;
             if (!reply.attemptId && (this.queue.some((i) => i.kind === "relay" && i.coordinatorSessionId === reply.sessionId) || [...this.batches.values()].some((b) => b.coordinatorSessionId === reply.sessionId))) return;
-            const key5 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text5);
-            if (this.replyCovered(reply, text5)) return;
+            const key5 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text6);
+            if (this.replyCovered(reply, text6)) return;
             const klass = !reply.attemptId ? "no_attempt" : reply.restartClosed ? "restart_closed" : "inside_attempt";
             if (!this.flaggedReplies.has(key5)) {
               this.flaggedReplies.set(key5, now);
@@ -134672,9 +134884,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               if (!queued.gapReplies?.some((r) => r.messageId === reply.messageId)) queued.gapReplies?.push(reply);
             } else this.queue.push({ kind: "line", source: "relay", text: "", messageId: `gap:${group}`, gapReplies: [reply] });
           }
-          replyCovered(reply, text5) {
-            if (this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text5))) return true;
-            const hash4 = replyHash(text5);
+          replyCovered(reply, text6) {
+            if (this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text6))) return true;
+            const hash4 = replyHash(text6);
             return [...this.renderedCoverage.keys()].some((key5) => {
               const [session, attempt, at, contentHash] = JSON.parse(key5);
               if (session !== reply.sessionId || contentHash !== hash4) return false;
@@ -134712,11 +134924,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 offset += label2.length;
                 renderedOffset += label2.length;
               }
-              const text5 = points.slice(offset, offset + part.chars).join("");
+              const text6 = points.slice(offset, offset + part.chars).join("");
               offset += part.chars;
-              renderedOffset += Array.from(text5.replace(/\r\n?/g, "\n")).length;
-              if (Array.from(text5).length !== part.chars) return null;
-              if (renderedOffset <= renderedLimit) replies.push({ messageAt: part.at, contentHash: replyHash(text5) });
+              renderedOffset += Array.from(text6.replace(/\r\n?/g, "\n")).length;
+              if (Array.from(text6).length !== part.chars) return null;
+              if (renderedOffset <= renderedLimit) replies.push({ messageAt: part.at, contentHash: replyHash(text6) });
             }
             if (offset !== points.length) return null;
             return { attemptId, coordinatorSessionId: sessionId, replies };
@@ -134780,8 +134992,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             this.kick();
           }
           // ── delivery ────────────────────────────────────────────────────────────
-          pushLine(source2, text5, meshId) {
-            this.queue.push({ kind: "line", source: source2, text: text5, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
+          pushLine(source2, text6, meshId) {
+            this.queue.push({ kind: "line", source: source2, text: text6, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
             this.kick();
           }
           kick() {
@@ -134812,8 +135024,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
             const missed = this.missedReportsIncluding(taken, parts);
             const gap = !parts.some((p) => p.messageId.startsWith("gap:") && !p.surfaced) ? "" : this.newGapLine(sid, missed);
-            const text5 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
-            if (taken.some((i) => i.kind === "relay") || text5.includes("\n") && parts.some((p) => p.source === "relay")) {
+            const text6 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
+            if (taken.some((i) => i.kind === "relay") || text6.includes("\n") && parts.some((p) => p.source === "relay")) {
               const projects2 = parts.flatMap((p) => p.meshId ? [this.ports.projectSlug(p.meshId) ?? p.meshId] : []);
               const decision = await this.nudge.decide(
                 { count: parts.length + (gap ? 1 : 0), projects: projects2 },
@@ -134822,7 +135034,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               );
               if (decision !== "push" || canceled()) return;
             }
-            const outcome = await this.ports.submit(sid, { text: text5, messageId, policy: { mode: "queue" } });
+            const outcome = await this.ports.submit(sid, { text: text6, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
             const submitted = outcome.kind === "delivered" || outcome.kind === "duplicate" && !!this.ports.isParked && !await this.ports.isParked(sid, messageId);
             this.commitTaken(taken, parts, sid, submitted);
@@ -134925,8 +135137,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               size += cost;
             }
             for (const [meshId, count] of folded) {
-              const text5 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
-              parts.push({ text: text5, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
+              const text6 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count);
+              parts.push({ text: text6, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
             }
             return { taken, parts };
           }
@@ -135135,8 +135347,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 offset: Array.from(body).slice(0, r.offset + RELAY_BODY_MAX_CHARS).join("").length
               })}.`;
             }).join("\n");
-            const text5 = envelope.slice(0, headerEnd) + references + (continuations ? continuations + "\n" : "") + envelope.slice(headerEnd);
-            return { text: text5, source: "relay", messageId: this.relayPartId(item, bodies), meshId: item.meshId, reports };
+            const text6 = envelope.slice(0, headerEnd) + references + (continuations ? continuations + "\n" : "") + envelope.slice(headerEnd);
+            return { text: text6, source: "relay", messageId: this.relayPartId(item, bodies), meshId: item.meshId, reports };
           }
         };
       }
@@ -135484,12 +135696,12 @@ ${section2}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
             if (!sid) return { fired: false, reason: "no_session" };
             if (!this.ports.isReady(sid) || this.ports.modalOpen(sid)) return { fired: false, reason: "not_ready" };
             if (this.ports.relayBusy()) return { fired: false, reason: "busy" };
-            const text5 = buildDecisionNudge(open, now);
+            const text6 = buildDecisionNudge(open, now);
             const messageId = `decisions:${now}`;
             this.lastAt = now;
             for (const k of keys2) this.announced.add(k);
-            this.ports.enqueue({ source: "digest", text: text5, messageId, forSessionId: sid });
-            return { fired: true, messageId, text: text5 };
+            this.ports.enqueue({ source: "digest", text: text6, messageId, forSessionId: sid });
+            return { fired: true, messageId, text: text6 };
           }
         };
       }
@@ -135927,12 +136139,12 @@ ${section2}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
                 byWake = /* @__PURE__ */ new Map();
                 receiptsByKey.set(key5, byWake);
               }
-              let list3 = byWake.get(wakeId);
-              if (!list3) {
-                list3 = [];
-                byWake.set(wakeId, list3);
+              let list4 = byWake.get(wakeId);
+              if (!list4) {
+                list4 = [];
+                byWake.set(wakeId, list4);
               }
-              list3.push({
+              list4.push({
                 receiptKey: receiptKey2,
                 wakeId,
                 atMs: effectiveAtMs,
@@ -136076,12 +136288,12 @@ ${section2}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
               byWake = /* @__PURE__ */ new Map();
               auditsByKey.set(key5, byWake);
             }
-            let list3 = byWake.get(wakeId);
-            if (!list3) {
-              list3 = [];
-              byWake.set(wakeId, list3);
+            let list4 = byWake.get(wakeId);
+            if (!list4) {
+              list4 = [];
+              byWake.set(wakeId, list4);
             }
-            list3.push({
+            list4.push({
               eventId,
               wakeId,
               atMs: effectiveAtMs,
@@ -136541,10 +136753,10 @@ ${section2}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
         );
       }
     }
-    function frameFollowerWakeRelayText(text5) {
+    function frameFollowerWakeRelayText(text6) {
       return `${UNTRUSTED_RELAY_NOTICE}
 
-${defangRelayBody(text5)}`;
+${defangRelayBody(text6)}`;
     }
     var import_crypto41;
     var FOLLOWER_SEND_RECEIPT_MAX_ENTRIES;
@@ -136849,13 +137061,13 @@ ${defangRelayBody(text5)}`;
       return { ok: true, acl };
     }
     async function followerProjectSend(ports, meshId, sender, args) {
-      const text5 = typeof args.text === "string" ? args.text : "";
-      if (!text5.trim()) return fail8("invalid_args", "text required");
-      if (text5.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+      const text6 = typeof args.text === "string" ? args.text : "";
+      if (!text6.trim()) return fail8("invalid_args", "text required");
+      if (text6.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
       const clientId = str17(args.clientId);
       if (!clientId || clientId.length > 200) return fail8("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str17(args.expectedCoordinatorSessionId);
-      const bodyHash = (0, import_crypto42.createHash)("sha256").update(text5, "utf8").digest("hex");
+      const bodyHash = (0, import_crypto42.createHash)("sha256").update(text6, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
       const deadSessionIds = /* @__PURE__ */ new Set();
       const admitted2 = await withMeshRemoteAccessMutex(meshId, async () => {
@@ -137151,7 +137363,7 @@ ${defangRelayBody(text5)}`;
         });
         if (!preSend.ok) return preSend;
         const { cursor: cursor2, messageId: messageId2 } = preSend;
-        const deliveredText = isLaunched ? frameFollowerWakeRelayText(text5) : text5;
+        const deliveredText = isLaunched ? frameFollowerWakeRelayText(text6) : text6;
         const sent2 = await ports.execute("send_chat", {
           targetSessionId: target4.sessionId,
           text: deliveredText,
@@ -137220,12 +137432,12 @@ ${defangRelayBody(text5)}`;
           if (isFollower) {
             return followerProjectSend(ports, meshId, sender, args);
           }
-          const text5 = typeof args.text === "string" ? args.text : "";
-          if (!text5.trim()) return fail8("invalid_args", "text required");
-          if (text5.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          const text6 = typeof args.text === "string" ? args.text : "";
+          if (!text6.trim()) return fail8("invalid_args", "text required");
+          if (text6.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str17(args.clientId);
           if (!clientId || clientId.length > 200) return fail8("invalid_args", "clientId required (at most 200 characters)");
-          const sent = await localProjectSend(ports, mesh, text5, clientId);
+          const sent = await localProjectSend(ports, mesh, text6, clientId);
           if (!sent.ok) return fail8(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
@@ -137896,8 +138108,8 @@ ${defangRelayBody(text5)}`;
           loadProjectPorts,
           liveSessionId,
           (sid) => instanceReady(instanceOf(components, sid)) && !relay.hasPendingInput(),
-          async (sid, messageId, text5) => {
-            if (!relay.isQueued(messageId)) relay.enqueueInput({ source: "relay", text: text5, messageId, forSessionId: sid });
+          async (sid, messageId, text6) => {
+            if (!relay.isQueued(messageId)) relay.enqueueInput({ source: "relay", text: text6, messageId, forSessionId: sid });
             if (messageId.startsWith("assistant-terminal-uncertain:")) return true;
             return false;
           }
@@ -137959,8 +138171,8 @@ ${defangRelayBody(text5)}`;
               const chat = await components.router.execute("read_chat", { targetSessionId: event.sessionId, limit: 40 }, "ipc", { inProcess: true });
               if (!chat?.success) return;
               const messages = compactTranscriptTail(chat, 20, 2e3).messages ?? [];
-              const text5 = buildPreviousSessionNote(messages);
-              if (text5) registry.recordContext(event.sessionId, text5, Date.now());
+              const text6 = buildPreviousSessionNote(messages);
+              if (text6) registry.recordContext(event.sessionId, text6, Date.now());
             } catch (e) {
               LOG.debug("Assistant", `context snapshot failed: ${e?.message ?? e}`);
             } finally {
@@ -142719,8 +142931,8 @@ ${tail}` : ""
       }
       const holdsByAttempt = /* @__PURE__ */ new Map();
       for (const row2 of store4.db.prepare(`SELECT attempt_id, reason FROM turn_holds WHERE status = 'active'`).all()) {
-        const list3 = holdsByAttempt.get(row2.attempt_id);
-        if (list3) list3.push(row2.reason);
+        const list4 = holdsByAttempt.get(row2.attempt_id);
+        if (list4) list4.push(row2.reason);
         else holdsByAttempt.set(row2.attempt_id, [row2.reason]);
       }
       const due = [];
@@ -144588,7 +144800,7 @@ ${tail}` : ""
       return createBackgroundWorkMonitor({
         // `components.cliManager` is read at call time: the monitor is built here,
         // before every component exists, and only nudges once a worker has ended a turn.
-        nudgeWorker: async (sessionId, text5, meta2) => {
+        nudgeWorker: async (sessionId, text6, meta2) => {
           const target4 = components.sessionRegistry?.get(sessionId);
           const resolvedSessionId = target4?.adapterKey || target4?.instanceKey || sessionId;
           const inputPort = components.cliManager?.input;
@@ -144598,7 +144810,7 @@ ${tail}` : ""
               sessionId: resolvedSessionId,
               origin: "mesh",
               policy: { mode: "queue" },
-              input: { parts: [{ type: "text", text: text5 }], textFallback: text5 },
+              input: { parts: [{ type: "text", text: text6 }], textFallback: text6 },
               createdAt: Date.now()
             });
             if (out.kind === "refused" && out.reason === "no_target" && resolvedSessionId !== sessionId) {
@@ -144607,7 +144819,7 @@ ${tail}` : ""
                 sessionId,
                 origin: "mesh",
                 policy: { mode: "queue" },
-                input: { parts: [{ type: "text", text: text5 }], textFallback: text5 },
+                input: { parts: [{ type: "text", text: text6 }], textFallback: text6 },
                 createdAt: Date.now()
               });
             }
@@ -144619,7 +144831,7 @@ ${tail}` : ""
             await components.commandHandler.handle("send_chat", {
               sessionId: resolvedSessionId,
               messageId: meta2.messageId,
-              text: text5,
+              text: text6,
               origin: "mesh"
             });
             return true;
@@ -144895,8 +145107,8 @@ ${tail}` : ""
       if (!providerType || typeof providerType !== "string") return null;
       return PROVIDER_CONSUMPTION_CAPABILITIES[providerType.trim()] ?? null;
     }
-    function normalizePromptWhitespace(text5) {
-      return text5.replace(/\s+/g, " ").trim();
+    function normalizePromptWhitespace(text6) {
+      return text6.replace(/\s+/g, " ").trim();
     }
     function hasAuthoritativeNonConsumptionProof(payload, ms3, observed2, providerType, sinceMs, opts) {
       const capability = opts?.capabilityOverride ?? getProviderConsumptionCapability(providerType);
@@ -144940,9 +145152,9 @@ ${tail}` : ""
         const msgId = typeof msg.id === "string" ? msg.id.trim() : typeof msg.messageId === "string" ? msg.messageId.trim() : "";
         if (expectedId && msgId && msgId === expectedId) return false;
         if (role === "user" || role === "human") {
-          const text5 = flattenContent(msg.content).trim();
-          const normalizedText = text5 ? normalizePromptWhitespace(text5) : "";
-          if (expectedBody && text5 && (text5 === expectedBody || text5.includes(expectedBody))) return false;
+          const text6 = flattenContent(msg.content).trim();
+          const normalizedText = text6 ? normalizePromptWhitespace(text6) : "";
+          if (expectedBody && text6 && (text6 === expectedBody || text6.includes(expectedBody))) return false;
           if (normalizedExpectedBody && normalizedText && (normalizedText === normalizedExpectedBody || normalizedText.includes(normalizedExpectedBody))) return false;
         } else if (role === "assistant" || role === "model") {
           if (flattenContent(msg.content).trim().length > 0) hasCompletedPriorAssistant = true;
@@ -147943,8 +148155,8 @@ ${tail}` : ""
     function isTerminalDeliveryStatus(status) {
       return isDeadStatus(status) || LEGACY_TERMINAL_DELIVERY_STATUSES.has(status);
     }
-    function resolveDeliveryDecision(sessionStatus, opts) {
-      const status = (sessionStatus || "").trim().toLowerCase();
+    function resolveDeliveryDecision(sessionStatus2, opts) {
+      const status = (sessionStatus2 || "").trim().toLowerCase();
       if (!status) {
         return {
           decision: "rejected",
@@ -148004,7 +148216,7 @@ ${tail}` : ""
       return {
         decision: "rejected",
         reason: "unrecognized_session_status",
-        message: `Session status '${sessionStatus}' is not recognized. Delivery rejected (fail-closed). Inspect session state before retrying.`
+        message: `Session status '${sessionStatus2}' is not recognized. Delivery rejected (fail-closed). Inspect session state before retrying.`
       };
     }
     var CTRL_C = "";
@@ -149517,12 +149729,12 @@ ${tail}` : ""
           machine.start?.();
         };
         const onMessage = (data) => {
-          const text5 = rawDataToString(data);
-          if (text5 === null) {
+          const text6 = rawDataToString(data);
+          if (text6 === null) {
             applyStep(machine.onFrame({}));
             return;
           }
-          applyStep(machine.onFrame(text5));
+          applyStep(machine.onFrame(text6));
         };
         const onClose = () => {
           settleFail("socket_closed");
@@ -151032,6 +151244,8 @@ CONSUMED:${nonceHash}`);
     function overlayHeldRuntime(status, entry, refreshing, opts) {
       const runtime2 = entry?.runtime ?? null;
       const held = {
+        freshness: !runtime2 ? "not_observed" : isHeldRuntimeLive(entry) ? "fresh" : "stale",
+        handshakePending: entry?.handshakePendingSince != null,
         source: runtime2 ? entry?.runtimeSource ?? "member_push" : "none",
         observedAt: runtime2 ? entry?.runtimeObservedAt ?? null : null,
         refreshing,
@@ -151167,11 +151381,11 @@ CONSUMED:${nonceHash}`);
       const nodeIds = [...new Set(memberNodes.map((n) => readText(n?.id)).filter(Boolean))];
       const compact2 = args.compact !== false;
       const missionsRead = async () => {
-        const list3 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose", ...args.structured ? { structured: true } : {} }));
-        if (compact2 || list3.success === false) return { list: list3 };
-        const ids = (Array.isArray(list3.missions) ? list3.missions : []).map((m) => String(m?.id)).filter(Boolean);
+        const list4 = await settle(() => execute("mission_list_query", { v, meshId, meshStatusView: compact2 ? "compact" : "verbose", ...args.structured ? { structured: true } : {} }));
+        if (compact2 || list4.success === false) return { list: list4 };
+        const ids = (Array.isArray(list4.missions) ? list4.missions : []).map((m) => String(m?.id)).filter(Boolean);
         const stats = ids.length > 0 ? await settle(() => execute("task_stats_query", { v, meshId, missionIds: ids })) : null;
-        return { list: list3, ...stats ? { stats } : {} };
+        return { list: list4, ...stats ? { stats } : {} };
       };
       const relatedRepoGit = {};
       const relatedReads = async () => {
@@ -151557,8 +151771,8 @@ CONSUMED:${nonceHash}`);
           "-Command",
           `(Get-CimInstance Win32_Process -Filter "${pidFilter}").CommandLine`
         ], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text5 = String(psOut).trim();
-        if (text5) return text5;
+        const text6 = String(psOut).trim();
+        if (text6) return text6;
         failures.push("powershell Get-CimInstance returned no CommandLine");
       } catch (error) {
         failures.push(`powershell Get-CimInstance failed: ${errorText(error)}`);
@@ -151571,8 +151785,8 @@ CONSUMED:${nonceHash}`);
           "get",
           "CommandLine"
         ], { encoding: "utf8", timeout: 3e3, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-        const text5 = String(wmicOut).trim();
-        if (text5) return text5;
+        const text6 = String(wmicOut).trim();
+        if (text6) return text6;
         failures.push("wmic returned no CommandLine");
       } catch (error) {
         failures.push(`wmic failed: ${errorText(error)}`);
@@ -151597,12 +151811,12 @@ CONSUMED:${nonceHash}`);
         return getWindowsProcessCommandLine(pid, exec7);
       }
       try {
-        const text5 = String(exec7("ps", ["-o", "command=", "-p", String(pid)], {
+        const text6 = String(exec7("ps", ["-o", "command=", "-p", String(pid)], {
           encoding: "utf8",
           timeout: 3e3,
           stdio: ["ignore", "pipe", "ignore"]
         })).trim();
-        return text5 || null;
+        return text6 || null;
       } catch (error) {
         LOG.debug("ProcessLifecycle", `ps lookup failed for pid ${pid}: ${errorText(error)}`);
         return null;
@@ -153043,8 +153257,8 @@ ${marker2}`,
     function isRetriableInstallLockError(error) {
       const code = error?.code;
       if (code === "EBUSY" || code === "EPERM") return true;
-      const text5 = `${error?.message || ""} ${error?.stderr || ""}`;
-      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text5);
+      const text6 = `${error?.message || ""} ${error?.stderr || ""}`;
+      return /\bEBUSY\b|\bEPERM\b|resource busy or locked/i.test(text6);
     }
     function removeDaemonPidFile(configDir = getConfigDir2()) {
       assertWorkerBridgeLifecycleAdmission("helper_pid_cleanup", configDir);
@@ -154502,12 +154716,12 @@ ${marker2}`,
         const client = new import_session_host_core13.SessionHostClient({ endpoint: endpoint2 });
         try {
           await client.connect();
-          const list3 = async () => {
+          const list4 = async () => {
             const reply = await client.request({ type: "list_sessions", payload: {} });
             if (!reply.success || !Array.isArray(reply.result)) throw new Error("maintenance_complete_inventory_required");
             return reply.result;
           };
-          const records = await list3(), inventory = retainedRuntimeInventory(records, state2);
+          const records = await list4(), inventory = retainedRuntimeInventory(records, state2);
           if (digest2(inventory) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
           for (const record7 of records) {
             if (record7.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record7.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
@@ -154526,7 +154740,7 @@ ${marker2}`,
             if (!reply.result?.attachedClients?.some((c) => c.clientId === clientId && c.readOnly === true) || JSON.stringify(reply.result.writeOwner) !== JSON.stringify(r.writeOwner)) throw new Error("maintenance_readonly_attach_required");
             if (!reply.success || !reply.result || digest2(retainedRuntimeInventory([reply.result], state2)[0]) !== digest2(inventory.find((x) => x.runtimeId === r.sessionId))) throw new Error("maintenance_observation_attach_drift");
           }
-          if (digest2(retainedRuntimeInventory(await list3(), state2)) !== digest2(inventory)) throw new Error("maintenance_retained_inventory_drift");
+          if (digest2(retainedRuntimeInventory(await list4(), state2)) !== digest2(inventory)) throw new Error("maintenance_retained_inventory_drift");
           const finalEndpoint = await host.deps.verifiedRetainedEndpoint();
           if (finalEndpoint.path !== endpoint2.path) throw new Error("maintenance_retained_endpoint_drift");
           if (digest2(retainedRuntimeInventory(records, state2)) !== digest2(inventory)) throw new Error("maintenance_coordinator_binding_drift");
@@ -154990,11 +155204,11 @@ ${marker2}`,
         const entries2 = members.flatMap((m) => m.inventory.entries.filter((e) => e.kind === kind).map((e) => ({ pid: m.identity.pid, ...e })));
         mcpChannel(channel, [...entries2, ...pendingBridge.filter((r) => r.kind === kind || !["report", "progress"].includes(r.kind)), ...invalidAck.filter((a) => a.kind === kind)], !after.receiptsObserved ? "receipt_store_unavailable" : invalidAck.length ? "exact_delivery_ACK_unconfirmed" : void 0);
       }
-      const statuses = (fn) => members.filter((m) => fn(m.inventory)).map((m) => ({ pid: m.identity.pid, bootNonce: m.identity.bootNonce }));
-      mcpChannel("unreadableOutboxes", statuses((v) => !v.directoryReadable || !v.diskSetMatchesMemory || v.quarantinedFileCount > 0 || v.unknownFileCount > 0 || !v.acknowledgmentsDurable));
-      mcpChannel("temporaryOutboxes", statuses((v) => v.temporaryCount > 0));
-      mcpChannel("memoryOnlyOutboxes", statuses((v) => v.memoryFallback || !v.durable));
-      const active = statuses((v) => v.activeSubmits > 0 || v.flushing || v.pendingNoticeCount > 0);
+      const statuses2 = (fn) => members.filter((m) => fn(m.inventory)).map((m) => ({ pid: m.identity.pid, bootNonce: m.identity.bootNonce }));
+      mcpChannel("unreadableOutboxes", statuses2((v) => !v.directoryReadable || !v.diskSetMatchesMemory || v.quarantinedFileCount > 0 || v.unknownFileCount > 0 || !v.acknowledgmentsDurable));
+      mcpChannel("temporaryOutboxes", statuses2((v) => v.temporaryCount > 0));
+      mcpChannel("memoryOnlyOutboxes", statuses2((v) => v.memoryFallback || !v.durable));
+      const active = statuses2((v) => v.activeSubmits > 0 || v.flushing || v.pendingNoticeCount > 0);
       if (active.length) channels.submits = { ...channels.submits, pending: [...channels.submits.pending, ...active] };
       if (before.digest !== after.digest || JSON.stringify(before.revision) !== JSON.stringify(after.revision)) for (const ch of Object.values(channels)) {
         ch.observed = false;
@@ -155483,11 +155697,11 @@ ${marker2}`,
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
                 const mainPages = titleFilteredPages.filter((t) => this.isMainPageUrl(t.url));
-                const list3 = mainPages.length > 0 ? mainPages : titleFilteredPages.length > 0 ? titleFilteredPages : pages;
-                this.log(`[CDP] pages(${list3.length}): ${list3.map((t) => `"${t.title}"`).join(", ")}`);
+                const list4 = mainPages.length > 0 ? mainPages : titleFilteredPages.length > 0 ? titleFilteredPages : pages;
+                this.log(`[CDP] pages(${list4.length}): ${list4.map((t) => `"${t.title}"`).join(", ")}`);
                 const previousTargetId = this._targetId;
                 const selected2 = resolveCdpPageTarget({
-                  pages: list3,
+                  pages: list4,
                   pinnedTargetId: previousTargetId,
                   previousPageTitle: this._pageTitle
                 });
@@ -155505,8 +155719,8 @@ ${marker2}`,
                   resolve69(null);
                   return;
                 }
-                this._pageTitle = list3[0]?.title || "";
-                resolve69(list3[0]);
+                this._pageTitle = list4[0]?.title || "";
+                resolve69(list4[0]);
               } catch {
                 resolve69(null);
               }
@@ -155757,7 +155971,7 @@ ${marker2}`,
       * 2. Insert text via Input.insertText
       * 3. Send Enter via Input.dispatchKeyEvent
       */
-      async typeAndSend(selector, text5) {
+      async typeAndSend(selector, text6) {
         if (!this.isConnected) return false;
         const focusResult = await this.evaluate(`(() => {
             const e = document.querySelector(${JSON.stringify(selector)});
@@ -155786,7 +156000,7 @@ ${marker2}`,
           clickCount: 1
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text5.split("\n");
+        const lines = text6.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -155822,14 +156036,14 @@ ${marker2}`,
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSend: sent "${text5.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSend: sent "${text6.substring(0, 50)}..."`);
         return true;
       }
       /**
       * Coordinate-based typeAndSend — for input fields inside webview iframe
       * Receives coordinates directly instead of selector for click+input+Enter
       */
-      async typeAndSendAt(x, y, text5) {
+      async typeAndSendAt(x, y, text6) {
         if (!this.isConnected) return false;
         await this.sendInternal("Input.dispatchMouseEvent", {
           type: "mousePressed",
@@ -155874,7 +156088,7 @@ ${marker2}`,
           windowsVirtualKeyCode: 8
         });
         await new Promise((r) => setTimeout(r, 150));
-        const lines = text5.split("\n");
+        const lines = text6.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (lines[i].length > 0) {
             await this.sendInternal("Input.insertText", { text: lines[i] });
@@ -155910,7 +156124,7 @@ ${marker2}`,
           code: "Enter",
           windowsVirtualKeyCode: 13
         });
-        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text5.substring(0, 50)}..."`);
+        this.log(`[CDP] typeAndSendAt(${Math.round(x)},${Math.round(y)}): sent "${text6.substring(0, 50)}..."`);
         return true;
       }
       /**
@@ -156459,16 +156673,16 @@ ${marker2}`,
       for (const parsedEntry of parsedEntries) {
         const parsedRole = getRole(parsedEntry.message);
         if (parsedRole !== "user" && parsedRole !== "human") continue;
-        const text5 = normalizeText(parsedEntry.message);
-        const bucket2 = parsedUserTurnsByText.get(text5);
+        const text6 = normalizeText(parsedEntry.message);
+        const bucket2 = parsedUserTurnsByText.get(text6);
         if (bucket2) bucket2.push(parsedEntry);
-        else parsedUserTurnsByText.set(text5, [parsedEntry]);
+        else parsedUserTurnsByText.set(text6, [parsedEntry]);
       }
       const runtimeAckCountByText = /* @__PURE__ */ new Map();
       for (const r of runtimeMessages) {
         if (metadata(r.message).runtimeInputAck !== true) continue;
-        const text5 = normalizeText(r.message);
-        runtimeAckCountByText.set(text5, (runtimeAckCountByText.get(text5) ?? 0) + 1);
+        const text6 = normalizeText(r.message);
+        runtimeAckCountByText.set(text6, (runtimeAckCountByText.get(text6) ?? 0) + 1);
       }
       const runtimeEntries = runtimeMessages.map((entry, index) => ({
         message: entry.message,
@@ -157115,16 +157329,16 @@ ${marker2}`,
       return lines.join("\n");
     }
     function looksLikeActiveApprovalPromptText(content) {
-      const text5 = content.trim();
-      if (!text5 || text5.length > 2e3) return false;
-      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text5) || /this command requires approval/i.test(text5) || /quick safety check/i.test(text5) || /is this a project you trust/i.test(text5);
-      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text5) || /^\s*1[.)]\s+yes\b/im.test(text5);
+      const text6 = content.trim();
+      if (!text6 || text6.length > 2e3) return false;
+      const hasApprovalQuestion = /do you want to (?:proceed|allow|run|make this edit|create)/i.test(text6) || /this command requires approval/i.test(text6) || /quick safety check/i.test(text6) || /is this a project you trust/i.test(text6);
+      const hasNumberedChoices = /^\s*[❯›>]?\s*1[.)]\s+(?:yes|allow|proceed|run)/im.test(text6) || /^\s*1[.)]\s+yes\b/im.test(text6);
       if (hasApprovalQuestion && hasNumberedChoices) return true;
-      const lastLines = text5.split(/\r?\n/).slice(-12).join("\n");
+      const lastLines = text6.split(/\r?\n/).slice(-12).join("\n");
       const hasDontAskAgain = /yes.*don'?t ask again/i.test(lastLines) || /yes.*always allow/i.test(lastLines);
       const hasNoOption = /^\s*[❯›>]?\s*\d+[.)]\s+no\b/im.test(lastLines);
       if (hasDontAskAgain && hasNoOption) return true;
-      if (/what do you want to do\?/i.test(text5) && /^\s*\d+[.)]\s+\S/m.test(text5)) return true;
+      if (/what do you want to do\?/i.test(text6) && /^\s*\d+[.)]\s+\S/m.test(text6)) return true;
       return false;
     }
     init_provider_patch_state();
@@ -159112,10 +159326,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (stat2.size < cached5.committedBytes || cached5.boundaryDigest === null) return false;
       return boundaryDigest(p, cached5.committedBytes) === cached5.boundaryDigest;
     }
-    function parseJsonlInto(out, text5) {
-      const lastNewline = text5.lastIndexOf("\n");
-      const settled = lastNewline >= 0 ? text5.slice(0, lastNewline + 1) : "";
-      const fragment = lastNewline >= 0 ? text5.slice(lastNewline + 1) : text5;
+    function parseJsonlInto(out, text6) {
+      const lastNewline = text6.lastIndexOf("\n");
+      const settled = lastNewline >= 0 ? text6.slice(0, lastNewline + 1) : "";
+      const fragment = lastNewline >= 0 ? text6.slice(lastNewline + 1) : text6;
       for (const line of settled.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
@@ -159192,16 +159406,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           return lines;
         }
       }
-      let text5;
+      let text6;
       try {
-        text5 = fs54.readFileSync(p, "utf8");
+        text6 = fs54.readFileSync(p, "utf8");
         parsedJsonlCacheStats.fileReads++;
       } catch {
         return [];
       }
       parsedJsonlCacheStats.parsePasses++;
       const out = [];
-      const parsed = parseJsonlInto(out, text5);
+      const parsed = parseJsonlInto(out, text6);
       storeParsedJsonlCache(p, {
         signature,
         sourceBytes: stat2.size,
@@ -159271,11 +159485,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         parsedJsonlCacheStats.fullReads++;
       }
       const parse2 = (bytes) => {
-        const text5 = bytes.toString("utf8").trim();
-        if (!text5) return;
+        const text6 = bytes.toString("utf8").trim();
+        if (!text6) return;
         let record7;
         try {
-          record7 = JSON.parse(text5);
+          record7 = JSON.parse(text6);
         } catch {
           return;
         }
@@ -159385,8 +159599,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var promptsByInstance = /* @__PURE__ */ new Map();
     var inputsByInstance = /* @__PURE__ */ new Map();
     var shortInputsByInstance = /* @__PURE__ */ new Map();
-    function normalizeInput(text5) {
-      return text5.replace(/\s+/g, " ").trim();
+    function normalizeInput(text6) {
+      return text6.replace(/\s+/g, " ").trim();
     }
     function hasExclusiveSentInput(instanceId, userMessages) {
       const id4 = instanceId.trim();
@@ -159414,13 +159628,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return matchedOwner === id4;
     }
-    function promptSnippet(text5) {
-      const line = String(text5 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
+    function promptSnippet(text6) {
+      const line = String(text6 || "").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).find(Boolean) || "";
       return line.length >= MIN_SNIPPET_CHARS ? line.slice(0, MAX_SNIPPET_CHARS) : "";
     }
-    function recordSentPrompt(instanceId, text5) {
+    function recordSentPrompt(instanceId, text6) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
-      const input = normalizeInput(String(text5 || ""));
+      const input = normalizeInput(String(text6 || ""));
       if (id4 && input.length >= MIN_SNIPPET_CHARS) {
         const inputs = inputsByInstance.get(id4) ?? [];
         if (inputs[inputs.length - 1] !== input) inputs.push(input);
@@ -159432,12 +159646,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (shorts.length > MAX_PROMPTS_PER_SESSION) shorts.splice(0, shorts.length - MAX_PROMPTS_PER_SESSION);
         shortInputsByInstance.set(id4, shorts);
       }
-      const snippet2 = promptSnippet(text5);
+      const snippet2 = promptSnippet(text6);
       if (!id4 || !snippet2) return;
-      const list3 = promptsByInstance.get(id4) ?? [];
-      if (list3[list3.length - 1] !== snippet2) list3.push(snippet2);
-      if (list3.length > MAX_PROMPTS_PER_SESSION) list3.splice(0, list3.length - MAX_PROMPTS_PER_SESSION);
-      promptsByInstance.set(id4, list3);
+      const list4 = promptsByInstance.get(id4) ?? [];
+      if (list4[list4.length - 1] !== snippet2) list4.push(snippet2);
+      if (list4.length > MAX_PROMPTS_PER_SESSION) list4.splice(0, list4.length - MAX_PROMPTS_PER_SESSION);
+      promptsByInstance.set(id4, list4);
     }
     function sentPromptSnippets(instanceId) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
@@ -159900,9 +160114,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           const buf = Buffer.alloc(8192);
           const bytes = fs55.readSync(fd, buf, 0, buf.length, 0);
           if (bytes <= 0) return null;
-          const text5 = buf.subarray(0, bytes).toString("utf8");
-          const nl = text5.indexOf("\n");
-          const firstLine = (nl >= 0 ? text5.slice(0, nl) : text5).trim();
+          const text6 = buf.subarray(0, bytes).toString("utf8");
+          const nl = text6.indexOf("\n");
+          const firstLine = (nl >= 0 ? text6.slice(0, nl) : text6).trim();
           if (!firstLine) return null;
           const parsed = JSON.parse(firstLine);
           if (String(parsed.type ?? "") !== "session_meta") return null;
@@ -160191,16 +160405,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       for (const line of head.split("\n")) {
         if (!line.trim()) continue;
-        let rec6;
+        let rec7;
         try {
-          rec6 = JSON.parse(line);
+          rec7 = JSON.parse(line);
         } catch {
           continue;
         }
-        if (rec6?.role !== "user") continue;
-        const content = rec6?.message?.content;
-        const text5 = Array.isArray(content) ? content.map((b) => typeof b?.text === "string" ? b.text : "").join("\n") : String(content ?? "");
-        return containsSentPrompt(text5, [snippet2]);
+        if (rec7?.role !== "user") continue;
+        const content = rec7?.message?.content;
+        const text6 = Array.isArray(content) ? content.map((b) => typeof b?.text === "string" ? b.text : "").join("\n") : String(content ?? "");
+        return containsSentPrompt(text6, [snippet2]);
       }
       return false;
     }
@@ -160798,10 +161012,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let last = null;
       let lastNonTool = null;
       for (let i = 0; i < lines.length; i += 1) {
-        const rec6 = lines[i];
-        const shape = shapes.pick(rec6);
+        const rec7 = lines[i];
+        const shape = shapes.pick(rec7);
         if (!shape) continue;
-        for (const msg of projectMessages(rec6, shape.map, i, lines.length, mtime)) {
+        for (const msg of projectMessages(rec7, shape.map, i, lines.length, mtime)) {
           messageCount += 1;
           if (!first) first = msg;
           last = msg;
@@ -160854,30 +161068,30 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const pickUsage = compileUsageShapes(src);
       const requested = readRequestedSessionId(input) || "";
       const projectionKey = JSON.stringify([src, input.agentType]);
-      const lines = yield* readProjectedJsonlRecords(sourcePath, projectionKey, (rec6, i) => {
-        const shape = shapes.pick(rec6);
-        const usageMap = pickUsage?.(rec6);
-        const messages2 = shape ? projectMessages(rec6, shape.map, i, i + 1, 1, "__projection__") : [];
+      const lines = yield* readProjectedJsonlRecords(sourcePath, projectionKey, (rec7, i) => {
+        const shape = shapes.pick(rec7);
+        const usageMap = pickUsage?.(rec7);
+        const messages2 = shape ? projectMessages(rec7, shape.map, i, i + 1, 1, "__projection__") : [];
         let terminal;
-        if (input.agentType === "codex-cli" && rec6?.type === "event_msg") {
-          const payload = rec6?.payload;
-          terminal = { type: rec6.type, timestamp: rec6.timestamp, payload: payload && {
+        if (input.agentType === "codex-cli" && rec7?.type === "event_msg") {
+          const payload = rec7?.payload;
+          terminal = { type: rec7.type, timestamp: rec7.timestamp, payload: payload && {
             type: payload.type,
             turn_id: payload.turn_id,
             message: typeof payload.message === "string" ? payload.message : void 0,
             error: payload.error && typeof payload.error === "object" ? { type: payload.error.type } : payload.error,
             last_agent_message: flattenJsonlText(payload.last_agent_message)
           } };
-        } else if (input.agentType === "kimi" && rec6?.type === "turn.ended") {
-          terminal = { type: rec6.type, time: rec6.time, reason: rec6.reason, turnId: rec6.turnId };
+        } else if (input.agentType === "kimi" && rec7?.type === "turn.ended") {
+          terminal = { type: rec7.type, time: rec7.time, reason: rec7.reason, turnId: rec7.turnId };
         }
         return {
           messages: messages2,
-          fallbackTime: !!shape && (!shape.map.timestamp_ms || parseTimestamp(jsonPathGet(rec6, shape.map.timestamp_ms)) == null),
-          usage: usageMap ? projectUsageRecord(rec6, usageMap, 0) : void 0,
-          fallbackUsageTime: !!usageMap && (!usageMap.timestamp_ms || parseTimestamp(jsonPathGet(rec6, usageMap.timestamp_ms)) == null),
-          sessionId: i === 0 && src.session_id_path ? jsonPathGet(rec6, src.session_id_path) : void 0,
-          workspace: i < 5 ? readSessionMetaWorkspace([rec6]) : void 0,
+          fallbackTime: !!shape && (!shape.map.timestamp_ms || parseTimestamp(jsonPathGet(rec7, shape.map.timestamp_ms)) == null),
+          usage: usageMap ? projectUsageRecord(rec7, usageMap, 0) : void 0,
+          fallbackUsageTime: !!usageMap && (!usageMap.timestamp_ms || parseTimestamp(jsonPathGet(rec7, usageMap.timestamp_ms)) == null),
+          sessionId: i === 0 && src.session_id_path ? jsonPathGet(rec7, src.session_id_path) : void 0,
+          workspace: i < 5 ? readSessionMetaWorkspace([rec7]) : void 0,
           terminal
         };
       }, cooperative ? () => jsonlTurnRemainingMs > 0 : void 0);
@@ -160907,19 +161121,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const lineage = providerSessionId || requested || sourcePath;
         let sliceStartedAt = performance.now();
         for (let i = 0; i < lines.length; i++) {
-          const rec6 = lines[i];
-          if (rec6.usage) usageRecords.push(rec6.fallbackUsageTime ? { ...rec6.usage, receivedAt: mtime } : rec6.usage);
-          if (rec6.sourceAddresses?.lineage !== lineage) {
-            rec6.sourceAddresses = { lineage, values: rec6.messages.map((original) => original._src?.cls === "n" ? nativeSourceAddress(lineage, original._src.addr) : original._src) };
+          const rec7 = lines[i];
+          if (rec7.usage) usageRecords.push(rec7.fallbackUsageTime ? { ...rec7.usage, receivedAt: mtime } : rec7.usage);
+          if (rec7.sourceAddresses?.lineage !== lineage) {
+            rec7.sourceAddresses = { lineage, values: rec7.messages.map((original) => original._src?.cls === "n" ? nativeSourceAddress(lineage, original._src.addr) : original._src) };
           }
-          for (const [messageIndex, original] of rec6.messages.entries()) {
+          for (const [messageIndex, original] of rec7.messages.entries()) {
             const msg = { ...original };
-            if (rec6.fallbackTime) msg.receivedAt += mtime - (lines.length - 1 - i) * 1e3 - 1;
+            if (rec7.fallbackTime) msg.receivedAt += mtime - (lines.length - 1 - i) * 1e3 - 1;
             if (msg.toolBlockRef) {
               if (mtime > 0) msg.toolBlockRef = { ...msg.toolBlockRef, sourceMtimeMs: mtime };
               else delete msg.toolBlockRef;
             }
-            if (original._src?.cls === "n") msg._src = rec6.sourceAddresses.values[messageIndex];
+            if (original._src?.cls === "n") msg._src = rec7.sourceAddresses.values[messageIndex];
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages2.push(msg);
           }
@@ -160930,7 +161144,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
         if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
-        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec6) => rec6.terminal), providerSessionId);
+        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec7) => rec7.terminal), providerSessionId);
         projection = {
           messages: markNativeHistorySnapshot(messages2),
           turnTerminalMarkers: turnTerminalMarkers2,
@@ -160978,14 +161192,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (agentType !== "codex-cli") return [];
       const markers = [];
       const provenance = createCodexTurnProvenance(nativeSessionId);
-      for (const rec6 of lines) {
-        if (String(rec6?.type ?? "") !== "event_msg") continue;
-        const payload = rec6?.payload;
+      for (const rec7 of lines) {
+        if (String(rec7?.type ?? "") !== "event_msg") continue;
+        const payload = rec7?.payload;
         if (!payload || typeof payload !== "object") continue;
         const payloadType = String(payload.type ?? "").trim();
         const isComplete = payloadType === "task_complete";
         const isAbort = payloadType === "turn_aborted";
-        const receivedAt = parseTimestamp(rec6?.timestamp) ?? 0;
+        const receivedAt = parseTimestamp(rec7?.timestamp) ?? 0;
         if (!isComplete && !isAbort) {
           provenance(payload, receivedAt);
           continue;
@@ -161005,11 +161219,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function extractKimiTurnTerminalMarkers(lines) {
       const markers = [];
-      for (const rec6 of lines) {
-        if (String(rec6?.type ?? "") !== "turn.ended") continue;
-        const receivedAt = parseTimestamp(rec6?.time) ?? Date.now();
-        const reason = String(rec6?.reason ?? "").trim();
-        const rawTurnId = rec6?.turnId;
+      for (const rec7 of lines) {
+        if (String(rec7?.type ?? "") !== "turn.ended") continue;
+        const receivedAt = parseTimestamp(rec7?.time) ?? Date.now();
+        const reason = String(rec7?.reason ?? "").trim();
+        const rawTurnId = rec7?.turnId;
         const turnId = typeof rawTurnId === "number" && Number.isFinite(rawTurnId) ? String(rawTurnId) : typeof rawTurnId === "string" && rawTurnId.trim() ? rawTurnId.trim() : "";
         markers.push({
           receivedAt,
@@ -161186,10 +161400,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (lines.length === 0) return false;
           const userTexts = [];
           for (let i = 0; i < lines.length; i += 1) {
-            const rec6 = lines[i];
-            const shape = shapes.pick(rec6);
+            const rec7 = lines[i];
+            const shape = shapes.pick(rec7);
             if (!shape) continue;
-            for (const msg of projectMessages(rec6, shape.map, i, lines.length, 0)) {
+            for (const msg of projectMessages(rec7, shape.map, i, lines.length, 0)) {
               if (msg.role === "user" && msg.content) userTexts.push(msg.content);
             }
           }
@@ -161454,8 +161668,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text5 = String(block2.text || "").trim();
-          if (text5) parts.push({ content: text5, kind: "standard", blockIndex, truncated: false });
+          const text6 = String(block2.text || "").trim();
+          if (text6) parts.push({ content: text6, kind: "standard", blockIndex, truncated: false });
         } else if (type2 === "tool_use") {
           const name = String(block2.name || "").trim() || "Tool";
           const { text: args, truncated } = summarizeToolUseInput(block2);
@@ -161483,18 +161697,18 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!block2 || typeof block2 !== "object") continue;
         const type2 = String(block2.type || "").trim();
         if (type2 === "text") {
-          const text5 = String(block2.text || "").trim();
-          if (text5) {
-            parts.push({ role: "user", content: text5, kind: "standard", blockIndex, truncated: false });
+          const text6 = String(block2.text || "").trim();
+          if (text6) {
+            parts.push({ role: "user", content: text6, kind: "standard", blockIndex, truncated: false });
           }
         } else if (type2 === "tool_result") {
           const raw = flattenToolResultContent(block2.content);
           if (!raw) continue;
-          const { text: text5, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-          if (!text5) continue;
+          const { text: text6, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+          if (!text6) continue;
           parts.push({
             role: "assistant",
-            content: text5,
+            content: text6,
             kind: "tool",
             senderName: "Tool",
             blockIndex,
@@ -161737,8 +161951,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const name = String(payload.name ?? payload.type ?? "tool").trim() || "tool";
       const argumentValue = codexToolCallArguments(payload);
       if (!argumentValue) return { content: name, truncated: false, toolName: name };
-      const { text: text5, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
-      return { content: text5 ? `${name}: ${text5}` : name, truncated, toolName: name };
+      const { text: text6, truncated } = oneLine(argumentValue, TOOL_CALL_SUMMARY_MAX);
+      return { content: text6 ? `${name}: ${text6}` : name, truncated, toolName: name };
     }
     function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
@@ -161755,13 +161969,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function extractToolOutputContent(payload) {
       const raw = codexToolOutputText(payload);
       if (!raw) return { content: "", truncated: false };
-      const { text: text5, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
-      return { content: text5, truncated };
+      const { text: text6, truncated } = oneLine(raw, TOOL_RESULT_SUMMARY_MAX);
+      return { content: text6, truncated };
     }
     function codexToolOutputText(payload) {
       const output = payload.output ?? payload.result ?? payload.content;
-      const text5 = flattenCodexContent(output);
-      if (text5) return text5;
+      const text6 = flattenCodexContent(output);
+      if (text6) return text6;
       if (output && typeof output === "object") {
         try {
           return JSON.stringify(output, null, 2).trim();
@@ -161815,14 +162029,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return false;
     }
     function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
-      const text5 = content.trim();
-      if (!text5) return;
-      if (hasAssistantStandardMessageSinceLastUser(records, text5)) return;
+      const text6 = content.trim();
+      if (!text6) return;
+      if (hasAssistantStandardMessageSinceLastUser(records, text6)) return;
       const msg = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
         role: "assistant",
-        content: text5,
+        content: text6,
         kind: "standard",
         agent: "codex-cli",
         historySessionId: sessionId
@@ -161858,8 +162072,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const buffer = Buffer.alloc(SESSION_META_PREFIX_BYTES);
         const bytes = fs62.readSync(fd, buffer, 0, buffer.length, 0);
         if (bytes <= 0) return null;
-        const text5 = buffer.subarray(0, bytes).toString("utf8");
-        const lines = text5.split("\n");
+        const text6 = buffer.subarray(0, bytes).toString("utf8");
+        const lines = text6.split("\n");
         const idx = lines.findIndex(Boolean);
         if (idx >= 0 && idx < lines.length - 1) return lines[idx];
         if (bytes < buffer.length) return idx >= 0 ? lines[idx] : null;
@@ -162194,8 +162408,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return printable / buf.length >= 0.9;
     }
-    function stripAnswerMarker(text5) {
-      return text5.replace(/^\s*MARKER_V1\s*/, "");
+    function stripAnswerMarker(text6) {
+      return text6.replace(/^\s*MARKER_V1\s*/, "");
     }
     function extractModelAnswer(payload) {
       const inner = firstLenField(payload, 20);
@@ -162209,9 +162423,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!inner) return "";
       const raw = firstLenField(inner, 2) ?? firstLenField(inner, 3);
       if (!raw || !looksLikeText(raw)) return "";
-      const text5 = raw.toString("utf-8").trim();
-      if (!text5) return "";
-      return extractUserRequestContent(text5);
+      const text6 = raw.toString("utf-8").trim();
+      if (!text6) return "";
+      return extractUserRequestContent(text6);
     }
     function extractModelReasoning(payload) {
       const inner = firstLenField(payload, 20);
@@ -162321,8 +162535,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return fields.length > 0 ? fields : null;
     }
-    function isBareUri(text5) {
-      return /^file:\/\/\S*$/.test(text5);
+    function isBareUri(text6) {
+      return /^file:\/\/\S*$/.test(text6);
     }
     function isBetterLeaf(candidate, best) {
       if (!candidate) return false;
@@ -162335,8 +162549,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const fields = depth < 8 ? decodeProtoStrict(buf) : null;
       if (!fields) {
         if (!looksLikeText(buf)) return "";
-        const text5 = buf.toString("utf-8").trim();
-        return exclude.has(text5) ? "" : text5;
+        const text6 = buf.toString("utf-8").trim();
+        return exclude.has(text6) ? "" : text6;
       }
       let best = "";
       for (const f of fields) {
@@ -162415,8 +162629,8 @@ ${output}` : "";
       const body = firstLenField(note2, 2);
       const title = (textField(body, 1) ?? "").trim();
       const detail = body ? longestTextLeaf(body, new Set(title ? [title] : [])) : "";
-      const text5 = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
-      return text5 ? { name, text: text5 } : null;
+      const text6 = [title, detail].filter(Boolean).join("\n") || (textField(note2, 1) ?? "").trim();
+      return text6 ? { name, text: text6 } : null;
     }
     function isSettledToolStatus(status, errorDetails) {
       if (status === null) return true;
@@ -162483,22 +162697,22 @@ ${output}` : "";
       const questions = [];
       for (const item of rawQuestions) {
         if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-        const rec6 = item;
-        const questionText = (typeof rec6.question === "string" ? rec6.question : typeof rec6.question_text === "string" ? rec6.question_text : typeof rec6.questionText === "string" ? rec6.questionText : "").trim();
+        const rec7 = item;
+        const questionText = (typeof rec7.question === "string" ? rec7.question : typeof rec7.question_text === "string" ? rec7.question_text : typeof rec7.questionText === "string" ? rec7.questionText : "").trim();
         if (!questionText) return null;
-        const multiSelect = rec6.is_multi_select === true || rec6.multiSelect === true;
-        const rawOptions = Array.isArray(rec6.options) ? rec6.options : [];
+        const multiSelect = rec7.is_multi_select === true || rec7.multiSelect === true;
+        const rawOptions = Array.isArray(rec7.options) ? rec7.options : [];
         const options = [];
         for (let i = 0; i < rawOptions.length; i++) {
           const opt = rawOptions[i];
           if (typeof opt === "string") {
-            const text5 = opt.trim();
-            if (text5) options.push({ id: `opt_${i + 1}`, text: text5, label: text5 });
+            const text6 = opt.trim();
+            if (text6) options.push({ id: `opt_${i + 1}`, text: text6, label: text6 });
           } else if (opt && typeof opt === "object" && !Array.isArray(opt)) {
             const o = opt;
-            const text5 = (typeof o.text === "string" ? o.text : typeof o.label === "string" ? o.label : "").trim();
+            const text6 = (typeof o.text === "string" ? o.text : typeof o.label === "string" ? o.label : "").trim();
             const id4 = typeof o.id === "string" && o.id.trim() ? o.id.trim() : `opt_${i + 1}`;
-            if (text5) options.push({ id: id4, text: text5, label: text5 });
+            if (text6) options.push({ id: id4, text: text6, label: text6 });
           }
         }
         if (options.length === 0) return null;
@@ -162536,10 +162750,10 @@ ${output}` : "";
             const optBuf = optionBufs[i];
             const field1 = (textField(optBuf, 1) ?? "").trim();
             const field22 = (textField(optBuf, 2) ?? "").trim();
-            const text5 = field22 || field1;
-            if (!text5) continue;
+            const text6 = field22 || field1;
+            if (!text6) continue;
             const id4 = (field22 ? field1 : "") || `opt_${i + 1}`;
-            options.push({ id: id4, text: text5, label: text5 });
+            options.push({ id: id4, text: text6, label: text6 });
           }
           if (options.length > 0) {
             questions.push({ questionText, options, multiSelect, isMultiSelect: multiSelect });
@@ -162898,8 +163112,8 @@ ${output}` : "";
           continue;
         }
         if (row2.step_type === AGY_STEP_TYPE_TASK_MESSAGE) {
-          const text5 = row2.step_payload ? row2.step_payload.toString("utf8") : "";
-          for (const match of text5.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
+          const text6 = row2.step_payload ? row2.step_payload.toString("utf8") : "";
+          for (const match of text6.matchAll(/Task id "([0-9a-f-]{36}\/task-\d+)"[^:]{0,80}?\bwith result\b/gi)) {
             out.push({ idx: row2.idx, kind: "notification", taskId: match[1], terminal: true });
           }
           continue;
@@ -163307,10 +163521,10 @@ ${output}` : "";
       return null;
     }
     var USER_QUERY_RE = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/;
-    function unwrapUserQuery(text5) {
-      const match = USER_QUERY_RE.exec(text5);
+    function unwrapUserQuery(text6) {
+      const match = USER_QUERY_RE.exec(text6);
       if (match) return match[1].trim();
-      return text5.trim();
+      return text6.trim();
     }
     function blocksToText(content) {
       if (typeof content === "string") return content;
@@ -163372,14 +163586,14 @@ ${output}` : "";
         if (typeof record7.synthetic_reason === "string" && record7.synthetic_reason) return null;
         const rawText = blocksToText(record7.content);
         if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
-        const text5 = unwrapUserQuery(rawText);
-        if (!text5) return null;
-        return { role: "user", content: text5, kind: "standard" };
+        const text6 = unwrapUserQuery(rawText);
+        if (!text6) return null;
+        return { role: "user", content: text6, kind: "standard" };
       }
       if (type2 === "assistant") {
-        const text5 = blocksToText(record7.content).trim();
+        const text6 = blocksToText(record7.content).trim();
         const toolCalls = Array.isArray(record7.tool_calls) ? record7.tool_calls : [];
-        if (!text5) {
+        if (!text6) {
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
           const label2 = names.length > 0 ? names.join(", ") : "tool";
@@ -163388,14 +163602,14 @@ ${output}` : "";
           const { text: summary, truncated } = oneLine(args, TOOL_CALL_SUMMARY_MAX);
           return { role: "assistant", content: `[tool: ${label2}] ${summary}`, kind: "tool", truncated, toolName: label2 };
         }
-        return { role: "assistant", content: text5, kind: "standard" };
+        return { role: "assistant", content: text6, kind: "standard" };
       }
       if (type2 === "tool_result") {
         const raw2 = blocksToText(record7.content).trim();
         if (!raw2) return null;
-        const { text: text5, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
-        if (!text5) return null;
-        return { role: "assistant", content: text5, kind: "tool", truncated };
+        const { text: text6, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
+        if (!text6) return null;
+        return { role: "assistant", content: text6, kind: "tool", truncated };
       }
       return null;
     }
@@ -163434,9 +163648,9 @@ ${output}` : "";
       return out;
     }
     function readSession4(sourcePath, sessionId, workspace) {
-      let text5;
+      let text6;
       try {
-        text5 = fs65.readFileSync(sourcePath, "utf8");
+        text6 = fs65.readFileSync(sourcePath, "utf8");
       } catch {
         return null;
       }
@@ -163445,7 +163659,7 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sourcePath);
       const parsed = [];
       let recordIndex = -1;
-      for (const line of text5.split("\n")) {
+      for (const line of text6.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
         let record7;
@@ -163801,8 +164015,8 @@ ${output}` : "";
           const buffer = Buffer.alloc(8192);
           const bytes = fs66.readSync(fd, buffer, 0, buffer.length, 0);
           if (bytes <= 0) return null;
-          const text5 = buffer.subarray(0, bytes).toString("utf8");
-          const firstLine = text5.slice(0, text5.indexOf("\n") >= 0 ? text5.indexOf("\n") : text5.length).trim();
+          const text6 = buffer.subarray(0, bytes).toString("utf8");
+          const firstLine = text6.slice(0, text6.indexOf("\n") >= 0 ? text6.indexOf("\n") : text6.length).trim();
           if (!firstLine) return null;
           const record7 = JSON.parse(firstLine);
           if (record7.type !== "session_meta" || !record7.payload || typeof record7.payload !== "object") return null;
@@ -164285,7 +164499,7 @@ ${output}` : "";
           const rendered2 = parts.length > 0 ? parts.join(" ") : sub?.message || String(sub);
           counts.set(rendered2, (counts.get(rendered2) ?? 0) + 1);
         }
-        const rendered = [...counts.entries()].map(([text5, n]) => n > 1 ? `${text5} (x${n})` : text5).join("; ");
+        const rendered = [...counts.entries()].map(([text6, n]) => n > 1 ? `${text6} (x${n})` : text6).join("; ");
         const name = e?.name || "AggregateError";
         return `${name}: ${rendered}`;
       }
@@ -165215,8 +165429,8 @@ ${output}` : "";
           return { probe, report: null };
         }
         this.autoUpdateLastError = void 0;
-        for (const [type2, rec6] of this.autoUpdateRecords) {
-          if (rec6.state === "blocked" && !probe.staleTypes.includes(type2)) this.autoUpdateRecords.delete(type2);
+        for (const [type2, rec7] of this.autoUpdateRecords) {
+          if (rec7.state === "blocked" && !probe.staleTypes.includes(type2)) this.autoUpdateRecords.delete(type2);
         }
         if (!options.enabled || probe.staleTypes.length === 0) return { probe, report: null };
         const report = await this.syncVerifiedChannel({ onlyTargetTypes: probe.staleTypes, mode: "auto" });
@@ -165228,8 +165442,8 @@ ${output}` : "";
       /** Auto-update status for the dashboard (check_provider_updates). Pure read. */
       getAutoUpdateStatus() {
         const types2 = {};
-        for (const [type2, rec6] of this.autoUpdateRecords) {
-          const { digest: _digest, inputsKey: _inputsKey, ...pub } = rec6;
+        for (const [type2, rec7] of this.autoUpdateRecords) {
+          const { digest: _digest, inputsKey: _inputsKey, ...pub } = rec7;
           types2[type2] = pub;
         }
         return {
@@ -167497,9 +167711,9 @@ ${output}` : "";
     function hashSignatureParts(parts) {
       let hash4 = 2166136261;
       for (const part of parts) {
-        const text5 = String(part || "");
-        for (let i = 0; i < text5.length; i += 1) {
-          hash4 ^= text5.charCodeAt(i);
+        const text6 = String(part || "");
+        for (let i = 0; i < text6.length; i += 1) {
+          hash4 ^= text6.charCodeAt(i);
           hash4 = Math.imul(hash4, 16777619) >>> 0;
         }
         hash4 ^= 255;
@@ -167618,9 +167832,9 @@ ${output}` : "";
     init_provider_native_history();
     var HOT_TAIL_MIN_LIMIT = 60;
     function normalizeComparableWorkspace(value) {
-      const text5 = typeof value === "string" ? value.trim() : "";
-      if (!text5) return "";
-      const lexical = path88.resolve(text5);
+      const text6 = typeof value === "string" ? value.trim() : "";
+      if (!text6) return "";
+      const lexical = path88.resolve(text6);
       try {
         return fs75.realpathSync.native(lexical);
       } catch {
@@ -167656,8 +167870,8 @@ ${output}` : "";
     }
     function hasSafeNativeHistoryMapping(args) {
       const isCoordinatorTranscript = args.nativeMessages.some((m) => {
-        const text5 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-        return text5.includes("mesh_send_task") || text5.includes("mesh_status") || text5.includes("mesh_read_chat") || text5.includes("mesh_launch_session");
+        const text6 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+        return text6.includes("mesh_send_task") || text6.includes("mesh_status") || text6.includes("mesh_read_chat") || text6.includes("mesh_launch_session");
       });
       const explicitSessionId = String(args.historySessionId || args.providerSessionId || "").trim();
       if (explicitSessionId) {
@@ -167672,8 +167886,8 @@ ${output}` : "";
         }
         if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
           const ptyHasCoordinator = args.ptyMessages.some((m) => {
-            const text5 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-            return text5.includes("mesh_send_task") || text5.includes("mesh_status") || text5.includes("mesh_read_chat");
+            const text6 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+            return text6.includes("mesh_send_task") || text6.includes("mesh_status") || text6.includes("mesh_read_chat");
           });
           return ptyHasCoordinator;
         }
@@ -167685,8 +167899,8 @@ ${output}` : "";
       if (!workspaceMatches) return false;
       if (isCoordinatorTranscript && args.ptyMessages && args.ptyMessages.length > 0) {
         const ptyHasCoordinator = args.ptyMessages.some((m) => {
-          const text5 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
-          return text5.includes("mesh_send_task") || text5.includes("mesh_status") || text5.includes("mesh_read_chat");
+          const text6 = typeof m?.content === "string" ? m.content : JSON.stringify(m?.content || "");
+          return text6.includes("mesh_send_task") || text6.includes("mesh_status") || text6.includes("mesh_read_chat");
         });
         if (!ptyHasCoordinator) {
           return false;
@@ -168021,9 +168235,9 @@ ${output}` : "";
        * mutate it.
        */
       snapshotRecord(key5) {
-        const rec6 = this.records.get(key5);
-        if (!rec6) return void 0;
-        return { state: rec6.state, lockedSince: rec6.lockedSince, transitions: [...rec6.transitions] };
+        const rec7 = this.records.get(key5);
+        if (!rec7) return void 0;
+        return { state: rec7.state, lockedSince: rec7.lockedSince, transitions: [...rec7.transitions] };
       }
       /** Restore a previously snapshotted record, undoing a speculative observe.
        *  Passing undefined clears the key (it had no record when snapshotted). */
@@ -170083,8 +170297,8 @@ ${output}` : "";
     init_message_identity_ledger();
     function describeRef(ref2) {
       const r = ref2 ?? {};
-      const num3 = (v) => typeof v === "number" && Number.isFinite(v) ? String(v) : "?";
-      return `mtime=${num3(r.sourceMtimeMs)} record=${num3(r.recordIndex)} block=${num3(r.blockIndex)}`;
+      const num4 = (v) => typeof v === "number" && Number.isFinite(v) ? String(v) : "?";
+      return `mtime=${num4(r.sourceMtimeMs)} record=${num4(r.recordIndex)} block=${num4(r.blockIndex)}`;
     }
     function canExpand(adapter) {
       return !!adapter && typeof adapter.expandToolBlock === "function";
@@ -170469,19 +170683,19 @@ ${output}` : "";
       const r = a;
       return r.modalKey === b.modalKey && (r.attemptId ?? null) === b.attemptId && (r.generation ?? null) === b.generation;
     }
-    function prepareOwnerActionChat(components, source2, sessionId, text5, selection, expectedModal, expectedApprovalTarget) {
+    function prepareOwnerActionChat(components, source2, sessionId, text6, selection, expectedModal, expectedApprovalTarget) {
       const state2 = assistantExecutionState(components);
-      if (sessionId !== state2.sessionId || !["p2p", "ws", "standalone"].includes(String(source2))) return { success: true, text: text5 };
+      if (sessionId !== state2.sessionId || !["p2p", "ws", "standalone"].includes(String(source2))) return { success: true, text: text6 };
       let raw = selection;
-      if (selection === void 0 && text5.startsWith("/assistant-action ")) {
+      if (selection === void 0 && text6.startsWith("/assistant-action ")) {
         try {
-          raw = JSON.parse(text5.slice("/assistant-action ".length));
+          raw = JSON.parse(text6.slice("/assistant-action ".length));
         } catch {
           return { success: false, code: "invalid_assistant_action" };
         }
       } else if (selection === void 0) {
-        const direction = /^(?:please\s+)?(approve|reject)(?:\s+(?:the request for\s+)?(.+?))?[.!]?$/i.exec(text5.trim());
-        if (!direction) return { success: true, text: text5 };
+        const direction = /^(?:please\s+)?(approve|reject)(?:\s+(?:the request for\s+)?(.+?))?[.!]?$/i.exec(text6.trim());
+        if (!direction) return { success: true, text: text6 };
         const requested = direction[1].toLowerCase();
         const targetName = direction[2]?.replace(/[.!]$/, "").trim();
         const choices = ownerActionChoices(components).filter((c2) => c2.action === requested && (!targetName || ["this", "selected permission"].includes(targetName.toLowerCase()) || c2.label === targetName || c2.targetSessionId === targetName));
@@ -170510,7 +170724,7 @@ ${output}` : "";
       }
       const issued = assistantExecution.issue(source2, state2, action2, target4.modal, Date.now(), episode.kind === "live" ? episode.target : null);
       if (!issued.success) return issued;
-      return { success: true, expiresAt: issued.expiresAt, text: `${text5}
+      return { success: true, expiresAt: issued.expiresAt, text: `${text6}
 [ADHDev owner action] ${JSON.stringify({ ...action2, authorization: issued.authorization, expiresAt: issued.expiresAt })}` };
     }
     init_contracts();
@@ -170690,9 +170904,9 @@ ${output}` : "";
           if (hasNonTextParts(input)) {
             return refuse5("unsupported_input", { message: `${target4.label || "This session"} only supports text input.` });
           }
-          const text5 = input.textFallback;
-          if (!text5 || !text5.trim()) return refuse5("unsupported_input", { message: "No input to send." });
-          return { text: text5 };
+          const text6 = input.textFallback;
+          if (!text6 || !text6.trim()) return refuse5("unsupported_input", { message: "No input to send." });
+          return { text: text6 };
         } catch (e) {
           return refuse5("unsupported_input", { message: e?.message || String(e) });
         }
@@ -171029,8 +171243,8 @@ ${output}` : "";
           log("info", `withdraw(${messageId}) session ${sessionId} \u2192 ${claimed ? "removed" : "not parked"}`);
           return { removed: !!claimed };
         },
-        async findParkedMessageIdByText(sessionId, text5) {
-          const wanted = text5.trim();
+        async findParkedMessageIdByText(sessionId, text6) {
+          const wanted = text6.trim();
           if (!wanted) return void 0;
           const candidates = [];
           for (const [messageId, entry] of parkedText) {
@@ -171165,13 +171379,13 @@ ${output}` : "";
     }
     function buildCliStructuredInputPrompt(input, options = {}) {
       const materializeDir = options.materializeDir || path91.join(os34.tmpdir(), "adhdev-input-media");
-      const { text: text5, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
+      const { text: text6, imageRefs, resourceRefs } = buildStructuredInputText(input, (part, index) => {
         const localPath = typeof part.uri === "string" ? filePathFromUri(part.uri) : null;
         const materializedPath = !localPath && part.data ? materializeImageDataPart(part, index, materializeDir) : null;
         return localPath || materializedPath || part.uri || "";
       });
       LOG.debug("CLI", `buildCliStructuredInputPrompt parts=${input.parts.length} images=${imageRefs.length} resources=${resourceRefs.length}`);
-      return text5;
+      return text6;
     }
     function buildCliInputAckText(input) {
       return buildStructuredInputText(input, (part) => {
@@ -171202,9 +171416,9 @@ ${output}` : "";
         return envelope.textFallback ? { text: envelope.textFallback } : null;
       }
       assertProviderSupportsDeclaredInput(provider, envelope);
-      const text5 = buildCliStructuredInputPrompt(envelope);
-      if (!text5) return null;
-      return { text: text5, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
+      const text6 = buildCliStructuredInputPrompt(envelope);
+      if (!text6) return null;
+      return { text: text6, ...shouldUseBracketedPasteForEnvelope(envelope) ? { bracketedPaste: true } : {} };
     }
     function buildSessionInputTarget(args) {
       const { adapter, instance, provider } = args;
@@ -171213,7 +171427,7 @@ ${output}` : "";
         label: adapter.cliType,
         getStatus: (o) => adapter.getStatus?.(o),
         buildBody: (input) => buildCliInputBody(provider, input),
-        sendMessage: (text5, options) => adapter.sendMessage(text5, options)
+        sendMessage: (text6, options) => adapter.sendMessage(text6, options)
       };
       if (typeof adapter.sendMessageDuringGeneration === "function") target4.sendMessageDuringGeneration = (t, b, id4) => adapter.sendMessageDuringGeneration(t, b, id4);
       if (typeof adapter.interruptTurn === "function") target4.interruptTurn = () => adapter.interruptTurn();
@@ -171243,9 +171457,9 @@ ${output}` : "";
     function getSendChatInputEnvelope(args) {
       return normalizeInputEnvelope(args?.input ? { input: args.input } : args);
     }
-    function callLegacyTextScript(script, text5) {
+    function callLegacyTextScript(script, text6) {
       if (typeof script !== "function") return null;
-      return script(text5);
+      return script(text6);
     }
     function didProviderConfirmSend(result) {
       const parsed = parseMaybeJson(result);
@@ -171443,8 +171657,8 @@ ${output}` : "";
     }
     async function handleSendChat(h, args) {
       const input = getSendChatInputEnvelope(args);
-      const text5 = input.textFallback;
-      const hasInput = input.parts.length > 0 || typeof text5 === "string" && text5.trim().length > 0;
+      const text6 = input.textFallback;
+      const hasInput = input.parts.length > 0 || typeof text6 === "string" && text6.trim().length > 0;
       if (!hasInput) return { success: false, error: "input required" };
       const _log = (msg) => LOG.debug("Command", `[send_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
@@ -171456,12 +171670,12 @@ ${output}` : "";
         return submitCliChat(h, args, input, provider, transport);
       }
       assertTextOnlyInput(provider, input);
-      if (!text5) return { success: false, error: "text required" };
+      if (!text6) return { success: false, error: "text required" };
       if (isExtensionTransport(transport)) {
         _log(`Extension: ${provider?.type || "unknown_extension"}`);
         try {
           const beforeState = await getStableExtensionBaseline(h);
-          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text5 }, 3e4);
+          const evalResult = await h.evaluateProviderScript("sendMessage", { message: text6 }, 3e4);
           if (evalResult?.result) {
             const parsed = parseMaybeJson(evalResult.result);
             if (didProviderConfirmSend(parsed)) {
@@ -171481,7 +171695,7 @@ ${output}` : "";
         }
         const extensionSessionId = h.currentSession?.sessionId;
         if (h.agentStream && h.getCdp() && extensionSessionId) {
-          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text5);
+          const ok = await h.agentStream.sendToSession(h.getCdp(), extensionSessionId, text6);
           if (ok) {
             _log(`AgentStreamManager sent OK`);
             return _logSendSuccess("agent-stream");
@@ -171496,7 +171710,7 @@ ${output}` : "";
         return { success: false, error: `CDP for ${managerKey || "unknown"} not connected` };
       }
       _log(`Targeting IDE: ${getCurrentManagerKey(h)}`);
-      const sendScript = h.getProviderScript("sendMessage", { message: text5 });
+      const sendScript = h.getProviderScript("sendMessage", { message: text6 });
       if (sendScript) {
         try {
           const result = await targetCdp.evaluate(sendScript, 3e4);
@@ -171507,7 +171721,7 @@ ${output}` : "";
           }
           if (parsed?.needsTypeAndSend && parsed?.selector) {
             try {
-              const sent = await targetCdp.typeAndSend(parsed.selector, text5);
+              const sent = await targetCdp.typeAndSend(parsed.selector, text6);
               if (sent) {
                 _log(`typeAndSend(script.selector=${parsed.selector}) success`);
                 return _logSendSuccess("typeAndSend-script");
@@ -171519,7 +171733,7 @@ ${output}` : "";
           if (parsed?.needsTypeAndSend && parsed?.clickCoords) {
             try {
               const { x, y } = parsed.clickCoords;
-              const sent = await targetCdp.typeAndSendAt(x, y, text5);
+              const sent = await targetCdp.typeAndSendAt(x, y, text6);
               if (sent) {
                 _log(`typeAndSendAt(${x},${y}) success`);
                 return _logSendSuccess("typeAndSendAt-script");
@@ -171530,7 +171744,7 @@ ${output}` : "";
           }
           if (parsed?.needsTypeAndSend && provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
             try {
-              const sent = await targetCdp.typeAndSend(provider.inputSelector, text5);
+              const sent = await targetCdp.typeAndSend(provider.inputSelector, text6);
               if (sent) {
                 _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
                 return _logSendSuccess("typeAndSend-provider");
@@ -171541,7 +171755,7 @@ ${output}` : "";
           }
           if (parsed?.needsTypeAndSend && provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
             try {
-              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text5);
+              const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text6);
               if (webviewScript && targetCdp.evaluateInWebviewFrame) {
                 const matchText = provider.webviewMatchText;
                 const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -171564,7 +171778,7 @@ ${output}` : "";
       }
       if (provider?.webviewMatchText && provider?.scripts?.webviewSendMessage) {
         try {
-          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text5);
+          const webviewScript = callLegacyTextScript(provider.scripts.webviewSendMessage, text6);
           if (webviewScript && targetCdp.evaluateInWebviewFrame) {
             const matchText = provider.webviewMatchText;
             const matchFn = matchText ? (body) => body.includes(matchText) : void 0;
@@ -171581,7 +171795,7 @@ ${output}` : "";
       }
       if (provider?.inputMethod === "cdp-type-and-send" && provider.inputSelector) {
         try {
-          const sent = await targetCdp.typeAndSend(provider.inputSelector, text5);
+          const sent = await targetCdp.typeAndSend(provider.inputSelector, text6);
           if (sent) {
             _log(`typeAndSend(provider.inputSelector=${provider.inputSelector}) success`);
             return _logSendSuccess("typeAndSend-provider");
@@ -171594,9 +171808,9 @@ ${output}` : "";
       return { success: false, error: "No provider method could send the message" };
     }
     async function handleCancelQueuedChat(h, args) {
-      const text5 = typeof args?.message === "string" ? args.message : "";
+      const text6 = typeof args?.message === "string" ? args.message : "";
       let messageId = readMessageId(args);
-      if (!messageId && !text5.trim()) return { success: false, error: "messageId required" };
+      if (!messageId && !text6.trim()) return { success: false, error: "messageId required" };
       const _log = (msg) => LOG.debug("Command", `[cancel_queued_chat] ${msg}`);
       const provider = h.getProvider(args?.agentType);
       const transport = getTargetTransport(h, provider);
@@ -171609,7 +171823,7 @@ ${output}` : "";
       }
       const service = sessionInputFor(h);
       if (!messageId) {
-        messageId = await service.findParkedMessageIdByText(sessionKey2, text5);
+        messageId = await service.findParkedMessageIdByText(sessionKey2, text6);
         _log(`legacy text-keyed cancel resolved to ${messageId || "nothing parked"}`);
         if (!messageId) return { success: true, cancelled: 0, removed: false };
       }
@@ -172377,7 +172591,7 @@ ${output}` : "";
       try {
         switch (action2) {
           case "input_key": {
-            const { type: evType, key: key5, code, text: text5, unmodifiedText, modifiers } = params;
+            const { type: evType, key: key5, code, text: text6, unmodifiedText, modifiers } = params;
             const mod = typeof modifiers === "number" ? modifiers : 0;
             const vk = KEY_TO_VK[key5] || (key5.length === 1 ? key5.charCodeAt(0) : 0);
             if (evType === "char") {
@@ -172385,8 +172599,8 @@ ${output}` : "";
                 type: "char",
                 key: key5,
                 code,
-                text: text5 || key5,
-                unmodifiedText: unmodifiedText || text5 || key5,
+                text: text6 || key5,
+                unmodifiedText: unmodifiedText || text6 || key5,
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -172395,7 +172609,7 @@ ${output}` : "";
                 type: "rawKeyDown",
                 key: key5,
                 code,
-                ...text5 ? { text: text5 } : {},
+                ...text6 ? { text: text6 } : {},
                 ...vk ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {},
                 ...mod ? { modifiers: mod } : {}
               });
@@ -172440,8 +172654,8 @@ ${output}` : "";
             return { success: true, x, y };
           }
           case "input_type": {
-            const { text: text5 } = params;
-            for (const char of text5 || "") {
+            const { text: text6 } = params;
+            for (const char of text6 || "") {
               await h.getCdp().send("Input.dispatchKeyEvent", {
                 type: "char",
                 text: char,
@@ -172701,10 +172915,10 @@ ${output}` : "";
       const command = payload.command;
       if (!command || typeof command !== "object") return null;
       if (command.type !== "send_message" && command.type !== "pty_write") return null;
-      const text5 = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
-      if (!text5) return null;
+      const text6 = typeof command.text === "string" ? command.text.trim() : typeof command.message === "string" ? command.message.trim() : "";
+      if (!text6) return null;
       const enterCount = Number.isInteger(command.enterCount) && command.enterCount > 0 && command.enterCount <= 5 ? command.enterCount : void 0;
-      return { type: command.type, text: text5, ...enterCount ? { enterCount } : {} };
+      return { type: command.type, text: text6, ...enterCount ? { enterCount } : {} };
     }
     init_control_effects();
     init_logger();
@@ -175081,8 +175295,8 @@ ${output}` : "";
       return null;
     }
     function sniffSecretContent(head) {
-      const text5 = Buffer.from(head.subarray(0, SECRET_SNIFF_BYTES)).toString("latin1");
-      return PRIVATE_KEY_HEAD.test(text5) ? "private-key-content" : null;
+      const text6 = Buffer.from(head.subarray(0, SECRET_SNIFF_BYTES)).toString("latin1");
+      return PRIVATE_KEY_HEAD.test(text6) ? "private-key-content" : null;
     }
     var ManifestError = class extends Error {
       constructor(code, message) {
@@ -175103,8 +175317,8 @@ ${output}` : "";
       const keys2 = Object.keys(obj).filter((k) => obj[k] !== void 0).sort();
       return `{${keys2.map((k) => `${JSON.stringify(k)}:${canonicalJson2(obj[k])}`).join(",")}}`;
     }
-    function sha256Hex2(text5) {
-      return (0, import_node_crypto43.createHash)("sha256").update(text5, "utf8").digest("hex");
+    function sha256Hex2(text6) {
+      return (0, import_node_crypto43.createHash)("sha256").update(text6, "utf8").digest("hex");
     }
     function byteCompare(a, b) {
       return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
@@ -175518,9 +175732,9 @@ ${output}` : "";
       const root = openRoot(opts.rootPath);
       const files = [];
       try {
-        const list3 = selectionFiles(selection);
-        for (let i = 0; i < list3.length; i++) {
-          const entry = list3[i];
+        const list4 = selectionFiles(selection);
+        for (let i = 0; i < list4.length; i++) {
+          const entry = list4[i];
           if (opts.isCancelled?.()) throw new ManifestError("CANCELLED", "cancelled while freezing");
           let src;
           try {
@@ -176297,9 +176511,9 @@ ${output}` : "";
         }
         fs90.renameSync(tmp, file);
       }
-      save(rec6) {
+      save(rec7) {
         this.ensure("records");
-        this.atomicWrite(this.p("records", `${rec6.id}.json`), JSON.stringify(rec6));
+        this.atomicWrite(this.p("records", `${rec7.id}.json`), JSON.stringify(rec7));
       }
       load(id4) {
         try {
@@ -176318,8 +176532,8 @@ ${output}` : "";
         const out = [];
         for (const n of names) {
           if (!n.endsWith(".json")) continue;
-          const rec6 = this.load(n.slice(0, -5));
-          if (rec6) out.push(rec6);
+          const rec7 = this.load(n.slice(0, -5));
+          if (rec7) out.push(rec7);
         }
         return out;
       }
@@ -176371,14 +176585,14 @@ ${output}` : "";
         } catch {
         }
         const staleTempIds = [];
-        for (const rec6 of this.list()) {
-          const idle = now - rec6.activityAt;
-          const age = now - rec6.createdAt;
-          if (TERMINAL_STATES.has(rec6.state)) {
-            this.removeSpool(rec6.id);
-            if (age > TRANSFER_RETENTION_MS.receipt) this.remove(rec6.id);
+        for (const rec7 of this.list()) {
+          const idle = now - rec7.activityAt;
+          const age = now - rec7.createdAt;
+          if (TERMINAL_STATES.has(rec7.state)) {
+            this.removeSpool(rec7.id);
+            if (age > TRANSFER_RETENTION_MS.receipt) this.remove(rec7.id);
           } else if (idle > TRANSFER_RETENTION_MS.tempIdle || age > TRANSFER_RETENTION_MS.tempMax) {
-            staleTempIds.push(rec6.id);
+            staleTempIds.push(rec7.id);
           }
         }
         return { staleTempIds };
@@ -176404,91 +176618,91 @@ ${output}` : "";
       // ── lifecycle ────────────────────────────────────────────────────────────────
       /** Boot: every non-terminal approved transfer needs re-approval (restart invalidates consent). */
       recover() {
-        for (const rec6 of this.store.list()) {
-          if (!TERMINAL_STATES.has(rec6.state) && rec6.state !== "previewed" && rec6.state !== "offered") {
-            rec6.state = "needs_reapproval";
-            delete rec6.localApproval;
-            rec6.peerApproved = false;
-            this.persist(rec6, "needs_reapproval");
+        for (const rec7 of this.store.list()) {
+          if (!TERMINAL_STATES.has(rec7.state) && rec7.state !== "previewed" && rec7.state !== "offered") {
+            rec7.state = "needs_reapproval";
+            delete rec7.localApproval;
+            rec7.peerApproved = false;
+            this.persist(rec7, "needs_reapproval");
           }
-          this.records.set(rec6.id, rec6);
+          this.records.set(rec7.id, rec7);
         }
         this.sweep();
       }
       /** Expiry + retention sweep; call on a timer. */
       sweep() {
         const t = this.now();
-        for (const rec6 of this.records.values()) {
-          if (TERMINAL_STATES.has(rec6.state)) continue;
-          const awaitingFirstApproval = rec6.state === "previewed" || rec6.state === "offered";
-          if (awaitingFirstApproval && t > rec6.previewExpiresAt) this.terminate(rec6, "expired", "PREVIEW_EXPIRED");
-          else if (!awaitingFirstApproval && t - rec6.createdAt > TRANSFER_RETENTION_MS.consent && rec6.state === "needs_reapproval") this.terminate(rec6, "expired", "CONSENT_EXPIRED");
-          else if (rec6.localApproval && t - rec6.localApproval.at > TRANSFER_RETENTION_MS.consent && !ACTIVE_STATES.has(rec6.state)) this.terminate(rec6, "expired", "CONSENT_EXPIRED");
+        for (const rec7 of this.records.values()) {
+          if (TERMINAL_STATES.has(rec7.state)) continue;
+          const awaitingFirstApproval = rec7.state === "previewed" || rec7.state === "offered";
+          if (awaitingFirstApproval && t > rec7.previewExpiresAt) this.terminate(rec7, "expired", "PREVIEW_EXPIRED");
+          else if (!awaitingFirstApproval && t - rec7.createdAt > TRANSFER_RETENTION_MS.consent && rec7.state === "needs_reapproval") this.terminate(rec7, "expired", "CONSENT_EXPIRED");
+          else if (rec7.localApproval && t - rec7.localApproval.at > TRANSFER_RETENTION_MS.consent && !ACTIVE_STATES.has(rec7.state)) this.terminate(rec7, "expired", "CONSENT_EXPIRED");
         }
         const { staleTempIds } = this.store.gc(t);
         for (const id4 of staleTempIds) {
-          const rec6 = this.records.get(id4);
-          if (rec6) this.terminate(rec6, "expired", "TEMP_DATA_EXPIRED");
+          const rec7 = this.records.get(id4);
+          if (rec7) this.terminate(rec7, "expired", "TEMP_DATA_EXPIRED");
         }
       }
       /** Host hook: owner auth generation / peer authorisation changed. Revokes unauthorised runs. */
       onAuthorityChanged() {
-        for (const rec6 of this.records.values()) {
-          if (TERMINAL_STATES.has(rec6.state) || !rec6.localApproval) continue;
-          const problem = this.authorizationProblem(rec6);
-          if (problem) this.endForProblem(rec6, problem);
+        for (const rec7 of this.records.values()) {
+          if (TERMINAL_STATES.has(rec7.state) || !rec7.localApproval) continue;
+          const problem = this.authorizationProblem(rec7);
+          if (problem) this.endForProblem(rec7, problem);
         }
       }
-      endForProblem(rec6, problem) {
-        if (problem === "consent-expired") this.terminate(rec6, "expired", "CONSENT_EXPIRED", true);
-        else this.terminate(rec6, "revoked", "REVOKED", true);
+      endForProblem(rec7, problem) {
+        if (problem === "consent-expired") this.terminate(rec7, "expired", "CONSENT_EXPIRED", true);
+        else this.terminate(rec7, "revoked", "REVOKED", true);
       }
-      authorizationProblem(rec6) {
-        const a = rec6.localApproval;
+      authorizationProblem(rec7) {
+        const a = rec7.localApproval;
         if (!a) return null;
         if (this.now() - a.at > TRANSFER_RETENTION_MS.consent) return "consent-expired";
         if (a.ownerAuthGeneration !== this.ports.ownerAuthGeneration()) return "owner-auth-changed";
         if (a.restartEpoch !== this.restartEpoch) return "restart";
-        if (!this.ports.isPeerAuthorized(rec6.peerDaemonId)) return "peer-unauthorized";
+        if (!this.ports.isPeerAuthorized(rec7.peerDaemonId)) return "peer-unauthorized";
         return null;
       }
-      persist(rec6, event) {
-        rec6.updatedAt = this.now();
-        rec6.activityAt = rec6.updatedAt;
-        this.records.set(rec6.id, rec6);
-        this.store.save(rec6);
-        if (event) this.store.audit({ id: rec6.id, role: rec6.role, event, ...rec6.errorCode ? { code: rec6.errorCode } : {}, files: rec6.selection.entries.filter((e) => e.kind === "file").length, bytes: rec6.totalBytes }, this.now());
+      persist(rec7, event) {
+        rec7.updatedAt = this.now();
+        rec7.activityAt = rec7.updatedAt;
+        this.records.set(rec7.id, rec7);
+        this.store.save(rec7);
+        if (event) this.store.audit({ id: rec7.id, role: rec7.role, event, ...rec7.errorCode ? { code: rec7.errorCode } : {}, files: rec7.selection.entries.filter((e) => e.kind === "file").length, bytes: rec7.totalBytes }, this.now());
       }
-      setState(rec6, state2, event) {
-        rec6.state = state2;
-        this.persist(rec6, event ?? state2);
+      setState(rec7, state2, event) {
+        rec7.state = state2;
+        this.persist(rec7, event ?? state2);
       }
       /** Terminal transition with full cleanup of runtime, spool and staging. */
-      terminate(rec6, state2, code, notifyPeer = false) {
-        if (TERMINAL_STATES.has(rec6.state)) return;
-        const run4 = this.runs.get(rec6.id);
+      terminate(rec7, state2, code, notifyPeer = false) {
+        if (TERMINAL_STATES.has(rec7.state)) return;
+        const run4 = this.runs.get(rec7.id);
         if (run4) run4.cancelled = true;
         const hadReceiver = !!run4?.receiver;
-        this.teardownRun(rec6.id, true);
-        if (rec6.role === "target" && !hadReceiver) {
-          const ws = this.ports.resolveWorkspace(rec6.selection.targetWorkspaceId);
-          if (ws) removeStagingFor(ws.path, rec6.id);
+        this.teardownRun(rec7.id, true);
+        if (rec7.role === "target" && !hadReceiver) {
+          const ws = this.ports.resolveWorkspace(rec7.selection.targetWorkspaceId);
+          if (ws) removeStagingFor(ws.path, rec7.id);
         }
-        rec6.errorCode = code;
-        rec6.state = state2;
-        delete rec6.localApproval;
-        this.persist(rec6, state2);
-        this.store.removeSpool(rec6.id);
+        rec7.errorCode = code;
+        rec7.state = state2;
+        delete rec7.localApproval;
+        this.persist(rec7, state2);
+        this.store.removeSpool(rec7.id);
         this.store.writeReceipt({
-          id: rec6.id,
-          role: rec6.role,
+          id: rec7.id,
+          role: rec7.role,
           outcome: state2,
           errorCode: code,
           finishedAt: this.now(),
-          files: (rec6.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
-          excluded: rec6.selection.excluded
+          files: (rec7.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
+          excluded: rec7.selection.excluded
         });
-        if (notifyPeer) void this.ports.dispatchPeer(rec6.peerDaemonId, { op: "cancel", transferId: rec6.id, code }).catch(() => {
+        if (notifyPeer) void this.ports.dispatchPeer(rec7.peerDaemonId, { op: "cancel", transferId: rec7.id, code }).catch(() => {
         });
       }
       teardownRun(id4, cleanStaging) {
@@ -176586,7 +176800,7 @@ ${output}` : "";
         }
         const digest5 = selectionDigest(manifest);
         const t = this.now();
-        const rec6 = {
+        const rec7 = {
           v: 1,
           id: manifest.transferId,
           role: "source",
@@ -176610,156 +176824,156 @@ ${output}` : "";
           return fail2("PEER_UNREACHABLE", e.message);
         }
         if (!reply?.ok) return fail2(String(reply?.code ?? "OFFER_REFUSED"));
-        this.persist(rec6, "previewed");
-        return { ok: true, transferId: rec6.id, record: rec6 };
+        this.persist(rec7, "previewed");
+        return { ok: true, transferId: rec7.id, record: rec7 };
       }
       /** Owner approval on THIS machine. `digest` must be the selection digest the owner saw. */
       async approve(id4, digest5) {
-        const rec6 = this.records.get(id4);
-        if (!rec6) return fail2("NOT_FOUND");
-        if (TERMINAL_STATES.has(rec6.state)) return fail2("TRANSFER_FINISHED");
-        if (digest5 !== rec6.selectionDigest) return fail2("APPROVAL_MISMATCH");
-        const first = rec6.state === "previewed" || rec6.state === "offered";
-        if (first && this.now() > rec6.previewExpiresAt) {
-          this.terminate(rec6, "expired", "PREVIEW_EXPIRED", true);
+        const rec7 = this.records.get(id4);
+        if (!rec7) return fail2("NOT_FOUND");
+        if (TERMINAL_STATES.has(rec7.state)) return fail2("TRANSFER_FINISHED");
+        if (digest5 !== rec7.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        const first = rec7.state === "previewed" || rec7.state === "offered";
+        if (first && this.now() > rec7.previewExpiresAt) {
+          this.terminate(rec7, "expired", "PREVIEW_EXPIRED", true);
           return fail2("PREVIEW_EXPIRED");
         }
-        if (!first && rec6.state !== "needs_reapproval") return fail2("ALREADY_APPROVED");
-        if (!this.ports.isPeerAuthorized(rec6.peerDaemonId)) return fail2("PEER_UNAUTHORIZED");
+        if (!first && rec7.state !== "needs_reapproval") return fail2("ALREADY_APPROVED");
+        if (!this.ports.isPeerAuthorized(rec7.peerDaemonId)) return fail2("PEER_UNAUTHORIZED");
         const unsupported = this.requireSupport();
         if (unsupported) return unsupported;
-        rec6.localApproval = { at: this.now(), ownerAuthGeneration: this.ports.ownerAuthGeneration(), restartEpoch: this.restartEpoch };
-        rec6.state = "awaiting_approval";
-        this.persist(rec6, "approved");
+        rec7.localApproval = { at: this.now(), ownerAuthGeneration: this.ports.ownerAuthGeneration(), restartEpoch: this.restartEpoch };
+        rec7.state = "awaiting_approval";
+        this.persist(rec7, "approved");
         try {
-          await this.ports.dispatchPeer(rec6.peerDaemonId, { op: "approval", transferId: id4, selectionDigest: digest5, approved: true });
+          await this.ports.dispatchPeer(rec7.peerDaemonId, { op: "approval", transferId: id4, selectionDigest: digest5, approved: true });
         } catch {
         }
-        void this.maybeStart(rec6);
-        return { ok: true, record: rec6 };
+        void this.maybeStart(rec7);
+        return { ok: true, record: rec7 };
       }
       async revokeApproval(id4) {
-        const rec6 = this.records.get(id4);
-        if (!rec6) return fail2("NOT_FOUND");
-        if (!rec6.localApproval) return fail2("NOT_APPROVED");
-        this.terminate(rec6, "revoked", "REVOKED", true);
+        const rec7 = this.records.get(id4);
+        if (!rec7) return fail2("NOT_FOUND");
+        if (!rec7.localApproval) return fail2("NOT_APPROVED");
+        this.terminate(rec7, "revoked", "REVOKED", true);
         return { ok: true };
       }
       async cancel(id4) {
-        const rec6 = this.records.get(id4);
-        if (!rec6) return fail2("NOT_FOUND");
-        if (TERMINAL_STATES.has(rec6.state)) return fail2("TRANSFER_FINISHED");
-        this.terminate(rec6, "cancelled", "CANCELLED", true);
+        const rec7 = this.records.get(id4);
+        if (!rec7) return fail2("NOT_FOUND");
+        if (TERMINAL_STATES.has(rec7.state)) return fail2("TRANSFER_FINISHED");
+        this.terminate(rec7, "cancelled", "CANCELLED", true);
         return { ok: true };
       }
       // ── start / run ──────────────────────────────────────────────────────────────
-      async maybeStart(rec6) {
-        if (!rec6.localApproval || !rec6.peerApproved || TERMINAL_STATES.has(rec6.state)) return;
-        if (rec6.role !== "source") return;
-        const run4 = this.runs.get(rec6.id) ?? { retries: 0, cancelled: false, starting: false };
-        this.runs.set(rec6.id, run4);
+      async maybeStart(rec7) {
+        if (!rec7.localApproval || !rec7.peerApproved || TERMINAL_STATES.has(rec7.state)) return;
+        if (rec7.role !== "source") return;
+        const run4 = this.runs.get(rec7.id) ?? { retries: 0, cancelled: false, starting: false };
+        this.runs.set(rec7.id, run4);
         if (run4.starting) return;
         run4.starting = true;
         try {
-          await this.startSource(rec6, run4);
+          await this.startSource(rec7, run4);
         } catch (e) {
           const code = e instanceof ManifestError || e instanceof SessionError ? e.code : "INTERNAL_ERROR";
-          this.terminate(rec6, "failed", code, true);
+          this.terminate(rec7, "failed", code, true);
         } finally {
           run4.starting = false;
         }
       }
-      guard(rec6) {
-        const problem = this.authorizationProblem(rec6);
+      guard(rec7) {
+        const problem = this.authorizationProblem(rec7);
         if (problem) {
-          this.endForProblem(rec6, problem);
+          this.endForProblem(rec7, problem);
           throw new SessionError(problem === "consent-expired" ? "CONSENT_EXPIRED" : "REVOKED", problem);
         }
       }
-      async startSource(rec6, run4) {
-        this.guard(rec6);
-        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec6.state)) throw new SessionError("TOO_MANY_TRANSFERS", "concurrent transfer limit");
-        const ws = this.ports.resolveWorkspace(rec6.selection.sourceWorkspaceId);
+      async startSource(rec7, run4) {
+        this.guard(rec7);
+        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec7.state)) throw new SessionError("TOO_MANY_TRANSFERS", "concurrent transfer limit");
+        const ws = this.ports.resolveWorkspace(rec7.selection.sourceWorkspaceId);
         if (!ws) throw new ManifestError("WORKSPACE_NOT_REGISTERED", "source workspace gone");
-        if (!rec6.content) {
-          this.setState(rec6, "freezing");
-          rec6.content = await freezeSelection({ rootPath: ws.path, selection: rec6.selection, spoolDir: this.store.spoolDir(rec6.id), isCancelled: () => run4.cancelled });
-          rec6.blocksDone = rec6.content.files.map(() => 0);
-          this.persist(rec6);
+        if (!rec7.content) {
+          this.setState(rec7, "freezing");
+          rec7.content = await freezeSelection({ rootPath: ws.path, selection: rec7.selection, spoolDir: this.store.spoolDir(rec7.id), isCancelled: () => run4.cancelled });
+          rec7.blocksDone = rec7.content.files.map(() => 0);
+          this.persist(rec7);
         }
-        await this.openSourceLink(rec6, run4);
+        await this.openSourceLink(rec7, run4);
       }
-      async openSourceLink(rec6, run4) {
-        this.guard(rec6);
+      async openSourceLink(rec7, run4) {
+        this.guard(rec7);
         const factory = this.ports.linkFactory;
         if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
         run4.linkKey = (0, import_node_crypto48.randomBytes)(32);
-        rec6.linkGen += 1;
-        this.setState(rec6, "linking");
-        const reply = await this.ports.dispatchPeer(rec6.peerDaemonId, {
+        rec7.linkGen += 1;
+        this.setState(rec7, "linking");
+        const reply = await this.ports.dispatchPeer(rec7.peerDaemonId, {
           op: "content",
-          transferId: rec6.id,
-          selectionDigest: rec6.selectionDigest,
-          content: rec6.content,
-          linkGen: rec6.linkGen,
+          transferId: rec7.id,
+          selectionDigest: rec7.selectionDigest,
+          content: rec7.content,
+          linkGen: rec7.linkGen,
           linkKeyB64: run4.linkKey.toString("base64")
         });
         if (!reply?.ok) throw new SessionError(String(reply?.code ?? "PEER_REFUSED"), "peer refused content");
-        const link = factory.create({ transferId: rec6.id, role: "initiator", linkGen: rec6.linkGen });
+        const link = factory.create({ transferId: rec7.id, role: "initiator", linkGen: rec7.linkGen });
         run4.link = link;
         link.onSignalOut((s2) => {
-          void this.ports.dispatchPeer(rec6.peerDaemonId, { op: "signal", transferId: rec6.id, linkGen: rec6.linkGen, signal: s2 }).catch(() => {
+          void this.ports.dispatchPeer(rec7.peerDaemonId, { op: "signal", transferId: rec7.id, linkGen: rec7.linkGen, signal: s2 }).catch(() => {
           });
         });
-        const session = new SenderSession(link, rec6.id, rec6.linkGen, run4.linkKey, rec6.content, this.store.spoolDir(rec6.id), this.rate, (fi, bi) => {
-          rec6.blocksDone[fi] = Math.max(rec6.blocksDone[fi] ?? 0, bi + 1);
-          rec6.bytesDone = rec6.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, rec6.content.files[i].size), 0);
-          rec6.activityAt = this.now();
+        const session = new SenderSession(link, rec7.id, rec7.linkGen, run4.linkKey, rec7.content, this.store.spoolDir(rec7.id), this.rate, (fi, bi) => {
+          rec7.blocksDone[fi] = Math.max(rec7.blocksDone[fi] ?? 0, bi + 1);
+          rec7.bytesDone = rec7.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, rec7.content.files[i].size), 0);
+          rec7.activityAt = this.now();
         });
         run4.session = session;
-        this.setState(rec6, "transferring");
-        this.armWatchdog(rec6, run4);
+        this.setState(rec7, "transferring");
+        this.armWatchdog(rec7, run4);
         session.wait().then(() => {
-          if (!TERMINAL_STATES.has(rec6.state)) this.setState(rec6, "verifying");
-        }, (e) => this.onSessionFailure(rec6, run4, e));
+          if (!TERMINAL_STATES.has(rec7.state)) this.setState(rec7, "verifying");
+        }, (e) => this.onSessionFailure(rec7, run4, e));
       }
-      armWatchdog(rec6, run4) {
+      armWatchdog(rec7, run4) {
         clearInterval(run4.watchdog);
         run4.watchdog = setInterval(() => {
-          if (TERMINAL_STATES.has(rec6.state)) {
+          if (TERMINAL_STATES.has(rec7.state)) {
             clearInterval(run4.watchdog);
             return;
           }
-          const problem = this.authorizationProblem(rec6);
-          if (problem) this.endForProblem(rec6, problem);
+          const problem = this.authorizationProblem(rec7);
+          if (problem) this.endForProblem(rec7, problem);
         }, 2e3);
         run4.watchdog.unref?.();
       }
-      onSessionFailure(rec6, run4, err) {
-        if (TERMINAL_STATES.has(rec6.state) || run4.cancelled) return;
+      onSessionFailure(rec7, run4, err) {
+        if (TERMINAL_STATES.has(rec7.state) || run4.cancelled) return;
         const code = err instanceof SessionError ? err.code : "INTERNAL_ERROR";
         if (code === "LINK_LOST" || code === "PEER_ABORT") {
-          this.setState(rec6, "paused", "paused");
+          this.setState(rec7, "paused", "paused");
           try {
             run4.link?.close();
           } catch {
           }
           run4.link = void 0;
           run4.session = void 0;
-          if (rec6.role === "source") this.scheduleRetry(rec6, run4);
+          if (rec7.role === "source") this.scheduleRetry(rec7, run4);
           return;
         }
-        this.terminate(rec6, "failed", code, true);
+        this.terminate(rec7, "failed", code, true);
       }
-      scheduleRetry(rec6, run4) {
+      scheduleRetry(rec7, run4) {
         if (run4.retries >= 5) {
-          this.terminate(rec6, "failed", "DIRECT_UNAVAILABLE", true);
+          this.terminate(rec7, "failed", "DIRECT_UNAVAILABLE", true);
           return;
         }
         const delay3 = Math.min(3e4, 1e3 * 2 ** run4.retries++);
         run4.retryTimer = setTimeout(() => {
-          if (TERMINAL_STATES.has(rec6.state)) return;
-          this.openSourceLink(rec6, run4).catch((e) => this.onSessionFailure(rec6, run4, e instanceof Error ? e : new SessionError("INTERNAL_ERROR", String(e))));
+          if (TERMINAL_STATES.has(rec7.state)) return;
+          this.openSourceLink(rec7, run4).catch((e) => this.onSessionFailure(rec7, run4, e instanceof Error ? e : new SessionError("INTERNAL_ERROR", String(e))));
         }, delay3);
         run4.retryTimer.unref?.();
       }
@@ -176771,21 +176985,21 @@ ${output}` : "";
         if (!sender || !this.ports.isPeerAuthorized(sender)) return fail2("PEER_UNAUTHORIZED");
         try {
           if (op === "offer") return this.onOffer(sender, id4, args);
-          const rec6 = this.records.get(id4);
-          if (!rec6) return fail2("NOT_FOUND");
-          if (!daemonIdsEquivalent4(rec6.peerDaemonId, sender)) return fail2("PEER_UNAUTHORIZED");
+          const rec7 = this.records.get(id4);
+          if (!rec7) return fail2("NOT_FOUND");
+          if (!daemonIdsEquivalent4(rec7.peerDaemonId, sender)) return fail2("PEER_UNAUTHORIZED");
           switch (op) {
             case "approval":
-              return this.onPeerApproval(rec6, args);
+              return this.onPeerApproval(rec7, args);
             case "content":
-              return await this.onContent(rec6, args);
+              return await this.onContent(rec7, args);
             case "signal":
-              return this.onSignal(rec6, args);
+              return this.onSignal(rec7, args);
             case "cancel":
-              this.terminate(rec6, "cancelled", "PEER_CANCELLED", false);
+              this.terminate(rec7, "cancelled", "PEER_CANCELLED", false);
               return { ok: true };
             case "state":
-              return this.onPeerState(rec6, args);
+              return this.onPeerState(rec7, args);
             default:
               return fail2("PROTOCOL_ERROR");
           }
@@ -176835,29 +177049,29 @@ ${output}` : "";
         }, "offered");
         return { ok: true };
       }
-      onPeerApproval(rec6, args) {
-        if (args.selectionDigest !== rec6.selectionDigest) return fail2("APPROVAL_MISMATCH");
-        rec6.peerApproved = args.approved === true;
-        this.persist(rec6, rec6.peerApproved ? "peer_approved" : "peer_unapproved");
-        if (rec6.peerApproved) void this.maybeStart(rec6);
-        else if (rec6.localApproval && !TERMINAL_STATES.has(rec6.state)) this.terminate(rec6, "revoked", "REVOKED", false);
+      onPeerApproval(rec7, args) {
+        if (args.selectionDigest !== rec7.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        rec7.peerApproved = args.approved === true;
+        this.persist(rec7, rec7.peerApproved ? "peer_approved" : "peer_unapproved");
+        if (rec7.peerApproved) void this.maybeStart(rec7);
+        else if (rec7.localApproval && !TERMINAL_STATES.has(rec7.state)) this.terminate(rec7, "revoked", "REVOKED", false);
         return { ok: true };
       }
-      async onContent(rec6, args) {
-        if (rec6.role !== "target") return fail2("PROTOCOL_ERROR");
-        if (!rec6.localApproval || !rec6.peerApproved) return fail2("APPROVAL_REQUIRED");
-        this.guard(rec6);
-        if (args.selectionDigest !== rec6.selectionDigest) return fail2("APPROVAL_MISMATCH");
-        const content = validateContentManifest(args.content, rec6.selection);
-        if (!Number.isInteger(args.linkGen) || args.linkGen <= rec6.linkGen) return fail2("PROTOCOL_ERROR");
+      async onContent(rec7, args) {
+        if (rec7.role !== "target") return fail2("PROTOCOL_ERROR");
+        if (!rec7.localApproval || !rec7.peerApproved) return fail2("APPROVAL_REQUIRED");
+        this.guard(rec7);
+        if (args.selectionDigest !== rec7.selectionDigest) return fail2("APPROVAL_MISMATCH");
+        const content = validateContentManifest(args.content, rec7.selection);
+        if (!Number.isInteger(args.linkGen) || args.linkGen <= rec7.linkGen) return fail2("PROTOCOL_ERROR");
         const key5 = Buffer.from(String(args.linkKeyB64 ?? ""), "base64");
         if (key5.length !== 32) return fail2("PROTOCOL_ERROR");
-        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec6.state)) return fail2("TOO_MANY_TRANSFERS");
+        if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec7.state)) return fail2("TOO_MANY_TRANSFERS");
         const factory = this.ports.linkFactory;
         if (!factory) return fail2("LINK_UNAVAILABLE");
-        const ws = this.ports.resolveWorkspace(rec6.selection.targetWorkspaceId);
+        const ws = this.ports.resolveWorkspace(rec7.selection.targetWorkspaceId);
         if (!ws) return fail2("WORKSPACE_NOT_REGISTERED");
-        const prev = this.runs.get(rec6.id);
+        const prev = this.runs.get(rec7.id);
         if (prev) {
           clearInterval(prev.watchdog);
           try {
@@ -176868,41 +177082,41 @@ ${output}` : "";
           prev.receiver?.dispose();
         }
         const run4 = { retries: 0, cancelled: false, starting: false, linkKey: key5 };
-        rec6.content = content;
-        rec6.linkGen = args.linkGen;
-        if (rec6.blocksDone.length !== content.files.length) rec6.blocksDone = content.files.map(() => 0);
-        const receiver = new TransferReceiver(ws.path, rec6.selection, content, (fi, blocks, bytes) => {
-          rec6.blocksDone[fi] = blocks;
-          rec6.bytesDone = bytes;
-          this.persist(rec6);
+        rec7.content = content;
+        rec7.linkGen = args.linkGen;
+        if (rec7.blocksDone.length !== content.files.length) rec7.blocksDone = content.files.map(() => 0);
+        const receiver = new TransferReceiver(ws.path, rec7.selection, content, (fi, blocks, bytes) => {
+          rec7.blocksDone[fi] = blocks;
+          rec7.bytesDone = bytes;
+          this.persist(rec7);
         });
         let resume;
         try {
-          resume = receiver.init(rec6.blocksDone);
+          resume = receiver.init(rec7.blocksDone);
         } catch (e) {
           receiver.dispose();
           throw e;
         }
-        rec6.blocksDone = [...resume];
+        rec7.blocksDone = [...resume];
         run4.receiver = receiver;
-        this.runs.set(rec6.id, run4);
-        this.setState(rec6, "linking");
-        const link = factory.create({ transferId: rec6.id, role: "responder", linkGen: rec6.linkGen });
+        this.runs.set(rec7.id, run4);
+        this.setState(rec7, "linking");
+        const link = factory.create({ transferId: rec7.id, role: "responder", linkGen: rec7.linkGen });
         run4.link = link;
         link.onSignalOut((s2) => {
-          void this.ports.dispatchPeer(rec6.peerDaemonId, { op: "signal", transferId: rec6.id, linkGen: rec6.linkGen, signal: s2 }).catch(() => {
+          void this.ports.dispatchPeer(rec7.peerDaemonId, { op: "signal", transferId: rec7.id, linkGen: rec7.linkGen, signal: s2 }).catch(() => {
           });
         });
-        const session = new ReceiverSession(link, rec6.id, rec6.linkGen, key5, receiver, resume);
+        const session = new ReceiverSession(link, rec7.id, rec7.linkGen, key5, receiver, resume);
         run4.session = session;
-        this.armWatchdog(rec6, run4);
-        this.setState(rec6, "transferring");
-        session.wait().then(() => this.finishTarget(rec6, run4), (e) => this.onSessionFailure(rec6, run4, e));
+        this.armWatchdog(rec7, run4);
+        this.setState(rec7, "transferring");
+        session.wait().then(() => this.finishTarget(rec7, run4), (e) => this.onSessionFailure(rec7, run4, e));
         return { ok: true };
       }
-      onSignal(rec6, args) {
-        const run4 = this.runs.get(rec6.id);
-        if (!run4?.link || args.linkGen !== rec6.linkGen) return fail2("STALE_LINK");
+      onSignal(rec7, args) {
+        const run4 = this.runs.get(rec7.id);
+        if (!run4?.link || args.linkGen !== rec7.linkGen) return fail2("STALE_LINK");
         const s2 = args.signal;
         if (!s2 || !["offer", "answer", "candidate"].includes(s2.kind)) return fail2("PROTOCOL_ERROR");
         if (typeof s2.candidate === "string" && / typ relay\b/.test(s2.candidate)) return fail2("RELAY_CANDIDATE_REFUSED");
@@ -176914,58 +177128,58 @@ ${output}` : "";
         run4.link.signalIn(s2);
         return { ok: true };
       }
-      onPeerState(rec6, args) {
-        if (rec6.role !== "source") return { ok: true };
+      onPeerState(rec7, args) {
+        if (rec7.role !== "source") return { ok: true };
         if (args.state === "completed") {
-          if (rec6.state !== "verifying" && rec6.state !== "transferring") return fail2("PROTOCOL_ERROR");
-          if (!rec6.content || rec6.content.files.some((f, i) => (rec6.blocksDone[i] ?? 0) < blockCount(f.size))) return fail2("PROTOCOL_ERROR");
+          if (rec7.state !== "verifying" && rec7.state !== "transferring") return fail2("PROTOCOL_ERROR");
+          if (!rec7.content || rec7.content.files.some((f, i) => (rec7.blocksDone[i] ?? 0) < blockCount(f.size))) return fail2("PROTOCOL_ERROR");
           if (typeof args.publishedName === "string") {
             try {
-              rec6.publishedName = validateFinalName(args.publishedName);
+              rec7.publishedName = validateFinalName(args.publishedName);
             } catch {
               return fail2("PROTOCOL_ERROR");
             }
           }
-          this.completeRecord(rec6);
+          this.completeRecord(rec7);
         } else if (args.state === "failed") {
-          this.terminate(rec6, "failed", String(args.code ?? "TARGET_FAILED"), false);
+          this.terminate(rec7, "failed", String(args.code ?? "TARGET_FAILED"), false);
         }
         return { ok: true };
       }
-      async finishTarget(rec6, run4) {
+      async finishTarget(rec7, run4) {
         try {
-          this.setState(rec6, "verifying");
+          this.setState(rec7, "verifying");
           run4.receiver.verifyAll();
-          this.guard(rec6);
-          this.setState(rec6, "publishing");
-          rec6.publishedName = run4.receiver.publish(rec6.selection.finalName);
+          this.guard(rec7);
+          this.setState(rec7, "publishing");
+          rec7.publishedName = run4.receiver.publish(rec7.selection.finalName);
           run4.receiver.dispose();
           run4.receiver = void 0;
-          this.completeRecord(rec6);
-          await this.ports.dispatchPeer(rec6.peerDaemonId, { op: "state", transferId: rec6.id, state: "completed", publishedName: rec6.publishedName }).catch(() => {
+          this.completeRecord(rec7);
+          await this.ports.dispatchPeer(rec7.peerDaemonId, { op: "state", transferId: rec7.id, state: "completed", publishedName: rec7.publishedName }).catch(() => {
           });
         } catch (e) {
           const code = e.code && /^[A-Z_]+$/.test(String(e.code)) ? String(e.code) : "VERIFY_FAILED";
-          this.terminate(rec6, "failed", code, false);
-          await this.ports.dispatchPeer(rec6.peerDaemonId, { op: "state", transferId: rec6.id, state: "failed", code }).catch(() => {
+          this.terminate(rec7, "failed", code, false);
+          await this.ports.dispatchPeer(rec7.peerDaemonId, { op: "state", transferId: rec7.id, state: "failed", code }).catch(() => {
           });
         }
       }
-      completeRecord(rec6) {
-        this.teardownRun(rec6.id, false);
-        rec6.errorCode = void 0;
-        rec6.bytesDone = rec6.totalBytes;
-        delete rec6.localApproval;
-        this.setState(rec6, "completed");
-        this.store.removeSpool(rec6.id);
+      completeRecord(rec7) {
+        this.teardownRun(rec7.id, false);
+        rec7.errorCode = void 0;
+        rec7.bytesDone = rec7.totalBytes;
+        delete rec7.localApproval;
+        this.setState(rec7, "completed");
+        this.store.removeSpool(rec7.id);
         this.store.writeReceipt({
-          id: rec6.id,
-          role: rec6.role,
+          id: rec7.id,
+          role: rec7.role,
           outcome: "completed",
           finishedAt: this.now(),
-          publishedName: rec6.publishedName,
-          files: (rec6.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
-          excluded: rec6.selection.excluded
+          publishedName: rec7.publishedName,
+          files: (rec7.content?.files ?? []).map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 })),
+          excluded: rec7.selection.excluded
         });
       }
       /** Remove everything (tests / shutdown). */
@@ -177009,27 +177223,27 @@ ${output}` : "";
       }
       return { success: false, code: str8(r.code) || "FAILED", error: str8(r.code) || "FAILED", ...r.detail ? { detail: r.detail } : {} };
     }
-    function view(rec6) {
+    function view(rec7) {
       return {
-        id: rec6.id,
-        role: rec6.role,
-        peerDaemonId: rec6.peerDaemonId,
-        state: rec6.state,
-        errorCode: rec6.errorCode,
-        finalName: rec6.selection.finalName,
-        publishedName: rec6.publishedName,
-        sourceWorkspaceId: rec6.selection.sourceWorkspaceId,
-        targetWorkspaceId: rec6.selection.targetWorkspaceId,
-        selectionDigest: rec6.selectionDigest,
-        createdAt: rec6.createdAt,
-        previewExpiresAt: rec6.previewExpiresAt,
-        totalBytes: rec6.totalBytes,
-        bytesDone: rec6.bytesDone,
-        fileCount: rec6.selection.entries.filter((e) => e.kind === "file").length,
-        entries: rec6.selection.entries,
-        excluded: rec6.selection.excluded,
-        localApproved: !!rec6.localApproval,
-        peerApproved: rec6.peerApproved === true
+        id: rec7.id,
+        role: rec7.role,
+        peerDaemonId: rec7.peerDaemonId,
+        state: rec7.state,
+        errorCode: rec7.errorCode,
+        finalName: rec7.selection.finalName,
+        publishedName: rec7.publishedName,
+        sourceWorkspaceId: rec7.selection.sourceWorkspaceId,
+        targetWorkspaceId: rec7.selection.targetWorkspaceId,
+        selectionDigest: rec7.selectionDigest,
+        createdAt: rec7.createdAt,
+        previewExpiresAt: rec7.previewExpiresAt,
+        totalBytes: rec7.totalBytes,
+        bytesDone: rec7.bytesDone,
+        fileCount: rec7.selection.entries.filter((e) => e.kind === "file").length,
+        entries: rec7.selection.entries,
+        excluded: rec7.selection.excluded,
+        localApproved: !!rec7.localApproval,
+        peerApproved: rec7.peerApproved === true
       };
     }
     var handlers = {
@@ -177092,8 +177306,8 @@ ${output}` : "";
       project_transfer_status: async (_ctx, args) => {
         const denied = ownerOnly(args);
         if (denied) return denied;
-        const rec6 = getProjectTransferEngine()?.get(str8(args?.transferId));
-        return rec6 ? { success: true, transfer: view(rec6) } : { success: false, code: "NOT_FOUND", error: "NOT_FOUND" };
+        const rec7 = getProjectTransferEngine()?.get(str8(args?.transferId));
+        return rec7 ? { success: true, transfer: view(rec7) } : { success: false, code: "NOT_FOUND", error: "NOT_FOUND" };
       },
       project_transfer_peer: async (_ctx, args) => {
         const engine2 = getProjectTransferEngine();
@@ -177324,20 +177538,20 @@ ${output}` : "";
           const nowMs2 = Date.now();
           const notes = entries2.map((e) => {
             const p = e.payload || {};
-            const text5 = typeof p.text === "string" ? p.text : "";
+            const text6 = typeof p.text === "string" ? p.text : "";
             const createdAt = typeof p.createdAt === "string" ? p.createdAt : e.timestamp;
             const pinned = p.pinned === true;
             const category = typeof p.category === "string" ? p.category : void 0;
             const sourceCoordinator = typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0;
             const explicitExpiry = typeof p.expiresAt === "string" ? p.expiresAt : void 0;
             const lifetime = resolveNoteExpiry2({ category, pinned, createdAt, ...explicitExpiry ? { expiresAt: explicitExpiry } : {} }, nowMs2);
-            const { preview, truncated } = previewOperatingNoteText2(text5);
+            const { preview, truncated } = previewOperatingNoteText2(text6);
             const scope = resolveOperatingNoteScope2({ pinned, sourceCoordinator });
             return {
               id: e.id,
               noteId: e.id,
               scope,
-              text: text5,
+              text: text6,
               preview,
               truncated,
               category,
@@ -177360,13 +177574,13 @@ ${output}` : "";
       record_mesh_note: async (_ctx, args) => {
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
-        const text5 = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!text5) return { success: false, error: "text required" };
+        const text6 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!text6) return { success: false, error: "text required" };
         try {
           const { recordOperatingNote: recordOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const category = typeof args?.category === "string" ? args.category : void 0;
           const entry = recordOperatingNote2(meshId, {
-            text: text5,
+            text: text6,
             ...category ? { category } : {},
             sourceCoordinator: "dashboard"
           });
@@ -177379,14 +177593,14 @@ ${output}` : "";
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         const noteId = typeof args?.noteId === "string" ? args.noteId.trim() : "";
-        const text5 = typeof args?.text === "string" ? args.text.trim() : "";
-        if (!noteId && !text5) return { success: false, error: "noteId or text required" };
+        const text6 = typeof args?.text === "string" ? args.text.trim() : "";
+        if (!noteId && !text6) return { success: false, error: "noteId or text required" };
         try {
           const { forgetOperatingNote: forgetOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
           const reason = typeof args?.reason === "string" && args.reason.trim() ? args.reason.trim() : "dashboard_manual";
           const result = forgetOperatingNote2(meshId, {
             ...noteId ? { noteId } : {},
-            ...text5 ? { text: text5 } : {},
+            ...text6 ? { text: text6 } : {},
             reason
           });
           return { success: true, matched: result.matched };
@@ -177487,8 +177701,8 @@ ${output}` : "";
         fs92.closeSync(fd);
       }
     }
-    function splitLogLines(text5) {
-      const lines = text5.split("\n");
+    function splitLogLines(text6) {
+      const lines = text6.split("\n");
       if (lines.length && lines[lines.length - 1] === "") lines.pop();
       return lines;
     }
@@ -179052,8 +179266,8 @@ ${output}` : "";
           }
           const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
           const taskId = typeof args?.taskId === "string" ? args.taskId.trim() : "";
-          const text5 = typeof args?.text === "string" ? args.text.trim() : "";
-          if (!meshId || !taskId || !text5) {
+          const text6 = typeof args?.text === "string" ? args.text.trim() : "";
+          if (!meshId || !taskId || !text6) {
             return { success: false, error: "invalid_input", detail: "meshId, taskId and text are all required" };
           }
           const { MeshRuntimeStore: MeshRuntimeStore2 } = await Promise.resolve().then(() => (init_mesh_runtime_store(), mesh_runtime_store_exports));
@@ -179073,7 +179287,7 @@ ${output}` : "";
             if (dropped > 0) LOG.info("WorkerMailbox", `Dropped ${dropped} undelivered memo(s) for remote-owned task(s) no local worker holds any more`);
             LOG.info("WorkerMailbox", `Memo for remote-owned task ${taskId} (owner ${worker.ownerDaemonId.slice(0, 16)}) held for its local worker session ${worker.sessionId}`);
           }
-          const result = depositWorkerMailboxMessage2({ meshId, taskId, text: text5 });
+          const result = depositWorkerMailboxMessage2({ meshId, taskId, text: text6 });
           if (!result.ok) {
             return { success: false, error: result.error, detail: result.detail };
           }
@@ -181136,8 +181350,8 @@ ${output}` : "";
           let resolvedMesh = ctx.getCachedInlineMesh?.(meshId) || args?.inlineMesh;
           if (!resolvedMesh) {
             try {
-              const rec6 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
-              resolvedMesh = rec6?.mesh;
+              const rec7 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              resolvedMesh = rec7?.mesh;
             } catch {
             }
           }
@@ -181646,8 +181860,8 @@ ${output}` : "";
             const candidate = join161(workspace, relative25);
             if (!existsSync132(candidate)) continue;
             try {
-              const text5 = readFileSync124(candidate, "utf-8");
-              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text5) : yaml3.load(text5);
+              const text6 = readFileSync124(candidate, "utf-8");
+              const parsed = /\.json$/i.test(candidate) ? JSON.parse(text6) : yaml3.load(text6);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
                 existingPath = candidate;
@@ -182974,11 +183188,11 @@ ${output}` : "";
               const noteEntries = readOperatingNotes2(id4, { tail: 100 });
               const notes = noteEntries.map((e) => {
                 const p = e.payload || {};
-                const text5 = typeof p.text === "string" ? p.text.trim() : "";
-                if (!text5) return null;
+                const text6 = typeof p.text === "string" ? p.text.trim() : "";
+                if (!text6) return null;
                 const category = p.category === "provider_quirk" || p.category === "pattern_to_avoid" || p.category === "recovery_lesson" ? p.category : void 0;
                 return {
-                  text: text5,
+                  text: text6,
                   category,
                   createdAt: typeof p.createdAt === "string" ? p.createdAt : e.timestamp,
                   sourceCoordinator: typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0,
@@ -184572,7 +184786,7 @@ ${ptyResult.output.slice(-2e3)}`);
       } };
     }
     function encodeDriverBundle(pkg) {
-      const text5 = JSON.stringify({
+      const text6 = JSON.stringify({
         format: DRIVER_BUNDLE_FORMAT,
         version: 1,
         type: pkg.report.type,
@@ -184581,16 +184795,16 @@ ${ptyResult.output.slice(-2e3)}`);
         treeDigest: pkg.report.treeDigest,
         files: pkg.files.map((f) => ({ path: f.path, size: f.bytes.length, content: f.bytes.toString("base64") }))
       }, null, 1);
-      if (Buffer.byteLength(text5) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Encoded bundle exceeds the 4 MiB artifact limit");
-      return text5;
+      if (Buffer.byteLength(text6) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Encoded bundle exceeds the 4 MiB artifact limit");
+      return text6;
     }
     var BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
     var BUNDLE_KEYS = /* @__PURE__ */ new Set(["format", "version", "type", "name", "providerVersion", "treeDigest", "files"]);
-    function decodeDriverBundle(text5) {
-      if (typeof text5 !== "string" || Buffer.byteLength(text5) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
+    function decodeDriverBundle(text6) {
+      if (typeof text6 !== "string" || Buffer.byteLength(text6) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
       let raw;
       try {
-        raw = JSON.parse(text5);
+        raw = JSON.parse(text6);
       } catch {
         throw new DriverPackageError("bundle_invalid", "Bundle is not valid JSON");
       }
@@ -184828,14 +185042,14 @@ ${lines.join("\n")}
             if (error instanceof DriverPackageError) throw error;
             if (error.code !== "ENOENT") throw error;
           }
-          const text5 = encodeDriverBundle(pkg);
+          const text6 = encodeDriverBundle(pkg);
           (0, import_node_fs32.mkdirSync)((0, import_node_path30.dirname)(out), { recursive: true });
-          (0, import_node_fs32.writeFileSync)(out, text5);
+          (0, import_node_fs32.writeFileSync)(out, text6);
           const path126 = (0, import_node_path30.relative)(w.root, out);
           return {
             success: true,
             path: path126,
-            sizeBytes: Buffer.byteLength(text5),
+            sizeBytes: Buffer.byteLength(text6),
             treeDigest: pkg.report.treeDigest,
             report: pkg.report,
             next: `Share it: artifact_register {"path":"${path126}"}. Another machine installs it with driver_install {artifact_id}.`
@@ -184863,8 +185077,8 @@ ${lines.join("\n")}
       driver_import: async (ctx, args) => {
         try {
           if (args?.bundle === void 0 === (args?.artifactId === void 0)) throw new DriverPackageError("invalid_arguments", "Provide exactly one of bundle or artifactId");
-          const text5 = args.bundle !== void 0 ? String(args.bundle) : await fetchBundleArtifact(ctx, args);
-          return await finishInstall(ctx, decodeDriverBundle(text5), args.bundle !== void 0 ? "owner-inline" : "owner-artifact");
+          const text6 = args.bundle !== void 0 ? String(args.bundle) : await fetchBundleArtifact(ctx, args);
+          return await finishInstall(ctx, decodeDriverBundle(text6), args.bundle !== void 0 ? "owner-inline" : "owner-artifact");
         } catch (error) {
           return asFailure(error);
         }
@@ -185029,7 +185243,7 @@ ${lines.join("\n")}
         ...deliveryState ? { delivery: deliveryState } : {}
       };
     }
-    var list = async (ctx, rawArgs) => {
+    var list2 = async (ctx, rawArgs) => {
       const args = stripRouterInternalArgs(rawArgs ?? {});
       const wanted = str14(args.meshId);
       let meshIds;
@@ -185058,7 +185272,7 @@ ${lines.join("\n")}
     };
     var missionDecisionSpecs = defineCommandSpecs("high", {
       [MISSION_DECISION_ANSWER]: answer,
-      [MISSION_DECISIONS_LIST]: list
+      [MISSION_DECISIONS_LIST]: list2
     }, {
       [MISSION_DECISION_ANSWER]: { sources: [...MISSION_DECISION_ANSWER_SOURCES] },
       [MISSION_DECISIONS_LIST]: { sources: [...MISSION_DECISIONS_LIST_SOURCES] }
@@ -185114,7 +185328,7 @@ ${lines.join("\n")}
         restriction: assistantExecution.toolRestriction() ?? "prompt_only",
         supportedActions: ["local_pty_approve", "local_pty_reject"],
         limitations: "Local PTY provider permissions only. Remote, extension, webview and arbitrary execution are unavailable. Staged writes require owner Inbox ratification.",
-        choices: ownerActionChoices(ctx.components()).map((choice) => ({ ...choice, daemonId })),
+        choices: ownerActionChoices(ctx.components()).map((choice2) => ({ ...choice2, daemonId })),
         executionAvailable: readAssistantSessionId(args) === s2.sessionId && assistantExecution.available(s2)
       };
     };
@@ -185188,7 +185402,7 @@ ${lines.join("\n")}
         return /* @__PURE__ */ new Map();
       }
     }
-    var list2 = async () => {
+    var list3 = async () => {
       const runtime2 = await runtimeOrNull();
       const registry = runtime2?.registry ?? getAssistantRegistry();
       const store4 = runtime2?.store ?? fallbackRelayStore();
@@ -185492,7 +185706,7 @@ ${lines.join("\n")}
       };
     };
     var assistantThreadSpecs = defineCommandSpecs("high", {
-      [ASSISTANT_VERB2.threads]: list2,
+      [ASSISTANT_VERB2.threads]: list3,
       [ASSISTANT_VERB2.threadClose]: close2,
       [ASSISTANT_REMOTE_FOLLOW_COMMAND]: remoteFollow
     }, {
@@ -185668,21 +185882,21 @@ ${lines.join("\n")}
     var import_node_fs33 = require("fs");
     async function readPersistedRuntimeRecord(file) {
       const stream = (0, import_node_fs33.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
-      let text5 = "", cursor = 0, start = -1, depth = 0;
+      let text6 = "", cursor = 0, start = -1, depth = 0;
       let quoted = false, escaped = false;
       try {
         for await (const chunk of stream) {
-          text5 += chunk;
-          if (text5.length > 1024 * 1024) throw new Error("runtime_metadata_too_large");
+          text6 += chunk;
+          if (text6.length > 1024 * 1024) throw new Error("runtime_metadata_too_large");
           if (start < 0) {
-            const envelope = /^\s*\{\s*"record"\s*:\s*/.exec(text5);
-            start = envelope ? envelope[0].length : text5.search(/\S/);
+            const envelope = /^\s*\{\s*"record"\s*:\s*/.exec(text6);
+            start = envelope ? envelope[0].length : text6.search(/\S/);
             if (start < 0) continue;
-            if (text5[start] !== "{") throw new Error("runtime_metadata_invalid");
+            if (text6[start] !== "{") throw new Error("runtime_metadata_invalid");
             cursor = start;
           }
-          for (; cursor < text5.length; cursor++) {
-            const c = text5[cursor];
+          for (; cursor < text6.length; cursor++) {
+            const c = text6[cursor];
             if (quoted) {
               if (escaped) escaped = false;
               else if (c === "\\") escaped = true;
@@ -185690,7 +185904,7 @@ ${lines.join("\n")}
             } else if (c === '"') quoted = true;
             else if (c === "{" || c === "[") depth++;
             else if (c === "}" || c === "]") {
-              if (--depth === 0) return JSON.parse(text5.slice(start, cursor + 1));
+              if (--depth === 0) return JSON.parse(text6.slice(start, cursor + 1));
             }
           }
         }
@@ -186363,8 +186577,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         skills: renderSkillIndex(input.skills, SKILL_INDEX_BUDGET_CHARS),
         safetyTail: ASSISTANT_SAFETY_TAIL
       };
-      const text5 = [sections.rules, sections.decisions, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
-      return { text: text5, length: text5.length, withinLimit: text5.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
+      const text6 = [sections.rules, sections.decisions, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN) + SECTION_JOIN + sections.safetyTail;
+      return { text: text6, length: text6.length, withinLimit: text6.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
     }
     var HOSTING_RANK = { here: 0, remote: 1, unmanaged: 2 };
     function field2(value, max = PROJECT_FIELD_MAX_CHARS) {
@@ -186478,10 +186692,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         const { buildPreviousSessionNote: buildPreviousSessionNote2 } = await Promise.resolve().then(() => (init_assistant_relay_format(), assistant_relay_format_exports));
         const tail = compactTranscriptTail2(chat ?? {}, 20, 2e3);
         const messages = Array.isArray(tail.messages) ? tail.messages : [];
-        const text5 = buildPreviousSessionNote2(messages);
-        LOG.info("Assistant", `previous-session context: ${messages.length} message(s) read from ${prevSid}; ${text5 ? "note queued" : "nothing from the owner to carry over"}`);
-        if (!text5) return;
-        runtime2.relay.enqueueInput({ source: "previous_session", text: text5, messageId: `prevctx:${sessionId}`, forSessionId: sessionId });
+        const text6 = buildPreviousSessionNote2(messages);
+        LOG.info("Assistant", `previous-session context: ${messages.length} message(s) read from ${prevSid}; ${text6 ? "note queued" : "nothing from the owner to carry over"}`);
+        if (!text6) return;
+        runtime2.relay.enqueueInput({ source: "previous_session", text: text6, messageId: `prevctx:${sessionId}`, forSessionId: sessionId });
       } catch (e) {
         LOG.warn("Assistant", `previous-session context unavailable for ${prevSid}: ${e?.message ?? e}`);
       }
@@ -193462,10 +193676,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
     }
     function buildCloudStatusReportPayload(sessions, p2p, timestamp2, seqscribe) {
-      const list3 = Array.isArray(sessions) ? sessions : [];
+      const list4 = Array.isArray(sessions) ? sessions : [];
       const seqscribeSummary = buildCloudSeqscribeSummary(seqscribe);
       return {
-        sessions: list3.map((raw) => {
+        sessions: list4.map((raw) => {
           const session = raw || {};
           return {
             id: session.id,
@@ -193938,8 +194152,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
-    function escapeControl(text5) {
-      return String(text5).replace(/[\x00-\x1f\x7f]/g, (ch) => {
+    function escapeControl(text6) {
+      return String(text6).replace(/[\x00-\x1f\x7f]/g, (ch) => {
         const code = ch.charCodeAt(0);
         if (ch === "\r") return "\\r";
         if (ch === "\n") return "\\n";
@@ -193948,8 +194162,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return "\\x" + code.toString(16).padStart(2, "0");
       });
     }
-    function capPreview(text5) {
-      return text5.length > EVENT_CONTENT_CAP ? text5.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text5.length - EVENT_CONTENT_CAP})` : text5;
+    function capPreview(text6) {
+      return text6.length > EVENT_CONTENT_CAP ? text6.slice(0, EVENT_CONTENT_CAP) + `\u2026(+${text6.length - EVENT_CONTENT_CAP})` : text6;
     }
     var TerminalAdapter = class {
       constructor(opts, handlers2) {
@@ -194097,13 +194311,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        *  no input reached the runtime since the transport's accounted point
        *  (PtyRuntimeTransport.writeIfInputUnchanged). Counted like every write.
        *  Resolves false when refused, or on a transport without it (raw pty). */
-      writeIfInputUnchanged(text5) {
+      writeIfInputUnchanged(text6) {
         const pty = this.pty;
         if (!pty || typeof pty.writeIfInputUnchanged !== "function") return Promise.resolve(false);
         this.writeCount += 1;
-        this.recordEvent("input", capPreview(escapeControl(text5)), text5.length);
+        this.recordEvent("input", capPreview(escapeControl(text6)), text6.length);
         try {
-          return Promise.resolve(pty.writeIfInputUnchanged(text5)).then((ok) => ok === true, () => false);
+          return Promise.resolve(pty.writeIfInputUnchanged(text6)).then((ok) => ok === true, () => false);
         } catch {
           return Promise.resolve(false);
         }
@@ -194127,16 +194341,16 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       hasActivePty() {
         return this.pty !== null;
       }
-      send_keys(text5, primeContext) {
+      send_keys(text6, primeContext) {
         this.writeCount += 1;
-        this.recordEvent("input", capPreview(escapeControl(text5)), text5.length);
+        this.recordEvent("input", capPreview(escapeControl(text6)), text6.length);
         if (!primeContext) {
-          return this.pty?.write(text5);
+          return this.pty?.write(text6);
         }
-        return this.writeInput(text5, primeContext);
+        return this.writeInput(text6, primeContext);
       }
-      async writeInput(text5, primeContext) {
-        const bytes = Buffer.byteLength(text5, "utf8");
+      async writeInput(text6, primeContext) {
+        const bytes = Buffer.byteLength(text6, "utf8");
         const source2 = primeContext.source;
         const prefix = `[${primeContext.specTag}] `;
         const afterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
@@ -194147,7 +194361,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         LOG.debug("FsmDriver", `${prefix}PTY write before source=${source2} bytes=${bytes} afterSpawnMs=${afterSpawnMs}`);
         try {
-          const result = await pty.write(text5);
+          const result = await pty.write(text6);
           const completedAfterSpawnMs = Math.max(0, Date.now() - this.spawnedAtMs);
           if (result === false) {
             LOG.warn("FsmDriver", `${prefix}PTY write after source=${source2} bytes=${bytes} afterSpawnMs=${completedAfterSpawnMs} outcome=false`);
@@ -194262,10 +194476,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }, this.screenDebounceMs);
       }
       computeScreen() {
-        const text5 = this.screen.getText();
-        this.cachedScreen = text5;
+        const text6 = this.screen.getText();
+        this.cachedScreen = text6;
         this.cachedScreenVersion = this.screenVersion;
-        return text5;
+        return text6;
       }
       stopTimers() {
         if (this.screenTimer) {
@@ -194366,8 +194580,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       return compiled;
     }
-    function matchSignalRule(rule, text5) {
-      const candidates = rule.multiline ? [text5] : text5.split("\n");
+    function matchSignalRule(rule, text6) {
+      const candidates = rule.multiline ? [text6] : text6.split("\n");
       for (const candidate of candidates) {
         const m = rule.regex.exec(candidate);
         if (!m) continue;
@@ -194404,10 +194618,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (rules.length === 0) return [];
       const out = [];
       for (const rule of rules) {
-        let text5 = fullScreen;
-        if (rule.section) text5 = sectionText2(rule.section);
-        if (!text5) continue;
-        const params = matchSignalRule(rule, text5);
+        let text6 = fullScreen;
+        if (rule.section) text6 = sectionText2(rule.section);
+        if (!text6) continue;
+        const params = matchSignalRule(rule, text6);
         if (!params) continue;
         if (!gate.shouldEmit(rule, params, now)) continue;
         out.push({ ruleId: rule.id, kind: rule.kind, params, detectedAt: now });
@@ -194430,35 +194644,35 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const out = [];
       for (const [i, p] of patterns.slice(0, MAX_PATTERNS).entries()) {
-        const rec6 = p && typeof p === "object" ? p : {};
+        const rec7 = p && typeof p === "object" ? p : {};
         const warn = (why) => LOG.warn("FsmDriver", `[${specTag}] background_marker.patterns[${i}] ${why} \u2014 pattern dropped`);
-        if (typeof rec6.regex !== "string" || !rec6.regex) {
+        if (typeof rec7.regex !== "string" || !rec7.regex) {
           warn("has no regex");
           continue;
         }
-        if (rec6.regex.length > MAX_PATTERN_LENGTH) {
+        if (rec7.regex.length > MAX_PATTERN_LENGTH) {
           warn("is too long");
           continue;
         }
-        if (!isBacktrackingSafeRegexSource(rec6.regex)) {
+        if (!isBacktrackingSafeRegexSource(rec7.regex)) {
           warn("failed the backtracking screen");
           continue;
         }
-        const flags = typeof rec6.flags === "string" ? rec6.flags : "i";
+        const flags = typeof rec7.flags === "string" ? rec7.flags : "i";
         if ([...flags].some((f) => !ALLOWED_FLAGS2.has(f))) {
           warn(`has unsupported flags ${JSON.stringify(flags)}`);
           continue;
         }
         try {
-          out.push({ re: new RegExp(rec6.regex, `${flags}g`), ...typeof rec6.section === "string" && rec6.section ? { section: rec6.section } : {} });
+          out.push({ re: new RegExp(rec7.regex, `${flags}g`), ...typeof rec7.section === "string" && rec7.section ? { section: rec7.section } : {} });
         } catch {
           warn("does not compile");
         }
       }
       return out;
     }
-    function collapse2(text5) {
-      return text5.replace(/\s+/g, " ").trim();
+    function collapse2(text6) {
+      return text6.replace(/\s+/g, " ").trim();
     }
     function scanBackgroundMarkers(markers, lines, sections) {
       const hits = [];
@@ -194483,9 +194697,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               continue;
             }
             hits.push({ line: i, start: match.index, end: match.index + match[0].length });
-            const text5 = collapse2(match[0]);
-            texts.add(text5);
-            if (!sample) sample = text5;
+            const text6 = collapse2(match[0]);
+            texts.add(text6);
+            if (!sample) sample = text6;
           }
         }
       }
@@ -194951,9 +195165,9 @@ trust_level = "trusted"
     }
     function readJsonObject(storePath) {
       try {
-        const text5 = fs113.readFileSync(storePath, "utf8");
-        if (!text5.trim()) return {};
-        const parsed = JSON.parse(text5);
+        const text6 = fs113.readFileSync(storePath, "utf8");
+        if (!text6.trim()) return {};
+        const parsed = JSON.parse(text6);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           return parsed;
         }
@@ -195078,9 +195292,9 @@ trust_level = "trusted"
           if (trust.scheme === "claude_json_projects") {
             let root = {};
             try {
-              const text5 = fs114.readFileSync(settingsPath, "utf8");
-              if (text5.trim().length > 0) {
-                const parsed2 = JSON.parse(text5);
+              const text6 = fs114.readFileSync(settingsPath, "utf8");
+              if (text6.trim().length > 0) {
+                const parsed2 = JSON.parse(text6);
                 if (parsed2 && typeof parsed2 === "object" && !Array.isArray(parsed2)) {
                   root = parsed2;
                 }
@@ -195112,22 +195326,22 @@ trust_level = "trusted"
         const key5 = trust.key;
         let parsed = {};
         if (fs114.existsSync(settingsPath)) {
-          const text5 = fs114.readFileSync(settingsPath, "utf8");
-          if (text5.trim().length > 0) {
-            const json2 = JSON.parse(text5);
+          const text6 = fs114.readFileSync(settingsPath, "utf8");
+          if (text6.trim().length > 0) {
+            const json2 = JSON.parse(text6);
             if (json2 && typeof json2 === "object" && !Array.isArray(json2)) {
               parsed = json2;
             }
           }
         }
         const existing = parsed[key5];
-        const list3 = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
-        if (list3.includes(real2)) {
+        const list4 = Array.isArray(existing) ? existing.filter((v) => typeof v === "string") : [];
+        if (list4.includes(real2)) {
           LOG.debug("pre-launch-trust", `[${settingsPath}] ${real2} already trusted \u2014 no change`);
           return null;
         }
-        list3.push(real2);
-        parsed[key5] = list3;
+        list4.push(real2);
+        parsed[key5] = list4;
         fs114.mkdirSync(path113.dirname(settingsPath), { recursive: true });
         fs114.writeFileSync(settingsPath, `${JSON.stringify(parsed, null, 2)}
 `, "utf8");
@@ -195813,12 +196027,12 @@ trust_level = "trusted"
       dispatchAcknowledgement(messageId, nonce) {
         return this.sends.dispatchAcknowledgement(messageId, nonce);
       }
-      sendMessageWithDisposition(text5, bracketedPaste, messageId) {
-        return this.sends.handleSendMessage(text5, bracketedPaste, messageId);
+      sendMessageWithDisposition(text6, bracketedPaste, messageId) {
+        return this.sends.handleSendMessage(text6, bracketedPaste, messageId);
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text5, bracketedPaste, messageId) {
-        return this.sends.sendMessageDuringGeneration(text5, bracketedPaste, messageId);
+      sendMessageDuringGeneration(text6, bracketedPaste, messageId) {
+        return this.sends.sendMessageDuringGeneration(text6, bracketedPaste, messageId);
       }
       /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
       supportsMidGenerationQueue() {
@@ -196754,9 +196968,9 @@ trust_level = "trusted"
     function extractPickerChoices(driver, action2) {
       const ec = action2.extract_choices;
       if (!ec?.pattern) return [];
-      const text5 = readScreenSectionText(driver, ec.section);
+      const text6 = readScreenSectionText(driver, ec.section);
       const all = [];
-      for (const rawLine of text5.split("\n")) {
+      for (const rawLine of text6.split("\n")) {
         const line = rawLine.replace(/\r$/, "");
         const m = new RegExp(ec.pattern, ec.flags ?? "").exec(line);
         if (!m) continue;
@@ -197024,21 +197238,21 @@ trust_level = "trusted"
     function detectAntigravityFromRecords(records) {
       const launches = /* @__PURE__ */ new Map();
       let lastUserIdx = -1;
-      for (const rec6 of records) {
-        if (!rec6 || typeof rec6 !== "object") continue;
-        if (rec6.kind === "user") {
-          lastUserIdx = rec6.idx;
+      for (const rec7 of records) {
+        if (!rec7 || typeof rec7 !== "object") continue;
+        if (rec7.kind === "user") {
+          lastUserIdx = rec7.idx;
           continue;
         }
-        const taskId = typeof rec6.taskId === "string" ? rec6.taskId.trim() : "";
+        const taskId = typeof rec7.taskId === "string" ? rec7.taskId.trim() : "";
         if (!taskId) continue;
-        if (rec6.kind === "launch") {
-          if (!launches.has(taskId)) launches.set(taskId, { launchIdx: rec6.idx, resolvedIdx: -1 });
+        if (rec7.kind === "launch") {
+          if (!launches.has(taskId)) launches.set(taskId, { launchIdx: rec7.idx, resolvedIdx: -1 });
           continue;
         }
-        if ((rec6.kind === "status" || rec6.kind === "notification") && rec6.terminal === true) {
+        if ((rec7.kind === "status" || rec7.kind === "notification") && rec7.terminal === true) {
           const entry = launches.get(taskId);
-          if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = rec6.idx;
+          if (entry && entry.resolvedIdx < 0) entry.resolvedIdx = rec7.idx;
         }
       }
       const inScope = [...launches.entries()].filter(([, v]) => v.launchIdx > lastUserIdx);
@@ -197049,9 +197263,9 @@ trust_level = "trusted"
     }
     function detectClaudeFromRecords(records) {
       const launched = /* @__PURE__ */ new Map();
-      for (const rec6 of records) {
-        if (!rec6 || typeof rec6 !== "object") continue;
-        const record7 = rec6;
+      for (const rec7 of records) {
+        if (!rec7 || typeof rec7 !== "object") continue;
+        const record7 = rec7;
         const type2 = String(record7.type ?? "").trim();
         const message = record7.message && typeof record7.message === "object" ? record7.message : null;
         if (!message) continue;
@@ -197092,9 +197306,9 @@ trust_level = "trusted"
       const textParts = [];
       const stepFinishReason = /* @__PURE__ */ new Map();
       for (let i = 0; i < records.length; i++) {
-        const rec6 = records[i];
-        if (!rec6 || typeof rec6 !== "object") continue;
-        const record7 = rec6;
+        const rec7 = records[i];
+        if (!rec7 || typeof rec7 !== "object") continue;
+        const record7 = rec7;
         const type2 = String(record7.type ?? "").trim();
         if (type2 === "turn.prompt") {
           lastPromptIdx = i;
@@ -197140,8 +197354,8 @@ trust_level = "trusted"
           continue;
         }
         if (type2 === "turn.steer" || type2 === "context.append_message") {
-          for (const text5 of kimiRecordTextParts(record7)) {
-            for (const match of text5.matchAll(/<notification\b[^>]*>/g)) {
+          for (const text6 of kimiRecordTextParts(record7)) {
+            for (const match of text6.matchAll(/<notification\b[^>]*>/g)) {
               const attrs = parseNotificationAttrs(match[0]);
               if (attrs.get("category") !== "task") continue;
               const sourceId = attrs.get("source_id") ?? "";
@@ -197228,8 +197442,8 @@ trust_level = "trusted"
         if (!Array.isArray(parts)) return;
         for (const part of parts) {
           if (!part || typeof part !== "object") continue;
-          const text5 = part.text;
-          if (typeof text5 === "string" && text5) out.push(text5);
+          const text6 = part.text;
+          if (typeof text6 === "string" && text6) out.push(text6);
         }
       };
       collect(record7.input);
@@ -197291,18 +197505,18 @@ trust_level = "trusted"
         storeTailJsonlCache(filePath2, { signature, maxBytes, sourceBytes: size, lines: out2 });
         return out2;
       }
-      let text5;
+      let text6;
       const fd = fs116.openSync(filePath2, "r");
       try {
         const buf = Buffer.alloc(length);
         const bytes = fs116.readSync(fd, buf, 0, length, start);
-        text5 = buf.subarray(0, bytes).toString("utf8");
+        text6 = buf.subarray(0, bytes).toString("utf8");
         tailJsonlCacheStats.fileReads++;
       } finally {
         fs116.closeSync(fd);
       }
       tailJsonlCacheStats.parsePasses++;
-      const rawLines = text5.split("\n");
+      const rawLines = text6.split("\n");
       if (start > 0 && rawLines.length > 0) rawLines.shift();
       const out = [];
       for (const line of rawLines) {
@@ -197419,13 +197633,13 @@ trust_level = "trusted"
       let inUser = false;
       let inThought = false;
       let seenRole = false;
-      const pushOrAppendAssistant = (text5) => {
+      const pushOrAppendAssistant = (text6) => {
         const last = messages[messages.length - 1];
         if (last && last.role === "assistant" && typeof last.content === "string") {
           last.content = last.content ? `${last.content}
-${text5}` : text5;
+${text6}` : text6;
         } else {
-          messages.push(assistantMessage(text5));
+          messages.push(assistantMessage(text6));
         }
       };
       for (const line of lines) {
@@ -197455,9 +197669,9 @@ ${text5}` : text5;
         if (inUser && isIndented(line)) continue;
         if (inThought && isIndented(line) && !JSON_START_RE.test(line) && !afterTool) continue;
         if (afterTool || inThought && JSON_START_RE.test(line)) {
-          const text5 = line.replace(/^\s+/, "");
-          if (text5) {
-            pushOrAppendAssistant(text5);
+          const text6 = line.replace(/^\s+/, "");
+          if (text6) {
+            pushOrAppendAssistant(text6);
             inThought = false;
             inUser = false;
           }
@@ -198252,8 +198466,8 @@ ${text5}` : text5;
       return { ...base, status: "idle", fsmReadySeen: readySeen === true };
     }
     init_interactive_prompt();
-    function normalizeClaudeTuiIdentity(text5) {
-      return text5.replace(/\s+/g, " ").trim();
+    function normalizeClaudeTuiIdentity(text6) {
+      return text6.replace(/\s+/g, " ").trim();
     }
     function claudeTuiQuestionMatches(expected, focused) {
       const expectedQuestion = normalizeClaudeTuiIdentity(expected.question);
@@ -199121,7 +199335,7 @@ ${text5}` : text5;
       "opencode": /\bopencode\b/i
     };
     var PROVIDER_LABEL = /\b(?:codex(?:-cli)?|openai|claude(?:-cli)?|anthropic|antigravity(?:-cli)?|agy|kimi(?:-cli)?|moonshot|cursor-(?:agent|cli)|grok(?:-cli)?|opencode)\b/gi;
-    function logicalBlocks(text5) {
+    function logicalBlocks(text6) {
       const blocks = [];
       let pending = [];
       let fence;
@@ -199134,7 +199348,7 @@ ${text5}` : text5;
         const prior = blocks[blocks.length - 1];
         if (!pending.length && prior?.trimEnd().endsWith(":") && Object.values(PROVIDER_MARKERS).some((marker2) => marker2.test(prior))) pending.push(blocks.pop());
       };
-      for (const line of text5.split("\n")) {
+      for (const line of text6.split("\n")) {
         const delimiter5 = line.match(/^\s*(`{3,}|~{3,})/);
         if (fence) {
           pending.push(line);
@@ -199222,11 +199436,11 @@ ${text5}` : text5;
       }
       return boundaries.map((start, i) => block2.slice(start, boundaries[i + 1] ?? block2.length));
     }
-    function maskForeignProviderText(cliType, text5) {
-      if (!(cliType in PROVIDER_MARKERS) || !text5) return text5;
-      const clean2 = stripAnsi3(text5);
+    function maskForeignProviderText(cliType, text6) {
+      if (!(cliType in PROVIDER_MARKERS) || !text6) return text6;
+      const clean2 = stripAnsi3(text6);
       const foreign = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType);
-      if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text5;
+      if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text6;
       return logicalBlocks(clean2).flatMap((block2) => labelledStatements(cliType, block2)).map((statement) => foreign.some(([, marker2]) => marker2.test(statement)) ? "" : statement).join("\n");
     }
     function classifyOwnAuthFailureOnlyReply(cliType, reply) {
@@ -199258,8 +199472,8 @@ ${text5}` : text5;
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
-    function classifyAuthBillingOutput(cliType, text5, exitCode) {
-      const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text5), exitCode);
+    function classifyAuthBillingOutput(cliType, text6, exitCode) {
+      const ownFailure = detectProviderFailure(maskForeignProviderText(cliType, text6), exitCode);
       if (!ownFailure) return null;
       if (cliType !== "kimi" && ownFailure.failureKind !== "auth") return null;
       return ownFailure;
@@ -199473,10 +199687,10 @@ ${text5}` : text5;
     var TOOL_OR_DIFF = /^\s*(?:▎|(?:Edited|Editing|Created|Creating|Deleted|Deleting|Read|Reading|Ran|Running|Searched|Searching|Listed|Listing|Grepped|Globbed|Fetched|Fetching)\s+\S+(?:\s+[+-]\d+)*\s*$)/;
     var MAX_CHARS = 4e3;
     function extractCursorScreenAssistantMessages(screenText, promptSnippets = []) {
-      const text5 = stripAnsi3(screenText || "").replace(/\r/g, "").replace(/\s+$/, "");
-      const tail = text5.split("\n").slice(-18).join("\n");
+      const text6 = stripAnsi3(screenText || "").replace(/\r/g, "").replace(/\s+$/, "");
+      const tail = text6.split("\n").slice(-18).join("\n");
       if (!SETTLED_FOOTER.test(tail) || BUSY.test(tail)) return [];
-      const lines = text5.split("\n");
+      const lines = text6.split("\n");
       let end = lines.findIndex((l) => COMPOSER.test(l));
       if (end < 0) end = lines.length;
       const flat = promptSnippets.map((s2) => s2.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -199757,17 +199971,17 @@ ${text5}` : text5;
       dispatchAcknowledgement(messageId, nonce) {
         return this.driver.dispatchAcknowledgement?.(messageId, nonce) ?? null;
       }
-      async sendMessage(text5, opts) {
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text5.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
-        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text5.slice(0, 80))}${text5.length > 80 ? "\u2026" : ""}`);
-        recordSentPrompt(this.owningSessionId, text5);
+      async sendMessage(text6, opts) {
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessage(len=${text6.length}${opts?.messageId ? ` id=${opts.messageId}` : ""})`);
+        LOG.debug("SpecAdapter", `[${this.cliType}] sendMessage body=${JSON.stringify(text6.slice(0, 80))}${text6.length > 80 ? "\u2026" : ""}`);
+        recordSentPrompt(this.owningSessionId, text6);
         if (typeof this.driver.sendMessageWithDisposition !== "function") {
-          this.driver.dispatch({ kind: "send_message", text: text5, bracketedPaste: opts?.bracketedPaste });
+          this.driver.dispatch({ kind: "send_message", text: text6, bracketedPaste: opts?.bracketedPaste });
           return;
         }
-        const disposition = this.driver.sendMessageWithDisposition(text5, opts?.bracketedPaste, opts?.messageId);
+        const disposition = this.driver.sendMessageWithDisposition(text6, opts?.bracketedPaste, opts?.messageId);
         if (disposition.status === "queued") {
-          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text5.length}, queueDepth=${disposition.queueDepth})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] send QUEUED not submitted \u2014 ${disposition.reason} (len=${text6.length}, queueDepth=${disposition.queueDepth})`);
           return { status: "queued", position: disposition.queueDepth };
         }
         return { status: "delivered" };
@@ -199784,16 +199998,16 @@ ${text5}` : text5;
        * the caller's whole contract here is that `accepted: false` means nothing
        * was written and its previous fallback is safe to take.
        */
-      sendMessageDuringGeneration(text5, bracketedPaste, messageId) {
+      sendMessageDuringGeneration(text6, bracketedPaste, messageId) {
         if (typeof this.driver.sendMessageDuringGeneration !== "function") {
           return { accepted: false, reason: "not_supported" };
         }
-        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text5.length})`);
-        const outcome = this.driver.sendMessageDuringGeneration(text5, bracketedPaste, messageId);
+        LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text6.length})`);
+        const outcome = this.driver.sendMessageDuringGeneration(text6, bracketedPaste, messageId);
         if (!outcome.accepted) {
-          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text5.length})`);
+          LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text6.length})`);
         } else {
-          recordSentPrompt(this.owningSessionId, text5);
+          recordSentPrompt(this.owningSessionId, text6);
         }
         return outcome;
       }
@@ -200769,7 +200983,7 @@ ${text5}` : text5;
     function record6(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
     }
-    var text4 = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
+    var text5 = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
     var rpcKey = (id4) => `${typeof id4}:${id4}`;
     function parseAsyncQuestionReply(input) {
       if (!Array.isArray(input)) return null;
@@ -200795,7 +201009,7 @@ ${text5}` : text5;
       const values = Array.isArray(replies) ? replies : [replies];
       if (!values.length || values.some((value) => {
         const r = record6(value);
-        return !r || !text4(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
+        return !r || !text5(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
       })) return null;
       return values;
     }
@@ -200822,17 +201036,17 @@ ${text5}` : text5;
       capture(requestId, raw) {
         if (this.entries.size >= 32 || this.seen.size >= 4096) return false;
         const p = record6(raw);
-        if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text4(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
+        if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text5(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
         const key5 = `rpc:${rpcKey(requestId)}`;
         if (this.seen.has(key5)) return false;
         const questions = [];
         for (const value of p.questions) {
           const q2 = record6(value);
-          if (!q2 || !text4(q2.id) || !text4(q2.question) || typeof q2.header !== "string" || typeof q2.isOther !== "boolean" || typeof q2.isSecret !== "boolean" || !(q2.options === null || Array.isArray(q2.options))) return false;
+          if (!q2 || !text5(q2.id) || !text5(q2.question) || typeof q2.header !== "string" || typeof q2.isOther !== "boolean" || typeof q2.isSecret !== "boolean" || !(q2.options === null || Array.isArray(q2.options))) return false;
           const options = [];
           for (const value2 of q2.options ?? []) {
             const option = record6(value2);
-            if (!option || !text4(option.label) || typeof option.description !== "string") return false;
+            if (!option || !text5(option.label) || typeof option.description !== "string") return false;
             options.push({ label: option.label, description: option.description });
           }
           if (options.length > 32 || new Set(options.map((o) => o.label)).size !== options.length) return false;
@@ -200868,9 +201082,9 @@ ${text5}` : text5;
         const questions = [];
         for (const [index, value] of raw.entries()) {
           const q2 = record6(value);
-          if (!q2 || !text4(q2.title) || !(q2.options === null || Array.isArray(q2.options))) return false;
+          if (!q2 || !text5(q2.title) || !(q2.options === null || Array.isArray(q2.options))) return false;
           const labels = q2.options ?? [];
-          if (labels.length > 32 || labels.some((label2) => !text4(label2)) || new Set(labels).size !== labels.length) return false;
+          if (labels.length > 32 || labels.some((label2) => !text5(label2)) || new Set(labels).size !== labels.length) return false;
           const questionId = JSON.stringify(["request_user_input_async", itemId, index]);
           if (Buffer.byteLength(questionId) > 512) return false;
           questions.push({
@@ -201204,12 +201418,12 @@ ${reply.answer}`).join("\n\n");
         }
         this.notify("fsm_state");
       }
-      async sendMessage(text5) {
+      async sendMessage(text6) {
         if (!this.isReady()) throw new Error("Codex managed runtime unavailable");
         const prompt = this.questions.active();
         if (prompt?.binding?.transport === "codex_rpc" && prompt.blocking !== false) throw new Error("Resolve the current native question before sending another input");
         const priorAsync = this.questions.asyncKeys();
-        const input = [{ type: "text", text: text5, textElements: [] }];
+        const input = [{ type: "text", text: text6, textElements: [] }];
         if (this.questions.turnId) await this.transport.request("turn/steer", { threadId: this.questions.threadId, expectedTurnId: this.questions.turnId, input });
         else {
           const result = record6(await this.transport.request("turn/start", { threadId: this.questions.threadId, input }));
@@ -201243,17 +201457,17 @@ ${reply.answer}`).join("\n\n");
             question: boundedTitle(q2.question),
             answer: prepared.answers[q2.questionId].answers[0]
           }));
-          const text5 = `<send_user_message_question_reply>
+          const text6 = `<send_user_message_question_reply>
 ${JSON.stringify(replies)}
 </send_user_message_question_reply>`;
           try {
-            await this.transport.request("turn/steer", { threadId: binding.threadId, expectedTurnId: binding.turnId, input: [{ type: "text", text: text5, textElements: [] }] });
+            await this.transport.request("turn/steer", { threadId: binding.threadId, expectedTurnId: binding.turnId, input: [{ type: "text", text: text6, textElements: [] }] });
           } catch (error) {
             this.questions.uncertain(prepared.key);
             this.notify("prompt_updated");
             throw error;
           }
-          this.questions.observeReply([{ type: "text", text: text5 }]);
+          this.questions.observeReply([{ type: "text", text: text6 }]);
         }
         this.notify("prompt_updated");
       }
@@ -201664,9 +201878,9 @@ ${JSON.stringify(replies)}
       const boundRaw = Number(env2.ADHDEV_TX_BUSY_LEASE_BOUND_MS);
       const boundMs = Number.isFinite(boundRaw) && boundRaw > 0 ? Math.floor(boundRaw) : BUSY_LEASE_BOUND_MS;
       const listRaw = env2.ADHDEV_TX_BUSY_LEASE_PROVIDERS;
-      const list3 = (typeof listRaw === "string" ? listRaw : DEFAULT_CANARY_PROVIDERS.join(",")).split(",").map((s2) => s2.trim()).filter(Boolean);
+      const list4 = (typeof listRaw === "string" ? listRaw : DEFAULT_CANARY_PROVIDERS.join(",")).split(",").map((s2) => s2.trim()).filter(Boolean);
       const type2 = (providerType ?? "").trim();
-      return { enabled: type2.length > 0 && list3.includes(type2), boundMs };
+      return { enabled: type2.length > 0 && list4.includes(type2), boundMs };
     }
     init_chat_history();
     init_logger();
@@ -202170,8 +202384,8 @@ ${JSON.stringify(replies)}
       if (!modal || buttons.length === 0) return null;
       const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
       if (modalKind !== "approval") return null;
-      const choice = selectAutoApprovalButton(host, buttons, providerApproval);
-      const { index: buttonIndex, label: buttonLabel } = choice ?? { index: -1, label: "" };
+      const choice2 = selectAutoApprovalButton(host, buttons, providerApproval);
+      const { index: buttonIndex, label: buttonLabel } = choice2 ?? { index: -1, label: "" };
       const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
       if (buttonIndex < 0 || !hasReliableConsentAnchor) return null;
       return approvalModalSignature(modal?.message, normalizeApprovalLabel(buttonLabel));
@@ -202310,13 +202524,13 @@ ${buttons.join("\n")}`;
           return autoApproveActive;
         }
       }
-      const choice = selectAutoApprovalButton(host, buttons, adapterStatus?.providerApproval);
-      if (!choice) {
+      const choice2 = selectAutoApprovalButton(host, buttons, adapterStatus?.providerApproval);
+      if (!choice2) {
         host.pendingAutoApprovalSignature = "";
         host.pendingAutoApprovalSince = 0;
         return host.isMeshWorkerSession() ? autoApproveActive : false;
       }
-      const { index: buttonIndex, label: buttonLabel } = choice;
+      const { index: buttonIndex, label: buttonLabel } = choice2;
       const hasReliableConsentAnchor = hasNegativeApprovalOption(buttons) || hasReliableApprovalAffirmative(buttons);
       if (buttonIndex < 0 || !hasReliableConsentAnchor) {
         return autoApproveActive;
@@ -203226,8 +203440,8 @@ ${buttons.join("\n")}`;
     }
     var MODEL_FALLBACK_SCAN_WINDOW_MS = 3 * 60 * 1e3;
     var MAX_MODEL_LENGTH = 120;
-    function flattenScreen(text5) {
-      return text5.replace(/\s+/g, " ");
+    function flattenScreen(text6) {
+      return text6.replace(/\s+/g, " ");
     }
     function detectModelFallback(warning, screenText) {
       if (!warning?.pattern || !screenText) return null;
@@ -203251,13 +203465,13 @@ ${buttons.join("\n")}`;
       let state2 = scans.get(host);
       if (!state2) scans.set(host, state2 = { startedAt: now, done: false });
       if (state2.done || now - state2.startedAt > MODEL_FALLBACK_SCAN_WINDOW_MS) return false;
-      let text5 = "";
+      let text6 = "";
       try {
-        text5 = host.adapter.getTerminalScreenSnapshot?.()?.text ?? "";
+        text6 = host.adapter.getTerminalScreenSnapshot?.()?.text ?? "";
       } catch {
         return false;
       }
-      const actual = detectModelFallback(warning, text5);
+      const actual = detectModelFallback(warning, text6);
       if (!actual) return false;
       state2.done = true;
       port.observeLaunchModel(host.instanceId, actual, now, { fallback: true });
@@ -203286,13 +203500,13 @@ ${buttons.join("\n")}`;
       keyFor(message) {
         const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
         const kind = typeof message.kind === "string" ? message.kind.trim().toLowerCase() : "";
-        let text5 = "";
+        let text6 = "";
         try {
-          text5 = flattenContent(message.content);
+          text6 = flattenContent(message.content);
         } catch {
-          text5 = String(message.content ?? "");
+          text6 = String(message.content ?? "");
         }
-        return `${role}|${kind}|${text5.replace(/\s+/g, " ").trim()}`;
+        return `${role}|${kind}|${text6.replace(/\s+/g, " ").trim()}`;
       }
       remember(key5, firstSeenAt) {
         this.firstSeenAtByKey.set(key5, firstSeenAt);
@@ -205076,8 +205290,8 @@ ${buttons.join("\n")}`;
     }
     function nativeTurnTerminalSummary(host, turnStartedAt) {
       const marker2 = host.nativeTurnTerminalMarker(turnStartedAt);
-      const text5 = typeof marker2?.summary === "string" ? marker2.summary.trim() : "";
-      return text5 || void 0;
+      const text6 = typeof marker2?.summary === "string" ? marker2.summary.trim() : "";
+      return text6 || void 0;
     }
     function hasEmittedGenuineCompletionForCurrentEpoch(host) {
       const latch = host.lastEmittedCompletion;
@@ -207060,9 +207274,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     var chalkModule = import_chalk.default;
     var chalkApi = typeof chalkModule.yellow === "function" ? chalkModule : chalkModule.default || null;
-    function colorize(color, text5) {
+    function colorize(color, text6) {
       const fn = chalkApi?.[color];
-      return typeof fn === "function" ? fn(text5) : text5;
+      return typeof fn === "function" ? fn(text6) : text6;
     }
     function resolveLaunchProvenance(args, settings2) {
       const declared = readLaunchProvenanceArgs(args);
@@ -207299,11 +207513,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (!current4 || current4.entry.meshId !== plan.entry.meshId) refuseCoordinatorRestore("coordinator identity changed during attach");
       registerMeshCoordinator(current4.entry);
     }
-    async function verifyCoordinatorRecoveryInventory(plan, record7, owner, list3) {
-      if (!list3) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
+    async function verifyCoordinatorRecoveryInventory(plan, record7, owner, list4) {
+      if (!list4) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
       let inventory;
       try {
-        inventory = await list3();
+        inventory = await list4();
       } catch {
         refuseCoordinatorRestore("coordinator recovery inventory unavailable");
       }
@@ -208809,15 +209023,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           return state2;
         }
       }
-      async sendMessage(evaluate, text5) {
+      async sendMessage(evaluate, text6) {
         let beforeState = null;
         try {
           beforeState = await this.readStableBaselineState(evaluate);
         } catch {
           beforeState = null;
         }
-        const params = { message: text5 };
-        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text5);
+        const params = { message: text6 };
+        const script = this.callScript("sendMessage", params) || this.callScript("sendMessage", text6);
         if (!script) throw new Error(`[${this.agentName}] sendMessage script not available`);
         const result = await evaluate(script);
         if (result && typeof result === "string" && result.startsWith("error:")) {
@@ -209128,7 +209342,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           };
         }
       }
-      async sendToSession(cdp, sessionId, text5) {
+      async sendToSession(cdp, sessionId, text6) {
         await this.ensureSessionPanelOpen(sessionId);
         const target4 = this.getSessionTarget(sessionId);
         if (!target4?.parentSessionId) return false;
@@ -209138,7 +209352,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (!agent) return false;
         try {
           const evaluate = (expr, timeout) => cdp.evaluateInSessionFrame(agent.cdpSessionId, expr, timeout);
-          await agent.adapter.sendMessage(evaluate, text5);
+          await agent.adapter.sendMessage(evaluate, text6);
           return true;
         } catch (e) {
           this.logFn(`[AgentStream] sendToSession(${sessionId}) error: ${e.message}`);
@@ -210557,8 +210771,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSend(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { selector, text: text5 } = body;
-      if (!selector || typeof selector !== "string" || !text5 || typeof text5 !== "string") {
+      const { selector, text: text6 } = body;
+      if (!selector || typeof selector !== "string" || !text6 || typeof text6 !== "string") {
         ctx.json(res, 400, { error: "selector and text strings required" });
         return;
       }
@@ -210568,7 +210782,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSend(selector, text5);
+        const sent = await cdp.typeAndSend(selector, text6);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -210576,8 +210790,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleTypeAndSendAt(ctx, type2, req, res) {
       const body = await ctx.readBody(req);
-      const { x, y, text: text5 } = body;
-      if (typeof x !== "number" || typeof y !== "number" || !text5 || typeof text5 !== "string") {
+      const { x, y, text: text6 } = body;
+      if (typeof x !== "number" || typeof y !== "number" || !text6 || typeof text6 !== "string") {
         ctx.json(res, 400, { error: "x, y numbers and text string required" });
         return;
       }
@@ -210587,7 +210801,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       try {
-        const sent = await cdp.typeAndSendAt(x, y, text5);
+        const sent = await cdp.typeAndSendAt(x, y, text6);
         ctx.json(res, 200, { sent });
       } catch (e) {
         ctx.json(res, 500, { error: e.message });
@@ -211174,8 +211388,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     }
     async function handleFindByText(ctx, req, res) {
       const body = await ctx.readBody(req);
-      const { text: text5, ideType, containerSelector } = body;
-      if (!text5 || typeof text5 !== "string") {
+      const { text: text6, ideType, containerSelector } = body;
+      if (!text6 || typeof text6 !== "string") {
         ctx.json(res, 400, { error: "text is required" });
         return;
       }
@@ -211210,7 +211424,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return parts.join(' < ');
     }
 
-    const searchText = ${JSON.stringify(text5)}.toLowerCase();
+    const searchText = ${JSON.stringify(text6)}.toLowerCase();
     const container = ${containerArg} ? document.querySelector(${containerArg}) : document.body;
     if (!container) return JSON.stringify({ error: 'Container not found' });
 
@@ -211282,7 +211496,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return (bMax - aMax) || (a.depth - b.depth);
     });
 
-    return JSON.stringify({ query: ${JSON.stringify(text5)}, matches, total: matches.length });
+    return JSON.stringify({ query: ${JSON.stringify(text6)}, matches, total: matches.length });
   })()`;
       try {
         const raw = await cdp.evaluate(script, 1e4);
@@ -211648,7 +211862,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       const {
         type: type2,
-        text: text5,
+        text: text6,
         instanceId: requestedInstanceId,
         workingDir,
         args,
@@ -211665,7 +211879,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!type2) {
         throw new Error("type required (e.g. claude-cli, codex-cli)");
       }
-      if (!text5 || typeof text5 !== "string") {
+      if (!text6 || typeof text6 !== "string") {
         throw new Error("text required (prompt to send to the CLI)");
       }
       let resolvedInstanceId = requestedInstanceId;
@@ -211760,7 +211974,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (status === "idle") break;
         await sleep2(150);
       }
-      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text5 });
+      ctx.instanceManager.sendEvent(bundle.target.instanceId, "send_message", { text: text6 });
       while (Date.now() - startAt < Math.max(1e3, timeoutMs)) {
         await sleep2(150);
         bundle = getCliTargetBundle(ctx, type2, bundle.target.instanceId);
@@ -211922,8 +212136,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return;
       }
       const body = await ctx.readBody(req);
-      const { type: type2, text: text5, instanceId } = body;
-      if (!text5) {
+      const { type: type2, text: text6, instanceId } = body;
+      if (!text6) {
         ctx.json(res, 400, { error: "text required" });
         return;
       }
@@ -211939,9 +212153,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             ctx.json(res, 404, { error: `No running CLI adapter found for: ${type2 || instanceId}` });
             return;
           }
-          await bundle.adapter.sendMessage(text5);
+          await bundle.adapter.sendMessage(text6);
         } else {
-          ctx.instanceManager.sendEvent(target4.instanceId, "send_message", { text: text5 });
+          ctx.instanceManager.sendEvent(target4.instanceId, "send_message", { text: text6 });
         }
         ctx.json(res, 200, { sent: true, type: target4.type, instanceId: target4.instanceId });
       } catch (e) {
@@ -213700,9 +213914,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!snapshotResponse.success) {
             throw new Error(snapshotResponse.error || `Failed to load snapshot for ${this.options.runtimeId}`);
           }
-          const text5 = snapshotResponse.result?.text || "";
-          if (text5) {
-            this.emitData(text5);
+          const text6 = snapshotResponse.result?.text || "";
+          if (text6) {
+            this.emitData(text6);
           }
         }
       }
@@ -214184,14 +214398,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       async readState() {
         return (await this.readSnapshot()).state;
       }
-      async writeInput(text5) {
+      async writeInput(text6) {
         if (this.mode !== "write") throw new Error("Raw terminal attachment is read-only");
         const response = await this.client.request({
           type: "send_input",
           payload: {
             sessionId: this.sessionId,
             clientId: this.clientId,
-            data: text5
+            data: text6
           }
         });
         if (!response.success) throw new Error(response.error || `Failed to write terminal input to ${this.sessionId}`);
@@ -215738,11 +215952,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         byGroup.set(group, [...byGroup.get(group) ?? [], bucket2]);
       }
       if (byGroup.size < 2) return [];
-      const pick = (list3, minutes) => {
-        const hits = list3.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+      const pick = (list4, minutes) => {
+        const hits = list4.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
         return hits.length ? hits.reduce((w, b) => b.usedPercent > w.usedPercent ? b : w) : null;
       };
-      return [...byGroup].map(([group, list3]) => ({ group, session: pick(list3, 300), weekly: pick(list3, 10080) }));
+      return [...byGroup].map(([group, list4]) => ({ group, session: pick(list4, 300), weekly: pick(list4, 10080) }));
     }
     function printQuota(name, quota) {
       console.log();
@@ -217188,13 +217402,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (!epoch && heads.length === 0) return null;
       const entries2 = heads.map((h) => {
         const body = h.body;
-        let text5 = typeof body.text === "string" ? body.text : "";
+        let text6 = typeof body.text === "string" ? body.text : "";
         if (typeof body.parts === "number") {
           const map2 = parts.get(h.id);
-          text5 = "";
-          for (let k = 0; k < body.parts; k += 1) text5 += map2?.get(k) ?? "";
+          text6 = "";
+          for (let k = 0; k < body.parts; k += 1) text6 += map2?.get(k) ?? "";
         }
-        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text: text5, srcId: h.srcId };
+        return { messageId: h.id, ord: h.ord, rev: h.rev, role: h.role, kind: h.kind, text: text6, srcId: h.srcId };
       });
       return { epoch, entries: entries2 };
     }
@@ -217853,23 +218067,23 @@ ${notice.notice}${supersededHint}`;
       const totals = { ...ZERO_TOTALS };
       for (const sync of Object.values(drain.topics ?? {})) {
         if (!sync) continue;
-        totals.servedEntries += num2(sync.servedEntries);
-        totals.servedBytes += num2(sync.servedBytes);
-        totals.appliedEntries += num2(sync.appliedEntries);
-        totals.appliedBytes += num2(sync.appliedBytes);
-        totals.wantRoundsRequested += num2(sync.wantRoundsRequested);
-        totals.wantRoundsServed += num2(sync.wantRoundsServed);
+        totals.servedEntries += num3(sync.servedEntries);
+        totals.servedBytes += num3(sync.servedBytes);
+        totals.appliedEntries += num3(sync.appliedEntries);
+        totals.appliedBytes += num3(sync.appliedBytes);
+        totals.wantRoundsRequested += num3(sync.wantRoundsRequested);
+        totals.wantRoundsServed += num3(sync.wantRoundsServed);
       }
       return totals;
     }
-    function num2(value) {
+    function num3(value) {
       return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
     }
     function sumApplyRejects(stats) {
       let total = 0;
       for (const topic of Object.values(stats.topics ?? {})) {
         for (const count of Object.values(topic?.applyRejects ?? {})) {
-          total += num2(count);
+          total += num3(count);
         }
       }
       return total;
@@ -217877,7 +218091,7 @@ ${notice.notice}${supersededHint}`;
     function sumStalledStreams(stats) {
       let total = 0;
       for (const peer of stats.peers ?? []) {
-        total += num2(peer?.stalledStreams);
+        total += num3(peer?.stalledStreams);
       }
       return total;
     }
@@ -217920,7 +218134,7 @@ ${notice.notice}${supersededHint}`;
           at,
           intervalMs: lastAt === null ? intervalMs : Math.max(0, at - lastAt),
           totals,
-          hotspots: (interval.syncHotspots ?? []).slice(0, SNAPSHOT_HOTSPOT_LIMIT).map((h) => ({ topic: h.topic, peerId: h.peerId, bytes: num2(h.bytes) })),
+          hotspots: (interval.syncHotspots ?? []).slice(0, SNAPSHOT_HOTSPOT_LIMIT).map((h) => ({ topic: h.topic, peerId: h.peerId, bytes: num3(h.bytes) })),
           applyRejects: sumApplyRejects(stats),
           stalledStreams: sumStalledStreams(stats),
           stats
@@ -217938,14 +218152,14 @@ ${notice.notice}${supersededHint}`;
         if (subs) {
           const prev = lastSubs;
           lastSubs = { ...subs };
-          const d = (k) => Math.max(0, num2(subs[k]) - num2(prev?.[k]));
+          const d = (k) => Math.max(0, num3(subs[k]) - num3(prev?.[k]));
           const snaps = d("snapsStarted");
           const resyncs = d("resyncs");
           const coalesced = d("resyncWritesCoalesced");
           if (snaps > 0 || resyncs > 0 || coalesced > 0) {
             log(
               resyncs > 0 ? "warn" : "info",
-              `subs ${intervalMs / 1e3}s: snaps=${snaps}/${fmtBytes(d("snapBytes"))} chunks=${d("snapChunksSent")} deltas=${d("deltasSent")} resyncs=${resyncs} (backpressure=${d("resyncsBackpressure")} oversized=${d("resyncsOversized")}) coalesced=${coalesced} pending=${num2(subs.resyncPending)} inFlight=${num2(subs.snapsInFlight)}`
+              `subs ${intervalMs / 1e3}s: snaps=${snaps}/${fmtBytes(d("snapBytes"))} chunks=${d("snapChunksSent")} deltas=${d("deltasSent")} resyncs=${resyncs} (backpressure=${d("resyncsBackpressure")} oversized=${d("resyncsOversized")}) coalesced=${coalesced} pending=${num3(subs.resyncPending)} inFlight=${num3(subs.snapsInFlight)}`
             );
           }
         }
@@ -218109,10 +218323,10 @@ ${notice.notice}${supersededHint}`;
           return;
         }
         const key5 = frameKey(at.epoch, at.frame);
-        let list3 = this.pending.get(key5);
-        if (!list3) {
-          list3 = [];
-          this.pending.set(key5, list3);
+        let list4 = this.pending.get(key5);
+        if (!list4) {
+          list4 = [];
+          this.pending.set(key5, list4);
           while (this.pending.size > PENDING_FRAMES_MAX) {
             const oldest = this.pending.keys().next().value;
             this.pendingRows -= this.pending.get(oldest).length;
@@ -218120,7 +218334,7 @@ ${notice.notice}${supersededHint}`;
             this.counters.tornFramesDropped++;
           }
         }
-        list3.push(row2);
+        list4.push(row2);
         this.pendingRows += 1;
         if (this.pendingRows > PENDING_ROWS_MAX) {
           this.pending.clear();
@@ -218150,11 +218364,11 @@ ${notice.notice}${supersededHint}`;
         }
         const key5 = frameKey(commit2.epoch, commit2.frame);
         const rows = (this.pending.get(key5) ?? []).filter((r) => r.writer === commit2.writer);
-        for (const [k, list3] of Array.from(this.pending)) {
+        for (const [k, list4] of Array.from(this.pending)) {
           const [epoch, frameText] = k.split("\0");
           if (epoch !== commit2.epoch || Number(frameText) <= commit2.frame) {
             if (k !== key5) this.counters.tornFramesDropped++;
-            this.pendingRows -= list3.length;
+            this.pendingRows -= list4.length;
             this.pending.delete(k);
           }
         }
@@ -218352,9 +218566,9 @@ ${notice.notice}${supersededHint}`;
       bodyOf(head) {
         if ("text" in head.body) return head.body.text;
         const map2 = this.state.parts.get(head.id);
-        let text5 = "";
-        for (let k = 0; k < head.body.parts; k += 1) text5 += map2?.get(k)?.text ?? "";
-        return text5;
+        let text6 = "";
+        for (let k = 0; k < head.body.parts; k += 1) text6 += map2?.get(k)?.text ?? "";
+        return text6;
       }
       materializeMessage(id4) {
         const head = this.state.heads.get(id4);
@@ -219656,8 +219870,8 @@ ${notice.notice}${supersededHint}`;
     init_mesh_mission_decisions();
     init_mesh_mission_decision_push_notifier();
     function clip(value, max) {
-      const text5 = value.replace(/\s+/g, " ").trim();
-      return text5.length <= max ? text5 : `${text5.slice(0, max - 1).trimEnd()}\u2026`;
+      const text6 = value.replace(/\s+/g, " ").trim();
+      return text6.length <= max ? text6 : `${text6.slice(0, max - 1).trimEnd()}\u2026`;
     }
     function projectDecisionPushEvent(entry, reason, timestamp2 = Date.now()) {
       const options = entry.options.slice(0, DECISION_PUSH_OPTIONS_MAX).map((o) => ({ id: o.id, label: clip(o.label, DECISION_PUSH_OPTION_LABEL_MAX) }));
@@ -235662,7 +235876,7 @@ var PROJECTS_TOOL = {
 };
 var PROJECT_STATUS_TOOL = {
   name: "project_status",
-  description: 'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model each machine would route a task to right now, which configured slots were excluded and why (`slot_capacity_exhausted`, `difficulty_floor_unavailable`, \u2026), and per-provider quota evidence (`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) \u2014 the answer to "why is this provider not being used". Also `sessions`: the live agent sessions on this machine (provider, status, age, message count, which task each was started for) \u2014 a session with `messageCount: 0` and `spawnedForTaskId: null` is an orphan that was started but never given work, worth telling the user about. `staleMissions` (only when present): active missions with no task activity for 3+ days (`idleDays`) \u2014 offer the user to close them; on a yes, ask the project to close them with project_send. Read-only: no quota is fetched and nothing is changed.',
+  description: 'Compact status of one project: machines online, queue counts, active mission titles, failed tasks, pending approvals, and when its coordinator last reported back. Also `routing`: which provider/model each machine would route a task to right now, which configured slots were excluded and why (`slot_capacity_exhausted`, `difficulty_floor_unavailable`, \u2026), and per-provider quota evidence (`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) \u2014 the answer to "why is this provider not being used". Also `sessions`: project task-bound workers across nodes, joined from held member pushes and local observations. `evidence` gives task/attempt/owner, status and activity provenance, freshness and observation time; unknown/stale/unreachable never implies idle. `sessionCoverage` reports missing or partial node observations. `nodeProviderQuota` is sanitized node/provider evidence, not a per-session rate error; `sessionError: unknown` means no reliable classifier. `staleMissions` (only when present): active missions with no task activity for 3+ days (`idleDays`) \u2014 offer the user to close them; on a yes, ask the project to close them with project_send. Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: "object", properties: { ...PROJECT_PROP }, required: ["project"] }
 };
 var PROJECT_ATTACH_REMOTE_TOOL = {

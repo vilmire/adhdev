@@ -81,10 +81,12 @@ const PROJECT_STATUS_TOOL: AssistantToolSchema = {
     + 'each machine would route a task to right now, which configured slots were excluded and why '
     + '(`slot_capacity_exhausted`, `difficulty_floor_unavailable`, …), and per-provider quota evidence '
     + '(`snapshotStatus`, `failureKind`, `zeroReason`, `gateOutcome`) — the answer to "why is this provider '
-    + 'not being used". Also `sessions`: the live agent sessions on this machine (provider, status, age, '
-    + 'message count, which task each was started for) — a session with `messageCount: 0` and '
-    + '`spawnedForTaskId: null` is an orphan that was started but never given work, worth telling the user '
-    + 'about. `staleMissions` (only when present): active missions with no task activity for 3+ days '
+    + 'not being used". Also `sessions`: project task-bound workers across nodes, joined from held member pushes '
+    + 'and local observations. `evidence` gives task/attempt/owner, status and activity provenance, '
+    + 'freshness and observation time; unknown/stale/unreachable never implies idle. '
+    + '`sessionCoverage` reports missing or partial node observations. `nodeProviderQuota` is sanitized '
+    + 'node/provider evidence, not a per-session rate error; `sessionError: unknown` means no reliable classifier. '
+    + '`staleMissions` (only when present): active missions with no task activity for 3+ days '
     + '(`idleDays`) — offer the user to close them; on a yes, ask the project to close them with project_send. '
     + 'Read-only: no quota is fetched and nothing is changed.',
   inputSchema: { type: 'object', properties: { ...PROJECT_PROP }, required: ['project'] },

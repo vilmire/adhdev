@@ -342,6 +342,9 @@ export interface RepoMeshNodeStatus {
 
 /** Held runtime of one remote mesh node, stamped per call like gitObservation. */
 export interface RepoMeshNodeHeldRuntime {
+    /** Derived with the member-push/handshake predicate on every serve. */
+    freshness?: 'fresh' | 'stale' | 'not_observed';
+    handshakePending?: boolean;
     /** 'none' = the coordinator holds no runtime for this node yet (sessions unknown, not zero). */
     source: 'member_push' | 'coordinator_probe' | 'none';
     observedAt: number | null;
