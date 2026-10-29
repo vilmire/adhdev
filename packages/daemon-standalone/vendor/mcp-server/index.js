@@ -42714,6 +42714,57 @@ ${error.message || ""}`;
         };
       }
     });
+    function hasBoundedClock(reading, observedAt) {
+      const capturedAt = reading.updatedAt;
+      const attemptedAt = reading.metadata?.fetchedAt;
+      if (!Number.isFinite(observedAt) || observedAt <= 0 || !Number.isFinite(capturedAt) || capturedAt <= 0 || typeof attemptedAt !== "number" || !Number.isFinite(attemptedAt) || attemptedAt < capturedAt || attemptedAt > observedAt) return false;
+      for (const axis2 of ["session", "weekly", "monthly"]) {
+        const window = reading[axis2];
+        if (!window) continue;
+        const reset = window.resetsAt;
+        const minutes = window.windowMinutes;
+        if (typeof reset !== "number" || !Number.isFinite(reset) || typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0 || capturedAt >= reset || capturedAt < reset - minutes * 6e4) return false;
+      }
+      return true;
+    }
+    function isOlderQuotaReport(previous, incoming, observedAt) {
+      if (previous.status !== "ok" || !canTransferQuotaReading(previous, incoming)) return false;
+      if (previous.buckets?.length || incoming.buckets?.length) return false;
+      if (!hasBoundedClock(previous, observedAt) || !hasBoundedClock(incoming, observedAt)) return false;
+      let sharedCycle = false;
+      for (const axis2 of ["session", "weekly", "monthly"]) {
+        const before = previous[axis2];
+        const after = incoming[axis2];
+        if (!before || !after) continue;
+        if (before.windowMinutes !== after.windowMinutes || before.resetsAt !== after.resetsAt) return false;
+        sharedCycle = true;
+      }
+      if (!sharedCycle) return false;
+      const incomingClock = incoming.status === "ok" ? incoming.updatedAt : incoming.metadata?.fetchedAt;
+      return typeof incomingClock === "number" && incomingClock < previous.updatedAt;
+    }
+    function selectReportedQuotaFacts(previous, incoming, observedAt) {
+      if (!previous?.quota || !incoming.quota) return incoming;
+      const quota = { ...incoming.quota };
+      let retained = false;
+      for (const [provider, reading] of Object.entries(quota)) {
+        const prior = previous.quota[provider];
+        if (prior && isOlderQuotaReport(prior, reading, observedAt)) {
+          const metadata = { ...prior.metadata };
+          if (reading.metadata?.accountEmail === void 0) delete metadata.accountEmail;
+          else metadata.accountEmail = reading.metadata.accountEmail;
+          quota[provider] = { ...prior, metadata };
+          retained = true;
+        }
+      }
+      return retained ? { ...incoming, quota } : incoming;
+    }
+    var init_reported_snapshot = __esm2({
+      "src/quota/reported-snapshot.ts"() {
+        "use strict";
+        init_account_lineage();
+      }
+    });
     var mesh_config_exports = {};
     __export2(mesh_config_exports, {
       addNode: () => addNode,
@@ -42945,7 +42996,7 @@ ${error.message || ""}`;
         node.reportedMemberState = opts.reportedMemberState;
       }
       if (opts.nodeFacts) {
-        node.nodeFacts = opts.nodeFacts;
+        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts, Date.now());
       }
       if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
       if (Object.prototype.hasOwnProperty.call(opts, "capabilities")) {
@@ -42978,6 +43029,7 @@ ${error.message || ""}`;
         init_mesh_config_store();
         init_mesh_node_limit();
         init_mesh_json_config();
+        init_reported_snapshot();
         listMeshesDiskReadCount = 0;
       }
     });
@@ -46534,14 +46586,15 @@ ${error.message || ""}`;
     }
     function computeMeshNodeRuntimeSignature(summary) {
       if (!summary) return "none";
-      const stripTimes = (value) => {
-        if (Array.isArray(value)) return value.map(stripTimes);
+      const stripTimes = (value, quotaData = false) => {
+        if (Array.isArray(value)) return value.map((item) => stripTimes(item, quotaData));
         const record7 = readOptionalRecord2(value);
         if (!record7) return value;
         const out = {};
         for (const key5 of Object.keys(record7).sort()) {
-          if (/At$/.test(key5) || key5 === "ageMs") continue;
-          out[key5] = stripTimes(record7[key5]);
+          const measurementClock = quotaData && (key5 === "updatedAt" || key5 === "resetsAt");
+          if (/At$/.test(key5) && !measurementClock || key5 === "ageMs") continue;
+          out[key5] = stripTimes(record7[key5], quotaData || key5 === "quota");
         }
         return out;
       };
@@ -46775,6 +46828,7 @@ ${error.message || ""}`;
         import_crypto7 = require("crypto");
         init_dist();
         init_logger();
+        init_reported_snapshot();
         init_mesh_node_runtime_summary();
         SIGNATURE_GIT_KEYS = [
           "isGitRepo",
@@ -46939,6 +46993,10 @@ ${error.message || ""}`;
             if (pending) {
               const fromReplacedProcess = entry.handshakePendingReason === "restart" && !!entry.handshakePendingBootId && runtime2.daemonBootId === entry.handshakePendingBootId && !instanceChanged;
               if (!fromReplacedProcess) clearHandshakePending(entry);
+            }
+            const sameDaemon2 = entry.runtime?.daemonId && runtime2.daemonId && daemonIdsEquivalent4(entry.runtime.daemonId, runtime2.daemonId);
+            if (sameDaemon2 && runtime2.nodeFacts) {
+              runtime2.nodeFacts = selectReportedQuotaFacts(entry.runtime?.nodeFacts, runtime2.nodeFacts, this.now());
             }
             const signature = computeMeshNodeRuntimeSignature(runtime2);
             const changed = signature !== entry.runtimeSignature;
@@ -66337,7 +66395,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       if (!isLocalSource) {
         const remoteFacts = normalizeMeshNodeFacts(git7.reporterNodeFacts);
-        if (remoteFacts) node.nodeFacts = remoteFacts;
+        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
       } else {
         try {
           let localNickname = null;
@@ -66366,8 +66424,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function recordReportedNodeFacts(node, rawFacts) {
       if (!node || typeof node !== "object" || Array.isArray(node)) return null;
-      const facts = normalizeMeshNodeFacts(rawFacts);
-      if (!facts) return null;
+      const normalized = normalizeMeshNodeFacts(rawFacts);
+      if (!normalized) return null;
+      const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
       const platform10 = readStringValue(facts.platform) ?? null;
       const arch2 = readStringValue(facts.arch) ?? null;
       const nickname = readStringValue(facts.machineNickname) ?? null;
@@ -66375,6 +66434,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const buildVersion = readStringValue(readObjectRecord(facts.daemonBuild).version) ?? null;
       const buildCommit = readStringValue(readObjectRecord(facts.daemonBuild).commit) ?? null;
       const previousCommit = readStringValue(readObjectRecord(readObjectRecord(node.nodeFacts).daemonBuild).commit) ?? null;
+      const quotaChanged = JSON.stringify(facts.quota) !== JSON.stringify(readObjectRecord(node.nodeFacts).quota);
       const configChanged = platform10 && platform10 !== readStringValue(node.reportedPlatform) || arch2 && arch2 !== readStringValue(node.reportedArch) || nickname && nickname !== readStringValue(node.machineNickname) || buildVersion && buildVersion !== readStringValue(node.reportedDaemonBuildVersion) || buildCommit && buildCommit !== previousCommit || providerVersions && JSON.stringify(providerVersions) !== JSON.stringify(readProviderVersionsRecord(node.reportedProviderVersions));
       stampNodeReporterPlatform(node, platform10, arch2);
       if (platform10) node.reportedPlatform = platform10;
@@ -66390,7 +66450,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         };
       }
       node.nodeFacts = facts;
-      if (!configChanged) return null;
+      if (!configChanged && !quotaChanged) return null;
       return {
         reporterPlatform: platform10,
         reporterArch: arch2,
@@ -66684,6 +66744,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_build_info();
         fs18 = __toESM2(require("fs"));
         init_logger();
+        init_reported_snapshot();
       }
     });
     function truncateString22(value, maxChars) {

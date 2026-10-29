@@ -27,6 +27,7 @@ import { createHash } from 'crypto';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import { daemonIdsEquivalent, sessionIdsEquivalent, readOptionalRecord } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
+import { selectReportedQuotaFacts } from '../quota/reported-snapshot.js';
 import {
     computeMeshNodeFactsSignature,
     computeMeshNodeRuntimeSignature,
@@ -429,6 +430,11 @@ export class MeshNodeGitStateStore {
                 && runtime.daemonBootId === entry.handshakePendingBootId
                 && !instanceChanged;
             if (!fromReplacedProcess) clearHandshakePending(entry);
+        }
+        const sameDaemon = entry.runtime?.daemonId && runtime.daemonId
+            && daemonIdsEquivalent(entry.runtime.daemonId, runtime.daemonId);
+        if (sameDaemon && runtime.nodeFacts) {
+            runtime.nodeFacts = selectReportedQuotaFacts(entry.runtime?.nodeFacts, runtime.nodeFacts, this.now());
         }
         const signature = computeMeshNodeRuntimeSignature(runtime);
         const changed = signature !== entry.runtimeSignature;

@@ -361,18 +361,20 @@ export function buildMeshNodeRuntimeSummary(statusMetadata: unknown, nodeFacts?:
 /**
  * Change signature. Ignores timestamps that move without a visible change
  * (the facts bundle stamp, per-quota fetch stamps, a session's lastMessageAt),
+ * but quota measurement/reset clocks affect routing and must travel as data,
  * so an unchanged daemon stays quiet between heartbeats.
  */
 export function computeMeshNodeRuntimeSignature(summary: MeshNodeRuntimeSummary | null | undefined): string {
     if (!summary) return 'none';
-    const stripTimes = (value: unknown): unknown => {
-        if (Array.isArray(value)) return value.map(stripTimes);
+    const stripTimes = (value: unknown, quotaData = false): unknown => {
+        if (Array.isArray(value)) return value.map(item => stripTimes(item, quotaData));
         const record = readOptionalRecord(value);
         if (!record) return value;
         const out: Record<string, unknown> = {};
         for (const key of Object.keys(record).sort()) {
-            if (/At$/.test(key) || key === 'ageMs') continue;
-            out[key] = stripTimes(record[key]);
+            const measurementClock = quotaData && (key === 'updatedAt' || key === 'resetsAt');
+            if ((/At$/.test(key) && !measurementClock) || key === 'ageMs') continue;
+            out[key] = stripTimes(record[key], quotaData || key === 'quota');
         }
         return out;
     };
@@ -390,7 +392,7 @@ export function computeMeshNodeRuntimeSignature(summary: MeshNodeRuntimeSummary 
 /** Signature of the facts bundle (quota / build) and provider catalog — the parts the dashboard renders. */
 export function computeMeshNodeFactsSignature(summary: MeshNodeRuntimeSummary | null | undefined): string {
     if (!summary?.nodeFacts && !summary?.providers) return 'none';
-    // `reportedAt` (like every *At key) is ignored by the signature.
+    // Envelope/attempt times are ignored; quota capture and reset clocks are data.
     return computeMeshNodeRuntimeSignature({
         schemaVersion: 1,
         sessions: [],

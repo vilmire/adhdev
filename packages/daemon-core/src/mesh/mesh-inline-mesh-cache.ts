@@ -21,6 +21,7 @@ import { getCachedProviderVersions } from '../detection/cli-detector.js';
 import { getDaemonBuildInfo } from '../build-info.js';
 import * as fs from 'fs';
 import { LOG } from '../logging/logger.js';
+import { selectReportedQuotaFacts } from '../quota/reported-snapshot.js';
 
 // normalizeInlineMeshGitStatus / scoreInlineMeshGitStatus /
 // buildInlineMeshTransitGitStatus were the standalone-side copies of the cloud
@@ -185,14 +186,15 @@ export function recordInlineMeshDirectGitTruth(
         }
     }
     // Versioned facts bundle (deploy-lag visibility design §a). Remote: ingest the
-    // envelope's reporterNodeFacts WHOLESALE (opaque — unknown future fields ride
-    // through). Self/worktree: the local probe bypasses handleGitCommand, so build
+    // envelope's reporterNodeFacts (opaque fields ride through; older quota
+    // measurements cannot displace a newer same-account/reset-cycle reading).
+    // Self/worktree: the local probe bypasses handleGitCommand, so build
     // the bundle with the SAME producer the envelope uses — the two paths cannot
     // drift on a per-field basis anymore. Skipped (no stamp churn) when a remote
     // envelope predates the bundle.
     if (!isLocalSource) {
         const remoteFacts = normalizeMeshNodeFacts((git as { reporterNodeFacts?: unknown }).reporterNodeFacts);
-        if (remoteFacts) node.nodeFacts = remoteFacts;
+        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
     } else {
         try {
             // machineNickname: without it the LOCAL machine's facts bundle was
@@ -229,7 +231,8 @@ export function recordInlineMeshDirectGitTruth(
  * userOverrides only when absent (an operator override wins), and the reported*
  * mirror fields + nodeFacts. Returns the reporter fields for
  * persistNodeReporterPlatform, or null when nothing a config record carries
- * changed (quota / timestamps alone never rewrite meshes.json).
+ * changed. Quota content also has to survive a config reload: queue routing
+ * reads those records independently of the held-runtime presentation overlay.
  */
 export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
     reporterPlatform: string | null;
@@ -241,8 +244,9 @@ export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
     nodeFacts: import('@adhdev/mesh-shared').MeshNodeFacts | null;
 } | null {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
-    const facts = normalizeMeshNodeFacts(rawFacts);
-    if (!facts) return null;
+    const normalized = normalizeMeshNodeFacts(rawFacts);
+    if (!normalized) return null;
+    const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
     const platform = readStringValue(facts.platform) ?? null;
     const arch = readStringValue(facts.arch) ?? null;
     const nickname = readStringValue(facts.machineNickname) ?? null;
@@ -250,6 +254,7 @@ export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
     const buildVersion = readStringValue(readObjectRecord(facts.daemonBuild).version) ?? null;
     const buildCommit = readStringValue(readObjectRecord(facts.daemonBuild).commit) ?? null;
     const previousCommit = readStringValue(readObjectRecord(readObjectRecord(node.nodeFacts).daemonBuild).commit) ?? null;
+    const quotaChanged = JSON.stringify(facts.quota) !== JSON.stringify(readObjectRecord(node.nodeFacts).quota);
     const configChanged = (platform && platform !== readStringValue(node.reportedPlatform))
         || (arch && arch !== readStringValue(node.reportedArch))
         || (nickname && nickname !== readStringValue(node.machineNickname))
@@ -270,7 +275,7 @@ export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
         };
     }
     node.nodeFacts = facts;
-    if (!configChanged) return null;
+    if (!configChanged && !quotaChanged) return null;
     return {
         reporterPlatform: platform,
         reporterArch: arch,
