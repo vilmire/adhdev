@@ -89,8 +89,11 @@ export function projectSessionView(view: RecordValue, opts: {
     const reportedMembers = list(rec(rec(view.membership).mesh).nodes);
     const members = reportedMembers.length ? reportedMembers : list(opts.members);
     const nodes = list(rec(view.status).nodes);
-    const tasks = rec(view.activeWork).success === false || (view.meshId && view.meshId !== opts.meshId)
-        ? [] : list(rec(rec(view.activeWork).activeWork).activeWork);
+    const activeWork = rec(rec(view.activeWork).activeWork);
+    const bindingsObserved = rec(view.activeWork).success === true && Array.isArray(activeWork.activeWork)
+        && (!view.meshId || view.meshId === opts.meshId);
+    const tasks = bindingsObserved ? list(activeWork.activeWork) : [];
+    const bindingsPartial = (num(rec(activeWork.summary).totalActiveCount) ?? 0) > tasks.length;
     const sessions: SessionRow[] = [];
     const coverage: ProjectSessionCoverage[] = [];
     const quota: RecordValue[] = [];
@@ -115,7 +118,8 @@ export function projectSessionView(view: RecordValue, opts: {
             : !ownerMatches || source === 'none' || observedAt === null ? 'not_observed'
             : held.handshakePending === true ? 'stale' : choice(held.freshness, freshnesses, 'unknown');
         coverage.push({ nodeId, ownerDaemonId: owner || null, source, freshness, observedAt,
-            coverage: source === 'none' ? 'not_observed' : held.sessionsTruncated === true ? 'partial'
+            coverage: source === 'none' ? 'not_observed' : !bindingsObserved ? 'unknown'
+                : held.sessionsTruncated === true || bindingsPartial ? 'partial'
                 : freshness === 'fresh' ? 'observed' : 'unknown', handshakePending: held.handshakePending === true });
         // Quota remains a node/provider fact. Never map collector errors to a session error.
         if (local || ownerMatches) for (const [key, value] of Object.entries(rec(rec(node.nodeFacts).quota))) {

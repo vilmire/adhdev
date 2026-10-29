@@ -127949,7 +127949,10 @@ ${grant.exp}`).digest("hex");
       const reportedMembers = list(rec2(rec2(view2.membership).mesh).nodes);
       const members = reportedMembers.length ? reportedMembers : list(opts.members);
       const nodes = list(rec2(view2.status).nodes);
-      const tasks = rec2(view2.activeWork).success === false || view2.meshId && view2.meshId !== opts.meshId ? [] : list(rec2(rec2(view2.activeWork).activeWork).activeWork);
+      const activeWork = rec2(rec2(view2.activeWork).activeWork);
+      const bindingsObserved = rec2(view2.activeWork).success === true && Array.isArray(activeWork.activeWork) && (!view2.meshId || view2.meshId === opts.meshId);
+      const tasks = bindingsObserved ? list(activeWork.activeWork) : [];
+      const bindingsPartial = (num(rec2(activeWork.summary).totalActiveCount) ?? 0) > tasks.length;
       const sessions = [];
       const coverage = [];
       const quota = [];
@@ -127973,7 +127976,7 @@ ${grant.exp}`).digest("hex");
           source: source2,
           freshness: freshness2,
           observedAt,
-          coverage: source2 === "none" ? "not_observed" : held.sessionsTruncated === true ? "partial" : freshness2 === "fresh" ? "observed" : "unknown",
+          coverage: source2 === "none" ? "not_observed" : !bindingsObserved ? "unknown" : held.sessionsTruncated === true || bindingsPartial ? "partial" : freshness2 === "fresh" ? "observed" : "unknown",
           handshakePending: held.handshakePending === true
         });
         if (local || ownerMatches) for (const [key5, value] of Object.entries(rec2(rec2(node.nodeFacts).quota))) {

@@ -86,6 +86,16 @@ describe('project task-bound sessions over held mesh status', () => {
         expect(projectSessionView(view, opts).sessions[0]!.status).toBe('unknown');
     });
 
+    it('reports unknown or partial coverage when project task bindings are unavailable or bounded', () => {
+        const view = fixture();
+        (view.activeWork.activeWork as any).summary = { totalActiveCount: 300 };
+        expect(projectSessionView(view, opts).sessionCoverage[1]!.coverage).toBe('partial');
+        view.activeWork.success = false;
+        const out = projectSessionView(view, opts);
+        expect(out.sessions).toEqual([]);
+        expect(out.sessionCoverage[1]).toMatchObject({ freshness: 'fresh', coverage: 'unknown' });
+    });
+
     it('retains observed terminal status and rejects mismatched attempts', () => {
         const view = fixture();
         view.status.nodes[1]!.activeSessionDetails![0]!.chatStatus = 'stopped';
