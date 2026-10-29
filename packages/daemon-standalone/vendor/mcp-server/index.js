@@ -27879,6 +27879,10 @@ ${renderWorkerProtocolFooter2(input)}`;
           "driver_list",
           "driver_describe",
           "driver_invoke",
+          "driver_scaffold",
+          "driver_validate",
+          "driver_export",
+          "driver_install",
           "artifact_register",
           "artifact_list",
           "artifact_read",
@@ -30141,18 +30145,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative22 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative22);
+        for (const relative24 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative24);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative22, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative24, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative22, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative24, sourceType: "repo_file", path: configPath };
           } catch (error) {
-            return { source: relative22, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+            return { source: relative24, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
           }
         }
       }
@@ -30436,8 +30440,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative22 = path3.relative(path3.resolve(parent), path3.resolve(child));
-      return relative22 === "" || !relative22.startsWith("..") && !path3.isAbsolute(relative22);
+      const relative24 = path3.relative(path3.resolve(parent), path3.resolve(child));
+      return relative24 === "" || !relative24.startsWith("..") && !path3.isAbsolute(relative24);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -30685,8 +30689,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative22 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative22);
+      for (const relative24 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative24);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text5 = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -30697,10 +30701,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text5.length;
           }
           const parsed = parseConfigText(configPath, text5);
-          const validation = validateChangeImpactConfig(parsed, relative22);
+          const validation = validateChangeImpactConfig(parsed, relative24);
           if (!validation.valid) {
             return {
-              source: relative22,
+              source: relative24,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -30709,14 +30713,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative22,
+            source: relative24,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error) {
           return {
-            source: relative22,
+            source: relative24,
             sourceType: "invalid",
             path: configPath,
             error: error?.message || String(error),
@@ -32767,41 +32771,41 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     function validateRetirementProof(repo, layer, { ref: ref2, env: env2, proofFile } = {}) {
-      const fail9 = () => {
+      const fail10 = () => {
         throw Error("invalid_normal_retirement_proof: current source/output/config and successful command logs required");
       };
       try {
         const proof = JSON.parse((0, import_node_fs3.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
-        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail9();
+        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail10();
         for (const target4 of ["root", "oss"]) {
-          if (target4 !== layer && proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4)) fail9();
-          if (proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4, proof.trees?.[target4])) fail9();
+          if (target4 !== layer && proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4)) fail10();
+          if (proof.snapshots[target4] !== retirementSnapshot(proof[`${target4}Repo`], target4, proof.trees?.[target4])) fail10();
         }
         if (layer === "root") {
           const pin = retirementGit(repo, ref2 ? ["rev-parse", `${ref2}:oss`] : ["rev-parse", ":oss"], env2);
-          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail9();
+          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail10();
         }
         const specs = configuredRetirementGates(proof.rootRepo, layer === "root" ? env2 : void 0);
-        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail9();
+        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail10();
         const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs3.readFileSync)(receipt.log));
-        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail9();
+        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail10();
         for (const target4 of ["root", "oss"]) {
           const repo2 = proof[`${target4}Repo`];
           const files = entries(repo2, proof.trees[target4]);
           const generated = (name) => retirementVendorDirs[target4].some((dir) => name.startsWith(`${dir}/`));
           const sources = files.filter((e) => !(target4 === "root" && e[2] === "oss") && !generated(e[2])).map(([mode, oid, path124]) => ({ mode, oid, path: path124 }));
           const outputs2 = files.filter((e) => generated(e[2])).map(([mode, oid, name]) => [name, mode, digest(retirementGit(repo2, ["cat-file", "blob", oid], void 0, true))]);
-          if (proof.generation.sources?.[target4] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target4]) !== JSON.stringify(outputs2)) fail9();
+          if (proof.generation.sources?.[target4] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target4]) !== JSON.stringify(outputs2)) fail10();
         }
         for (let i = 0; i < specs.length; i++) {
-          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail9();
+          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail10();
           const args = [...specs[i].args];
           if (["vendor-drift-root", "vendor-drift-oss"].includes(specs[i].id)) args.push("--tree", proof.trees[specs[i].id === "vendor-drift-root" ? "root" : "oss"]);
-          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail9();
+          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail10();
         }
         return proof;
       } catch {
-        fail9();
+        fail10();
       }
     }
     var import_node_child_process22;
@@ -33057,7 +33061,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return env2;
     }
     function runGit2(cwd, args, { input, env: env2, onStdout } = {}) {
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         const child = (0, import_node_child_process3.spawn)("git", ["--no-replace-objects", "-C", cwd, ...args], {
           cwd,
           env: gitEnv(env2),
@@ -33091,7 +33095,7 @@ ${renderWorkerProtocolFooter2(input)}`;
                 return reject(e);
               }
             }
-            return resolve66(stdout);
+            return resolve68(stdout);
           }
           reject(new Error(`git ${args.slice(0, 3).join(" ")} exited ${code}: ${Buffer.concat(err).toString("utf-8").trim().slice(0, 500)}`));
         });
@@ -33463,8 +33467,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
       return {
         read(name) {
-          return new Promise((resolve66, reject) => {
-            waiter = { resolve: resolve66, reject };
+          return new Promise((resolve68, reject) => {
+            waiter = { resolve: resolve68, reject };
             if (dead) return settle2();
             child.stdin.write(`${name}
 `);
@@ -34026,10 +34030,10 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       }
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, ...schedule ? { schedule } : {}, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref2, relative22) {
+    function readConfigFromBaseRef(gitCwd, ref2, relative24) {
       if (!ref2 || ref2.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process2.execFileSync)("git", ["show", `${ref2}:${relative22}`], {
+        return (0, import_child_process2.execFileSync)("git", ["show", `${ref2}:${relative24}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -34069,26 +34073,26 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative22 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path4.join)(workspace, relative22);
+      for (const relative24 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path4.join)(workspace, relative24);
         if (!(0, import_fs4.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs4.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative22);
-          if (!validation.valid) return { source: relative22, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative22, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative24);
+          if (!validation.valid) return { source: relative24, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative24, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative22, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative24, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       const baseRefs = (options?.baseRefs || []).filter((ref2) => typeof ref2 === "string" && ref2.trim().length > 0);
       for (const ref2 of baseRefs) {
-        for (const relative22 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text5 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative22);
+        for (const relative24 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text5 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative24);
           if (text5 === void 0) continue;
-          const source2 = `${ref2.trim()}:${relative22}`;
+          const source2 = `${ref2.trim()}:${relative24}`;
           try {
-            const parsed = parseConfigText(relative22, text5);
+            const parsed = parseConfigText(relative24, text5);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref2.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref2.trim() };
@@ -34558,28 +34562,28 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative22 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path5.join)(workspace, relative22);
+      for (const relative24 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path5.join)(workspace, relative24);
         if (!(0, import_fs5.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs5.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative22);
-          if (!validation.valid) return { source: relative22, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative22, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative24);
+          if (!validation.valid) return { source: relative24, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative24, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative22, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative24, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest5 = {};
-      for (const relative22 of staleInputs ?? []) {
-        const filePath2 = (0, import_path5.join)(workspace, relative22);
+      for (const relative24 of staleInputs ?? []) {
+        const filePath2 = (0, import_path5.join)(workspace, relative24);
         try {
-          digest5[relative22] = (0, import_node_crypto42.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
+          digest5[relative24] = (0, import_node_crypto42.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest5[relative22] = "absent";
+          digest5[relative24] = "absent";
         }
       }
       return digest5;
@@ -35174,7 +35178,7 @@ ${tail}`;
       const { execFile: execFile13 } = await import("child_process");
       const run4 = async (args, input) => {
         let child;
-        const result = new Promise((resolve66, reject) => {
+        const result = new Promise((resolve68, reject) => {
           child = execFile13(GIT, args, {
             cwd: submodulePath,
             encoding: "utf8",
@@ -35182,7 +35186,7 @@ ${tail}`;
             windowsHide: true,
             env: realGitEnv(),
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
-          }, (error, stdout) => error ? reject(error) : resolve66(String(stdout || "")));
+          }, (error, stdout) => error ? reject(error) : resolve68(String(stdout || "")));
           child.stdin?.on("error", () => {
           });
           child.stdin?.end(input);
@@ -36068,19 +36072,19 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return null;
     }
     function execAsync(cmd, timeoutMs = 5e3) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const child = (0, import_child_process4.exec)(cmd, {
           encoding: "utf-8",
           timeout: timeoutMs,
           ...process.platform === "win32" ? { windowsHide: true } : {}
         }, (err, stdout) => {
           if (err || !stdout?.trim()) {
-            resolve66(null);
+            resolve68(null);
           } else {
-            resolve66(stdout.trim());
+            resolve68(stdout.trim());
           }
         });
-        child.on("error", () => resolve66(null));
+        child.on("error", () => resolve68(null));
       });
     }
     async function resolveVersion(candidates) {
@@ -36327,8 +36331,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       try {
         const timedResult = await Promise.race([
           inFlight5.then((items) => ({ timedOut: false, items })),
-          new Promise((resolve66) => {
-            timer = setTimeout(() => resolve66({ timedOut: true }), budgetMs);
+          new Promise((resolve68) => {
+            timer = setTimeout(() => resolve68({ timedOut: true }), budgetMs);
           })
         ]);
         if (!timedResult.timedOut) {
@@ -36906,13 +36910,13 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return path9.join(getConfigDir2(), "version-history.json");
     }
     async function runCommand(cmd, timeout = 1e4) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error, stdout) => {
-          if (error) return resolve66(null);
-          resolve66(stdout.trim());
+          if (error) return resolve68(null);
+          resolve68(stdout.trim());
         });
       });
     }
@@ -37303,7 +37307,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform10}").`;
     }
     function runCredStoreCommand(deps, command, args) {
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         let child;
         try {
           child = deps.spawn(command, args, { env: deps.env });
@@ -37340,7 +37344,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         });
         child.on("error", (err) => finish(() => reject(err)));
         child.on("exit", (code) => {
-          finish(() => resolve66({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
+          finish(() => resolve68({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
         child.stdin.end();
       });
@@ -39038,7 +39042,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchCodexQuotaFromAppServer(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         let child;
         try {
           child = deps.spawn(
@@ -39048,7 +39052,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve66(
+          resolve68(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
               collectorScope: "background-collector",
@@ -39084,7 +39088,7 @@ child.on('exit', () => process.exit(0));
           } catch {
           }
           void killHandle;
-          resolve66(quota);
+          resolve68(quota);
         };
         const handleLine = (line) => {
           let message;
@@ -39380,7 +39384,7 @@ child.on('exit', () => process.exit(0));
       }
     }
     function runKeychainRead(deps, service) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         let child;
         try {
           child = deps.spawn(
@@ -39389,7 +39393,7 @@ child.on('exit', () => process.exit(0));
             { env: deps.env }
           );
         } catch {
-          resolve66(null);
+          resolve68(null);
           return;
         }
         let settled = false;
@@ -39398,7 +39402,7 @@ child.on('exit', () => process.exit(0));
           if (settled) return;
           settled = true;
           deps.clearTimeout(timer);
-          resolve66(value);
+          resolve68(value);
         };
         const timer = deps.setTimeout(() => {
           try {
@@ -40292,7 +40296,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchOpencodeUsage(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         let child;
         try {
           child = deps.spawn(
@@ -40302,7 +40306,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve66(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
+          resolve68(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
             source: SOURCE3,
             failureKind: "cli-unavailable"
           }));
@@ -40319,7 +40323,7 @@ child.on('exit', () => process.exit(0));
             child.kill();
           } catch {
           }
-          resolve66(quota);
+          resolve68(quota);
         };
         const timeoutHandle = deps.setTimeout(() => {
           finish(quotaFailure("opencode", "error", `opencode stats timed out after ${TIMEOUT_MS}ms`, {
@@ -47553,8 +47557,8 @@ ${error.message || ""}`;
       }
     }
     function inside(root, p) {
-      const relative22 = path29.relative(root, p);
-      return relative22 === "" || !relative22.startsWith(`..${path29.sep}`) && relative22 !== ".." && !path29.isAbsolute(relative22);
+      const relative24 = path29.relative(root, p);
+      return relative24 === "" || !relative24.startsWith(`..${path29.sep}`) && relative24 !== ".." && !path29.isAbsolute(relative24);
     }
     function canonical(p) {
       try {
@@ -47633,9 +47637,9 @@ ${error.message || ""}`;
         } catch {
         }
       }
-      for (const relative22 of buildPaths) {
-        const resolved = canonical(path29.join(worktree, relative22));
-        if (!inside(worktree, resolved)) throw new Error(`ownership_build_resource_escape: ${relative22}`);
+      for (const relative24 of buildPaths) {
+        const resolved = canonical(path29.join(worktree, relative24));
+        if (!inside(worktree, resolved)) throw new Error(`ownership_build_resource_escape: ${relative24}`);
         resources.push({ path: resolved, identity: identity2(resolved), subtree: true });
       }
       return {
@@ -48385,8 +48389,8 @@ ${error.message || ""}`;
       return {
         acquire() {
           if (held < max && waiters.length === 0) return Promise.resolve(grant());
-          return new Promise((resolve66) => {
-            waiters.push(resolve66);
+          return new Promise((resolve68) => {
+            waiters.push(resolve68);
           });
         },
         inflight: () => held,
@@ -50221,7 +50225,7 @@ ${error.message || ""}`;
               const through = this.deps.store.maxRowid(topic);
               if (this.deps.store.cursorGet(name, topic) >= through)
                 return Promise.resolve({ throughRowid: through });
-              return new Promise((resolve66, reject) => c.waiters.push({ through, resolve: resolve66, reject }));
+              return new Promise((resolve68, reject) => c.waiters.push({ through, resolve: resolve68, reject }));
             } catch (e) {
               return Promise.reject(e);
             }
@@ -51586,7 +51590,7 @@ ${error.message || ""}`;
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve66, reject) => {
+            return new Promise((resolve68, reject) => {
               this.push({
                 t: "append",
                 topic,
@@ -51596,7 +51600,7 @@ ${error.message || ""}`;
                 causal: o?.causal,
                 causalProvider: o?.causalProvider,
                 ref: o?.ref,
-                resolve: resolve66,
+                resolve: resolve68,
                 reject
               });
             });
@@ -51606,8 +51610,8 @@ ${error.message || ""}`;
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
             validateEntry(entry, this.constants);
             this.topics.get(entry.topic);
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "external", entry, via, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "external", entry, via, resolve: resolve68, reject });
             });
           }
           // §6.4 fork path ② (HAVE contradiction) is detected outside the queue but the
@@ -51615,8 +51619,8 @@ ${error.message || ""}`;
           sealStream(topic, writer) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "seal", topic, writer, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "seal", topic, writer, resolve: resolve68, reject });
             });
           }
           setOnApplied(hook) {
@@ -51639,15 +51643,15 @@ ${error.message || ""}`;
           applyCert(cert) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "cert", cert, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "cert", cert, resolve: resolve68, reject });
             });
           }
           applyDirective(directive) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "directive", directive, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "directive", directive, resolve: resolve68, reject });
             });
           }
           // §7.8 snapshot adoption: stream heads jump to the cut (chains continue from
@@ -51655,8 +51659,8 @@ ${error.message || ""}`;
           adoptSnapshotCut(topic, cut) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "adopt", topic, cut, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "adopt", topic, cut, resolve: resolve68, reject });
             });
           }
           // C7-7 writer-row GC. Local housekeeping only — no signed authority, no
@@ -51675,8 +51679,8 @@ ${error.message || ""}`;
             if (entry.policy.replication === "full-sync") {
               return Promise.reject(misuse(`retireTopic: full-sync topics are not GC-eligible (${topic})`));
             }
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "retireTopic", topic, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "retireTopic", topic, resolve: resolve68, reject });
             });
           }
           // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
@@ -51710,13 +51714,13 @@ ${error.message || ""}`;
             if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
               return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
             }
-            return new Promise((resolve66, reject) => {
+            return new Promise((resolve68, reject) => {
               this.push({
                 t: "pruneTopic",
                 topic,
                 olderThanMs: o.olderThanMs,
                 keepNewest: o.keepNewest,
-                resolve: resolve66,
+                resolve: resolve68,
                 reject
               });
             });
@@ -51752,14 +51756,14 @@ ${error.message || ""}`;
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve66, reject) => {
+            return new Promise((resolve68, reject) => {
               this.push({
                 t: "pruneSuperseded",
                 topic,
                 uptoRowid: o.uptoRowid,
                 maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
                 supersedeOtherWriters: o.supersedeOtherWriters === true,
-                resolve: resolve66,
+                resolve: resolve68,
                 reject
               });
             });
@@ -51788,13 +51792,13 @@ ${error.message || ""}`;
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve66, reject) => {
+            return new Promise((resolve68, reject) => {
               this.push({
                 t: "pruneAcked",
                 topic,
                 o,
                 maxRows: Math.min(o.maxRows ?? ACKED_PRUNE_DEFAULT_MAX_ROWS, ACKED_PRUNE_MAX_ROWS_CAP),
-                resolve: resolve66,
+                resolve: resolve68,
                 reject
               });
             });
@@ -51802,8 +51806,8 @@ ${error.message || ""}`;
           adoptFloor(topic, writer, seq2, chain) {
             if (this.closed)
               return Promise.reject(new SeqscribeError("ERR_MISUSE", "node is closed"));
-            return new Promise((resolve66, reject) => {
-              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve66, reject });
+            return new Promise((resolve68, reject) => {
+              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve68, reject });
             });
           }
           // This node's retention floor for a stream (rows ≤ seq are not held), or null.
@@ -56783,9 +56787,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (o.fromSeq !== void 0 || o.toSeq !== void 0)
           throw misuse("scanEntries: fromSeq/toSeq require writer");
         const fetched = store4.entriesAfterOrder(topic, o.after ?? null, limit + 1);
-        const within = o.through ? fetched.filter((e) => orderCompare(orderOf(e), o.through) <= 0) : fetched;
-        const entries2 = within.slice(0, limit);
-        const complete = within.length <= limit && (within.length < fetched.length || fetched.length <= limit);
+        const within2 = o.through ? fetched.filter((e) => orderCompare(orderOf(e), o.through) <= 0) : fetched;
+        const entries2 = within2.slice(0, limit);
+        const complete = within2.length <= limit && (within2.length < fetched.length || fetched.length <= limit);
         const cert = core2.getCert(topic);
         const truncatedBelow = store4.archivedCount(topic) > 0 && (o.after === void 0 || cert !== null && orderCompare(o.after, cert.order) < 0);
         const r = { entries: entries2, complete, truncatedBelow };
@@ -60486,7 +60490,7 @@ ${line}`;
       const waiters = /* @__PURE__ */ new Set();
       return {
         wait(meshId, untilMs, signal) {
-          return new Promise((resolve66, reject) => {
+          return new Promise((resolve68, reject) => {
             if (signal.aborted) {
               reject(signal.reason ?? new Error("aborted"));
               return;
@@ -60501,7 +60505,7 @@ ${line}`;
                 waiters.delete(waiter);
                 timers.clearTimeout(handle);
                 signal.removeEventListener("abort", onAbort);
-                resolve66(v);
+                resolve68(v);
               }
             };
             const onAbort = () => {
@@ -63159,13 +63163,13 @@ ${pattern}
         };
       }
     });
-    function privateDirectory(home, relative22 = "") {
-      const target4 = path34.resolve(home, relative22);
-      const within = path34.relative(path34.resolve(home), target4);
-      if (within === ".." || within.startsWith(`..${path34.sep}`) || path34.isAbsolute(within)) {
+    function privateDirectory(home, relative24 = "") {
+      const target4 = path34.resolve(home, relative24);
+      const within2 = path34.relative(path34.resolve(home), target4);
+      if (within2 === ".." || within2.startsWith(`..${path34.sep}`) || path34.isAbsolute(within2)) {
         throw new Error("worker_private_home_path_escape");
       }
-      for (const dir of [home, ...within.split(path34.sep).filter(Boolean).map((_, i, parts) => path34.join(home, ...parts.slice(0, i + 1)))]) {
+      for (const dir of [home, ...within2.split(path34.sep).filter(Boolean).map((_, i, parts) => path34.join(home, ...parts.slice(0, i + 1)))]) {
         let stat2;
         try {
           stat2 = (0, import_fs18.lstatSync)(dir);
@@ -66032,7 +66036,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         let done = false;
         let poll2;
         let responseTimer;
@@ -66082,7 +66086,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           if (typeof poll2.unref === "function") poll2.unref();
         }
         work.then(
-          (val) => settle2(() => resolve66(val)),
+          (val) => settle2(() => resolve68(val)),
           (err) => settle2(() => reject(err))
         );
       });
@@ -67595,7 +67599,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           const connection = args.getConnection?.(args.daemonId);
           if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
           if (connection) args.onConnection?.(connection);
-          await new Promise((resolve66) => setTimeout(resolve66, 250 * 2 ** (attempt - 1)));
+          await new Promise((resolve68) => setTimeout(resolve68, 250 * 2 ** (attempt - 1)));
         }
         try {
           const remoteGit = await probeRemoteMeshGitStatus({
@@ -78169,7 +78173,7 @@ ${includeRefs[0]}`;
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve66) => setTimeout(resolve66, ms3)));
+      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve68) => setTimeout(resolve68, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready2 = false;
@@ -81908,12 +81912,12 @@ ${includeRefs[0]}`;
       const blockers = [];
       const inputs = [];
       for (const location of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) inputs.push(`bootstrap:${location}:${statSig((0, import_node_path9.join)(workspace, location))}`);
-      for (const relative22 of opts?.staleInputs ?? []) inputs.push(`stale:${relative22}:${statSig((0, import_node_path9.join)(workspace, relative22))}`);
+      for (const relative24 of opts?.staleInputs ?? []) inputs.push(`stale:${relative24}:${statSig((0, import_node_path9.join)(workspace, relative24))}`);
       const missing = [];
-      for (const relative22 of opts?.readyOutputs ?? []) {
-        const present2 = (0, import_node_fs13.existsSync)((0, import_node_path9.join)(workspace, relative22));
-        inputs.push(`out:${relative22}:${present2 ? 1 : 0}`);
-        if (!present2) missing.push(relative22);
+      for (const relative24 of opts?.readyOutputs ?? []) {
+        const present2 = (0, import_node_fs13.existsSync)((0, import_node_path9.join)(workspace, relative24));
+        inputs.push(`out:${relative24}:${present2 ? 1 : 0}`);
+        if (!present2) missing.push(relative24);
       }
       if (missing.length) {
         blockers.push({ kind: "missing_build", detail: `missing build output: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ""}`, preparable: true, transient: false });
@@ -83821,7 +83825,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
       while (Date.now() < deadline) {
         if (adapter.isReady() || adapter.currentStatus === "idle") return;
-        await new Promise((resolve66) => setTimeout(resolve66, LOCAL_LAUNCH_READY_POLL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, LOCAL_LAUNCH_READY_POLL_MS));
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
@@ -84385,7 +84389,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       trackInFlightAutoLaunch(meshId, autoLaunchPromise);
       autoLaunchStarted = await Promise.race([
         autoLaunchPromise,
-        new Promise((resolve66) => setImmediate(() => resolve66(false)))
+        new Promise((resolve68) => setImmediate(() => resolve68(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId, {
         idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy2(mesh.policy).delegatedSessionIdleTtlMinutes)
@@ -90056,7 +90060,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative22) => (0, import_fs23.existsSync)((0, import_path16.join)(workspace, relative22)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative24) => (0, import_fs23.existsSync)((0, import_path16.join)(workspace, relative24)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -91478,8 +91482,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           try {
             const settled = await Promise.race([
               pending,
-              new Promise((resolve66) => {
-                timer = setTimeout(() => resolve66("timeout"), maxWaitMs);
+              new Promise((resolve68) => {
+                timer = setTimeout(() => resolve68("timeout"), maxWaitMs);
                 timer.unref?.();
               })
             ]);
@@ -92533,7 +92537,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
-          const resolve66 = (queries, buckets, bucketKind, output) => {
+          const resolve68 = (queries, buckets, bucketKind, output) => {
             for (const [key5, bucketQueries] of queries) {
               const terminals = buckets.get(key5)?.[bucketKind];
               if (!terminals?.length) continue;
@@ -92549,9 +92553,9 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
               }
             }
           };
-          resolve66(taskQueries, taskBuckets, "real", realByDispatch);
-          resolve66(sessionQueries, sessionBuckets, "real", realByDispatch);
-          resolve66(nodeQueries, nodeBuckets, "real", realByDispatch);
+          resolve68(taskQueries, taskBuckets, "real", realByDispatch);
+          resolve68(sessionQueries, sessionBuckets, "real", realByDispatch);
+          resolve68(nodeQueries, nodeBuckets, "real", realByDispatch);
           const resolveLatestApproval = (queries, buckets) => {
             for (const [key5, bucketQueries] of queries) {
               const transitions = buckets.get(key5)?.approval;
@@ -93541,6 +93545,10 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           "driver_list",
           "driver_describe",
           "driver_invoke",
+          "driver_scaffold",
+          "driver_validate",
+          "driver_export",
+          "driver_install",
           "artifact_register",
           "artifact_list",
           "artifact_read",
@@ -103500,7 +103508,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
       const started = deps.now();
-      const result = await new Promise((resolve66) => {
+      const result = await new Promise((resolve68) => {
         let stdout = "";
         let stderr = "";
         let settled = false;
@@ -103509,7 +103517,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve66(value);
+          resolve68(value);
         };
         let child;
         try {
@@ -107162,7 +107170,7 @@ ${result.stderr}`, result.code);
               throw new Error("sessionId is required to publish artifact bubble");
             }
             while (this.inFlight.has(sessionId)) {
-              await new Promise((resolve66) => setImmediate(resolve66));
+              await new Promise((resolve68) => setImmediate(resolve68));
             }
             if (!this.admitSession(sessionId)) {
               this.counters.publishFailed++;
@@ -108319,21 +108327,21 @@ ${result.stderr}`, result.code);
               resolvedBy: resolving?.resolvedBy,
               reviewTurnId
             });
-            const fail9 = (outcome) => (journal2(outcome.result), outcome);
-            if (state2.unreadable) return fail9({ result: "memory_store_unreadable" });
-            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail9({ result: "memory_user_requires_human" });
+            const fail10 = (outcome) => (journal2(outcome.result), outcome);
+            if (state2.unreadable) return fail10({ result: "memory_store_unreadable" });
+            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail10({ result: "memory_user_requires_human" });
             if (content !== null) {
               const reason = validateContent(content);
-              if (reason) return fail9({ result: "memory_invalid_format", reason });
+              if (reason) return fail10({ result: "memory_invalid_format", reason });
             }
             let index = -1;
             if (op.action !== "add") {
               const match = typeof op.match === "string" ? op.match : "";
-              if (!match.trim()) return fail9({ result: "memory_invalid_format", reason: "empty_match" });
+              if (!match.trim()) return fail10({ result: "memory_invalid_format", reason: "empty_match" });
               const hits = state2.entries.map((e, i) => e.includes(match) ? i : -1).filter((i) => i >= 0);
-              if (hits.length === 0) return fail9({ result: "memory_no_match" });
+              if (hits.length === 0) return fail10({ result: "memory_no_match" });
               if (hits.length > 1) {
-                return fail9({
+                return fail10({
                   result: "memory_ambiguous",
                   candidates: hits.map((i) => firstChars(state2.entries[i], CANDIDATE_PREVIEW_CHARS))
                 });
@@ -108347,16 +108355,16 @@ ${result.stderr}`, result.code);
             else next.splice(index, 1);
             const used2 = usedOf(next);
             if (used2 > state2.budget && used2 > state2.used) {
-              return fail9({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
+              return fail10({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
             }
             if (content !== null && state2.entries.some((e, i) => e === content && i !== index)) {
-              return fail9({ result: "memory_duplicate" });
+              return fail10({ result: "memory_duplicate" });
             }
-            if (op.action === "replace" && before === content) return fail9({ result: "memory_duplicate" });
-            if (content !== null && detectCredential(content)) return fail9({ result: "memory_secret_rejected" });
+            if (op.action === "replace" && before === content) return fail10({ result: "memory_duplicate" });
+            if (content !== null && detectCredential(content)) return fail10({ result: "memory_secret_rejected" });
             const finding = content !== null ? scanWriteContent(content) : null;
             if (finding) {
-              return fail9(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
+              return fail10(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
             }
             if (!resolving && mustStage(origin)) {
               const stagedId = this.stage(op, origin, reviewTurnId);
@@ -109986,11 +109994,11 @@ ${body}`;
           }
           /** Owner import (Hermes): origin `imported`, no staging, every format/limit/credential check. */
           importSkill(input) {
-            const fail9 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
+            const fail10 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
             const { refusal: refusal2, files } = this.prepareImport(input);
-            if (refusal2) return fail9(refusal2);
+            if (refusal2) return fail10(refusal2);
             const live = this.liveCount();
-            if (live >= SKILL_LIMITS.liveSkills) return fail9({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
+            if (live >= SKILL_LIMITS.liveSkills) return fail10({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
             this.writeFiles(input.name, [{ path: SKILL_FILE, content: composeSkillMd(input.frontmatterRaw, input.body) }, ...files]);
             const { file } = this.loadState();
             file.skills[input.name] = newSkillState("imported", this.now().toISOString());
@@ -110465,21 +110473,21 @@ ${body}`;
           /** Called only behind assistant_staged_resolve's owner-source gate. Read the
            * currently installed tree, never caller-supplied type/digest/permissions. */
           resolve(id4, decision, store4, readCurrent) {
-            const fail9 = (code) => ({ success: false, code });
-            if (decision !== "apply" && decision !== "discard") return fail9("invalid_args");
+            const fail10 = (code) => ({ success: false, code });
+            if (decision !== "apply" && decision !== "discard") return fail10("invalid_args");
             const rec6 = this.read(id4);
-            if (!rec6) return fail9("staged_not_found");
+            if (!rec6) return fail10("staged_not_found");
             if (decision === "discard") {
               this.discarded.add(`${rec6.type}\0${rec6.treeDigest}`);
               this.remove(id4);
               return { success: true, result: "discarded" };
             }
-            if (this.now().getTime() - Date.parse(rec6.createdAt) >= MAX_AGE) return fail9("expired");
+            if (this.now().getTime() - Date.parse(rec6.createdAt) >= MAX_AGE) return fail10("expired");
             const current4 = readCurrent(rec6.type);
-            if (!current4) return fail9("driver_not_installed");
+            if (!current4) return fail10("driver_not_installed");
             const risk = deriveDriverRiskClass(current4.module);
-            if (current4.module.type !== rec6.type || current4.module.name !== rec6.name || current4.module.providerVersion !== rec6.providerVersion || (current4.module.publisher ?? void 0) !== (rec6.publisher ?? void 0) || current4.treeDigest !== rec6.treeDigest || risk.riskClass !== rec6.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec6.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec6.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec6.runtime)) return fail9("stale");
-            if (!store4.approve(current4.module, rec6.treeDigest)) return fail9("driver_disabled");
+            if (current4.module.type !== rec6.type || current4.module.name !== rec6.name || current4.module.providerVersion !== rec6.providerVersion || (current4.module.publisher ?? void 0) !== (rec6.publisher ?? void 0) || current4.treeDigest !== rec6.treeDigest || risk.riskClass !== rec6.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec6.reasons) || JSON.stringify(current4.module.declaredAccess ?? {}) !== JSON.stringify(rec6.declaredAccess) || JSON.stringify(current4.module.runtime) !== JSON.stringify(rec6.runtime)) return fail10("stale");
+            if (!store4.approve(current4.module, rec6.treeDigest)) return fail10("driver_disabled");
             this.remove(id4);
             return { success: true, result: "applied", type: rec6.type, treeDigest: rec6.treeDigest };
           }
@@ -110586,35 +110594,35 @@ ${body}`;
       const issue = selectionSchemaIssue(candidate);
       if (!isLaunchRole(role) || issue) return { ok: false, issue: issue ?? { field: "provider", reason: "invalid_schema" } };
       const selection = { ...candidate };
-      const fail9 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
+      const fail10 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
       try {
         selection.provider = ports.resolveAlias(selection.provider);
         const facts = ports.getProvider(selection.provider, selection.model);
-        if (!facts || facts.type !== selection.provider) return fail9("provider", "provider_unknown");
-        if (facts.category !== "cli") return fail9("provider", "provider_not_cli");
-        if (facts.enabled !== true) return fail9("provider", "provider_disabled");
-        if (facts.detected !== true) return fail9("provider", "provider_not_detected");
-        if (facts.quotaGated === true) return fail9("provider", "provider_quota_gated");
+        if (!facts || facts.type !== selection.provider) return fail10("provider", "provider_unknown");
+        if (facts.category !== "cli") return fail10("provider", "provider_not_cli");
+        if (facts.enabled !== true) return fail10("provider", "provider_disabled");
+        if (facts.detected !== true) return fail10("provider", "provider_not_detected");
+        if (facts.quotaGated === true) return fail10("provider", "provider_quota_gated");
         if (role === "assistant" ? facts.assistant.supported !== true : !["supported", "manual"].includes(facts.coordinator)) {
-          return fail9("provider", "provider_not_eligible");
+          return fail10("provider", "provider_not_eligible");
         }
         const warnings = [];
         if (role === "coordinator" && facts.coordinator === "manual") warnings.push("manual_mcp_setup_required");
         if (selection.model !== void 0) {
-          if (!facts.modelLaunchArgs?.length) return fail9("model", "model_unsupported");
-          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail9("model", "model_provider_mismatch");
+          if (!facts.modelLaunchArgs?.length) return fail10("model", "model_unsupported");
+          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail10("model", "model_provider_mismatch");
           const options = resolveModelOptions(facts.modelOptions, facts.discovery, facts.modelLaunchValueMap);
           if (facts.discovery?.status === "ok") {
-            if (!facts.discovery.models.length) return fail9("model", "catalog_unavailable");
-            if (!options.includes(selection.model)) return fail9("model", "model_not_offered", options);
+            if (!facts.discovery.models.length) return fail10("model", "catalog_unavailable");
+            if (!options.includes(selection.model)) return fail10("model", "model_not_offered", options);
           } else {
             warnings.push("catalog_unverified");
           }
         }
         if (selection.thinkingLevel !== void 0) {
-          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail9("thinkingLevel", "thinking_unsupported");
+          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail10("thinkingLevel", "thinking_unsupported");
           if (!facts.thinkingLevelOptions?.includes(selection.thinkingLevel)) {
-            return fail9("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
+            return fail10("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
           }
         }
         const toolRestriction = facts.assistant.toolRestriction;
@@ -110626,7 +110634,7 @@ ${body}`;
           lowersToolLock: role === "assistant" && previousToolRestriction === "enforced" && toolRestriction === "prompt_only"
         };
       } catch {
-        return fail9("provider", "catalog_unavailable");
+        return fail10("provider", "catalog_unavailable");
       }
     }
     var init_validate = __esm2({
@@ -110704,25 +110712,25 @@ ${body}`;
           }
           /** Call only after owner/tool authorization and staging decisions. */
           write(request) {
-            const fail9 = (code, reason) => ({ ok: false, code, reason, committed: false });
+            const fail10 = (code, reason) => ({ ok: false, code, reason, committed: false });
             if (!isRecord9(request) || !hasOnlyKeys3(request, ["role", "selection", "expectedRevision", "by", "origin", "previousToolRestriction"]) || !isLaunchRole(request.role) || !integer(request.expectedRevision) || !["owner", "assistant"].includes(request.by) || !origins.includes(request.origin) || request.previousToolRestriction !== void 0 && !["enforced", "prompt_only"].includes(request.previousToolRestriction)) {
-              return fail9("invalid_args", "invalid_write_request");
+              return fail10("invalid_args", "invalid_write_request");
             }
             const dir = (0, import_node_path18.resolve)(this.path, "..");
             const lock = `${this.path}.lock`;
             try {
               (0, import_node_fs222.mkdirSync)(dir, { recursive: true, mode: 448 });
             } catch {
-              return fail9("persistence_failed", "config_directory_unavailable");
+              return fail10("persistence_failed", "config_directory_unavailable");
             }
             const acquired = acquireOwnedLock(lock, this.lockOptions);
-            if (!acquired.ok) return fail9(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
+            if (!acquired.ok) return fail10(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
             try {
               const current4 = this.read();
-              if (current4.status === "invalid" || current4.status === "unreadable") return fail9("store_unavailable", current4.reason);
+              if (current4.status === "invalid" || current4.status === "unreadable") return fail10("store_unavailable", current4.reason);
               const revision = current4.status === "ok" ? current4.document.revision : 0;
               if (revision !== request.expectedRevision) return { ok: false, code: "revision_conflict", reason: "document_revision_changed", committed: false, actualRevision: revision };
-              if (revision >= Number.MAX_SAFE_INTEGER) return fail9("store_unavailable", "revision_exhausted");
+              if (revision >= Number.MAX_SAFE_INTEGER) return fail10("store_unavailable", "revision_exhausted");
               let selection = null;
               let warnings = [];
               let lowersToolLock = false;
@@ -111355,8 +111363,8 @@ ${body}`;
           try {
             const raw = await Promise.race([
               dispatch2(readText(m.meshHost.hostDaemonId), "get_mesh", { meshId: m.id, membershipOnly: true }),
-              new Promise((resolve66) => {
-                timer = setTimeout(() => resolve66(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
+              new Promise((resolve68) => {
+                timer = setTimeout(() => resolve68(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
                 timer.unref?.();
               })
             ]);
@@ -114183,14 +114191,14 @@ ${detail.join("\n")}` : stripped;
           whenSubmitDrained(timeoutMs) {
             if (!this.hasInFlightSubmit()) return Promise.resolve(true);
             const deadline = Date.now() + Math.max(0, timeoutMs);
-            return new Promise((resolve66) => {
+            return new Promise((resolve68) => {
               const poll2 = () => {
                 if (!this.hasInFlightSubmit()) {
-                  resolve66(true);
+                  resolve68(true);
                   return;
                 }
                 if (Date.now() >= deadline) {
-                  resolve66(false);
+                  resolve68(false);
                   return;
                 }
                 setTimeout(poll2, 100);
@@ -116635,7 +116643,7 @@ ${detail.join("\n")}` : stripped;
         return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
       };
       const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
-      const fail9 = () => {
+      const fail10 = () => {
         LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
       };
@@ -116660,7 +116668,7 @@ ${detail.join("\n")}` : stripped;
           LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
           return;
         }
-        fail9();
+        fail10();
       });
       return true;
     }
@@ -121920,10 +121928,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     });
     function listProcessesPs() {
       if (process.platform === "win32") return Promise.resolve([]);
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         (0, import_node_child_process18.execFile)("ps", ["-A", "-o", "pid=,ppid=,command="], { encoding: "utf8", windowsHide: true, timeout: 1e4, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
           if (error || typeof stdout !== "string") {
-            resolve66([]);
+            resolve68([]);
             return;
           }
           const rows = [];
@@ -121931,7 +121939,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
             if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
           }
-          resolve66(rows);
+          resolve68(rows);
         });
       });
     }
@@ -121940,11 +121948,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     }
     function waitForExit(child, ms3) {
       if (exited(child)) return Promise.resolve(true);
-      return new Promise((resolve66) => {
-        const timer = setTimeout(() => resolve66(exited(child)), ms3);
+      return new Promise((resolve68) => {
+        const timer = setTimeout(() => resolve68(exited(child)), ms3);
         child.once("exit", () => {
           clearTimeout(timer);
-          resolve66(true);
+          resolve68(true);
         });
       });
     }
@@ -122922,11 +122930,11 @@ ${out.stderr}`);
       if (excludePaths.length > 0) {
         diffArgs.push("--", ".", ...excludePaths.map((path124) => `:(exclude)${path124}`));
       }
-      const { mkdtempSync: mkdtempSync3, rmSync: rmSync18, openSync: openSync29, closeSync: closeSync29 } = await import("fs");
+      const { mkdtempSync: mkdtempSync3, rmSync: rmSync19, openSync: openSync29, closeSync: closeSync29 } = await import("fs");
       const { tmpdir: tmpdir11 } = await import("os");
-      const { join: join157 } = await import("path");
-      const scratch = mkdtempSync3(join157(tmpdir11(), "adhdev-patchid-"));
-      const patchFile = join157(scratch, "patch.diff");
+      const { join: join160 } = await import("path");
+      const scratch = mkdtempSync3(join160(tmpdir11(), "adhdev-patchid-"));
+      const patchFile = join160(scratch, "patch.diff");
       try {
         const out = openSync29(patchFile, "w");
         let diffRun;
@@ -122965,7 +122973,7 @@ ${out.stderr}`);
         }
         return (patchIdRun.stdout || "").trim().split(/\s+/)[0] || "";
       } finally {
-        rmSync18(scratch, { recursive: true, force: true });
+        rmSync19(scratch, { recursive: true, force: true });
       }
     }
     async function runMeshRefinePatchEquivalenceGate(repoRoot, baseHead, branchHead) {
@@ -123602,7 +123610,7 @@ ${asText(streams.stderr)}
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...control?.env || {}, ...candidate.env || {} },
         ...spawn12.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       };
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         let timer;
         let idleTimedOut = false;
         let childRef;
@@ -123642,7 +123650,7 @@ ${asText(streams.stderr)}
             reject(err);
             return;
           }
-          resolve66({ stdout, stderr });
+          resolve68({ stdout, stderr });
         });
         execOptions.timeout = idleTimeoutMs;
         childRef = child;
@@ -124205,7 +124213,7 @@ ${asText(streams.stderr)}
       const meshId = String(mesh?.id || mesh?.name || "");
       const nodeId = entry.nodeId;
       const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
-      const fail9 = (code, error) => {
+      const fail10 = (code, error) => {
         entry.execution = { attempted: true, success: false, code, error };
         metrics.removalFailures++;
       };
@@ -124231,7 +124239,7 @@ ${asText(streams.stderr)}
         const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
         if (precheck.ok === false) {
           entry.reasonCode = "execution_precheck_refused";
-          fail9(precheck.code, precheck.error);
+          fail10(precheck.code, precheck.error);
           return;
         }
         if (deps.cleanupMeshSessions) {
@@ -124243,7 +124251,7 @@ ${asText(streams.stderr)}
         const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId });
         if (cleanup.success === false) {
           entry.reasonCode = "execution_cleanup_failed";
-          fail9(cleanup.code, cleanup.error);
+          fail10(cleanup.code, cleanup.error);
           return;
         }
         if (cleanup.skipped !== true) {
@@ -124271,7 +124279,7 @@ ${asText(streams.stderr)}
         try {
           removed = removeNodeFromMesh(meshId, nodeId) === true;
         } catch (e) {
-          fail9("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
+          fail10("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
           return;
         }
         try {
@@ -124283,7 +124291,7 @@ ${asText(streams.stderr)}
         }
         if (!removed) {
           entry.reasonCode = "execution_membership_not_removed";
-          fail9("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
+          fail10("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
           return;
         }
         try {
@@ -124568,7 +124576,7 @@ ${asText(streams.stderr)}
       const maxWaitMs = Math.max(minSettleMs, opts.maxWaitMs ?? INJECTION_CLEANUP_MAX_WAIT_MS);
       const pollMs = opts.pollMs ?? INJECTION_CLEANUP_POLL_MS;
       const startedAt = Date.now();
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const tick2 = () => {
           const elapsed = Date.now() - startedAt;
           let ready2 = true;
@@ -124581,7 +124589,7 @@ ${asText(streams.stderr)}
           }
           if (ready2 || elapsed >= maxWaitMs) {
             removeInjectionFiles(effect, ready2 ? "session ready" : `session not ready after ${maxWaitMs}ms`, opts.label);
-            resolve66();
+            resolve68();
             return;
           }
           const t2 = setTimeout(tick2, pollMs);
@@ -124740,7 +124748,7 @@ ${asText(streams.stderr)}
           };
           async send(message) {
             if (this.closed || !this.child.stdin?.writable) throw new DriverMcpError("connection_closed", "Driver stdio is closed");
-            await new Promise((resolve66, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve66()));
+            await new Promise((resolve68, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve68()));
           }
           async close() {
             if (this.closed) return;
@@ -124837,8 +124845,8 @@ ${asText(streams.stderr)}
                 detached: process.platform !== "win32"
               });
               this.child = child;
-              this.exited = new Promise((resolve66) => child.once("close", () => {
-                resolve66();
+              this.exited = new Promise((resolve68) => child.once("close", () => {
+                resolve68();
                 if (this.child === child && !this.stopping && this.state !== "stopped") this.fail(new DriverMcpError("connection_closed", "Driver process exited"));
               }));
               child.on("error", (error) => this.fail(error));
@@ -124942,13 +124950,13 @@ ${asText(streams.stderr)}
                 try {
                   if (process.platform !== "win32" && child.pid) process.kill(-child.pid, name);
                   else if (child.pid) {
-                    await new Promise((resolve66) => {
+                    await new Promise((resolve68) => {
                       const killer = hiddenSpawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
                       killer.once("error", () => {
                         child.kill(name);
-                        resolve66();
+                        resolve68();
                       });
-                      killer.once("close", () => resolve66());
+                      killer.once("close", () => resolve68());
                     });
                   } else child.kill(name);
                 } catch {
@@ -124957,8 +124965,8 @@ ${asText(streams.stderr)}
               const wait = async (ms3) => {
                 let timer;
                 try {
-                  await Promise.race([this.exited, new Promise((resolve66) => {
-                    timer = setTimeout(resolve66, ms3);
+                  await Promise.race([this.exited, new Promise((resolve68) => {
+                    timer = setTimeout(resolve68, ms3);
                   })]);
                 } finally {
                   clearTimeout(timer);
@@ -126698,7 +126706,7 @@ ${asText(streams.stderr)}
     function coordinatorWasTold(prev) {
       return !!prev && (prev.state !== "pending" || prev.kind !== "answered");
     }
-    function fail3(code, error, extra) {
+    function fail4(code, error, extra) {
       return { ok: false, code, error, ...extra ?? {} };
     }
     function describeDecisionAnswer(d) {
@@ -126717,17 +126725,17 @@ ${asText(streams.stderr)}
         const items = s2.missionItems();
         const item = items.getItem(req.meshId, req.itemId);
         if (!item || item.kind !== "decision" || !item.decision) {
-          return fail3("decision_not_found", `no decision item '${req.itemId}' on this mesh`);
+          return fail4("decision_not_found", `no decision item '${req.itemId}' on this mesh`);
         }
         const d = item.decision;
         if (item.state !== "open" && item.state !== "answered") {
-          return fail3("decision_not_open", `decision is ${item.state} \u2014 it can no longer be answered`);
+          return fail4("decision_not_open", `decision is ${item.state} \u2014 it can no longer be answered`);
         }
         const nowIso = new Date(nowMs2).toISOString();
         const prevRevision = d.answerRevision ?? (d.answer ? 1 : 0);
         const { promptAckedAt: _seen, ...dRest } = d;
         if (req.undo === true) {
-          if (item.state !== "answered" || !d.answer) return fail3("nothing_to_undo", "this decision has no answer to undo");
+          if (item.state !== "answered" || !d.answer) return fail4("nothing_to_undo", "this decision has no answer to undo");
           const revision2 = prevRevision + 1;
           const told2 = coordinatorWasTold(d.delivery) && d.delivery?.kind !== "undone";
           const { answer: _a, delivery: _dl, ...rest } = dRest;
@@ -126756,16 +126764,16 @@ ${asText(streams.stderr)}
             rawText = "";
           }
         }
-        if (!optionId && !rawText) return fail3("answer_required", "give an optionId or a text answer");
+        if (!optionId && !rawText) return fail4("answer_required", "give an optionId or a text answer");
         if (optionId && !d.options.some((o) => o.id === optionId)) {
-          return fail3("unknown_option", `option '${optionId}' does not exist on this decision`, { validOptions: d.options.map((o) => o.id) });
+          return fail4("unknown_option", `option '${optionId}' does not exist on this decision`, { validOptions: d.options.map((o) => o.id) });
         }
         if (rawText && !optionId && !d.allowFreeText && d.options.length > 0) {
-          return fail3("free_text_not_allowed", "this decision only accepts one of its options", { validOptions: d.options.map((o) => o.id) });
+          return fail4("free_text_not_allowed", "this decision only accepts one of its options", { validOptions: d.options.map((o) => o.id) });
         }
         const interpretedFrom = typeof req.interpretedFrom === "string" ? req.interpretedFrom.trim() : "";
         if (actor.via === "assistant" && !interpretedFrom) {
-          return fail3("interpreted_from_required", "an assistant answer must carry the owner's words (interpretedFrom)");
+          return fail4("interpreted_from_required", "an assistant answer must carry the owner's words (interpretedFrom)");
         }
         const text5 = rawText ? truncateMissionText(rawText, DECISION_ANSWER_TEXT_MAX) : "";
         const same = item.state === "answered" && d.answer && (d.answer.optionId ?? "") === optionId && (d.answer.text ?? "") === text5;
@@ -127019,11 +127027,11 @@ ${asText(streams.stderr)}
           const terminate = async () => {
             try {
               if (process.platform === "win32" && child.pid) {
-                await new Promise((done, fail9) => {
-                  const deadline = setTimeout(() => fail9(new Error("Tree termination unconfirmed")), 5e3);
+                await new Promise((done, fail10) => {
+                  const deadline = setTimeout(() => fail10(new Error("Tree termination unconfirmed")), 5e3);
                   (0, import_node_child_process21.execFile)("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5e3 }, (err) => {
                     clearTimeout(deadline);
-                    if (err) fail9(err);
+                    if (err) fail10(err);
                     else done();
                   });
                 });
@@ -127089,19 +127097,19 @@ ${asText(streams.stderr)}
     }
     async function managedCheckoutPath(meshId, identity4) {
       const config = await (0, import_promises11.realpath)(getConfigDir2());
-      const root = (0, import_node_path28.join)(config, "remote-projects");
+      const root = (0, import_node_path31.join)(config, "remote-projects");
       try {
         await (0, import_promises11.mkdir)(root);
       } catch (e) {
         if (e.code !== "EEXIST") throw e;
       }
-      if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path28.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key5 = (0, import_node_crypto54.createHash)("sha256").update(`${meshId}\0${identity4}`).digest("hex").slice(0, 24);
-      return (0, import_node_path28.join)(root, key5);
+      if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path31.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
+      const key5 = (0, import_node_crypto56.createHash)("sha256").update(`${meshId}\0${identity4}`).digest("hex").slice(0, 24);
+      return (0, import_node_path31.join)(root, key5);
     }
     async function verifyCheckout(workspace, identity4) {
       const info = await (0, import_promises11.lstat)(workspace);
-      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises11.realpath)(workspace) !== (0, import_node_path28.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
+      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises11.realpath)(workspace) !== (0, import_node_path31.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
       const root = await git4(workspace, ["rev-parse", "--show-toplevel"]);
       if (await (0, import_promises11.realpath)(root) !== await (0, import_promises11.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
       const remote = githubRemote(await git4(workspace, ["remote", "get-url", "origin"]));
@@ -127148,7 +127156,7 @@ ${asText(streams.stderr)}
       if (info.isSymbolicLink() || !info.isDirectory()) return true;
       let owner;
       try {
-        owner = await readOwner2((0, import_node_path28.join)(guard2, "owner"));
+        owner = await readOwner2((0, import_node_path31.join)(guard2, "owner"));
       } catch {
         owner = void 0;
       }
@@ -127164,8 +127172,8 @@ ${asText(streams.stderr)}
         if (await guardIsStale(guard2)) throw guardRecovery(guard2);
         throw busy();
       }
-      const ownerPath = (0, import_node_path28.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
+      const ownerPath = (0, import_node_path31.join)(guard2, "owner");
+      const self = { pid: process.pid, nonce: (0, import_node_crypto56.randomUUID)() };
       try {
         await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -127191,7 +127199,7 @@ ${asText(streams.stderr)}
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises11.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto54.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto56.randomUUID)() };
         await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -127313,9 +127321,9 @@ ${asText(streams.stderr)}
     }
     var import_node_child_process21;
     var import_node_util12;
-    var import_node_crypto54;
+    var import_node_crypto56;
     var import_promises11;
-    var import_node_path28;
+    var import_node_path31;
     var exec5;
     var REMOTE_GIT_TIMEOUT_MS;
     var REMOTE_GIT_CLONE_TIMEOUT_MS;
@@ -127332,9 +127340,9 @@ ${asText(streams.stderr)}
         "use strict";
         import_node_child_process21 = require("child_process");
         import_node_util12 = require("util");
-        import_node_crypto54 = require("crypto");
+        import_node_crypto56 = require("crypto");
         import_promises11 = require("fs/promises");
-        import_node_path28 = require("path");
+        import_node_path31 = require("path");
         init_config();
         exec5 = (0, import_node_util12.promisify)(import_node_child_process21.execFile);
         REMOTE_GIT_TIMEOUT_MS = 12e4;
@@ -127356,7 +127364,7 @@ ${asText(streams.stderr)}
         guardRecovery = (guard2) => new AttachFailure(
           "CHECKOUT_RECOVERY_REQUIRED",
           "checkout",
-          `A previous attempt was interrupted while holding the lock guard remote-projects/${(0, import_node_path28.basename)(guard2)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`
+          `A previous attempt was interrupted while holding the lock guard remote-projects/${(0, import_node_path31.basename)(guard2)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`
         );
         inFlight3 = /* @__PURE__ */ new Set();
       }
@@ -127377,13 +127385,13 @@ ${asText(streams.stderr)}
       if (!daemonIdsEquivalent4(str11(grant.target), selfId) || !daemonIdsEquivalent4(str11(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str11(grant.sig))) return false;
-      const key5 = (0, import_node_crypto55.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto55.createHmac)("sha256", key5).update(`${grant.target}
+      const key5 = (0, import_node_crypto57.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto57.createHmac)("sha256", key5).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto55.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto57.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity4) {
       const hostId = str11(args?.hostDaemonId);
@@ -127412,16 +127420,16 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto55;
+    var import_node_crypto57;
     var str11;
-    var fail4;
+    var fail5;
     var attachRemoteProject;
     var remoteProjectHandlers;
     var remoteProjectSpecs;
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto55 = require("crypto");
+        import_node_crypto57 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -127430,15 +127438,15 @@ ${grant.exp}`).digest("hex");
         init_mesh_host_ownership();
         init_remote_project_checkout();
         str11 = (v) => typeof v === "string" ? v : "";
-        fail4 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
+        fail5 = (code, stage, action2, subcode) => ({ success: false, code, ...subcode ? { subcode } : {}, stage, action: action2, attached: false });
         attachRemoteProject = async (ctx, args) => {
-          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId))) return fail4("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
+          if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId))) return fail5("INVALID_TARGET", "target_access", "Pass the exact owner-selected canonical daemon_mach_* identity.");
           try {
             await prepare(ctx, args);
           } catch (e) {
             return refusal(e);
           }
-          if (!ctx.deps.attachRemoteProject) return fail4("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
+          if (!ctx.deps.attachRemoteProject) return fail5("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
           const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
           if (res && res.code === "PROJECT_ATTACH_DISABLED") {
             const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
@@ -127503,15 +127511,15 @@ ${grant.exp}`).digest("hex");
           remote_project_register: async (ctx, args) => {
             try {
               const { mesh, remote, self, hostSynthesized } = await prepare(ctx, args);
-              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.targetDaemonId)) || !str11(args.workspace)) return fail4("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
+              if (args.identity !== remote.identity || !/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args.targetDaemonId)) || !str11(args.workspace)) return fail5("ATTACH_SCOPE_MISMATCH", "registration", "Repeat the authenticated attachment flow with the exact project and target.");
               const existing = mesh.nodes.find((n) => daemonIdsEquivalent4(n.daemonId, args.targetDaemonId) && n.workspace === args.workspace);
               if (existing) return { success: true, nodeId: existing.id, attached: true };
               if (hostSynthesized) {
                 const pin = setMeshHostPin(mesh.id, { hostDaemonId: ctx.deps.statusInstanceId, hostNodeId: self.id });
-                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
+                if (!pin || !pin.applied && pin.reason !== "already_pinned_same") return fail5("REGISTRATION_FAILED", "registration", "Checkout was preserved. Establish this project host before retrying.", "HOST_PIN_FAILED");
               }
               const result = await ctx.execute("add_mesh_node", { meshId: mesh.id, workspace: args.workspace, repoRoot: args.workspace, daemonId: args.targetDaemonId }, "internal", { inProcess: true });
-              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail4("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
+              return result.success ? { success: true, nodeId: result.node?.id, attached: true } : fail5("REGISTRATION_FAILED", "registration", "Checkout was preserved. Retry after resolving host registration access.", "NODE_ADD_FAILED");
             } catch (e) {
               return refusal(e);
             }
@@ -127525,7 +127533,7 @@ ${grant.exp}`).digest("hex");
               if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
               const old = authorizeHost(ctx, args, remote.identity);
               await verifyCheckout(workspace, remote.identity);
-              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail4("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
+              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail5("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
               const resources = await pythonResourcePreflight();
               return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? "ready" : "resource_preflight" };
             } catch (e) {
@@ -129029,7 +129037,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest5 = (0, import_node_crypto56.createHash)("sha256").update(body).digest("hex");
+        const digest5 = (0, import_node_crypto58.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest5;
       } catch {
         return false;
@@ -129066,7 +129074,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text5 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest5 = (0, import_node_crypto56.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest5 = (0, import_node_crypto58.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest5 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -129153,8 +129161,8 @@ ${b.text}`).join("\n\n");
         try {
           return await Promise.race([
             Promise.resolve().then(() => execute(command, args)),
-            new Promise((resolve66) => {
-              timer = setTimeout(() => resolve66(null), remaining);
+            new Promise((resolve68) => {
+              timer = setTimeout(() => resolve68(null), remaining);
             })
           ]);
         } catch {
@@ -129371,7 +129379,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash4 = (text5) => (0, import_node_crypto56.createHash)("sha256").update(text5).digest("hex");
+      const hash4 = (text5) => (0, import_node_crypto58.createHash)("sha256").update(text5).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -129448,7 +129456,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto56;
+    var import_node_crypto58;
     var rec5;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -129460,7 +129468,7 @@ ${b.text}`).join("\n\n");
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
         init_chat_history_tail();
-        import_node_crypto56 = require("crypto");
+        import_node_crypto58 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -130180,7 +130188,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       assistantVerb: () => assistantVerb,
       callRemote: () => callRemote,
       coordinatorPorts: () => coordinatorPorts,
-      fail: () => fail5,
+      fail: () => fail6,
       localArtifactList: () => localArtifactList,
       localArtifactRead: () => localArtifactRead,
       localAttemptReport: () => localAttemptReport,
@@ -130196,7 +130204,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function str12(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail5(code, error = code, extra = {}) {
+    function fail6(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     function wrap(project, meshId, result) {
@@ -130211,13 +130219,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (isTrustedOwnerIngress(rawArgs, expectedOwnerSource)) {
             return null;
           }
-          return fail5(
+          return fail6(
             "COMMAND_SOURCE_REJECTED",
             `${verb} requires an authenticated owner or bound assistant session`
           );
         }
         if (routerIngress.source !== "ipc" || routerIngress.inProcess) {
-          return fail5(
+          return fail6(
             "COMMAND_SOURCE_REJECTED",
             `${verb} requires an authenticated owner or bound assistant session`
           );
@@ -130226,7 +130234,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         return null;
       }
       if (routerIngress?.hasForgedProvenanceFields || routerIngress?.hasRevokedOwnerProof || hasRevokedTrustedOwnerIngress(rawArgs) || "ownerVerified" in rawArgs || "_ownerVerified" in rawArgs || "source" in rawArgs || COMMAND_SOURCE_ARG in rawArgs || rawArgs.bind !== void 0 || rawArgs.token !== void 0) {
-        return fail5(
+        return fail6(
           "COMMAND_SOURCE_REJECTED",
           `${verb} rejected forged provenance or worker credentials on assistant ingress`
         );
@@ -130234,7 +130242,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const boundSid = str12(getAssistantRegistry().read()?.sessionId);
       const callerSid = readAssistantSessionId(rawArgs);
       if (!boundSid || !callerSid || callerSid !== boundSid) {
-        return fail5(
+        return fail6(
           "COMMAND_SOURCE_REJECTED",
           `${verb} requires the bound assistant session`
         );
@@ -130242,14 +130250,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const mcpCmd = readAuthenticatedMcpCommand(rawArgs, verb);
       if (mcpCmd.present) {
         if (!mcpCmd.valid) {
-          return fail5(
+          return fail6(
             "COMMAND_SOURCE_REJECTED",
             `${verb} MCP capability is invalid or revoked`
           );
         }
         const mcpScope = readAuthenticatedMcpScope(rawArgs, verb);
         if (!mcpScope || mcpScope.isCoordinator || mcpScope.sessionId !== boundSid) {
-          return fail5(
+          return fail6(
             "COMMAND_SOURCE_REJECTED",
             `${verb} MCP scope does not match the bound assistant session`
           );
@@ -130260,7 +130268,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (credScope && !credScope.isCoordinator && credScope.sessionId === boundSid) {
         return null;
       }
-      return fail5(
+      return fail6(
         "COMMAND_SOURCE_REJECTED",
         `${verb} requires an authenticated owner or session-bound assistant capability`
       );
@@ -130305,14 +130313,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const r = resolveAssistantProject(ref2, candidates, ports.aliases());
       if (!r.ok) {
         const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
-        return { ok: false, result: fail5(r.code, r.code, detail) };
+        return { ok: false, result: fail6(r.code, r.code, detail) };
       }
       const entry = r.mesh._followedRemote;
       if (entry) {
         if (entry.state === "unfollowed") {
           return {
             ok: false,
-            result: fail5(
+            result: fail6(
               "remote_project_unfollowed",
               "Remote project is not currently followed. Follow it again from the dashboard before accessing or sending.",
               { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
@@ -130327,12 +130335,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const error = verify4 && !verify4.ok ? verify4.error : "Local assistant owner binding requires explicit owner reconciliation (ensure_binding) before this followed project can resume.";
             return {
               ok: false,
-              result: fail5(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
+              result: fail6(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
             };
           }
           return {
             ok: false,
-            result: fail5(
+            result: fail6(
               "host_revoked",
               "Remote host access for this project has been revoked.",
               { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
@@ -130343,7 +130351,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (verify3 && !verify3.ok) {
           return {
             ok: false,
-            result: fail5(verify3.code, verify3.error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
+            result: fail6(verify3.code, verify3.error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
           };
         }
         const remote = ports.followedRemoteHost ? ports.followedRemoteHost(entry) : {
@@ -130372,7 +130380,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       }
       if (out.kind === "unreachable") {
-        return fail5("project_unreachable", out.error, { ...where, host: remote.label, reason: out.reason });
+        return fail6("project_unreachable", out.error, { ...where, host: remote.label, reason: out.reason });
       }
       const raw = out.result && typeof out.result === "object" ? out.result : {};
       const replacementDetail = out.code === "coordinator_replaced" ? {
@@ -130380,7 +130388,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         ...typeof raw.originalCoordinatorSessionId === "string" ? { originalCoordinatorSessionId: raw.originalCoordinatorSessionId } : {},
         ...typeof raw.currentCoordinatorSessionId === "string" || raw.currentCoordinatorSessionId === null ? { currentCoordinatorSessionId: raw.currentCoordinatorSessionId } : {}
       } : {};
-      return fail5(out.code, out.error, {
+      return fail6(out.code, out.error, {
         ...where,
         host: remote.label,
         ...out.code === "host_unsupported" ? { reason: "host_unsupported" } : {},
@@ -130947,7 +130955,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           );
           if (!composed.ok) {
             const { ok: _ok2, code, error, ...detail } = composed;
-            return fail5(code, error, detail);
+            return fail6(code, error, detail);
           }
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
@@ -131012,7 +131020,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
           const sent = await localProjectSend(ports, p.mesh, composed.text, clientId);
-          if (!sent.ok) return fail5(sent.code, sent.error, { ...where, ...sent.detail });
+          if (!sent.ok) return fail6(sent.code, sent.error, { ...where, ...sent.detail });
           ports.relay.openThread?.(meshId);
           if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
           const { ok: _ok, cursor: _cursor, ...result } = sent;
@@ -131028,7 +131036,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (caller && caller === ports.relay.assistantSessionId?.()) ports.relay.recordProjectRead?.(result, caller);
           };
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail5("invalid_args", continuation);
+          if (typeof continuation === "string") return fail6("invalid_args", continuation);
           if (p.remote) {
             const out = await callRemote(ports, { ...p, remote: p.remote }, "read", { tail, ...continuation ?? {} });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
@@ -131056,17 +131064,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return wrap(p.slug, meshId, { ...rawBody, host: p.remote.label, via: "relay" });
           }
           const r = await localProjectRead(ports, meshId, tail, continuation);
-          if (!r.ok) return fail5("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
+          if (!r.ok) return fail6("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
           acknowledge(r.result);
           return wrap(p.slug, meshId, r.result);
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
         projectAdd = assistantVerb(ASSISTANT_VERB2.projectAdd, async (ports, args) => {
           const raw = str12(args.path);
-          if (!raw) return fail5("invalid_args", "path required");
-          if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail5("invalid_args", "path must be absolute");
+          if (!raw) return fail6("invalid_args", "path required");
+          if (!(0, import_path43.isAbsolute)(expandPath3(raw))) return fail6("invalid_args", "path must be absolute");
           const path124 = (0, import_path43.resolve)(expandPath3(raw));
-          if (!(0, import_fs44.existsSync)(path124) || !(0, import_fs44.statSync)(path124).isDirectory()) return fail5("path_not_found", `not a directory: ${path124}`);
+          if (!(0, import_fs44.existsSync)(path124) || !(0, import_fs44.statSync)(path124).isDirectory()) return fail6("path_not_found", `not a directory: ${path124}`);
           const plan = await ports.execute("plan_mesh_onboarding", { workspace: path124, operation: "auto" });
           const identity4 = str12(plan?.discovery?.repoIdentity);
           const meshes = ports.listMeshes();
@@ -131074,19 +131082,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str12(plan?.code))) {
             const mesh = existing ?? meshes.find((m) => (m.nodes ?? []).some((n) => (0, import_path43.resolve)(n.workspace) === path124));
             const slug2 = mesh ? projectSlugs(meshes).get(mesh.id) ?? mesh.id : "";
-            return fail5("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity4 || null });
+            return fail6("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity4 || null });
           }
-          if (!plan?.success) return fail5(str12(plan?.code) || "onboarding_plan_failed", str12(plan?.error) || "onboarding plan failed", { action: plan?.action });
+          if (!plan?.success) return fail6(str12(plan?.code) || "onboarding_plan_failed", str12(plan?.error) || "onboarding plan failed", { action: plan?.action });
           const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
           const createStep = steps.find((s2) => s2?.command === "create_mesh");
           const addStep2 = steps.find((s2) => s2?.command === "add_mesh_node");
           if (plan.plan?.kind !== "create_mesh_and_onboard" || !createStep || !addStep2) {
-            return fail5("onboarding_plan_unexpected", `unexpected onboarding plan: ${str12(plan.plan?.kind) || "none"}`);
+            return fail6("onboarding_plan_unexpected", `unexpected onboarding plan: ${str12(plan.plan?.kind) || "none"}`);
           }
           const name = str12(args.name) || projectSlugBase(identity4) || str12(createStep.args?.name);
           const created = await ports.execute("create_mesh", { ...createStep.args, name, workspace: path124 });
           const meshId = str12(created?.mesh?.id);
-          if (!created?.success || !meshId) return fail5("project_create_failed", str12(created?.error) || "create_mesh failed");
+          if (!created?.success || !meshId) return fail6("project_create_failed", str12(created?.error) || "create_mesh failed");
           const selfDaemonId = ports.selfDaemonId();
           const node = await ports.execute("add_mesh_node", {
             ...addStep2.args,
@@ -131096,7 +131104,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
           if (!node?.success) {
             await ports.execute("delete_mesh", { meshId }).catch(() => void 0);
-            return fail5("project_add_node_failed", str12(node?.error) || "add_mesh_node failed", { rolledBack: true });
+            return fail6("project_add_node_failed", str12(node?.error) || "add_mesh_node failed", { rolledBack: true });
           }
           const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity4) || meshId;
           return wrap(slug, meshId, {
@@ -131112,7 +131120,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const meshes = ports.listMeshes();
           const workspaces = meshes.flatMap((m) => (m.nodes ?? []).map((n) => str12(n.workspace)).filter(Boolean));
           const roots = Array.isArray(args.roots) && args.roots.length > 0 ? explicitDiscoverRoots(args.roots) : defaultDiscoverRoots(workspaces);
-          if (roots.length === 0) return fail5("invalid_args", "roots must be absolute paths");
+          if (roots.length === 0) return fail6("invalid_args", "roots must be absolute paths");
           const result = discoverRepos({
             roots,
             known: {
@@ -131131,7 +131139,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
-              return fail5("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
+              return fail6("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
             }
             const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_list", {
               ...sessionId ? { sessionId } : {},
@@ -131153,7 +131161,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         });
         artifactRead = assistantVerb(ASSISTANT_VERB2.artifactRead, async (ports, args, ctx) => {
           const artifactId = str12(args.artifactId ?? args.artifact_id);
-          if (!artifactId) return fail5("invalid_args", "artifactId required");
+          if (!artifactId) return fail6("invalid_args", "artifactId required");
           const p = await resolveProject(ports, args.project);
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
@@ -131161,7 +131169,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
           if (p.remote) {
             if (p.followedRemote?.allowArtifactRead === false) {
-              return fail5("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
+              return fail6("artifact_read_disabled", "Artifact reading is disabled for this followed project.", { project: p.slug, meshId });
             }
             const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_read", { artifactId, offset: rawOffset, limit: rawLimit });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
@@ -131169,7 +131177,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return { ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: "relay" }), ...body };
           }
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          if (!read2.ok) return fail5(read2.code, read2.error, { project: p.slug, meshId });
+          if (!read2.ok) return fail6(read2.code, read2.error, { project: p.slug, meshId });
           return { ...wrap(p.slug, meshId, read2.result), ...read2.result };
         });
         assistantProjectHandlers = {
@@ -131177,7 +131185,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           [ASSISTANT_VERB2.projectAttachRemote]: assistantVerb(ASSISTANT_VERB2.projectAttachRemote, async (ports, args, ctx) => {
             const p = await resolveProject(ports, args.project);
             if (!p.ok) return p.result;
-            if (p.remote) return fail5("project_host_required", "Run attachment on this project host.");
+            if (p.remote) return fail6("project_host_required", "Run attachment on this project host.");
             return attachRemoteProject(ctx, { meshId: p.mesh.id, targetDaemonId: args.targetDaemonId });
           }),
           [ASSISTANT_VERB2.projects]: projects,
@@ -131766,8 +131774,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             try {
               const records = await Promise.race([
                 Promise.resolve().then(() => sessionHostControl.listSessions()),
-                new Promise((resolve66) => {
-                  timer = setTimeout(() => resolve66(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
+                new Promise((resolve68) => {
+                  timer = setTimeout(() => resolve68(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
                   timer.unref?.();
                 })
               ]);
@@ -131982,7 +131990,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
       }
     });
-    function fail6(code, error, detail = {}) {
+    function fail7(code, error, detail = {}) {
       return { success: false, code, error, ...detail };
     }
     function parse(args, write, assistant) {
@@ -132018,7 +132026,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     function diskError(stored) {
       if (stored.status === "ok" && isLaunchDefaultsDocument(stored.document)) return null;
-      return stored.status === "missing" ? fail6("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail6(
+      return stored.status === "missing" ? fail7("launch_default_required", "Explicitly save launch defaults on this daemon.", { documentRevision: 0 }) : fail7(
         "launch_default_unavailable",
         "Launch defaults cannot be read.",
         { reason: stored.status === "ok" ? "launch_defaults_schema_invalid" : stored.reason }
@@ -132040,7 +132048,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return live === "enforced" || prior === "enforced" ? "enforced" : live ?? prior;
     }
     function persistenceFailure(result) {
-      return fail6(result.code, result.reason, {
+      return fail7(result.code, result.reason, {
         reason: result.reason,
         committed: result.committed,
         ...result.actualRevision !== void 0 ? { actualRevision: result.actualRevision } : {},
@@ -132051,12 +132059,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function createLaunchDefaultsHandlers(ports) {
       const run4 = async (args, write2, assistant) => {
         const input = parse(args, write2, assistant);
-        if (!input) return fail6("invalid_args", "Invalid launch defaults request.");
+        if (!input) return fail7("invalid_args", "Invalid launch defaults request.");
         let origin = "owner";
         if (assistant) {
           const authority = ports.assistantContext?.(input.sessionId);
           if (authority?.reviewTurnOpen || authority?.origin === "review") {
-            return fail6("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
+            return fail7("review_turn_tool_denied", "Launch defaults tools are unavailable during review turns.");
           }
           origin = authority?.origin === "human" || authority?.origin === "review_tainted" ? authority.origin : "relay";
         }
@@ -132066,7 +132074,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         let project;
         if (input.project) {
           const read3 = projectState(ports, input.project);
-          if (!read3.ok) return fail6(read3.code, read3.code);
+          if (!read3.ok) return fail7(read3.code, read3.code);
           project = read3.state;
         }
         if (input.action === "get") {
@@ -132099,7 +132107,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         let lowersToolLock = false;
         if (input.selection) {
           const validated = validateLaunchDefault(role, input.selection, ports.validation, restriction);
-          if (!validated.ok) return fail6("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
+          if (!validated.ok) return fail7("launch_default_invalid", validated.issue.reason, { role, ...validated.issue });
           selection = validated.selection;
           warnings = validated.warnings;
           lowersToolLock = validated.lowersToolLock;
@@ -132114,10 +132122,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           };
         }
         const revision = project?.revision ?? (stored.status === "ok" ? stored.document.revision : 0);
-        if (input.expectedRevision !== revision) return fail6("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
+        if (input.expectedRevision !== revision) return fail7("revision_conflict", "Default revision changed.", { actualRevision: revision, committed: false });
         const providerChange = assistant && role === "assistant" && selection !== null && (!previous || ports.validation.resolveAlias(previous.provider) !== selection.provider);
         if (assistant && (mustStage(origin) || providerChange && lowersToolLock)) {
-          if (!ports.stage) return fail6("staging_unavailable", "Owner Inbox staging is unavailable.");
+          if (!ports.stage) return fail7("staging_unavailable", "Owner Inbox staging is unavailable.");
           let stagedId;
           try {
             stagedId = ports.stage({
@@ -132131,9 +132139,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               ...input.sessionId ? { callerSessionId: input.sessionId } : {}
             });
           } catch {
-            return fail6("staging_failed", "Could not stage launch defaults.");
+            return fail7("staging_failed", "Could not stage launch defaults.");
           }
-          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail6("staging_failed", "Invalid owner Inbox proposal identifier.");
+          if (!/^ldf-[A-Za-z0-9-]+$/.test(stagedId)) return fail7("staging_failed", "Invalid owner Inbox proposal identifier.");
           return {
             success: true,
             result: "staged",
@@ -132150,13 +132158,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const projectId = project.projectId;
           return ports.projects.withWriteLock(() => {
             const fresh = projectState(ports, projectId);
-            if (!fresh.ok) return fail6(fresh.code, fresh.code);
-            if (fresh.state.projectId !== projectId) return fail6("project_storage_unavailable", "Host project identity changed.");
-            if (fresh.state.revision !== input.expectedRevision) return fail6("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
-            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail6("store_unavailable", "Project revision exhausted.");
+            if (!fresh.ok) return fail7(fresh.code, fresh.code);
+            if (fresh.state.projectId !== projectId) return fail7("project_storage_unavailable", "Host project identity changed.");
+            if (fresh.state.revision !== input.expectedRevision) return fail7("revision_conflict", "Project default revision changed.", { actualRevision: fresh.state.revision, committed: false });
+            if (fresh.state.revision >= Number.MAX_SAFE_INTEGER) return fail7("store_unavailable", "Project revision exhausted.");
             if (selection) {
               const checked = validateLaunchDefault(role, selection, ports.validation);
-              if (!checked.ok) return fail6("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
+              if (!checked.ok) return fail7("launch_default_invalid", checked.issue.reason, { role, ...checked.issue });
               warnings = checked.warnings;
             }
             const nextRevision = fresh.state.revision + 1;
@@ -132167,7 +132175,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               setAt: Date.now()
             } : null;
             const outcome = ports.projects.replace({ projectId, revision: nextRevision, entry });
-            if (!outcome.ok) return fail6("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
+            if (!outcome.ok) return fail7("persistence_failed", outcome.reason, { committed: outcome.committed, reason: outcome.reason });
             return {
               success: true,
               result: "applied",
@@ -132209,12 +132217,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         try {
           return await run4(args, write2, assistant);
         } catch (error) {
-          if (error instanceof MeshConfigStrictLockError) return fail6(error.code, error.message, {
+          if (error instanceof MeshConfigStrictLockError) return fail7(error.code, error.message, {
             committed: false,
             ...error.lockPath ? { reason: `${error.code === "store_busy" ? "write_lock_held" : "write_lock_unavailable"}: ${error.lockPath}` } : {}
           });
-          if (error instanceof LaunchDefaultsCatalogError) return fail6("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
-          return fail6("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
+          if (error instanceof LaunchDefaultsCatalogError) return fail7("launch_default_unavailable", error.message, { reason: "catalog_unavailable" });
+          return fail7("persistence_failed", "Launch defaults operation outcome is unconfirmed.", { reason: "operation_outcome_unconfirmed" });
         }
       };
       const read2 = (args, assistant) => guarded(args, false, assistant);
@@ -133205,9 +133213,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
         const anchor = () => opts.db.prepare("SELECT attempt_id,generation,accepted_at FROM turn_attempts WHERE session_id=? AND scope='plain' ORDER BY accepted_at,attempt_id").all(sessionId);
-        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto57.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto59.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now, { checkpoints, scope });
-        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto57.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto59.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         if (opts.isAuthorized?.(meshId, sessionId) === false || scope !== currentScope) {
           checkpoints.reset(sessionId);
           return { sessionId, skipped: true };
@@ -133253,7 +133261,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             meshId,
             messageId,
             ...attempt && window.complete && !open ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
-            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto57.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
+            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto59.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
             messageAt: bubble.at,
             chars: Array.from(bubble.text).length,
             text: bubble.text,
@@ -133266,7 +133274,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (failed && !successful) throw new Error("coordinator native audit unavailable");
       return complete ? out : Object.assign(out, { complete: false });
     }
-    var import_node_crypto57;
+    var import_node_crypto59;
     var TERMINAL2;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
@@ -133274,7 +133282,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
         init_native_scan_checkpoint();
-        import_node_crypto57 = require("crypto");
+        import_node_crypto59 = require("crypto");
         init_assistant_native_window();
         init_report_continuation();
         init_attempt_report_recovery();
@@ -133292,15 +133300,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const target4 = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target4)}.`;
     }
-    var import_node_crypto58;
+    var import_node_crypto60;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto58 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto58.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto60 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto60.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -133561,7 +133569,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
-    var import_node_crypto59;
+    var import_node_crypto61;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -133578,7 +133586,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_assistant_relay_types();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto59 = require("crypto");
+        import_node_crypto61 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -133590,7 +133598,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text5) => (0, import_node_crypto59.createHash)("sha256").update(text5.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text5) => (0, import_node_crypto61.createHash)("sha256").update(text5.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text5) => JSON.stringify([sessionId, attemptId, at, replyHash(text5)]);
         RELAY_THREAD_STALE_CLOSE_MS = 7 * 24 * 60 * 6e4;
         AssistantRelay = class {
@@ -133678,9 +133686,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             this.attemptBodies.clear();
             this.attemptMeta.clear();
             this.attemptBodyAt.clear();
-            for (const [timer, resolve66] of this.pendingTimers) {
+            for (const [timer, resolve68] of this.pendingTimers) {
               this.clock.clearTimeout(timer);
-              resolve66();
+              resolve68();
             }
             this.pendingTimers.clear();
             this.renderedCoverage.clear();
@@ -134113,8 +134121,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           /** A stopped relay resolves its waits too; late I/O cannot repopulate caches. */
           async bounded(read2, ms3, fallback) {
             let timer;
-            const timeout = new Promise((resolve66) => {
-              const finish = () => resolve66(fallback);
+            const timeout = new Promise((resolve68) => {
+              const finish = () => resolve68(fallback);
               timer = this.clock.setTimeout(finish, ms3);
               this.pendingTimers.set(timer, finish);
             });
@@ -136110,14 +136118,14 @@ ${defangRelayBody(text5)}`;
     function record4(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
     }
-    function fail7(code, error = code, extra = {}) {
+    function fail8(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     async function withMeshRemoteAccessMutex(meshId, fn) {
       const prev = meshRemoteAccessQueues.get(meshId) ?? Promise.resolve();
       let release2;
-      const gate = new Promise((resolve66) => {
-        release2 = resolve66;
+      const gate = new Promise((resolve68) => {
+        release2 = resolve68;
       });
       const next = prev.then(() => gate, () => gate);
       meshRemoteAccessQueues.set(meshId, next);
@@ -136185,21 +136193,21 @@ ${defangRelayBody(text5)}`;
     }
     async function note(meshId, args) {
       const op = parseNoteOp(args);
-      if (typeof op === "string") return fail7("invalid_args", op);
+      if (typeof op === "string") return fail8("invalid_args", op);
       const callerSessionId = str17(args.callerSessionId);
       if (op.action === "list" || op.action === "read") {
         const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
         if (out.result === "note_not_found") {
-          return fail7("note_not_found", String(out.error || "note_not_found"), {
+          return fail8("note_not_found", String(out.error || "note_not_found"), {
             ...typeof out.noteId === "string" ? { noteId: out.noteId } : {}
           });
         }
         return { success: true, ...out };
       }
       const origin = str17(args.origin);
-      if (origin !== "human" && origin !== "owner") return fail7("invalid_args", "origin must be human or owner");
+      if (origin !== "human" && origin !== "owner") return fail8("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
-      if (refusal2) return fail7(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
+      if (refusal2) return fail8(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
       const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || void 0);
       return { success: true, ...applied };
     }
@@ -136220,7 +136228,7 @@ ${defangRelayBody(text5)}`;
         const msg = e instanceof Error ? e.message : String(e);
         return {
           ok: false,
-          result: fail7(
+          result: fail8(
             "host_unavailable_transient",
             `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`
           )
@@ -136233,35 +136241,35 @@ ${defangRelayBody(text5)}`;
         if (!strictRead.ok) return strictRead;
         mesh = strictRead.mesh;
       }
-      if (!mesh) return { ok: false, result: fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
-      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh) return { ok: false, result: fail8("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
+      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail8("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const self = ports.selfDaemonId();
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail8("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       if (self && !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail7("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail8("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
       if (!sender || !daemonIdsEquivalent4(acl.activeDaemonId, sender)) {
-        return { ok: false, result: fail7("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
       const claimedSlot = str17(followerClaim?.accountSlot) || str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail8("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail7("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail8("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -136270,14 +136278,14 @@ ${defangRelayBody(text5)}`;
       if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead !== true) {
         return {
           ok: false,
-          result: fail7("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+          result: fail8("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
             bindingRevision: acl.bindingRevision,
             grantRevision: acl.grantRevision
           })
         };
       }
       if (!followerOpPermitted(op, acl.allowedOps)) {
-        return { ok: false, result: fail7("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
+        return { ok: false, result: fail8("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
       }
       return { ok: true, acl };
     }
@@ -136313,46 +136321,46 @@ ${defangRelayBody(text5)}`;
       return "live";
     }
     function verifyRemoteFollowerBindingForWake(ports, mesh, meshId, sender, args) {
-      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail8("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail8("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       const self = ports.selfDaemonId();
       if (!self || !daemonIdsEquivalent4(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail7("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail8("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
-      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
+      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail8("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
       const canonSender = canonicalDaemonId2(sender);
       if (!canonSender || daemonIdsEquivalent4(canonSender, self) || !daemonIdsEquivalent4(acl.activeDaemonId, canonSender)) {
-        return { ok: false, result: fail7("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record4(args.followerAccess);
       const localBindingErr = str17(followerClaim?.localBindingError);
-      if (localBindingErr) return { ok: false, result: fail7(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
+      if (localBindingErr) return { ok: false, result: fail8(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
       const claimedSlot = str17(followerClaim?.accountSlot) || str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail7("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail8("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedActiveDaemonId = str17(followerClaim?.activeDaemonId);
       if (claimedActiveDaemonId && !daemonIdsEquivalent4(claimedActiveDaemonId, acl.activeDaemonId)) {
-        return { ok: false, result: fail7("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedHostDaemonId = str17(followerClaim?.hostDaemonId);
       if (claimedHostDaemonId && !daemonIdsEquivalent4(claimedHostDaemonId, acl.hostDaemonId)) {
-        return { ok: false, result: fail7("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail8("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail7("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail8("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -136362,10 +136370,10 @@ ${defangRelayBody(text5)}`;
     }
     async function followerProjectSend(ports, meshId, sender, args) {
       const text5 = typeof args.text === "string" ? args.text : "";
-      if (!text5.trim()) return fail7("invalid_args", "text required");
-      if (text5.length > REMOTE_SEND_MAX_CHARS) return fail7("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+      if (!text5.trim()) return fail8("invalid_args", "text required");
+      if (text5.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
       const clientId = str17(args.clientId);
-      if (!clientId || clientId.length > 200) return fail7("invalid_args", "clientId required (at most 200 characters)");
+      if (!clientId || clientId.length > 200) return fail8("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str17(args.expectedCoordinatorSessionId);
       const bodyHash = (0, import_crypto42.createHash)("sha256").update(text5, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
@@ -136395,9 +136403,9 @@ ${defangRelayBody(text5)}`;
         }
       }
       if (prior) {
-        if (prior.bodyHash !== bodyHash) return fail7("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
+        if (prior.bodyHash !== bodyHash) return fail8("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
         if (!live || prior.coordinatorSessionId !== live.sessionId) {
-          return fail7("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
+          return fail8("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
             originalCoordinatorSessionId: prior.coordinatorSessionId,
             currentCoordinatorSessionId: live?.sessionId ?? null
           });
@@ -136454,7 +136462,7 @@ ${defangRelayBody(text5)}`;
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail7("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+              result: fail8("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                 bindingRevision: acl.bindingRevision,
                 grantRevision: acl.grantRevision
               })
@@ -136466,7 +136474,7 @@ ${defangRelayBody(text5)}`;
               recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
               return {
                 ok: false,
-                result: fail7(
+                result: fail8(
                   "wake_rate_limited",
                   reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                   { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -136507,7 +136515,7 @@ ${defangRelayBody(text5)}`;
               if (acl.allowCoordinatorLaunch === false) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
-                preLaunchDeniedResult = fail7("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+                preLaunchDeniedResult = fail8("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                   bindingRevision: acl.bindingRevision,
                   grantRevision: acl.grantRevision
                 });
@@ -136517,7 +136525,7 @@ ${defangRelayBody(text5)}`;
                 const reserved = reserveFollowerWakeSlot(meshId, sender, checkNow);
                 if (!reserved.ok) {
                   recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
-                  preLaunchDeniedResult = fail7(
+                  preLaunchDeniedResult = fail8(
                     "wake_rate_limited",
                     reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                     { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -136568,7 +136576,7 @@ ${defangRelayBody(text5)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
-              result: fail7("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
+              result: fail8("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
             };
           }
           if (coord.launched) {
@@ -136594,7 +136602,7 @@ ${defangRelayBody(text5)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail7("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
+              result: fail8("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
             };
           }
           return {
@@ -136607,7 +136615,7 @@ ${defangRelayBody(text5)}`;
       };
       if (live) {
         if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-          return fail7("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
+          return fail8("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
             expectedCoordinatorSessionId,
             currentCoordinatorSessionId: live.sessionId
           });
@@ -136654,7 +136662,7 @@ ${defangRelayBody(text5)}`;
             acl = bindingCheck.acl;
             if (acl.allowCoordinatorLaunch === false) {
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target4.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
-              return { ok: false, result: fail7("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
+              return { ok: false, result: fail8("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
             }
           }
           const cursor3 = ports.coordinatorTurns(target4.sessionId, 1).committed[0]?.attemptId ?? null;
@@ -136687,7 +136695,7 @@ ${defangRelayBody(text5)}`;
       }
       const { sent, cursor, messageId } = sendAttempt;
       if (!sent.success) {
-        return fail7(str17(sent.reason) || str17(sent.code) || "send_failed", str17(sent.error) || "send_failed", {
+        return fail8(str17(sent.reason) || str17(sent.code) || "send_failed", str17(sent.error) || "send_failed", {
           launched,
           coordinatorSessionId: live.sessionId,
           messageId
@@ -136733,57 +136741,57 @@ ${defangRelayBody(text5)}`;
             return followerProjectSend(ports, meshId, sender, args);
           }
           const text5 = typeof args.text === "string" ? args.text : "";
-          if (!text5.trim()) return fail7("invalid_args", "text required");
-          if (text5.length > REMOTE_SEND_MAX_CHARS) return fail7("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          if (!text5.trim()) return fail8("invalid_args", "text required");
+          if (text5.length > REMOTE_SEND_MAX_CHARS) return fail8("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str17(args.clientId);
-          if (!clientId || clientId.length > 200) return fail7("invalid_args", "clientId required (at most 200 characters)");
+          if (!clientId || clientId.length > 200) return fail8("invalid_args", "clientId required (at most 200 characters)");
           const sent = await localProjectSend(ports, mesh, text5, clientId);
-          if (!sent.ok) return fail7(sent.code, sent.error, sent.detail);
+          if (!sent.ok) return fail8(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return { success: true, result };
         }
         case "read": {
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail7("invalid_args", continuation);
+          if (typeof continuation === "string") return fail8("invalid_args", continuation);
           const r = await localProjectRead(ports, meshId, readTailArg(args.tail), continuation);
-          return r.ok ? { success: true, result: r.result } : fail7("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
+          return r.ok ? { success: true, result: r.result } : fail8("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
         }
         case "report": {
-          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail7("invalid_args");
+          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail8("invalid_args");
           return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
         case "artifact_list":
           return { success: true, result: localArtifactList(meshId, args) };
         case "artifact_read": {
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          return read2.ok ? { success: true, result: read2.result } : fail7(read2.code, read2.error);
+          return read2.ok ? { success: true, result: read2.result } : fail8(read2.code, read2.error);
         }
         case "decision_list": {
           const withAuto = args.includeAutoApplied === true;
           return { success: true, result: listDecisionsForMesh(meshId, { includeAutoApplied: withAuto }) };
         }
         case "decision_answer": {
-          if (!ctx) return fail7("invalid_args", "decision_answer needs a command context");
+          if (!ctx) return fail8("invalid_args", "decision_answer needs a command context");
           const parsed = parseDecisionAnswers(args);
-          if (typeof parsed === "string") return fail7("invalid_args", parsed);
+          if (typeof parsed === "string") return fail8("invalid_args", parsed);
           return { success: true, result: await applyDecisionAnswers(ctx, meshId, parsed) };
         }
         case "decision_request": {
           const done = registerDecisionRequest(meshId, args);
-          return done.success === true ? { success: true, result: done } : fail7(String(done.code ?? "decision_rejected"), String(done.error ?? "decision_rejected"));
+          return done.success === true ? { success: true, result: done } : fail8(String(done.code ?? "decision_rejected"), String(done.error ?? "decision_rejected"));
         }
         case "inventory":
-          if (isFollower) return fail7("remote_op_forbidden", "inventory is not permitted for remote followers");
+          if (isFollower) return fail8("remote_op_forbidden", "inventory is not permitted for remote followers");
           return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : void 0) };
         case "terminal": {
-          if (isFollower) return fail7("remote_op_forbidden", "terminal is not permitted for remote followers");
-          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail7("invalid_args");
+          if (isFollower) return fail8("remote_op_forbidden", "terminal is not permitted for remote followers");
+          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail8("invalid_args");
           return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind, args.entityId, 0, args.receipts) } };
         }
         case "poll":
           return poll(ports, meshId, args);
         case "note":
-          if (isFollower) return fail7("remote_op_forbidden", "note is not permitted for remote followers");
+          if (isFollower) return fail8("remote_op_forbidden", "note is not permitted for remote followers");
           return note(meshId, args);
       }
     }
@@ -136840,14 +136848,14 @@ ${defangRelayBody(text5)}`;
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const meshId = str17(args.meshId);
           const op = str17(args.op);
-          if (!meshId) return fail7("invalid_args", "meshId required");
-          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail7("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
+          if (!meshId) return fail8("invalid_args", "meshId required");
+          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail8("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
           try {
             const ports = await projectPortsFor(ctx);
             const meshRead = readHostMeshStrict(ports, meshId);
             if (!meshRead.ok) return meshRead.result;
             const mesh = meshRead.mesh;
-            if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+            if (!mesh) return fail8("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
             const sender = readMeshSender(args);
             const self = ports.selfDaemonId();
             const onRoster = isSenderOnWorkerRoster(mesh, self, sender);
@@ -136856,7 +136864,7 @@ ${defangRelayBody(text5)}`;
               const verified = verifyFollowerAcl(ports, mesh, meshId, sender, op, args);
               if (!verified.ok) return verified.result;
             } else if (op !== "inventory" && !ports.isHostedHere(mesh)) {
-              return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              return fail8("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
             }
             if (op === "send" || op === "note") {
               const who = sender && self && daemonIdsEquivalent4(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
@@ -136869,12 +136877,12 @@ ${defangRelayBody(text5)}`;
           }
         };
         assistantRemoteProjectCatalog = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail7("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail8("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail7("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail8("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             const now = Date.now();
             const hostedMeshes2 = ports.listMeshes().filter((m) => ports.isHostedHere(m));
             const projects2 = hostedMeshes2.map((m) => {
@@ -136914,25 +136922,25 @@ ${defangRelayBody(text5)}`;
           }
         };
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail7("owner_ingress_required", "Remote project access changes require verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail8("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const action2 = str17(args.action) || "get";
           const meshId = str17(args.meshId);
-          if (!meshId) return fail7("invalid_args", "meshId required");
+          if (!meshId) return fail8("invalid_args", "meshId required");
           if (action2 !== "grant" && action2 !== "revoke" && action2 !== "get" && action2 !== "set_policy") {
-            return fail7("invalid_args", "action must be grant, revoke, set_policy, or get");
+            return fail8("invalid_args", "action must be grant, revoke, set_policy, or get");
           }
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail7("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail8("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             if (action2 === "get") {
               const mesh = ports.listMeshes().find((m) => m.id === meshId);
-              if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-              if (!ports.isHostedHere(mesh)) return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              if (!mesh) return fail8("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+              if (!ports.isHostedHere(mesh)) return fail8("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
               if (mesh.assistantRemoteAccess !== void 0 && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
-                return fail7("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                return fail8("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
               }
               return { success: true, action: "get", access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
             }
@@ -136940,10 +136948,10 @@ ${defangRelayBody(text5)}`;
               try {
                 return withStrictMeshConfigWriteLock(() => {
                   const config = readMeshConfigFromDisk();
-                  if (!config) return fail7("project_storage_unavailable", "meshes.json is unavailable");
+                  if (!config) return fail8("project_storage_unavailable", "meshes.json is unavailable");
                   const mesh = config.meshes.find((m) => m.id === meshId);
-                  if (!mesh) return fail7("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-                  if (!ports.isHostedHere(mesh)) return fail7("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+                  if (!mesh) return fail8("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+                  if (!ports.isHostedHere(mesh)) return fail8("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
                   const rawAcl = mesh.assistantRemoteAccess;
                   const existing = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
                   const rawGrantRev = typeof record4(rawAcl)?.grantRevision === "number" && Number.isInteger(record4(rawAcl).grantRevision) && record4(rawAcl).grantRevision > 0 ? record4(rawAcl).grantRevision : 0;
@@ -136952,11 +136960,11 @@ ${defangRelayBody(text5)}`;
                   if (action2 === "set_policy") {
                     const hasLaunchToggle = typeof args.allowCoordinatorLaunch === "boolean";
                     const hasArtifactToggle = typeof args.allowArtifactRead === "boolean";
-                    if (!hasLaunchToggle && !hasArtifactToggle) return fail7("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
-                    if (rawAcl !== void 0 && !existing) return fail7("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                    if (!existing) return fail7("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
+                    if (!hasLaunchToggle && !hasArtifactToggle) return fail8("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
+                    if (rawAcl !== void 0 && !existing) return fail8("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                    if (!existing) return fail8("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                     if (existing.status !== "active") {
-                      return fail7("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+                      return fail8("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
                         grantRevision: existing.grantRevision,
                         bindingRevision: existing.bindingRevision
                       });
@@ -136969,21 +136977,21 @@ ${defangRelayBody(text5)}`;
                     mesh.assistantRemoteAccess = updated;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail7("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail8("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(updated.allowCoordinatorLaunch)}, allowArtifactRead=${String(updated.allowArtifactRead)}, grantRev=${updated.grantRevision})`);
                     return { success: true, action: "set_policy", access: updated };
                   }
                   if (action2 === "grant") {
                     const rawActiveDaemonId = str17(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
-                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail7("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail7("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail8("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail8("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
                     const slot = str17(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail7("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail8("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
-                    if (bindingRevision === null) return fail7("invalid_args", "bindingRevision must be a positive integer");
+                    if (bindingRevision === null) return fail8("invalid_args", "bindingRevision must be a positive integer");
                     if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                      return fail7("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
+                      return fail8("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
@@ -137004,7 +137012,7 @@ ${defangRelayBody(text5)}`;
                     mesh.assistantRemoteAccess = binding;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail7("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail8("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Granted remote assistant access on mesh ${meshId} to ${activeDaemonId.slice(0, 24)} (bindingRev=${bindingRevision}, grantRev=${nextGrantRevision2})`);
                     return { success: true, action: "grant", access: binding };
                   }
@@ -137028,12 +137036,12 @@ ${defangRelayBody(text5)}`;
                   mesh.assistantRemoteAccess = tombstone;
                   mesh.updatedAt = new Date(now).toISOString();
                   const saved = saveMeshConfigDurable(config);
-                  if (!saved.ok) return fail7("persistence_failed", saved.reason);
+                  if (!saved.ok) return fail8("persistence_failed", saved.reason);
                   LOG.info("Assistant", `Revoked remote assistant access on mesh ${meshId} (grantRev=${nextGrantRevision})`);
                   return { success: true, action: "revoke", access: tombstone };
                 });
               } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) return fail7(err.code, err.message);
+                if (err instanceof MeshConfigStrictLockError) return fail8(err.code, err.message);
                 throw err;
               }
             });
@@ -137766,7 +137774,7 @@ ${defangRelayBody(text5)}`;
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs32.existsSync)(cwd),
+          cwdExists: (0, import_node_fs35.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -137873,7 +137881,7 @@ ${defangRelayBody(text5)}`;
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process23;
-    var import_node_fs32;
+    var import_node_fs35;
     var import_node_util13;
     var execFileAsync5;
     var GIT2;
@@ -137882,7 +137890,7 @@ ${defangRelayBody(text5)}`;
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process23 = require("child_process");
-        import_node_fs32 = require("fs");
+        import_node_fs35 = require("fs");
         import_node_util13 = require("util");
         init_resolve_executable();
         init_logger();
@@ -137904,7 +137912,7 @@ ${defangRelayBody(text5)}`;
     }
     async function assessScope(cwd, path124, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs33.existsSync)(cwd)) return { path: path124, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs36.existsSync)(cwd)) return { path: path124, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git5(cwd, ["rev-parse", baseRef]);
         const branchHead = await git5(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -137974,7 +137982,7 @@ ${defangRelayBody(text5)}`;
             });
             touchedSubmodulePaths = area.touchedSubmodulePaths;
             for (const subPath of touchedSubmodulePaths) {
-              const subCwd = (0, import_node_path32.resolve)(workspace, subPath);
+              const subCwd = (0, import_node_path35.resolve)(workspace, subPath);
               const subBaseRef = await (async () => {
                 for (const ref2 of ["origin/main", "origin/master", "main", "master"]) {
                   try {
@@ -137994,13 +138002,13 @@ ${defangRelayBody(text5)}`;
       const verdict = scopes2.some((s2) => s2.verdict === "diverged") ? "diverged" : scopes2.some((s2) => s2.verdict === "unknown") ? "unknown" : "clear";
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
-    var import_node_path32;
-    var import_node_fs33;
+    var import_node_path35;
+    var import_node_fs36;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
-        import_node_path32 = require("path");
-        import_node_fs33 = require("fs");
+        import_node_path35 = require("path");
+        import_node_fs36 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -138484,7 +138492,7 @@ ${defangRelayBody(text5)}`;
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs34.existsSync)(workspace)) return null;
+      if ((0, import_node_fs37.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -138504,12 +138512,12 @@ ${defangRelayBody(text5)}`;
         }
       };
     }
-    var import_node_fs34;
+    var import_node_fs37;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs34 = require("fs");
+        import_node_fs37 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -138678,8 +138686,8 @@ ${defangRelayBody(text5)}`;
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
         LOG.info("Mesh", `[Refinery] ${label2} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
-        await new Promise((resolve66) => {
-          waitQueue.push(resolve66);
+        await new Promise((resolve68) => {
+          waitQueue.push(resolve68);
         });
         LOG.info("Mesh", `[Refinery] ${label2} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
@@ -139397,7 +139405,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs35.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs38.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -139767,14 +139775,14 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs35;
+    var import_node_fs38;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_publication_contract();
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs35 = require("fs");
+        import_node_fs38 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -141074,7 +141082,7 @@ ${tail}` : ""
         };
       }
     });
-    var import_node_crypto67;
+    var import_node_crypto69;
     var import_node_perf_hooks3;
     var import_session_host_core27;
     var hash3;
@@ -141082,11 +141090,11 @@ ${tail}` : ""
     var init_operator_recovery = __esm2({
       "src/mesh/turn-ledger/operator-recovery.ts"() {
         "use strict";
-        import_node_crypto67 = require("crypto");
+        import_node_crypto69 = require("crypto");
         import_node_perf_hooks3 = require("perf_hooks");
         init_worker_bridge_transaction();
         import_session_host_core27 = require_dist();
-        hash3 = (s2) => (0, import_node_crypto67.createHash)("sha256").update(s2).digest("hex");
+        hash3 = (s2) => (0, import_node_crypto69.createHash)("sha256").update(s2).digest("hex");
         OperatorRecoveryAnchors = class {
           constructor(deps) {
             this.deps = deps;
@@ -141146,7 +141154,7 @@ ${tail}` : ""
           }
           async recover(grant, peer) {
             const assertOwner2 = this.deps.owner.reserve(grant, "anchor_recover");
-            const nonce = (0, import_node_crypto67.randomBytes)(32).toString("hex");
+            const nonce = (0, import_node_crypto69.randomBytes)(32).toString("hex");
             const nonceHash = hash3(nonce);
             const p = {
               deadline: this.now() + 3e4,
@@ -141234,20 +141242,20 @@ ${tail}` : ""
     function readRecoveryCurrentAssignment(db2, selfDaemonId) {
       if (!db2.inTransaction || selfDaemonId !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId) throw new Error("recovery_owner_transaction_required");
       if (!inRecoveryMeshOwnershipFence()) throw new Error("recovery_physical_owner_fence_required");
-      const fd = (0, import_node_fs38.openSync)(getMeshConfigPath(), import_node_fs38.constants.O_RDONLY | import_node_fs38.constants.O_NOFOLLOW);
+      const fd = (0, import_node_fs41.openSync)(getMeshConfigPath(), import_node_fs41.constants.O_RDONLY | import_node_fs41.constants.O_NOFOLLOW);
       let ownerBytes;
       let ownerFileIdentity;
       try {
-        const before = (0, import_node_fs38.fstatSync)(fd, { bigint: true });
+        const before = (0, import_node_fs41.fstatSync)(fd, { bigint: true });
         if (!before.isFile() || before.nlink !== 1n || before.ino <= 0n || before.birthtimeNs <= 0n || before.ctimeNs <= 0n) {
           throw new Error("recovery_owner_file_identity_unproved");
         }
         const identity4 = (s2) => [s2.dev, s2.ino, s2.birthtimeNs, s2.ctimeNs, s2.mtimeNs, s2.size].map((n) => n.toString()).join(":");
-        ownerBytes = (0, import_node_fs38.readFileSync)(fd, "utf8");
-        ownerFileIdentity = identity4((0, import_node_fs38.fstatSync)(fd, { bigint: true }));
+        ownerBytes = (0, import_node_fs41.readFileSync)(fd, "utf8");
+        ownerFileIdentity = identity4((0, import_node_fs41.fstatSync)(fd, { bigint: true }));
         if (ownerFileIdentity !== identity4(before)) throw new Error("recovery_owner_file_changed");
       } finally {
-        (0, import_node_fs38.closeSync)(fd);
+        (0, import_node_fs41.closeSync)(fd);
       }
       const currentMesh = JSON.parse(ownerBytes).meshes?.find((m) => m.id === import_session_host_core28.OPERATOR_RECOVERY_TARGET.meshId);
       const allowedOwnerPins = /* @__PURE__ */ new Set([import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId, import_session_host_core28.OPERATOR_RECOVERY_TARGET.ownerDaemonId.slice("daemon_".length)]);
@@ -141262,7 +141270,7 @@ ${tail}` : ""
       const holds = db2.prepare("SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id").all(a.attempt_id);
       const payload = JSON.parse(q2.payload);
       if (payload.id !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core28.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
-      const hash4 = (s2) => (0, import_node_crypto68.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
+      const hash4 = (s2) => (0, import_node_crypto70.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
       return {
         ownerDaemonId: a.owner_daemon_id,
         meshId: a.mesh_id,
@@ -141287,15 +141295,15 @@ ${tail}` : ""
         queueRevision: hash4(q2)
       };
     }
-    var import_node_fs38;
-    var import_node_crypto68;
+    var import_node_fs41;
+    var import_node_crypto70;
     var import_session_host_core28;
     var init_operator_recovery_store = __esm2({
       "src/mesh/turn-ledger/operator-recovery-store.ts"() {
         "use strict";
-        import_node_fs38 = require("fs");
+        import_node_fs41 = require("fs");
         init_mesh_config_store();
-        import_node_crypto68 = require("crypto");
+        import_node_crypto70 = require("crypto");
         import_session_host_core28 = require_dist();
       }
     });
@@ -142333,8 +142341,8 @@ ${tail}` : ""
         try {
           read2 = await Promise.race([
             probe.reader.read(attempt, location, target4.holds),
-            new Promise((resolve66) => {
-              deadline = setTimeout(() => resolve66({ presence: "unknown" }), endProbeGraceMs(policy));
+            new Promise((resolve68) => {
+              deadline = setTimeout(() => resolve68({ presence: "unknown" }), endProbeGraceMs(policy));
             })
           ]);
         } catch (error) {
@@ -142872,7 +142880,7 @@ ${tail}` : ""
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto69.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto71.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db2.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db2.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -142882,7 +142890,7 @@ ${tail}` : ""
       return {
         begin,
         async handling(run4) {
-          const id4 = (0, import_node_crypto69.randomUUID)();
+          const id4 = (0, import_node_crypto71.randomUUID)();
           active.add(id4);
           try {
             return await run4();
@@ -142897,11 +142905,11 @@ ${tail}` : ""
         }
       };
     }
-    var import_node_crypto69;
+    var import_node_crypto71;
     var init_notice_submit_inventory = __esm2({
       "src/mesh/turn-ledger/notice-submit-inventory.ts"() {
         "use strict";
-        import_node_crypto69 = require("crypto");
+        import_node_crypto71 = require("crypto");
         init_cooperative_gate();
       }
     });
@@ -147771,12 +147779,12 @@ ${tail}` : ""
           isCurrent,
           requestPhysicalProof: async (nonce) => {
             if (!isCurrent()) throw new Error("recovery_authenticated_peer_changed");
-            const reply = await new Promise((resolve66, reject) => {
+            const reply = await new Promise((resolve68, reject) => {
               this.writeRequest(peer, {
                 id: `${this.idNonce}:recovery:${this.idSeq++}`,
                 command: "mesh_operator_recovery_census",
                 args: { nonce, fenceDigest },
-                resolve: resolve66,
+                resolve: resolve68,
                 reject,
                 queuedAt: (/* @__PURE__ */ new Date()).toISOString(),
                 resultTimeoutMs: 25e3
@@ -148516,7 +148524,7 @@ ${tail}` : ""
       let serverOriginGrantPublicKey;
       let serverKeyRotation;
       let serverKeyRotationChain;
-      const fail9 = (code, notifyPeer) => {
+      const fail10 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -148545,28 +148553,28 @@ ${tail}` : ""
         },
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail9("bad_frame", false);
+          if (state2 === "done") return fail10("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail9(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail9(parsed.code, false);
-          if (state2 === "idle") return fail9("bad_frame", true);
+          if (isParseError(parsed)) return fail10(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail10(parsed.code, false);
+          if (state2 === "idle") return fail10("bad_frame", true);
           if (state2 === "awaiting_challenge") {
-            if (parsed.kind !== "mesh_challenge") return fail9("bad_frame", true);
+            if (parsed.kind !== "mesh_challenge") return fail10("bad_frame", true);
             if (opts.serverDaemonIdExpected && canon(opts.serverDaemonIdExpected) !== canon(parsed.daemonId)) {
-              return fail9("bad_proof", true);
+              return fail10("bad_proof", true);
             }
             const peerHasCap = hasOriginGrantCap(parsed.caps);
             const peerSentKeyMaterial = Boolean(
               parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
             );
             if (peerSentKeyMaterial && !peerHasCap) {
-              return fail9("bad_proof", true);
+              return fail10("bad_proof", true);
             }
             if (localHasOriginGrantCap && peerHasCap && !parsed.originGrantPublicKey) {
-              return fail9("bad_proof", true);
+              return fail10("bad_proof", true);
             }
             if (localHasOriginGrantCap && !peerHasCap && hasCapableNonceSentinel(parsed.nonce, opts.secret, "server", opts.meshId, parsed.daemonId)) {
-              return fail9("bad_proof", true);
+              return fail10("bad_proof", true);
             }
             negotiatedOriginGrant = localHasOriginGrantCap && peerHasCap;
             const inputs = negotiatedOriginGrant ? {
@@ -148592,7 +148600,7 @@ ${tail}` : ""
               clientDaemonId: opts.daemonId,
               serverDaemonId: parsed.daemonId
             };
-            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail9("bad_proof", true);
+            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail10("bad_proof", true);
             if (negotiatedOriginGrant && parsed.originGrantPublicKey) {
               if (!canAcceptPeerOriginGrantPublicKey(
                 opts.meshId,
@@ -148603,7 +148611,7 @@ ${tail}` : ""
                   rotationChain: parsed.keyRotationChain
                 }
               )) {
-                return fail9("bad_proof", true);
+                return fail10("bad_proof", true);
               }
               serverCaps = parsed.caps;
               serverOriginGrantPublicKey = parsed.originGrantPublicKey;
@@ -148625,11 +148633,11 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_ok") return fail9("bad_frame", true);
-          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail9("bad_frame", true);
+          if (parsed.kind !== "mesh_ok") return fail10("bad_frame", true);
+          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail10("bad_frame", true);
           if (!negotiatedOriginGrant) {
             if (parsed.originGrantPublicKey !== void 0 || parsed.keyRotation !== void 0 || parsed.keyRotationChain !== void 0 || parsed.proof !== void 0 || hasOriginGrantCap(parsed.caps)) {
-              return fail9("bad_proof", true);
+              return fail10("bad_proof", true);
             }
             state2 = "done";
             step = {
@@ -148640,16 +148648,16 @@ ${tail}` : ""
             return step;
           }
           if (!hasOriginGrantCap(parsed.caps) || !capsEquivalent(parsed.caps, serverCaps)) {
-            return fail9("bad_proof", true);
+            return fail10("bad_proof", true);
           }
           if (!originGrantPublicKeysEqual(serverOriginGrantPublicKey, parsed.originGrantPublicKey)) {
-            return fail9("bad_proof", true);
+            return fail10("bad_proof", true);
           }
           if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
-            return fail9("bad_proof", true);
+            return fail10("bad_proof", true);
           }
           if (parsed.keyRotationChain && !rotationChainsEquivalent(parsed.keyRotationChain, serverKeyRotationChain)) {
-            return fail9("bad_proof", true);
+            return fail10("bad_proof", true);
           }
           const okInputs = {
             secret: opts.secret,
@@ -148668,7 +148676,7 @@ ${tail}` : ""
             serverKeyRotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
           };
           if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
-            return fail9("bad_proof", true);
+            return fail10("bad_proof", true);
           }
           const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
           const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : void 0;
@@ -148682,7 +148690,7 @@ ${tail}` : ""
                 rotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
               }
             );
-            if (!recorded) return fail9("bad_proof", true);
+            if (!recorded) return fail10("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -148712,7 +148720,7 @@ ${tail}` : ""
       let clientOriginGrantPublicKey;
       let clientKeyRotation;
       let clientKeyRotationChain;
-      const fail9 = (code, notifyPeer) => {
+      const fail10 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -148726,12 +148734,12 @@ ${tail}` : ""
       return {
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail9("bad_frame", false);
+          if (state2 === "done") return fail10("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail9(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail9(parsed.code, false);
+          if (isParseError(parsed)) return fail10(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail10(parsed.code, false);
           if (state2 === "awaiting_hello") {
-            if (parsed.kind !== "mesh_hello") return fail9("bad_frame", true);
+            if (parsed.kind !== "mesh_hello") return fail10("bad_frame", true);
             const canonicalPeer = canon(parsed.daemonId);
             const secret = opts.resolveSecret(parsed.meshId, canonicalPeer);
             const serverNonce = localHasOriginGrantCap && secret ? mintCapableHandshakeNonce(secret, "server", parsed.meshId, opts.localDaemonId) : mintHandshakeNonce();
@@ -148741,15 +148749,15 @@ ${tail}` : ""
             );
             if (localHasOriginGrantCap) {
               if (clientSentKeyMaterial && !clientHasCap) {
-                if (secret === null || secret === "") return fail9("unknown_peer", true);
-                return fail9("bad_proof", true);
+                if (secret === null || secret === "") return fail10("unknown_peer", true);
+                return fail10("bad_proof", true);
               }
               if (clientHasCap && !parsed.originGrantPublicKey) {
-                if (secret === null || secret === "") return fail9("unknown_peer", true);
-                return fail9("bad_proof", true);
+                if (secret === null || secret === "") return fail10("unknown_peer", true);
+                return fail10("bad_proof", true);
               }
               if (!clientHasCap && secret && hasCapableNonceSentinel(parsed.nonce, secret, "client", parsed.meshId, parsed.daemonId)) {
-                return fail9("bad_proof", true);
+                return fail10("bad_proof", true);
               }
             }
             negotiatedOriginGrant = Boolean(
@@ -148783,7 +148791,7 @@ ${tail}` : ""
             const okProof = negotiatedOriginGrant ? computeOkProof(inputs) : void 0;
             if (secret === null || secret === "") {
               proofsEqual(serverProof, clientProof);
-              return fail9("unknown_peer", true);
+              return fail10("unknown_peer", true);
             }
             expectedClientProof = clientProof;
             expectedOkProof = okProof;
@@ -148809,8 +148817,8 @@ ${tail}` : ""
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_proof") return fail9("bad_frame", true);
-          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail9("bad_proof", true);
+          if (parsed.kind !== "mesh_proof") return fail10("bad_frame", true);
+          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail10("bad_proof", true);
           const validClientPubKey = negotiatedOriginGrant && clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
           if (validClientPubKey) {
             const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
@@ -148822,7 +148830,7 @@ ${tail}` : ""
                 rotationChain: clientKeyRotationChain
               }
             );
-            if (!recorded) return fail9("bad_proof", true);
+            if (!recorded) return fail10("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -148878,7 +148886,7 @@ ${tail}` : ""
       return null;
     }
     function performMeshHandshake(socket, side, opts, timeoutMs = MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS) {
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         let settled = false;
         const send = (frame2) => {
           if (socket.readyState !== WS_OPEN2) return;
@@ -148938,7 +148946,7 @@ ${tail}` : ""
           if (settled) return;
           settled = true;
           detach();
-          resolve66(result);
+          resolve68(result);
         };
         const settleFail = (code, detail) => {
           if (settled) return;
@@ -149180,10 +149188,10 @@ ${tail}` : ""
         }
         const peer = this.getOrCreatePeer(target4, "initiator", "demand");
         peer.lastCommandAt = (/* @__PURE__ */ new Date()).toISOString();
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           const id4 = `${this.idNonce}:${this.idSeq++}`;
           const resultTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : resultTimeoutForCommand(command);
-          const pending = { id: id4, command, args, resolve: resolve66, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
+          const pending = { id: id4, command, args, resolve: resolve68, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
           if (peer.state === "connected" && peer.dc.isOpen()) {
             this.writeRequest(peer, pending);
             return;
@@ -149895,9 +149903,9 @@ ${tail}` : ""
       timer.unref();
       server.unref();
       try {
-        await new Promise((resolve66, reject) => {
+        await new Promise((resolve68, reject) => {
           server.once("error", reject);
-          server.listen(0, "127.0.0.1", resolve66);
+          server.listen(0, "127.0.0.1", resolve68);
         });
         const address = server.address();
         if (!address || typeof address === "string" || !current4()) throw new Error("recovery_cli_owner_or_listener_unavailable");
@@ -150783,7 +150791,7 @@ CONSUMED:${nonceHash}`);
       for (; ; ) {
         if (isConnectedMeshPeer(getConnectionStatus(daemonId))) return true;
         if (Date.now() >= deadline) return false;
-        await new Promise((resolve66) => setTimeout(resolve66, RECONNECT_POLL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, RECONNECT_POLL_MS));
       }
     }
     async function dispatchMeshOneshotWithAckRetry(dispatch2, opts) {
@@ -151150,7 +151158,7 @@ CONSUMED:${nonceHash}`);
       while (Date.now() - start < timeoutMs) {
         try {
           process.kill(pid, 0);
-          await new Promise((resolve66) => setTimeout(resolve66, 250));
+          await new Promise((resolve68) => setTimeout(resolve68, 250));
         } catch {
           return true;
         }
@@ -151253,17 +151261,17 @@ CONSUMED:${nonceHash}`);
     }
     var DEFAULT_HEALTH_TIMEOUT_MS = 12e4;
     function fetchLocalJson(port, pathname) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const req = http.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
           let body = "";
           res.setEncoding("utf8");
           res.on("data", (chunk) => {
             body += chunk;
           });
-          res.on("end", () => resolve66({ ok: res.statusCode === 200, body }));
+          res.on("end", () => resolve68({ ok: res.statusCode === 200, body }));
         });
         req.on("timeout", () => req.destroy());
-        req.on("error", () => resolve66({ ok: false, body: "" }));
+        req.on("error", () => resolve68({ ok: false, body: "" }));
       });
     }
     async function fetchLocalHealth(port) {
@@ -151738,7 +151746,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
               loggedVersionPending = true;
               options.log(`Health gate: replacement reports version ${version2} (want ${targetVersion}) at ${elapsedMs}ms`);
             }
-            await new Promise((resolve66) => setTimeout(resolve66, 500));
+            await new Promise((resolve68) => setTimeout(resolve68, 500));
           }
           options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
           return false;
@@ -152623,9 +152631,9 @@ ${marker2}`,
       for (const shim of backup.binShims) {
         try {
           const entry = fs44.realpathSync(shim);
-          const relative22 = path57.relative(backup.packageRoot, entry);
-          if (relative22.startsWith("..") || path57.isAbsolute(relative22)) continue;
-          const previousFirstLine = fs44.readFileSync(path57.join(backup.backupDir, "package", relative22), "utf8").split("\n", 1)[0];
+          const relative24 = path57.relative(backup.packageRoot, entry);
+          if (relative24.startsWith("..") || path57.isAbsolute(relative24)) continue;
+          const previousFirstLine = fs44.readFileSync(path57.join(backup.backupDir, "package", relative24), "utf8").split("\n", 1)[0];
           if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
           const current4 = fs44.readFileSync(entry, "utf8");
           const currentFirstLine = current4.split("\n", 1)[0];
@@ -152735,7 +152743,7 @@ ${marker2}`,
           });
           return "reinstall";
         },
-        sleep: (ms3) => new Promise((resolve66) => setTimeout(resolve66, ms3)),
+        sleep: (ms3) => new Promise((resolve68) => setTimeout(resolve68, ms3)),
         now: () => Date.now(),
         log
       };
@@ -153150,7 +153158,7 @@ ${marker2}`,
             appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || "lock"}); clearing holders + staging and retrying after backoff`);
             await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
             cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
-            await new Promise((resolve66) => setTimeout(resolve66, attempt * 1500));
+            await new Promise((resolve68) => setTimeout(resolve68, attempt * 1500));
             continue;
           }
           if (isRetriableInstallLockError(error)) {
@@ -153193,7 +153201,7 @@ ${marker2}`,
         }
       }
       if (process.platform === "win32") {
-        await new Promise((resolve66) => setTimeout(resolve66, 500));
+        await new Promise((resolve68) => setTimeout(resolve68, 500));
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         appendUpgradeLog("Post-install staging cleanup complete");
       }
@@ -154225,14 +154233,14 @@ ${marker2}`,
       });
       const records = readRecords3();
       if (new Set(records.map((r) => r.pid)).size !== records.length) throw new Error("maintenance_mcp_pid_incarnation_ambiguous");
-      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity4) => new Promise((resolve66) => {
+      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity4) => new Promise((resolve68) => {
         const name = `${root}:${key3(identity4)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
         const nonce = (0, import_node_crypto29.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
-          resolve66({ identity: identity4, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
+          resolve68({ identity: identity4, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
-        waiting.set(name, { identity: identity4, nonce, epoch: state2.epoch, resolve: resolve66, timer });
+        waiting.set(name, { identity: identity4, nonce, epoch: state2.epoch, resolve: resolve68, timer });
       })));
       if (sha5(fs47.readdirSync(dir).sort()) !== sha5(names) || sha5(readRecords3()) !== membershipDigest) throw new Error("maintenance_mcp_membership_changed");
       return { observed: members.every((m) => m.observed), reason: members.some((m) => !m.observed) ? "mcp_incarnation_unreachable" : void 0, membershipDigest, members, nativeCensusRequired: true };
@@ -154848,7 +154856,7 @@ ${marker2}`,
       * Returns multiple entries if multiple IDE windows are open on same port
       */
       static listAllTargets(port) {
-        return new Promise((resolve66) => {
+        return new Promise((resolve68) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -154864,16 +154872,16 @@ ${marker2}`,
                   (t) => !isNonMain(t.title || "") && t.url?.includes("workbench.html") && !t.url?.includes("agent")
                 );
                 const fallbackPages = pages.filter((t) => !isNonMain(t.title || ""));
-                resolve66(mainPages.length > 0 ? mainPages : fallbackPages);
+                resolve68(mainPages.length > 0 ? mainPages : fallbackPages);
               } catch {
-                resolve66([]);
+                resolve68([]);
               }
             });
           });
-          req.on("error", () => resolve66([]));
+          req.on("error", () => resolve68([]));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve66([]);
+            resolve68([]);
           });
         });
       }
@@ -154913,7 +154921,7 @@ ${marker2}`,
         }
       }
       findTargetOnPort(port) {
-        return new Promise((resolve66) => {
+        return new Promise((resolve68) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -154924,7 +154932,7 @@ ${marker2}`,
                   (t) => (t.type === "page" || t.type === "browser" || t.type === "Page") && t.webSocketDebuggerUrl
                 );
                 if (pages.length === 0) {
-                  resolve66(targets.find((t) => t.webSocketDebuggerUrl) || null);
+                  resolve68(targets.find((t) => t.webSocketDebuggerUrl) || null);
                   return;
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
@@ -154943,25 +154951,25 @@ ${marker2}`,
                     this._targetId = selected2.target.id;
                   }
                   this._pageTitle = selected2.target.title || "";
-                  resolve66(selected2.target);
+                  resolve68(selected2.target);
                   return;
                 }
                 if (previousTargetId) {
                   this.log(`[CDP] Target ${previousTargetId} not found in page list`);
-                  resolve66(null);
+                  resolve68(null);
                   return;
                 }
                 this._pageTitle = list3[0]?.title || "";
-                resolve66(list3[0]);
+                resolve68(list3[0]);
               } catch {
-                resolve66(null);
+                resolve68(null);
               }
             });
           });
-          req.on("error", () => resolve66(null));
+          req.on("error", () => resolve68(null));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve66(null);
+            resolve68(null);
           });
         });
       }
@@ -154972,7 +154980,7 @@ ${marker2}`,
         this.extensionProviders = providers;
       }
       connectToTarget(wsUrl) {
-        return new Promise((resolve66) => {
+        return new Promise((resolve68) => {
           this.ws = new import_ws3.default(wsUrl);
           this.ws.on("open", async () => {
             this._connected = true;
@@ -154982,17 +154990,17 @@ ${marker2}`,
             }
             this.connectBrowserWs().catch(() => {
             });
-            resolve66(true);
+            resolve68(true);
           });
           this.ws.on("message", (data) => {
             try {
               const msg = JSON.parse(data.toString());
               if (msg.id && this.pending.has(msg.id)) {
-                const { resolve: resolve67, reject } = this.pending.get(msg.id);
+                const { resolve: resolve69, reject } = this.pending.get(msg.id);
                 this.pending.delete(msg.id);
                 this.failureCount = 0;
                 if (msg.error) reject(new Error(msg.error.message));
-                else resolve67(msg.result);
+                else resolve69(msg.result);
               } else if (msg.method === "Runtime.executionContextCreated") {
                 this.contexts.add(msg.params.context.id);
               } else if (msg.method === "Runtime.executionContextDestroyed") {
@@ -155015,7 +155023,7 @@ ${marker2}`,
           this.ws.on("error", (err) => {
             this.log(`[CDP] WebSocket error: ${err.message}`);
             this._connected = false;
-            resolve66(false);
+            resolve68(false);
           });
         });
       }
@@ -155029,7 +155037,7 @@ ${marker2}`,
             return;
           }
           this.log(`[CDP] Connecting browser WS for target discovery...`);
-          await new Promise((resolve66, reject) => {
+          await new Promise((resolve68, reject) => {
             this.browserWs = new import_ws3.default(browserWsUrl);
             this.browserWs.on("open", async () => {
               this._browserConnected = true;
@@ -155039,16 +155047,16 @@ ${marker2}`,
               } catch (e) {
                 this.log(`[CDP] setDiscoverTargets failed: ${e.message}`);
               }
-              resolve66();
+              resolve68();
             });
             this.browserWs.on("message", (data) => {
               try {
                 const msg = JSON.parse(data.toString());
                 if (msg.id && this.browserPending.has(msg.id)) {
-                  const { resolve: resolve67, reject: reject2 } = this.browserPending.get(msg.id);
+                  const { resolve: resolve69, reject: reject2 } = this.browserPending.get(msg.id);
                   this.browserPending.delete(msg.id);
                   if (msg.error) reject2(new Error(msg.error.message));
-                  else resolve67(msg.result);
+                  else resolve69(msg.result);
                 }
               } catch {
               }
@@ -155068,31 +155076,31 @@ ${marker2}`,
         }
       }
       getBrowserWsUrl() {
-        return new Promise((resolve66) => {
+        return new Promise((resolve68) => {
           const req = http2.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
             res.on("end", () => {
               try {
                 const info = JSON.parse(data);
-                resolve66(info.webSocketDebuggerUrl || null);
+                resolve68(info.webSocketDebuggerUrl || null);
               } catch {
-                resolve66(null);
+                resolve68(null);
               }
             });
           });
-          req.on("error", () => resolve66(null));
+          req.on("error", () => resolve68(null));
           req.setTimeout(3e3, () => {
             req.destroy();
-            resolve66(null);
+            resolve68(null);
           });
         });
       }
       sendBrowser(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           if (!this.browserWs || !this._browserConnected) return reject(new Error("Browser WS not connected"));
           const id4 = this.browserMsgId++;
-          this.browserPending.set(id4, { resolve: resolve66, reject });
+          this.browserPending.set(id4, { resolve: resolve68, reject });
           this.browserWs.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.browserPending.has(id4)) {
@@ -155132,11 +155140,11 @@ ${marker2}`,
       }
       // ─── CDP Protocol ────────────────────────────────────────
       sendInternal(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           if (!this.ws || !this._connected) return reject(new Error("CDP not connected"));
           if (this.ws.readyState !== import_ws3.default.OPEN) return reject(new Error("WebSocket not open"));
           const id4 = this.msgId++;
-          this.pending.set(id4, { resolve: resolve66, reject });
+          this.pending.set(id4, { resolve: resolve68, reject });
           this.ws.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.pending.has(id4)) {
@@ -155385,7 +155393,7 @@ ${marker2}`,
         const browserWs = this.browserWs;
         let msgId = this.browserMsgId;
         const sendWs = (method, params = {}, sessionId) => {
-          return new Promise((resolve66, reject) => {
+          return new Promise((resolve68, reject) => {
             const mid = msgId++;
             this.browserMsgId = msgId;
             const handler = (raw) => {
@@ -155394,7 +155402,7 @@ ${marker2}`,
                 if (msg.id === mid) {
                   browserWs.removeListener("message", handler);
                   if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                  else resolve66(msg.result);
+                  else resolve68(msg.result);
                 }
               } catch {
               }
@@ -155595,14 +155603,14 @@ ${marker2}`,
         if (!ws || ws.readyState !== import_ws3.default.OPEN) {
           throw new Error("CDP not connected");
         }
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           const id4 = getNextId();
           pendingMap.set(id4, {
             resolve: (result) => {
               if (result?.result?.subtype === "error") {
                 reject(new Error(result.result.description));
               } else {
-                resolve66(result?.result?.value);
+                resolve68(result?.result?.value);
               }
             },
             reject
@@ -155634,10 +155642,10 @@ ${marker2}`,
           throw new Error("CDP not connected");
         }
         const sendViaSession = (method, params = {}) => {
-          return new Promise((resolve66, reject) => {
+          return new Promise((resolve68, reject) => {
             const pendingMap = this._browserConnected ? this.browserPending : this.pending;
             const id4 = this._browserConnected ? this.browserMsgId++ : this.msgId++;
-            pendingMap.set(id4, { resolve: resolve66, reject });
+            pendingMap.set(id4, { resolve: resolve68, reject });
             ws.send(JSON.stringify({ id: id4, sessionId, method, params }));
             setTimeout(() => {
               if (pendingMap.has(id4)) {
@@ -157268,8 +157276,8 @@ ${marker2}`,
           if ((0, import_fs28.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os49 === "win32") {
-          const { dirname: dirname67 } = await import("path");
-          const appDir = dirname67(appPath);
+          const { dirname: dirname69 } = await import("path");
+          const appDir = dirname69(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -160028,7 +160036,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const run4 = async () => {
         let step;
         do {
-          await new Promise((resolve66) => setImmediate(resolve66));
+          await new Promise((resolve68) => setImmediate(resolve68));
           step = advanceJsonlWork(work);
         } while (!step?.done);
         return step.value;
@@ -160582,11 +160590,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function pickUniqueSpawnEvidence(candidates, sessionFloorMs) {
       if (!(sessionFloorMs > 0) || candidates.length === 0) return null;
-      const within = candidates.filter((c) => {
+      const within2 = candidates.filter((c) => {
         const born = c.birth > 0 ? c.birth : c.mtime;
         return Math.abs(born - sessionFloorMs) <= SPAWN_BIND_GRACE_MS;
       });
-      return within.length === 1 ? within[0].p : null;
+      return within2.length === 1 ? within2[0].p : null;
     }
     function resolveSidecarClaimSource(template, pattern, windowMs, sessionFloorMs, workspaceHint, requestedSessionId, sidecar, input) {
       const exact = requestedSessionId ? pickDirUuidFileAcrossGlob(template, pattern, requestedSessionId) : null;
@@ -162565,8 +162573,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path75.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative22 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative22.split(path75.sep)[0];
+        const relative24 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative24.split(path75.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -163651,7 +163659,7 @@ ${output}` : "";
       return e?.message || String(e);
     }
     function delay(ms3) {
-      return new Promise((resolve66) => setTimeout(resolve66, ms3));
+      return new Promise((resolve68) => setTimeout(resolve68, ms3));
     }
     var ProviderChannelRuntime = class {
       store;
@@ -164022,7 +164030,7 @@ ${output}` : "";
     }
     function defaultFetchJson(url) {
       const https = require("https");
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", Accept: "application/json" }, timeout: 15e3 }, (res) => {
           if (res.statusCode !== 200) {
             reject(new Error(`HTTP ${res.statusCode}`));
@@ -164032,7 +164040,7 @@ ${output}` : "";
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             try {
-              resolve66(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+              resolve68(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
             } catch (e) {
               reject(e);
             }
@@ -164048,7 +164056,7 @@ ${output}` : "";
     function defaultDownloadFile(url, destPath) {
       const https = require("https");
       const http4 = require("http");
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         const doRequest = (reqUrl, redirectCount = 0) => {
           if (redirectCount > 5) {
             reject(new Error("Too many redirects"));
@@ -164068,7 +164076,7 @@ ${output}` : "";
             res.pipe(ws);
             ws.on("finish", () => {
               ws.close();
-              resolve66();
+              resolve68();
             });
             ws.on("error", reject);
           });
@@ -165604,7 +165612,20 @@ ${output}` : "";
        */
       getProviderRoots() {
         const externalDir = path85.join(getConfigDir2(), "external");
-        return [this.userDir, externalDir, ...this.channelSync.objectRoots, this.upstreamDir];
+        return [this.userDir, externalDir, ...this.externalSourceRoots(externalDir), ...this.channelSync.objectRoots, this.upstreamDir];
+      }
+      /**
+       * Named external sources (external/<source>/<category>/<type>) are loaded by loadAll()
+       * but `external/<category>/<type>` never matches them, so findProviderDir() could not
+       * locate a driver/provider installed under a named source (driver_install uses one so it
+       * never disturbs the legacy single-source layout). Legacy category dirs are not sources.
+       */
+      externalSourceRoots(externalDir) {
+        try {
+          return fs73.readdirSync(externalDir, { withFileTypes: true }).filter((e) => e.isDirectory() && !["cli", "ide", "extension", "driver"].includes(e.name)).map((e) => path85.join(externalDir, e.name));
+        } catch {
+          return [];
+        }
       }
       getSourceConfig() {
         return {
@@ -166150,7 +166171,7 @@ ${output}` : "";
     var PS_TIMEOUT_MS = 3e3;
     function findRunningMacAppPids(appPaths, spawnImpl = import_child_process13.spawn) {
       if (!appPaths.some((p) => normalizeMacAppPath(p))) return Promise.resolve([]);
-      return new Promise((resolve66, reject) => {
+      return new Promise((resolve68, reject) => {
         const child = spawnImpl("ps", ["axww", "-o", "pid=,args="], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
         const pids = [];
         const take = (completed) => {
@@ -166165,7 +166186,7 @@ ${output}` : "";
           clearTimeout(timer);
           if (error) return reject(error);
           if (line) take(line);
-          resolve66(pids);
+          resolve68(pids);
         };
         const timer = setTimeout(() => {
           child.kill();
@@ -166227,10 +166248,10 @@ ${output}` : "";
     }
     init_logger();
     async function execQuiet(command, options = {}) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         (0, import_child_process14.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
-          if (error) return resolve66("");
-          resolve66(stdout.toString());
+          if (error) return resolve68("");
+          resolve68(stdout.toString());
         });
       });
     }
@@ -166312,17 +166333,17 @@ ${output}` : "";
       throw new Error("No free port found");
     }
     function checkPortFree(port) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const server = net.createServer();
         server.unref();
-        server.on("error", () => resolve66(false));
+        server.on("error", () => resolve68(false));
         server.listen(port, "127.0.0.1", () => {
-          server.close(() => resolve66(true));
+          server.close(() => resolve68(true));
         });
       });
     }
     async function isCdpActive(port) {
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const req = require("http").get(`http://127.0.0.1:${port}/json/version`, {
           timeout: 2e3
         }, (res) => {
@@ -166331,16 +166352,16 @@ ${output}` : "";
           res.on("end", () => {
             try {
               const info = JSON.parse(data);
-              resolve66(!!info["WebKit-Version"] || !!info["Browser"]);
+              resolve68(!!info["WebKit-Version"] || !!info["Browser"]);
             } catch {
-              resolve66(false);
+              resolve68(false);
             }
           });
         });
-        req.on("error", () => resolve66(false));
+        req.on("error", () => resolve68(false));
         req.on("timeout", () => {
           req.destroy();
-          resolve66(false);
+          resolve68(false);
         });
       });
     }
@@ -169883,7 +169904,7 @@ ${output}` : "";
       }
     }
     function sleep(ms3) {
-      return new Promise((resolve66) => setTimeout(resolve66, ms3));
+      return new Promise((resolve68) => setTimeout(resolve68, ms3));
     }
     async function waitForIdleAfterInterrupt(target4, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -170625,7 +170646,7 @@ ${output}` : "";
     async function getStableExtensionBaseline(h) {
       const first = await readExtensionChatState(h);
       if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
-      await new Promise((resolve66) => setTimeout(resolve66, 150));
+      await new Promise((resolve68) => setTimeout(resolve68, 150));
       const second = await readExtensionChatState(h);
       return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
     }
@@ -170633,7 +170654,7 @@ ${output}` : "";
       const beforeCount = getStateMessageCount(before);
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve66) => setTimeout(resolve66, 250));
+        await new Promise((resolve68) => setTimeout(resolve68, 250));
         const state2 = await readExtensionChatState(h);
         if (state2?.status === "waiting_approval") return true;
         const afterCount = getStateMessageCount(state2);
@@ -172379,7 +172400,7 @@ ${output}` : "";
             const enterCount = cliCommand.enterCount || 1;
             await adapter.writeRaw(cliCommand.text + "\r");
             for (let i = 1; i < enterCount; i += 1) {
-              await new Promise((resolve66) => setTimeout(resolve66, 50));
+              await new Promise((resolve68) => setTimeout(resolve68, 50));
               await adapter.writeRaw("\r");
             }
           }
@@ -175367,8 +175388,8 @@ ${output}` : "";
         this.linkGen = linkGen;
         this.linkKey = linkKey;
         this.roleName = roleName;
-        this.promise = new Promise((resolve66, reject) => {
-          this.settle = { resolve: resolve66, reject };
+        this.promise = new Promise((resolve68, reject) => {
+          this.settle = { resolve: resolve68, reject };
         });
         this.promise.catch(() => {
         });
@@ -180399,7 +180420,7 @@ ${output}` : "";
           const setupPromise = finishWorktreeSetup();
           const setupResult = setupWaitMs > 0 ? await Promise.race([
             setupPromise.then((value) => ({ completed: true, value })),
-            new Promise((resolve66) => setTimeout(() => resolve66({ completed: false }), setupWaitMs))
+            new Promise((resolve68) => setTimeout(() => resolve68({ completed: false }), setupWaitMs))
           ]) : { completed: false };
           const bootstrapStartedMs = Date.now();
           const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
@@ -180546,8 +180567,8 @@ ${output}` : "";
           try {
             const raced = await Promise.race([
               pipelinePromise.then((res) => ({ completed: true, res })),
-              new Promise((resolve66) => {
-                budgetTimer = setTimeout(() => resolve66({ completed: false }), syncBudgetMs);
+              new Promise((resolve68) => {
+                budgetTimer = setTimeout(() => resolve68({ completed: false }), syncBudgetMs);
               })
             ]);
             if (raced.completed) {
@@ -180871,12 +180892,12 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync67, writeFileSync: writeFileSync54 } = await import("fs");
-          const { dirname: dirname67, join: join157 } = await import("path");
+          const { mkdirSync: mkdirSync69, writeFileSync: writeFileSync56 } = await import("fs");
+          const { dirname: dirname69, join: join160 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
-          const absolutePath = join157(workspace, relativePath);
+          const absolutePath = join160(workspace, relativePath);
           const validation = normalizeRepoMeshDeclarativeConfig2(scaffold);
           if (!validation.valid) {
             return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join("; ")}` };
@@ -180912,8 +180933,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync67(dirname67(absolutePath), { recursive: true });
-          writeFileSync54(absolutePath, `${scaffoldJson}
+          mkdirSync69(dirname69(absolutePath), { recursive: true });
+          writeFileSync56(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
             success: true,
@@ -180981,18 +181002,18 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync130, readFileSync: readFileSync121, mkdirSync: mkdirSync67, writeFileSync: writeFileSync54 } = await import("fs");
-          const { dirname: dirname67, join: join157 } = await import("path");
+          const { existsSync: existsSync131, readFileSync: readFileSync123, mkdirSync: mkdirSync69, writeFileSync: writeFileSync56 } = await import("fs");
+          const { dirname: dirname69, join: join160 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
-          let existingPath = join157(workspace, relativePath);
+          let existingPath = join160(workspace, relativePath);
           let existedAsYaml = false;
-          for (const relative22 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join157(workspace, relative22);
-            if (!existsSync130(candidate)) continue;
+          for (const relative24 of MESH_JSON_CONFIG_LOCATIONS2) {
+            const candidate = join160(workspace, relative24);
+            if (!existsSync131(candidate)) continue;
             try {
-              const text5 = readFileSync121(candidate, "utf-8");
+              const text5 = readFileSync123(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text5) : yaml3.load(text5);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -181000,7 +181021,7 @@ ${output}` : "";
                 existedAsYaml = !/\.json$/i.test(candidate);
               }
             } catch (e) {
-              return { success: false, error: `existing ${relative22} is unparseable, refusing to overwrite: ${e?.message || e}` };
+              return { success: false, error: `existing ${relative24} is unparseable, refusing to overwrite: ${e?.message || e}` };
             }
             break;
           }
@@ -181046,8 +181067,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync67(dirname67(absolutePath), { recursive: true });
-          writeFileSync54(absolutePath, serialized, "utf-8");
+          mkdirSync69(dirname69(absolutePath), { recursive: true });
+          writeFileSync56(absolutePath, serialized, "utf-8");
           return {
             success: true,
             written: true,
@@ -182079,7 +182100,7 @@ ${output}` : "";
         return ports.store.withSnapshot((stored) => {
           if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override }, ports.validation);
           if (projectId && !ports.projects) return unavailable3("project_storage_unavailable");
-          const resolve66 = () => {
+          const resolve68 = () => {
             let hasHostInventory = false;
             if (projectId) {
               try {
@@ -182107,7 +182128,7 @@ ${output}` : "";
               } } : {}
             }, ports.validation);
           };
-          return projectId && ports.projects ? ports.projects.withWriteLock(resolve66) : resolve66();
+          return projectId && ports.projects ? ports.projects.withWriteLock(resolve68) : resolve68();
         });
       } catch {
         return unavailable3("launch_snapshot_unavailable");
@@ -182683,8 +182704,8 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync130, readFileSync: readFileSync121, writeFileSync: writeFileSync54, mkdirSync: mkdirSync67 } = await import("fs");
-          const { dirname: dirname67 } = await import("path");
+          const { existsSync: existsSync131, readFileSync: readFileSync123, writeFileSync: writeFileSync56, mkdirSync: mkdirSync69 } = await import("fs");
+          const { dirname: dirname69 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -182712,18 +182733,18 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync67(dirname67(mcpConfigPath), { recursive: true });
+              mkdirSync69(dirname69(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
               return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
             }
-            const hadExistingMcpConfig = existsSync130(mcpConfigPath);
+            const hadExistingMcpConfig = existsSync131(mcpConfigPath);
             let existingMcpConfig = {};
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
               try {
-                existingMcpConfigText = readFileSync121(mcpConfigPath, "utf-8");
+                existingMcpConfigText = readFileSync123(mcpConfigPath, "utf-8");
                 const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
                 existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
               } catch (error) {
@@ -182749,11 +182770,11 @@ ${ptyResult.output.slice(-2e3)}`);
               if (nextMcpConfigText !== existingMcpConfigText) {
                 if (hadExistingMcpConfig) {
                   const backupDir = (0, import_path39.join)(getConfigDir2(), "mcp-config-backups");
-                  mkdirSync67(backupDir, { recursive: true });
+                  mkdirSync69(backupDir, { recursive: true });
                   const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
-                  writeFileSync54((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
+                  writeFileSync56((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
                 }
-                writeFileSync54(mcpConfigPath, nextMcpConfigText, "utf-8");
+                writeFileSync56(mcpConfigPath, nextMcpConfigText, "utf-8");
               }
             } catch (error) {
               const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;
@@ -183551,7 +183572,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync130 } = await import("fs");
+          const { existsSync: existsSync131 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -183570,7 +183591,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync130(workspace)) continue;
+            if (!workspace || !existsSync131(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -183791,6 +183812,430 @@ ${ptyResult.output.slice(-2e3)}`);
       mesh_node_state_nudge: { meshSender: "authenticated_peer" }
     }, { meshSender: "authenticated_peer" });
     init_drivers();
+    var import_node_fs32 = require("fs");
+    var import_node_path30 = require("path");
+    init_command_registry();
+    init_worker_report();
+    init_artifact_sharing();
+    init_artifacts2();
+    init_drivers();
+    init_logger();
+    init_config();
+    var import_node_crypto55 = require("crypto");
+    var import_node_fs31 = require("fs");
+    var import_node_path29 = require("path");
+    init_installed_driver();
+    var import_node_crypto54 = require("crypto");
+    var import_node_fs30 = require("fs");
+    var import_node_path28 = require("path");
+    init_manifest();
+    init_activation_store();
+    init_risk_class();
+    var DRIVER_BUNDLE_FORMAT = "adhdev-driver-bundle";
+    var DRIVER_BUNDLE_MAX_FILES = 200;
+    var DRIVER_BUNDLE_MAX_FILE_BYTES = 1024 * 1024;
+    var DRIVER_BUNDLE_MAX_TOTAL_BYTES = 256e4;
+    var DRIVER_BUNDLE_MAX_JSON_BYTES = 4 * 1024 * 1024;
+    var DRIVER_MANIFEST_FILE = "provider.v1.json";
+    var MAX_PATH_CHARS2 = 200;
+    var SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
+    var TYPE_PATTERN = /^[a-z][a-z0-9-]*$/;
+    var EXCLUDED_NAMES2 = /* @__PURE__ */ new Set([".git", "node_modules", ".DS_Store"]);
+    var DriverPackageError = class extends Error {
+      constructor(code, message) {
+        super(`${message} (${code})`);
+        this.code = code;
+        this.name = "DriverPackageError";
+      }
+    };
+    function isSafeDriverRelPath(rel) {
+      if (typeof rel !== "string" || !rel || rel.length > MAX_PATH_CHARS2 || !SAFE_PATH.test(rel)) return false;
+      if (rel.startsWith("/") || rel.endsWith("/") || rel.includes("//")) return false;
+      return rel.split("/").every((seg) => seg !== "" && seg !== "." && seg !== ".." && !EXCLUDED_NAMES2.has(seg));
+    }
+    function isValidDriverType(type2) {
+      return typeof type2 === "string" && type2.length <= 64 && TYPE_PATTERN.test(type2);
+    }
+    function digestDriverFiles(type2, files) {
+      const hash4 = (0, import_node_crypto54.createHash)("sha256");
+      for (const file of [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
+        hash4.update(`driver/${type2}/${file.path}\0${file.bytes.length}\0`).update(file.bytes);
+      }
+      return `sha256:${hash4.digest("hex")}`;
+    }
+    function readDriverPackageDir(dir) {
+      const root = (0, import_node_fs30.lstatSync)(dir);
+      if (!root.isDirectory() || root.isSymbolicLink()) throw new DriverPackageError("invalid_directory", "Driver package must be a real directory");
+      const out = [];
+      const walk = (sub) => {
+        for (const entry of (0, import_node_fs30.readdirSync)((0, import_node_path28.join)(dir, sub), { withFileTypes: true })) {
+          if (EXCLUDED_NAMES2.has(entry.name)) continue;
+          const rel = sub ? `${sub}/${entry.name}` : entry.name;
+          const stat2 = (0, import_node_fs30.lstatSync)((0, import_node_path28.join)(dir, rel));
+          if (stat2.isSymbolicLink()) throw new DriverPackageError("symlink_refused", `Symbolic link in driver package: ${rel}`);
+          if (stat2.isDirectory()) walk(rel);
+          else if (stat2.isFile()) {
+            if (out.length >= DRIVER_BUNDLE_MAX_FILES) throw new DriverPackageError("too_many_files", `More than ${DRIVER_BUNDLE_MAX_FILES} files`);
+            if (stat2.size > DRIVER_BUNDLE_MAX_FILE_BYTES) throw new DriverPackageError("file_too_large", `${rel} exceeds ${DRIVER_BUNDLE_MAX_FILE_BYTES} bytes`);
+            out.push({ path: rel, bytes: (0, import_node_fs30.readFileSync)((0, import_node_path28.join)(dir, rel)) });
+          } else throw new DriverPackageError("non_regular_entry", `Non-regular entry in driver package: ${rel}`);
+        }
+      };
+      walk("");
+      return out;
+    }
+    var normRef = (value) => value.replace(/^\.\//, "");
+    function verifyDriverFiles(files, opts = {}) {
+      if (!files.length) throw new DriverPackageError("empty_package", "Driver package has no files");
+      if (files.length > DRIVER_BUNDLE_MAX_FILES) throw new DriverPackageError("too_many_files", `More than ${DRIVER_BUNDLE_MAX_FILES} files`);
+      const seen2 = /* @__PURE__ */ new Set();
+      let total = 0;
+      for (const file of files) {
+        if (!isSafeDriverRelPath(file.path)) throw new DriverPackageError("unsafe_path", `Unsafe path in driver package: ${String(file.path).slice(0, 80)}`);
+        const key5 = file.path.toLowerCase();
+        if (seen2.has(key5)) throw new DriverPackageError("duplicate_path", `Duplicate path: ${file.path}`);
+        seen2.add(key5);
+        if (file.bytes.length > DRIVER_BUNDLE_MAX_FILE_BYTES) throw new DriverPackageError("file_too_large", `${file.path} exceeds ${DRIVER_BUNDLE_MAX_FILE_BYTES} bytes`);
+        total += file.bytes.length;
+      }
+      if (total > DRIVER_BUNDLE_MAX_TOTAL_BYTES) throw new DriverPackageError("package_too_large", `Driver package exceeds ${DRIVER_BUNDLE_MAX_TOTAL_BYTES} bytes`);
+      const manifestFile = files.find((f) => f.path === DRIVER_MANIFEST_FILE);
+      if (!manifestFile) throw new DriverPackageError("manifest_missing", `${DRIVER_MANIFEST_FILE} is required`);
+      let manifest;
+      try {
+        manifest = JSON.parse(manifestFile.bytes.toString("utf8"));
+      } catch {
+        throw new DriverPackageError("manifest_invalid", `${DRIVER_MANIFEST_FILE} is not valid JSON`);
+      }
+      const validation = validateDriverProviderManifest(manifest);
+      if (!validation.ok) throw new DriverPackageError("manifest_invalid", `Manifest invalid: ${JSON.stringify(validation.issues).slice(0, 400)}`);
+      if (!isValidDriverType(manifest.type)) throw new DriverPackageError("manifest_invalid", "Invalid driver type");
+      const paths = new Set(files.map((f) => f.path));
+      const refs = [];
+      for (const action2 of manifest.actions) if (action2.inputSchema) refs.push(action2.inputSchema);
+      if (manifest.guidance) refs.push(manifest.guidance);
+      for (const arg of manifest.runtime.args ?? []) if (arg.startsWith("./")) refs.push(arg);
+      for (const ref2 of opts.checkReferences === false ? [] : refs) {
+        const rel = normRef(ref2);
+        if (!isSafeDriverRelPath(rel) || !paths.has(rel)) throw new DriverPackageError("missing_reference", `Manifest references a file that is not in the package: ${ref2}`);
+      }
+      const risk = deriveDriverRiskClass(manifest);
+      return { manifest, files: [...files].sort((a, b) => a.path < b.path ? -1 : 1), report: {
+        type: manifest.type,
+        name: manifest.name,
+        providerVersion: manifest.providerVersion,
+        treeDigest: digestDriverFiles(manifest.type, files),
+        riskClass: risk.riskClass,
+        reasons: risk.reasons,
+        declaredAccess: structuredClone(manifest.declaredAccess ?? {}),
+        runtime: structuredClone(manifest.runtime),
+        actions: structuredClone(manifest.actions),
+        files: files.length,
+        totalBytes: total
+      } };
+    }
+    function encodeDriverBundle(pkg) {
+      const text5 = JSON.stringify({
+        format: DRIVER_BUNDLE_FORMAT,
+        version: 1,
+        type: pkg.report.type,
+        name: pkg.report.name,
+        providerVersion: pkg.report.providerVersion,
+        treeDigest: pkg.report.treeDigest,
+        files: pkg.files.map((f) => ({ path: f.path, size: f.bytes.length, content: f.bytes.toString("base64") }))
+      }, null, 1);
+      if (Buffer.byteLength(text5) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Encoded bundle exceeds the 4 MiB artifact limit");
+      return text5;
+    }
+    var BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+    var BUNDLE_KEYS = /* @__PURE__ */ new Set(["format", "version", "type", "name", "providerVersion", "treeDigest", "files"]);
+    function decodeDriverBundle(text5) {
+      if (typeof text5 !== "string" || Buffer.byteLength(text5) > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
+      let raw;
+      try {
+        raw = JSON.parse(text5);
+      } catch {
+        throw new DriverPackageError("bundle_invalid", "Bundle is not valid JSON");
+      }
+      if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.format !== DRIVER_BUNDLE_FORMAT || raw.version !== 1 || Object.keys(raw).some((k) => !BUNDLE_KEYS.has(k)) || !isValidDriverType(raw.type) || !validDriverDigest(raw.treeDigest) || !Array.isArray(raw.files)) throw new DriverPackageError("bundle_invalid", "Not an adhdev-driver-bundle v1");
+      if (raw.files.length > DRIVER_BUNDLE_MAX_FILES) throw new DriverPackageError("too_many_files", `More than ${DRIVER_BUNDLE_MAX_FILES} files`);
+      const files = raw.files.map((entry) => {
+        if (!entry || typeof entry !== "object" || typeof entry.path !== "string" || typeof entry.content !== "string" || !Number.isInteger(entry.size) || entry.size < 0 || entry.size > DRIVER_BUNDLE_MAX_FILE_BYTES || Object.keys(entry).some((k) => !["path", "size", "content"].includes(k)) || !BASE64.test(entry.content)) {
+          throw new DriverPackageError("bundle_invalid", "Malformed file entry in bundle");
+        }
+        const bytes = Buffer.from(entry.content, "base64");
+        if (bytes.length !== entry.size) throw new DriverPackageError("bundle_invalid", `Size mismatch for ${entry.path.slice(0, 80)}`);
+        return { path: entry.path, bytes };
+      });
+      const pkg = verifyDriverFiles(files);
+      if (pkg.manifest.type !== raw.type) throw new DriverPackageError("bundle_invalid", "Bundle type does not match its manifest");
+      if (pkg.report.treeDigest !== raw.treeDigest) throw new DriverPackageError("bundle_digest_mismatch", "Bundle contents do not match the declared digest");
+      return pkg;
+    }
+    function scaffoldDriverFiles(input) {
+      const manifest = {
+        $schema: "https://adhf.dev/schemas/v1/driver/provider.schema.json",
+        type: input.type,
+        category: "driver",
+        name: input.name,
+        providerVersion: input.providerVersion ?? "1.0.0",
+        ...input.publisher ? { publisher: input.publisher } : {},
+        compatibility: { driverApi: "^1.0.0" },
+        runtime: {
+          kind: "mcp-stdio",
+          command: input.command,
+          ...input.args?.length ? { args: input.args } : {},
+          ...input.env?.length ? { env: input.env } : {},
+          startupTimeoutMs: 2e4,
+          idleStopMs: 6e5
+        },
+        actions: input.actions.map((a) => ({ id: a.id, tool: a.tool, risk: a.risk ?? "write" })),
+        guidance: "./guidance/usage.md",
+        declaredAccess: input.declaredAccess ?? { filesystem: ["workspace"] }
+      };
+      const lines = input.actions.map((a) => `- \`${a.id}\` (${a.risk ?? "write"}) calls MCP tool \`${a.tool}\``);
+      const guidance = `# ${input.name}
+
+${input.guidance?.trim() || `Driver wrapping \`${input.command}\`.`}
+
+## Actions
+
+${lines.join("\n")}
+`;
+      return [
+        { path: DRIVER_MANIFEST_FILE, bytes: Buffer.from(`${JSON.stringify(manifest, null, 2)}
+`) },
+        { path: "guidance/usage.md", bytes: Buffer.from(guidance) }
+      ];
+    }
+    var INSTALL_SOURCE_NAME = "adhdev-installed";
+    var LEGACY_CATEGORIES = /* @__PURE__ */ new Set(["cli", "ide", "extension", "driver"]);
+    function within(root, target4) {
+      const rel = (0, import_node_path29.relative)((0, import_node_path29.resolve)(root), (0, import_node_path29.resolve)(target4));
+      return !!rel && !rel.startsWith("..") && !(0, import_node_path29.isAbsolute)(rel);
+    }
+    function resolveInstallDest(configDir, type2, existing) {
+      const externalRoot2 = (0, import_node_path29.join)(configDir, "external");
+      if (existing) {
+        if (!existing.dir || !within(externalRoot2, existing.dir)) {
+          throw new DriverPackageError("type_conflict", `A user, built-in or channel provider already uses the type "${type2}"`);
+        }
+        return { dest: existing.dir, replaced: true };
+      }
+      let legacy = false;
+      try {
+        legacy = (0, import_node_fs31.readdirSync)(externalRoot2, { withFileTypes: true }).some((e) => e.isDirectory() && LEGACY_CATEGORIES.has(e.name));
+      } catch {
+      }
+      const dest = legacy ? (0, import_node_path29.join)(externalRoot2, "driver", type2) : (0, import_node_path29.join)(externalRoot2, INSTALL_SOURCE_NAME, "driver", type2);
+      return { dest, replaced: false };
+    }
+    function installDriverPackage(configDir, pkg, existing) {
+      const { type: type2, treeDigest } = pkg.report;
+      const { dest, replaced } = resolveInstallDest(configDir, type2, existing);
+      const work = (0, import_node_path29.join)(configDir, "drivers", ".installing", (0, import_node_crypto55.randomBytes)(6).toString("hex"));
+      const staged = (0, import_node_path29.join)(work, type2);
+      try {
+        for (const file of pkg.files) {
+          const target4 = (0, import_node_path29.join)(staged, file.path);
+          (0, import_node_fs31.mkdirSync)((0, import_node_path29.dirname)(target4), { recursive: true });
+          (0, import_node_fs31.writeFileSync)(target4, file.bytes, { mode: 420 });
+        }
+        if (computeDriverTreeDigest(staged) !== treeDigest) throw new DriverPackageError("bundle_digest_mismatch", "Written tree does not match the verified digest");
+        (0, import_node_fs31.mkdirSync)((0, import_node_path29.dirname)(dest), { recursive: true });
+        const old = (0, import_node_path29.join)(work, "previous");
+        if ((0, import_node_fs31.existsSync)(dest)) (0, import_node_fs31.renameSync)(dest, old);
+        try {
+          (0, import_node_fs31.renameSync)(staged, dest);
+        } catch (error) {
+          if ((0, import_node_fs31.existsSync)(old)) (0, import_node_fs31.renameSync)(old, dest);
+          throw error;
+        }
+        return { dest, replaced };
+      } finally {
+        try {
+          (0, import_node_fs31.rmSync)(work, { recursive: true, force: true });
+        } catch {
+        }
+      }
+    }
+    var fail3 = (code, error) => ({ success: false, code, error });
+    var asFailure = (error) => error instanceof DriverPackageError ? fail3(error.code, error.message) : fail3("driver_authoring_failed", error instanceof Error ? error.message : String(error));
+    function resolveInsideWorkspace(root, rel) {
+      if (typeof rel !== "string" || !rel.trim() || rel.includes("\0") || (0, import_node_path30.isAbsolute)(rel)) throw new DriverPackageError("invalid_path", "A workspace-relative path is required");
+      const full = (0, import_node_path30.resolve)(root, rel);
+      const lexical = (0, import_node_path30.relative)(root, full);
+      if (!lexical || lexical.startsWith("..") || (0, import_node_path30.isAbsolute)(lexical)) throw new DriverPackageError("path_outside_workspace", "Path escapes the workspace");
+      let probe = full;
+      for (; ; ) {
+        try {
+          (0, import_node_fs32.lstatSync)(probe);
+          break;
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          const parent = (0, import_node_path30.dirname)(probe);
+          if (parent === probe) throw new DriverPackageError("invalid_path", "No existing ancestor");
+          probe = parent;
+        }
+      }
+      const real2 = (0, import_node_path30.relative)(root, (0, import_node_fs32.realpathSync)(probe));
+      if (real2.startsWith("..") || (0, import_node_path30.isAbsolute)(real2)) throw new DriverPackageError("path_outside_workspace", "Path resolves outside the workspace");
+      return full;
+    }
+    async function workerWorkspace(ctx, args) {
+      const identity4 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+      if (!identity4?.sessionId || !identity4.meshId || !identity4.taskId) return { failure: fail3("worker_credential_required", "A worker credential is required") };
+      const ws = await resolveRegisteredSessionWorkspace(ctx, identity4.sessionId, {
+        meshId: identity4.meshId,
+        taskId: identity4.taskId,
+        ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
+        allowTrustedWorkerFallback: true
+      });
+      if (!ws.workspaceRoot) return { failure: fail3("workspace_unavailable", "The worker session workspace could not be resolved") };
+      try {
+        return { root: (0, import_node_fs32.realpathSync)(ws.workspaceRoot) };
+      } catch {
+        return { failure: fail3("workspace_unavailable", "The worker session workspace is not readable") };
+      }
+    }
+    function readBundleFile(path124) {
+      const stat2 = (0, import_node_fs32.lstatSync)(path124);
+      if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "Bundle path must be a regular file");
+      if (stat2.size > DRIVER_BUNDLE_MAX_JSON_BYTES) throw new DriverPackageError("package_too_large", "Bundle exceeds the 4 MiB limit");
+      return (0, import_node_fs32.readFileSync)(path124, "utf8");
+    }
+    async function fetchBundleArtifact(ctx, args) {
+      const res = await artifactHandlers.artifact_fetch(ctx, args);
+      if (!res?.success) throw new DriverPackageError(typeof res?.code === "string" ? res.code : "artifact_unavailable", typeof res?.error === "string" ? res.error : "Artifact could not be fetched");
+      if (res.kind !== "json" || res.encoding !== "utf8" || typeof res.content !== "string") throw new DriverPackageError("bundle_invalid", "Artifact is not a driver bundle (json)");
+      return res.content;
+    }
+    async function finishInstall(ctx, pkg, origin) {
+      const loader2 = ctx.deps.providerLoader;
+      const type2 = pkg.report.type;
+      const meta2 = loader2.getMeta?.(type2);
+      const existing = meta2 ? { dir: loader2.findProviderDir?.(type2) ?? null } : null;
+      const result = installDriverPackage(getConfigDir2(), pkg, existing);
+      loader2.reload?.();
+      const described = await getDriverService(ctx).describe(type2);
+      LOG.info("DriverAuthoring", `[driver-authoring] installed type=${type2} digest=${pkg.report.treeDigest.slice(0, 19)} origin=${origin} replaced=${result.replaced} state=${described?.state}`);
+      return {
+        success: true,
+        type: type2,
+        name: pkg.report.name,
+        treeDigest: pkg.report.treeDigest,
+        replaced: result.replaced,
+        state: described?.state ?? "installed",
+        ...described?.stagedId ? { stagedId: described.stagedId } : {},
+        riskClass: pkg.report.riskClass,
+        reasons: pkg.report.reasons,
+        declaredAccess: pkg.report.declaredAccess,
+        runtime: pkg.report.runtime,
+        approval: 'Not active yet: the owner must approve this driver activation (dashboard "needs you" / assistant Inbox).'
+      };
+    }
+    var driverAuthoringHandlers = {
+      driver_scaffold: async (ctx, args) => {
+        const w = await workerWorkspace(ctx, args);
+        if ("failure" in w) return w.failure;
+        try {
+          const input = args;
+          if (!isValidDriverType(input.type)) throw new DriverPackageError("invalid_arguments", "type must be lowercase kebab-case (^[a-z][a-z0-9-]*$)");
+          if (typeof input.name !== "string" || !input.name.trim() || typeof input.command !== "string" || !input.command.trim() || !Array.isArray(input.actions) || !input.actions.length || input.actions.length > 100) throw new DriverPackageError("invalid_arguments", "name, command and at least one action are required");
+          const dir = resolveInsideWorkspace(w.root, input.dir ?? `drivers/${input.type}`);
+          try {
+            (0, import_node_fs32.lstatSync)(dir);
+            throw new DriverPackageError("already_exists", "Target directory already exists");
+          } catch (error) {
+            if (error instanceof DriverPackageError) throw error;
+            if (error.code !== "ENOENT") throw error;
+          }
+          const files = scaffoldDriverFiles(input);
+          const pkg = verifyDriverFiles(files, { checkReferences: false });
+          for (const file of pkg.files) {
+            const target4 = (0, import_node_path30.join)(dir, file.path);
+            (0, import_node_fs32.mkdirSync)((0, import_node_path30.dirname)(target4), { recursive: true });
+            (0, import_node_fs32.writeFileSync)(target4, file.bytes);
+          }
+          return {
+            success: true,
+            dir: (0, import_node_path30.relative)(w.root, dir),
+            files: pkg.files.map((f) => f.path),
+            report: pkg.report,
+            next: "Edit the files if needed, run driver_validate, then driver_export or driver_install."
+          };
+        } catch (error) {
+          return asFailure(error);
+        }
+      },
+      driver_validate: async (ctx, args) => {
+        const w = await workerWorkspace(ctx, args);
+        if ("failure" in w) return w.failure;
+        try {
+          return { success: true, report: verifyDriverFiles(readDriverPackageDir(resolveInsideWorkspace(w.root, args?.dir))).report };
+        } catch (error) {
+          return asFailure(error);
+        }
+      },
+      driver_export: async (ctx, args) => {
+        const w = await workerWorkspace(ctx, args);
+        if ("failure" in w) return w.failure;
+        try {
+          const pkg = verifyDriverFiles(readDriverPackageDir(resolveInsideWorkspace(w.root, args?.dir)));
+          const out = resolveInsideWorkspace(w.root, args?.out ?? `driver-bundles/${pkg.report.type}.driver-bundle.json`);
+          if (!out.endsWith(".json")) throw new DriverPackageError("invalid_path", "out must be a .json file (artifact kind json)");
+          try {
+            const stat2 = (0, import_node_fs32.lstatSync)(out);
+            if (!stat2.isFile() || stat2.isSymbolicLink()) throw new DriverPackageError("invalid_path", "out exists and is not a regular file");
+          } catch (error) {
+            if (error instanceof DriverPackageError) throw error;
+            if (error.code !== "ENOENT") throw error;
+          }
+          const text5 = encodeDriverBundle(pkg);
+          (0, import_node_fs32.mkdirSync)((0, import_node_path30.dirname)(out), { recursive: true });
+          (0, import_node_fs32.writeFileSync)(out, text5);
+          const path124 = (0, import_node_path30.relative)(w.root, out);
+          return {
+            success: true,
+            path: path124,
+            sizeBytes: Buffer.byteLength(text5),
+            treeDigest: pkg.report.treeDigest,
+            report: pkg.report,
+            next: `Share it: artifact_register {"path":"${path124}"}. Another machine installs it with driver_install {artifact_id}.`
+          };
+        } catch (error) {
+          return asFailure(error);
+        }
+      },
+      driver_install: async (ctx, args) => {
+        const w = await workerWorkspace(ctx, args);
+        if ("failure" in w) return w.failure;
+        try {
+          const sources = ["dir", "path", "artifactId"].filter((k) => args?.[k] !== void 0);
+          if (sources.length !== 1) throw new DriverPackageError("invalid_arguments", "Provide exactly one of dir, path or artifact_id");
+          let pkg;
+          if (args.dir !== void 0) pkg = verifyDriverFiles(readDriverPackageDir(resolveInsideWorkspace(w.root, args.dir)));
+          else if (args.path !== void 0) pkg = decodeDriverBundle(readBundleFile(resolveInsideWorkspace(w.root, args.path)));
+          else pkg = decodeDriverBundle(await fetchBundleArtifact(ctx, args));
+          return await finishInstall(ctx, pkg, sources[0]);
+        } catch (error) {
+          return asFailure(error);
+        }
+      },
+      /** Owner dashboard: inline bundle text (the viewer already holds it) or an artifact id. */
+      driver_import: async (ctx, args) => {
+        try {
+          if (args?.bundle === void 0 === (args?.artifactId === void 0)) throw new DriverPackageError("invalid_arguments", "Provide exactly one of bundle or artifactId");
+          const text5 = args.bundle !== void 0 ? String(args.bundle) : await fetchBundleArtifact(ctx, args);
+          return await finishInstall(ctx, decodeDriverBundle(text5), args.bundle !== void 0 ? "owner-inline" : "owner-artifact");
+        } catch (error) {
+          return asFailure(error);
+        }
+      }
+    };
+    var driverAuthoringSpecs = defineCommandSpecs("med", driverAuthoringHandlers, {
+      driver_import: { sources: ["p2p", "standalone"] }
+    }, { sources: ["ipc", "standalone"] });
     init_artifacts2();
     init_assistant_store();
     init_dist();
@@ -184391,26 +184836,26 @@ ${ptyResult.output.slice(-2e3)}`);
       const raw = args && typeof args === "object" && !Array.isArray(args) ? args : {};
       const ingress = readRouterCommandIngress(raw);
       if (ingress && (ingress.source !== "ipc" || ingress.inProcess || ingress.hasForgedProvenanceFields || ingress.hasRevokedOwnerProof)) {
-        return fail5("COMMAND_SOURCE_REJECTED", "owner decisions are handled by the bound assistant session only");
+        return fail6("COMMAND_SOURCE_REJECTED", "owner decisions are handled by the bound assistant session only");
       }
       if (raw.bind !== void 0 || raw.token !== void 0) {
-        return fail5("COMMAND_SOURCE_REJECTED", "worker credentials cannot use assistant decision verbs");
+        return fail6("COMMAND_SOURCE_REJECTED", "worker credentials cannot use assistant decision verbs");
       }
       const boundSid = str20(getAssistantRegistry().read()?.sessionId);
       const callerSid = readAssistantSessionId(raw);
       if (!boundSid || !callerSid || callerSid !== boundSid) {
-        return fail5("COMMAND_SOURCE_REJECTED", "this verb requires the bound assistant session");
+        return fail6("COMMAND_SOURCE_REJECTED", "this verb requires the bound assistant session");
       }
       const scope = verifyMcpSessionCredential(raw.mcpSessionCredential);
       if (!scope || scope.isCoordinator || scope.sessionId !== boundSid) {
-        return fail5("COMMAND_SOURCE_REJECTED", "this verb requires the bound assistant session credential");
+        return fail6("COMMAND_SOURCE_REJECTED", "this verb requires the bound assistant session credential");
       }
       if (opts.requireOwnerUtterance) {
         const log = getAssistantServices().inputLog;
         const turn = log.currentTurn(boundSid);
         const humanTurn = !!turn && turn.open && (turn.openedBy === "human" || turn.openedBy === "human_unverified");
         if (!humanTurn && log.writeContext(boundSid).origin !== "human" && !isUnverifiedHumanWrite(boundSid)) {
-          return fail5(
+          return fail6(
             "no_owner_utterance",
             "No owner message is behind this call: decisions are answered only on the owner's own words in the current turn. Ask the owner, then answer when they reply."
           );
@@ -184426,7 +184871,7 @@ ${ptyResult.output.slice(-2e3)}`);
       const denied = authorizeAssistantDecisionCaller(args, { requireOwnerUtterance: true });
       if (denied) return denied;
       const answers = parseDecisionAnswers(args);
-      if (typeof answers === "string") return fail5("invalid_args", answers);
+      if (typeof answers === "string") return fail6("invalid_args", answers);
       const p = await resolveProject(ports, args.project);
       if (!p.ok) return p.result;
       const meshId = p.mesh.id;
@@ -184453,7 +184898,7 @@ ${ptyResult.output.slice(-2e3)}`);
     var decisionRequest = assistantVerb(ASSISTANT_VERB2.decisionRequest, async (ports, args) => {
       const denied = authorizeAssistantDecisionCaller(args, { requireOwnerUtterance: false });
       if (denied) return denied;
-      if (!str20(args.question)) return fail5("invalid_args", "question is required");
+      if (!str20(args.question)) return fail6("invalid_args", "question is required");
       const p = await resolveProject(ports, args.project);
       if (!p.ok) return p.result;
       const meshId = p.mesh.id;
@@ -184473,10 +184918,10 @@ ${ptyResult.output.slice(-2e3)}`);
         const out = await callRemote(ports, { ...p, remote: p.remote }, "decision_request", clean2);
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
         const body = remoteBody(out);
-        return body.success === false ? fail5(str20(body.code) || "decision_rejected", str20(body.error) || "decision_rejected", { project: p.slug, meshId }) : { success: true, project: p.slug, meshId, result: { ...body, host: p.remote.label, via: "relay" } };
+        return body.success === false ? fail6(str20(body.code) || "decision_rejected", str20(body.error) || "decision_rejected", { project: p.slug, meshId }) : { success: true, project: p.slug, meshId, result: { ...body, host: p.remote.label, via: "relay" } };
       }
       const done = registerDecisionRequest(meshId, payload);
-      if (done.success !== true) return fail5(str20(done.code) || "decision_rejected", str20(done.error) || "decision_rejected", { project: p.slug, meshId });
+      if (done.success !== true) return fail6(str20(done.code) || "decision_rejected", str20(done.error) || "decision_rejected", { project: p.slug, meshId });
       return { success: true, project: p.slug, meshId, result: done };
     });
     var assistantDecisionHandlers = {
@@ -184523,7 +184968,7 @@ ${ptyResult.output.slice(-2e3)}`);
       if (fence.sessionId && dispatches.get(fence.sessionId) === fence) dispatches.delete(fence.sessionId);
     }
     init_owned_lock();
-    var import_node_path30 = require("path");
+    var import_node_path33 = require("path");
     init_config();
     init_command_args();
     function shouldRestoreHostedRuntime(record7, managerTag) {
@@ -184535,13 +184980,13 @@ ${ptyResult.output.slice(-2e3)}`);
     init_logger();
     init_binding_owner();
     var import_promises12 = require("fs/promises");
-    var import_node_path29 = require("path");
+    var import_node_path32 = require("path");
     init_dist();
     init_owned_lock();
     var import_session_host_core16 = require_dist();
-    var import_node_fs30 = require("fs");
+    var import_node_fs33 = require("fs");
     async function readPersistedRuntimeRecord(file) {
-      const stream = (0, import_node_fs30.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
+      const stream = (0, import_node_fs33.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
       let text5 = "", cursor = 0, start = -1, depth = 0;
       let quoted = false, escaped = false;
       try {
@@ -184605,7 +185050,7 @@ ${ptyResult.output.slice(-2e3)}`);
       } catch (error) {
         if (["ENOENT", "ECONNREFUSED"].includes(error.code ?? "")) {
           try {
-            const pid = Number((await (0, import_promises12.readFile)((0, import_node_path29.join)(configDir, `${namespace}-session-host.pid`), "utf8")).trim());
+            const pid = Number((await (0, import_promises12.readFile)((0, import_node_path32.join)(configDir, `${namespace}-session-host.pid`), "utf8")).trim());
             if (Number.isSafeInteger(pid) && pid > 0 && !isPidAlive2(pid)) return /* @__PURE__ */ new Set();
           } catch {
           }
@@ -184619,7 +185064,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     async function persistedAssistantRuntimeIds(configDir, options) {
       const ids = /* @__PURE__ */ new Set();
-      const hostRoot = (0, import_node_path29.join)(configDir, "session-host");
+      const hostRoot = (0, import_node_path32.join)(configDir, "session-host");
       let namespaces;
       try {
         namespaces = await (0, import_promises12.readdir)(hostRoot);
@@ -184634,7 +185079,7 @@ ${ptyResult.output.slice(-2e3)}`);
           if (/^adhdev-(?:test(?:-|$)|input-ann-)/.test(namespace)) continue;
           if (["adhdev", "adhdev-preview"].includes(options.currentNamespace ?? "") && ["adhdev", "adhdev-preview"].includes(namespace)) continue;
         }
-        const runtimes = (0, import_node_path29.join)(hostRoot, namespace, "runtimes");
+        const runtimes = (0, import_node_path32.join)(hostRoot, namespace, "runtimes");
         let files;
         try {
           files = await (0, import_promises12.readdir)(runtimes);
@@ -184646,7 +185091,7 @@ ${ptyResult.output.slice(-2e3)}`);
         for (const file of files.filter((f) => /^[\w-]+\.json$/.test(f))) {
           let r;
           try {
-            r = await readPersistedRuntimeRecord((0, import_node_path29.join)(runtimes, file));
+            r = await readPersistedRuntimeRecord((0, import_node_path32.join)(runtimes, file));
           } catch {
             candidates.add(file.slice(0, -5));
             continue;
@@ -184654,7 +185099,7 @@ ${ptyResult.output.slice(-2e3)}`);
           if (r.category !== "cli" || r.termination || ["stopped", "failed"].includes(r.lifecycle) || r.sessionId !== options.boundSessionId && !hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) continue;
           if (typeof r.sessionId !== "string" || !/^[\w-]+$/.test(r.sessionId)) throw new Error("assistant_runtime_identity_missing");
           try {
-            await (0, import_promises12.access)((0, import_node_path29.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`));
+            await (0, import_promises12.access)((0, import_node_path32.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`));
             continue;
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
@@ -184769,7 +185214,7 @@ ${ptyResult.output.slice(-2e3)}`);
           entry = registry.reload();
         }
         if (entry?.sessionId && !sameHostedBindingOwner(
-          resolveHostedBindingOwner(entry.sessionId, entry.hostOwner, owner, liveIds, (0, import_node_path30.dirname)(registry.path)),
+          resolveHostedBindingOwner(entry.sessionId, entry.hostOwner, owner, liveIds, (0, import_node_path33.dirname)(registry.path)),
           owner
         )) {
           return refused3(entry.hostOwner ? "assistant_owned_by_other_host" : "assistant_binding_owner_unknown");
@@ -184794,10 +185239,10 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto60 = require("crypto");
-    var import_node_fs31 = require("fs");
+    var import_node_crypto62 = require("crypto");
+    var import_node_fs34 = require("fs");
     var os38 = __toESM2(require("os"));
-    var import_node_path31 = require("path");
+    var import_node_path34 = require("path");
     init_mesh_coordinator_config();
     var fs104 = __toESM2(require("fs"));
     var os37 = __toESM2(require("os"));
@@ -184859,7 +185304,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return contents.split(/\r?\n/).some((line) => line.trim() === needle);
     }
     init_assistant_launch_plan();
-    var O_NOFOLLOW_FLAG = typeof import_node_fs31.constants.O_NOFOLLOW === "number" ? import_node_fs31.constants.O_NOFOLLOW : 0;
+    var O_NOFOLLOW_FLAG = typeof import_node_fs34.constants.O_NOFOLLOW === "number" ? import_node_fs34.constants.O_NOFOLLOW : 0;
     function unsafePathError(message) {
       return new Error(`assistant_unsafe_path: ${message}`);
     }
@@ -184876,7 +185321,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function lstatOrNull(targetPath) {
       try {
-        return (0, import_node_fs31.lstatSync)(targetPath);
+        return (0, import_node_fs34.lstatSync)(targetPath);
       } catch (err) {
         if (err?.code === "ENOENT") return null;
         throw err;
@@ -184886,51 +185331,51 @@ ${ptyResult.output.slice(-2e3)}`);
       const home = os38.homedir();
       const candidates = [];
       for (const rel of [".codex", ".gemini", ".claude", ".cursor"]) {
-        const p = (0, import_node_path31.join)(home, rel);
-        candidates.push((0, import_node_path31.resolve)(p));
+        const p = (0, import_node_path34.join)(home, rel);
+        candidates.push((0, import_node_path34.resolve)(p));
         try {
-          candidates.push((0, import_node_fs31.realpathSync)(p));
+          candidates.push((0, import_node_fs34.realpathSync)(p));
         } catch {
         }
       }
       for (const globalDir of candidates) {
-        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path31.sep)) {
+        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path34.sep)) {
           throw unsafePathError(`target ${realTarget} resolves inside global provider config directory ${globalDir}`);
         }
       }
     }
     function ensurePrivateAssistantDirectoryChain(rootDir, targetDir) {
-      const resolvedRoot = (0, import_node_path31.resolve)(rootDir);
-      const resolvedTarget = (0, import_node_path31.resolve)(targetDir);
-      if (!(0, import_node_path31.isAbsolute)(resolvedRoot) || !(0, import_node_path31.isAbsolute)(resolvedTarget)) {
+      const resolvedRoot = (0, import_node_path34.resolve)(rootDir);
+      const resolvedTarget = (0, import_node_path34.resolve)(targetDir);
+      if (!(0, import_node_path34.isAbsolute)(resolvedRoot) || !(0, import_node_path34.isAbsolute)(resolvedTarget)) {
         throw unsafePathError("assistant directory paths must be absolute");
       }
       if (isOverBroadTrustRoot(resolvedRoot)) {
         throw unsafePathError(`refusing over-broad assistant root directory ${resolvedRoot}`);
       }
-      const rel = (0, import_node_path31.relative)(resolvedRoot, resolvedTarget);
-      if (rel === ".." || rel.startsWith(`..${import_node_path31.sep}`) || (0, import_node_path31.isAbsolute)(rel)) {
+      const rel = (0, import_node_path34.relative)(resolvedRoot, resolvedTarget);
+      if (rel === ".." || rel.startsWith(`..${import_node_path34.sep}`) || (0, import_node_path34.isAbsolute)(rel)) {
         throw unsafePathError(`target directory ${resolvedTarget} escapes root ${resolvedRoot}`);
       }
       let rootStat = lstatOrNull(resolvedRoot);
       if (!rootStat) {
-        (0, import_node_fs31.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
+        (0, import_node_fs34.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
         rootStat = lstatOrNull(resolvedRoot);
       }
       if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
         throw unsafePathError(`assistant root ${resolvedRoot} must be a real directory (not a symlink)`);
       }
       assertOwnedByCurrentUser(rootStat, resolvedRoot);
-      const segments = rel.split(import_node_path31.sep).filter(Boolean);
+      const segments = rel.split(import_node_path34.sep).filter(Boolean);
       let cursor = resolvedRoot;
       for (const seg of segments) {
         if (seg === "." || seg === "..") {
           throw unsafePathError(`invalid relative segment "${seg}" under ${resolvedRoot}`);
         }
-        cursor = (0, import_node_path31.join)(cursor, seg);
+        cursor = (0, import_node_path34.join)(cursor, seg);
         let stat2 = lstatOrNull(cursor);
         if (!stat2) {
-          (0, import_node_fs31.mkdirSync)(cursor, { mode: 448 });
+          (0, import_node_fs34.mkdirSync)(cursor, { mode: 448 });
           stat2 = lstatOrNull(cursor);
         }
         if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory()) {
@@ -184938,9 +185383,9 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         assertOwnedByCurrentUser(stat2, cursor);
       }
-      const realRoot = (0, import_node_fs31.realpathSync)(resolvedRoot);
-      const realTarget = (0, import_node_fs31.realpathSync)(resolvedTarget);
-      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path31.sep)) {
+      const realRoot = (0, import_node_fs34.realpathSync)(resolvedRoot);
+      const realTarget = (0, import_node_fs34.realpathSync)(resolvedTarget);
+      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path34.sep)) {
         throw unsafePathError(`canonical directory ${realTarget} escapes canonical root ${realRoot}`);
       }
       if (isOverBroadTrustRoot(realTarget)) {
@@ -184953,7 +185398,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return ensurePrivateAssistantDirectoryChain(configDir, workspace);
     }
     function readPrivateAssistantConfigSnapshot(requestedFilePath, canonicalFilePath, expectedRealParent) {
-      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path31.resolve)(requestedFilePath), canonicalFilePath])) {
+      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path34.resolve)(requestedFilePath), canonicalFilePath])) {
         const lstat3 = lstatOrNull(candidate);
         if (!lstat3) continue;
         if (lstat3.isSymbolicLink()) {
@@ -184973,17 +185418,17 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       let fd = null;
       try {
-        fd = (0, import_node_fs31.openSync)(canonicalFilePath, import_node_fs31.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-        const fstat = (0, import_node_fs31.fstatSync)(fd);
+        fd = (0, import_node_fs34.openSync)(canonicalFilePath, import_node_fs34.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+        const fstat = (0, import_node_fs34.fstatSync)(fd);
         if (!fstat.isFile() || fstat.nlink > 1 || fstat.ino !== lstat2.ino || fstat.dev !== lstat2.dev) {
           throw unsafePathError(`config file ${canonicalFilePath} changed or failed descriptor verification on open`);
         }
         assertOwnedByCurrentUser(fstat, canonicalFilePath);
-        const realFile = (0, import_node_fs31.realpathSync)(canonicalFilePath);
-        if (realFile !== canonicalFilePath || (0, import_node_path31.dirname)(realFile) !== expectedRealParent) {
+        const realFile = (0, import_node_fs34.realpathSync)(canonicalFilePath);
+        if (realFile !== canonicalFilePath || (0, import_node_path34.dirname)(realFile) !== expectedRealParent) {
           throw unsafePathError(`canonical config file ${realFile} does not match expected ${canonicalFilePath}`);
         }
-        const content = (0, import_node_fs31.readFileSync)(fd, "utf-8");
+        const content = (0, import_node_fs34.readFileSync)(fd, "utf-8");
         return {
           exists: true,
           content,
@@ -184995,41 +185440,41 @@ ${ptyResult.output.slice(-2e3)}`);
       } finally {
         if (fd !== null) {
           try {
-            (0, import_node_fs31.closeSync)(fd);
+            (0, import_node_fs34.closeSync)(fd);
           } catch {
           }
         }
       }
     }
     function writeProtectedAssistantConfigFile(options) {
-      const resolvedFilePath = (0, import_node_path31.resolve)(options.filePath);
-      const parentDir = (0, import_node_path31.dirname)(resolvedFilePath);
-      const fileName = (0, import_node_path31.basename)(resolvedFilePath);
+      const resolvedFilePath = (0, import_node_path34.resolve)(options.filePath);
+      const parentDir = (0, import_node_path34.dirname)(resolvedFilePath);
+      const fileName = (0, import_node_path34.basename)(resolvedFilePath);
       if (!fileName || fileName === "." || fileName === "..") {
         throw unsafePathError(`invalid config file name: ${options.filePath}`);
       }
       const maxRetries = Math.max(1, options.maxRetries ?? 3);
       const realParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
-      const canonicalFilePath = (0, import_node_path31.join)(realParent, fileName);
+      const canonicalFilePath = (0, import_node_path34.join)(realParent, fileName);
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const snapshot = readPrivateAssistantConfigSnapshot(resolvedFilePath, canonicalFilePath, realParent);
         const next = options.transform(snapshot.content);
         if (snapshot.exists && next === snapshot.content) {
           return { written: false, content: next };
         }
-        const tmpPath = (0, import_node_path31.join)(
+        const tmpPath = (0, import_node_path34.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto60.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto62.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
         try {
-          tmpFd = (0, import_node_fs31.openSync)(
+          tmpFd = (0, import_node_fs34.openSync)(
             tmpPath,
-            import_node_fs31.constants.O_CREAT | import_node_fs31.constants.O_EXCL | import_node_fs31.constants.O_WRONLY | O_NOFOLLOW_FLAG,
+            import_node_fs34.constants.O_CREAT | import_node_fs34.constants.O_EXCL | import_node_fs34.constants.O_WRONLY | O_NOFOLLOW_FLAG,
             384
           );
-          const tmpStat = (0, import_node_fs31.fstatSync)(tmpFd);
+          const tmpStat = (0, import_node_fs34.fstatSync)(tmpFd);
           if (!tmpStat.isFile() || tmpStat.nlink !== 1) {
             throw unsafePathError(`temporary config file ${tmpPath} is not an isolated regular file`);
           }
@@ -185037,14 +185482,14 @@ ${ptyResult.output.slice(-2e3)}`);
           const buf = Buffer.from(next, "utf-8");
           let offset = 0;
           while (offset < buf.length) {
-            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs31.writeSync)(tmpFd, buf, offset, buf.length - offset);
+            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs34.writeSync)(tmpFd, buf, offset, buf.length - offset);
             if (!Number.isInteger(writtenBytes) || writtenBytes <= 0) {
               throw new Error("EIO: short or zero-byte write while writing temporary assistant config");
             }
             offset += writtenBytes;
           }
-          (0, import_node_fs31.fsyncSync)(tmpFd);
-          (0, import_node_fs31.closeSync)(tmpFd);
+          (0, import_node_fs34.fsyncSync)(tmpFd);
+          (0, import_node_fs34.closeSync)(tmpFd);
           tmpFd = null;
           options.onBeforeRenameForTest?.(attempt, canonicalFilePath, tmpPath);
           const recheckedParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
@@ -185055,7 +185500,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const changedConcurrently = preRenameSnapshot.exists !== snapshot.exists || snapshot.exists && (preRenameSnapshot.ino !== snapshot.ino || preRenameSnapshot.dev !== snapshot.dev || preRenameSnapshot.size !== snapshot.size || preRenameSnapshot.mtimeMs !== snapshot.mtimeMs || preRenameSnapshot.content !== snapshot.content);
           if (changedConcurrently) {
             try {
-              (0, import_node_fs31.unlinkSync)(tmpPath);
+              (0, import_node_fs34.unlinkSync)(tmpPath);
             } catch {
             }
             if (attempt + 1 < maxRetries) {
@@ -185063,18 +185508,18 @@ ${ptyResult.output.slice(-2e3)}`);
             }
             throw conflictError(`concurrent modification detected on ${canonicalFilePath} after ${maxRetries} attempts`);
           }
-          (0, import_node_fs31.renameSync)(tmpPath, canonicalFilePath);
+          (0, import_node_fs34.renameSync)(tmpPath, canonicalFilePath);
           renamed2 = true;
           if (process.platform !== "win32") {
             let dirFd = null;
             try {
-              dirFd = (0, import_node_fs31.openSync)(realParent, import_node_fs31.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-              (0, import_node_fs31.fsyncSync)(dirFd);
+              dirFd = (0, import_node_fs34.openSync)(realParent, import_node_fs34.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+              (0, import_node_fs34.fsyncSync)(dirFd);
             } catch {
             } finally {
               if (dirFd !== null) {
                 try {
-                  (0, import_node_fs31.closeSync)(dirFd);
+                  (0, import_node_fs34.closeSync)(dirFd);
                 } catch {
                 }
               }
@@ -185084,13 +185529,13 @@ ${ptyResult.output.slice(-2e3)}`);
         } finally {
           if (tmpFd !== null) {
             try {
-              (0, import_node_fs31.closeSync)(tmpFd);
+              (0, import_node_fs34.closeSync)(tmpFd);
             } catch {
             }
           }
           if (!renamed2) {
             try {
-              (0, import_node_fs31.unlinkSync)(tmpPath);
+              (0, import_node_fs34.unlinkSync)(tmpPath);
             } catch {
             }
           }
@@ -185099,15 +185544,15 @@ ${ptyResult.output.slice(-2e3)}`);
       throw conflictError(`failed to write ${canonicalFilePath} due to repeated concurrent modifications`);
     }
     function resolveAllowedConfigRoot(w, ctx) {
-      const target4 = (0, import_node_path31.resolve)(w.path);
+      const target4 = (0, import_node_path34.resolve)(w.path);
       const candidates = [ctx?.workspace, ctx?.privateHomeDir, ctx?.configDir].filter(
         (c) => typeof c === "string" && c.trim().length > 0
       );
       for (const candidate of candidates) {
-        const resolvedCandidate = (0, import_node_path31.resolve)(candidate);
-        const rel = (0, import_node_path31.relative)(resolvedCandidate, target4);
-        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path31.sep}`) && !(0, import_node_path31.isAbsolute)(rel)) {
-          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path31.resolve)(ctx.configDir)) {
+        const resolvedCandidate = (0, import_node_path34.resolve)(candidate);
+        const rel = (0, import_node_path34.relative)(resolvedCandidate, target4);
+        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path34.sep}`) && !(0, import_node_path34.isAbsolute)(rel)) {
+          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path34.resolve)(ctx.configDir)) {
             ensurePrivateAssistantDirectoryChain(ctx.configDir, resolvedCandidate);
           }
           return resolvedCandidate;
@@ -185116,7 +185561,7 @@ ${ptyResult.output.slice(-2e3)}`);
       if (ctx?.configDir) {
         throw unsafePathError(`config path ${w.path} is outside assistant roots under ${ctx.configDir}`);
       }
-      return (0, import_node_path31.dirname)(target4);
+      return (0, import_node_path34.dirname)(target4);
     }
     function writeAssistantMcpConfig(w, ctx) {
       const rootDir = resolveAllowedConfigRoot(w, ctx);
@@ -185312,7 +185757,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function str21(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail8(code, error = code, extra = {}) {
+    function fail9(code, error = code, extra = {}) {
       LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
@@ -185363,7 +185808,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var launchAssistantOnce = async (ctx, args, fence) => {
       const registry = getAssistantRegistry();
       const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
-      if (fence.aborted) return fail8("assistant_launch_timeout");
+      if (fence.aborted) return fail9("assistant_launch_timeout");
       if (admission) {
         if (admission.success) {
           const { getAssistantRuntime: getAssistantRuntime3 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -185395,9 +185840,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         sessionId: assistantSessionKey,
         declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path
       });
-      if (!mcp.ok) return fail8(mcp.code, mcp.error, { cliType });
+      if (!mcp.ok) return fail9(mcp.code, mcp.error, { cliType });
       const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
-      if (!approval.ok) return fail8(approval.code, approval.error, { cliType });
+      if (!approval.ok) return fail9(approval.code, approval.error, { cliType });
       let projects2;
       try {
         projects2 = await promptProjects(ctx);
@@ -185405,15 +185850,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
       }
-      if (fence.aborted) return fail8("assistant_launch_timeout");
-      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail8("assistant_restore_pending");
+      if (fence.aborted) return fail9("assistant_launch_timeout");
+      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail9("assistant_restore_pending");
       const svc = getAssistantServices();
       const prompt = buildAssistantSystemPrompt({ projects: projects2, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: /* @__PURE__ */ new Date() });
-      if (!prompt.withinLimit) return fail8("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
+      if (!prompt.withinLimit) return fail9("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
       try {
         ensurePrivateAssistantWorkspace(configDir, workspace);
       } catch (e) {
-        return fail8("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
+        return fail9("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
       }
       if (mcp.privateHome) {
         try {
@@ -185421,7 +185866,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
           if (prepared.failed.length) LOG.warn("Assistant", `[${cliType}] private HOME imports failed: ${prepared.failed.join(", ")}`);
         } catch (e) {
-          return fail8("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
+          return fail9("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
         }
       }
       try {
@@ -185433,7 +185878,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           });
         }
       } catch (e) {
-        return fail8("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
+        return fail9("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
       }
       const cliArgs = [];
       const { ensureMcpSessionCredential: ensureMcpSessionCredential2 } = await Promise.resolve().then(() => (init_mcp_command_ingress(), mcp_command_ingress_exports));
@@ -185449,7 +185894,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
       const injection = applyMeshCoordinatorSystemPromptInjection2(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
-      if (injection.error) return fail8(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
+      if (injection.error) return fail9(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
       const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
       if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a) => typeof a === "string" && !!a.trim()));
       cliArgs.push(...mcp.cliArgs);
@@ -185458,11 +185903,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       try {
         if (fence.aborted) {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail8("assistant_launch_timeout");
+          return fail9("assistant_launch_timeout");
         }
         if (ctx.deps.cliManager.hostedRestoreState !== "ready") {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail8("assistant_restore_pending");
+          return fail9("assistant_restore_pending");
         }
         registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
@@ -185537,13 +185982,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
-        if (bindingConflict && !fence.aborted) return fail8("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
-        return fail8(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
+        if (bindingConflict && !fence.aborted) return fail9("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
+        return fail9(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
-        return fail8(str21(launched?.code) || "assistant_launch_failed", str21(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
+        return fail9(str21(launched?.code) || "assistant_launch_failed", str21(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail8("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
+      if (!mayBind()) return fail9("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -185564,7 +186009,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         } catch (stopError) {
           LOG.warn("Assistant", `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
         }
-        return fail8("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
+        return fail9("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
       }
       svc.inputLog.begin(sessionId);
       runtime2?.activate("launch");
@@ -185584,9 +186029,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
       const failures = assistantCleanupFailures.get(registry);
       if (failures?.size) {
-        if (!forced) return fail8("assistant_launch_cleanup_pending");
+        if (!forced) return fail9("assistant_launch_cleanup_pending");
         for (const [id4, failure7] of failures) {
-          if (!await failure7.cleanup()) return fail8("assistant_launch_cleanup_pending");
+          if (!await failure7.cleanup()) return fail9("assistant_launch_cleanup_pending");
           failure7.fence.cleanupPending = false;
           failure7.fence.onCleanupAcknowledged?.();
           failures.delete(id4);
@@ -185595,7 +186040,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let pending = assistantStarts.get(registry);
       const meta2 = assistantStartMeta.get(registry);
       if (pending && meta2 && forced && Date.now() - meta2.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
-        if (!meta2.fence.cancelBeforeSpawn()) return fail8("assistant_launch_cancellation_pending");
+        if (!meta2.fence.cancelBeforeSpawn()) return fail9("assistant_launch_cancellation_pending");
         LOG.warn("Assistant", "owner_force cancelled a launch before spawning after the hard ceiling");
         assistantGenerations.delete(registry);
         meta2.clear();
@@ -185609,7 +186054,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const lockPath = (0, import_path44.join)(lockDir, ".assistant-launch.lock");
       const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
-      if (!lock.ok) return fail8(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
+      if (!lock.ok) return fail9(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
       const fence = new AssistantLaunchFence();
       assistantGenerations.set(registry, fence);
       let timer;
@@ -185626,11 +186071,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       fence.onCleanupAcknowledged = clear;
       assistantStartMeta.set(registry, { startedAt: Date.now(), fence, clear });
-      const timeout = new Promise((resolve66) => {
+      const timeout = new Promise((resolve68) => {
         timer = setTimeout(() => {
           fence.aborted = true;
           if (!fence.dispatched) clear();
-          resolve66(fail8("assistant_launch_timeout"));
+          resolve68(fail9("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
       });
@@ -185653,7 +186098,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const caller = readAssistantSessionId(args);
       const live = runtime2.liveSessionId();
       if (live && caller !== live) {
-        return fail8("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
+        return fail9("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
       }
       return { success: true, assistantEvents: await runtime2.pull(caller || null) };
     };
@@ -187035,7 +187480,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs107.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms3) => new Promise((resolve66) => setTimeout(resolve66, ms3));
+      const sleep3 = (ms3) => new Promise((resolve68) => setTimeout(resolve68, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -188404,6 +188849,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           ...meshStatusViewSpecs,
           ...assistantStoreSpecs,
           ...driverSpecs,
+          ...driverAuthoringSpecs,
           ...artifactSpecs,
           ...assistantProjectSpecs,
           ...assistantDecisionSpecs,
@@ -190746,7 +191192,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const channel = host._ctx.providerLoader?.channel ?? "stable";
       const url = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
       try {
-        const data = await new Promise((resolve66, reject) => {
+        const data = await new Promise((resolve68, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -190756,7 +191202,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve66(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve68(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -190780,7 +191226,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const cfg = loadConfig();
       const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
       function fetchJson(url) {
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -190790,7 +191236,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve66(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve68(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -191598,7 +192044,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(body);
-          const result = await new Promise((resolve66, reject) => {
+          const result = await new Promise((resolve68, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -191610,9 +192056,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve66(JSON.parse(data));
+                  resolve68(JSON.parse(data));
                 } catch {
-                  resolve66({ raw: data });
+                  resolve68({ raw: data });
                 }
               });
             });
@@ -191630,15 +192076,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
-          const result = await new Promise((resolve66, reject) => {
+          const result = await new Promise((resolve68, reject) => {
             http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint2}`, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve66(JSON.parse(data));
+                  resolve68(JSON.parse(data));
                 } catch {
-                  resolve66({ raw: data });
+                  resolve68({ raw: data });
                 }
               });
             }).on("error", reject);
@@ -191652,7 +192098,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(args || {});
-          const result = await new Promise((resolve66, reject) => {
+          const result = await new Promise((resolve68, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -191664,9 +192110,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve66(JSON.parse(data));
+                  resolve68(JSON.parse(data));
                 } catch {
-                  resolve66({ raw: data });
+                  resolve68({ raw: data });
                 }
               });
             });
@@ -192569,7 +193015,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_debug_config();
     init_debug_trace();
     var import_session_host_core22 = require_dist();
-    var import_node_crypto61 = require("crypto");
+    var import_node_crypto63 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
@@ -192591,7 +193037,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         return rows.length ? rows : null;
       },
-      pause: () => new Promise((resolve66) => setTimeout(resolve66, 100))
+      pause: () => new Promise((resolve68) => setTimeout(resolve68, 100))
     };
     var testPorts;
     async function stopExactMeshWriter(host, request, ports = testPorts ?? nativeWriterStopPorts) {
@@ -192633,7 +193079,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               success: true,
               quiescent: true,
               evidence,
-              incarnation: (0, import_node_crypto61.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
+              incarnation: (0, import_node_crypto63.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
             };
           }
           return pending("unknown, cannot prove dead: host still reports session");
@@ -192705,7 +193151,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs118 = __toESM2(require("fs"));
     var path114 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto62 = require("crypto");
+    var import_node_crypto64 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -192749,7 +193195,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto62.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto64.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -195526,7 +195972,7 @@ trust_level = "trusted"
     };
     init_evaluator();
     function delay2(ms3) {
-      return new Promise((resolve66) => setTimeout(resolve66, ms3));
+      return new Promise((resolve68) => setTimeout(resolve68, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action2) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -196419,7 +196865,7 @@ ${text5}` : text5;
       return { status, stateHistory: history.slice(-limit), screenText: screenText ?? "" };
     }
     var fs117 = __toESM2(require("fs"));
-    var import_node_crypto63 = require("crypto");
+    var import_node_crypto65 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -196446,7 +196892,7 @@ ${text5}` : text5;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash4 = (0, import_node_crypto63.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash4 = (0, import_node_crypto65.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -197422,7 +197868,7 @@ ${text5}` : text5;
       let screenText = readClaudeTuiSnapshotForAnswer(host);
       let focused = readFocusedClaudeTuiQuestion(screenText);
       while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-        await new Promise((resolve66) => setTimeout(resolve66, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
         focused = readFocusedClaudeTuiQuestion(screenText);
       }
@@ -197473,7 +197919,7 @@ ${text5}` : text5;
         if (review) return screenText;
         if (directSubmitted) return null;
         if (Date.now() >= deadline) return screenText;
-        await new Promise((resolve66) => setTimeout(resolve66, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
       }
     }
@@ -197509,7 +197955,7 @@ ${text5}` : text5;
       let screenText = host.driver.snapshot();
       const deadline = Date.now() + CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
       while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-        await new Promise((resolve66) => setTimeout(resolve66, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = host.driver.snapshot();
       }
       return screenText;
@@ -197520,13 +197966,13 @@ ${text5}` : text5;
       for (let index = 1; index < headers.length; index += 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "	" });
-        await new Promise((resolve66) => setTimeout(resolve66, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         pages.push({ screenText: await snapshotSettledClaudeTuiPage(host), header: headers[index] });
       }
       for (let index = headers.length - 1; index > 0; index -= 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "\x1B[Z" });
-        await new Promise((resolve66) => setTimeout(resolve66, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         const reread = await snapshotSettledClaudeTuiPage(host);
         const landed = pages[index - 1];
         if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
@@ -197581,7 +198027,7 @@ ${text5}` : text5;
               break questionLoop;
             }
             host.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve66) => setTimeout(resolve66, 180));
+            await new Promise((resolve68) => setTimeout(resolve68, 180));
           }
           const answer2 = response.answers[question.questionId];
           const singleSelectDigitOnly = !question.multiSelect && (answer2?.selectedLabels.length ?? 0) === 1 && !answer2?.freeformText?.trim();
@@ -197592,7 +198038,7 @@ ${text5}` : text5;
               previewLayoutAnswer = true;
               LOG.info("SpecAdapter", `[${host.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
               host.driver.dispatch({ kind: "pty_write", data: "\r" });
-              await new Promise((resolve66) => setTimeout(resolve66, 180));
+              await new Promise((resolve68) => setTimeout(resolve68, 180));
             }
           }
         }
@@ -197608,7 +198054,7 @@ ${text5}` : text5;
             throw new Error("Claude TUI active interactive prompt changed before review submission");
           }
           host.driver.dispatch({ kind: "pty_write", data: "\r" });
-          await new Promise((resolve66) => setTimeout(resolve66, 180));
+          await new Promise((resolve68) => setTimeout(resolve68, 180));
         }
       } else {
         host.driver.dispatch({ kind: "pty_write", data: `${buildClaudeInteractiveToolResult(response)}
@@ -197799,7 +198245,7 @@ ${text5}` : text5;
             );
           }
         }
-        await new Promise((resolve66) => setTimeout(resolve66, CAROUSEL_STEP_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
       throw new Error(
         `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}; partial/unconfirmed carousel advancement \u2014 stopped remaining keystrokes.`
@@ -197829,7 +198275,7 @@ ${text5}` : text5;
             return screen;
           }
         }
-        await new Promise((resolve66) => setTimeout(resolve66, CAROUSEL_STEP_POLL_INTERVAL_MS));
+        await new Promise((resolve68) => setTimeout(resolve68, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
       throw new Error(
         `Timed out waiting for Antigravity Write-in editor to return to options on Question ${expectedQuestionIndex1Based}; stopped remaining keystrokes.`
@@ -198982,7 +199428,7 @@ ${text5}` : text5;
           const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX) ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot()) : buildKimiInteractiveTuiAnswerSteps(prompt, response);
           for (const step of steps) {
             this.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve66) => setTimeout(resolve66, 180));
+            await new Promise((resolve68) => setTimeout(resolve68, 180));
           }
           this.activeInteractivePrompt = null;
           this.notifyChange("prompt_cleared");
@@ -199477,7 +199923,7 @@ ${text5}` : text5;
     init_logger();
     init_track_identity();
     var import_node_child_process27 = require("child_process");
-    var import_node_crypto64 = require("crypto");
+    var import_node_crypto66 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -199487,7 +199933,7 @@ ${text5}` : text5;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto64.randomUUID)();
+      generation = (0, import_node_crypto66.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -199548,14 +199994,14 @@ ${text5}` : text5;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto64.randomUUID)()}`;
-        return new Promise((resolve66, reject) => {
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto66.randomUUID)()}`;
+        return new Promise((resolve68, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
             reject(new Error(`Codex ${method} timed out`));
             if (["initialize", "thread/start", "turn/start", "turn/steer", "turn/interrupt"].includes(method)) this.stop("timeout");
           }, 15e3);
-          this.pending.set(id4, { resolve: resolve66, reject, timer });
+          this.pending.set(id4, { resolve: resolve68, reject, timer });
           try {
             this.write({ id: id4, method, params });
           } catch (error) {
@@ -199584,7 +200030,7 @@ ${text5}` : text5;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto65 = require("crypto");
+    var import_node_crypto67 = require("crypto");
     init_dist();
     init_interactive_prompt();
     function record6(value) {
@@ -199716,7 +200162,7 @@ ${text5}` : text5;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto65.randomUUID)(),
+          promptId: (0, import_node_crypto67.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -200556,7 +201002,7 @@ ${JSON.stringify(replies)}
         if (status === "stopped") {
           throw new Error("CLI runtime stopped before it became ready");
         }
-        await new Promise((resolve66) => setTimeout(resolve66, pollMs));
+        await new Promise((resolve68) => setTimeout(resolve68, pollMs));
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
@@ -201490,7 +201936,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto66 = require("crypto");
+    var import_node_crypto68 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -201675,7 +202121,7 @@ ${buttons.join("\n")}`;
               now
             );
             const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
-            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto66.randomUUID)()}`;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto68.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
@@ -203529,7 +203975,7 @@ ${buttons.join("\n")}`;
         const enterCount = cliCommand.enterCount || 1;
         await host.adapter.writeRaw(cliCommand.text + "\r");
         for (let i = 1; i < enterCount; i += 1) {
-          await new Promise((resolve66) => setTimeout(resolve66, 50));
+          await new Promise((resolve68) => setTimeout(resolve68, 50));
           await host.adapter.writeRaw("\r");
         }
       }
@@ -207471,7 +207917,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const beforeCount = this.messageCount(before);
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
-          await new Promise((resolve66) => setTimeout(resolve66, 250));
+          await new Promise((resolve68) => setTimeout(resolve68, 250));
           let state2;
           try {
             state2 = await this.readChat(evaluate);
@@ -207493,7 +207939,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
           return first;
         }
-        await new Promise((resolve66) => setTimeout(resolve66, 150));
+        await new Promise((resolve68) => setTimeout(resolve68, 150));
         const second = await this.readChat(evaluate);
         return this.messageCount(second) >= this.messageCount(first) ? second : first;
       }
@@ -207644,7 +208090,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           if (typeof data.error === "string" && data.error.trim()) return false;
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          await new Promise((resolve66) => setTimeout(resolve66, 250));
+          await new Promise((resolve68) => setTimeout(resolve68, 250));
           const state2 = await this.readChat(evaluate);
           const title = this.getStateTitle(state2);
           if (this.titlesMatch(title, sessionId)) return true;
@@ -210363,7 +210809,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { target: target4, instance, adapter };
     }
     function sleep2(ms3) {
-      return new Promise((resolve66) => setTimeout(resolve66, ms3));
+      return new Promise((resolve68) => setTimeout(resolve68, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -211204,15 +211650,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             this.json(res, 500, { error: e.message });
           }
         });
-        return new Promise((resolve66, reject) => {
+        return new Promise((resolve68, reject) => {
           this.server.listen(port, "127.0.0.1", () => {
             this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve66();
+            resolve68();
           });
           this.server.on("error", (e) => {
             if (e.code === "EADDRINUSE") {
               this.log(`Port ${port} in use, skipping dev server`);
-              resolve66();
+              resolve68();
             } else {
               reject(e);
             }
@@ -211296,20 +211742,20 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           child.stderr?.on("data", (d) => {
             stderr += d.toString().slice(0, 2e3);
           });
-          await new Promise((resolve66) => {
+          await new Promise((resolve68) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve66();
+              resolve68();
             }, 3e3);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve66();
+              resolve68();
             });
             child.stdout?.once("data", () => {
               setTimeout(() => {
                 child.kill();
                 clearTimeout(timer);
-                resolve66();
+                resolve68();
               }, 500);
             });
           });
@@ -211846,14 +212292,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         res.end(JSON.stringify(data, null, 2));
       }
       async readBody(req) {
-        return new Promise((resolve66) => {
+        return new Promise((resolve68) => {
           let body = "";
           req.on("data", (chunk) => body += chunk);
           req.on("end", () => {
             try {
-              resolve66(JSON.parse(body));
+              resolve68(JSON.parse(body));
             } catch {
-              resolve66({});
+              resolve68({});
             }
           });
         });
@@ -212314,12 +212760,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       waitForRetry(attempt) {
         if (this.closed) return Promise.resolve();
-        return new Promise((resolve66) => {
-          this.reconnectWake = resolve66;
+        return new Promise((resolve68) => {
+          this.reconnectWake = resolve68;
           this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             this.reconnectWake = null;
-            resolve66();
+            resolve68();
           }, Math.min(50 * Math.pow(2, Math.min(attempt, 4)), 500));
           this.reconnectTimer.unref?.();
         });
@@ -212598,12 +213044,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           while (!this.closed) {
             if (attempt > 0) {
               const delayMs = Math.min(50 * Math.pow(2, Math.min(attempt - 1, 4)), 500);
-              await new Promise((resolve66) => {
-                this.reconnectWake = resolve66;
+              await new Promise((resolve68) => {
+                this.reconnectWake = resolve68;
                 this.reconnectTimer = setTimeout(() => {
                   this.reconnectTimer = null;
                   this.reconnectWake = null;
-                  resolve66();
+                  resolve68();
                 }, delayMs);
                 this.reconnectTimer.unref?.();
               });
@@ -213215,7 +213661,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const delay3 = options.canConnectRetryDelayMs ?? options.verifyRetryDelayMs ?? 150;
       for (let attempt = 0; attempt <= retries2 && remaining() > 0; attempt++) {
         if (attempt > 0) {
-          await new Promise((resolve66) => setTimeout(resolve66, Math.min(remaining(), 250, delay3 * 2 ** (attempt - 1))));
+          await new Promise((resolve68) => setTimeout(resolve68, Math.min(remaining(), 250, delay3 * 2 ** (attempt - 1))));
           if (remaining() <= 0) break;
         }
         const result = await probeHost(
@@ -213260,7 +213706,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             return endpoint2;
           }
           lastError = result.error;
-          await new Promise((resolve66) => setTimeout(resolve66, Math.min(STARTUP_POLL_MS, remaining())));
+          await new Promise((resolve68) => setTimeout(resolve68, Math.min(STARTUP_POLL_MS, remaining())));
         }
         throw new SessionHostUnavailableTransientError(endpoint2, lastError);
       })();
@@ -213927,10 +214373,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             const buffer = Buffer.from(await res.arrayBuffer());
             const fs129 = await import("fs");
             fs129.writeFileSync(vsixPath, buffer);
-            return new Promise((resolve66) => {
+            return new Promise((resolve68) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error, _stdout, stderr) => {
-                resolve66({
+                resolve68({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
                   success: !error,
@@ -213943,11 +214389,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (e) {
         }
       }
-      return new Promise((resolve66) => {
+      return new Promise((resolve68) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
         hiddenExec(cmd, { timeout: 6e4 }, (error, stdout, stderr) => {
           if (error) {
-            resolve66({
+            resolve68({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: false,
@@ -213955,7 +214401,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               error: stderr || error.message
             });
           } else {
-            resolve66({
+            resolve68({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: true,
@@ -214296,7 +214742,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
-      await new Promise((resolve66, reject) => {
+      await new Promise((resolve68, reject) => {
         const onError = (error) => {
           httpServer?.off("listening", onListening);
           reject(error);
@@ -214304,7 +214750,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const onListening = () => {
           httpServer?.off("error", onError);
           listening = true;
-          resolve66();
+          resolve68();
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
@@ -214331,12 +214777,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
           clients.clear();
-          await new Promise((resolve66) => {
+          await new Promise((resolve68) => {
             if (!httpServer) {
-              resolve66();
+              resolve68();
               return;
             }
-            httpServer.close(() => resolve66());
+            httpServer.close(() => resolve68());
           });
           httpServer = null;
           wss = null;
@@ -214348,11 +214794,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto20 = __toESM2(require("crypto"));
-    var import_node_fs36 = require("fs");
-    var import_node_path33 = require("path");
+    var import_node_fs39 = require("fs");
+    var import_node_path36 = require("path");
     init_provider_cli_shared();
-    var import_node_fs37 = require("fs");
-    var import_node_path34 = require("path");
+    var import_node_fs40 = require("fs");
+    var import_node_path37 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
       tui: [
@@ -215348,7 +215794,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
     function yieldToEventLoop() {
-      return new Promise((resolve66) => setImmediate(resolve66));
+      return new Promise((resolve68) => setImmediate(resolve68));
     }
     function errText2(error) {
       return error instanceof Error ? error.message : String(error);
@@ -215878,7 +216324,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { ...runtimeCounters };
     }
     function yieldToEventLoop2() {
-      return new Promise((resolve66) => setImmediate(resolve66));
+      return new Promise((resolve68) => setImmediate(resolve68));
     }
     var CHAT_SCAN_PAGE_ROWS = 2e3;
     function scanAllLatestPerKey(node, topic, options = {}) {
@@ -216027,7 +216473,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_runtime_store();
     init_logger();
     init_config();
-    var import_node_fs39 = require("fs");
+    var import_node_fs42 = require("fs");
     init_logger();
     var LEGACY_OWNER_MARKER = "operator-recovery-owner";
     var LEGACY_LOCK_RECLAIM_MIN_AGE_MS = 10 * 6e4;
@@ -216038,7 +216484,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       try {
         let st;
         try {
-          st = (0, import_node_fs39.lstatSync)(lock);
+          st = (0, import_node_fs42.lstatSync)(lock);
         } catch (e) {
           if (e.code === "ENOENT") return { reclaimed: false, reason: "absent" };
           throw e;
@@ -216046,8 +216492,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!st.isDirectory()) return { reclaimed: false, reason: "not_directory" };
         const ageMs2 = now - st.mtimeMs;
         if (!(ageMs2 > minAgeMs)) return { reclaimed: false, reason: "fresh" };
-        if ((0, import_node_fs39.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
-        (0, import_node_fs39.rmdirSync)(lock);
+        if ((0, import_node_fs42.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
+        (0, import_node_fs42.rmdirSync)(lock);
         LOG.warn("MeshConfig", `Removed abandoned legacy mesh write lock ${lock} (age ${Math.round(ageMs2 / 1e3)}s, no ${LEGACY_OWNER_MARKER} marker); left by a crashed older ADHDev version`);
         return { reclaimed: true, ageMs: ageMs2 };
       } catch (e) {
@@ -218420,7 +218866,7 @@ ${notice.notice}${supersededHint}`;
     function createDecisionPushEmitter(deps) {
       const seen2 = /* @__PURE__ */ new Set();
       const max = deps.maxDedupe ?? 512;
-      const resolve66 = deps.resolveEntry ?? ((meshId, itemId) => buildOwnerDecisions(meshId).find((e) => e.itemId === itemId));
+      const resolve68 = deps.resolveEntry ?? ((meshId, itemId) => buildOwnerDecisions(meshId).find((e) => e.itemId === itemId));
       setDecisionPushListener((src) => {
         const key5 = `${src.itemId}:${src.reason}`;
         if (seen2.has(key5)) return;
@@ -218432,7 +218878,7 @@ ${notice.notice}${supersededHint}`;
         }
         queueMicrotask(() => {
           try {
-            const entry = resolve66(src.meshId, src.itemId);
+            const entry = resolve68(src.meshId, src.itemId);
             if (!entry) return;
             deps.sendServer(projectDecisionPushEvent(entry, src.reason));
           } catch (error) {
@@ -220078,6 +220524,10 @@ var WORKER_TOOLS = [
   "driver_list",
   "driver_describe",
   "driver_invoke",
+  "driver_scaffold",
+  "driver_validate",
+  "driver_export",
+  "driver_install",
   "artifact_register",
   "artifact_list",
   "artifact_read",
@@ -223741,6 +224191,11 @@ var TOOL_ANNOTATIONS = {
   // daemon reports a duplicate as accepted rather than as a failure.
   driver_list: READ_LOCAL,
   driver_describe: READ_LOCAL,
+  // Authoring: scaffold/export write inside the worker workspace; install writes inert files + stages an owner request.
+  driver_scaffold: WRITE_LOCAL_SAFE,
+  driver_validate: READ_LOCAL,
+  driver_export: WRITE_LOCAL_SAFE,
+  driver_install: WRITE_LOCAL_SAFE,
   driver_invoke: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   // Registers or updates metadata for one workspace file in the session artifact registry (idempotent upsert by path).
   artifact_register: WRITE_LOCAL_SAFE,
@@ -233357,6 +233812,73 @@ async function runMeshToolWithPendingEvents(ctx, run) {
   return attachPendingCoordinatorEventsToResponse(ctx, text, before);
 }
 
+// src/tools/driver-authoring-tools.ts
+var OBJ = (properties, required) => ({ type: "object", properties, required, additionalProperties: false });
+var DRIVER_SCAFFOLD_TOOL = {
+  name: "driver_scaffold",
+  description: 'Create a driver package in the workspace that wraps an EXISTING MCP stdio server command (provider.v1.json + guidance). You must list the actions (MCP tool names) yourself; the daemon does not run the command to discover them. Unspecified risk defaults to "write". The package is inert until the owner approves its activation.',
+  inputSchema: OBJ({
+    type: { type: "string", description: 'Lowercase kebab-case driver type, e.g. "my-browser".' },
+    name: { type: "string", description: "Human-readable driver name." },
+    command: { type: "string", description: 'Executable that starts the MCP stdio server (e.g. "npx", "node").' },
+    args: { type: "array", items: { type: "string" }, description: 'Arguments. Use "./path" for files shipped inside the package.' },
+    env: { type: "array", items: { type: "string" }, description: "Names of parent environment variables the server may inherit." },
+    actions: { type: "array", minItems: 1, items: OBJ({
+      id: { type: "string", description: "Action id (^[a-z][a-z0-9_-]*$)." },
+      tool: { type: "string", description: "MCP tool name the action calls." },
+      risk: { type: "string", enum: ["read", "write", "destructive"] }
+    }, ["id", "tool"]) },
+    declared_access: OBJ({
+      network: { type: "array", items: { type: "string" } },
+      filesystem: { type: "array", items: { type: "string" } },
+      desktopControl: { type: "boolean" }
+    }, []),
+    guidance: { type: "string", description: "Usage notes for agents (markdown)." },
+    dir: { type: "string", description: "Workspace-relative target directory (default drivers/<type>). Must not exist." }
+  }, ["type", "name", "command", "actions"])
+};
+var DRIVER_VALIDATE_TOOL = {
+  name: "driver_validate",
+  description: "Validate a driver package directory in the workspace (manifest schema, referenced files, no symlinks, size limits) and show what the owner will see: tree digest, risk class and reasons, declared access.",
+  inputSchema: OBJ({ dir: { type: "string", description: "Workspace-relative package directory." } }, ["dir"])
+};
+var DRIVER_EXPORT_TOOL = {
+  name: "driver_export",
+  description: "Export a driver package directory as one shareable bundle file (<type>.driver-bundle.json, digest-bound). Then call artifact_register on the returned path to share it; another machine installs it with driver_install {artifact_id}.",
+  inputSchema: OBJ({
+    dir: { type: "string", description: "Workspace-relative package directory." },
+    out: { type: "string", description: "Workspace-relative .json output (default driver-bundles/<type>.driver-bundle.json)." }
+  }, ["dir"])
+};
+var DRIVER_INSTALL_TOOL = {
+  name: "driver_install",
+  description: 'Install a driver on THIS machine from a workspace package directory, a bundle file, or a shared bundle artifact \u2014 no daemon restart. The driver is NOT active: an activation request is staged for the owner (dashboard "needs you"), and driver_invoke refuses it until approved. You cannot approve it. Tell the owner what to approve.',
+  inputSchema: OBJ({
+    dir: { type: "string", description: "Workspace-relative package directory." },
+    path: { type: "string", description: "Workspace-relative bundle (.driver-bundle.json) file." },
+    artifact_id: { type: "string", description: "Bundle artifact id (art_*), e.g. one the coordinator named in input_artifact_ids." }
+  }, [])
+};
+async function callDriverAuthoringTool(transport, tool, args, credentials = {}) {
+  const payload = tool === "driver_scaffold" ? {
+    type: args.type,
+    name: args.name,
+    command: args.command,
+    actions: args.actions,
+    ...args.args !== void 0 ? { args: args.args } : {},
+    ...args.env !== void 0 ? { env: args.env } : {},
+    ...args.declared_access !== void 0 ? { declaredAccess: args.declared_access } : {},
+    ...args.guidance !== void 0 ? { guidance: args.guidance } : {},
+    ...args.dir !== void 0 ? { dir: args.dir } : {}
+  } : tool === "driver_validate" ? { dir: args.dir } : tool === "driver_export" ? { dir: args.dir, ...args.out !== void 0 ? { out: args.out } : {} } : {
+    ...args.dir !== void 0 ? { dir: args.dir } : {},
+    ...args.path !== void 0 ? { path: args.path } : {},
+    ...args.artifact_id !== void 0 ? { artifactId: args.artifact_id } : {}
+  };
+  const result = await transport.command(tool, { ...payload, ...credentials });
+  return { text: JSON.stringify(result), ...result?.success === true ? {} : { isError: true } };
+}
+
 // src/tools/worker-tools.ts
 var import_node_crypto4 = require("crypto");
 
@@ -234043,7 +234565,7 @@ async function contractCurrentTool(transport, credentials) {
   const { success: _s, ...view } = result;
   return { text: JSON.stringify(view) };
 }
-var ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL, WORKER_ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL, CONTRACT_READ_TOOL, CONTRACT_OBSERVE_TOOL, CONTRACT_CURRENT_TOOL]);
+var ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, DRIVER_SCAFFOLD_TOOL, DRIVER_VALIDATE_TOOL, DRIVER_EXPORT_TOOL, DRIVER_INSTALL_TOOL, ARTIFACT_REGISTER_TOOL, WORKER_ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL, CONTRACT_READ_TOOL, CONTRACT_OBSERVE_TOOL, CONTRACT_CURRENT_TOOL]);
 var WORKER_GIT_TOOLS = annotateAll([GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL]);
 function resolveWorkerModeTools(candidates = [...ALL_WORKER_TOOLS, ...WORKER_GIT_TOOLS]) {
   const byName = /* @__PURE__ */ new Map();
@@ -234270,6 +234792,9 @@ function describeWorkerDeliveryAnswer(kind, result) {
 }
 async function workerDriverTool(transport, credentials, tool, args) {
   return callDriverTool(transport, tool, args, credentials);
+}
+async function workerDriverAuthoringTool(transport, credentials, tool, args) {
+  return callDriverAuthoringTool(transport, tool, args, credentials);
 }
 async function workerArtifactRegister(transport, credentials, args) {
   const text = await callWorkerArtifactRegister(transport, credentials, args);
@@ -234925,6 +235450,10 @@ ${deliveryNotices.join("\n\n")}
       driver_list: async (a) => asResponse(await workerDriverTool(transport, credentials, "driver_list", a)),
       driver_describe: async (a) => asResponse(await workerDriverTool(transport, credentials, "driver_describe", a)),
       driver_invoke: async (a) => asResponse(await workerDriverTool(transport, credentials, "driver_invoke", a)),
+      driver_scaffold: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, "driver_scaffold", a)),
+      driver_validate: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, "driver_validate", a)),
+      driver_export: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, "driver_export", a)),
+      driver_install: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, "driver_install", a)),
       artifact_register: async (a) => asResponse(await workerArtifactRegister(transport, credentials, a)),
       artifact_list: async (a) => asResponse(await workerArtifactList(transport, credentials, a)),
       artifact_read: async (a) => asResponse(await workerArtifactRead(transport, credentials, a)),

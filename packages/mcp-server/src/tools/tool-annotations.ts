@@ -295,6 +295,11 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // daemon reports a duplicate as accepted rather than as a failure.
   driver_list: READ_LOCAL,
   driver_describe: READ_LOCAL,
+  // Authoring: scaffold/export write inside the worker workspace; install writes inert files + stages an owner request.
+  driver_scaffold: WRITE_LOCAL_SAFE,
+  driver_validate: READ_LOCAL,
+  driver_export: WRITE_LOCAL_SAFE,
+  driver_install: WRITE_LOCAL_SAFE,
   driver_invoke: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   // Registers or updates metadata for one workspace file in the session artifact registry (idempotent upsert by path).
   artifact_register: WRITE_LOCAL_SAFE,

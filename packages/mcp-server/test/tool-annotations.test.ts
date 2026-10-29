@@ -80,8 +80,8 @@ test('every published mesh tool carries all four behavior hints', () => {
 
 test('every published worker tool carries all four behavior hints', () => {
   // G1a-6 adds the three driver tools + artifact_register, artifact_list, artifact_read to the three worker report/context tools;
-  // contract versioning Cut A adds contract_read / contract_observe / contract_current.
-  assert.equal(ALL_WORKER_TOOLS.length, 12);
+  // contract versioning Cut A adds contract_read / contract_observe / contract_current; driver authoring adds driver_scaffold / validate / export / install.
+  assert.equal(ALL_WORKER_TOOLS.length, 16);
   for (const tool of ALL_WORKER_TOOLS) {
     const annotations = (tool as any).annotations;
     assert.ok(annotations, `${tool.name} has no annotations`);

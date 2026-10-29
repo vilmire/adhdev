@@ -325,7 +325,21 @@ export class ProviderLoader extends ProviderRegistry {
     // channel roots sit above .upstream so digest-verified bytes win over
     // legacy manifest installs of the same type, mirroring loadAll().
     const externalDir = path.join(getConfigDir(), 'external');
-    return [this.userDir, externalDir, ...this.channelSync.objectRoots, this.upstreamDir];
+    return [this.userDir, externalDir, ...this.externalSourceRoots(externalDir), ...this.channelSync.objectRoots, this.upstreamDir];
+  }
+
+  /**
+   * Named external sources (external/<source>/<category>/<type>) are loaded by loadAll()
+   * but `external/<category>/<type>` never matches them, so findProviderDir() could not
+   * locate a driver/provider installed under a named source (driver_install uses one so it
+   * never disturbs the legacy single-source layout). Legacy category dirs are not sources.
+   */
+  private externalSourceRoots(externalDir: string): string[] {
+    try {
+      return fs.readdirSync(externalDir, { withFileTypes: true })
+        .filter(e => e.isDirectory() && !['cli', 'ide', 'extension', 'driver'].includes(e.name))
+        .map(e => path.join(externalDir, e.name));
+    } catch { return []; }
   }
 
   getSourceConfig(): ProviderSourceConfigSnapshot {

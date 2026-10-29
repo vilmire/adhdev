@@ -310,6 +310,8 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',
     'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled',
+    // Driver authoring (2026-10-29): worker scaffold/validate/export/install + owner import.
+    'driver_scaffold', 'driver_validate', 'driver_export', 'driver_install', 'driver_import',
     // Artifact viewer additions use med-family contexts; not part of the legacy migration.
     'artifact_fetch', 'artifact_fetch_origin', 'artifact_index_forwarded', 'artifact_list', 'artifact_read', 'artifact_register',
     'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',

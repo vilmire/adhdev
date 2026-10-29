@@ -73,3 +73,43 @@ test('worker exposes daemon rejection as an MCP error and has no credential argu
       assert.equal(Object.hasOwn(tool.inputSchema.properties ?? {}, forbidden), false);
   }
 });
+
+// ── Driver authoring (docs/design/2026-10-29-driver-authoring-and-sharing.md) ──
+import { workerDriverAuthoringTool } from '../src/tools/worker-tools.js';
+test('authoring tools are worker-only: coordinator and assistant publish none of them', () => {
+  const authoring = ['driver_scaffold', 'driver_validate', 'driver_export', 'driver_install'];
+  const workerNames = tools.worker.map(t => t.name);
+  for (const name of authoring) {
+    assert.ok(workerNames.includes(name), `${name} in worker mode`);
+    assert.ok(!tools.coordinator.some(t => t.name === name), `${name} absent in coordinator mode`);
+    assert.ok(!tools.assistant.some(t => t.name === name), `${name} absent in assistant mode`);
+    assert.equal(resolveMeshToolHandler(name), undefined);
+  }
+  assert.equal(workerNames.includes('driver_import'), false, 'the owner import verb is never a worker tool');
+});
+test('authoring tool schemas never publish credential or workspace overrides', () => {
+  for (const name of ['driver_scaffold', 'driver_validate', 'driver_export', 'driver_install']) {
+    const props = Object.keys((tools.worker.find(t => t.name === name)!.inputSchema as any).properties);
+    for (const forbidden of ['token', 'bind', 'workspace', 'workspaceRoot', 'sessionId', 'meshId', 'taskId']) assert.ok(!props.includes(forbidden), `${name}.${forbidden}`);
+  }
+});
+test('authoring tools map snake_case to daemon fields and append only launch credentials', async () => {
+  const t = transport(); const credentials = readWorkerCredentials({ ADHDEV_WORKER_TASK_TOKEN: 'wtk_launch' });
+  await workerDriverAuthoringTool(t.value, credentials, 'driver_scaffold', { type: 'x', name: 'X', command: 'node', actions: [{ id: 'a', tool: 't' }],
+    declared_access: { filesystem: ['workspace'] }, token: 'forged', workspace: '/etc' });
+  await workerDriverAuthoringTool(t.value, credentials, 'driver_install', { artifact_id: 'art_1', bind: 'forged', meshId: 'forged' });
+  await workerDriverAuthoringTool(t.value, credentials, 'driver_export', { dir: 'd', out: 'o.json' });
+  await workerDriverAuthoringTool(t.value, credentials, 'driver_validate', { dir: 'd', sessionId: 'forged' });
+  assert.deepEqual(t.calls, [
+    { verb: 'driver_scaffold', args: { type: 'x', name: 'X', command: 'node', actions: [{ id: 'a', tool: 't' }], declaredAccess: { filesystem: ['workspace'] }, ...credentials } },
+    { verb: 'driver_install', args: { artifactId: 'art_1', ...credentials } },
+    { verb: 'driver_export', args: { dir: 'd', out: 'o.json', ...credentials } },
+    { verb: 'driver_validate', args: { dir: 'd', ...credentials } },
+  ]);
+});
+test('authoring tools mark daemon refusals as tool errors', async () => {
+  const refuse = { command: async () => ({ success: false, code: 'type_conflict' }) } as unknown as CommandTransport;
+  const result = await workerDriverAuthoringTool(refuse, {}, 'driver_install', { dir: 'd' });
+  assert.equal(result.isError, true);
+  assert.equal(JSON.parse(result.text).code, 'type_conflict');
+});
