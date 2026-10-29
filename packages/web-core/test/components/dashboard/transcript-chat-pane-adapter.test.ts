@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import {
   buildTranscriptPaneAttributes,
+  TranscriptBubbleCache,
   mapTranscriptViewToChatView,
 } from '../../../src/components/dashboard/transcript-chat-pane-adapter'
 
@@ -107,4 +108,17 @@ describe('buildTranscriptPaneAttributes', () => {
     const attrs = buildTranscriptPaneAttributes({ omittedBefore: true })
     expect(Object.keys(attrs)).toEqual(['data-transcript-omitted-before'])
   })
+})
+
+it('refreshes cached final state on a native bubble revision without inferring idle from the bubble', () => {
+  const cache = new TranscriptBubbleCache()
+  const row = { role: 'assistant' as const, kind: 'standard' as const, content: 'Native final', receivedAt: 10, timestamp: 10,
+    turnKey: 'native-turn', bubbleState: null, senderName: null, toolName: null, streaming: null,
+    messageId: 'native-final', ord: 'a1', rev: 1, expandable: false, srcId: null }
+  const before = mapTranscriptViewToChatView(buildSnapshot({ status: 'generating', messages: [row] }), { cache })
+  const final = mapTranscriptViewToChatView(buildSnapshot({ status: 'generating', messages: [{ ...row, rev: 2, bubbleState: 'final' }] }), { cache })
+  expect(final.messages[0]).not.toBe(before.messages[0])
+  expect(final.messages[0].bubbleState).toBe('final')
+  const idle = mapTranscriptViewToChatView(buildSnapshot({ status: 'idle', messages: [{ ...row, rev: 2, bubbleState: 'final' }] }), { cache })
+  expect(idle.messages[0]).toBe(final.messages[0])
 })

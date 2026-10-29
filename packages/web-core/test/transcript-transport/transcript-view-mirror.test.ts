@@ -81,3 +81,16 @@ describe('TranscriptViewMirror', () => {
         expect(compareTranscriptOrd({ ord: 'a1', messageId: 'b' }, { ord: 'a1', messageId: 'a' })).toBeGreaterThan(0)
     })
 })
+
+it('keeps a late native final revision visible while status settles independently', () => {
+    const mirror = new TranscriptViewMirror()
+    const initial = { ...bubble('answer', 'a1', 1, 'Final text'), bubbleState: 'streaming' as const }
+    mirror.apply(frame({ reset: true, meta: { ...META, status: 'generating' }, upserts: [initial] }))
+    const final = mirror.apply(frame({ frame: 2, upserts: [bubble('answer', 'a1', 2, 'Final text')] }))!
+    expect(final.view.messages[0].bubbleState).toBe('final')
+    expect(final.view.messages[0].rev).toBe(2)
+    expect(final.view.status).toBe('generating')
+    const settled = mirror.apply(frame({ frame: 3, meta: { ...META, frame: 3, status: 'idle' } }))!
+    expect(settled.view.status).toBe('idle')
+    expect(settled.view.messages[0]).toBe(final.view.messages[0])
+})

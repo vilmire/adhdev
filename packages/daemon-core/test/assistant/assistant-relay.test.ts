@@ -1,9 +1,17 @@
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
+import { ensureAssistantRelaySchema } from '../../src/mesh/mesh-runtime-store-schema.js';
+import { SqliteAssistantRelayStore } from '../../src/assistant/assistant-relay-sqlite-store.js';
+import { repairLateCaptures, readLateCaptureState } from '../../src/assistant/late-capture-repair.js';
+import { receiptKey } from '../../src/assistant/relay-gap-tracker.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { SendPolicy, SubmitOutcome } from '@adhdev/mesh-shared';
 import { runStatusTransitionTick } from '../../src/providers/completion/status-transition.js';
 import { makeHost, SAMPLE_PROMPT } from '../providers/completion/status-transition-picker-host-fixture.js';
 import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
-import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
+import { InMemoryAssistantRelayStore, type AssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
 import {
     AssistantRelay,
     RELAY_THREAD_STALE_CLOSE_MS,
@@ -58,7 +66,7 @@ class FakeClock implements RelayClock {
 interface Harness {
     relay: AssistantRelay;
     clock: FakeClock;
-    store: InMemoryAssistantRelayStore;
+    store: AssistantRelayStore;
     log: AssistantInputLog;
     submits: Array<{ sessionId: string; text: string; messageId: string; policy: SendPolicy }>;
     emit(e: AssistantRelayBusEvent): void;
@@ -66,7 +74,7 @@ interface Harness {
     delivered: string[][];
 }
 
-function harness(existingStore?: InMemoryAssistantRelayStore): Harness {
+function harness(existingStore?: AssistantRelayStore): Harness {
     const clock = new FakeClock();
     const store = existingStore ?? new InMemoryAssistantRelayStore();
     const log = new AssistantInputLog();
@@ -837,4 +845,87 @@ it('refuses session-only tails when no exact reader is available', async () => {
     expect(h.submits[0].text).toContain('native transcript unavailable');
     expect(h.submits[0].text).not.toContain('newest session tail');
     expect(h.store.listUndelivered()).toHaveLength(0); h.relay.stop();
+});
+
+async function deliverMissingNotice(h: Harness, reason = 'original_native_bubble_unavailable') {
+    h.relay.openThread(MESH);
+    (h.relay as any).ports.rehydrateAttemptReport = async () => ({ body: null, completeness: 'envelope_unverified', reason });
+    h.emit(turn('committed', COORD, 1, h.clock.now()));
+    await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
+    h.clock.advance(RELAY_NATIVE_GRACE_MS + RELAY_QUIET_MS); h.relay.tick(); await micro(); await settle(h);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0].text).toContain('"sourceComplete":false');
+    expect(h.submits[0].text).toContain(reason === 'private/path/secret' ? 'capture_failed' : reason);
+    expect(h.store.listUndelivered()).toHaveLength(0);
+}
+
+it('repairs a verified same-attempt final after the uncertainty notice, once', async () => {
+    const h = harness(); await deliverMissingNotice(h);
+    const calls: string[] = [];
+    (h.relay as any).ports.rehydrateAttemptReport = async (_m: string, _s: string, id: string) => {
+        calls.push(id); return { body: 'Late verified original final.', completeness: 'final_native' };
+    };
+    h.clock.advance(MIN); h.relay.tick(); await micro(); await settle(h);
+    expect(calls).toEqual(['plain:coord_blog:e1']);
+    expect(h.submits).toHaveLength(2); expect(h.submits[1].text).toContain('Late verified original final.');
+    expect(h.submits[1].text).toContain('"complete":true');
+    h.clock.advance(10 * MIN); h.relay.tick(); await micro(); await settle(h);
+    expect(h.submits).toHaveLength(2); expect(calls).toHaveLength(1); h.relay.stop();
+});
+
+it('retains bounded late-repair eligibility across relay restart and refuses unverified text', async () => {
+    const first = harness(); await deliverMissingNotice(first); first.relay.stop();
+    const second = harness(first.store); second.clock.t = first.clock.t + MIN;
+    (second.relay as any).ports.rehydrateAttemptReport = async () => ({ body: 'Unverified envelope must stay hidden', completeness: 'envelope_unverified' });
+    second.relay.tick(); await micro(); await settle(second); expect(second.submits).toHaveLength(0);
+    (second.relay as any).ports.rehydrateAttemptReport = async () => ({ body: 'Verified final after restart', completeness: 'final_native' });
+    second.clock.advance(2 * MIN); second.relay.tick(); await micro(); await settle(second);
+    expect(second.submits).toHaveLength(1); expect(second.submits[0].text).toContain('Verified final after restart'); second.relay.stop();
+});
+
+it.each(['original_terminal_evidence_unavailable', 'private/path/secret'])('sanitizes notice reason and bounds permanent/expired repair: %s', async reason => {
+    const h = harness(); await deliverMissingNotice(h, reason);
+    const read = vi.fn(async () => ({ body: 'must not deliver', completeness: 'final_native' }));
+    (h.relay as any).ports.rehydrateAttemptReport = read;
+    h.clock.advance(reason === 'original_terminal_evidence_unavailable' ? MIN : 24 * 60 * MIN);
+    h.relay.tick(); await micro(); await settle(h);
+    expect(read).not.toHaveBeenCalled(); expect(h.submits).toHaveLength(1); expect(h.submits[0].text).not.toContain('private/path/secret'); h.relay.stop();
+});
+
+for (const kind of ['memory', 'sqlite']) it(`${kind} restores probe-24 atomic recovery and delivers its pinned report once after cold restart`, async () => {
+    const path = kind === 'sqlite' ? join(mkdtempSync(join(tmpdir(), 'relay-final-probe-')), 'relay.db') : null;
+    let db: Database.Database | undefined;
+    let store: AssistantRelayStore = new InMemoryAssistantRelayStore();
+    const reopen = () => {
+        if (path) {
+            db?.close(); db = new Database(path); ensureAssistantRelaySchema(db);
+            store = new SqliteAssistantRelayStore(db);
+        }
+        return store;
+    };
+    const first = harness(reopen());
+    try {
+        await deliverMissingNotice(first); first.relay.stop();
+        const id = 'plain:coord_blog:e1';
+        const now = first.clock.now() + MIN;
+        store.writeReceipt(receiptKey('late-capture', id), JSON.stringify({ ...readLateCaptureState(store, id, now), probes: 23 }), now, 'capture');
+        await expect(repairLateCaptures({ store, now, live: () => true,
+            read: async () => ({ body: 'Fixed the RSS link.', completeness: 'final_native' }),
+            ready: () => { throw new Error('crash before queue'); } })).rejects.toThrow('crash before queue');
+        const second = harness(reopen()); second.clock.t = now;
+        try {
+            await micro(); second.relay.tick(); await micro(); await settle(second);
+            expect(second.submits).toHaveLength(1);
+            expect(second.submits[0].text).toContain('Fixed the RSS link.');
+            expect(store.listUndelivered()).toEqual([]);
+            second.emit(turn('committed', COORD, 1, second.clock.now()));
+            second.clock.advance(RELAY_QUIET_MS + MIN); second.relay.tick(); await micro(); await settle(second);
+            expect(second.submits).toHaveLength(1);
+        } finally { second.relay.stop(); }
+        const third = harness(reopen()); third.clock.t = now + MIN;
+        try {
+            await micro(); third.relay.tick(); await micro(); await settle(third);
+            expect(third.submits).toHaveLength(0);
+        } finally { third.relay.stop(); }
+    } finally { first.relay.stop(); db?.close(); }
 });

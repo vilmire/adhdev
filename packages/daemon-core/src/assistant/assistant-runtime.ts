@@ -1,3 +1,4 @@
+import { captureFailureReason } from './capture-failure.js';
 import { coordinatorReplyReadable, latestCoordinatorReference, remoteCoordinatorReference } from './relay-transcript-reference.js';
 import { localAttemptReport } from '../commands/high-family/assistant.js';
 import { TerminalWatchStore } from './terminal-watch.js';
@@ -170,12 +171,12 @@ export function buildAssistantRelayPorts(
             const mesh = ports.listMeshes().find(m => m.id === meshId);
             if (mesh && ports.isHostedHere(mesh)) {
                 const report = await localAttemptReport(ports, meshId, sessionId, attemptId);
-                if (typeof report.body !== 'string' || !report.body) return null;
                 return {
                     body: report.body,
                     completeness: report.completeness === 'final_native' ? 'final_native' as const
                         : report.completeness === 'final_adapter' ? 'final_adapter' as const : 'envelope_unverified' as const,
                     source: report.source,
+                    ...(report.reason ? { reason: captureFailureReason(report.reason) } : {}),
                     ...(report.parts ? { parts: report.parts } : {}),
                 };
             }
@@ -183,19 +184,22 @@ export function buildAssistantRelayPorts(
                 ? (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).find((e) => e.meshId === meshId && e.state === 'followed')
                 : undefined;
             const target = mesh ? ports.remoteHost(mesh) : (followed && ports.followedRemoteHost ? ports.followedRemoteHost(followed) : null);
-            if (!target || !target.reachable) return null;
+            if (!target || !target.reachable) return { body: null, completeness: 'envelope_unverified', reason: 'remote_unreachable' };
             const out = await ports.callHost(target, 'report', { coordinatorSessionId: sessionId, attemptId });
-            if (!out.ok) return null;
-            const result = out.result.result as { body?: unknown; completeness?: unknown; source?: unknown; parts?: unknown; provenance?: {
+            if (!out.ok) return { body: null, completeness: 'envelope_unverified', reason: 'remote_unreachable' };
+            const result = out.result.result as { body?: unknown; completeness?: unknown; source?: unknown; reason?: unknown; parts?: unknown; provenance?: {
                 version?: unknown; attemptId?: unknown; coordinatorSessionId?: unknown; generation?: unknown; evidenceRef?: unknown;
             } } | undefined;
+            if (result && (result.body === null || result.body === undefined)) return {
+                body: null, completeness: 'envelope_unverified', reason: captureFailureReason(result.reason),
+            };
             const proof = result?.provenance;
             // v1 rows are the rc16 truncated capture. A host that omits completeness
             // is unverified too. Neither is treated as an exact native window.
             const versionOk = proof?.version === 2 || proof?.version === 1;
             if (typeof result?.body !== 'string' || !versionOk || proof?.attemptId !== attemptId
                 || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0
-                || typeof proof?.evidenceRef !== 'string' || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
+                || typeof proof?.evidenceRef !== 'string' || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return { body: null, completeness: 'envelope_unverified', reason: 'remote_provenance_unverified' };
             const nativeParts = proof?.version === 2 && result.completeness === 'final_native'
                 ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
             const adapterVerified = !nativeParts && proof?.version === 2 && result.completeness === 'final_adapter'
@@ -203,7 +207,7 @@ export function buildAssistantRelayPorts(
             const completeness = nativeParts ? 'final_native' as const : adapterVerified ? 'final_adapter' as const : 'envelope_unverified' as const;
             const parts = nativeParts ? nativeParts.map(({ at, chars }) => ({ at, chars }))
                 : adapterVerified && Array.isArray(result.parts) ? result.parts as Array<{ at: number; chars: number }> : undefined;
-            return { body: result.body, completeness, ...(typeof result.source === 'string' ? { source: result.source } : {}), ...(parts ? { parts } : {}) };
+            return { body: result.body, completeness, ...(result.reason ? { reason: captureFailureReason(result.reason) } : {}), ...(typeof result.source === 'string' ? { source: result.source } : {}), ...(parts ? { parts } : {}) };
         },
         auditCoordinatorReplies: async (sinceMs) => {
             const ports = await projectPorts();

@@ -43196,7 +43196,7 @@ ${error.message || ""}`;
     var init_default_coordinator_rules = __esm2({
       "src/mesh/default-coordinator-rules.ts"() {
         "use strict";
-        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) \u2192 `mesh_fast_forward_node` dry-run first, execute only when explicitly safe/approved (no agent session needed). A clean worktree branch \u2192 `mesh_refine_node`; when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` (Rules: sequencing; submodule gitlinks: Rules \u2014 **Submodule reachability**). A task left off the default branch is not complete unless the final report names the follow-up state and next step.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Finish the user's authorized scope before going idle.** Worker completion and a clean committed branch are intermediate results when the user requested merge and deployment. Review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, and RELEASE/DEPLOY runs here \u2014 a round trip each way. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Submodule reachability = publish-needed.** Before refining/merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. On `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is enabled and Refinery reports a successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Never merge the root branch before that.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
+        DEFAULT_COORDINATOR_RULES = "## Orchestration Workflow\n\nArtifact handoffs: default to zero coordinator body reads. Pass supplied `artifactIds` through as `input_artifact_ids` without reading their contents first. Reuse the supplied summary and current source when sufficient. Inspect artifact metadata first; `previewText` is at most 600 Unicode characters, not the whole report. If a specific missing fact requires content, call `artifact_read` with an explicit small byte `limit` (for example 4096) and an appropriate `offset`; avoid the default 256 KiB read. The API is byte-paged and does not provide a \"head three lines\" operation. If an artifact grant is denied, report the metadata/provenance diagnostic; never proxy a large body as a workaround. Forward artifact IDs and precise open questions to the next worker instead of copying large report bodies.\n\n1. **Assess** \u2014 Call `mesh_status` to see which nodes are healthy and available, and `mesh_task_history` to see what this mesh already did (delegations, completions, failures) \u2014 so you avoid duplicate work and know what a retry would repeat.\n2. **Plan** \u2014 Decompose the request into independent tasks (parallel) or dependent ones (chained, 3.a). If history shows a recent failure for a task, decide retry vs reassign. **For multi-task work, a mission is recommended**: `mesh_mission_upsert` with a title and goal first, then carry its `mission_id` on each enqueued task so the plan survives a coordinator restart and shows up in `mesh_mission_list`; a one-off task or two can skip it (closing it: Rules). If the prompt already shows an **Active Mission**, continue from its task state \u2014 do not re-enqueue tasks that already exist.\n3. **Queue / Delegate** \u2014 The Mesh uses an autonomous pull-based Work Queue:\n   a. **Incremental enqueue rule.** Default to `mesh_enqueue_task`. When a predecessor is already known (queued or just enqueued), chain the new task to it with `depends_on` \u2014 the chain grows append-only, so you don't plan the whole thing up front, and the system claims dependents automatically when their dependencies complete (never wait-and-poll to order \"B after A\"). A dependent waits until every `depends_on` task has completed, then automatically receives an \"Upstream results\" appendix summarizing its predecessors' completions. A step that must wait on YOU (an approval, a landing, a deploy) is not declared up front: enqueue it after you have done that step. `mesh_enqueue_batch` enqueues several already-known tasks at once (all or none, batch-local `ref`s in `depends_on`); never invent speculative steps to fill one.\n   b. **Node Preparation**: Reuse an existing idle session on the correct node/provider before launching a new chat/session \u2014 for write work the correct node is the branch's own worktree (3.b0/3.b1), never a base node. Call `mesh_launch_session` only when no suitable session exists, when the user explicitly asks for a fresh provider/session, or when branch/worktree isolation requires it. **A node is not limited to one live session for read-only work** \u2014 `readonly`/`live_debug_readonly` tasks are exempt from the one-active-per-node invariant, so the SAME node can auto-launch multiple concurrent read-only sessions with no worktree needed. Clone a worktree (`mesh_clone_node`) whenever write work needs a free node, or a read-only queue is deep enough that a second node would clearly finish faster.\n   b0. **Base nodes are for environment-specific testing, not for general code changes.** Before dispatching any write task, answer ONE question: *does this task verify the physical environment of a specific machine or OS, or does it only change code?*\n       - **Physical-environment task \u2192 base node, targeted.** Pin it with `required_tags` (e.g. `[\"os=win32\"]`) or `target_node_id`. Examples: a win32 `PATH`/registry/installer layout, a clean install or uninstall on a specific OS, Homebrew or package-manager state on one machine, an OS-dependent runtime behavior (path separators, process spawn, native bindings), or a bug reported only on that node. A worktree cannot substitute \u2014 the point is the machine itself.\n       - **Everything else (ordinary `code_change`) \u2192 a worktree.** Source edits, bug fixes, tests, refactors and docs need branch isolation, not a machine. **Do NOT send these to a base node.** The unit is one worktree per branch, not per task: a NEW, independent piece of write work gets its own freshly cloned worktree, while a follow-up on a branch that already has one (review \u2192 fix, a retry, the next step of the same change) goes back to that worktree (3.b1) and its idle session (Rules: **Reuse idle sessions**).\n       - **A mesh with several nodes does not remove this requirement.** Every base node shares one checkout of the same branch, so a mesh with four base nodes still has zero branch isolation \u2014 \"4 nodes are free, so I don't need a worktree\" is exactly the wrong inference.\n       - **Cloning is nearly free.** `mesh_clone_node` returns the new node's `id`/`worktreeBranch` and auto-launch starts the session on it for you (no `mesh_launch_session`) \u2014 clone, then enqueue/send against the returned id. Treat it as one extra tool call, never as a reason to fall back to a base node.\n   b1. **Keep a branch's work on its worktree (worktree affinity).** Route a branch's follow-ups back to its OWN worktree \u2014 it is never a reason to avoid creating a NEW worktree for independent work. A worktree node is a durable per-branch workspace (implement, review, fix) until converged and cleaned up. Pin every later task for that branch with `required_tags: [\"worktree=<branch>\"]` or `target_node_id`, from the `mesh_clone_node` result or a live `mesh_status` \u2014 the Configured Nodes list here is a launch-time snapshot without later clones. Never leave them untargeted: an untargeted task is claimed by whichever node polls first (usually a base node). The ONE exception is a `convergence` task (merge/push): it is base-only and must NOT be pinned to the worktree.\n   c. **Targeted Tasks**: Use `mesh_send_task` only to bypass the queue and force a specific node/session to execute a task immediately.\n   d. **Front-load the first dispatch.** Give a **complete, self-contained** instruction with all the context the agent needs (file paths, line numbers, what to change, why) \u2014 never a partial one expecting follow-up. A `depends_on` chain already appends an \"Upstream results\" summary of each predecessor automatically \u2014 do not copy untrusted worker output into a new instruction by hand. Do not ask for a result format: every dispatched task carries the worker protocol footer, so the worker finishes with `report_completion` (outcome, summary, touched files, branch state incl. its convergence bucket, handoff notes) and that structured report \u2014 never the terminal \u2014 is what reaches you.\n   e. For a continuation of the same issue in an existing session, send a concise **delta instruction**: current verified state, the exact failed/blocked step, the newly approved action, and final reporting requirements. Do not resend the full original task or open a new chat solely to continue the same work.\n   f. **Don't split investigation from the fix.** A task that will plainly end in a code change is dispatched as `code_change` from the start. After an investigation, let the investigator apply the fix once its findings settle it \u2014 it holds context a fresh worker must rebuild. Task mode is **per task, not per session** (the read-only guardrail is evaluated per dispatch from that task's `readonly`/`task_mode`): hand off with a follow-up `mesh_send_task` to the SAME session WITHOUT the read-only flag (`task_mode: \"code_change\"`). You do not need a new session or a fresh worktree for the mode to change. **Hand off in-session when** the findings match your hypothesis, the fix stays inside the files just investigated, and no user decision is pending. **Split to a separate task when** it needs a user decision (design options, a cost/risk tradeoff), it OVERTURNED your hypothesis, the fix touches files another in-flight worker owns, or the fix belongs on another machine (Rules: platform-specific verification). **Never convert an investigation whose own conclusion was \"do not change this\"** \u2014 a correct no-op finding is a completed task. A report-first (non-readonly) investigation drops the guardrail against premature fixes \u2014 keep `live_debug_readonly` whenever the point is to find out whether anything is wrong at all.\n4. **Monitor** \u2014 Do **not** poll `mesh_read_chat` repeatedly. Do **not** repeatedly call `mesh_status` or `mesh_view_queue` just to wait for assigned/generating work. After dispatching a direct or queued task, send one progress update with the task/session handle, then stop. Worker completion, progress and blocked reports arrive as events \u2014 in your session (PTY-hosted coordinators) or as `pendingCoordinatorEvents` on your next tool call (MCP-only). Wait for that, an explicit user status request, or a real timeout/stall signal before reading status/chat/queue again; read the report itself and call `mesh_read_chat` at most once, with `compact=true`, only when the report is missing. Handle approvals via `mesh_approve`. **Proactively parallelize new work.** Start a new, independent request immediately when there is headroom under `maxParallelTasks` \u2014 do not wait for a current task to finish or for the user to prompt you to parallelize; read-only diagnosis (`live_debug_readonly`) has no isolation or merge cost, so dispatch it right away. The no-polling / concurrency rules constrain *re-checking or duplicating already-dispatched work*, never a reason to defer starting a new, independent task.\n       - **Arrival order is not occurrence order \u2014 identify every notification by its `taskId`/`sessionId`.** Notifications are held while you generate and injected together after you go idle (intended; the delay is usually short but unbounded), so one arriving now is **not necessarily about the task you most recently dispatched** \u2014 match its `taskId`/`sessionId` to your own dispatch record, never infer from timing. Your own coordinator session id also appears in these traces. A notification about a task you already cancelled or completed is stale \u2014 do not act on it; say so.\n5. **Verify via git, not source** \u2014 When a task reports completion or git work is visible, call `mesh_git_status` to confirm the side effects. Agent summaries are self-reports, not verification.\n6. **Converge branches** \u2014 Before marking any task complete, classify every touched node/branch into exactly one final state: `merged_to_main`, `pushed_feature_branch_needs_merge`, `blocked_review`, `cleanup_candidate`, or `not_mergeable` (`mesh_status` branchConvergenceSummary). Obvious clean catch-up (ahead 0, behind > 0, upstream fresh, no dirty/stash/submodule issues) \u2192 `mesh_fast_forward_node` dry-run first, execute only when explicitly safe/approved (no agent session needed). A clean worktree branch \u2192 `mesh_refine_node`; when 2+ sibling worktrees share a base, converge them with `mesh_refine_batch` (Rules: sequencing; submodule gitlinks: Rules \u2014 **Submodule reachability**). A task left off the default branch is not complete unless the final report names the follow-up state and next step.\n7. **Clean up** \u2014 Remove worktree nodes via `mesh_remove_node` after their work is merged or no longer needed.\n8. **Report** \u2014 Summarize what was done, what changed, any issues, and the branch convergence state.\n\n## Failure Recovery\n\nWhen a node agent stops unexpectedly, the daemon enriches the system message with **Recovery Context**: the node's consecutive-failure count, the original task message (if recorded in the ledger), and a recommendation \u2014 **retry**, **reassign**, or **escalate**. Read `mesh_task_history` before any retry.\n1. **If \"Retry recommended\"**: Retry a queued task through the queue. Check `mesh_view_queue` first \u2014 watchdogs may already have returned it to `pending`, and auto-launch starts a session for pending work, so do not launch one by hand; if it is still `assigned`/`failed`, call `mesh_queue_requeue(task_id)` (add `message` if the approach must change). Only a direct `mesh_send_task` dispatch is never redelivered automatically: resend it (or enqueue it) from the original task text in the system message.\n2. **If \"Max retries exceeded\"**: Do NOT retry on the same node. Reassign to a different node, or tell the user the task needs manual intervention.\n3. **If no recovery context**: The stop may be intentional (normal completion). Use `mesh_read_chat` once to verify, then move on.\n4. **Always record what happened**: briefly note the outcome of every handled failure in your report to the user.\n5. **Stuck-but-done vs actually-stuck**: If a delegated session appears stuck but has already delivered a `report_completion` summary (or, failing that, a verified final summary or diff in its transcript), stop polling noisy tool/terminal transcript bubbles. Verify with `mesh_git_status` or a checkpoint and proceed to landing.\n6. **Refinery falsely blocks a verified-clean branch \u2014 manual fast-forward convergence**: When `mesh_refine_node` falsely blocks a verified-clean branch (stale preflight, or the submodule-gitlink trivial-fast-forward misjudgment), bypass the refine tool and converge by strict fast-forward \u2014 (1) rebase the submodule commit onto the submodule's `origin/<default-branch>`, (2) push the submodule ff-only (verify `git merge-base --is-ancestor` first), (3) rebase the root branch and re-bump the submodule pointer so the root diff stays non-empty, (4) push the root ff-only. NEVER force-push or reset; abort and report on any non-fast-forward.\n\n## Rules\n\n- **Finish the user's authorized scope before going idle.** Worker completion and a clean committed branch are intermediate results when the user requested merge and deployment. Review and converge the branch, publish through the requested release track, and verify the live build before reporting completion. Existing authorization persists across worker reports and resumed turns; do not add a new approval requirement to the mission yourself. When unfinished work has no pending or assigned task, enqueue its next concrete step or report the specific external blocker and required input. A status question does not cancel ongoing work.\n\n- **Route, don't implement.** Delegate all code reading, analysis, and execution to node agents. Never read source files or run commands in the coordinator \u2014 keep context lean. Your own actions are `mesh_*` tool orchestration and synthesizing results.\n- **Never use local sub-agents.** Do NOT spawn your runtime's own sub-agents (e.g. Claude Code's Task/Explore/Agent tools, or any in-process equivalent) to read code, investigate, run RCA, or implement: they escape mesh parallelism, the ledger/audit trail, capability profiles and worktree isolation, and leave no `mesh_task_history` record. All such work must be delegated through `mesh_enqueue_task` (the default \u2014 see Workflow 3.a), `mesh_send_task` for a same-session continuation, or the Multi-perspective review recipe.\n- **`mesh_enqueue_task` is the default enqueue surface** (Workflow 3.a). Never fabricate steps just to assemble a batch.\n- **Reuse idle sessions.** For follow-up, retry, commit/push, or cleanup on the same issue, send only the delta to the existing idle session. Start a fresh session only when: (a) branch/worktree isolation is required, (b) the existing session had a dispatch failure or provider mismatch, (c) the transcript/runtime is contaminated or interrupted, (d) the user explicitly asks for a different provider/session, or (e) **the delta is a genuinely NEW subject rather than a continuation** \u2014 a new topic appended to an existing session can be dropped or re-run as the previous task, so give it its own task even when a session sits idle. Continuation of the same issue in an already-idle session is allowed and preferred \u2014 this rule blocks unrelated work interleaved into a live (still-generating) session, not sequential same-issue follow-ups. The test is subject continuity, not timing: an investigation's own fix is the SAME subject (Workflow 3f); an unrelated bug is new even if the session just went idle.\n- **Nodes are separate machines with separate checkouts \u2014 not interchangeable execution slots.** Work done on another node must be committed, pushed, and pulled back before this machine sees it, and RELEASE/DEPLOY runs here \u2014 a round trip each way. So **default to this coordinator's own machine for code changes** (its base node or a worktree cloned from it). A DIFFERENT machine needs one of exactly two reasons: (a) **platform-specific verification** that cannot be done here (win32 PATH/registry, a clean install/uninstall on that OS, that machine's package-manager state); or (b) **parallelizing read-only investigation** across machines. \"That node is idle\" is not a reason.\n- **Match concurrency to task kind.** Independent read-only tasks (`live_debug_readonly`) dispatch all at once up to the read-only cap \u2014 no worktree, no free node needed. Each write task needs its OWN branch workspace (Workflow 3.b0). Ramp up cautiously only when tasks share a base branch or submodule pointer (landing order matters). Never launch a second session onto in-flight work for the same issue, even when `mesh_read_chat` shows no final message yet \u2014 successive stages of one investigation stay in their session (see Workflow 3f).\n- **Automatic routing is the default for ordinary new tasks.** Omit provider tags and model/thinking overrides; classify difficulty honestly and let routing choose. A branch's `target_node_id` or `worktree=<branch>` tag is node affinity only, never a reason to pin a provider. Pin only for an intentional exception such as explicit owner choice or cross-provider review. A prior successful provider choice does not justify pinning a new task; stale quota is not evidence of exhaustion. Same-issue continuation in the existing session remains legitimate and preferred. Provider-pin return warnings are informational: honor intentional pins without a permission gate or reroute.\n- **Classify task difficulty honestly** (Task difficulty section). Never bend difficulty to chase a model; retune slots instead.\n- **Node slots change only with approval.** On a persistent routing misfit (every `difficult` task lands on a cheap-model-only node, or a capability a node clearly has isn't declared), propose with `mesh_node_slots` action `set` (write=false) and present the current-vs-proposed diff with a one-line reason. When a node has NO slots (routing falls back to \"first available provider\") or CLI agents were newly installed, draft with action `propose` instead of hand-writing, and call out its `unknownProvider` / `provisional` slots as guesses. A write is a WHOLESALE replacement: present the `droppedSlots` / `destructive` it reports and apply (write=true) only after the user approves \u2014 never silently.\n- **Respect explicit provider requests.** Map: Claude/Claude Code \u2192 `claude-cli`, Codex \u2192 `codex-cli`, Cursor \u2192 `cursor-cli`, Kimi \u2192 `kimi`, OpenCode \u2192 `opencode`, Grok \u2192 `grok-cli`, Antigravity \u2192 `antigravity-cli`. Never substitute the coordinator's own runtime.\n- **Don't reopen already-done work after a resume.** Before reopening a reported issue after context compaction or session resume, check current git state and recent session context. If another session has already completed the work, continue from the existing diff/commit instead of starting a duplicate investigation.\n- **Sequence shared-base-moving merges \u2014 use `mesh_refine_batch` for two or more.** Merging one worktree advances its siblings' base (especially a shared submodule pointer), turning a clean fast-forward into a diverged rebase. Pass 2+ sibling worktrees to `mesh_refine_batch` (dry-run first) instead of per-node `mesh_refine_node`: it picks a conflict-aware order (non-submodule first, submodule-touching serialized last), each node re-resolves the base and auto-rebases before its own gates, and it avoids the `base_locked` contention concurrent single-node refines cause. It is not a conflict solver \u2014 a real content or submodule conflict lands that node in `blocked_review` for manual resolution while the rest proceeds. Use per-node `mesh_refine_node` only for a single branch or to hand-resolve a node the batch reported blocked.\n- **Submodule reachability = publish-needed.** Before refining/merging root commits that contain submodule gitlink changes, require each submodule commit to be reachable from the configured submodule remote main branch, not merely present on a feature ref or local checkout. On `submodule_reachability_failed` or publish-required evidence, keep the public convergence bucket as `blocked_review`; unless `allowAutoPublishSubmoduleMainCommits` is enabled and Refinery reports a successful non-force publish plus post-publish verification, ask the user for explicit approval to push/publish the unreachable submodule commit(s) to the submodule's default branch, then rerun `mesh_refine_node`. Never merge the root branch before that.\n- **Refinery is config-driven.** `mesh_refine_node` must run validation from `.adhdev/refine.{json,yaml,yml}` or `repo-mesh.refine.*`. Heuristics are scaffolding only.\n- **Honor per-node instructions.** When a node carries a \u{1F4CC} Node instruction in the nodes section, quote its relevant parts verbatim in the task message you send to that node \u2014 don't paraphrase, so the worker sees exactly what the user wrote.\n- **Close missions yourself \u2014 status does not update itself.** When a mission's work is done or abandoned, call `mesh_mission_upsert` with status `completed` or `abandoned` (all-cancelled tasks with no further work \u2192 `abandoned`); never leave a finished mission `active`. Don't wait for `mission_close_candidate` or the idle-active-mission reminder \u2014 they fire only on a genuine idle edge (the reminder also needs an empty pending-event queue and a 5-minute debounce), so on a busy day they arrive late or never. At the end of every dispatch round \u2014 after a batch lands, after a convergence, before you go idle \u2014 call `mesh_mission_list` and close what is done; an `active` mission with no remaining work is a debt.\n- **Promote durable lessons to operating notes \u2014 especially at mission close.** If a mission taught something a future coordinator needs (a provider quirk, a pattern to avoid, a recovery lesson), call `mesh_note` with action `record` FIRST, before closing it \u2014 a completed mission's history is invisible to the next coordinator. Record only when all three hold: (a) a coordinator on another day or another session would act differently knowing it, (b) it cannot be rediscovered from code, config, or `git log`, and (c) it is not a one-off detail specific to this single mission. Operating notes reach the COORDINATOR prompt only \u2014 they are never injected into delegated worker sessions, so a convention workers must follow belongs in a CI gate or the repo's agent instructions file.\n- **Verify a mission goal's claims before dispatching on them.** A goal is a snapshot; the paths, SHAs and claims it cites may be stale. Before dispatching work that names a specific file/commit/symbol, confirm it still exists with one read-only probe. For a deletion/removal task, always add: \"if the target doesn't exist, delete nothing and report that instead.\"\n- **Act on stopped-work notices.** `queue_dependency_blocked` (a task failed or was cancelled; its `depends_on` dependents wait under the default `block` policy): tasks waiting on it never start on their own \u2014 retry the root with `mesh_queue_requeue(task_id, force=true)` (add `message` if the approach must change), or cancel the waiting ids with `mesh_queue_cancel`, including after your own cancel. `queue_dependency_cancelled` (the mesh policy is `cancel`): cancelled work never revives \u2014 re-plan with new `mesh_enqueue_task` steps if the branch is still wanted. Each notice is sent once \u2014 do not poll `mesh_view_queue` waiting for another.\n- **Don't spawn a nested coordinator for simple inspection.** Do not spawn a nested coordinator-like agent for simple inspection tasks. If delegation is required, use explicit provider selection and a fully self-contained, bounded task instruction.\n- **Keep internal traffic out of the transcript.** Internal tool calls, status events, control messages, and debug output must not appear as ordinary user-visible chat transcript content unless explicitly marked user-facing by the producing agent.\n- **Never fabricate tool results.** Always call the actual tool.\n- **Keep the user informed.** One or two sentences after each delegation round.\n";
       }
     });
     function resolveCoordinatorRules(meshBaseWorkspace) {
@@ -129243,6 +129243,23 @@ ${grant.exp}`).digest("hex");
           listUndelivered() {
             return [...this.relays.values()].filter((r) => r.deliveredAt === null).sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId)).map((r) => ({ ...r }));
           }
+          listSettledUncovered(now, eligible = () => true) {
+            const candidates = [];
+            const rows = [...this.relays.values()].filter((r) => r.deliveredAt !== null && r.committedAt > now - ATTEMPT_BODY_TTL_MS && !this.coverage.has(r.attemptId)).sort((a, b) => b.committedAt - a.committedAt || a.attemptId.localeCompare(b.attemptId));
+            for (const row2 of rows) {
+              if (eligible(row2)) candidates.push({ ...row2 });
+              if (candidates.length >= ATTEMPT_BODY_MAX_ROWS) break;
+            }
+            return candidates;
+          }
+          reopenUncovered(attemptId, capture) {
+            const row2 = this.relays.get(attemptId);
+            if (!row2 || row2.deliveredAt === null || this.coverage.has(attemptId)) return false;
+            if (capture) this.writeReceipt(capture.key, capture.value, capture.at, "capture");
+            row2.deliveredAt = null;
+            row2.relayedAt = null;
+            return true;
+          }
           countUnrendered(since) {
             const byMesh = /* @__PURE__ */ new Map();
             for (const r of this.relays.values()) {
@@ -129461,6 +129478,27 @@ ${grant.exp}`).digest("hex");
           }
           listUndelivered() {
             return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
+          }
+          listSettledUncovered(now, eligible = () => true) {
+            const candidates = [];
+            const rows = this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
+            AND r.committed_at>? AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=r.attempt_id)
+            ORDER BY r.committed_at DESC, r.attempt_id`).iterate(now - ATTEMPT_BODY_TTL_MS);
+            for (const value of rows) {
+              const row2 = toRelay(value);
+              if (eligible(row2)) candidates.push(row2);
+              if (candidates.length >= ATTEMPT_BODY_MAX_ROWS) break;
+            }
+            return candidates;
+          }
+          reopenUncovered(attemptId, capture) {
+            return this.db.transaction(() => {
+              const reopened = this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
+                WHERE attempt_id=? AND delivered_at IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+              if (reopened && capture) this.writeReceipt(capture.key, capture.value, capture.at, "capture");
+              return reopened;
+            })();
           }
           countUnrendered(since) {
             const rows = this.db.prepare(
@@ -133858,6 +133896,59 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
+    function captureFailureReason(value) {
+      return typeof value === "string" && REASONS.includes(value) ? value : "capture_failed";
+    }
+    function permanentCaptureFailure(value) {
+      return [
+        "attempt_mesh_mismatch",
+        "original_terminal_evidence_unavailable",
+        "no_unique_original_native_bubble_reference",
+        "ambiguous_original_native_bubble",
+        "native_reference_outside_attempt",
+        "coordinator_session_no_longer_authorized"
+      ].includes(String(value));
+    }
+    function normalizeCaptureReport(raw) {
+      if (typeof raw === "string") return raw.length <= ATTEMPT_BODY_MAX_CHARS ? { body: raw, completeness: "final_native" } : { body: null, completeness: "envelope_unverified" };
+      if (!raw || typeof raw !== "object") return { body: null, completeness: "envelope_unverified" };
+      if (typeof raw.body === "string" && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: "envelope_unverified" };
+      const validParts = raw.parts === void 0 || Array.isArray(raw.parts) && raw.parts.length <= 600 && raw.parts.every((p) => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime()) && Number.isSafeInteger(p.chars) && p.chars > 0);
+      const completeness = (raw.completeness === "final_native" || raw.completeness === "final_adapter") && validParts ? raw.completeness : "envelope_unverified";
+      return {
+        body: typeof raw.body === "string" ? raw.body : null,
+        completeness,
+        ...typeof raw.source === "string" && /^[a-z_]{1,128}$/.test(raw.source) ? { source: raw.source } : {},
+        ...raw.reason ? { reason: captureFailureReason(raw.reason) } : {},
+        ...raw.parts && validParts ? { parts: raw.parts.map((p) => ({ at: p.at, chars: p.chars })) } : {}
+      };
+    }
+    var REASONS;
+    var init_capture_failure = __esm2({
+      "src/assistant/capture-failure.ts"() {
+        "use strict";
+        init_assistant_relay_store();
+        REASONS = [
+          "exact_committed_attempt_not_found",
+          "attempt_mesh_mismatch",
+          "original_terminal_evidence_unavailable",
+          "no_unique_original_native_bubble_reference",
+          "ambiguous_original_native_bubble",
+          "native_reference_outside_attempt",
+          "native_window_unverified",
+          "terminal_native_reply_unavailable",
+          "original_native_bubble_unavailable",
+          "coordinator_session_no_longer_authorized",
+          "native_history_unavailable",
+          "native_history_loading",
+          "native_owner_unverified",
+          "capture_timeout",
+          "capture_failed",
+          "remote_unreachable",
+          "remote_provenance_unverified"
+        ];
+      }
+    });
     async function coordinatorReplyReadable(execute, reply) {
       if (!reply.messageId) return false;
       const page = await continueReport(execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
@@ -134099,6 +134190,73 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
+    function readLateCaptureState(store4, id4, now) {
+      try {
+        const state2 = JSON.parse(store4.readReceipt(receiptKey("late-capture", id4), now) ?? "null");
+        return state2 && Number.isFinite(state2.deadline) && Number.isFinite(state2.nextAt) && Number.isSafeInteger(state2.probes) && typeof state2.sourceComplete === "boolean" && (!state2.sourceComplete || /^[a-f0-9]{64}$/.test(state2.reportId)) ? state2 : null;
+      } catch {
+        return null;
+      }
+    }
+    function settleLateCapture(store4, id4, at, info) {
+      const state2 = readLateCaptureState(store4, id4, at);
+      if (info.surfacedMissing && info.committedAt !== void 0 && !state2) {
+        store4.writeReceipt(receiptKey("late-capture", id4), JSON.stringify({
+          deadline: info.committedAt + ATTEMPT_BODY_TTL_MS,
+          nextAt: at + 6e4,
+          probes: 0,
+          sourceComplete: false,
+          reportId: null,
+          done: permanentCaptureFailure(info.reason)
+        }), at, "capture");
+      } else if (info.rendered && state2) store4.writeReceipt(receiptKey("late-capture", id4), JSON.stringify({ ...state2, done: true }), at, "capture");
+    }
+    async function repairLateCaptures(ports) {
+      const { store: store4, now } = ports;
+      let probes = 0;
+      const eligible = (row2) => {
+        const state2 = readLateCaptureState(store4, row2.attemptId, now);
+        return !!state2 && !state2.done && state2.deadline > now && state2.nextAt <= now && state2.probes < 24 && store4.isThreadOpen(row2.meshId);
+      };
+      for (const row2 of store4.listSettledUncovered?.(now, eligible) ?? []) {
+        const state2 = readLateCaptureState(store4, row2.attemptId, now);
+        if (!state2 || state2.done || state2.deadline <= now || state2.nextAt > now || state2.probes >= 24 || !store4.isThreadOpen(row2.meshId)) continue;
+        if (++probes > 4 || !ports.live()) break;
+        const key5 = receiptKey("late-capture", row2.attemptId);
+        const next = { ...state2, probes: state2.probes + 1, nextAt: now + Math.min(60 * 6e4, 6e4 * 2 ** Math.min(6, state2.probes)) };
+        store4.writeReceipt(key5, JSON.stringify(next), now, "capture");
+        let report;
+        try {
+          report = await ports.read(row2);
+        } catch {
+          report = { body: null, completeness: "envelope_unverified", reason: "capture_failed" };
+        }
+        if (!ports.live() || !store4.isThreadOpen(row2.meshId)) return;
+        const sourceComplete = report.completeness === "final_native" || report.completeness === "final_adapter";
+        if (!sourceComplete || !report.body?.trim()) {
+          if (permanentCaptureFailure(report.reason)) store4.writeReceipt(key5, JSON.stringify({ ...next, done: true }), now, "capture");
+          continue;
+        }
+        if (state2.sourceComplete && state2.reportId !== reportBodyId(report.body)) {
+          store4.writeReceipt(key5, JSON.stringify({ ...next, done: true }), now, "capture");
+          continue;
+        }
+        if (store4.reopenUncovered?.(row2.attemptId, {
+          key: key5,
+          at: now,
+          value: JSON.stringify({ ...next, sourceComplete: true, reportId: reportBodyId(report.body) })
+        })) ports.ready(row2, report);
+      }
+    }
+    var init_late_capture_repair = __esm2({
+      "src/assistant/late-capture-repair.ts"() {
+        "use strict";
+        init_assistant_relay_store();
+        init_capture_failure();
+        init_relay_gap_tracker();
+        init_report_continuation();
+      }
+    });
     function unavailableReportNotice(count, project, cursor, attemptPointer) {
       const attemptNote = attemptPointer ? ` (attempt ${attemptPointer.attemptId})` : "";
       const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "report could" : "reports could"} not be captured in full${attemptNote}: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
@@ -134315,6 +134473,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var init_assistant_relay = __esm2({
       "src/assistant/assistant-relay.ts"() {
         "use strict";
+        init_late_capture_repair();
+        init_capture_failure();
         init_relay_delivery_policy();
         init_relay_nudge();
         init_assistant_relay_types();
@@ -134387,6 +134547,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           flushing = null;
           dirty = false;
           seq = 0;
+          lateCaptureScan = null;
           restoredAttempts = /* @__PURE__ */ new Map();
           /** Subscribe and load undelivered rows from the store as backlog. */
           start() {
@@ -134612,6 +134773,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             this.pruneCoverage(now);
             this.pruneBodyCache(now);
             this.auditReplies(now);
+            if (!this.lateCaptureScan && this.unsubscribe) {
+              const scan = this.repairLateCaptures(now);
+              this.lateCaptureScan = scan;
+              void scan.catch(() => {
+              }).finally(() => {
+                if (this.lateCaptureScan === scan) this.lateCaptureScan = null;
+              });
+            }
             for (const item of this.queue) if (item.kind === "relay") for (const id4 of item.attemptIds) {
               if (!this.hasCapturedBody(id4) && !this.attemptBodyCapture.has(id4)) {
                 const ref2 = this.restoredAttempts.get(id4);
@@ -134804,7 +134973,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           captureAttemptBody(attemptId, meshId, coordinatorSessionId, retryWindow = false, restore = false) {
             const started = this.clock.now();
             const firstProbe = this.deliveryPolicy.initial(attemptId);
-            if (!this.deliveryPolicy.due(attemptId) || this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe)) return;
+            if (!this.deliveryPolicy.due(attemptId) || this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe) && this.lateCaptureState(attemptId)?.sourceComplete !== true) return;
             const initial = retryWindow && firstProbe;
             let p;
             const live = () => this.attemptBodyCapture.get(attemptId) === p;
@@ -134826,7 +134995,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               await Promise.resolve();
               if (!live()) return;
               try {
-                const raw = await this.bounded(read2, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), null);
+                const raw = await this.bounded(read2, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), { body: null, completeness: "envelope_unverified", reason: "capture_timeout" });
                 const next = this.normalizeReport(raw);
                 if (next.body || !last.body) last = next;
               } catch {
@@ -134868,17 +135037,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
           }
           normalizeReport(raw) {
-            if (typeof raw === "string") return raw.length <= ATTEMPT_BODY_MAX_CHARS ? { body: raw, completeness: "final_native" } : { body: null, completeness: "envelope_unverified" };
-            if (!raw || typeof raw !== "object") return { body: null, completeness: "envelope_unverified" };
-            if (typeof raw.body === "string" && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: "envelope_unverified" };
-            const validParts = raw.parts === void 0 || Array.isArray(raw.parts) && raw.parts.length <= 600 && raw.parts.every((p) => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime()) && Number.isSafeInteger(p.chars) && p.chars > 0);
-            const completeness = (raw.completeness === "final_native" || raw.completeness === "final_adapter") && validParts ? raw.completeness : "envelope_unverified";
-            return {
-              body: typeof raw.body === "string" ? raw.body : null,
-              completeness,
-              ...typeof raw.source === "string" && raw.source.length <= 128 ? { source: raw.source } : {},
-              ...raw.parts && validParts ? { parts: raw.parts.map((p) => ({ at: p.at, chars: p.chars })) } : {}
-            };
+            return normalizeCaptureReport(raw);
           }
           rememberReport(attemptId, report) {
             this.attemptBodies.set(attemptId, report.body);
@@ -134888,11 +135047,41 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             this.pruneBodyCache(this.clock.now());
           }
           rememberCapture(id4, report) {
+            const repair = this.lateCaptureState(id4);
+            if (repair?.sourceComplete && report.body && reportBodyId(report.body) !== repair.reportId) {
+              report = { body: null, completeness: "envelope_unverified", reason: "remote_provenance_unverified" };
+            }
             this.rememberReport(id4, report);
             if (!this.hasCapturedBody(id4)) {
               this.deliveryPolicy.failed(id4);
-              LOG.warn("Assistant", `native relay capture unavailable attempt=${id4}; retry scheduled with backoff`);
+              LOG.warn("Assistant", `native relay capture unavailable attempt=${id4} reason=${captureFailureReason(report.reason)}; retry scheduled with backoff`);
             }
+          }
+          lateCaptureState(id4) {
+            return readLateCaptureState(this.ports.store, id4, this.clock.now());
+          }
+          repairLateCaptures(now) {
+            const lifecycle = this.lifecycle;
+            return repairLateCaptures({
+              store: this.ports.store,
+              now,
+              live: () => lifecycle === this.lifecycle,
+              read: async (row2) => this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(row2.meshId, row2.coordinatorSessionId, row2.attemptId) ?? Promise.resolve(null), RELAY_CAPTURE_PROBE_MS, { body: null, completeness: "envelope_unverified", reason: "capture_timeout" })),
+              ready: (row2, report) => {
+                this.restoredAttempts.set(row2.attemptId, { meshId: row2.meshId, sessionId: row2.coordinatorSessionId, committedAt: row2.committedAt });
+                this.rememberCapture(row2.attemptId, report);
+                this.queue.push({
+                  kind: "relay",
+                  meshId: row2.meshId,
+                  coordinatorSessionId: row2.coordinatorSessionId,
+                  attemptIds: [row2.attemptId],
+                  outcome: row2.outcome,
+                  committedAt: now,
+                  idle: false
+                });
+                this.kick();
+              }
+            });
           }
           pruneBodyCache(now) {
             let bytes = 0;
@@ -135250,6 +135439,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               }, sid);
             }
             const surfaced = /* @__PURE__ */ new Set([...parts.flatMap((p) => p.surfaced ?? []), ...[...sentReports.values()].filter((r) => r.autoStopped).map((r) => r.attemptId)]);
+            for (const id4 of settled) settleLateCapture(this.ports.store, id4, at, {
+              surfacedMissing: surfaced.has(id4) && !this.hasCapturedBody(id4),
+              committedAt: this.restoredAttempts.get(id4)?.committedAt,
+              rendered: rendered.includes(id4),
+              reason: this.attemptMeta.get(id4)?.reason
+            });
             this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter((id4) => surfaced.has(id4))], coverage);
             if (relayItems.length) this.loadDeliveredCoverage(at);
             for (const id4 of settled) {
@@ -135357,7 +135552,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               meshId: item.meshId,
               messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
               surfaced: [...item.attemptIds],
-              text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session })
+              text: `[ADHDev capture status] ${JSON.stringify(item.attemptIds.map((id4) => ({ attemptId: id4, sourceComplete: false, reason: captureFailureReason(this.attemptMeta.get(id4)?.reason) })))}
+` + unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session })
             };
           }
           async renderRelay(item) {
@@ -137878,28 +138074,33 @@ ${defangRelayBody(text6)}`;
           const mesh = ports.listMeshes().find((m) => m.id === meshId);
           if (mesh && ports.isHostedHere(mesh)) {
             const report = await localAttemptReport(ports, meshId, sessionId, attemptId);
-            if (typeof report.body !== "string" || !report.body) return null;
             return {
               body: report.body,
               completeness: report.completeness === "final_native" ? "final_native" : report.completeness === "final_adapter" ? "final_adapter" : "envelope_unverified",
               source: report.source,
+              ...report.reason ? { reason: captureFailureReason(report.reason) } : {},
               ...report.parts ? { parts: report.parts } : {}
             };
           }
           const followed = !mesh ? (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).find((e) => e.meshId === meshId && e.state === "followed") : void 0;
           const target4 = mesh ? ports.remoteHost(mesh) : followed && ports.followedRemoteHost ? ports.followedRemoteHost(followed) : null;
-          if (!target4 || !target4.reachable) return null;
+          if (!target4 || !target4.reachable) return { body: null, completeness: "envelope_unverified", reason: "remote_unreachable" };
           const out = await ports.callHost(target4, "report", { coordinatorSessionId: sessionId, attemptId });
-          if (!out.ok) return null;
+          if (!out.ok) return { body: null, completeness: "envelope_unverified", reason: "remote_unreachable" };
           const result = out.result.result;
+          if (result && (result.body === null || result.body === void 0)) return {
+            body: null,
+            completeness: "envelope_unverified",
+            reason: captureFailureReason(result.reason)
+          };
           const proof = result?.provenance;
           const versionOk = proof?.version === 2 || proof?.version === 1;
-          if (typeof result?.body !== "string" || !versionOk || proof?.attemptId !== attemptId || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0 || typeof proof?.evidenceRef !== "string" || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
+          if (typeof result?.body !== "string" || !versionOk || proof?.attemptId !== attemptId || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0 || typeof proof?.evidenceRef !== "string" || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return { body: null, completeness: "envelope_unverified", reason: "remote_provenance_unverified" };
           const nativeParts = proof?.version === 2 && result.completeness === "final_native" ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
           const adapterVerified = !nativeParts && proof?.version === 2 && result.completeness === "final_adapter" && isAdapterEvidenceRef(proof.evidenceRef, result.body, Number(proof.generation));
           const completeness = nativeParts ? "final_native" : adapterVerified ? "final_adapter" : "envelope_unverified";
           const parts = nativeParts ? nativeParts.map(({ at, chars }) => ({ at, chars })) : adapterVerified && Array.isArray(result.parts) ? result.parts : void 0;
-          return { body: result.body, completeness, ...typeof result.source === "string" ? { source: result.source } : {}, ...parts ? { parts } : {} };
+          return { body: result.body, completeness, ...result.reason ? { reason: captureFailureReason(result.reason) } : {}, ...typeof result.source === "string" ? { source: result.source } : {}, ...parts ? { parts } : {} };
         },
         auditCoordinatorReplies: async (sinceMs) => {
           const ports = await projectPorts();
@@ -138342,6 +138543,7 @@ ${defangRelayBody(text6)}`;
     var init_assistant_runtime = __esm2({
       "src/assistant/assistant-runtime.ts"() {
         "use strict";
+        init_capture_failure();
         init_relay_transcript_reference();
         init_assistant();
         init_terminal_watch();
@@ -162079,10 +162281,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return null;
     }
-    function hasAssistantStandardMessageSinceLastUser(records, content) {
+    function hasAssistantStandardMessageSinceLastUser(records, content, floor = 0) {
       const normalized = content.trim();
       if (!normalized) return false;
-      for (let i = records.length - 1; i >= 0; i--) {
+      for (let i = records.length - 1; i >= floor; i--) {
         const record7 = records[i];
         if (record7.kind === "session_start") continue;
         if (record7.role === "user") return false;
@@ -162092,16 +162294,21 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return false;
     }
-    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1) {
+    function pushAssistantStandardMessage(records, sessionId, receivedAt, content, workspace, recordIndex = -1, turnMessageStart = 0) {
       const text6 = content.trim();
       if (!text6) return;
-      if (hasAssistantStandardMessageSinceLastUser(records, text6)) return;
+      if (hasAssistantStandardMessageSinceLastUser(records, text6, turnMessageStart)) {
+        const existing = records.slice(turnMessageStart).reverse().find((m) => m.role === "assistant" && m.kind === "standard" && m.content.trim() === text6);
+        if (existing) existing.bubbleState = "final";
+        return;
+      }
       const msg = {
         ts: new Date(receivedAt).toISOString(),
         receivedAt,
         role: "assistant",
         content: text6,
         kind: "standard",
+        bubbleState: "final",
         agent: "codex-cli",
         historySessionId: sessionId
       };
@@ -162172,6 +162379,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
+      let turnMessageStart = 0;
       for (const line of lines) {
         let parsed = null;
         try {
@@ -162210,6 +162418,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const payloadType = String(payload.type ?? "").trim();
         if (type2 === "event_msg") {
           const nativeAt = extractTimestampValue(record7.timestamp) || 0;
+          if (payloadType === "task_started") turnMessageStart = records.length;
           if (payloadType === "task_started" || payloadType === "error" || payloadType === "user_message") provenance(payload, nativeAt);
           if (completionSignal) {
             const isComplete = payloadType === completionSignal.recordType;
@@ -162234,7 +162443,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               receivedAt,
               flattenCodexContent(payload.last_agent_message) || codexTurnErrorText(payload),
               detectedWorkspace,
-              recordIndex
+              recordIndex,
+              turnMessageStart
             );
           } else if (payloadType === "agent_message" && String(payload.phase ?? "").trim() === "final_answer") {
             pushAssistantStandardMessage(
@@ -162243,7 +162453,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
               receivedAt,
               flattenCodexContent(payload.message),
               detectedWorkspace,
-              recordIndex
+              recordIndex,
+              turnMessageStart
             );
           } else if (payloadType === "token_count") {
             const usageRecord = extractCodexUsage(payload, receivedAt);
@@ -162257,7 +162468,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           if (role !== "user" && role !== "assistant") continue;
           const content = flattenCodexContent(payload.content);
           if (!content) continue;
-          if (role === "assistant" && hasAssistantStandardMessageSinceLastUser(records, content)) continue;
+          if (role === "assistant" && String(payload.phase ?? "") === "final_answer") {
+            pushAssistantStandardMessage(records, sessionId, receivedAt, content, detectedWorkspace, recordIndex, turnMessageStart);
+            continue;
+          }
+          if (role === "assistant" && hasAssistantStandardMessageSinceLastUser(records, content, turnMessageStart)) continue;
           const msg = {
             ts: new Date(receivedAt).toISOString(),
             receivedAt,
@@ -163879,6 +164094,7 @@ ${output}` : "";
         content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
         receivedAt: typeof m.receivedAt === "number" ? m.receivedAt : Date.parse(m.timestamp || "") || Date.now(),
         kind: typeof m.kind === "string" ? m.kind : "standard",
+        ...m.bubbleState === "final" ? { bubbleState: "final" } : {},
         workspace: typeof m.workspace === "string" ? m.workspace : workspace || void 0,
         // (TOOL-EXPAND) Forward the reader's ref. This projection is an
         // allow-list, so a ref the reader stamped is dropped here unless
@@ -163916,7 +164132,7 @@ ${output}` : "";
         const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir2);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
-        const ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
+        let ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
           try {
             fs66.statSync(sourcePath);
@@ -163926,6 +164142,16 @@ ${output}` : "";
         const readSessionId = reader === "antigravity-cli" ? extractAntigravityConversationUuid(sourcePath) || sessionId : sessionId;
         const session = readByReader(reader, sourcePath, readSessionId, workspace);
         if (!session) return null;
+        if (reader === "codex-cli" && !requestedProviderSid && !isUuidLike(sessionId) && instanceId) {
+          ownerConfirmed = !!instanceId && sessionStartedAtMs > 0 && hasExclusiveSentInput(instanceId, session.messages.filter((m) => m.role === "user").map((m) => m.content));
+          if (!ownerConfirmed) return {
+            messages: [],
+            sourcePath: "",
+            sourceMtimeMs: 0,
+            ownerConfirmed: false,
+            unavailableReason: "native_owner_unverified"
+          };
+        }
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
           return null;
         }
@@ -163956,7 +164182,7 @@ ${output}` : "";
           return p ? { path: p } : null;
         }
         case "codex-cli": {
-          const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs);
+          const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId, homeDir2);
           return p ? { path: p } : null;
         }
         case "antigravity-cli":
@@ -163994,12 +164220,13 @@ ${output}` : "";
       if (!workspace || !(sessionStartedAtMs > 0)) return null;
       return `${resolveRealPath(workspace)}::${sessionStartedAtMs}`;
     }
-    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs) {
-      const root = codexSessionsRoot();
+    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId = "", homeDir2) {
+      const root = homeDir2 ? path78.join(homeDir2, ".codex", "sessions") : codexSessionsRoot();
       if (sessionId && isUuidLike(sessionId)) {
         return findCodexPathBySessionId(root, sessionId);
       }
-      const key5 = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+      const baseKey = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+      const key5 = baseKey ? [root, instanceId, baseKey].join("\0") : null;
       if (key5) {
         const pinned = codexRuntimeBindings.get(key5);
         if (pinned) {
@@ -164007,7 +164234,7 @@ ${output}` : "";
           codexRuntimeBindings.delete(key5);
         }
       }
-      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId);
       if (resolved && key5) codexRuntimeBindings.set(key5, resolved);
       return resolved;
     }
@@ -164039,7 +164266,7 @@ ${output}` : "";
       matches.sort((a, b) => b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
-    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs) {
+    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId) {
       if (!fs66.existsSync(root) || !workspace) return null;
       const workspaceResolved = resolveRealPath(workspace);
       const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -164066,9 +164293,14 @@ ${output}` : "";
           if (!meta2?.cwd || resolveRealPath(meta2.cwd) !== workspaceResolved) continue;
           const diff = sessionStartedAtMs > 0 && meta2.timestampMs != null ? Math.abs(meta2.timestampMs - sessionStartedAtMs) : 0;
           if (sessionStartedAtMs > 0 && (meta2.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
+          if (instanceId) {
+            const candidate = readSession2(entryPath);
+            if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter((m) => m.role === "user").map((m) => m.content))) continue;
+          }
           matches.push({ p: entryPath, mtime, diff });
         }
       }
+      if (instanceId && matches.length !== 1) return null;
       matches.sort((a, b) => sessionStartedAtMs > 0 ? a.diff - b.diff || b.mtime - a.mtime : b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
@@ -201712,15 +201944,23 @@ ${JSON.stringify(replies)}
     init_summary_metadata();
     init_native_turn_signal();
     function captureCompletionIdentity(host, pending) {
-      const current4 = host.currentAttemptRef?.();
-      pending.capturedAttemptRef = current4 ? { ...current4 } : null;
-      if (!host.providerSessionId || !host.lastAcknowledgedInputDigest || !pending.turnStartedAt || !(host.lastAcknowledgedUserInputAt > 0 && host.lastAcknowledgedUserInputAt <= pending.turnStartedAt)) return;
+      if (pending.capturedAttemptRef === void 0) {
+        const current4 = host.currentAttemptRef?.();
+        pending.capturedAttemptRef = current4 ? { ...current4 } : null;
+        if (host.lastAcknowledgedInputDigest) pending.capturedCompletionInput = {
+          inputAt: host.lastAcknowledgedUserInputAt,
+          inputDigest: host.lastAcknowledgedInputDigest,
+          taskId: host.completingTurnTaskId?.()
+        };
+      }
+      const input = pending.capturedCompletionInput;
+      if (pending.completionBinding || !input || !host.providerSessionId || !pending.turnStartedAt || host.disposed || pending.turnStartedAt !== host.generatingStartedAt || input.inputAt !== host.lastAcknowledgedUserInputAt || input.inputDigest !== host.lastAcknowledgedInputDigest || input.taskId !== host.completingTurnTaskId?.() || JSON.stringify(pending.capturedAttemptRef) !== JSON.stringify(host.currentAttemptRef?.() ?? null) || !(input.inputAt > 0 && input.inputAt <= pending.turnStartedAt)) return;
       pending.completionBinding = {
         sessionId: host.instanceId,
         nativeSessionId: host.providerSessionId,
         turnStartedAt: pending.turnStartedAt,
-        inputAt: host.lastAcknowledgedUserInputAt,
-        inputDigest: host.lastAcknowledgedInputDigest,
+        inputAt: input.inputAt,
+        inputDigest: input.inputDigest,
         attemptRef: pending.capturedAttemptRef
       };
     }
@@ -201729,6 +201969,7 @@ ${JSON.stringify(replies)}
       return !!b && !host.disposed && b.sessionId === host.instanceId && b.nativeSessionId === host.providerSessionId && b.turnStartedAt === host.generatingStartedAt && b.inputAt === host.lastAcknowledgedUserInputAt && b.inputDigest === host.lastAcknowledgedInputDigest && (!pending.taskId || !host.completingTurnTaskId || host.completingTurnTaskId() === pending.taskId) && JSON.stringify(b.attemptRef) === JSON.stringify(host.currentAttemptRef?.() ?? null);
     }
     function boundCompletionMarker(host, pending) {
+      captureCompletionIdentity(host, pending);
       if (!completionIdentityCurrent(host, pending)) return null;
       const marker2 = selectTurnTerminalMarker(host.lastNativeTurnTerminalMarkers, pending.turnStartedAt, pending.completionBinding);
       if (marker2 && marker2.receivedAt > Date.now()) return null;
@@ -201756,7 +201997,7 @@ ${JSON.stringify(replies)}
       "agent:ready"
     ]);
     function armCancelledCompletionRecheck(host, pending, reason) {
-      if (reason === "new_pty_output" && !pending.completionBinding) return;
+      if (reason === "new_pty_output" && !pending.completionBinding && !pending.capturedCompletionInput) return;
       const now = Date.now();
       let prior = host.cancelledCompletionRecheck;
       if (prior && (prior.pending.turnStartedAt !== pending.turnStartedAt || prior.pending.completionBinding?.inputAt !== pending.completionBinding?.inputAt || JSON.stringify(prior.pending.capturedAttemptRef) !== JSON.stringify(pending.capturedAttemptRef))) {
@@ -201765,7 +202006,7 @@ ${JSON.stringify(replies)}
       }
       const carriedPending = prior?.pending ?? pending;
       const attempts = prior ? prior.attempts : 0;
-      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding) {
+      if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding && !carriedPending.capturedCompletionInput) {
         clearCancelledCompletionRecheck(host);
         LOG.debug("CLI", `[${host.type}] cancelled-completion recheck budget exhausted (${reason}) \u2014 deferring to the next FSM completion edge`);
         return;
@@ -201801,8 +202042,10 @@ ${JSON.stringify(replies)}
         clearCancelledCompletionRecheck(host);
         return;
       }
-      if (watch6.pending.completionBinding) {
-        if (Date.now() - watch6.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch6.pending)) {
+      if (watch6.pending.completionBinding || watch6.pending.capturedCompletionInput) {
+        host.readExternalCompletionMessages?.();
+        captureCompletionIdentity(host, watch6.pending);
+        if (Date.now() - watch6.firstCancelledAt > 12e4 || watch6.pending.completionBinding && !completionIdentityCurrent(host, watch6.pending)) {
           clearCancelledCompletionRecheck(host);
           return;
         }
@@ -201841,7 +202084,8 @@ ${JSON.stringify(replies)}
     }
     function observeCancelledNativeCompletion(host) {
       const watch6 = host.cancelledCompletionRecheck;
-      if (!watch6?.pending.completionBinding || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+      if (!watch6 || !watch6.pending.completionBinding && !watch6.pending.capturedCompletionInput || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+      captureCompletionIdentity(host, watch6.pending);
       if (Date.now() - watch6.firstCancelledAt > 12e4 || !completionIdentityCurrent(host, watch6.pending)) {
         clearCancelledCompletionRecheck(host);
         return;
@@ -202805,6 +203049,11 @@ ${buttons.join("\n")}`;
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
       });
+      const reason = restoredHistory.stale ? "native_history_loading" : restoredHistory.source !== "provider-native" ? "native_history_unavailable" : !resolvedHandle && restoredHistory.ownerConfirmed !== true ? "native_owner_unverified" : "native_history_ready";
+      if (host.nativeCaptureReason !== reason) {
+        host.nativeCaptureReason = reason;
+        host.recordCompletionGateTrace?.("native_discovery", { reason, bound: !!resolvedHandle });
+      }
       if (restoredHistory.stale || restoredHistory.unavailableReason === "native_history_loading") {
         host.nativeHistoryReadPending = true;
         const previous = host.lastExternalCompletionMessages;
@@ -202816,6 +203065,10 @@ ${buttons.join("\n")}`;
         host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
+      }
+      if (!resolvedHandle && restoredHistory.ownerConfirmed === true && restoredHistory.providerSessionId) {
+        host.promoteProviderSessionId?.(restoredHistory.providerSessionId);
+        resolvedHandle = host.providerSessionId || restoredHistory.providerSessionId;
       }
       host.lastNativeTurnTerminalMarkers = Array.isArray(restoredHistory.turnTerminalMarkers) ? restoredHistory.turnTerminalMarkers : null;
       if (restoredHistory.source !== "provider-native") {
@@ -206015,7 +206268,7 @@ ${buttons.join("\n")}`;
       }
       nativeTurnTerminalMarker(turnStartedAt) {
         const pending = this.completedDebouncePending ?? this.cancelledCompletionRecheck?.pending;
-        if (pending?.completionBinding && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
+        if (pending && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
         return nativeTurnTerminalMarker(this, turnStartedAt);
       }
       isAutonomousMeshSession() {

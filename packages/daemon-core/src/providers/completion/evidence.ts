@@ -146,6 +146,7 @@ export interface EvidenceHost {
     workingDir: string;
     startedAt: number;
     providerSessionId?: string;
+    promoteProviderSessionId?(sessionId: string): void;
     provider: ProviderModule;
     adapter: {
         getStatus(opts: { allowParse: boolean }): unknown;
@@ -157,6 +158,8 @@ export interface EvidenceHost {
     lastExternalCompletionProbe: ExternalTranscriptProbe | null;
     /** A cooperative rebuild has not produced a fresh observation yet. */
     nativeHistoryReadPending?: boolean;
+    nativeCaptureReason?: string;
+    recordCompletionGateTrace?(stage: string, payload: Record<string, unknown>): void;
     lastExternalCompletionMessages?: { historySessionId: string; messages: unknown[] } | null;
     /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
@@ -427,6 +430,13 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
     });
+    const reason = restoredHistory.stale ? 'native_history_loading'
+        : restoredHistory.source !== 'provider-native' ? 'native_history_unavailable'
+        : !resolvedHandle && restoredHistory.ownerConfirmed !== true ? 'native_owner_unverified' : 'native_history_ready';
+    if (host.nativeCaptureReason !== reason) {
+        host.nativeCaptureReason = reason;
+        host.recordCompletionGateTrace?.('native_discovery', { reason, bound: !!resolvedHandle });
+    }
     // Deferred snapshots are not fresh samples: old mtime/messages cannot prove
     // no growth or clear a trailing-tool veto. Keep the previous observation
     // and expose pending to watchdog/completion/admission decision sites.
@@ -447,6 +457,10 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
+    }
+    if (!resolvedHandle && restoredHistory.ownerConfirmed === true && restoredHistory.providerSessionId) {
+        host.promoteProviderSessionId?.(restoredHistory.providerSessionId);
+        resolvedHandle = host.providerSessionId || restoredHistory.providerSessionId;
     }
     host.lastNativeTurnTerminalMarkers = Array.isArray((restoredHistory as any).turnTerminalMarkers)
         ? (restoredHistory as any).turnTerminalMarkers as NativeTurnTerminalMarker[]
