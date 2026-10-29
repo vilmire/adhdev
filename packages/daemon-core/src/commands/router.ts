@@ -69,6 +69,7 @@ import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
 import { driverSpecs, closeDriverService } from './med-family/drivers.js';
+import { driverAuthoringSpecs } from './med-family/driver-authoring.js';
 import { artifactSpecs, rejectUntrustedArtifactIngress } from './med-family/artifacts.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
@@ -324,6 +325,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshStatusViewSpecs,
             ...assistantStoreSpecs,
             ...driverSpecs,
+            ...driverAuthoringSpecs,
             ...artifactSpecs,
             ...assistantProjectSpecs,
             ...assistantDecisionSpecs,

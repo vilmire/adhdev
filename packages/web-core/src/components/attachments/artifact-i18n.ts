@@ -49,6 +49,10 @@ export type ArtifactTranslationKey =
     | 'artifact.kind.json'
     | 'artifact.kind.text'
     | 'artifact.kind.image'
+    | 'artifact.driverInstall'
+    | 'artifact.driverInstallTarget'
+    | 'artifact.driverInstalled'
+    | 'artifact.driverInstallFailed'
 
 export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
     Record<'en' | 'ko' | 'ja' | 'zh-CN' | 'es', Readonly<Record<ArtifactTranslationKey, string>>>
@@ -101,6 +105,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.kind.json': 'JSON',
         'artifact.kind.text': 'Text',
         'artifact.kind.image': 'Image',
+        'artifact.driverInstall': 'Install driver',
+        'artifact.driverInstallTarget': 'Install on',
+        'artifact.driverInstalled': 'Installed. Approve its activation under Needs you before it can run.',
+        'artifact.driverInstallFailed': 'Driver install failed',
     },
     ko: {
         'chat.artifact': '산출물',
@@ -150,6 +158,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.kind.json': 'JSON',
         'artifact.kind.text': '텍스트',
         'artifact.kind.image': '이미지',
+        'artifact.driverInstall': '드라이버 설치',
+        'artifact.driverInstallTarget': '설치할 머신',
+        'artifact.driverInstalled': '설치했습니다. 실행하려면 “확인 필요”에서 활성화를 승인하세요.',
+        'artifact.driverInstallFailed': '드라이버 설치 실패',
     },
     ja: {
         'chat.artifact': 'アーティファクト',
@@ -199,6 +211,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.kind.json': 'JSON',
         'artifact.kind.text': 'テキスト',
         'artifact.kind.image': '画像',
+        'artifact.driverInstall': 'ドライバーをインストール',
+        'artifact.driverInstallTarget': 'インストール先',
+        'artifact.driverInstalled': 'インストールしました。実行するには「要対応」で有効化を承認してください。',
+        'artifact.driverInstallFailed': 'ドライバーのインストールに失敗',
     },
     'zh-CN': {
         'chat.artifact': '产物',
@@ -248,6 +264,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.kind.json': 'JSON',
         'artifact.kind.text': '文本',
         'artifact.kind.image': '图片',
+        'artifact.driverInstall': '安装驱动',
+        'artifact.driverInstallTarget': '安装到',
+        'artifact.driverInstalled': '已安装。运行前请在「待处理」中批准激活。',
+        'artifact.driverInstallFailed': '驱动安装失败',
     },
     es: {
         'chat.artifact': 'Artefacto',
@@ -297,6 +317,10 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.kind.json': 'JSON',
         'artifact.kind.text': 'Texto',
         'artifact.kind.image': 'Imagen',
+        'artifact.driverInstall': 'Instalar controlador',
+        'artifact.driverInstallTarget': 'Instalar en',
+        'artifact.driverInstalled': 'Instalado. Aprueba su activación en «Requiere tu atención» antes de ejecutarlo.',
+        'artifact.driverInstallFailed': 'Error al instalar el controlador',
     },
 }
 

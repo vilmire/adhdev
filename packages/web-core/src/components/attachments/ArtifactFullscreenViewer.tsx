@@ -8,6 +8,7 @@ import { ArtifactLinkContext, type ArtifactLinkResolver } from './artifact-link-
 import { ArtifactContentRenderer } from './ArtifactContentRenderers'
 import { getArtifactKindLabel, trArtifact } from './artifact-i18n'
 import { openArtifactInNewWindow } from './artifact-popout'
+import DriverBundleInstall, { isDriverBundleItem } from './DriverBundleInstall'
 import {
     downloadArtifactViewerItem,
     extractMarkdownHeadings,
@@ -335,6 +336,7 @@ export function ArtifactFullscreenViewer({
                     )}
                 </div>
             </header>
+            {isModal && isDriverBundleItem(item) && <DriverBundleInstall item={item} />}
             {popOutBlocked && (
                 <div role="alert" data-testid="artifact-popout-blocked" className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-2xs text-amber-800 dark:text-amber-200">
                     {tr('artifact.popoutBlocked')}

@@ -47,7 +47,7 @@ test('worker shares only driver discovery and artifact tools with mesh mode; inv
   const shared = ALL_WORKER_TOOLS.filter(t => meshNames.has(t.name)).map(t => t.name).sort();
   assert.deepEqual(shared, ['artifact_list', 'artifact_read', 'artifact_register', 'driver_describe', 'driver_list']);
   assert.deepEqual(ALL_WORKER_TOOLS.map(t => t.name).sort(),
-    ['artifact_list', 'artifact_read', 'artifact_register', 'contract_current', 'contract_observe', 'contract_read', 'driver_describe', 'driver_invoke', 'driver_list', 'peer_context_pull', 'progress_update', 'report_completion']);
+    ['artifact_list', 'artifact_read', 'artifact_register', 'contract_current', 'contract_observe', 'contract_read', 'driver_describe', 'driver_export', 'driver_install', 'driver_invoke', 'driver_list', 'driver_scaffold', 'driver_validate', 'peer_context_pull', 'progress_update', 'report_completion']);
 });
 
 test('no worker tool takes a task id — attribution is never caller-supplied', () => {

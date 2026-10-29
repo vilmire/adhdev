@@ -27,6 +27,7 @@
  */
 
 import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, callDriverTool, type DriverTool } from './driver-tools.js';
+import { DRIVER_SCAFFOLD_TOOL, DRIVER_VALIDATE_TOOL, DRIVER_EXPORT_TOOL, DRIVER_INSTALL_TOOL, callDriverAuthoringTool, type DriverAuthoringTool } from './driver-authoring-tools.js';
 import {
   ARTIFACT_REGISTER_TOOL,
   WORKER_ARTIFACT_LIST_TOOL,
@@ -329,7 +330,7 @@ export async function contractCurrentTool(transport: CommandTransport, credentia
  * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
  * new worker tool cannot be added here without stating what it does.
  */
-export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL, WORKER_ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL, CONTRACT_READ_TOOL, CONTRACT_OBSERVE_TOOL, CONTRACT_CURRENT_TOOL]);
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, DRIVER_SCAFFOLD_TOOL, DRIVER_VALIDATE_TOOL, DRIVER_EXPORT_TOOL, DRIVER_INSTALL_TOOL, ARTIFACT_REGISTER_TOOL, WORKER_ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL, CONTRACT_READ_TOOL, CONTRACT_OBSERVE_TOOL, CONTRACT_CURRENT_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
 interface WorkerModeTool {
@@ -716,6 +717,12 @@ export function describeWorkerDeliveryAnswer(kind: WorkerDeliveryKind, result: a
 export async function workerDriverTool(transport: CommandTransport, credentials: WorkerCredentials,
   tool: DriverTool, args: Record<string, unknown>): Promise<WorkerToolResult> {
   return callDriverTool(transport, tool, args, credentials);
+}
+
+/** Driver authoring tools carry the same launch credentials; they can stage but never activate. */
+export async function workerDriverAuthoringTool(transport: CommandTransport, credentials: WorkerCredentials,
+  tool: DriverAuthoringTool, args: Record<string, unknown>): Promise<WorkerToolResult> {
+  return callDriverAuthoringTool(transport, tool, args, credentials);
 }
 
 /** Register a workspace artifact under this worker's launch credentials (sends `transport.command('artifact_register', ...)`). */

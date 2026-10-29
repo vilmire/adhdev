@@ -60,7 +60,7 @@ import {
   callStandardArtifactRead,
 } from './tools/artifact-tools.js';
 import {
-  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerArtifactRegister, workerArtifactList, workerArtifactRead, reportCompletion, progressUpdate, peerContextPull, drainMailbox, contractReadTool, contractObserveTool, contractCurrentTool,
+  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerDriverAuthoringTool, workerArtifactRegister, workerArtifactList, workerArtifactRead, reportCompletion, progressUpdate, peerContextPull, drainMailbox, contractReadTool, contractObserveTool, contractCurrentTool,
   describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
@@ -279,6 +279,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       driver_list: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_list', a)),
       driver_describe: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_describe', a)),
       driver_invoke: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_invoke', a)),
+      driver_scaffold: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, 'driver_scaffold', a)),
+      driver_validate: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, 'driver_validate', a)),
+      driver_export: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, 'driver_export', a)),
+      driver_install: async (a) => asResponse(await workerDriverAuthoringTool(transport, credentials, 'driver_install', a)),
       artifact_register: async (a) => asResponse(await workerArtifactRegister(transport, credentials, a)),
       artifact_list: async (a) => asResponse(await workerArtifactList(transport, credentials, a)),
       artifact_read: async (a) => asResponse(await workerArtifactRead(transport, credentials, a)),
