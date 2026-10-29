@@ -144,8 +144,7 @@ export function projectSessionView(view: RecordValue, opts: {
             const attemptId = text(task.attemptId) || null;
             const stateAttempts = [state?.attemptId, rec(state?.turn).attemptId,
                 rec(remoteState?.turn).attemptId, rec(localState?.turn).attemptId].map(text).filter(Boolean);
-            const attemptMatches = attemptId ? stateAttempts.length > 0 && stateAttempts.every(id => id === attemptId)
-                : new Set(stateAttempts).size <= 1;
+            const attemptMatches = !!attemptId && stateAttempts.length > 0 && stateAttempts.every(id => id === attemptId);
             const effectiveFreshness = !attemptMatches ? 'unknown' : freshness;
             const activityValue = local ? state?.lastActivityAt ?? state?.lastMessageAt
                 : remoteState?.lastMessageAt ?? state?.lastActivityAt;

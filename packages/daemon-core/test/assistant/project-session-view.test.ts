@@ -113,6 +113,44 @@ describe('project task-bound sessions over held mesh status', () => {
         expect(projectSessionView(view, opts).sessions[0]).toMatchObject({ status: 'unknown', evidence: { freshness: 'unknown', lastActivityAt: null, observedStatus: 'unknown' } });
     });
 
+    it.each(['remote', 'local'] as const)('requires a nonempty task attempt before using %s runtime status or activity', location => {
+        for (const taskAttempt of [undefined, '', '   ']) for (const runtimeAttempt of ['old-attempt', undefined]) {
+            const view = fixture();
+            const task = view.activeWork.activeWork.activeWork[0]!;
+            if (taskAttempt === undefined) delete (task as any).attemptId;
+            else task.attemptId = taskAttempt;
+            const remote = view.status.nodes[1]!;
+            remote.activeSessionDetails![0]!.chatStatus = 'idle';
+            remote.heldRuntime!.sessions[0]!.status = 'idle';
+            if (runtimeAttempt === undefined) {
+                delete (remote.activeSessionDetails![0] as any).attemptId;
+                delete (remote.heldRuntime!.sessions[0] as any).turn;
+            } else {
+                remote.activeSessionDetails![0]!.attemptId = runtimeAttempt;
+                remote.heldRuntime!.sessions[0]!.turn.attemptId = runtimeAttempt;
+            }
+            if (location === 'local') task.nodeId = 'host';
+            const localStates = location === 'local' ? [{ instanceId: 'worker', type: 'kimi', status: 'idle',
+                lastActivityAt: NOW - 100, turn: { attemptId: runtimeAttempt },
+                settings: { meshNodeFor: 'project', meshNodeId: 'host' } }] : [];
+            const out = projectSessionView(view, { ...opts, localStates });
+            expect(out.sessions).toHaveLength(1);
+            expect(out.sessions[0]).toMatchObject({ status: 'unknown', evidence: { taskId: 'task', attemptId: null,
+                freshness: 'unknown', observedStatus: 'unknown', lastActivityAt: null, lastActivitySource: 'unknown' } });
+        }
+    });
+
+    it('keeps explicitly registered local coordinators observable without a task claim', () => {
+        const view = fixture();
+        view.activeWork.activeWork.activeWork = [];
+        const localStates = [{ instanceId: 'coordinator', type: 'codex-cli', status: 'idle', lastActivityAt: NOW - 100,
+            settings: { meshCoordinatorFor: 'project' } }];
+        expect(projectSessionView(view, { ...opts, localStates }).sessions).toEqual([]);
+        expect(projectSessionView(view, { ...opts, localStates, coordinatorSessionIds: ['coordinator'] }).sessions)
+            .toMatchObject([{ sessionId: 'coordinator', status: 'idle', isCoordinator: true,
+                evidence: { taskId: null, attemptId: null, freshness: 'fresh', lastActivityAt: NOW - 100 } }]);
+    });
+
     it('treats absent attempt evidence and contradictory node ownership as unknown', () => {
         const view = fixture();
         delete (view.status.nodes[1]!.activeSessionDetails![0] as any).attemptId;

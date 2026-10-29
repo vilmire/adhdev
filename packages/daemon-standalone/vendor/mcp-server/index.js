@@ -128004,7 +128004,7 @@ ${grant.exp}`).digest("hex");
             rec2(remoteState?.turn).attemptId,
             rec2(localState?.turn).attemptId
           ].map(text3).filter(Boolean);
-          const attemptMatches = attemptId ? stateAttempts.length > 0 && stateAttempts.every((id4) => id4 === attemptId) : new Set(stateAttempts).size <= 1;
+          const attemptMatches = !!attemptId && stateAttempts.length > 0 && stateAttempts.every((id4) => id4 === attemptId);
           const effectiveFreshness = !attemptMatches ? "unknown" : freshness2;
           const activityValue = local ? state2?.lastActivityAt ?? state2?.lastMessageAt : remoteState?.lastMessageAt ?? state2?.lastActivityAt;
           const lastActivityAt = state2 && attemptMatches ? activity(activityValue) : null;
