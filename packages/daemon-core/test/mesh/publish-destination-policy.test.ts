@@ -1,11 +1,13 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { canonicalPushIdentity, resolvePushPolicy } from '../../src/git/public-push-guard.mjs'
 import { fastForwardMeshNode } from '../../src/mesh/mesh-fast-forward.js'
-import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
+import { preflightRefineryPublish } from '../../src/mesh/mesh-refine-gitlink-utils.js'
+import { useSyntheticPublicPushPatterns, bindPushDestination, syntheticPushTransportCalls } from '../helpers/public-push-patterns'
 
 useSyntheticPublicPushPatterns({ 'github.com/fixture/widget': 'public', 'github.com/fixture/internal': 'private', 'github.com/vilmire/adhdev': 'private' })
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
@@ -105,4 +107,103 @@ it('multiple repositories require per-repository exact approvals', async () => {
     for (const execute of [false, true]) expect(await fastForwardMeshNode({ workspace: f.work, mode: 'push', execute, approvedPublishShas: [f.tip] })).toMatchObject({ code: 'publish_approval_required', executed: false })
     expect(await fastForwardMeshNode({ workspace: f.work, mode: 'push', approvedPublishShas: { 'github.com/fixture/widget': [f.tip], 'github.com/fixture/internal': [f.tip] } })).toMatchObject({ code: 'push_available', executed: false })
   } finally { rmSync(f.root, { recursive: true, force: true }) }
+})
+
+// A candidate can set its own origin, commit a policy and contain another repo.
+// None of those facts grants visibility authority. Exercise the full preflight
+// without transport, rather than only asserting the loader in isolation.
+for (const location of ['implicit-self', 'explicit-self', 'contained'] as const) {
+  for (const pin of ['missing', 'invalid', 'wrong'] as const) {
+    it(`refuses candidate-controlled ${location} policy with ${pin} authority pin`, async () => {
+      const f = fixture()
+      const saved = { root: process.env.ADHDEV_PRIVATE_ROOT, digest: process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 }
+      try {
+        const blob = JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'], blockedText: ['synthetic-private-token'], repositories: { 'github.com/fixture/public-widget': 'private' } })
+        mkdirSync(join(f.work, '.adhdev')); writeFileSync(join(f.work, '.adhdev/public-push-patterns.json'), blob)
+        git(f.work, 'add', '.adhdev'); git(f.work, 'commit', '-qm', 'Candidate controlled policy')
+        git(f.work, 'remote', 'set-url', 'origin', 'https://github.com/vilmire/adhdev-cloud.git')
+        let target = f.work
+        if (location === 'contained') {
+          target = join(f.work, 'child'); mkdirSync(target); git(target, 'init', '-q')
+        }
+        git(target, 'config', 'remote.publish.url', 'https://github.com/fixture/public-widget.git')
+        if (location === 'implicit-self') delete process.env.ADHDEV_PRIVATE_ROOT
+        else process.env.ADHDEV_PRIVATE_ROOT = f.work
+        if (pin === 'missing') delete process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256
+        else process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 = pin === 'invalid' ? 'invalid-pin' : '0'.repeat(64)
+        const before = syntheticPushTransportCalls()
+        expect(await preflightRefineryPublish(target, git(f.work, 'rev-parse', 'HEAD'), 'main', undefined, 'publish')).toMatchObject({ ok: false, code: 'publish_policy_unmapped' })
+        expect(syntheticPushTransportCalls()).toBe(before)
+        // Positive proof: the same generic mapping works with independently
+        // supplied authority even for a self/contained root. No fixed allowlist.
+        process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 = createHash('sha256').update(blob).digest('hex')
+        expect(await preflightRefineryPublish(target, git(f.work, 'rev-parse', 'HEAD'), 'main', undefined, 'publish')).toEqual({ ok: true })
+        expect(syntheticPushTransportCalls()).toBe(before)
+      } finally {
+        for (const [key, value] of Object.entries({ ADHDEV_PRIVATE_ROOT: saved.root, ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256: saved.digest })) {
+          if (value === undefined) delete process.env[key]; else process.env[key] = value
+        }
+        rmSync(f.root, { recursive: true, force: true })
+      }
+    })
+  }
+}
+it('refuses a raw public policy-root pushurl rewritten to the private canonical URL', async () => {
+  const f = fixture(), saved = process.env.ADHDEV_PRIVATE_ROOT
+  try {
+    const authority = process.env.ADHDEV_PRIVATE_ROOT!
+    // Use the trusted synthetic root/pin, changing only its raw/effective URLs.
+    git(authority, 'config', 'remote.origin.pushurl', 'https://github.com/fixture/public-policy.git')
+    git(authority, 'config', 'url.https://github.com/vilmire/adhdev-cloud.git.insteadOf', 'https://github.com/fixture/public-policy.git')
+    git(f.work, 'config', 'remote.publish.url', 'https://github.com/fixture/internal.git')
+    const before = syntheticPushTransportCalls()
+    expect(await preflightRefineryPublish(f.work, f.tip, 'main', undefined, 'publish')).toMatchObject({ ok: false, code: 'publish_policy_unmapped' })
+    expect(syntheticPushTransportCalls()).toBe(before)
+  } finally {
+    git(saved!, 'config', '--unset-all', 'remote.origin.pushurl')
+    git(saved!, 'config', '--unset-all', 'url.https://github.com/vilmire/adhdev-cloud.git.insteadOf')
+    rmSync(f.root, { recursive: true, force: true })
+  }
+})
+for (const credentialUrl of ['https://synthetic-user:synthetic-password@github.com/fixture/widget.git', 'https://synthetic-user@github.com/fixture/widget.git', 'ssh://git:synthetic-password@github.com/fixture/widget.git', 'synthetic-user@github.com:fixture/widget.git']) {
+  it('refuses credentials in raw/effective URLs without structured output or console disclosure', async () => {
+    const f = fixture()
+    const logs: unknown[][] = []
+    const spies = ['log', 'warn', 'error', 'info', 'debug'].map(method => vi.spyOn(console, method as 'log').mockImplementation((...args) => { logs.push(args) }))
+    try {
+      for (const rewritten of [false, true]) {
+        git(f.work, 'config', 'remote.origin.pushurl', credentialUrl)
+        if (rewritten) git(f.work, 'config', 'url.https://github.com/fixture/widget.git.insteadOf', credentialUrl)
+        const before = syntheticPushTransportCalls()
+        const preflight = await preflightRefineryPublish(f.work, f.tip, 'main')
+        expect(preflight).toMatchObject({ ok: false, code: 'publish_destination_malformed' })
+        expect(syntheticPushTransportCalls()).toBe(before)
+        const results: unknown[] = [preflight]
+        for (const execute of [false, true]) {
+          const result = await fastForwardMeshNode({ workspace: f.work, mode: 'push', execute })
+          expect(result).toMatchObject({ success: false, code: 'publish_destination_malformed', executed: false })
+          results.push(result)
+        }
+        expect(JSON.stringify([results, logs])).not.toMatch(/synthetic-user|synthetic-password/)
+      }
+    } finally {
+      spies.forEach(spy => spy.mockRestore())
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+}
+it('refuses credential-bearing policy-root URLs without exposing userinfo', async () => {
+  const f = fixture(), authority = process.env.ADHDEV_PRIVATE_ROOT!
+  try {
+    git(authority, 'config', 'remote.origin.pushurl', 'https://synthetic-user:synthetic-password@github.com/vilmire/adhdev-cloud.git')
+    git(f.work, 'config', 'remote.publish.url', 'https://github.com/fixture/internal.git')
+    const before = syntheticPushTransportCalls()
+    const result = await preflightRefineryPublish(f.work, f.tip, 'main', undefined, 'publish')
+    expect(result).toMatchObject({ ok: false, code: 'publish_policy_unmapped' })
+    expect(JSON.stringify(result)).not.toMatch(/synthetic-user|synthetic-password/)
+    expect(syntheticPushTransportCalls()).toBe(before)
+  } finally {
+    git(authority, 'config', '--unset-all', 'remote.origin.pushurl')
+    rmSync(f.root, { recursive: true, force: true })
+  }
 })

@@ -4,7 +4,8 @@ A publish request uses a named Git remote. Approval identity comes from every
 **effective push URL**, after Git applies URL rewrites. Canonical GitHub HTTPS
 and SSH URLs resolve to `github.com/<owner>/<repository>` in lowercase. Local
 paths, noncanonical hosts, ambiguous paths, query strings and other transports
-are refused. Existing built-in approval keys (`root`, `oss`,
+are refused. Credential-bearing URLs are refused before approval output; SSH
+permits the conventional `git` username without a password. Existing built-in approval keys (`root`, `oss`,
 `adhdev-providers`, `homebrew-adhdev`) remain compatible.
 
 Additional repositories require an explicit visibility entry in the committed
@@ -29,8 +30,14 @@ with `publish_policy_unmapped`, even when approvals were supplied. Arbitrary
 repositories use the canonical identity itself as their approval-map key.
 
 The root must retain its canonical private origin and committed pattern policy.
-For an external root, `ADHDEV_PRIVATE_ROOT` also requires
-`ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256` matching the committed policy blob. Working
+Every additional repository visibility mapping requires the trusted process's
+out-of-band `ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256` matching the committed policy
+blob, including self-root and contained-root lookups. Set this pin through the
+trusted launcher after independently verifying policy; never derive it from
+the candidate checkout at publication time. `ADHDEV_PRIVATE_ROOT` selects a
+location, not an authority. The historical contained pattern-only lookup for
+built-in repositories remains unchanged. Raw origin URL and pushurl values and
+effective policy-root push URLs must all qualify as canonical private. Working
 copy edits cannot grant visibility. Built-in public repositories cannot be
 made private through this configuration. Every configured and effective URL
 must independently qualify as private to skip public policy; aliases and

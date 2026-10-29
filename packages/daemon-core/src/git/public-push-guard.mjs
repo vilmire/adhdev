@@ -37,7 +37,7 @@ export const REQUIRED_NAME = 'vilmire';
 export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
 
 // Supplied by private repo config; never embed owner/fleet patterns in OSS.
-export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 } = {}) {
+export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, requireAuthorityPin = false } = {}) {
   try {
     const git = args => execFileSync('git', ['--no-replace-objects', '-C', repo, ...args], { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
     const root = realpathSync(git(['rev-parse', '--show-toplevel']).replace(/\n$/, ''));
@@ -46,13 +46,18 @@ export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = 
     const containsTarget = !isAbsolute(location) && location !== '..' && !location.startsWith('../') && !location.startsWith('..\\');
     const urls = git(['remote', 'get-url', '--push', '--all', 'origin']).replace(/\n$/, '').split('\n');
     const configured = git(['config', '--get-all', 'remote.origin.url']).replace(/\n$/, '').split('\n');
-    if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
+    let pushurls = [];
+    try { pushurls = git(['config', '--get-all', 'remote.origin.pushurl']).replace(/\n$/, '').split('\n'); }
+    catch (error) { if (error.status !== 1) throw error; /* Git falls back to origin.url. */ }
+    if (![...urls, ...configured, ...pushurls].every(isKnownPrivateUrl)) throw new Error();
     const entry = git(['ls-tree', 'HEAD', '--', '.adhdev/public-push-patterns.json']);
     if (!/^100(?:644|755) blob [0-9a-f]{40,64}\t\.adhdev\/public-push-patterns\.json\n$/.test(entry)) throw new Error();
     // Read committed policy, isolated from replacements, grafts and working-tree
-    // edits. An external root additionally requires an out-of-band content pin.
+    // edits. Generic visibility always requires an out-of-band content pin:
+    // containment, HEAD and origin config are all controlled by the candidate.
+    // Preserve the historical contained pattern-only loader for built-in repos.
     const blob = git(['show', 'HEAD:.adhdev/public-push-patterns.json']);
-    if (!containsTarget && !expectedDigest) throw new Error();
+    if ((requireAuthorityPin || !containsTarget) && !expectedDigest) throw new Error();
     if (expectedDigest !== undefined && (!/^[0-9a-f]{64}$/.test(expectedDigest) || createHash('sha256').update(blob).digest('hex') !== expectedDigest)) throw new Error();
     const patterns = JSON.parse(blob);
     if (!['ownerNames', 'knownHosts', 'blockedText'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error();
@@ -66,12 +71,25 @@ export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = 
 const ZERO = /^0+$/;
 const REPO_KEYS = new Map([['vilmire/adhdev-cloud', 'root'], ['vilmire/adhdev', 'oss'], ['vilmire/adhdev-providers', 'adhdev-providers'], ['vilmire/homebrew-adhdev', 'homebrew-adhdev']]);
 
+// Reject credentials before URLs can enter structured approval/error output.
+// The conventional SSH transport username is public syntax, not a credential.
+function hasRemoteCredentials(value) {
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+      const url = new URL(value);
+      return !!url.password || (!!url.username && !(url.protocol === 'ssh:' && url.username === 'git'));
+    }
+    const scp = /^([^@/:]+)@[^/:]+:/.exec(value);
+    return !!scp && scp[1] !== 'git';
+  } catch { return true; }
+}
+
 // All transports use the same canonical path and authority. Invalid input never
 // supplies private evidence, even when a local private marker is present.
 function parseRemoteDetails(value) {
   try {
     let input = String(value || '');
-    if (!input || /[\x00-\x20\\~]/.test(input)) return null;
+    if (!input || /[\x00-\x20\\~]/.test(input) || hasRemoteCredentials(input)) return null;
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
       const scp = /^(?:[^@/:]+@)?([^/:]+):(.+)$/.exec(input);
       input = scp ? `ssh://${scp[1]}/${scp[2]}` : `file:///${input.replace(/^\/+/, '')}`;
@@ -152,14 +170,14 @@ function runGit(cwd, args, { input, env, onStdout } = {}) {
 const tryGit = async (cwd, args) => { try { return (await runGit(cwd, args)).trim(); } catch { return null; } };
 
 /** Anchor private config in the superproject, never a public submodule override. */
-export async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
-  if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd });
+export async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT, { requireAuthorityPin = false } = {}) {
+  if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd, requireAuthorityPin });
   let repo = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
   const seen = new Set();
   while (!seen.has(repo)) {
     seen.add(repo);
     const parent = (await runGit(repo, ['rev-parse', '--show-superproject-working-tree'])).trim();
-    if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd });
+    if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd, requireAuthorityPin });
     repo = resolve(parent);
   }
   throw new Error('cyclic superproject config lookup; refusing public publish');
@@ -189,7 +207,7 @@ export async function resolvePushPolicy(cwd, remoteName = 'origin') {
   let configured = {};
   if (identities.some(identity => !REPO_KEYS.has(identity.slice('github.com/'.length)))) {
     let patterns;
-    try { patterns = await loadPublicPushPatternsForRepo(cwd); }
+    try { patterns = await loadPublicPushPatternsForRepo(cwd, undefined, { requireAuthorityPin: true }); }
     catch { throw new PublishDestinationError('publish_policy_unmapped', 'push destination visibility requires committed private-root repository policy'); }
     configured = patterns.repositories || {};
     if (!configured || typeof configured !== 'object' || Array.isArray(configured)) {
@@ -234,6 +252,7 @@ export async function pushDestinations(cwd, remoteName = 'origin') {
   const configured = pushurls || await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.url`]);
   if (!urls.length || urls.every(url => !url)) throw new Error(`no push destinations for ${remoteName}`);
   const all = [...urls, ...configured.replace(/\n$/, '').split('\n')];
+  if (all.some(hasRemoteCredentials)) throw new PublishDestinationError('publish_destination_malformed', 'credential-bearing push URLs are refused; configure credential-free named remotes');
   // Local adhdev-private markers cannot broaden this allow-list. Every URL,
   // including configured aliases and rewrites, must prove the same private repo.
   return { urls, configuredUrls: configured.replace(/\n$/, '').split('\n'), isPublic: all.some(isPublicRemoteUrl) };

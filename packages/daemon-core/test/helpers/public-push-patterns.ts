@@ -1,7 +1,7 @@
 import { afterAll, beforeAll } from 'vitest'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -9,6 +9,9 @@ import { tmpdir } from 'node:os'
 const shellQuote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'"
 
 let endpointFile: string
+let transportLogFile: string
+// Record only operation names, never URL/userinfo or payloads.
+export const syntheticPushTransportCalls = () => readFileSync(transportLogFile, 'utf8')
 const endpoints: Array<{ cwd: string; url: string; local: string }> = []
 export function bindPushDestination(repo: string, local: string, key = 'oss', remote = 'origin', url?: string) {
   const name = { root: 'adhdev-cloud', oss: 'adhdev', 'adhdev-providers': 'adhdev-providers', 'homebrew-adhdev': 'homebrew-adhdev' }[key]
@@ -38,6 +41,7 @@ export function useSyntheticPublicPushPatterns(repositories?: Record<string, 'pu
     process.env.ADHDEV_PRIVATE_ROOT = root
     process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 = createHash('sha256').update(blob).digest('hex')
     endpointFile = join(root, 'endpoints.json'); writeFileSync(endpointFile, '[]')
+    transportLogFile = join(root, 'transport.log'); writeFileSync(transportLogFile, '')
     // Test-only transport: URLs/config and guard decisions stay real. Only the
     // network operation is served by local bare Git repositories, never GitHub.
     const shim = `#!${process.execPath}
@@ -49,6 +53,7 @@ try { cwd=fs.realpathSync(cwd); } catch {}
 const records=JSON.parse(fs.readFileSync(${JSON.stringify(endpointFile)},'utf8')).filter(e=>e.cwd===cwd);
 const net=args.find(a=>['push','fetch','ls-remote','clone'].includes(a));
 if(net && !args.includes('--get-url')) {
+ fs.appendFileSync(${JSON.stringify(transportLogFile)},net+'\\n');
  const i=args.indexOf(net); let candidates=args.slice(i+1).filter(a=>/^(https?|ssh|git):\\/\\//.test(a)||/^[^/]+@[^:]+:/.test(a));
  if(!candidates.length) {
   const tail=args.slice(i+1).filter(a=>!a.startsWith('-')); const remote=tail[0]||'origin';

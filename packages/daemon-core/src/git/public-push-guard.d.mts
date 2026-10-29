@@ -1,6 +1,6 @@
-export function loadPublicPushPatternsForRepo(repo: string, privateRoot?: string): Promise<PublicPushPatterns>;
+export function loadPublicPushPatternsForRepo(repo: string, privateRoot?: string, options?: { requireAuthorityPin?: boolean }): Promise<PublicPushPatterns>;
 export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText: string[]; repositories?: Record<string, 'public' | 'private'> }
-export function loadPublicPushPatterns(repo: string, options?: { forRepo?: string; expectedDigest?: string }): PublicPushPatterns;
+export function loadPublicPushPatterns(repo: string, options?: { forRepo?: string; expectedDigest?: string; requireAuthorityPin?: boolean }): PublicPushPatterns;
 export function parseRemoteUrl(url: string): { protocol: string; host: string; port: string; path: string } | null;
 export const REQUIRED_NAME: string;
 export const REQUIRED_EMAIL: string;

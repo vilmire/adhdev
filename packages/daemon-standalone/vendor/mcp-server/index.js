@@ -33007,7 +33007,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         A = "(?![A-Za-z0-9])";
       }
     });
-    function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 } = {}) {
+    function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256, requireAuthorityPin = false } = {}) {
       try {
         const git7 = (args) => (0, import_node_child_process3.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] });
         const root = (0, import_node_fs4.realpathSync)(git7(["rev-parse", "--show-toplevel"]).replace(/\n$/, ""));
@@ -33016,11 +33016,17 @@ ${renderWorkerProtocolFooter2(input)}`;
         const containsTarget = !(0, import_node_path5.isAbsolute)(location) && location !== ".." && !location.startsWith("../") && !location.startsWith("..\\");
         const urls = git7(["remote", "get-url", "--push", "--all", "origin"]).replace(/\n$/, "").split("\n");
         const configured = git7(["config", "--get-all", "remote.origin.url"]).replace(/\n$/, "").split("\n");
-        if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
+        let pushurls = [];
+        try {
+          pushurls = git7(["config", "--get-all", "remote.origin.pushurl"]).replace(/\n$/, "").split("\n");
+        } catch (error) {
+          if (error.status !== 1) throw error;
+        }
+        if (![...urls, ...configured, ...pushurls].every(isKnownPrivateUrl)) throw new Error();
         const entry = git7(["ls-tree", "HEAD", "--", ".adhdev/public-push-patterns.json"]);
         if (!/^100(?:644|755) blob [0-9a-f]{40,64}\t\.adhdev\/public-push-patterns\.json\n$/.test(entry)) throw new Error();
         const blob = git7(["show", "HEAD:.adhdev/public-push-patterns.json"]);
-        if (!containsTarget && !expectedDigest) throw new Error();
+        if ((requireAuthorityPin || !containsTarget) && !expectedDigest) throw new Error();
         if (expectedDigest !== void 0 && (!/^[0-9a-f]{64}$/.test(expectedDigest) || (0, import_node_crypto32.createHash)("sha256").update(blob).digest("hex") !== expectedDigest)) throw new Error();
         const patterns = JSON.parse(blob);
         if (!["ownerNames", "knownHosts", "blockedText"].every((key5) => Array.isArray(patterns[key5]) && patterns[key5].length && patterns[key5].every((v) => typeof v === "string" && v.trim()))) throw new Error();
@@ -33029,10 +33035,22 @@ ${renderWorkerProtocolFooter2(input)}`;
         throw new Error("public push pattern config unavailable, uncommitted, unpinned or invalid at private root; refusing public publish");
       }
     }
+    function hasRemoteCredentials(value) {
+      try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+          const url = new URL(value);
+          return !!url.password || !!url.username && !(url.protocol === "ssh:" && url.username === "git");
+        }
+        const scp = /^([^@/:]+)@[^/:]+:/.exec(value);
+        return !!scp && scp[1] !== "git";
+      } catch {
+        return true;
+      }
+    }
     function parseRemoteDetails(value) {
       try {
         let input = String(value || "");
-        if (!input || /[\x00-\x20\\~]/.test(input)) return null;
+        if (!input || /[\x00-\x20\\~]/.test(input) || hasRemoteCredentials(input)) return null;
         if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
           const scp = /^(?:[^@/:]+@)?([^/:]+):(.+)$/.exec(input);
           input = scp ? `ssh://${scp[1]}/${scp[2]}` : `file:///${input.replace(/^\/+/, "")}`;
@@ -33114,14 +33132,14 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       });
     }
-    async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
-      if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd });
+    async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT, { requireAuthorityPin = false } = {}) {
+      if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd, requireAuthorityPin });
       let repo = (await runGit2(cwd, ["rev-parse", "--show-toplevel"])).trim();
       const seen2 = /* @__PURE__ */ new Set();
       while (!seen2.has(repo)) {
         seen2.add(repo);
         const parent = (await runGit2(repo, ["rev-parse", "--show-superproject-working-tree"])).trim();
-        if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd });
+        if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd, requireAuthorityPin });
         repo = (0, import_node_path5.resolve)(parent);
       }
       throw new Error("cyclic superproject config lookup; refusing public publish");
@@ -33140,7 +33158,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (identities.some((identity4) => !REPO_KEYS.has(identity4.slice("github.com/".length)))) {
         let patterns;
         try {
-          patterns = await loadPublicPushPatternsForRepo(cwd);
+          patterns = await loadPublicPushPatternsForRepo(cwd, void 0, { requireAuthorityPin: true });
         } catch {
           throw new PublishDestinationError("publish_policy_unmapped", "push destination visibility requires committed private-root repository policy");
         }
@@ -33180,6 +33198,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const configured = pushurls || await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.url`]);
       if (!urls.length || urls.every((url) => !url)) throw new Error(`no push destinations for ${remoteName}`);
       const all = [...urls, ...configured.replace(/\n$/, "").split("\n")];
+      if (all.some(hasRemoteCredentials)) throw new PublishDestinationError("publish_destination_malformed", "credential-bearing push URLs are refused; configure credential-free named remotes");
       return { urls, configuredUrls: configured.replace(/\n$/, "").split("\n"), isPublic: all.some(isPublicRemoteUrl) };
     }
     function commandWords(command) {
