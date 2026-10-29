@@ -13,6 +13,8 @@ export interface AppShellNavItem {
     active?: boolean
     title?: string
     className?: string
+    /** Count badge (e.g. open decisions); hidden at 0/undefined. */
+    badge?: number
 }
 
 export interface AppShellNavSection {
@@ -105,8 +107,19 @@ const AppShellSidebar = memo(function AppShellSidebar({
             }}
             title={collapsed ? (item.title ?? (typeof item.label === 'string' ? item.label : undefined)) : item.title}
         >
-            <span className="nav-icon">{item.icon}</span>
+            <span className="nav-icon" style={{ position: 'relative' }}>
+                {item.icon}
+                {collapsed && item.badge ? <span aria-hidden="true" style={{ position: 'absolute', top: -2, right: -4, width: 8, height: 8, borderRadius: 9999, background: 'var(--status-warning)' }} /> : null}
+            </span>
             {!collapsed && item.label}
+            {!collapsed && item.badge ? (
+                <span
+                    className="ml-auto rounded-full px-1.5 text-3xs font-bold tabular-nums"
+                    style={{ background: 'var(--status-warning)', color: 'var(--bg-base, #000)' }}
+                    data-testid={`nav-badge-${item.id}`}
+                    aria-label={String(item.badge)}
+                >{item.badge > 99 ? '99+' : item.badge}</span>
+            ) : null}
         </div>
     )
 

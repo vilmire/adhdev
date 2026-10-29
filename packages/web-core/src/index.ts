@@ -387,6 +387,8 @@ export { default as RepoMesh } from './pages/RepoMesh'
 // instead (components/dashboard/LazyDashboardMeshGraphDialog).
 export { default as LazyDashboardMeshGraphDialog, preloadDashboardMeshGraphDialog } from './components/dashboard/LazyDashboardMeshGraphDialog'
 export { default as ApprovalsPage } from './pages/Approvals'
+export { default as NeedsYouPage } from './pages/NeedsYou'
+export { NeedsYouProvider, NeedsYouStateProvider, useNeedsYou, useNeedsYouCount } from './context/NeedsYouContext'
 export { default as ArtifactViewerPage } from './pages/ArtifactViewerPage'
 export { ArtifactFullscreenViewer, openArtifactInNewWindow } from './components/attachments'
 export type { ArtifactFullscreenViewerProps, ArtifactViewerItem } from './components/attachments'

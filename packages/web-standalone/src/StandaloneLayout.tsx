@@ -6,7 +6,7 @@
 import { useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh, IconBell } from '@adhdev/web-core'
+import { AppShell, type AppShellNavItem, IconDashboard, IconServer, IconInfo, IconSettings, IconBook, IconMesh, IconBell, IconWarning, useNeedsYouCount } from '@adhdev/web-core'
 
 interface LayoutProps {
     children: React.ReactNode
@@ -16,9 +16,11 @@ export default function StandaloneLayout({ children }: LayoutProps) {
     const navigate = useNavigate()
     const location = useLocation()
     const { t } = useTranslation('common')
+    const needsYouCount = useNeedsYouCount()
 
     const navItems = useMemo<AppShellNavItem[]>(() => ([
         { id: 'dashboard', path: '/dashboard', icon: <IconDashboard />, label: t('nav.dashboard'), active: location.pathname.startsWith('/dashboard'), onSelect: () => navigate('/dashboard') },
+        { id: 'needs-you', path: '/needs-you', icon: <IconWarning />, label: t('nav.needsYou'), active: location.pathname.startsWith('/needs-you'), badge: needsYouCount, onSelect: () => navigate('/needs-you') },
         { id: 'machine', path: '/machines', icon: <IconServer />, label: t('nav.machines'), active: location.pathname.startsWith('/machines'), onSelect: () => navigate('/machines') },
         // Setup has no nav entry: it is first-run onboarding that ends by handing off
         // to Mesh, which owns every mesh setting from then on. The /setup route stays
@@ -29,7 +31,7 @@ export default function StandaloneLayout({ children }: LayoutProps) {
         // a dedicated sidebar page duplicates that.
         { id: 'notifications', path: '/notifications', icon: <IconBell />, label: t('nav.notifications'), active: location.pathname.startsWith('/notifications'), onSelect: () => navigate('/notifications') },
         { id: 'settings', path: '/settings', icon: <IconSettings />, label: t('nav.settings'), active: location.pathname.startsWith('/settings'), onSelect: () => navigate('/settings') },
-    ]), [location.pathname, navigate, t])
+    ]), [location.pathname, navigate, t, needsYouCount])
 
     const footerItems = useMemo<AppShellNavItem[]>(() => ([
         {

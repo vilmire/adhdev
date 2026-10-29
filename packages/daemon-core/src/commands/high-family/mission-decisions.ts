@@ -1,7 +1,7 @@
 /**
  * Owner-decision commands (structured-missions design 2026-10-28 §6):
  *
- *   mission_decisions_list   { meshId?, includeAnswered? }  → the `ownerDecisions` projection
+ *   mission_decisions_list   { meshId?, includeAnswered?, includeLiveChecks?, includeMissions? }  → the `ownerDecisions` projection (+ `liveChecks` / per-mission structure on request)
  *   mission_decision_answer  { meshId, itemId, optionId?, text?, via?, interpretedFrom?, undo? }
  *
  * ★The one hard rule (design §6.3/§9): a coordinator or worker credential can
@@ -37,6 +37,8 @@ import { projectPortsFor } from './assistant-store.js';
 import type { HighFamilyHandler } from './types.js';
 import {
     answerMissionDecision,
+    buildMissionStructure,
+    buildOpenLiveChecks,
     buildOwnerDecisions,
     listRecentlyAnswered,
     type DecisionActor,
@@ -151,16 +153,26 @@ const list: HighFamilyHandler = async (ctx, rawArgs) => {
     const args = stripRouterInternalArgs((rawArgs ?? {}) as Record<string, unknown>);
     const wanted = str(args.meshId);
     let meshIds: string[];
-    if (wanted) meshIds = [wanted];
-    else {
-        try { meshIds = hostedMeshes(ctx.components()).map(h => h.mesh.id); }
-        catch { meshIds = []; }
-    }
+    const meshNames: Record<string, string> = {};
+    try {
+        const hosted = hostedMeshes(ctx.components());
+        for (const h of hosted) if (typeof h.mesh.name === 'string' && h.mesh.name) meshNames[h.mesh.id] = h.mesh.name;
+        meshIds = wanted ? [wanted] : hosted.map(h => h.mesh.id);
+    } catch { meshIds = wanted ? [wanted] : []; }
     const decisions = meshIds.flatMap(id => buildOwnerDecisions(id));
     const recentlyAnswered = args.includeAnswered === true
         ? meshIds.flatMap(id => listRecentlyAnswered(id, Date.now() - RECENT_ANSWER_WINDOW_MS))
         : undefined;
-    return { success: true, ownerDecisions: decisions, ...(recentlyAnswered ? { recentlyAnswered } : {}) };
+    // Opt-in: the default output stays exactly as before.
+    const liveChecks = args.includeLiveChecks === true ? meshIds.flatMap(id => buildOpenLiveChecks(id)) : undefined;
+    const missions = args.includeMissions === true ? meshIds.flatMap(id => buildMissionStructure(id)) : undefined;
+    return {
+        success: true,
+        ownerDecisions: decisions,
+        ...(missions ? { missions, hostedMeshIds: meshIds, meshNames } : {}),
+        ...(recentlyAnswered ? { recentlyAnswered } : {}),
+        ...(liveChecks ? { liveChecks } : {}),
+    };
 };
 
 export const missionDecisionSpecs = defineCommandSpecs('high', {

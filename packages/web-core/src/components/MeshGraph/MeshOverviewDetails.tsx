@@ -19,10 +19,11 @@ import ModalPortal from '../ui/ModalPortal';
 import { TechnicalDetails } from '../ui/TechnicalDetails';
 import { requestOpenSessionChat } from '../../utils/session-nav';
 import type { MeshGraphSessionDetail } from '../../utils/mesh-visualization';
+import { missionDisplayTitle } from '../needs-you/needs-you-model';
 
 function detailTitle(detail: DetailSelection, t: (key: string) => string): { kicker: string; title: string } {
     switch (detail.kind) {
-        case 'mission': return { kicker: t('mesh.overview.detailKickerMission'), title: detail.mission.title }
+        case 'mission': return { kicker: t('mesh.overview.detailKickerMission'), title: missionDisplayTitle({ title: detail.mission.title }, t('needsYou.carryOverTitle')) }
         case 'ledger': return { kicker: t('mesh.overview.detailKickerLedger'), title: ledgerKindLabel(detail.entry.kind, t, detail.entry.payload) }
         case 'queue': return { kicker: t('mesh.overview.detailKickerQueue'), title: splitTaskMessage(queueTaskDisplayText(detail.task.message))?.lead.slice(0, 120) || t('mesh.overview.detailKickerQueue') }
         case 'session': return { kicker: t('mesh.overview.detailKickerSession'), title: [detail.session.providerType, nodeDisplayName(detail.node)].filter(Boolean).join(' · ') }

@@ -27,8 +27,9 @@ import {
 } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MissionEventType, MissionItemRecord } from './mesh-mission-items-store.js';
-import { getMeshMission } from './mesh-missions.js';
+import { getMeshMission, getMeshMissions } from './mesh-missions.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
+import { applyOwnerConfirmationAnswer } from './mesh-mission-owner-confirm.js';
 
 export type DecisionAnswerVia = 'dashboard' | 'assistant' | 'push' | 'cli';
 export const DECISION_ANSWER_VIAS: readonly DecisionAnswerVia[] = ['dashboard', 'assistant', 'push', 'cli'];
@@ -202,7 +203,11 @@ export function answerMissionDecision(
         items.bumpVersion(req.meshId, item.missionId, nowIso);
         return { ok: true, action: wasAnswered ? 'changed' : 'answered', meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision, answer, delivery };
     });
-    if (result.ok && result.action !== 'unchanged') notifyMissionChanged(req.meshId);
+    if (result.ok && result.action !== 'unchanged') {
+        // "Reopen" on a coordinator's owner_abandoned confirmation reopens the mission (acceptance 11).
+        if (result.action !== 'undone') applyOwnerConfirmationAnswer(req.meshId, req.itemId);
+        notifyMissionChanged(req.meshId);
+    }
     return result;
 }
 
@@ -293,6 +298,70 @@ export function buildOwnerDecisions(meshId: string): OwnerDecisionEntry[] {
     return out.sort(compareOwnerDecisions);
 }
 
+export interface OpenLiveCheckEntry {
+    meshId: string;
+    missionId: string;
+    missionTitle: string;
+    itemId: string;
+    text: string;
+    machine?: string;
+    createdAt: string;
+    carryOver?: true;
+}
+
+/** Open `live_check` items of one mesh (the "needs you" page lists them next to decisions). Oldest first. */
+export function buildOpenLiveChecks(meshId: string): OpenLiveCheckEntry[] {
+    const missionCache = new Map<string, { title: string; carryOver: boolean }>();
+    return store().missionItems().listOpenByKind(meshId, 'live_check').map(item => {
+        let m = missionCache.get(item.missionId);
+        if (!m) {
+            const rec = getMeshMission(meshId, item.missionId);
+            m = { title: rec?.title ?? item.missionId, carryOver: rec ? isCarryOverMissionRecord(rec) : false };
+            missionCache.set(item.missionId, m);
+        }
+        return {
+            meshId, missionId: item.missionId, missionTitle: m.title, itemId: item.id, text: item.text,
+            ...(item.machine ? { machine: item.machine } : {}),
+            createdAt: item.createdAt,
+            ...(m.carryOver ? { carryOver: true as const } : {}),
+        };
+    });
+}
+
+export interface MissionStructureEntry {
+    meshId: string;
+    missionId: string;
+    summary?: string;
+    openItems: { remaining: number; live_check: number; decision: number; evidence: number };
+    /** The auto carry-over mission (the dashboard localizes its title instead of showing the stored string). */
+    carryOver?: true;
+}
+
+/**
+ * Per-mission structured facts for the dashboard Overview cards (summary, open item
+ * counts, carry-over flag). A side channel on the decisions list so the strict
+ * mesh.status mission wire does not have to grow. Only missions that carry something.
+ */
+export function buildMissionStructure(meshId: string): MissionStructureEntry[] {
+    const items = store().missionItems();
+    const counts = items.openCountsByMission(meshId);
+    const out: MissionStructureEntry[] = [];
+    for (const m of getMeshMissions(meshId)) {
+        const st = items.getStructured(meshId, m.id);
+        const openItems = counts.get(m.id) ?? { remaining: 0, live_check: 0, decision: 0, evidence: 0 };
+        const carryOver = isCarryOverMissionRecord({ isCarryOver: st?.isCarryOver, title: m.title });
+        const total = openItems.remaining + openItems.live_check + openItems.decision + openItems.evidence;
+        if (!st?.summary && total === 0 && !carryOver) continue;
+        out.push({
+            meshId, missionId: m.id,
+            ...(st?.summary ? { summary: st.summary } : {}),
+            openItems,
+            ...(carryOver ? { carryOver: true as const } : {}),
+        });
+    }
+    return out;
+}
+
 export interface RecentlyAnsweredDecision {
     meshId: string;
     missionId: string;
@@ -303,6 +372,10 @@ export interface RecentlyAnsweredDecision {
     deliveryState?: MissionDecisionDelivery['state'];
     /** Auto-applied answers are shown as such and stay undoable. */
     autoApplied: boolean;
+    /** Enough of the question to let the owner change the answer in place (dashboard). */
+    options: Array<{ id: string; label: string; detail?: string }>;
+    recommended?: string;
+    allowFreeText: boolean;
 }
 
 /** Answers recorded within `sinceMs` (digest "auto-applied yesterday", undo affordance). Newest first. */
@@ -317,6 +390,9 @@ export function listRecentlyAnswered(meshId: string, sinceMs: number): RecentlyA
             revision: i.decision!.answerRevision ?? 1,
             ...(i.decision!.delivery ? { deliveryState: i.decision!.delivery.state } : {}),
             autoApplied: i.decision!.answer!.by === 'auto_recommended',
+            options: i.decision!.options.map(o => ({ id: o.id, label: o.label, ...(o.detail ? { detail: o.detail } : {}) })),
+            ...(i.decision!.recommended ? { recommended: i.decision!.recommended } : {}),
+            allowFreeText: i.decision!.allowFreeText,
         }))
         .sort((a, b) => (a.answer.at < b.answer.at ? 1 : -1));
 }

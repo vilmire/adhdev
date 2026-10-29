@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText } from '../../utils/queue-task-label';
 import { Tooltip } from '../ui/InfoTip'
+import MissionStructureLine, { useMissionTitle } from './MissionStructureLine'
 import { filterLedgerEntriesForDisplay, ledgerEntryNodeLabel } from './meshLedgerEvents';
 import type {
     RepoMeshLedgerEntryStatus,
@@ -266,13 +267,17 @@ function MissionRow({ meshTheme, mission, onSelect }: {
     // A mission with zero attached tasks carries no progress signal — mute the
     // whole row so the ones with real work stand out.
     const muted = taskStats.total === 0
+    const title = useMissionTitle(mission)
     return (
-        <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
-            <StatusBadge meshTheme={meshTheme} label={missionStatusLabel(mission.status, t)} tone={missionStatusTone(mission.status)} />
-            <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{mission.title}</span>
-            {taskStats.total > 0 && <span className={`shrink-0 tabular-nums text-2xs ${meshTheme.textMuted}`}>✓{taskStats.completed}/{taskStats.total}</span>}
-            {lastActivity && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{lastActivity}</span>}
-        </ListRow>
+        <div className="min-w-0">
+            <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
+                <StatusBadge meshTheme={meshTheme} label={missionStatusLabel(mission.status, t)} tone={missionStatusTone(mission.status)} />
+                <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{title}</span>
+                {taskStats.total > 0 && <span className={`shrink-0 tabular-nums text-2xs ${meshTheme.textMuted}`}>✓{taskStats.completed}/{taskStats.total}</span>}
+                {lastActivity && <span className={`shrink-0 text-3xs ${meshTheme.textMuted}`}>{lastActivity}</span>}
+            </ListRow>
+            <MissionStructureLine meshTheme={meshTheme} mission={mission} />
+        </div>
     )
 }
 

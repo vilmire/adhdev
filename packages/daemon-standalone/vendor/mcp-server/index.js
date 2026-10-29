@@ -126606,6 +126606,36 @@ ${asText(streams.stderr)}
         init_mesh_node_identity();
       }
     });
+    function applyOwnerConfirmationAnswer(meshId, itemId) {
+      const item = MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId);
+      const key5 = item?.dedupeKey ?? "";
+      const d = item?.decision;
+      if (!item || !d?.answer || !key5.startsWith(`k:${OWNER_ABANDON_CONFIRM_KEY_PREFIX}`)) return { reopened: false };
+      const picked = d.answer.optionId ? d.options.find((o) => o.id === d.answer.optionId) : void 0;
+      if (!picked || picked.label.trim().toLowerCase() !== REOPEN_LABEL) return { reopened: false };
+      const missionId = key5.slice(`k:${OWNER_ABANDON_CONFIRM_KEY_PREFIX}`.length) || item.refs.find((r) => r.kind === "mission")?.value || "";
+      const mission = missionId ? getMeshMission(meshId, missionId) : null;
+      if (!mission || mission.status !== "completed" && mission.status !== "abandoned") return { reopened: false };
+      try {
+        const { result } = upsertStructuredMission(meshId, { id: mission.id, title: "", status: "active" }, { actor: "daemon" });
+        return { reopened: true, missionId: mission.id, ...result.restoredItems ? { restoredItems: result.restoredItems } : {} };
+      } catch (e) {
+        LOG.warn("MissionDecision", `reopen of ${mission.id} after owner confirmation failed: ${e?.message || e}`);
+        return { reopened: false };
+      }
+    }
+    var REOPEN_LABEL;
+    var init_mesh_mission_owner_confirm = __esm2({
+      "src/mesh/mesh-mission-owner-confirm.ts"() {
+        "use strict";
+        init_dist();
+        init_mesh_runtime_store();
+        init_mesh_missions();
+        init_mesh_mission_structured();
+        init_logger();
+        REOPEN_LABEL = OWNER_ABANDON_CONFIRM_OPTIONS[1].toLowerCase();
+      }
+    });
     function store3() {
       return MeshRuntimeStore.getInstance();
     }
@@ -126721,7 +126751,10 @@ ${asText(streams.stderr)}
         items.bumpVersion(req.meshId, item.missionId, nowIso);
         return { ok: true, action: wasAnswered ? "changed" : "answered", meshId: req.meshId, missionId: item.missionId, itemId: item.id, question: d.question, revision, answer: answer2, delivery };
       });
-      if (result.ok && result.action !== "unchanged") notifyMissionChanged(req.meshId);
+      if (result.ok && result.action !== "unchanged") {
+        if (result.action !== "undone") applyOwnerConfirmationAnswer(req.meshId, req.itemId);
+        notifyMissionChanged(req.meshId);
+      }
       return result;
     }
     function sourceOf(createdBy) {
@@ -126781,6 +126814,47 @@ ${asText(streams.stderr)}
       }
       return out.sort(compareOwnerDecisions);
     }
+    function buildOpenLiveChecks(meshId) {
+      const missionCache = /* @__PURE__ */ new Map();
+      return store3().missionItems().listOpenByKind(meshId, "live_check").map((item) => {
+        let m = missionCache.get(item.missionId);
+        if (!m) {
+          const rec5 = getMeshMission(meshId, item.missionId);
+          m = { title: rec5?.title ?? item.missionId, carryOver: rec5 ? isCarryOverMissionRecord(rec5) : false };
+          missionCache.set(item.missionId, m);
+        }
+        return {
+          meshId,
+          missionId: item.missionId,
+          missionTitle: m.title,
+          itemId: item.id,
+          text: item.text,
+          ...item.machine ? { machine: item.machine } : {},
+          createdAt: item.createdAt,
+          ...m.carryOver ? { carryOver: true } : {}
+        };
+      });
+    }
+    function buildMissionStructure(meshId) {
+      const items = store3().missionItems();
+      const counts = items.openCountsByMission(meshId);
+      const out = [];
+      for (const m of getMeshMissions(meshId)) {
+        const st = items.getStructured(meshId, m.id);
+        const openItems = counts.get(m.id) ?? { remaining: 0, live_check: 0, decision: 0, evidence: 0 };
+        const carryOver = isCarryOverMissionRecord({ isCarryOver: st?.isCarryOver, title: m.title });
+        const total = openItems.remaining + openItems.live_check + openItems.decision + openItems.evidence;
+        if (!st?.summary && total === 0 && !carryOver) continue;
+        out.push({
+          meshId,
+          missionId: m.id,
+          ...st?.summary ? { summary: st.summary } : {},
+          openItems,
+          ...carryOver ? { carryOver: true } : {}
+        });
+      }
+      return out;
+    }
     function listRecentlyAnswered(meshId, sinceMs) {
       const cutoff = new Date(sinceMs).toISOString();
       return store3().missionItems().listByKindStates(meshId, "decision", ["answered"]).filter((i) => i.decision?.answer && i.decision.answer.at >= cutoff).map((i) => ({
@@ -126791,7 +126865,10 @@ ${asText(streams.stderr)}
         answer: i.decision.answer,
         revision: i.decision.answerRevision ?? 1,
         ...i.decision.delivery ? { deliveryState: i.decision.delivery.state } : {},
-        autoApplied: i.decision.answer.by === "auto_recommended"
+        autoApplied: i.decision.answer.by === "auto_recommended",
+        options: i.decision.options.map((o) => ({ id: o.id, label: o.label, ...o.detail ? { detail: o.detail } : {} })),
+        ...i.decision.recommended ? { recommended: i.decision.recommended } : {},
+        allowFreeText: i.decision.allowFreeText
       })).sort((a, b) => a.answer.at < b.answer.at ? 1 : -1);
     }
     function processDecisionDeadlines(meshId, nowMs2 = Date.now()) {
@@ -126834,6 +126911,7 @@ ${asText(streams.stderr)}
         init_mesh_runtime_store();
         init_mesh_missions();
         init_mesh_mission_change_notifier();
+        init_mesh_mission_owner_confirm();
         DECISION_ANSWER_TEXT_MAX = 1e3;
         DECISION_INTERPRETED_FROM_MAX = 500;
       }
@@ -183329,17 +183407,25 @@ ${ptyResult.output.slice(-2e3)}`);
       const args = stripRouterInternalArgs(rawArgs ?? {});
       const wanted = str14(args.meshId);
       let meshIds;
-      if (wanted) meshIds = [wanted];
-      else {
-        try {
-          meshIds = hostedMeshes(ctx.components()).map((h) => h.mesh.id);
-        } catch {
-          meshIds = [];
-        }
+      const meshNames = {};
+      try {
+        const hosted = hostedMeshes(ctx.components());
+        for (const h of hosted) if (typeof h.mesh.name === "string" && h.mesh.name) meshNames[h.mesh.id] = h.mesh.name;
+        meshIds = wanted ? [wanted] : hosted.map((h) => h.mesh.id);
+      } catch {
+        meshIds = wanted ? [wanted] : [];
       }
       const decisions = meshIds.flatMap((id4) => buildOwnerDecisions(id4));
       const recentlyAnswered = args.includeAnswered === true ? meshIds.flatMap((id4) => listRecentlyAnswered(id4, Date.now() - RECENT_ANSWER_WINDOW_MS)) : void 0;
-      return { success: true, ownerDecisions: decisions, ...recentlyAnswered ? { recentlyAnswered } : {} };
+      const liveChecks = args.includeLiveChecks === true ? meshIds.flatMap((id4) => buildOpenLiveChecks(id4)) : void 0;
+      const missions = args.includeMissions === true ? meshIds.flatMap((id4) => buildMissionStructure(id4)) : void 0;
+      return {
+        success: true,
+        ownerDecisions: decisions,
+        ...missions ? { missions, hostedMeshIds: meshIds, meshNames } : {},
+        ...recentlyAnswered ? { recentlyAnswered } : {},
+        ...liveChecks ? { liveChecks } : {}
+      };
     };
     var missionDecisionSpecs = defineCommandSpecs("high", {
       [MISSION_DECISION_ANSWER]: answer,

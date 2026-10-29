@@ -14,7 +14,7 @@ import {
     initStandaloneFontPreferences,
     normalizeStandaloneFontPreferences,
 } from './standalone-font-preferences'
-import { ArtifactViewerPage, TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel, FIRST_RUN_DIALOG_EVENT } from '@adhdev/web-core'
+import { ArtifactViewerPage, TransportProvider, LaunchCliProvider, MachineDetail, Dashboard, RepoMesh, StandaloneRepoMeshProvider, NotificationsPage, NeedsYouPage, NeedsYouProvider, useBaseDaemons, initTheme, initChatTheme, initI18n, ApiProvider, createApiClient, InteractivePromptModal, useInteractivePrompt, AlertBanner, DashboardWireCompatOverlay, Button, Input, getMachineNickname, getMachineHostnameLabel, FIRST_RUN_DIALOG_EVENT } from '@adhdev/web-core'
 import { useTranslation } from 'react-i18next'
 import StandaloneLayout from './StandaloneLayout'
 import SetupWizardPage from './SetupWizardPage'
@@ -330,6 +330,7 @@ function StandaloneShell() {
                             {/* A daemon speaking another dashboard wire version is never
                                 rendered: reload (daemon newer) or update it (daemon older). */}
                             <DashboardWireCompatOverlay />
+                            <NeedsYouProvider>
                             <StandaloneLayout>
                                 <OnboardingGate />
                                 <Routes>
@@ -341,6 +342,7 @@ function StandaloneShell() {
                                         No /approvals route — owner decision (re-confirmed
                                         2026-08-24): pending approvals surface inline on the
                                         dashboard inbox; a dedicated page duplicates it. */}
+                                    <Route path="/needs-you" element={<NeedsYouPage />} />
                                     <Route path="/notifications" element={<StandaloneNotificationsPage />} />
                                     <Route path="/about" element={<StandaloneAbout />} />
                                     <Route path="/settings" element={<StandaloneSettings />} />
@@ -349,6 +351,7 @@ function StandaloneShell() {
                                     <Route path="*" element={<Navigate to="/dashboard" replace />} />
                                 </Routes>
                             </StandaloneLayout>
+                            </NeedsYouProvider>
                             </LaunchCliProvider>
                         </TransportProvider>
                     </StandaloneDaemonProvider>
