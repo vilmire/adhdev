@@ -1,4 +1,5 @@
 import { remoteProjectHandlers, remoteProjectSpecs, attachRemoteProject } from './remote-project-attach.js';
+import { decisionStatusFields, openDecisionCountsField } from './assistant-decisions-core.js';
 import { readTaskReportPage } from '../../assistant/task-report-continuation.js';
 import { recoverAttemptReport, verifiedNativeRead } from '../../assistant/attempt-report-recovery.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
@@ -85,11 +86,11 @@ function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
 }
 
-function fail(code: string, error: string = code, extra: Record<string, unknown> = {}): CommandRouterResult {
+export function fail(code: string, error: string = code, extra: Record<string, unknown> = {}): CommandRouterResult {
     return { success: false, code, error, ...extra };
 }
 
-function wrap(project: string, meshId: string, result: Record<string, unknown>): CommandRouterResult {
+export function wrap(project: string, meshId: string, result: Record<string, unknown>): CommandRouterResult {
     return { success: true, project, meshId, result };
 }
 
@@ -175,7 +176,7 @@ function authorizeAssistantArtifactCaller(args: unknown, verb: string): CommandR
 }
 
 /** Gate + ports + boot-window handling shared by every verb. */
-function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: any, ctx: HighFamilyContext) => Promise<CommandRouterResult>): HighFamilyHandler {
+export function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: any, ctx: HighFamilyContext) => Promise<CommandRouterResult>): HighFamilyHandler {
     return async (ctx, args) => {
         if (verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead) {
             const authFailure = authorizeAssistantArtifactCaller(args, verb);
@@ -224,7 +225,7 @@ type Resolved =
  * rebind across hosts. Unfollowed or revoked remote projects fail closed and
  * can never be reopened by a `project_send` or other verb.
  */
-async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promise<Resolved> {
+export async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promise<Resolved> {
     await ports.refreshMemberMeshes?.();
     const localMeshes = ports.listMeshes();
     const followedList = (ports.followedRemoteProjects?.() ?? []).filter((e) =>
@@ -500,7 +501,7 @@ async function reconcileFollowedRemoteAfterSendRefusal(
 }
 
 /** Call the host of a remote-hosted project; an unreachable host is refused before any call. */
-async function callRemote(ports: AssistantProjectPorts, p: { slug: string; mesh: LocalMeshEntry; remote: RemoteHostView }, op: Parameters<AssistantProjectPorts['callHost']>[1], args: Record<string, unknown>): Promise<RemoteCallOutcome> {
+export async function callRemote(ports: AssistantProjectPorts, p: { slug: string; mesh: LocalMeshEntry; remote: RemoteHostView }, op: Parameters<AssistantProjectPorts['callHost']>[1], args: Record<string, unknown>): Promise<RemoteCallOutcome> {
     if (p.remote.followerAccess?.localBindingError) {
         const { code, error } = p.remote.followerAccess.localBindingError;
         return { ok: false, kind: 'refused', code, error, result: { success: false, code, error } };
@@ -512,7 +513,7 @@ async function callRemote(ports: AssistantProjectPorts, p: { slug: string; mesh:
 }
 
 /** Body of a host's answer: `{success, result: {...}}` → `{...}`. */
-function remoteBody(out: Extract<RemoteCallOutcome, { ok: true }>): Record<string, unknown> {
+export function remoteBody(out: Extract<RemoteCallOutcome, { ok: true }>): Record<string, unknown> {
     const r = out.result.result;
     return r && typeof r === 'object' && !Array.isArray(r) ? r as Record<string, unknown> : {};
 }
@@ -558,6 +559,7 @@ function projectRow(ports: AssistantProjectPorts, mesh: LocalMeshEntry, slug: st
         queue: ports.queueCounts(mesh.id),
         activeMissions: ports.activeMissionCount(mesh.id),
         pendingApprovals: ports.pendingApprovals(mesh.id),
+        ...openDecisionCountsField(mesh.id),
     };
 }
 
@@ -688,6 +690,7 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
         coordinatorSessionId: liveCoord?.sessionId ?? null,
         routing,
         sessions,
+        ...decisionStatusFields(meshId),
         ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }),
     };
 }

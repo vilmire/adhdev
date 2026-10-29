@@ -76,6 +76,7 @@ import { missionDecisionSpecs } from './high-family/mission-decisions.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
+import { assistantDecisionSpecs } from './high-family/assistant-decisions.js';
 import { assistantRemoteSpecs } from './high-family/assistant-remote.js';
 import { assistantLaunchSpecs } from './high-family/assistant-launch.js';
 import { launchDefaultsSpecs } from './high-family/launch-defaults.js';
@@ -325,6 +326,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...driverSpecs,
             ...artifactSpecs,
             ...assistantProjectSpecs,
+            ...assistantDecisionSpecs,
             ...assistantActionSpecs,
             ...assistantThreadSpecs,
             ...assistantWatchSpecs,

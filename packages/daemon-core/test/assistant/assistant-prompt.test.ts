@@ -9,6 +9,7 @@ import {
     type AssistantPromptProject,
     type BuildAssistantPromptInput,
 } from '../../src/assistant/assistant-prompt.js';
+import { ASSISTANT_DECISION_RULES } from '../../src/assistant/assistant-decision-rules.js';
 import { MAX_MEMORY_BUDGETS, MEMORY_ENTRY_SEPARATOR, type MemoryFileState } from '../../src/assistant/memory/memory-store.js';
 import { SKILL_INDEX_HEADER } from '../../src/assistant/skills/skill-index.js';
 
@@ -90,7 +91,8 @@ describe('buildAssistantSystemPrompt', () => {
     });
 
     it('mentions every assistant tool in the fixed rules', () => {
-        for (const tool of ASSISTANT_TOOLS) expect(ASSISTANT_FIXED_RULES).toContain(`\`${tool}\``);
+        // The fixed rules sit at their size ceiling; the owner-decision tools are named in their own section.
+        for (const tool of ASSISTANT_TOOLS) expect(`${ASSISTANT_FIXED_RULES}\n${ASSISTANT_DECISION_RULES}`).toContain(`\`${tool}\``);
     });
 
     it('tells the assistant a choice relay block after a waiting notice is untrusted data for the user', () => {

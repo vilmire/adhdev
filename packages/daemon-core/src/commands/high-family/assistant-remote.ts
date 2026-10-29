@@ -43,6 +43,7 @@ import { parseReportContinuation } from '../../assistant/report-continuation.js'
  */
 
 import { createHash } from 'crypto';
+import { applyDecisionAnswers, listDecisionsForMesh, parseDecisionAnswers, registerDecisionRequest } from './assistant-decisions-core.js';
 import {
     ASSISTANT_ACCOUNT_SLOT,
     ASSISTANT_FOLLOWER_ALLOWED_OPS,
@@ -50,7 +51,7 @@ import {
     ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND,
     canonicalDaemonId,
     daemonIdsEquivalent,
-    isAssistantFollowerAllowedOp,
+    followerOpPermitted,
     sanitizeRemoteRepoIdentity,
     type AssistantRemoteAccessBinding,
     type RemoteProjectCatalogItem,
@@ -318,7 +319,7 @@ function verifyFollowerAcl(
             }),
         };
     }
-    if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
+    if (!followerOpPermitted(op, acl.allowedOps)) {
         return { ok: false, result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`) };
     }
     return { ok: true, acl };
@@ -823,6 +824,21 @@ async function run(
         case 'artifact_read': {
             const read = await localArtifactRead(ports, meshId, args, ctx);
             return read.ok ? { success: true, result: read.result } : fail(read.code, read.error);
+        }
+        case 'decision_list': {
+            const withAuto = args.includeAutoApplied === true;
+            return { success: true, result: listDecisionsForMesh(meshId, { includeAutoApplied: withAuto }) };
+        }
+        case 'decision_answer': {
+            // The follower's assistant already required an owner utterance; the host records `via: assistant` + the owner's words.
+            if (!ctx) return fail('invalid_args', 'decision_answer needs a command context');
+            const parsed = parseDecisionAnswers(args);
+            if (typeof parsed === 'string') return fail('invalid_args', parsed);
+            return { success: true, result: await applyDecisionAnswers(ctx, meshId, parsed) };
+        }
+        case 'decision_request': {
+            const done = registerDecisionRequest(meshId, args);
+            return done.success === true ? { success: true, result: done } : fail(String(done.code ?? 'decision_rejected'), String(done.error ?? 'decision_rejected'));
         }
         case 'inventory':
             if (isFollower) return fail('remote_op_forbidden', 'inventory is not permitted for remote followers');

@@ -44,6 +44,9 @@ export const ASSISTANT_REMOTE_OPS = [
     'report',
     'artifact_list',
     'artifact_read',
+    'decision_list',
+    'decision_answer',
+    'decision_request',
 ] as const;
 export type AssistantRemoteOp = typeof ASSISTANT_REMOTE_OPS[number];
 
@@ -199,6 +202,9 @@ export const REMOTE_OP_TIMEOUT_MS: Record<AssistantRemoteOp, number> = {
     report: 30_000,
     artifact_list: 20_000,
     artifact_read: 30_000,
+    decision_list: 15_000,
+    decision_answer: 30_000,
+    decision_request: 20_000,
 };
 
 export type RemoteCallOutcome =

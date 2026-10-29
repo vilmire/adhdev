@@ -27,6 +27,8 @@ export interface AssistantDigestPorts {
     followsProjects(): boolean;
     relayBusy(): boolean;
     enqueue(input: { source: 'digest'; text: string; messageId: string; forSessionId: string }): void;
+    /** Owner-decision block for the "needs you" part (decision-nudge.ts); empty/absent → none. */
+    decisionSection?(now: number): string;
     recordDigest(at: number): void;
 }
 
@@ -57,7 +59,9 @@ export class AssistantDigestScheduler {
         if (this.ports.relayBusy()) return { fired: false, reason: 'busy' };
         const messageId = `digest:${now}`;
         this.ports.recordDigest(now);
-        this.ports.enqueue({ source: 'digest', text: DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
+        let section = '';
+        try { section = this.ports.decisionSection?.(now) ?? ''; } catch { /* the digest is still worth sending */ }
+        this.ports.enqueue({ source: 'digest', text: section ? `${DIGEST_INPUT_TEXT}\n\n${section}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
         return { fired: true, messageId };
     }
 }

@@ -49,6 +49,7 @@ import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-cur
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
 import { buildPreviousSessionNote, type PreviousSessionMessage } from './assistant-relay-format.js';
 import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
+import { DecisionNudge, DecisionWatch, decisionSourcesFromPorts, formatDecisionDigestSection } from './decision-nudge.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
@@ -354,6 +355,7 @@ export function wireAssistantRuntime(
         followsProjects: () => store.openThreads().length > 0,
         relayBusy: () => relay.hasPendingInput(),
         enqueue: (input) => relay.enqueueInput(input),
+        decisionSection: (now) => formatDecisionDigestSection(decisionWatch.snapshot(), now),
         recordDigest: (at) => registry.recordDigest(at),
     });
 
@@ -382,6 +384,18 @@ export function wireAssistantRuntime(
         });
         return projectPorts;
     };
+    // Owner decisions waiting (structured missions §6.1): one nudge per new batch + the digest's decision block.
+    const decisionWatch = new DecisionWatch(decisionSourcesFromPorts(loadProjectPorts));
+    const decisionNudge = new DecisionNudge(decisionWatch, {
+        liveSessionId,
+        isReady: (sid) => instanceReady(instanceOf(components, sid)),
+        modalOpen: (sid) => instanceModalOpen(instanceOf(components, sid)),
+        relayBusy: () => relay.hasPendingInput(),
+        enqueue: (input) => relay.enqueueInput(input),
+    });
+    let decisionRefreshing = false;
+    let lastDecisionRefresh = 0;
+    const DECISION_REFRESH_EVERY_MS = 15_000;
     const remotePoller = new AssistantRemoteRelayPoller({
         openThreads: () => store.openThreads().map((t) => ({
             meshId: t.meshId,
@@ -522,6 +536,15 @@ export function wireAssistantRuntime(
             if (r.fired) LOG.info('Assistant', `idle review turn queued (${r.messageId})`);
             const d = digestScheduler.evaluate(now);
             if (d.fired) LOG.info('Assistant', `daily digest queued (${d.messageId})`);
+            if (liveSessionId() && now - lastDecisionRefresh >= DECISION_REFRESH_EVERY_MS && !decisionRefreshing) {
+                lastDecisionRefresh = now;
+                decisionRefreshing = true;
+                void decisionWatch.refresh()
+                    .catch((e) => LOG.debug('Assistant', `decision refresh failed: ${(e as Error)?.message ?? e}`))
+                    .finally(() => { decisionRefreshing = false; });
+            }
+            const dn = decisionNudge.evaluate(now);
+            if (dn.fired) LOG.info('Assistant', `decision nudge queued (${dn.messageId})`);
             if (metrics && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {
                 lastMetricsPrune = now;
                 metrics.prune(now);

@@ -22,6 +22,7 @@
  * because that is what the Windows limit counts.
  */
 
+import { ASSISTANT_DECISION_RULES } from './assistant-decision-rules.js';
 import { renderMemorySnapshot, type MemoryFileState } from './memory/memory-store.js';
 import { renderSkillIndex, SKILL_INDEX_BUDGET_CHARS } from './skills/skill-index.js';
 import type { SkillSummary } from './skills/skill-store.js';
@@ -137,7 +138,7 @@ export interface AssistantPrompt {
     length: number;
     withinLimit: boolean;
     /** The sections in order, for audit display (session info) and tests. */
-    sections: { rules: string; projects: string; memory: string; skills: string; safetyTail: string };
+    sections: { rules: string; decisions: string; projects: string; memory: string; skills: string; safetyTail: string };
 }
 
 const SECTION_JOIN = '\n\n';
@@ -145,6 +146,7 @@ const SECTION_JOIN = '\n\n';
 export function buildAssistantSystemPrompt(input: BuildAssistantPromptInput): AssistantPrompt {
     const sections = {
         rules: ASSISTANT_FIXED_RULES,
+        decisions: ASSISTANT_DECISION_RULES,
         projects: renderProjectTable(input.projects, input.frozenAt),
         memory: renderClampedMemorySnapshot(input.memory, input.frozenAt),
         skills: renderSkillIndex(input.skills, SKILL_INDEX_BUDGET_CHARS),
@@ -152,7 +154,7 @@ export function buildAssistantSystemPrompt(input: BuildAssistantPromptInput): As
     };
     // Order is the contract (§4.5 / §4.10.2): the tail is pushed last, outside
     // any conditional.
-    const text = [sections.rules, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN)
+    const text = [sections.rules, sections.decisions, sections.projects, sections.memory, sections.skills].join(SECTION_JOIN)
         + SECTION_JOIN + sections.safetyTail;
     return { text, length: text.length, withinLimit: text.length <= ASSISTANT_PROMPT_MAX_LENGTH, sections };
 }
