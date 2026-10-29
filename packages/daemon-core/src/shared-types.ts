@@ -26,7 +26,7 @@ import type {
 } from '@adhdev/session-host-core';
 // Dependency-free leaf (mesh-shared never imports daemon-core) — type-only,
 // same convention as mesh/node-facts.ts.
-import type { KeyedDocDelta, MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import type { DecisionPushWire, KeyedDocDelta, MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import type { ProviderControlDef } from './providers/provider-control-contracts.js';
 
 export type {
@@ -826,7 +826,9 @@ export type DaemonStatusEventName =
     | 'agent:waiting_choice'
     | 'agent:generating_completed'
     | 'agent:stopped'
-    | 'monitor:no_progress';
+    | 'monitor:no_progress'
+    // An owner decision (structured missions) needs the owner — push only (design §9).
+    | 'agent:decision_needed';
 
 /** Minimal daemon-originated event payload relayed through the server. */
 export interface DaemonStatusEventPayload {
@@ -861,6 +863,13 @@ export interface DaemonStatusEventPayload {
      */
     surfaceHidden?: boolean;
     muted?: boolean;
+    /**
+     * `agent:decision_needed` only. The single, deliberate widening of the push exception (owner
+     * decision D1, 2026-10-28): question <=80 chars + <=3 option labels <=24 chars + ids/urgency/
+     * dueAt. Built ONLY by `projectDecisionPushEvent` (status/decision-push.ts), an allow-list;
+     * `context`, free-text answers and mission goal/summary are never part of it.
+     */
+    decision?: DecisionPushWire;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildCloudStatusReportPayload } from '../../src/status/reporter.js';
 import { projectServerStatusEvent } from '../../src/status/status-event.js';
+import { projectDecisionPushEvent } from '../../src/status/decision-push.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { createStatusEventEmitter } from '../../src/status/status-event.js';
 
@@ -707,5 +708,26 @@ describe('turn-sourced status_event — server content boundary', () => {
                 expect(wire).not.toContain(needle);
             }
         }
+    });
+});
+
+describe('owner-decision push — widened exception (owner decision D1, 2026-10-28)', () => {
+    // CLAUDE.md "Push notification exception": question <=80 chars + <=3 option labels <=24 chars.
+    // context / option detail / free text / mission goal+title / chat content never reach the server.
+    it('status_report (snapshot path) never carries decision text', () => {
+        const wire = JSON.stringify(buildCloudStatusReportPayload([sessionWithContent({ decisions: [{ question: 'DECISION-Q-LEAK' }], ownerDecisions: [{ context: 'DECISION-CTX-LEAK' }] })], undefined, 1));
+        expect(wire).not.toContain('DECISION-Q-LEAK');
+        expect(wire).not.toContain('DECISION-CTX-LEAK');
+    });
+
+    it('projectDecisionPushEvent is an allow-list: a future OwnerDecisionEntry field is dropped', () => {
+        const entry = {
+            meshId: 'm', missionId: 'x', itemId: 'i', question: 'Ship it?', urgency: 'blocking' as const,
+            options: [{ id: 'a', label: 'Yes', detail: 'DETAIL-LEAK' }],
+            context: 'CTX-LEAK', missionTitle: 'TITLE-LEAK', futureField: 'FUTURE-LEAK',
+        };
+        const wire = JSON.stringify(projectDecisionPushEvent(entry as never, 'new'));
+        for (const leak of ['DETAIL-LEAK', 'CTX-LEAK', 'TITLE-LEAK', 'FUTURE-LEAK']) expect(wire).not.toContain(leak);
+        expect(wire).toContain('Ship it?');
     });
 });

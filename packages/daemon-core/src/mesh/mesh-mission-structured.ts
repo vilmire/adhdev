@@ -38,6 +38,7 @@ import { newMissionItemId, type MissionItemRecord, type MissionItemStore } from 
 import { getMeshMission, upsertMeshMission, type MeshMissionRecord } from './mesh-missions.js';
 import { acknowledgeAnsweredDecisions } from './mesh-mission-prompt.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
+import { notifyDecisionPush } from './mesh-mission-decision-push-notifier.js';
 
 export type MissionWriteActor = 'coordinator' | 'worker' | 'daemon';
 
@@ -149,6 +150,7 @@ export function addNormalizedItem(
         if ((reviveFrom as string[]).includes(same.state)) {
             items.updateItem(meshId, same.id, { state: 'open', text: n.text, ...(n.decision ? { decision: n.decision } : {}), movedTo: null, ...(n.refs.length ? { refs: n.refs } : {}) });
             items.appendEvent(meshId, missionId, 'item_state_changed', actor, { itemId: same.id, from: same.state, to: 'open', revived: true });
+            if (n.kind === 'decision') notifyDecisionPush({ meshId, missionId, itemId: same.id, reason: 'new' });
             return { ...base, id: same.id, state: 'open', revived: true };
         }
         return { ...base, id: same.id, state: same.state, deduped: true, ...(same.decision?.answer ? { answer: same.decision.answer } : {}) };
@@ -161,6 +163,7 @@ export function addNormalizedItem(
         dedupeKey: n.dedupeKey, createdBy,
     });
     items.appendEvent(meshId, missionId, 'item_added', actor, { itemId: rec.id, kind: rec.kind, text: truncateMissionText(rec.text, 120), createdBy });
+    if (rec.kind === 'decision') notifyDecisionPush({ meshId, missionId, itemId: rec.id, reason: 'new' });
     return { ...base, id: rec.id, state };
 }
 
