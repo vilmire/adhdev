@@ -325,6 +325,7 @@ export class StandaloneHttpApi {
   captureUnauthenticatedArtifactReadGuard(req: IncomingMessage, commandType: string): (() => boolean) | null {
     if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType) && !UNAUTHENTICATED_OWNER_APPROVAL_VERBS.has(commandType)) return null;
     if (this.hasAnyAuth() || this.hasMcpCredentialHeader(req) || this.resolveInternalAuthScope(req) || !this.isAllowedOrigin(req)) return null;
+    if (UNAUTHENTICATED_OWNER_APPROVAL_VERBS.has(commandType) && !String(req.headers.origin ?? '').trim()) return null; // approvals need a browser Origin; a bare local HTTP call cannot approve
     const capturedEpoch = this.authEpoch;
     return () => !this.hasAnyAuth() && !this.hasMcpCredentialHeader(req) && this.authEpoch === capturedEpoch;
   }
