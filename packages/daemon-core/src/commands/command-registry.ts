@@ -25,10 +25,14 @@ import type { DaemonCommandHandler } from './handler.js';
 import type { GitCommandServices } from '../git/git-commands.js';
 import type { MeshSenderClass } from './mesh-sender.js';
 
-/** Where a command entered the daemon. Recorded verbatim in the command log. */
-export type CommandSource = 'ws' | 'p2p' | 'ext' | 'api' | 'project_attach' | 'standalone' | 'ipc' | 'mesh' | 'internal';
+/**
+ * Where a command entered the daemon. Recorded verbatim in the command log.
+ * `push_relay`: the server-relayed push-notification decision answer — accepted by exactly one
+ * command (`mission_decision_push_relay_answer`); the cloud transport maps it to `ws` for any other.
+ */
+export type CommandSource = 'ws' | 'p2p' | 'ext' | 'api' | 'project_attach' | 'standalone' | 'ipc' | 'mesh' | 'internal' | 'push_relay';
 
-export const COMMAND_SOURCES: readonly CommandSource[] = ['ws', 'p2p', 'ext', 'api', 'project_attach', 'standalone', 'ipc', 'mesh', 'internal'];
+export const COMMAND_SOURCES: readonly CommandSource[] = ['ws', 'p2p', 'ext', 'api', 'project_attach', 'standalone', 'ipc', 'mesh', 'internal', 'push_relay'];
 
 export function isCommandSource(source: unknown): source is CommandSource {
     return typeof source === 'string' && (COMMAND_SOURCES as readonly string[]).includes(source);

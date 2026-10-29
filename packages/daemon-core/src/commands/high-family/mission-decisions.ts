@@ -42,6 +42,7 @@ import {
     buildOwnerDecisions,
     listRecentlyAnswered,
     type DecisionActor,
+    type DecisionAnswerRequest,
     type DecisionAnswerVia,
 } from '../../mesh/mesh-mission-decisions.js';
 import { createCoordinatorDecisionSender, deliverDecisionAnswer } from '../../mesh/mesh-mission-decision-delivery.js';
@@ -113,7 +114,7 @@ const answer: HighFamilyHandler = async (ctx, rawArgs) => {
     const meshId = str(args.meshId);
     const itemId = str(args.itemId);
     if (!meshId || !itemId) return { success: false, code: 'invalid_args', error: 'meshId and itemId are required' };
-    const result = answerMissionDecision({
+    return answerAndDeliver(ctx, {
         meshId,
         itemId,
         ...(str(args.missionId) ? { missionId: str(args.missionId) } : {}),
@@ -122,6 +123,16 @@ const answer: HighFamilyHandler = async (ctx, rawArgs) => {
         ...(typeof args.interpretedFrom === 'string' ? { interpretedFrom: args.interpretedFrom } : {}),
         ...(args.undo === true ? { undo: true } : {}),
     }, caller.actor);
+};
+
+/** Record the answer, then try the immediate coordinator delivery. Shared with the push-relay ingress. */
+export async function answerAndDeliver(
+    ctx: Parameters<HighFamilyHandler>[0],
+    req: DecisionAnswerRequest,
+    actor: DecisionActor,
+): ReturnType<HighFamilyHandler> {
+    const { meshId, itemId } = req;
+    const result = answerMissionDecision(req, actor);
     if (!result.ok) {
         return { success: false, code: result.code, error: result.error, ...(result.validOptions ? { validOptions: result.validOptions } : {}) };
     }
@@ -147,7 +158,7 @@ const answer: HighFamilyHandler = async (ctx, rawArgs) => {
         ...(result.answer ? { answer: result.answer } : {}),
         ...(deliveryState ? { delivery: deliveryState } : {}),
     };
-};
+}
 
 const list: HighFamilyHandler = async (ctx, rawArgs) => {
     const args = stripRouterInternalArgs((rawArgs ?? {}) as Record<string, unknown>);
