@@ -173,6 +173,25 @@ describe('member quota ingestion → two mesh projections and persisted routing'
         for (const meshId of MESHES) expect(evaluateProviderQuotaGate(getMesh(meshId)!.nodes[0], PROVIDER, undefined, NOW)).toBeNull();
     });
 
+    it('does not let a delayed failure attempted before the current measurement erase its supported axes', async () => {
+        const measured = quota(100);
+        await pushToBoth(measured);
+        await expectBoth(measured);
+        const delayedFailure = { ...quota(null, NOW - 60_000), status: 'error', session: null, weekly: null, error: 'old network failure',
+            metadata: { ...quota(null, NOW - 60_000).metadata, failureKind: 'network' } };
+        await pushToBoth(delayedFailure, NOW + 1);
+        await expectBoth(measured);
+    });
+
+    it('accepts a current failure attempt even when its last-good data clock is older', async () => {
+        await pushToBoth(quota(100));
+        await expectBoth(quota(100));
+        const currentFailure = { ...quota(100, NOW - 60_000), status: 'error', error: 'current network failure',
+            metadata: { ...quota(null).metadata, fetchedAt: NOW, failureKind: 'network', lastGoodWindows: true } };
+        await pushToBoth(currentFailure, NOW + 1);
+        await expectBoth(currentFailure);
+    });
+
     it('clears readings on unconfirmed lineage and never restores the previous account windows', async () => {
         await pushToBoth(quota(100));
         await expectBoth(quota(100));
@@ -203,14 +222,25 @@ describe('member quota ingestion → two mesh projections and persisted routing'
     });
 
     it('does not infer a provider-pool join from headline windows on bucket-based snapshots', async () => {
-        const pooled = quota(100);
+        const pooled = quota(100, NOW - 1_000, 'antigravity-cli');
         pooled.buckets = [{ id: 'pool-a', usedPercent: 100, windowMinutes: 300, resetsAt: NOW + 3_600_000 }];
         await pushToBoth(pooled);
         await expectBoth(pooled);
-        const anotherPool = quota(null, NOW - 60_000);
+        const anotherPool = quota(null, NOW - 60_000, 'antigravity-cli');
         anotherPool.buckets = [{ id: 'pool-b', usedPercent: 40, windowMinutes: 10080, resetsAt: NOW + 86_400_000 }];
         await pushToBoth(anotherPool, NOW + 1);
         await expectBoth(anotherPool);
+    });
+
+    it('does not hide a failure behind a newer measurement from an unjoined model pool', async () => {
+        const pooled = quota(100, NOW - 1_000, 'antigravity-cli');
+        pooled.buckets = [{ id: 'pool-a', usedPercent: 100, windowMinutes: 300, resetsAt: NOW + 3_600_000 }];
+        await pushToBoth(pooled);
+        await expectBoth(pooled);
+        const failure = { ...quota(null, NOW - 60_000, 'antigravity-cli'), status: 'error', weekly: null, error: 'pool unknown',
+            metadata: { ...pooled.metadata, fetchedAt: NOW - 60_000, failureKind: 'network' } };
+        await pushToBoth(failure, NOW + 1);
+        await expectBoth(failure);
     });
 
     it('retains a measured unreset 5h window past the age threshold and clears it at its own reset', async () => {

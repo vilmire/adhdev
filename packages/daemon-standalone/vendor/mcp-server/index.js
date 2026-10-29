@@ -42714,10 +42714,15 @@ ${error.message || ""}`;
         };
       }
     });
-    function olderReadingInSameCycle(previous, incoming) {
-      if (previous.status !== "ok" || incoming.status !== "ok" || !canTransferQuotaReading(previous, incoming)) return false;
-      if (!Number.isFinite(previous.updatedAt) || !Number.isFinite(incoming.updatedAt) || incoming.updatedAt <= 0 || previous.updatedAt <= incoming.updatedAt) return false;
+    function isOlderQuotaReport(previous, incoming) {
+      if (previous.status !== "ok" || !canTransferQuotaReading(previous, incoming)) return false;
+      if (!Number.isFinite(previous.updatedAt) || previous.updatedAt <= 0) return false;
       if (previous.buckets?.length || incoming.buckets?.length) return false;
+      if (incoming.status !== "ok") {
+        const attemptedAt = incoming.metadata?.fetchedAt;
+        return typeof attemptedAt === "number" && Number.isFinite(attemptedAt) && attemptedAt > 0 && attemptedAt < previous.updatedAt;
+      }
+      if (!Number.isFinite(incoming.updatedAt) || incoming.updatedAt <= 0 || previous.updatedAt <= incoming.updatedAt) return false;
       let sharedCycle = false;
       for (const axis2 of ["session", "weekly", "monthly"]) {
         const before = previous[axis2];
@@ -42734,7 +42739,7 @@ ${error.message || ""}`;
       let retained = false;
       for (const [provider, reading] of Object.entries(quota)) {
         const prior = previous.quota[provider];
-        if (prior && olderReadingInSameCycle(prior, reading)) {
+        if (prior && isOlderQuotaReport(prior, reading)) {
           quota[provider] = prior;
           retained = true;
         }
