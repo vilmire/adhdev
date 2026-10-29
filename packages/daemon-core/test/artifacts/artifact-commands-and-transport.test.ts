@@ -2245,7 +2245,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
     });
 
     describe('Mission b295ce35 — Artifact sharing (OD-4, Coordinator, Defects 1 & 2, P2P origin fetch, Content boundary)', () => {
-        it('OD-4: allows a worker to read another session artifact only in the same mission AND listed in inputArtifactIds; denies unlisted or cross-mission artifacts', async () => {
+        it('OD-4: a worker reads another session artifact only when the coordinator listed it in inputArtifactIds (any mission, missions can be related); unlisted is denied', async () => {
             sessionRegistry.register({
                 sessionId: 'sess-worker-a',
                 parentSessionId: null,
@@ -2382,7 +2382,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             expect(deniedUnlisted.success).toBe(false);
             expect(deniedUnlisted.code).toBe('artifact_access_denied');
 
-            // DENY 2: Worker C in a DIFFERENT mission tries to read regShared.artifactId even if inputArtifactIds lists it
+            // ALLOW 2: Worker C in a DIFFERENT mission reads regShared.artifactId because the coordinator listed it (owner 2026-10-29: related missions share)
             const workspaceC = path.join(tempRoot, 'workspace-c');
             fs.mkdirSync(workspaceC, { recursive: true });
             sessionRegistry.register({
@@ -2428,13 +2428,12 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 sessionId: 'sess-worker-c',
             });
 
-            const deniedCrossMission = await artifactHandlers.artifact_read(ctx, {
+            const crossMissionRead = await artifactHandlers.artifact_read(ctx, {
                 artifactId: regShared.artifactId,
                 bind: bindC.bind,
                 token: tokenC.token,
             });
-            expect(deniedCrossMission.success).toBe(false);
-            expect(deniedCrossMission.code).toBe('artifact_access_denied');
+            expect(crossMissionRead.success).toBe(true);
         });
 
         it('Defect 2: View full (artifact_fetch & artifact_read) succeeds after the producer session has ended by falling back to stored workspace_root', async () => {

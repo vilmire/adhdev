@@ -359,7 +359,7 @@ export function recordDirectDispatchTask(
          * for the report_completion.touched_files comparison — never a routing input.
          */
         ownedPaths?: string[];
-        /** OD-4 (artifact sharing): same-mission artifact ids this task's worker may read. */
+        /** OD-4 (artifact sharing): artifact ids (any mission) this task's worker may read. */
         inputArtifactIds?: string[];
         input_artifact_ids?: string[];
         dispatchedAt?: string;

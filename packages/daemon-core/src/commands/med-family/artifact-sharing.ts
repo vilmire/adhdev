@@ -46,6 +46,16 @@ import {
     type ArtifactOriginFetchGrant,
 } from './artifact-origin-grant.js';
 
+
+/**
+ * OD-4 sharing rule: the coordinator naming an artifact in a task's
+ * `inputArtifactIds` IS the grant (same mesh only). No mission match is
+ * required — missions can be related, and a coordinator artifact registered
+ * outside any mission handed to a worker was invisible under the old
+ * "same mission" test (standalone QA 2026-10-29; owner: requiring one mission
+ * across related work is wrong).
+ */
+
 export {
     __resetOriginGrantStateForTest,
     getHostOriginGrantPublicKey,
@@ -578,37 +588,20 @@ export async function authorizeCrossSessionArtifactAccess(
                 ? (meshStore.findQueueEntryById(authority.meshId, authority.taskId) as Record<string, unknown> | null)
                 : null;
         const taskPayload = (taskEntry?.payload ?? {}) as Record<string, unknown>;
-        const workerMissionId =
-            trimString(taskEntry?.missionId) || trimString(taskPayload.missionId) || authority.missionId || '';
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds)
             ? taskEntry.inputArtifactIds
             : Array.isArray(taskPayload.inputArtifactIds)
               ? taskPayload.inputArtifactIds
               : (authority.remoteInputArtifactIds ?? []);
         const allowedIds = new Set(rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0));
-        let recordMissionId = trimString(record.missionId);
-        if (!recordMissionId && record.taskId) {
-            try {
-                const prodEntry = meshStore.findQueueEntryById(
-                    record.meshId || authority.meshId || '',
-                    record.taskId,
-                ) as Record<string, unknown> | null;
-                recordMissionId =
-                    trimString(prodEntry?.missionId) ||
-                    trimString((prodEntry?.payload as Record<string, unknown> | undefined)?.missionId);
-            } catch {
-                recordMissionId = '';
-            }
-        }
-        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
         const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
-        if (!sameMission || !sameMesh || !allowedIds.has(artifactId)) {
+        if (!sameMesh || !allowedIds.has(artifactId)) {
             return {
                 ok: false,
                 result: {
                     success: false,
                     code: 'artifact_access_denied',
-                    error: `Worker session "${authority.sessionId}" is not authorized to read artifact "${artifactId}" (OD-4 requires same mission and inclusion in inputArtifactIds) (artifact_access_denied)`,
+                    error: `Worker session "${authority.sessionId}" is not authorized to read artifact "${artifactId}" (OD-4: the coordinator must name it in this task's inputArtifactIds, same mesh) (artifact_access_denied)`,
                 },
             };
         }
@@ -671,11 +664,6 @@ export function listWorkerAuthorizedArtifacts(
               > | null)
             : null;
     const taskPayload = (taskEntry?.payload ?? {}) as Record<string, unknown>;
-    const workerMissionId =
-        trimString(taskEntry?.missionId) ||
-        trimString(taskPayload.missionId) ||
-        authority.missionId ||
-        '';
     const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds)
         ? taskEntry.inputArtifactIds
         : Array.isArray(taskPayload.inputArtifactIds)
@@ -691,23 +679,8 @@ export function listWorkerAuthorizedArtifacts(
         if (!id || seen.has(id)) continue;
         const record = store.get(id) ?? remoteArtifactById.get(id);
         if (!record) continue;
-        let recordMissionId = trimString(record.missionId);
-        if (!recordMissionId && record.taskId) {
-            try {
-                const prodEntry = meshStore.findQueueEntryById(
-                    record.meshId || authority.meshId || '',
-                    record.taskId,
-                ) as Record<string, unknown> | null;
-                recordMissionId =
-                    trimString(prodEntry?.missionId) ||
-                    trimString((prodEntry?.payload as Record<string, unknown> | undefined)?.missionId);
-            } catch {
-                recordMissionId = '';
-            }
-        }
-        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
         const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
-        if (sameMission && sameMesh) {
+        if (sameMesh) {
             seen.add(id);
             merged.push(record);
         }
@@ -1025,9 +998,8 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
                 const rec = store.get(id);
                 if (!rec) continue;
                 const recMissionId = resolveRecMission(rec);
-                const sameMission = Boolean(missionId && recMissionId && missionId === recMissionId);
                 const sameMesh = !rec.meshId || rec.meshId === meshId;
-                if (sameMission && sameMesh) {
+                if (sameMesh) {
                     inputArtifacts.push({
                         ...rec,
                         ...(recMissionId ? { missionId: recMissionId } : {}),
@@ -1045,8 +1017,7 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
                 const reqMissionId = resolveRecMission(reqRec);
                 const isAllowed =
                     sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) ||
-                    (Boolean(missionId && reqMissionId && missionId === reqMissionId) &&
-                        (!reqRec.meshId || reqRec.meshId === meshId) &&
+                    ((!reqRec.meshId || reqRec.meshId === meshId) &&
                         allowedSet.has(reqArtifactId));
                 if (!isAllowed) {
                     return {

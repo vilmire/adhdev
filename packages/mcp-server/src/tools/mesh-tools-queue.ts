@@ -147,7 +147,7 @@ interface EnqueueTaskArgsShape {
     maxRetries?: number; max_retries?: number;
     /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths. */
     owned_paths?: unknown; ownedPaths?: unknown;
-    /** OD-4 (artifact sharing) — same-mission artifact IDs this worker task may read. */
+    /** OD-4 (artifact sharing) — artifact IDs (any mission) this worker task may read. */
     input_artifact_ids?: unknown; inputArtifactIds?: unknown;
 }
 

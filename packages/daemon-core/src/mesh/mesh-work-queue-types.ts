@@ -383,7 +383,7 @@ export interface MeshEnqueueTaskOptions {
     maxRetries?: number;
     /** M1/M3: mission this task belongs to. */
     missionId?: string;
-    /** OD-4 (artifact sharing): same-mission artifact ids this task's worker may read. */
+    /** OD-4 (artifact sharing): artifact ids (any mission) this task's worker may read. */
     inputArtifactIds?: string[];
     input_artifact_ids?: string[];
     /** Model override forwarded to the executing session's launch (initialModel). */

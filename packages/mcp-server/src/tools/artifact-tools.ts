@@ -129,12 +129,12 @@ export const ARTIFACT_LIST_TOOL: Tool = {
  *
  * Never accepts `session_id` / `task_id` — worker identity comes from the launch
  * credential, and daemon-side OD-4 filtering returns the worker's own session
- * artifacts plus same-mission `inputArtifactIds` artifacts.
+ * artifacts plus the `inputArtifactIds` artifacts the coordinator named.
  */
 export const WORKER_ARTIFACT_LIST_TOOL: Tool & { description: string } = {
     name: 'artifact_list',
     description:
-        'List artifacts visible to this worker (its own session artifacts, plus same-mission artifacts the coordinator named in input_artifact_ids; metadata only, never raw file bytes).',
+        'List artifacts visible to this worker (its own session artifacts, plus artifacts the coordinator named in input_artifact_ids (any mission); metadata only, never raw file bytes).',
     inputSchema: {
         type: 'object',
         properties: {

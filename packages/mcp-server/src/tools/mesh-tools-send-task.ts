@@ -1037,7 +1037,7 @@ export async function meshSendTask(
         mission_id?: string; missionId?: string;
         /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths doc. */
         owned_paths?: unknown; ownedPaths?: unknown;
-        /** OD-4 (artifact sharing) — same-mission artifact IDs this worker task may read. */
+        /** OD-4 (artifact sharing) — artifact IDs (any mission) this worker task may read. */
         input_artifact_ids?: unknown; inputArtifactIds?: unknown;
         difficulty?: string;
         delivery_mode?: string; deliveryMode?: string;

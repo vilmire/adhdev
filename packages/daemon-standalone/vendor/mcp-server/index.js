@@ -119966,30 +119966,16 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const meshStore = getMeshRuntimeStore(ctx);
         const taskEntry = authority.meshId && authority.taskId ? meshStore.findQueueEntryById(authority.meshId, authority.taskId) : null;
         const taskPayload = taskEntry?.payload ?? {};
-        const workerMissionId = trimString3(taskEntry?.missionId) || trimString3(taskPayload.missionId) || authority.missionId || "";
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
         const allowedIds = new Set(rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0));
-        let recordMissionId = trimString3(record7.missionId);
-        if (!recordMissionId && record7.taskId) {
-          try {
-            const prodEntry = meshStore.findQueueEntryById(
-              record7.meshId || authority.meshId || "",
-              record7.taskId
-            );
-            recordMissionId = trimString3(prodEntry?.missionId) || trimString3(prodEntry?.payload?.missionId);
-          } catch {
-            recordMissionId = "";
-          }
-        }
-        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
         const sameMesh = !record7.meshId || !authority.meshId || record7.meshId === authority.meshId;
-        if (!sameMission || !sameMesh || !allowedIds.has(artifactId)) {
+        if (!sameMesh || !allowedIds.has(artifactId)) {
           return {
             ok: false,
             result: {
               success: false,
               code: "artifact_access_denied",
-              error: `Worker session "${authority.sessionId}" is not authorized to read artifact "${artifactId}" (OD-4 requires same mission and inclusion in inputArtifactIds) (artifact_access_denied)`
+              error: `Worker session "${authority.sessionId}" is not authorized to read artifact "${artifactId}" (OD-4: the coordinator must name it in this task's inputArtifactIds, same mesh) (artifact_access_denied)`
             }
           };
         }
@@ -120033,7 +120019,6 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const meshStore = getMeshRuntimeStore(ctx);
       const taskEntry = authority.meshId && authority.taskId ? meshStore.findQueueEntryById(authority.meshId, authority.taskId) : null;
       const taskPayload = taskEntry?.payload ?? {};
-      const workerMissionId = trimString3(taskEntry?.missionId) || trimString3(taskPayload.missionId) || authority.missionId || "";
       const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
       const remoteArtifactById = new Map(
         (authority.remoteInputArtifacts ?? []).map((rec6) => [rec6.artifactId, rec6])
@@ -120045,21 +120030,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         if (!id4 || seen2.has(id4)) continue;
         const record7 = store4.get(id4) ?? remoteArtifactById.get(id4);
         if (!record7) continue;
-        let recordMissionId = trimString3(record7.missionId);
-        if (!recordMissionId && record7.taskId) {
-          try {
-            const prodEntry = meshStore.findQueueEntryById(
-              record7.meshId || authority.meshId || "",
-              record7.taskId
-            );
-            recordMissionId = trimString3(prodEntry?.missionId) || trimString3(prodEntry?.payload?.missionId);
-          } catch {
-            recordMissionId = "";
-          }
-        }
-        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
         const sameMesh = !record7.meshId || !authority.meshId || record7.meshId === authority.meshId;
-        if (sameMission && sameMesh) {
+        if (sameMesh) {
           seen2.add(id4);
           merged.push(record7);
         }
@@ -120342,9 +120314,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 const rec6 = store4.get(id4);
                 if (!rec6) continue;
                 const recMissionId = resolveRecMission(rec6);
-                const sameMission = Boolean(missionId && recMissionId && missionId === recMissionId);
                 const sameMesh = !rec6.meshId || rec6.meshId === meshId;
-                if (sameMission && sameMesh) {
+                if (sameMesh) {
                   inputArtifacts.push({
                     ...rec6,
                     ...recMissionId ? { missionId: recMissionId } : {},
@@ -120360,7 +120331,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                   return { success: false, code: "artifact_not_found", error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
                 }
                 const reqMissionId = resolveRecMission(reqRec);
-                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || Boolean(missionId && reqMissionId && missionId === reqMissionId) && (!reqRec.meshId || reqRec.meshId === meshId) && allowedSet.has(reqArtifactId);
+                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || (!reqRec.meshId || reqRec.meshId === meshId) && allowedSet.has(reqArtifactId);
                 if (!isAllowed) {
                   return {
                     success: false,
@@ -223225,7 +223196,7 @@ var ARTIFACT_LIST_TOOL = {
 };
 var WORKER_ARTIFACT_LIST_TOOL = {
   name: "artifact_list",
-  description: "List artifacts visible to this worker (its own session artifacts, plus same-mission artifacts the coordinator named in input_artifact_ids; metadata only, never raw file bytes).",
+  description: "List artifacts visible to this worker (its own session artifacts, plus artifacts the coordinator named in input_artifact_ids (any mission); metadata only, never raw file bytes).",
   inputSchema: {
     type: "object",
     properties: {
@@ -223867,7 +223838,7 @@ var MESH_ENQUEUE_TASK_TOOL = {
       target_node_id: { type: "string", description: "HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected." },
       prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op if none)." },
       depends_on: { type: "array", items: { type: "string" }, description: 'Task ids that must complete first; completion summaries are appended ("Upstream results"). Cycles rejected.' },
-      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Same-mission artifact ids this task may read (OD-4)." },
+      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission, OD-4)." },
       mission_id: { type: "string", description: "Mission id (full, exact); unknown id rejected (mission_not_found)." },
       priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "high jumps older normal/low work; default normal." },
       model: { type: "string", description: "Model override, e.g. opus (best-effort)." },
@@ -223904,7 +223875,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             target_node_id: { type: "string", description: "HARD pin; an unresolvable id rejects the batch." },
             prefer_worktree: { type: "boolean" },
             depends_on: { type: "array", items: { type: "string" }, description: "Sibling refs and/or existing task ids that must complete first." },
-            input_artifact_ids: { type: "array", items: { type: "string" }, description: "Same-mission artifact ids this task may read." },
+            input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission)." },
             mission_id: { type: "string", description: "Overrides the top-level mission_id." },
             priority: enumOf(MESH_TASK_PRIORITIES),
             model: { type: "string" },
@@ -224170,7 +224141,7 @@ var MESH_SEND_TASK_TOOL = {
       task_mode: { ...enumOf(MESH_TASK_MODES), description: "Optional. live_debug_readonly rejects obvious write/commit/push/deploy/destructive instructions before dispatch \u2014 a lint of the instruction TEXT, not a sandbox: the worker's Edit/Write/Bash tools are NOT restricted, so verify with mesh_git_status afterward." },
       readonly: { type: "boolean", description: "Read-only axis (any task_mode): no write isolation, read-only cap, exempt from the per-node write limit and the dirty/stale gates, rejects write instructions. The worker's own tools are NOT restricted." },
       owned_paths: { type: "array", items: { type: "string" }, description: "As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing \u2014 feeds the overlap check and the touched_files comparison." },
-      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Same-mission artifact ids this task may read (OD-4)." },
+      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission, OD-4)." },
       mission_id: { type: "string", description: "Full/exact mission id (attributes the task and its completion); unresolvable \u2192 REJECTED (mission_not_found)." },
       difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger)." },
       delivery_mode: {
