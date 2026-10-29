@@ -42714,33 +42714,46 @@ ${error.message || ""}`;
         };
       }
     });
-    function isOlderQuotaReport(previous, incoming) {
-      if (previous.status !== "ok" || !canTransferQuotaReading(previous, incoming)) return false;
-      if (!Number.isFinite(previous.updatedAt) || previous.updatedAt <= 0) return false;
-      if (previous.buckets?.length || incoming.buckets?.length) return false;
-      if (incoming.status !== "ok") {
-        const attemptedAt = incoming.metadata?.fetchedAt;
-        return typeof attemptedAt === "number" && Number.isFinite(attemptedAt) && attemptedAt > 0 && attemptedAt < previous.updatedAt;
+    function hasBoundedClock(reading, observedAt) {
+      const capturedAt = reading.updatedAt;
+      const attemptedAt = reading.metadata?.fetchedAt;
+      if (!Number.isFinite(observedAt) || observedAt <= 0 || !Number.isFinite(capturedAt) || capturedAt <= 0 || typeof attemptedAt !== "number" || !Number.isFinite(attemptedAt) || attemptedAt < capturedAt || attemptedAt > observedAt) return false;
+      for (const axis2 of ["session", "weekly", "monthly"]) {
+        const window = reading[axis2];
+        if (!window) continue;
+        const reset = window.resetsAt;
+        const minutes = window.windowMinutes;
+        if (typeof reset !== "number" || !Number.isFinite(reset) || typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0 || capturedAt >= reset || capturedAt < reset - minutes * 6e4) return false;
       }
-      if (!Number.isFinite(incoming.updatedAt) || incoming.updatedAt <= 0 || previous.updatedAt <= incoming.updatedAt) return false;
+      return true;
+    }
+    function isOlderQuotaReport(previous, incoming, observedAt) {
+      if (previous.status !== "ok" || !canTransferQuotaReading(previous, incoming)) return false;
+      if (previous.buckets?.length || incoming.buckets?.length) return false;
+      if (!hasBoundedClock(previous, observedAt) || !hasBoundedClock(incoming, observedAt)) return false;
       let sharedCycle = false;
       for (const axis2 of ["session", "weekly", "monthly"]) {
         const before = previous[axis2];
         const after = incoming[axis2];
         if (!before || !after) continue;
-        if (before.windowMinutes !== after.windowMinutes || !Number.isFinite(before.resetsAt) || Number(before.resetsAt) <= 0 || before.resetsAt !== after.resetsAt) return false;
+        if (before.windowMinutes !== after.windowMinutes || before.resetsAt !== after.resetsAt) return false;
         sharedCycle = true;
       }
-      return sharedCycle;
+      if (!sharedCycle) return false;
+      const incomingClock = incoming.status === "ok" ? incoming.updatedAt : incoming.metadata?.fetchedAt;
+      return typeof incomingClock === "number" && incomingClock < previous.updatedAt;
     }
-    function selectReportedQuotaFacts(previous, incoming) {
+    function selectReportedQuotaFacts(previous, incoming, observedAt) {
       if (!previous?.quota || !incoming.quota) return incoming;
       const quota = { ...incoming.quota };
       let retained = false;
       for (const [provider, reading] of Object.entries(quota)) {
         const prior = previous.quota[provider];
-        if (prior && isOlderQuotaReport(prior, reading)) {
-          quota[provider] = prior;
+        if (prior && isOlderQuotaReport(prior, reading, observedAt)) {
+          const metadata = { ...prior.metadata };
+          if (reading.metadata?.accountEmail === void 0) delete metadata.accountEmail;
+          else metadata.accountEmail = reading.metadata.accountEmail;
+          quota[provider] = { ...prior, metadata };
           retained = true;
         }
       }
@@ -42983,7 +42996,7 @@ ${error.message || ""}`;
         node.reportedMemberState = opts.reportedMemberState;
       }
       if (opts.nodeFacts) {
-        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts);
+        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts, Date.now());
       }
       if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
       if (Object.prototype.hasOwnProperty.call(opts, "capabilities")) {
@@ -46983,7 +46996,7 @@ ${error.message || ""}`;
             }
             const sameDaemon2 = entry.runtime?.daemonId && runtime2.daemonId && daemonIdsEquivalent4(entry.runtime.daemonId, runtime2.daemonId);
             if (sameDaemon2 && runtime2.nodeFacts) {
-              runtime2.nodeFacts = selectReportedQuotaFacts(entry.runtime?.nodeFacts, runtime2.nodeFacts);
+              runtime2.nodeFacts = selectReportedQuotaFacts(entry.runtime?.nodeFacts, runtime2.nodeFacts, this.now());
             }
             const signature = computeMeshNodeRuntimeSignature(runtime2);
             const changed = signature !== entry.runtimeSignature;
@@ -66382,7 +66395,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       if (!isLocalSource) {
         const remoteFacts = normalizeMeshNodeFacts(git7.reporterNodeFacts);
-        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts);
+        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
       } else {
         try {
           let localNickname = null;
@@ -66413,7 +66426,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!node || typeof node !== "object" || Array.isArray(node)) return null;
       const normalized = normalizeMeshNodeFacts(rawFacts);
       if (!normalized) return null;
-      const facts = selectReportedQuotaFacts(node.nodeFacts, normalized);
+      const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
       const platform10 = readStringValue(facts.platform) ?? null;
       const arch2 = readStringValue(facts.arch) ?? null;
       const nickname = readStringValue(facts.machineNickname) ?? null;

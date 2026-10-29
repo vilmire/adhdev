@@ -194,7 +194,7 @@ export function recordInlineMeshDirectGitTruth(
     // envelope predates the bundle.
     if (!isLocalSource) {
         const remoteFacts = normalizeMeshNodeFacts((git as { reporterNodeFacts?: unknown }).reporterNodeFacts);
-        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts);
+        if (remoteFacts) node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, remoteFacts, Date.now());
     } else {
         try {
             // machineNickname: without it the LOCAL machine's facts bundle was
@@ -246,7 +246,7 @@ export function recordReportedNodeFacts(node: any, rawFacts: unknown): {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return null;
     const normalized = normalizeMeshNodeFacts(rawFacts);
     if (!normalized) return null;
-    const facts = selectReportedQuotaFacts(node.nodeFacts, normalized);
+    const facts = selectReportedQuotaFacts(node.nodeFacts, normalized, Date.now());
     const platform = readStringValue(facts.platform) ?? null;
     const arch = readStringValue(facts.arch) ?? null;
     const nickname = readStringValue(facts.machineNickname) ?? null;

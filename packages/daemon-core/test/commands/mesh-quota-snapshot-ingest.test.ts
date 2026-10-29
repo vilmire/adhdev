@@ -6,7 +6,9 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { DaemonCommandRouter } from '../../src/commands/router.js';
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender.js';
 import { saveMeshConfig } from '../../src/config/mesh-config-store.js';
-import { getMesh } from '../../src/config/mesh-config.js';
+import { fetchCodexQuota } from '../../src/quota/fetchers/codex.js';
+import type { QuotaChildProcess } from '../../src/quota/fetchers/deps.js';
+import { getMesh, updateNode } from '../../src/config/mesh-config.js';
 import { MeshNodeGitStateStore } from '../../src/mesh/mesh-node-git-state.js';
 import { MeshNodeStatePusher } from '../../src/mesh/mesh-node-state-pusher.js';
 import { MeshNodeGitRefresher } from '../../src/mesh/mesh-node-git-refresher.js';
@@ -177,10 +179,138 @@ describe('member quota ingestion → two mesh projections and persisted routing'
         const measured = quota(100);
         await pushToBoth(measured);
         await expectBoth(measured);
-        const delayedFailure = { ...quota(null, NOW - 60_000), status: 'error', session: null, weekly: null, error: 'old network failure',
+        const delayedFailure = { ...quota(null, NOW - 60_000), status: 'error', session: null, error: 'old network failure',
             metadata: { ...quota(null, NOW - 60_000).metadata, failureKind: 'network' } };
         await pushToBoth(delayedFailure, NOW + 1);
         await expectBoth(measured);
+    });
+
+    it.each(['different', 'missing', 'unknown'] as const)('keeps delayed failures visible with %s reset-cycle evidence', async cycle => {
+        const measured = quota(100);
+        await pushToBoth(measured);
+        await expectBoth(measured);
+        const failure = { ...quota(0, NOW - 60_000), status: 'error', error: 'synthetic delayed failure' };
+        if (cycle === 'different') failure.session!.resetsAt = NOW + 2 * 3_600_000;
+        if (cycle === 'missing') { failure.session = null; failure.weekly = null; }
+        if (cycle === 'unknown') failure.session!.resetsAt = null;
+        await pushToBoth(failure, NOW + 1);
+        await expectBoth(failure);
+    });
+
+    it.each(['missing', 'future', 'noncausal', 'zero'] as const)('keeps same-cycle errors visible with %s attempt clocks', async clock => {
+        const measured = quota(100);
+        await pushToBoth(measured);
+        await expectBoth(measured);
+        const failure = { ...quota(0, NOW - 60_000), status: 'error', error: 'synthetic clock uncertainty' };
+        if (clock === 'missing') delete failure.metadata!.fetchedAt;
+        if (clock === 'future') failure.metadata!.fetchedAt = NOW + 60_000;
+        if (clock === 'noncausal') failure.metadata!.fetchedAt = NOW - 120_000;
+        if (clock === 'zero') failure.metadata!.fetchedAt = 0;
+        await pushToBoth(failure, NOW + 1);
+        await expectBoth(failure);
+    });
+
+    it.each(['unknown-capture', 'future-capture', 'noncausal-attempt'] as const)(
+        'accepts incoming measurements with %s instead of asserting an ordering', async clock => {
+            const measured = quota(100);
+            await pushToBoth(measured);
+            await expectBoth(measured);
+            const incoming = quota(0, clock === 'unknown-capture' ? 0 : NOW - 60_000);
+            if (clock === 'future-capture') incoming.updatedAt = NOW + 1;
+            if (clock === 'noncausal-attempt') incoming.metadata!.fetchedAt = incoming.updatedAt - 1;
+            await pushToBoth(incoming);
+            await expectBoth(incoming);
+        });
+
+    it.each(['future', 'beyond-reset', 'noncausal', 'unknown-attempt', 'before-window'] as const)(
+        'replaces a prior snapshot with an untrusted %s clock through held, config and probe ingress', async clock => {
+            const poisoned = quota(100);
+            if (clock === 'future') {
+                poisoned.updatedAt = NOW + 365 * 86_400_000;
+                poisoned.metadata!.fetchedAt = poisoned.updatedAt;
+            }
+            if (clock === 'beyond-reset') poisoned.session!.resetsAt = NOW - 2_000;
+            if (clock === 'noncausal') poisoned.metadata!.fetchedAt = poisoned.updatedAt - 1;
+            if (clock === 'unknown-attempt') delete poisoned.metadata!.fetchedAt;
+            if (clock === 'before-window') poisoned.updatedAt = NOW - 8 * 86_400_000;
+            await pushToBoth(poisoned);
+            await expectBoth(poisoned);
+            // A current 0% or current error must replace poisoned ordering.
+            for (const status of ['ok', 'error']) {
+                const current = { ...quota(0, clock === 'before-window' ? poisoned.updatedAt - 1 : NOW - 60_000), status,
+                    error: status === 'error' ? 'current failure' : null };
+                current.metadata!.fetchedAt = NOW;
+                if (clock === 'beyond-reset') current.session = { ...poisoned.session!, usedPercent: 0 };
+                await pushToBoth(poisoned);
+                await expectBoth(poisoned);
+                // Exercise config selection directly as well as the router path.
+                for (const meshId of MESHES) {
+                    const node = getMesh(meshId)!.nodes[0];
+                    updateNode(meshId, node.id, { nodeFacts: facts(current) });
+                    expect(getMesh(meshId)!.nodes[0].nodeFacts?.quota?.[PROVIDER]).toMatchObject(current);
+                    const reporter = recordInlineMeshDirectGitTruth({ ...node, nodeFacts: facts(poisoned) }, {
+                        isGitRepo: true, branch: 'main', reporterNodeFacts: facts(current),
+                        lastCheckedAt: NOW + 365 * 86_400_000, // sender/probe stamp is not the receiver clock
+                    }, 'selected_coordinator_mesh_p2p_git');
+                    expect(reporter.nodeFacts?.quota?.[PROVIDER]).toMatchObject(current);
+                }
+                await pushToBoth(current);
+                await expectBoth(current);
+            }
+        });
+
+    it('honors the actual Codex email opt-out while retaining a delayed same-cycle measurement', async () => {
+        const measured = quota(100, NOW - 1_000, 'codex-cli');
+        measured.metadata!.accountEmail = 'synthetic@example.invalid';
+        await pushToBoth(measured);
+        await expectBoth(measured);
+        const requests: string[] = [];
+        let receive: (chunk: string) => void = () => {};
+        const child = {
+            stdin: { write(chunk: string) {
+                const request = JSON.parse(chunk);
+                requests.push(request.method);
+                queueMicrotask(() => receive(JSON.stringify({ jsonrpc: '2.0', id: request.id, result:
+                    request.method === 'initialize' ? {} : { rateLimits: {
+                        primary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: (NOW + 86_400_000) / 1000 },
+                        secondary: null,
+                    } },
+                }) + '\n'));
+            }, end() {} },
+            stdout: { on(_event: string, listener: typeof receive) { receive = listener; } },
+            stderr: { on() {} }, on() {}, kill() {},
+        } as unknown as QuotaChildProcess;
+        const optedOut = await fetchCodexQuota({
+            spawn: () => child, now: () => NOW - 60_000, env: {} as NodeJS.ProcessEnv,
+            showAccountEmail: () => false,
+        });
+        expect(requests).not.toContain('account/read');
+        expect(optedOut.status).toBe('ok');
+        expect(optedOut.metadata).not.toHaveProperty('accountEmail');
+        const incoming = { ...quota(null, NOW - 60_000, 'codex-cli'), ...optedOut,
+            metadata: { ...optedOut.metadata, fetchedAt: NOW - 60_000, accountLineage: ACCOUNT } };
+        const { accountEmail: _email, ...metadata } = measured.metadata!;
+        const expected = { ...measured, metadata };
+        await pushToBoth(incoming);
+        await expectBoth(expected);
+        await vi.waitFor(() => {
+            for (const [i, meshId] of MESHES.entries()) {
+                for (const nodeFacts of [store.get(meshId, `node_quota_${i}`)?.runtime?.nodeFacts,
+                    getMesh(meshId)!.nodes[0].nodeFacts, projection(meshId).nodeFacts]) {
+                    expect(JSON.stringify(nodeFacts)).not.toContain('synthetic@example.invalid');
+                    expect(nodeFacts?.quota?.['codex-cli']?.metadata).not.toHaveProperty('accountEmail');
+                }
+            }
+        });
+        for (const meshId of MESHES) {
+            const node = getMesh(meshId)!.nodes[0];
+            const reporter = recordInlineMeshDirectGitTruth({ ...node, nodeFacts: facts(measured) }, {
+                isGitRepo: true, reporterNodeFacts: facts(incoming),
+            }, 'selected_coordinator_mesh_p2p_git');
+            expect(reporter.nodeFacts?.quota?.['codex-cli']).toEqual(expected);
+            persistNodeReporterPlatform('local_config', getMesh(meshId)!, node.id, reporter);
+        }
+        await expectBoth(expected);
     });
 
     it('accepts a current failure attempt even when its last-good data clock is older', async () => {

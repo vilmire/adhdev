@@ -454,7 +454,7 @@ function updateNodeUnlocked(
     if (opts.nodeFacts) {
         // Preserve opaque facts, but a delayed same-account report must not
         // roll back quota measured later while this config write was queued.
-        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts);
+        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts, Date.now());
     }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (Object.prototype.hasOwnProperty.call(opts, 'capabilities')) {
