@@ -14,6 +14,8 @@ export interface CompactDecision {
     allowFreeText: boolean;
     urgency: 'normal' | 'blocking';
     dueAt?: string;
+    /** Deadline relative to when the host listed it ("in 2h 58m" / "overdue by 15m"). */
+    dueIn?: string;
     onDue: 'remind' | 'apply_recommended';
     source: 'coordinator' | 'worker' | 'daemon';
     missionId: string;
@@ -65,6 +67,7 @@ function sanitizeRow(raw: unknown): CompactDecision | null {
     });
     const recommended = text(r.recommended, 8);
     const dueAt = text(r.dueAt, 40);
+    const dueIn = text(r.dueIn, 40);
     const remindedAt = text(r.remindedAt, 40);
     const source = r.source === 'worker' || r.source === 'daemon' ? r.source : 'coordinator';
     return {
@@ -73,6 +76,7 @@ function sanitizeRow(raw: unknown): CompactDecision | null {
         allowFreeText: r.allowFreeText !== false,
         urgency: r.urgency === 'blocking' ? 'blocking' : 'normal',
         ...(dueAt ? { dueAt } : {}),
+        ...(dueIn ? { dueIn } : {}),
         onDue: r.onDue === 'apply_recommended' ? 'apply_recommended' : 'remind',
         source,
         missionId: text(r.missionId, 100),

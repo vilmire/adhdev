@@ -38,7 +38,22 @@ export const DECISION_ANSWERS_MAX = 10;
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECENT_ROWS_MAX = 10;
 
+/**
+ * The deadline relative to now ("in 2h 58m" / "overdue by 15m"): the assistant has no
+ * reliable clock, and reading a UTC `dueAt` against the owner's local time it got
+ * "already past" wrong in standalone QA (2026-10-29).
+ */
+export function describeDueIn(dueAt: string | undefined, nowMs: number = Date.now()): string | undefined {
+    const t = dueAt ? Date.parse(dueAt) : NaN;
+    if (!Number.isFinite(t)) return undefined;
+    const mins = Math.round((t - nowMs) / 60_000);
+    const abs = Math.abs(mins);
+    const span = abs < 60 ? `${abs}m` : abs < 48 * 60 ? `${Math.floor(abs / 60)}h ${abs % 60}m` : `${Math.round(abs / 1440)}d`;
+    return mins < 0 ? `overdue by ${span}` : `in ${span}`;
+}
+
 export function compactDecision(e: OwnerDecisionEntry): CompactDecision {
+    const dueIn = describeDueIn(e.dueAt);
     return {
         itemId: e.itemId,
         question: e.question,
@@ -47,6 +62,7 @@ export function compactDecision(e: OwnerDecisionEntry): CompactDecision {
         allowFreeText: e.allowFreeText,
         urgency: e.urgency,
         ...(e.dueAt ? { dueAt: e.dueAt } : {}),
+        ...(dueIn ? { dueIn } : {}),
         onDue: e.onDue,
         source: e.source,
         missionId: e.missionId,
