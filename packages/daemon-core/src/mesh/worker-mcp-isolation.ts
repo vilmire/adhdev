@@ -423,6 +423,7 @@ interface WorkerMcpConfigOverrideDeliveryInput {
     envVarsTemplate: string;
     enabledTemplate: string;
     shellEnvExcludeTemplate?: string;
+    approvalModeTemplate?: string;
 }
 
 export interface WorkerMcpConfigOverrideDelivery extends WorkerMcpConfigOverrideDeliveryInput {

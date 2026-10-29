@@ -44,6 +44,7 @@ const codexIsolation = {
     envVarsTemplate: 'mcp_servers.{serverName}.env_vars={env_vars_json}',
     enabledTemplate: 'mcp_servers.{serverName}.enabled=true',
     shellEnvExcludeTemplate: 'shell_environment_policy.exclude={env_vars_json}',
+    approvalModeTemplate: 'mcp_servers.{serverName}.default_tools_approval_mode="approve"',
   },
   args: [
     {
@@ -360,6 +361,13 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(existsSync(join(workerHome!, 'config.toml'))).toBe(false)
   })
 
+  it('★the SHIPPED codex provider declares approvalModeTemplate (read-only workers must not park on the MCP tool prompt)', () => {
+    const manifest = join(__dirname, '../../../../../adhdev-providers/cli/codex-cli/provider.v1.json')
+    if (!existsSync(manifest)) return // OSS checkout without the providers submodule
+    const delivery = JSON.parse(readFileSync(manifest, 'utf-8')).meshCoordinator.delegatedWorkerIsolation.workerMcpDelivery
+    expect(delivery.approvalModeTemplate).toBe('mcp_servers.{serverName}.default_tools_approval_mode="approve"')
+  })
+
   it('delivers Codex worker MCP via config overrides while keeping the bind out of argv', () => {
     const workspace = mkdtempSync(join(tmpdir(), 'adhdev-gateon-codex-'))
     __tmpDirsToClean.push(workspace)
@@ -393,6 +401,15 @@ describe('worker-MCP gate ON ⇒ provider-specific worker delivery is active', (
     expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.args')!)).toContain('--worker')
     expect(JSON.parse(overrides.get('mcp_servers.adhdev-worker.env_vars')!)).toEqual(['ADHDEV_WORKER_SESSION_BIND'])
     expect(overrides.get('mcp_servers.adhdev-worker.enabled')).toBe('true')
+    // ★2026-10-29 (mission fea90234): codex asks "Allow the adhdev-worker MCP server to run
+    // tool …?" for every worker tool call under a read-only sandbox launch and the session
+    // parked as `generating` forever. `default_tools_approval_mode="approve"` (verified on
+    // codex 0.162.1: valid values auto|prompt|writes|approve; completes a tool call under
+    // `-s read-only`) silences it for the worker server ONLY. No sandbox/approval-policy flag
+    // may be added here: the read-only sandbox itself must stay intact.
+    expect(overrides.get('mcp_servers.adhdev-worker.default_tools_approval_mode')).toBe('"approve"')
+    expect(result.cliArgs).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+    expect(result.cliArgs).not.toContain('-s')
     expect(JSON.parse(overrides.get('shell_environment_policy.exclude')!)).toEqual(['ADHDEV_WORKER_SESSION_BIND'])
     expect(result.env.ADHDEV_WORKER_SESSION_BIND).toMatch(/^wsb_/)
     expect(result.cliArgs.join(' ')).not.toContain(result.env.ADHDEV_WORKER_SESSION_BIND)

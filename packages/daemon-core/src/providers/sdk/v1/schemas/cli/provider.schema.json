@@ -1000,6 +1000,10 @@
                 "shellEnvExcludeTemplate": {
                   "type": "string",
                   "minLength": 1
+                },
+                "approvalModeTemplate": {
+                  "type": "string",
+                  "minLength": 1
                 }
               }
             }

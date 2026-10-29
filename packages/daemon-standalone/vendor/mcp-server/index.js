@@ -102263,6 +102263,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
                         shellEnvExcludeTemplate: {
                           type: "string",
                           minLength: 1
+                        },
+                        approvalModeTemplate: {
+                          type: "string",
+                          minLength: 1
                         }
                       }
                     }
@@ -158181,6 +158185,10 @@ ${marker2}`,
           if (shellEnvExcludeTemplate !== void 0 && (typeof shellEnvExcludeTemplate !== "string" || !shellEnvExcludeTemplate.trim())) {
             errors.push(`${prefix}.shellEnvExcludeTemplate must be a non-empty string when provided`);
           }
+          const approvalModeTemplate = item.approvalModeTemplate;
+          if (approvalModeTemplate !== void 0 && (typeof approvalModeTemplate !== "string" || !approvalModeTemplate.trim())) {
+            errors.push(`${prefix}.approvalModeTemplate must be a non-empty string when provided`);
+          }
         }
       }
     }
@@ -205077,7 +205085,8 @@ ${buttons.join("\n")}`;
         delivery.argsTemplate,
         delivery.envVarsTemplate,
         delivery.enabledTemplate,
-        delivery.shellEnvExcludeTemplate
+        delivery.shellEnvExcludeTemplate,
+        delivery.approvalModeTemplate
       ];
       const renderedArgs = [];
       for (const template of templates) {

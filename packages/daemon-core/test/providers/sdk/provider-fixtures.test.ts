@@ -176,6 +176,26 @@ describe('provider fixtures — codex-cli', () => {
   const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf-8')) as Record<string, unknown>;
   const handlers = buildHandlersFromManifest(manifest);
 
+  // ─── MCP tool approval under a read-only sandbox (mission fea90234) ─────
+
+  const mcpToolApprovalPath = fixturePath('cli', 'codex-cli', 'mcp-tool-approval-readonly-2026-10-29');
+
+  it.skipIf(!ptyExists(mcpToolApprovalPath))(
+    'mcp-tool-approval-readonly: "Allow the … MCP server to run tool" is waiting_approval with its 4 buttons',
+    () => {
+      const result = replayFixture(mcpToolApprovalPath, handlers, { spawnAt: 1000 });
+      if (!result.overallPasses) {
+        throw new Error(`Fixture replay failed:\n${formatReplayReport(result)}`);
+      }
+      expect(result.perAnchor[0].actual.detectStatus).toBe('waiting_approval');
+      const buttons = result.perAnchor[0].actual.parseApproval?.buttons ?? [];
+      expect(buttons).toHaveLength(4);
+      expect(buttons.map((b) => b.split(/\s{2,}/)[0])).toEqual([
+        'Allow', 'Allow for this session', 'Always allow', 'Cancel',
+      ]);
+    },
+  );
+
   // ─── squash-approval ────────────────────────────────────────────────────
 
   const squashApprovalPath = fixturePath('cli', 'codex-cli', 'squash-approval');

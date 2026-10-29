@@ -594,6 +594,11 @@ function validateMeshCoordinatorDelegatedWorkerIsolation(
         && (typeof shellEnvExcludeTemplate !== 'string' || !shellEnvExcludeTemplate.trim())) {
         errors.push(`${prefix}.shellEnvExcludeTemplate must be a non-empty string when provided`)
       }
+      const approvalModeTemplate = item.approvalModeTemplate
+      if (approvalModeTemplate !== undefined
+        && (typeof approvalModeTemplate !== 'string' || !approvalModeTemplate.trim())) {
+        errors.push(`${prefix}.approvalModeTemplate must be a non-empty string when provided`)
+      }
     }
   }
 }

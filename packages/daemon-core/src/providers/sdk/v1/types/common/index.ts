@@ -216,6 +216,7 @@ export interface MeshCoordinatorWorkerMcpDeliveryDef {
   envVarsTemplate: string;
   enabledTemplate: string;
   shellEnvExcludeTemplate?: string;
+  approvalModeTemplate?: string;
 }
 
 export type MeshCoordinatorDelegatedWorkerArgRuleDef =

@@ -117,6 +117,15 @@ export interface MeshCoordinatorWorkerMcpDelivery {
   enabledTemplate: string;
   /** Optional config override that removes the bind secret from shell children. */
   shellEnvExcludeTemplate?: string;
+  /**
+   * Optional config override that stops the CLI from asking its own per-call
+   * approval for the worker server's tools (codex: `default_tools_approval_mode="approve"`).
+   * Without it a read-only sandbox launch parks on the CLI's "Allow the … MCP server to run tool"
+   * prompt for every `report_completion`/`driver_invoke`. Owner principle: usefulness first —
+   * the worker server is ADHDev's own, token-scoped surface; the trade-off is that the CLI's
+   * per-call consent is skipped for it only (other MCP servers keep prompting).
+   */
+  approvalModeTemplate?: string;
 }
 
 export type MeshCoordinatorDelegatedWorkerArgRule =
