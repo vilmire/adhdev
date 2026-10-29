@@ -46,7 +46,7 @@ import { projectSlugs } from './assistant-projects.js';
 import { setAssistantMemberMeshSource } from './member-meshes.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
-import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
+import { liveAssistantQuotaPort, resolveQuotaPoolModel, type AssistantQuotaPort } from './assistant-quota.js';
 import { buildPreviousSessionNote, type PreviousSessionMessage } from './assistant-relay-format.js';
 import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
 import { DecisionNudge, DecisionWatch, decisionSourcesFromPorts, formatDecisionDigestSection } from './decision-nudge.js';
@@ -323,7 +323,13 @@ export function wireAssistantRuntime(
     };
     const reviewQuotaRemainingPct = (now: number): number | null => {
         const cliType = registry.read()?.cliType;
-        return cliType ? quota.remainingPct(cliType, now) : null;
+        if (!cliType) return null;
+        // Pool-aware quota (antigravity): judge by the pool of the model the
+        // live session actually runs; unknown model → worst-of-all (fail closed).
+        const sid = registry.read()?.sessionId;
+        let model: string | undefined;
+        try { model = sid ? resolveQuotaPoolModel(instanceOf(components, sid)?.getState?.()) : undefined; } catch { /* unknown */ }
+        return quota.remainingPct(cliType, now, model);
     };
     review = new AssistantReviewScheduler({
         liveSessionId,

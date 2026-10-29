@@ -49,6 +49,13 @@ export interface ProviderMeshCoordinatorConfig {
    */
   launchArgs?: string[];
   /**
+   * Pre-approve ADHDev's own MCP servers (worker / assistant / coordinator) at the
+   * CLI's per-TOOL permission layer. `--approve-mcps` only approves loading a server;
+   * cursor-agent still asks "Run this MCP tool?" for every call unless
+   * `Mcp(<server>:*)` is in its permissions allow list. Third-party servers keep prompting.
+   */
+  mcpToolAllow?: { format: 'cursor_cli_permissions' };
+  /**
    * Tools the coordinator session must not have, enforced by the CLI's own
    * permission system rather than by prompt text: the coordinator routes work to
    * mesh workers instead of implementing it with local sub-agents, and must not

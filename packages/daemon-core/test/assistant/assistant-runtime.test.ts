@@ -130,6 +130,20 @@ describe('wireAssistantRuntime', () => {
         runtime = null;
     });
 
+    it('passes the live session model (pool-resolvable only) to the quota port', () => {
+        const seen: Array<string | null | undefined> = [];
+        const quota = { remainingPct: (_c: string, _n: number, model?: string | null) => (seen.push(model), 42) };
+        runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, tickMs: 3_600_000, quota });
+        registry.bindSession({ sessionId: 'asst', cliType: 'antigravity-cli', workspace: dir, at: 1 });
+        instances.asst = { getState: () => ({ launchRecord: { model: { requested: 'Claude Opus 5.5 (High)' } } }) };
+        runtime.reviewQuotaRemainingPct(1);
+        instances.asst = { getState: () => ({ controlValues: { model: 'mystery' } }) };
+        runtime.reviewQuotaRemainingPct(1);
+        expect(seen).toEqual(['Claude Opus 5.5 (High)', undefined]);
+        runtime.dispose();
+        runtime = null;
+    });
+
     it('the relay tick queues the idle review turn into the live assistant, records it and bumps review_turns', async () => {
         const t0 = Date.parse('2026-10-08T09:00:00Z');
         vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });

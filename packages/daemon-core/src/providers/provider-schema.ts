@@ -430,6 +430,12 @@ function validateMeshCoordinator(raw: unknown, errors: string[]): void {
   }
 
   validateMeshCoordinatorMcpConfig(meshCoordinator.mcpConfig, errors)
+  if (meshCoordinator.mcpToolAllow !== undefined) {
+    const allow = meshCoordinator.mcpToolAllow as Record<string, unknown> | null
+    if (!allow || typeof allow !== 'object' || Array.isArray(allow) || allow.format !== 'cursor_cli_permissions') {
+      errors.push('meshCoordinator.mcpToolAllow.format must be cursor_cli_permissions')
+    }
+  }
   validateMeshCoordinatorDelegatedWorkerIsolation(
     meshCoordinator.delegatedWorkerIsolation,
     errors,

@@ -276,3 +276,34 @@ describe('collision fallback: a workspace layer already declares adhdev-mesh', (
     off()
   })
 })
+
+describe('cursor worker: ADHDev MCP tools pre-approved at the per-tool layer', () => {
+  it('writes Mcp(<server>:*) into the private HOME cli-config.json only when the provider declares mcpToolAllow', () => {
+    const run = (mcpToolAllow?: { format: 'cursor_cli_permissions' }) => {
+      const ws = tmp('adhdev-allow-ws-')
+      const iso = resolveWorkerMcpIsolation({
+        providerType: 'cursor-cli',
+        workspace: ws,
+        sessionKey: `s_${Math.random()}`,
+        realHome: fakeRealHome(),
+        baseDir: tmp('adhdev-allow-base-'),
+        mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.cursor/mcp.json', serverName: 'adhdev-mesh' },
+        ...(mcpToolAllow ? { mcpToolAllow } : {}),
+        server: SERVER,
+        bindContext: { meshId: 'mesh_x', sessionId: `s_${Math.random()}` },
+      }, ON)!
+      return { iso, ws }
+    }
+    const declared = run({ format: 'cursor_cli_permissions' })
+    const cfgDir = join(declared.iso.configPath ? join(declared.iso.configPath, '..') : '')
+    const permFile = join(cfgDir, declared.iso.configShared ? 'cli.json' : 'cli-config.json')
+    expect(JSON.parse(readFileSync(permFile, 'utf8')).permissions.allow).toContain('Mcp(adhdev-mesh:*)')
+    // The worker never writes into the project workspace's own cursor permissions.
+    expect(existsSync(join(declared.ws, '.cursor', 'cli-config.json'))).toBe(false)
+
+    const plain = run()
+    const plainDir = join(plain.iso.configPath!, '..')
+    expect(existsSync(join(plainDir, 'cli-config.json'))).toBe(false)
+    expect(existsSync(join(plainDir, 'cli.json'))).toBe(false)
+  })
+})

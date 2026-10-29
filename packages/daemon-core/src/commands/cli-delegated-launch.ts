@@ -59,6 +59,8 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
         path?: string;
         serverName?: string;
     };
+    /** Provider-declared per-tool MCP pre-approval for ADHDev's own servers (cursor `Mcp(server:*)`). */
+    mcpToolAllow?: { format: 'cursor_cli_permissions' };
     /** Stable per-launch key so two workers never share a private HOME. */
     sessionKey?: string;
     /** Provider spec path; worker trust declarations are loaded in this module. */
@@ -331,6 +333,7 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         workspace: input.workspace,
         sessionKey: input.sessionKey || input.workspace,
         mcpConfig: input.mcpConfig,
+        mcpToolAllow: input.mcpToolAllow,
         forcedConfigFile,
         workerMcpDelivery: input.isolation?.workerMcpDelivery,
         realHome: input.realHome,

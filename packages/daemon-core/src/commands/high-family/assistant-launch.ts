@@ -49,6 +49,7 @@ import { ASSISTANT_TOOL_SOURCES, readAssistantSessionId } from './assistant-stor
 import { ASSISTANT_PROJECTS_SOURCES } from './assistant.js';
 import { resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
 import { materializePrivateHome } from '../../mesh/worker-private-home.js';
+import { ensureCursorMcpToolAllow, isMcpToolAllowDeclared } from '../../mesh/mcp-tool-allow.js';
 import {
     ensurePrivateAssistantDirectoryChain,
     ensurePrivateAssistantWorkspace,
@@ -209,6 +210,9 @@ const launchAssistantOnce = async (
                 workspace,
                 privateHomeDir: mcp.privateHome?.dir,
             });
+            if (isMcpToolAllowDeclared(provider?.meshCoordinator?.mcpToolAllow)) {
+                ensureCursorMcpToolAllow({ mcpConfigPath: mcp.configWrite.path, workspace, serverNames: [mcp.configWrite.serverName] });
+            }
         }
     } catch (e) {
         return fail('assistant_config_write_failed', `could not prepare the assistant MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });

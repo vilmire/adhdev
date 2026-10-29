@@ -80,6 +80,7 @@ import {
     type WorkerSessionBinding,
     type WorkerSessionBindStatus,
 } from '../runtime-defaults.js';
+import { ensureCursorMcpToolAllow, isMcpToolAllowDeclared } from './mcp-tool-allow.js';
 import { buildInlineWorkerMcpConfig, resolvePrivateWorkerMcpConfigPath, resolveWorkerMcpPlacement, writeWorkerMcpConfig, WORKER_SESSION_BIND_ENV, type WorkerMcpServerCommand } from './worker-mcp-config.js';
 import { prepareWorkerPrivateHome } from './worker-private-home.js';
 import { findWorkerPrivateHomeSpec } from './worker-home-specs.js';
@@ -387,6 +388,8 @@ interface WorkerMcpIsolationInput {
     };
     /** Provider-declared non-file delivery for the worker MCP server. */
     workerMcpDelivery?: WorkerMcpConfigOverrideDeliveryInput;
+    /** Provider-declared per-tool pre-approval of the worker server (cursor `Mcp(server:*)`). */
+    mcpToolAllow?: { format: 'cursor_cli_permissions' };
     /**
      * True when this launch FORCES the CLI to read one explicit config file
      * (claude's `empty_mcp_config` rule: `--mcp-config <file>` +
@@ -677,6 +680,11 @@ export function resolveWorkerMcpIsolation(
                 ...(input.bindContext?.sessionId ? { teardownSessionId: input.bindContext.sessionId } : {}),
             });
             if (placement.kind === 'shared_merge') result.configShared = true;
+            if (input.server && isMcpToolAllowDeclared(input.mcpToolAllow) && result.configPath) {
+                // --approve-mcps only loads the server; without this cursor asks "Run this MCP tool?" on every report_completion.
+                const allowFile = ensureCursorMcpToolAllow({ mcpConfigPath: result.configPath, workspace: input.workspace, serverNames: [serverName] });
+                if (allowFile) notes.push(`worker MCP tools pre-approved in ${allowFile}`);
+            }
         }
         if (input.server) result.configHasServer = true;
         if (pendingBind) result.bind = pendingBind.bind;

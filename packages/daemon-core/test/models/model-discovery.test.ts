@@ -180,6 +180,49 @@ describe('manifest fallback — a failed discovery NEVER empties a picker', () =
         return child;
     };
 
+    it('stdout delivered AFTER the exit event is still captured (cursor-agent 0-model race)', async () => {
+        // A busy daemon processes 'exit' before the pipe's last 'data' chunks.
+        // Settling on 'exit' saw an empty stdout with code 0 → "no models parsed"
+        // while the same command printed 270 models in a shell.
+        const out = 'Available models\n\nauto - Auto (default)\ngpt-5.3-codex - Codex 5.3\n';
+        const racing = () => {
+            const handlers: Record<string, Function[]> = {};
+            let dataCb: Function = () => {};
+            const child: any = {
+                stdout: { on: (_e: string, cb: Function) => { dataCb = cb; } },
+                stderr: { on: () => {} },
+                on: (e: string, cb: Function) => { (handlers[e] ||= []).push(cb); },
+                kill: () => {},
+            };
+            setImmediate(() => {
+                handlers.exit?.forEach((cb) => cb(0));          // exit first…
+                setTimeout(() => {                               // …data after
+                    dataCb(Buffer.from(out));
+                    handlers.close?.forEach((cb) => cb(0));
+                }, 20);
+            });
+            return child;
+        };
+        const snapshot = await discoverProviderModels(
+            'cursor-cli',
+            { kind: 'command', argv: ['models'], parse: { format: 'lines', linePattern: '^(?<slug>[A-Za-z0-9][\\w./-]*)\\s+-\\s+(?<label>.+?)\\s*$' } } as ModelDiscoverySpec,
+            '/usr/local/bin/cursor-agent',
+            { spawn: racing as any },
+        );
+        expect(snapshot.status).toBe('ok');
+        expect(snapshot.models.map((m) => m.slug ?? (m as any).id)).toContain('auto');
+    });
+
+    it('parse failure logs a redacted output sample', async () => {
+        const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+        await failing({ spawn: fakeChild({ stdout: 'weird banner token ' + 'a'.repeat(40), code: 0 }) });
+        const msg = warn.mock.calls.map((c) => String(c[1])).join('\n');
+        expect(msg).toContain('discovery parse failure');
+        expect(msg).toContain('[REDACTED]');
+        expect(msg).not.toContain('a'.repeat(40));
+        warn.mockRestore();
+    });
+
     it('signed out (non-zero exit) → error snapshot, manifest list stands', async () => {
         const snapshot = await failing({ spawn: fakeChild({ stderr: 'You are not logged in. Run `grok login`.', code: 1 }) });
         expect(snapshot.status).toBe('error');

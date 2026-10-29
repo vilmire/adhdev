@@ -45,6 +45,9 @@ export const MODEL_DISCOVERY_TIMEOUT_MS = 20_000;
  * permanent `parse` failure — so this is deliberately generous, and the parse
  * is not line-oriented.
  */
+/** How long after 'exit' we wait for 'close' (stdio drained) before settling anyway. */
+export const EXIT_DRAIN_GRACE_MS = 300;
+
 export const MODEL_DISCOVERY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /** Injectable side-effect surface, mirroring QuotaFetchDeps. */
@@ -54,6 +57,7 @@ export interface ModelDiscoveryDeps {
         stderr: { on(event: 'data', listener: (chunk: Buffer | string) => void): void };
         on(event: 'error', listener: (err: Error) => void): void;
         on(event: 'exit', listener: (code: number | null) => void): void;
+        on(event: 'close', listener: (code: number | null) => void): void;
         kill(signal?: NodeJS.Signals): void;
     };
     readFile?: (filePath: string) => Promise<string>;
@@ -132,6 +136,15 @@ function failure(
     };
 }
 
+/** Short, secret-scrubbed excerpt of CLI output for diagnostics. */
+export function redactSample(text: string, max = 200): string {
+    return text
+        .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+        .replace(os.homedir(), '~')
+        .replace(/[A-Za-z0-9_\-.]{32,}/g, '[REDACTED]')
+        .slice(0, max);
+}
+
 /** Run a `command` source: spawn the provider's own listing subcommand and parse stdout. */
 async function discoverByCommand(
     provider: string,
@@ -177,7 +190,20 @@ async function discoverByCommand(
             if (stderr.length < 64 * 1024) stderr += chunk.toString();
         });
         child.on('error', (err) => finish({ stdout, stderr, code: null, timedOut: false, spawnError: err }));
-        child.on('exit', (code) => finish({ stdout, stderr, code, timedOut: false }));
+        // ★Settle on 'close', NOT 'exit'. 'exit' fires when the process ends, but
+        // the stdout pipe can still hold unread data; on a busy daemon (boot) the
+        // exit callback ran first and discovery saw an empty/truncated stdout with
+        // code 0 — "0 models, no models parsed" while the same command in a shell
+        // printed 270 (cursor-agent, 2026-10-29). 'close' fires after the stdio
+        // streams ended. 'exit' stays as a bounded fallback for a stream that
+        // never closes (a grandchild inheriting the pipe).
+        let exitCode: number | null | undefined;
+        child.on('close', (code) => finish({ stdout, stderr, code: code ?? exitCode ?? null, timedOut: false }));
+        child.on('exit', (code) => {
+            exitCode = code;
+            const t = setTimeout(() => finish({ stdout, stderr, code, timedOut: false }), EXIT_DRAIN_GRACE_MS);
+            (t as any).unref?.();
+        });
     });
 
     const now = deps.now();
@@ -206,6 +232,7 @@ async function discoverByCommand(
         // alone would cache an empty list as authoritative — exactly the
         // "silently empty picker" this design forbids. Classify from the output.
         const kind = classifyFailure(`${result.stdout}\n${result.stderr}`, result.code);
+        LOG.warn('Models', `[${provider}] discovery parse failure: stdout=${result.stdout.length}B stderr=${result.stderr.length}B sample=${JSON.stringify(redactSample(result.stdout || result.stderr))}`);
         return failure(provider, kind === 'unknown' ? 'parse' : kind, 'no models parsed from output', now);
     }
 

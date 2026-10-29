@@ -724,6 +724,7 @@ function prepareDelegatedLaunch(
             // daemon write a worker config for the 6 providers that
             // declare no isolation rules of their own.
             mcpConfig: provLookup?.meshCoordinator?.mcpConfig,
+            mcpToolAllow: provLookup?.meshCoordinator?.mcpToolAllow,
             // `provLookup` comes from getMeta(), which returns the
             // raw map entry — and `_resolvedSpecPath` is only ever
             // set on resolve()'s deep CLONE, so reading the hidden

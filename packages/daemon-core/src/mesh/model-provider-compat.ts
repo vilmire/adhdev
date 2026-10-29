@@ -30,6 +30,10 @@ const ANTHROPIC_PROVIDER_TYPES: ReadonlySet<string> = new Set([
     'claude-cli',
 ]);
 
+function isAntigravityProvider(providerType: string | undefined | null): boolean {
+    return typeof providerType === 'string' && providerType.trim().toLowerCase() === 'antigravity-cli';
+}
+
 /**
  * True when `providerType` is an Anthropic-backed provider (Claude). Matching is
  * case-insensitive and tolerant of surrounding whitespace. An empty/undefined
@@ -69,5 +73,12 @@ export function isModelCompatibleWithProvider(
 ): boolean {
     if (!isAnthropicModel(model)) return true;      // non-Claude model → no constraint
     if (isAnthropicProvider(providerType)) return true; // Claude model on Claude provider → fine
+    // Antigravity hosts Claude models in their own quota pool, selected by a
+    // concrete `Claude <name> (<effort>)` label or `claude-…` slug (see its
+    // modelLaunchValueMap). Dropping those silently launched the provider
+    // default (a Gemini model) instead of the chosen Claude model. Bare
+    // brain-preset aliases (opus/sonnet/haiku) still carry no agy mapping and
+    // stay stripped.
+    if (isAntigravityProvider(providerType) && /^claude[\s/_-]/i.test(String(model).trim())) return true;
     return false;                                    // Claude model on non-Claude provider → block
 }

@@ -13,11 +13,12 @@
  */
 
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared';
+import { antigravityPoolFromLeadingLabel, quotaWindowsForGateTarget } from '../mesh/mesh-quota-routing.js';
 import { QUOTA_ROUTABLE_MAX_AGE_MS, readQuotaCache } from '../quota/refresh.js';
 
 export interface AssistantQuotaPort {
     /** Remaining % (0–100) of the CLI's tightest current window, or null when unknown. */
-    remainingPct(cliType: string, now: number): number | null;
+    remainingPct(cliType: string, now: number, model?: string | null): number | null;
 }
 
 /**
@@ -30,19 +31,26 @@ export interface AssistantQuotaPort {
  *    `staleAfterMs` old. A window past its reset says nothing about now.
  *  - Session, weekly, monthly and per-pool buckets all count; the lowest
  *    remaining wins.
+ *  - Pool-aware (antigravity-cli): when `model` resolves to one quota pool
+ *    (same helpers as mesh routing) only that pool's session/weekly windows
+ *    count, so a Claude-model assistant is not judged by an exhausted Gemini
+ *    pool. Unresolvable model / no matching bucket keeps worst-of-all.
  */
 export function quotaRemainingPct(
     entry: MeshNodeFactsProviderQuota | null | undefined,
     now: number,
     staleAfterMs: number = QUOTA_ROUTABLE_MAX_AGE_MS,
+    model?: string | null,
 ): number | null {
     if (!entry || typeof entry !== 'object') return null;
     if (entry.metadata?.failureKind === 'quota-exhausted') return 0;
     if (entry.status !== 'ok' && entry.metadata?.lastGoodWindows !== true) return null;
     const updatedAt = Number(entry.updatedAt);
-    const windows: Array<Partial<MeshNodeFactsQuotaWindow> | null | undefined> = [
+    let windows: Array<Partial<MeshNodeFactsQuotaWindow> | null | undefined> = [
         entry.session, entry.weekly, entry.monthly, ...(Array.isArray(entry.buckets) ? entry.buckets : []),
     ];
+    const pooled = model ? quotaWindowsForGateTarget(entry.provider, entry, { model }) : undefined;
+    if (pooled) windows = [pooled.session, pooled.weekly];
     let worstUsed: number | null = null;
     for (const w of windows) {
         if (!w || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent)) continue;
@@ -57,7 +65,28 @@ export function quotaRemainingPct(
 
 /** The daemon's live quota cache (no fetch). */
 export const liveAssistantQuotaPort: AssistantQuotaPort = {
-    remainingPct(cliType, now) {
-        return quotaRemainingPct(readQuotaCache()?.[cliType], now);
+    remainingPct(cliType, now, model) {
+        return quotaRemainingPct(readQuotaCache()?.[cliType], now, undefined, model);
     },
 };
+
+/**
+ * The model name(s) a live assistant session may be running, most specific
+ * first (control value, summary item, launch record, settings). Callers pick
+ * the first one that resolves to an antigravity pool.
+ */
+export function sessionModelCandidates(state: any): string[] {
+    const launch = state?.launchRecord?.model;
+    const items = Array.isArray(state?.summaryMetadata?.items) ? state.summaryMetadata.items : [];
+    const modelItem = items.find((item: any) => item?.id === 'model');
+    const raw = [
+        state?.controlValues?.model, modelItem?.shortValue, modelItem?.value,
+        launch?.requested, launch?.launchValue, launch?.resolvedDefault,
+        state?.settings?.initialModel, state?.settings?.model,
+    ];
+    return raw.filter((v): v is string => typeof v === 'string' && v.trim() !== '').map(v => v.trim());
+}
+
+export function resolveQuotaPoolModel(state: any): string | undefined {
+    return sessionModelCandidates(state).find(m => antigravityPoolFromLeadingLabel(m));
+}

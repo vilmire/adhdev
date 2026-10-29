@@ -52,7 +52,14 @@ describe('model ↔ provider compatibility guard (codex 400 root)', () => {
             expect(isModelCompatibleWithProvider('opus', 'codex-cli')).toBe(false);
             expect(isModelCompatibleWithProvider('claude-opus-4-8', 'codex-cli')).toBe(false);
             expect(isModelCompatibleWithProvider('sonnet', 'antigravity-cli')).toBe(false);
+            expect(isModelCompatibleWithProvider('Claude Opus 5.5 (High)', 'codex-cli')).toBe(false);
             expect(isModelCompatibleWithProvider('haiku', 'hermes-cli')).toBe(false);
+        });
+
+        it('ALLOWS antigravity Claude labels/slugs (own Claude pool), still strips bare aliases', () => {
+            expect(isModelCompatibleWithProvider('Claude Opus 5.5 (High)', 'antigravity-cli')).toBe(true);
+            expect(isModelCompatibleWithProvider('claude-opus-5-5-high', 'antigravity-cli')).toBe(true);
+            expect(isModelCompatibleWithProvider('opus', 'antigravity-cli')).toBe(false);
         });
 
         it('ALLOWS an Anthropic model on claude-cli', () => {

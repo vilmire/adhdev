@@ -172,6 +172,8 @@ export interface MeshCoordinatorDef {
   systemPromptInjection?: MeshCoordinatorSystemPromptInjectionDef;
   /** Coordinator-only extra spawn args (e.g. cursor's --approve-mcps). */
   launchArgs?: string[];
+  /** Pre-approve ADHDev's own MCP servers at the CLI's per-tool permission layer (cursor `Mcp(server:*)`). */
+  mcpToolAllow?: { format: 'cursor_cli_permissions' };
   /** Coordinator-only deny list rendered as `<flag>=<tools joined by ','>` (e.g. claude --disallowedTools). */
   disallowedTools?: { flag: string; tools: string[] };
   delegatedWorkerIsolation?: MeshCoordinatorDelegatedWorkerIsolationDef;

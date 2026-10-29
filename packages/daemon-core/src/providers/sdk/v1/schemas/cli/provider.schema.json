@@ -837,6 +837,21 @@
             "minLength": 1
           }
         },
+        "mcpToolAllow": {
+          "description": "Pre-approve ADHDev's own MCP servers (worker, assistant, coordinator) at the CLI's per-tool permission layer so their tools never park the session on a 'Run this MCP tool?' prompt. The daemon merges `Mcp(<server>:*)` entries into the CLI's permissions file next to the MCP config it writes; third-party MCP servers keep prompting.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "format"
+          ],
+          "properties": {
+            "format": {
+              "enum": [
+                "cursor_cli_permissions"
+              ]
+            }
+          }
+        },
         "disallowedTools": {
           "description": "Tools the coordinator session must not have, enforced by the CLI's own permission system (route, don't implement: no local sub-agents; no destructive git). Rendered at coordinator launch only as ONE argv `<flag>=<tools joined by ','>`, e.g. claude-cli `--disallowedTools=Agent,Bash(git reset --hard*)`. Each entry uses the CLI's own rule syntax and must not contain ',' or a line break. Daemons that predate this field ignore it.",
           "type": "object",
