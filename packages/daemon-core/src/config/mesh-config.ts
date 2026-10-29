@@ -32,6 +32,7 @@ import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfigEntry, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity, peekMeshNodes } from './mesh-config-store.js';
 import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
+import { selectReportedQuotaFacts } from '../quota/reported-snapshot.js';
 
 /**
  * Strictly validate a persisted `assistantRemoteAccess` binding from `meshes.json`.
@@ -451,9 +452,9 @@ function updateNodeUnlocked(
         node.reportedMemberState = opts.reportedMemberState;
     }
     if (opts.nodeFacts) {
-        // Versioned runtime-facts bundle — whole-object replace, OPAQUE (unknown
-        // future fields persist untouched; deploy-lag design §a).
-        node.nodeFacts = opts.nodeFacts;
+        // Preserve opaque facts, but a delayed same-account report must not
+        // roll back quota measured later while this config write was queued.
+        node.nodeFacts = selectReportedQuotaFacts(node.nodeFacts, opts.nodeFacts);
     }
     if (opts.policy) node.policy = { ...node.policy, ...opts.policy };
     if (Object.prototype.hasOwnProperty.call(opts, 'capabilities')) {
