@@ -133,7 +133,11 @@ describe('DaemonCliManager mesh node-scoped agent_command', () => {
       action: 'send_chat',
       message: 'must NOT land on base',
       meshContext: { meshId: 'mesh-1', nodeId: worktreeNodeId },
-    })).rejects.toThrow(/No mesh worker session bound to node/)
+    })).resolves.toMatchObject({
+      success: false,
+      code: 'dispatch_not_started',
+      error: expect.stringMatching(/No mesh worker session bound to node/),
+    })
 
     expect(base.sendMessage).not.toHaveBeenCalled()
   })

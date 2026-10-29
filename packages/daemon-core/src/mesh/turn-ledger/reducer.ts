@@ -634,10 +634,18 @@ function reclaim(draft: Draft, reason: TurnReason): void {
     const refusal = draft.ctx.evidence;
     if (attempt.scope === 'mesh_direct' && attempt.state === 'accepted'
         && attempt.deliveredAt === null && attempt.consumedAt === null
+        && attempt.lastActivityAt === null && attempt.lastLiveness === null
+        && attempt.redriveCount === 0 && attempt.reclaimCount === 0
+        && !attempt.data.writerStop && !attempt.data.report
         && refusal.kind === 'dispatch_failed' && refusal.source === 'dispatch'
+        && refusal.attemptRef?.attemptId === attempt.attemptId
+        && refusal.attemptRef.generation === attempt.generation
+        && sessionIdsEquivalent(refusal.sessionId, attempt.sessionId)
+        && !refusal.workerAbsent
         && refusal.reason === 'rejected_by_worker' && refusal.refusalCode === 'dispatch_not_started') {
         // The addressed host refused before resolving an adapter or submitting
-        // input. There is no writer for this attempt to stop. Transport errors
+        // input. Only the exact unobserved attempt can use this negative proof.
+        // Uncorrelated refusals, conflicting activity/liveness, transport errors
         // and delivered/consumed attempts still require exact quiescence.
         commit(draft, 'failed', 'genuine', 'dispatch_failed');
         return;

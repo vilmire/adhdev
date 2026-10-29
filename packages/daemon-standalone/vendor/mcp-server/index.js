@@ -58721,7 +58721,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return;
       }
       const refusal2 = draft.ctx.evidence;
-      if (attempt.scope === "mesh_direct" && attempt.state === "accepted" && attempt.deliveredAt === null && attempt.consumedAt === null && refusal2.kind === "dispatch_failed" && refusal2.source === "dispatch" && refusal2.reason === "rejected_by_worker" && refusal2.refusalCode === "dispatch_not_started") {
+      if (attempt.scope === "mesh_direct" && attempt.state === "accepted" && attempt.deliveredAt === null && attempt.consumedAt === null && attempt.lastActivityAt === null && attempt.lastLiveness === null && attempt.redriveCount === 0 && attempt.reclaimCount === 0 && !attempt.data.writerStop && !attempt.data.report && refusal2.kind === "dispatch_failed" && refusal2.source === "dispatch" && refusal2.attemptRef?.attemptId === attempt.attemptId && refusal2.attemptRef.generation === attempt.generation && sessionIdsEquivalent(refusal2.sessionId, attempt.sessionId) && !refusal2.workerAbsent && refusal2.reason === "rejected_by_worker" && refusal2.refusalCode === "dispatch_not_started") {
         commit(draft, "failed", "genuine", "dispatch_failed");
         return;
       }
@@ -207691,7 +207691,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (meshScopeNodeId && !args?.targetSessionId) {
         found = host.findMeshNodeAdapter(agentType, meshScopeNodeId, args?.dir);
         if (!found) {
-          throw new Error(`No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`);
+          const error = `No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`;
+          if (action2 === "send_chat") return { success: false, code: "dispatch_not_started", error };
+          throw new Error(error);
         }
       } else {
         found = host.findAdapter(agentType, {

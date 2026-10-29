@@ -56,7 +56,12 @@ export async function agentCommand(host: CliAgentCommandHost, args: AgentCommand
     if (meshScopeNodeId && !args?.targetSessionId) {
         found = host.findMeshNodeAdapter(agentType, meshScopeNodeId, args?.dir);
         if (!found) {
-            throw new Error(`No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`);
+            const error = `No mesh worker session bound to node '${meshScopeNodeId}' for agent '${agentType}' on this daemon; refusing provider-only fuzzy match to avoid cross-node dispatch`;
+            // This branch has neither resolved an adapter nor submitted input.
+            // Preserve that proof for the exact direct attempt's settlement;
+            // a throw is indistinguishable from an uncertain transport failure.
+            if (action === 'send_chat') return { success: false, code: 'dispatch_not_started', error };
+            throw new Error(error);
         }
     } else {
         found = host.findAdapter(agentType, {
