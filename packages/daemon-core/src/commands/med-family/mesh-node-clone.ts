@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { gitChildEnv } from '../../git/git-locale.js';
+import { initializeWorktreeSubmodules } from '../../git/initialize-worktree-submodules.js';
 /**
  * RF-ROUTER MED family — clone a worktree node (local git worktree + submodule
  * sync + bootstrap, or forwarded to the owning daemon) and re-run a node's
@@ -496,11 +497,7 @@ async function appendCloneLedger(
 async function initClonedWorktreeSubmodules(worktreePath: string, sourceNode: any, gitUserName?: string, gitUserEmail?: string): Promise<boolean> {
     let submodulesInitialized = false;
     try {
-        await runGit(
-            { workspace: worktreePath, repoRoot: worktreePath, isGitRepo: true },
-            ['submodule', 'update', '--init', '--recursive'],
-            { timeoutMs: 120000 },
-        );
+        await initializeWorktreeSubmodules(worktreePath);
         const hookInstaller = join(worktreePath, 'scripts/setup-hooks.mjs');
         if (existsSync(hookInstaller)) await promisify(execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 30_000, windowsHide: true });
         submodulesInitialized = true;
