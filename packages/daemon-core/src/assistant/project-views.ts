@@ -1,3 +1,4 @@
+import { sanitizeDecisionFields } from './decision-views.js';
 import { createHash } from 'crypto';
 /**
  * Compact projections for the assistant project verbs (design
@@ -86,6 +87,8 @@ export interface ProjectRow {
     queue?: QueueCounts | null;
     activeMissions?: number | null;
     pendingApprovals?: number;
+    /** Owner decisions waiting on this project (hosted here only; project_status carries the questions). */
+    openDecisions?: { count: number; blocking: number };
 }
 
 export interface MachineSummary {
@@ -797,6 +800,7 @@ export function followerStatusView(
         lastRelayAt: null,
         ...(staleMissions.length > 0 ? { staleMissions } : {}),
         ...(routing ? { routing } : {}),
+        ...sanitizeDecisionFields(raw),
         sessions,
         ...(readText(raw.statusError) ? { statusError: 'mesh_status_view failed' } : {}),
     };

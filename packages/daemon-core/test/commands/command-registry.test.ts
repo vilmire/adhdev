@@ -339,6 +339,8 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_projects', 'assistant_project_status', 'assistant_project_send',
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
     'assistant_artifact_list', 'assistant_artifact_read',
+    // Owner-decision inbox verbs (high-family/assistant-decisions.ts, structured missions §6.3).
+    'assistant_decision_answer', 'assistant_decision_request',
     // Authenticated remote project attach (high-family/remote-project-attach.ts): the
     // owner entry (assistant verb + mesh tool command), the owner settings verb, and the four server-api steps.
     'assistant_project_attach_remote', 'attach_remote_project', 'remote_project_attach_settings',

@@ -36,6 +36,8 @@ export const ASSISTANT_TOOLS = [
     'driver_describe',
     'artifact_list',
     'artifact_read',
+    'decision_answer',
+    'decision_request',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -71,6 +73,10 @@ export const ASSISTANT_VERB = {
     launchDefaultsSet: 'assistant_launch_defaults_set',
     artifactList: 'assistant_artifact_list',
     artifactRead: 'assistant_artifact_read',
+    /** Owner-decision inbox (structured-missions design 2026-10-28 §6.3): the owner's words recorded as answers. */
+    decisionAnswer: 'assistant_decision_answer',
+    /** Register a plain-text question a coordinator put to the owner as a decision item (§5.2). */
+    decisionRequest: 'assistant_decision_request',
     // assistant-side daemon verbs without a tool of the same name
     launch: 'launch_assistant',
     pendingRelays: 'assistant_pending_relays',
@@ -107,6 +113,8 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     launch_defaults_set: ASSISTANT_VERB.launchDefaultsSet,
     artifact_list: ASSISTANT_VERB.artifactList,
     artifact_read: ASSISTANT_VERB.artifactRead,
+    decision_answer: ASSISTANT_VERB.decisionAnswer,
+    decision_request: ASSISTANT_VERB.decisionRequest,
 }
 
 /**
@@ -115,7 +123,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set', 'decision_answer', 'decision_request']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [
@@ -170,13 +178,32 @@ export const ASSISTANT_REMOTE_FOLLOW_COMMAND = 'assistant_remote_follow' as cons
  * `assistant_remote_project` when the host's `assistantRemoteAccess` ACL is active.
  * `note`, `terminal`, and `inventory` remain strictly roster-member-only.
  */
-export const ASSISTANT_FOLLOWER_ALLOWED_OPS = ['status', 'read', 'poll', 'report', 'send', 'artifact_list', 'artifact_read'] as const
+export const ASSISTANT_FOLLOWER_ALLOWED_OPS = ['status', 'read', 'poll', 'report', 'send', 'artifact_list', 'artifact_read', 'decision_list', 'decision_answer', 'decision_request'] as const
 export type AssistantFollowerAllowedOp = typeof ASSISTANT_FOLLOWER_ALLOWED_OPS[number]
 
 const ASSISTANT_FOLLOWER_ALLOWED_OP_SET: ReadonlySet<string> = new Set(ASSISTANT_FOLLOWER_ALLOWED_OPS)
 
 export function isAssistantFollowerAllowedOp(value: unknown): value is AssistantFollowerAllowedOp {
     return typeof value === 'string' && ASSISTANT_FOLLOWER_ALLOWED_OP_SET.has(value)
+}
+
+/**
+ * Owner-decision ops were added after grants were persisted with an explicit
+ * `allowedOps` list. A grant that already lets the follower read status (list)
+ * or send to the coordinator (answer / register) covers the matching decision op,
+ * so no existing grant needs re-issuing.
+ */
+const DECISION_OP_IMPLIED_BY: Readonly<Record<string, AssistantFollowerAllowedOp>> = {
+    decision_list: 'status',
+    decision_answer: 'send',
+    decision_request: 'send',
+}
+
+export function followerOpPermitted(op: string, allowedOps: readonly AssistantFollowerAllowedOp[]): boolean {
+    if (!isAssistantFollowerAllowedOp(op)) return false
+    if ((allowedOps as readonly string[]).includes(op)) return true
+    const implied = DECISION_OP_IMPLIED_BY[op]
+    return implied !== undefined && allowedOps.includes(implied)
 }
 
 /**

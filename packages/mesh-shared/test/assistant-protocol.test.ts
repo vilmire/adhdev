@@ -22,6 +22,7 @@ describe('ASSISTANT_TOOLS', () => {
             'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
             'project_attach_remote', 'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
             'launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe', 'artifact_list', 'artifact_read',
+            'decision_answer', 'decision_request',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
     })
@@ -41,17 +42,17 @@ describe('ASSISTANT_TOOLS', () => {
         for (const t of ASSISTANT_TOOLS) expect(ASSISTANT_TOOL_VERBS[t]).toBe(t === 'assistant_action' || t.startsWith('driver_') ? t : `assistant_${t}`)
     })
 
-    it('write tools are memory, skill_manage and project_note', () => {
-        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'launch_defaults_set', 'memory', 'project_add', 'project_attach_remote', 'project_note', 'project_send', 'project_watch', 'skill_manage'])
+    it('write tools are memory, skill_manage, project_note and the owner-decision tools', () => {
+        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'decision_answer', 'decision_request', 'launch_defaults_set', 'memory', 'project_add', 'project_attach_remote', 'project_note', 'project_send', 'project_watch', 'skill_manage'])
     })
 })
 
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are twenty-nine distinct names: twenty tool verbs + launch/pull/state/threads + five owner verbs', () => {
-        expect(all.length).toBe(29)
-        expect(new Set(all).size).toBe(29)
+    it('are thirty-one distinct names: twenty-two tool verbs + launch/pull/state/threads + five owner verbs', () => {
+        expect(all.length).toBe(31)
+        expect(new Set(all).size).toBe(31)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',

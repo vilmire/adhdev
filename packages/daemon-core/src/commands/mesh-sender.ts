@@ -55,7 +55,7 @@ import type { CancelDispatchRequest } from '../mesh/turn-ledger/effects.js';
 import {
     ASSISTANT_REMOTE_PROJECT_COMMAND,
     daemonIdsEquivalent,
-    isAssistantFollowerAllowedOp,
+    followerOpPermitted,
     meshNodeIdMatches,
 } from '@adhdev/mesh-shared';
 import { normalizeAssistantRemoteAccessBinding } from '../config/mesh-config.js';
@@ -401,7 +401,7 @@ async function checkFollowerAccess(
         return refuse(sender, 'mesh_sender_not_on_roster', `remote_access_denied: sender is not the active follower deputy for mesh ${meshId}`);
     }
     const op = str(args.op);
-    if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
+    if (!followerOpPermitted(op, acl.allowedOps)) {
         return refuse(sender, 'mesh_sender_not_on_roster', `remote_op_forbidden: operation '${op || 'unknown'}' is not permitted for follower access on mesh ${meshId}`);
     }
     const claimedBindingRev = typeof args.bindingRevision === 'number'

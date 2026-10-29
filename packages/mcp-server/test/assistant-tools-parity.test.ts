@@ -55,6 +55,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   launch_defaults_set: { action: 'set', role: 'assistant', expectedRevision: 1, provider: 'claude-cli' },
   artifact_list: { project: 'adhdev' },
   artifact_read: { project: 'adhdev', artifact_id: 'art_0123456789abcdef' },
+  decision_answer: { project: 'adhdev', itemId: 'dec_1', optionId: 'a', interpretedFrom: 'budget temp' },
+  decision_request: { project: 'adhdev', question: 'Which database?', options: ['postgres', 'sqlite'] },
 };
 
 function fakeTransport(reply: (type: string, args: Record<string, unknown>) => any = () => ({ success: true })) {
@@ -250,4 +252,52 @@ test('help text lists the assistant tools from the contract tuple', () => {
   const line = buildMcpHelpText().split('\n').find(l => l.startsWith('Assistant tools:'));
   assert.ok(line, 'help text must carry an Assistant tools line');
   assert.equal(line!.replace(/^Assistant tools:\s*/, ''), ASSISTANT_TOOLS.join(', '));
+});
+
+// ─── Owner-decision tools (structured missions §6.3, §5.2) ─────────────────
+
+test('decision_answer / decision_request are assistant-only: not in the coordinator or worker tool sets', () => {
+  const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS]);
+  for (const name of ['decision_answer', 'decision_request']) {
+    assert.ok((ASSISTANT_TOOLS as readonly string[]).includes(name), `${name} is an assistant tool`);
+    assert.equal(others.has(name), false, `${name} must not be in the coordinator or worker sets`);
+  }
+  assert.equal(ASSISTANT_TOOL_VERBS.decision_answer, 'assistant_decision_answer');
+  assert.equal(ASSISTANT_TOOL_VERBS.decision_request, 'assistant_decision_request');
+  const writes = new Set<string>(ASSISTANT_WRITE_TOOLS);
+  assert.ok(writes.has('decision_answer') && writes.has('decision_request'));
+});
+
+test('decision_answer: batch answers pass through whole, the assistant session credential rides along, interpretedFrom is in the schema', async () => {
+  const tools = resolveAssistantModeTools();
+  const schema = tools.find(t => t.name === 'decision_answer')!.inputSchema as any;
+  assert.deepEqual(schema.required, ['project']);
+  assert.deepEqual(schema.properties.answers.items.required, ['itemId', 'interpretedFrom']);
+  assert.equal(schema.properties.answers.maxItems, 10);
+  assert.ok(schema.properties.interpretedFrom && schema.properties.undo);
+
+  const previous = process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
+  process.env.ADHDEV_MCP_SESSION_CREDENTIAL = 'mcp_sess_unit_test_credential';
+  try {
+    const transport = fakeTransport(() => ({ success: true, lines: ['✓ [dec_1] …', '✓ [dec_2] …'] }));
+    const answers = [
+      { itemId: 'dec_1', optionId: 'a', interpretedFrom: 'budget temp, npmrc as is' },
+      { itemId: 'dec_2', optionId: 'a', interpretedFrom: 'budget temp, npmrc as is' },
+    ];
+    const res = await handleAssistantToolCall(transport, tools, 'sess-assistant-1', 'decision_answer', { project: 'adhdev', answers });
+    assert.equal(res.isError, undefined);
+    const call = transport.calls.find(c => c.type === 'assistant_decision_answer')!;
+    assert.deepEqual(call.args.answers, answers);
+    assert.equal(call.args.mcpSessionCredential, 'mcp_sess_unit_test_credential');
+    assert.equal(call.args[ASSISTANT_SESSION_ID_ARG], 'sess-assistant-1');
+    // a daemon refusal (e.g. no owner utterance) is surfaced as an error, not swallowed
+    const refused = await handleAssistantToolCall(fakeTransport(() => ({ success: false, code: 'no_owner_utterance' })), tools, 'sess-assistant-1', 'decision_answer', { project: 'adhdev', answers });
+    assert.equal(refused.isError, true);
+    // unknown arguments are rejected up front
+    const bad = await handleAssistantToolCall(fakeTransport(), tools, 'sess-assistant-1', 'decision_answer', { project: 'adhdev', answers, via: 'dashboard' });
+    assert.equal(bad.isError, true);
+  } finally {
+    if (previous === undefined) delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
+    else process.env.ADHDEV_MCP_SESSION_CREDENTIAL = previous;
+  }
 });

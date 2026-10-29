@@ -340,6 +340,9 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   launch_defaults: READ_LOCAL,
   // set replaces a role's whole triple, clear removes it (CAS-guarded, may be staged for the owner).
   launch_defaults_set: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // Owner-decision inbox: an answer overwrites an earlier one (undoable); a request is deduped by its question.
+  decision_answer: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  decision_request: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 };
 
 /**
