@@ -357,7 +357,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_action', 'assistant_environment', 'assistant_execution_settings',
     'assistant_execution_state', 'assistant_project_watch',
     // Owner-decision inbox (high-family/mission-decisions.ts, structured-missions design §6).
-    'mission_decision_answer', 'mission_decisions_list',
+    'mission_decision_answer', 'mission_decision_push_relay_answer', 'mission_decisions_list',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

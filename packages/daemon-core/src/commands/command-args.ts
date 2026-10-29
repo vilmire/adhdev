@@ -215,7 +215,7 @@ export function readOutboundOrigin(args: unknown, fallback: OutboundMessageOrigi
 export const COMMAND_SOURCE_ARG = '_commandSource'
 
 /** Commands whose handler reads `COMMAND_SOURCE_ARG`. */
-export const COMMAND_SOURCE_STAMPED: ReadonlySet<string> = new Set(['send_chat', 'pty_input', 'interactive_prompt_response', 'assistant_staged_resolve', 'mission_decision_answer'])
+export const COMMAND_SOURCE_STAMPED: ReadonlySet<string> = new Set(['send_chat', 'pty_input', 'interactive_prompt_response', 'assistant_staged_resolve', 'mission_decision_answer', 'mission_decision_push_relay_answer'])
 
 /**
  * Router-stamped attribution flag (NOT authority): a dashboard `send_chat` /

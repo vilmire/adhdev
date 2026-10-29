@@ -40,7 +40,7 @@ export const DECISION_ANSWER_TEXT_MAX = 1000;
 export const DECISION_INTERPRETED_FROM_MAX = 500;
 
 export type DecisionActor =
-    | { by: 'owner'; via: DecisionAnswerVia }
+    | { by: 'owner'; via: DecisionAnswerVia; /** Provenance when the answer was relayed (e.g. `push_relay`); recorded on the answer and the event. */ ingress?: string }
     | { by: 'auto_recommended'; via: 'auto' };
 
 export interface DecisionAnswerRequest {
@@ -184,6 +184,7 @@ export function answerMissionDecision(
             ...(text ? { text } : {}),
             by: actor.by,
             via: actor.via,
+            ...('ingress' in actor && actor.ingress ? { ingress: actor.ingress } : {}),
             ...(interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, DECISION_INTERPRETED_FROM_MAX) } : {}),
             at: nowIso,
         };
@@ -198,6 +199,7 @@ export function answerMissionDecision(
             ...(optionId ? { optionId } : {}),
             ...(text ? { text: truncateMissionText(text, 200) } : {}),
             via: actor.via,
+            ...('ingress' in actor && actor.ingress ? { ingress: actor.ingress } : {}),
             ...(interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, 200) } : {}),
             ...(wasAnswered && d.answer ? { previous: truncateMissionText(describeDecisionAnswer(d), 200) } : {}),
         });

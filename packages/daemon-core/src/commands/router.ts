@@ -74,6 +74,7 @@ import { artifactSpecs, rejectUntrustedArtifactIngress } from './med-family/arti
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
 import { missionDecisionSpecs } from './high-family/mission-decisions.js';
+import { missionDecisionPushRelaySpecs } from './high-family/mission-decision-push-relay.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
@@ -333,6 +334,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...assistantThreadSpecs,
             ...assistantWatchSpecs,
             ...missionDecisionSpecs,
+            ...missionDecisionPushRelaySpecs,
             ...assistantRemoteSpecs,
             ...assistantLaunchSpecs,
             ...launchDefaultsSpecs,

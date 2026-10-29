@@ -23858,6 +23858,8 @@ var require_dist3 = __commonJS({
       DECISION_PUSH_OPTIONS_MAX: () => DECISION_PUSH_OPTIONS_MAX,
       DECISION_PUSH_OPTION_LABEL_MAX: () => DECISION_PUSH_OPTION_LABEL_MAX,
       DECISION_PUSH_QUESTION_MAX: () => DECISION_PUSH_QUESTION_MAX,
+      DECISION_PUSH_RELAY_COMMAND: () => DECISION_PUSH_RELAY_COMMAND,
+      DECISION_PUSH_RELAY_SOURCE: () => DECISION_PUSH_RELAY_SOURCE,
       DEFAULT_DIFFICULTY_BRAINS: () => DEFAULT_DIFFICULTY_BRAINS,
       DELIVERY_OUTCOMES: () => DELIVERY_OUTCOMES2,
       DELIVERY_VIAS: () => DELIVERY_VIAS2,
@@ -27340,6 +27342,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     var WORKER_DECISIONS_NEEDED_MAX;
     var WORKER_COMMITS_MAX;
     var SHA_RE;
+    var DECISION_PUSH_RELAY_COMMAND;
+    var DECISION_PUSH_RELAY_SOURCE;
     var DAEMON_METADATA_DOC_SPEC;
     var MESH_STATUS_DOC_SPEC;
     var RELAY_REPROBE_BASE_DELAY_MS;
@@ -28458,6 +28462,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         WORKER_DECISIONS_NEEDED_MAX = 3;
         WORKER_COMMITS_MAX = 20;
         SHA_RE = /^[0-9a-f]{7,64}$/i;
+        DECISION_PUSH_RELAY_COMMAND = "mission_decision_push_relay_answer";
+        DECISION_PUSH_RELAY_SOURCE = "push_relay";
         DAEMON_METADATA_DOC_SPEC = {
           collections: { "status.sessions": "id" },
           splitObjects: ["status"],
@@ -74948,20 +74954,20 @@ ${block2.text}`,
       };
     }
     function resolveForwardedWorkerIdentity(claim, sender, nowMs2 = Date.now(), isSelfDaemon) {
-      const refuse4 = (reason, detail) => ({ refused: reason, detail });
+      const refuse5 = (reason, detail) => ({ refused: reason, detail });
       const senderDaemonId = typeof sender.senderDaemonId === "string" ? sender.senderDaemonId.trim() : "";
-      if (!senderDaemonId) return refuse4("sender_unknown", "the mesh transport did not identify the relaying daemon");
+      if (!senderDaemonId) return refuse5("sender_unknown", "the mesh transport did not identify the relaying daemon");
       const senderOwnsNode = (nodeId) => {
-        if (!nodeId) return refuse4("node_unresolved", "the owner's record of this task names no node");
+        if (!nodeId) return refuse5("node_unresolved", "the owner's record of this task names no node");
         let owner;
         try {
           owner = sender.nodeDaemonId(nodeId);
         } catch {
           owner = void 0;
         }
-        if (!owner) return refuse4("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
+        if (!owner) return refuse5("node_unresolved", `node ${nodeId} is not on the owner's mesh roster`);
         if (!daemonIdsEquivalent4(owner, senderDaemonId)) {
-          return refuse4("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
+          return refuse5("sender_not_node_owner", `node ${nodeId} belongs to daemon ${owner}, not the relaying daemon ${senderDaemonId}`);
         }
         return null;
       };
@@ -74974,7 +74980,7 @@ ${block2.text}`,
       }
       if (row2?.id) {
         if (claim.taskId && claim.taskId !== row2.id) {
-          return refuse4("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
+          return refuse5("task_mismatch", `the owner has task ${row2.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
         }
         const rowNodeId2 = row2.assignedNodeId || row2.targetNodeId;
         const nodeRefusal2 = senderOwnsNode(rowNodeId2);
@@ -74990,15 +74996,15 @@ ${block2.text}`,
           attemptId = latestAttempt?.attemptId;
         }
         if (claim.attemptId && claim.attemptId !== attemptId) {
-          return refuse4("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
+          return refuse5("attempt_mismatch", `task ${row2.id}'s attempt on the owner is ${attemptId ?? "(none)"}, not ${claim.attemptId}`);
         }
         if (latestAttempt && attemptId && latestAttempt.attemptId !== attemptId) {
-          return refuse4("attempt_mismatch", `task ${row2.id}'s latest attempt on the owner is ${latestAttempt.attemptId}, not ${attemptId}`);
+          return refuse5("attempt_mismatch", `task ${row2.id}'s latest attempt on the owner is ${latestAttempt.attemptId}, not ${attemptId}`);
         }
         const attempt2 = attemptId ? store4.turnStore().getAttempt(attemptId) : latestAttempt;
-        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse4("generation_mismatch", "the claimed generation is no longer current");
-        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse4("attempt_mismatch", "the attempt is not owned here for this session");
-        if (latestAttempt && (latestAttempt.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(latestAttempt.ownerDaemonId))) return refuse4("attempt_mismatch", "the latest attempt is not owned here for this session");
+        if (claim.generation !== void 0 && claim.generation !== attempt2?.generation) return refuse5("generation_mismatch", "the claimed generation is no longer current");
+        if (attempt2 && (attempt2.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(attempt2.ownerDaemonId))) return refuse5("attempt_mismatch", "the attempt is not owned here for this session");
+        if (latestAttempt && (latestAttempt.sessionId !== claim.sessionId || isSelfDaemon && !isSelfDaemon(latestAttempt.ownerDaemonId))) return refuse5("attempt_mismatch", "the latest attempt is not owned here for this session");
         if (!attempt2?.terminal && !latestAttempt?.terminal) {
           const token = findWorkerTaskTokenForSession(claim.meshId, row2.id, claim.sessionId);
           return {
@@ -75015,15 +75021,15 @@ ${block2.text}`,
       }
       const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs2, isSelfDaemon);
       if (!attempt) {
-        return refuse4("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store4, claim.meshId, claim.taskId) : ""}`);
+        return refuse5("no_live_task", `the owner has no task assigned to session ${claim.sessionId} and no attempt of it that ended in the last ${Math.round(WORKER_LATE_REPORT_GRACE_MS / 6e4)} min${claim.taskId ? describeOwnerRow(store4, claim.meshId, claim.taskId) : ""}`);
       }
       if (claim.taskId && claim.taskId !== attempt.taskId) {
-        return refuse4("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
+        return refuse5("task_mismatch", `session ${claim.sessionId}'s latest attempt on the owner is for task ${attempt.taskId}, not ${claim.taskId}${describeOwnerRow(store4, claim.meshId, claim.taskId)}`);
       }
       if (claim.attemptId && claim.attemptId !== attempt.attemptId) {
-        return refuse4("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
+        return refuse5("attempt_mismatch", `task ${attempt.taskId}'s attempt on the owner is ${attempt.attemptId}, not ${claim.attemptId}`);
       }
-      if (claim.generation !== void 0 && claim.generation !== store4.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse4("generation_mismatch", "the terminal generation does not match");
+      if (claim.generation !== void 0 && claim.generation !== store4.turnStore().getAttempt(attempt.attemptId)?.generation) return refuse5("generation_mismatch", "the terminal generation does not match");
       const nodeRefusal = senderOwnsNode(attempt.nodeId);
       if (nodeRefusal) return nodeRefusal;
       return {
@@ -77759,7 +77765,7 @@ ${includeRefs[0]}`;
         init_dist();
         init_mcp_command_ingress();
         COMMAND_SOURCE_ARG = "_commandSource";
-        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer"]);
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer", "mission_decision_push_relay_answer"]);
         UNVERIFIED_DASHBOARD_INPUT_ARG = "_unverifiedDashboardInput";
         UNVERIFIED_DASHBOARD_INPUT_COMMANDS = /* @__PURE__ */ new Set(["send_chat", "pty_input"]);
         TRUSTED_OWNER_INGRESS_STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.trustedOwnerIngressState");
@@ -87793,7 +87799,7 @@ ${continuationNotice}` } : task,
       return host.transaction(() => {
         if (bridgeDispatchFrozen(host.db, meshId) || sessionIsStopping(host.db, sessionId)) return null;
         host.ensureLegacyQueueMigrated(meshId);
-        const refuse4 = (reason, detail, deepest) => {
+        const refuse5 = (reason, detail, deepest) => {
           if (opts?.outRefusal) {
             opts.outRefusal.reason = reason;
             if (detail) opts.outRefusal.detail = detail;
@@ -87806,14 +87812,14 @@ ${continuationNotice}` } : task,
         };
         const activeHold = evaluateNewWorkHold({ meshId });
         if (activeHold.held) {
-          return refuse4(NEW_WORK_HELD_CODE2, formatNewWorkHeldToken({
+          return refuse5(NEW_WORK_HELD_CODE2, formatNewWorkHeldToken({
             holdId: activeHold.hold.holdId || "active",
             revision: activeHold.hold.revision,
             expiresAt: activeHold.hold.expiresAt || 0,
             phase: activeHold.hold.phase
           }));
         }
-        if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse4("session_already_assigned");
+        if (host.hasActiveSessionAssignment(meshId, sessionId)) return refuse5("session_already_assigned");
         const nodeWriteBusy = host.hasActiveNodeWriteAssignment(meshId, nodeId);
         const providerType = typeof opts?.providerType === "string" ? opts.providerType.trim() : "";
         const providerMaxParallel = opts?.providerMaxParallel;
@@ -87982,19 +87988,19 @@ ${continuationNotice}` } : task,
           }
         })));
         if (!selected2.entry) {
-          if (!candidates.length) return refuse4("no_pending_candidates");
+          if (!candidates.length) return refuse5("no_pending_candidates");
           if (selected2.reason === "owned_paths_conflict" && selected2.deepest) {
             const conflicts = ownedPathsConflictFor(selected2.deepest);
-            return refuse4("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
+            return refuse5("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected2.deepest);
           }
           if (selected2.reason === "dirty_workspace") {
-            return refuse4("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected2.deepest);
+            return refuse5("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected2.deepest);
           }
           if (selected2.reason === "node_stale_behind_upstream") {
             const behindDetail = nodeGitGate?.behind !== void 0 ? `node ${nodeId} is ${nodeGitGate.behind} commit(s) behind upstream (max ${nodeGitGate.maxBehind ?? 0})` : `node ${nodeId} is behind upstream beyond the configured maxBehind`;
-            return refuse4("node_stale_behind_upstream", behindDetail, selected2.deepest);
+            return refuse5("node_stale_behind_upstream", behindDetail, selected2.deepest);
           }
-          return refuse4(
+          return refuse5(
             selected2.reason,
             selected2.deepest ? `closest candidate ${selected2.deepest.id} of ${candidates.length}` : void 0,
             selected2.deepest
@@ -99930,7 +99936,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var init_command_registry = __esm2({
       "src/commands/command-registry.ts"() {
         "use strict";
-        COMMAND_SOURCES = ["ws", "p2p", "ext", "api", "project_attach", "standalone", "ipc", "mesh", "internal"];
+        COMMAND_SOURCES = ["ws", "p2p", "ext", "api", "project_attach", "standalone", "ipc", "mesh", "internal", "push_relay"];
         COMMAND_PREFIX_DEFAULTS = [
           { prefix: "workspace_", invalidates: ["daemon.metadata"] },
           { prefix: "session_host_", invalidates: ["daemon.metadata", "session_host.diagnostics"] },
@@ -126791,6 +126797,7 @@ ${asText(streams.stderr)}
           ...text5 ? { text: text5 } : {},
           by: actor.by,
           via: actor.via,
+          ..."ingress" in actor && actor.ingress ? { ingress: actor.ingress } : {},
           ...interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, DECISION_INTERPRETED_FROM_MAX) } : {},
           at: nowIso
         };
@@ -126806,6 +126813,7 @@ ${asText(streams.stderr)}
           ...optionId ? { optionId } : {},
           ...text5 ? { text: truncateMissionText(text5, 200) } : {},
           via: actor.via,
+          ..."ingress" in actor && actor.ingress ? { ingress: actor.ingress } : {},
           ...interpretedFrom ? { interpretedFrom: truncateMissionText(interpretedFrom, 200) } : {},
           ...wasAnswered && d.answer ? { previous: truncateMissionText(describeDecisionAnswer(d), 200) } : {}
         });
@@ -149833,7 +149841,7 @@ ${tail}` : ""
       let uses = 0;
       let revoked = false;
       const server = (0, import_node_http.createServer)(async (req, res) => {
-        const refuse4 = (status) => {
+        const refuse5 = (status) => {
           res.writeHead(status);
           res.end(JSON.stringify({ success: false, code: "operator_recovery_refused" }));
         };
@@ -149844,21 +149852,21 @@ ${tail}` : ""
         }
         if (!valid) {
           revoked = true;
-          refuse4(403);
+          refuse5(403);
           return;
         }
         if (req.method !== "POST" || req.url !== "/api/v1/command" || req.headers.origin || req.headers["x-adhdev-mcp"]) {
-          refuse4(403);
+          refuse5(403);
           return;
         }
         const raw = req.headers.cookie;
         const expected = `adhdev_operator_recovery=${token}`;
         if (typeof raw !== "string" || Buffer.byteLength(raw) !== Buffer.byteLength(expected) || !(0, import_node_crypto222.timingSafeEqual)(Buffer.from(raw), Buffer.from(expected))) {
-          refuse4(401);
+          refuse5(401);
           return;
         }
         if (uses >= 2) {
-          refuse4(403);
+          refuse5(403);
           return;
         }
         uses++;
@@ -149889,7 +149897,7 @@ ${tail}` : ""
           res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
           res.end(JSON.stringify(result));
         } catch {
-          refuse4(403);
+          refuse5(403);
         }
       });
       server.requestTimeout = 5e3;
@@ -170031,7 +170039,7 @@ ${output}` : "";
         }
         parkedText.set(msg.messageId, { sessionId: msg.sessionId, text: msg.input.textFallback.trim() });
       }
-      function refuse4(reason, extra) {
+      function refuse5(reason, extra) {
         const message = extra?.message ?? REFUSAL_MESSAGES[reason];
         return {
           kind: "refused",
@@ -170052,16 +170060,16 @@ ${output}` : "";
           if (target4.buildBody) {
             const body = target4.buildBody(input);
             if (body && body.text.trim()) return body;
-            return refuse4("unsupported_input", { message: "No input to send." });
+            return refuse5("unsupported_input", { message: "No input to send." });
           }
           if (hasNonTextParts(input)) {
-            return refuse4("unsupported_input", { message: `${target4.label || "This session"} only supports text input.` });
+            return refuse5("unsupported_input", { message: `${target4.label || "This session"} only supports text input.` });
           }
           const text5 = input.textFallback;
-          if (!text5 || !text5.trim()) return refuse4("unsupported_input", { message: "No input to send." });
+          if (!text5 || !text5.trim()) return refuse5("unsupported_input", { message: "No input to send." });
           return { text: text5 };
         } catch (e) {
-          return refuse4("unsupported_input", { message: e?.message || String(e) });
+          return refuse5("unsupported_input", { message: e?.message || String(e) });
         }
       }
       async function writeAndReport(target4, msg, body, opts, noticeObserver) {
@@ -170115,7 +170123,7 @@ ${output}` : "";
       }
       async function splitWrite(target4, msg, parked, input = msg.input, noticeObserver) {
         if (typeof target4.sendMessageDuringGeneration !== "function") {
-          return refuse4("not_supported", { restored: true });
+          return refuse5("not_supported", { restored: true });
         }
         let body;
         let claimed = null;
@@ -170170,10 +170178,10 @@ ${output}` : "";
         }
         const reason = splitWriteRefusal(outcome.reason);
         log("info", `submit(${msg.messageId}) send_now refused ${outcome.reason} (session ${msg.sessionId}, promoted=${parked}, restored=${restored})`);
-        return refuse4(reason, { restored });
+        return refuse5(reason, { restored });
       }
       async function interruptThenWrite(target4, msg, parked, input = msg.input, noticeObserver) {
-        if (typeof target4.interruptTurn !== "function") return refuse4("interrupt_not_implemented");
+        if (typeof target4.interruptTurn !== "function") return refuse5("interrupt_not_implemented");
         let fresh = null;
         if (!parked) {
           const built = freshBody(target4, msg, input);
@@ -170184,7 +170192,7 @@ ${output}` : "";
         const interrupted = await target4.interruptTurn();
         if (!interrupted.ok) {
           log("warn", `submit(${msg.messageId}) interrupt refused: ${interrupted.reason}`);
-          return refuse4(interruptRefusal(interrupted.reason), { message: interrupted.message, restored: true });
+          return refuse5(interruptRefusal(interrupted.reason), { message: interrupted.message, restored: true });
         }
         const claimed = parked ? target4.claimQueuedSend?.(msg.messageId) ?? null : null;
         if (parked && !claimed) {
@@ -170208,7 +170216,7 @@ ${output}` : "";
           });
           if (!wentIdle && terminalStatus !== null) {
             log("warn", `submit(${msg.messageId}) session reported '${String(terminalStatus)}' after the stop key \u2014 NOT delivered`);
-            return refuse4("session_exited", { restored: false });
+            return refuse5("session_exited", { restored: false });
           }
           if (!wentIdle) {
             let restored = !claimed;
@@ -170221,7 +170229,7 @@ ${output}` : "";
               }
             }
             log("warn", `submit(${msg.messageId}) interrupt sent but no idle within ${timeoutMs}ms (restored=${restored})`);
-            return refuse4("idle_timeout", { restored });
+            return refuse5("idle_timeout", { restored });
           }
           return await writeAndReport(target4, msg, body, {
             fresh: !parked,
@@ -170260,9 +170268,9 @@ ${output}` : "";
           target4 = await resolveTarget();
         } catch (e) {
           log("error", `submit(${msg.messageId}) resolveSession threw: ${e?.message ?? e}`);
-          return refuse4("internal_error");
+          return refuse5("internal_error");
         }
-        if (!target4) return refuse4("no_target");
+        if (!target4) return refuse5("no_target");
         const cls = classify(target4);
         const parked = target4.hasQueuedSend?.(msg.messageId) === true;
         const prior = settledKind(msg.messageId);
@@ -170273,12 +170281,12 @@ ${output}` : "";
         }
         const strategy = BUSY_DECISION[msg.policy.mode][cls];
         if (typeof strategy === "object") {
-          return refuse4(strategy.refuse, parked ? { restored: true } : void 0);
+          return refuse5(strategy.refuse, parked ? { restored: true } : void 0);
         }
         let input = msg.input;
         if (!parked && prepareInput) {
           const prepared = prepareInput();
-          if ("refusal" in prepared) return refuse4("unsupported_input", { message: prepared.refusal });
+          if ("refusal" in prepared) return refuse5("unsupported_input", { message: prepared.refusal });
           input = prepared;
         }
         if (strategy === "split_write") return splitWrite(target4, msg, parked, input, noticeObserver);
@@ -170314,7 +170322,7 @@ ${output}` : "";
               sessionSettings: settingsForHold
             });
             if (!isContinuation) {
-              return refuse4(NEW_WORK_HELD_CODE2, {
+              return refuse5(NEW_WORK_HELD_CODE2, {
                 message: formatNewWorkHeldMessage({
                   holdId: activeHold.hold.holdId || "active",
                   revision: activeHold.hold.revision,
@@ -170329,22 +170337,22 @@ ${output}` : "";
         return run4(msg, resolveTarget, prepareInput, noticeObserver);
       }
       async function submitOwned(msg, prepareInput, noticeObserver) {
-        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse4("internal_error", { message: "messageId required" });
-        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse4("no_target");
+        if (!msg || typeof msg.messageId !== "string" || !msg.messageId.trim()) return refuse5("internal_error", { message: "messageId required" });
+        if (typeof msg.sessionId !== "string" || !msg.sessionId.trim()) return refuse5("no_target");
         const pending = inFlight5.get(msg.messageId);
         if (pending) {
           await pending.catch(() => void 0);
           try {
             if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
           } catch (error) {
-            if (error.message === "Outgoing message identity conflict") return refuse4("internal_error", { message: "Outgoing message identity conflict" });
+            if (error.message === "Outgoing message identity conflict") return refuse5("internal_error", { message: "Outgoing message identity conflict" });
             receiptFailure(msg.messageId, error);
           }
           return { kind: "duplicate", of: msg.messageId };
         }
         const promise = withMaintenanceAdmission(() => runAdmitted(msg, prepareInput, noticeObserver)).catch((e) => {
           log("error", `submit(${msg.messageId}) threw: ${e?.message ?? e}`);
-          return refuse4("internal_error", { message: e?.message || String(e) });
+          return refuse5("internal_error", { message: e?.message || String(e) });
         });
         inFlight5.set(msg.messageId, promise);
         try {
@@ -171296,20 +171304,20 @@ ${output}` : "";
     function readExactTargetButton(args, offered) {
       const hasButton = args?.button !== void 0 || args?.buttonText !== void 0;
       if (!hasButton && args?.buttonIndex === void 0) return { ok: true, button: null };
-      const refuse4 = (code, error) => ({ ok: false, code, error });
-      if (!hasButton) return refuse4("approval_button_required", "An exact provider button label is required with buttonIndex");
+      const refuse5 = (code, error) => ({ ok: false, code, error });
+      if (!hasButton) return refuse5("approval_button_required", "An exact provider button label is required with buttonIndex");
       if (args?.button !== void 0 && args?.buttonText !== void 0 && args.button !== args.buttonText) {
-        return refuse4("approval_button_mismatch", "button and buttonText disagree");
+        return refuse5("approval_button_mismatch", "button and buttonText disagree");
       }
       const label2 = args?.button !== void 0 ? args.button : args.buttonText;
-      if (typeof label2 !== "string" || !label2.trim()) return refuse4("approval_button_required", "An exact provider button label is required");
+      if (typeof label2 !== "string" || !label2.trim()) return refuse5("approval_button_required", "An exact provider button label is required");
       const index = offered.indexOf(label2.slice(0, 120));
-      if (index < 0) return refuse4("approval_button_not_offered", "The button is not one of this permission request's provider buttons");
+      if (index < 0) return refuse5("approval_button_not_offered", "The button is not one of this permission request's provider buttons");
       if (args?.buttonIndex !== void 0 && (!Number.isInteger(args.buttonIndex) || offered[args.buttonIndex] !== label2.slice(0, 120))) {
-        return refuse4("approval_button_mismatch", "buttonIndex does not name the requested button");
+        return refuse5("approval_button_mismatch", "buttonIndex does not name the requested button");
       }
       if (isNegativeApprovalLabel(label2) !== (args?.action === "reject")) {
-        return refuse4("approval_button_action_mismatch", "The button does not match the requested approve/reject action");
+        return refuse5("approval_button_action_mismatch", "The button does not match the requested approve/reject action");
       }
       return { ok: true, button: label2 };
     }
@@ -177582,20 +177590,20 @@ ${output}` : "";
     }
     async function reconcileMeshHolder(host, args) {
       const mc = args.meshContext, op = args.holderReconcile;
-      const refuse4 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
-      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse4("identity_required");
+      const refuse5 = (reason) => ({ success: false, code: "mesh_holder_attach_refused", reason });
+      if (!mc?.meshId || !mc.taskId || !mc.nodeId || !mc.attemptId || !Number.isSafeInteger(mc.attemptGeneration) || mc.attemptGeneration < 0 || !Number.isSafeInteger(mc.dispatchNonce) || mc.dispatchNonce < 0 || !mc.coordinatorDaemonId || !args.targetSessionId || !op?.operationId || op.operationId.length > 512 || !["prepare", "commit", "rollback"].includes(op.phase)) return refuse5("identity_required");
       const instance = host.deps.getInstanceManager()?.getInstance(args.targetSessionId);
-      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse4("holder_unavailable");
-      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse4("native_attach_ack_unavailable");
+      if (!instance?.captureMeshAssignment || !instance.restoreMeshAssignment) return refuse5("holder_unavailable");
+      if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse5("native_attach_ack_unavailable");
       const launch = host.deps.getSessionRegistry?.()?.get(args.targetSessionId)?.launch;
-      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse4("protected_or_stopping_holder");
+      if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse5("protected_or_stopping_holder");
       const db2 = journal(true), identity4 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
       const row2 = db2.prepare("SELECT * FROM mesh_holder_attaches WHERE operation_id=?").get(op.operationId);
-      if (row2 && row2.identity_json !== identity4) return refuse4("operation_identity_changed");
+      if (row2 && row2.identity_json !== identity4) return refuse5("operation_identity_changed");
       recoverHolderAttachRollback(instance);
       const state2 = instance.getState(), s2 = state2.settings;
-      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse4("holder_not_currently_working");
-      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse4("foreign_or_stale_holder");
+      if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse5("holder_not_currently_working");
+      if (s2?.assistant || s2?.meshCoordinatorFor || s2?.meshNodeFor !== mc.meshId || !pinnedMeshNodeIdMatches(s2?.meshNodeId, mc.nodeId) || s2?.meshActiveTaskId !== mc.taskId && !(row2 && row2.boot_nonce !== BOOT && !s2?.meshActiveTaskId) || s2?.meshActiveAttemptId !== mc.attemptId || typeof s2?.meshCoordinatorDaemonId !== "string" || !daemonIdsEquivalent4(s2.meshCoordinatorDaemonId, mc.coordinatorDaemonId) || (s2.meshActiveAttemptGeneration ?? 0) > mc.attemptGeneration || (s2.meshActiveDispatchNonce ?? 0) > mc.dispatchNonce) return refuse5("foreign_or_stale_holder");
       const current4 = () => {
         const v = instance.getState().settings;
         return v?.meshActiveTaskId === mc.taskId && v?.meshActiveAttemptId === mc.attemptId && (v?.meshActiveAttemptGeneration ?? 0) === mc.attemptGeneration && v?.meshActiveDispatchNonce === mc.dispatchNonce;
@@ -177610,14 +177618,14 @@ ${output}` : "";
       const proof = () => ({ success: true, attached: true, operationId: op.operationId, sessionId: args.targetSessionId, ...mc });
       if (op.phase === "prepare") {
         if (row2) {
-          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse4("prepare_no_longer_current");
+          if (!["preparing", "prepared"].includes(row2.phase) || runtime(instance) !== row2.runtime_json) return refuse5("prepare_no_longer_current");
           if (row2.boot_nonce !== BOOT && !current4() && await verify3(JSON.parse(row2.prepared_json))) {
             instance.attachMeshAssignment({ ...mc, meshId: mc.meshId });
             db2.prepare("UPDATE mesh_holder_attaches SET prepared_json=?,boot_nonce=? WHERE operation_id=?").run(JSON.stringify(instance.captureMeshAssignment()), BOOT, op.operationId);
           }
           const snapshot = instance.captureMeshAssignment();
           const owns = row2.boot_nonce !== BOOT || JSON.stringify(snapshot) === row2.prepared_json;
-          return current4() && owns && await verify3(snapshot) ? proof() : refuse4("native_attach_unconfirmed");
+          return current4() && owns && await verify3(snapshot) ? proof() : refuse5("native_attach_unconfirmed");
         }
         const before = instance.captureMeshAssignment();
         let prepared;
@@ -177636,19 +177644,19 @@ ${output}` : "";
             instance.restoreMeshAssignment(before);
             if (prepared) db2.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(await verify3(before) ? "rolled_back" : "rollback_pending", op.operationId);
           }
-          return refuse4("holder_attach_failed_checkpoint_pending");
+          return refuse5("holder_attach_failed_checkpoint_pending");
         }
       }
-      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current4() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse4("late_claim_changed");
+      if (!row2 || !["prepared", "preparing", "committed"].includes(row2.phase) || !current4() || runtime(instance) !== row2.runtime_json || row2.boot_nonce === BOOT && JSON.stringify(instance.captureMeshAssignment()) !== row2.prepared_json) return refuse5("late_claim_changed");
       if (op.phase === "rollback") {
-        if (row2.phase === "committed") return refuse4("already_committed");
+        if (row2.phase === "committed") return refuse5("already_committed");
         const before = JSON.parse(row2.snapshot_json);
         instance.restoreMeshAssignment(before);
         const confirmed = await verify3(before);
         db2.prepare("UPDATE mesh_holder_attaches SET phase=? WHERE operation_id=?").run(confirmed ? "rolled_back" : "rollback_pending", op.operationId);
         return { success: confirmed, rolledBack: confirmed };
       }
-      if (!await verify3(instance.captureMeshAssignment())) return refuse4("native_attach_unconfirmed");
+      if (!await verify3(instance.captureMeshAssignment())) return refuse5("native_attach_unconfirmed");
       db2.prepare("UPDATE mesh_holder_attaches SET phase='committed' WHERE operation_id=?").run(op.operationId);
       return { success: true, committed: true };
     }
@@ -184353,7 +184361,7 @@ ${lines.join("\n")}
       const meshId = str14(args.meshId);
       const itemId = str14(args.itemId);
       if (!meshId || !itemId) return { success: false, code: "invalid_args", error: "meshId and itemId are required" };
-      const result = answerMissionDecision({
+      return answerAndDeliver(ctx, {
         meshId,
         itemId,
         ...str14(args.missionId) ? { missionId: str14(args.missionId) } : {},
@@ -184362,6 +184370,10 @@ ${lines.join("\n")}
         ...typeof args.interpretedFrom === "string" ? { interpretedFrom: args.interpretedFrom } : {},
         ...args.undo === true ? { undo: true } : {}
       }, caller.actor);
+    };
+    async function answerAndDeliver(ctx, req, actor) {
+      const { meshId, itemId } = req;
+      const result = answerMissionDecision(req, actor);
       if (!result.ok) {
         return { success: false, code: result.code, error: result.error, ...result.validOptions ? { validOptions: result.validOptions } : {} };
       }
@@ -184386,7 +184398,7 @@ ${lines.join("\n")}
         ...result.answer ? { answer: result.answer } : {},
         ...deliveryState ? { delivery: deliveryState } : {}
       };
-    };
+    }
     var list = async (ctx, rawArgs) => {
       const args = stripRouterInternalArgs(rawArgs ?? {});
       const wanted = str14(args.meshId);
@@ -184417,6 +184429,42 @@ ${lines.join("\n")}
     }, {
       [MISSION_DECISION_ANSWER]: { sources: [...MISSION_DECISION_ANSWER_SOURCES] },
       [MISSION_DECISIONS_LIST]: { sources: [...MISSION_DECISIONS_LIST_SOURCES] }
+    });
+    init_dist();
+    init_command_registry();
+    init_command_args();
+    init_router_internal_args();
+    init_mesh_mission_decisions();
+    var ID_RE3 = /^[A-Za-z0-9_.:-]{1,128}$/;
+    var ALLOWED_KEYS = /* @__PURE__ */ new Set(["meshId", "itemId", "optionId"]);
+    function refuse4(code, error) {
+      return { success: false, code, error };
+    }
+    var relayAnswer = async (ctx, rawArgs) => {
+      const raw = rawArgs ?? {};
+      if (raw[COMMAND_SOURCE_ARG] !== DECISION_PUSH_RELAY_SOURCE) {
+        return refuse4("decision_answer_not_allowed", "only the server push relay may use this command");
+      }
+      const args = stripRouterInternalArgs(raw);
+      const extra = Object.keys(args).filter((k) => !ALLOWED_KEYS.has(k) && !k.startsWith("_"));
+      if (extra.length > 0) return refuse4("invalid_args", "unexpected fields");
+      const { meshId, itemId, optionId } = args;
+      if (![meshId, itemId, optionId].every((v) => typeof v === "string" && ID_RE3.test(v))) {
+        return refuse4("invalid_args", "meshId, itemId and optionId are required ids");
+      }
+      const entry = buildOwnerDecisions(meshId).find((e) => e.itemId === itemId);
+      if (!entry) return refuse4("decision_not_open", "this decision is no longer open");
+      if (entry.recommended !== optionId) return refuse4("option_not_relayable", "only the recommended option can be answered from a notification");
+      return answerAndDeliver(
+        ctx,
+        { meshId, itemId, optionId },
+        { by: "owner", via: "push", ingress: DECISION_PUSH_RELAY_SOURCE }
+      );
+    };
+    var missionDecisionPushRelaySpecs = defineCommandSpecs("high", {
+      [DECISION_PUSH_RELAY_COMMAND]: relayAnswer
+    }, {
+      [DECISION_PUSH_RELAY_COMMAND]: { sources: [DECISION_PUSH_RELAY_SOURCE] }
     });
     var import_node_os9 = require("os");
     init_dist();
@@ -188857,6 +188905,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           ...assistantThreadSpecs,
           ...assistantWatchSpecs,
           ...missionDecisionSpecs,
+          ...missionDecisionPushRelaySpecs,
           ...assistantRemoteSpecs,
           ...assistantLaunchSpecs,
           ...launchDefaultsSpecs,
