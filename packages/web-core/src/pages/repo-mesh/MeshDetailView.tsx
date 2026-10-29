@@ -245,10 +245,10 @@ export function MeshDetailView({
     // header's primary "Open" button. This page is the mesh SETTINGS surface.
     const [graphDialogOpen, setGraphDialogOpen] = useState(false)
     const canLaunchGraphDialog = !!activeDaemonId && !!selectedMesh.id
-    const [dialogInit, setDialogInit] = useState<{ tab?: MeshDeepLink['tab']; taskId?: string } | null>(null)
+    const [dialogInit, setDialogInit] = useState<{ tab?: MeshDeepLink['tab']; taskId?: string; missionId?: string } | null>(null)
     useEffect(() => {
         if (!openRequest || openRequest.meshId !== selectedMesh.id || !canLaunchGraphDialog) return
-        setDialogInit({ tab: openRequest.tab, taskId: openRequest.taskId })
+        setDialogInit({ tab: openRequest.tab, taskId: openRequest.taskId, missionId: openRequest.missionId })
         setGraphDialogOpen(true)
         onOpenRequestConsumed?.()
     }, [openRequest, selectedMesh.id, canLaunchGraphDialog, onOpenRequestConsumed])
@@ -629,6 +629,7 @@ export function MeshDetailView({
                     sendDaemonCommand={sendCommand}
                     initialTab={dialogInit?.tab}
                     initialFocusTaskId={dialogInit?.taskId}
+                    initialFocusMissionId={dialogInit?.missionId}
                     onClose={() => { setGraphDialogOpen(false); setDialogInit(null) }}
                 />
             )}

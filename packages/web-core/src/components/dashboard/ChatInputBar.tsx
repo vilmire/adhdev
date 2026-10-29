@@ -50,6 +50,20 @@ export function shouldDisableChatSendButton({
     return !hasDraft || isBusy;
 }
 
+const parkedDrafts = new Map<string, string>();
+const MAX_PARKED_DRAFTS = 30;
+function parkDraft(key: string, text: string) {
+    parkedDrafts.delete(key);
+    if (!text.trim()) return;
+    parkedDrafts.set(key, text);
+    while (parkedDrafts.size > MAX_PARKED_DRAFTS) parkedDrafts.delete(parkedDrafts.keys().next().value as string);
+}
+function takeParkedDraft(key: string): string {
+    const text = parkedDrafts.get(key) ?? '';
+    parkedDrafts.delete(key);
+    return text;
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -130,8 +144,18 @@ const ChatInputBar = memo(function ChatInputBar({
     const canAttachImages = supportsImageInput(messageInput);
     const hasDraft = !!draftInput.trim() || attachments.length > 0;
 
+    // A draft belongs to the conversation it was typed in. Switching context parks the old text
+    // (restored if the owner comes back) instead of destroying it — a message that was typed but not
+    // yet sent must never silently vanish (assistant-startup report 2026-10-29).
+    const draftRef = useRef('');
+    draftRef.current = draftInput;
+    const prevContextKeyRef = useRef(contextKey);
     useEffect(() => {
-        setDraftInput('');
+        if (prevContextKeyRef.current !== contextKey) {
+            parkDraft(prevContextKeyRef.current, draftRef.current);
+            prevContextKeyRef.current = contextKey;
+        }
+        setDraftInput(takeParkedDraft(contextKey));
         setAttachments([]);
         setAttachError(null);
     }, [contextKey]);
@@ -332,6 +356,10 @@ const ChatInputBar = memo(function ChatInputBar({
                     <textarea
                         ref={chatInputRef}
                         rows={1}
+                        // The inactive duplicate composer (the pty layout mounts a terminal-pane bar and a chat-pane
+                        // bar; only one is shown) must not be focusable or typeable — a hidden bar swallowing Enter
+                        // was one way a message went nowhere.
+                        disabled={!isActive}
                         placeholder={statusMessage || (canAttachImages && attachments.length > 0 ? t('chatInput.addMessageOptional') : t('chatInput.placeholder', { panel: panelLabel }))}
                         value={draftInput}
                         onChange={e => setDraftInput(e.target.value)}

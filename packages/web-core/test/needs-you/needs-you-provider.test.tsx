@@ -91,7 +91,35 @@ describe('NeedsYouProvider', () => {
         await act(async () => { await Promise.resolve() })
         expect(sendCommand.mock.calls.some(c => c[1] === 'assistant_staged_resolve' && c[2]?.action === 'list')).toBe(true)
         expect(latest!.entries.some(e => e.kind === 'staged')).toBe(true)
-        expect(latest!.count).toBe(1)
+        expect(latest!.count).toBe(2) // one held write on each of the two mocked daemons
+        await act(async () => { root.unmount() })
+    })
+
+    it('aggregates held writes across all connected daemons and routes resolve to the owner', async () => {
+        const calls: Array<{ id: string; payload: any }> = []
+        const sendCommand = vi.fn(async (id: string, type: string, payload?: any) => {
+            if (type !== 'assistant_staged_resolve') throw new Error('unknown command')
+            calls.push({ id, payload })
+            if (payload?.action === 'list') {
+                return { success: true, memory: [{ id: 'same-id', origin: 'relay', createdAt: '2026-10-29T00:00:00.000Z', op: { action: 'add', target: 'memory', content: `on ${id}` } }] }
+            }
+            return { success: true, results: [{ id: payload.id, ok: true }] }
+        })
+        const root = createRoot(document.createElement('div'))
+        await act(async () => { root.render(<TransportProvider value={{ sendCommand }}><NeedsYouProvider><Probe /></NeedsYouProvider></TransportProvider>) })
+        await act(async () => { await Promise.resolve() })
+        expect([...new Set(calls.filter(c => c.payload?.action === 'list').map(c => c.id))].sort()).toEqual(['dA', 'dB'])
+        const items = latest!.staged.items!
+        expect(items).toHaveLength(2)
+        expect(new Set(items.map(i => i.id)).size).toBe(2)
+        expect(items.every(i => !!i.machine)).toBe(true)
+        expect(latest!.count).toBe(2)
+        const onB = items.find(i => i.text === 'on dB')!
+        calls.length = 0
+        await act(async () => { await latest!.staged.resolve({ id: onB.id }, 'apply') })
+        const resolveCall = calls.find(c => c.payload?.decision === 'apply')!
+        expect(resolveCall.id).toBe('dB')
+        expect(resolveCall.payload.id).toBe('same-id')
         await act(async () => { root.unmount() })
     })
 })

@@ -300,7 +300,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
                             <Badge label={t('mesh.obs.artifactsCount', { count: mission.count })} />
                         </h3>
                         {mission.tasks.map(group => (
-                            <div key={group.taskId ?? 'none'} className="flex flex-col gap-1.5 pl-2" data-testid="mesh-artifact-task" data-task-id={group.taskId ?? ''}>
+                            <div key={group.groupKey} className="flex flex-col gap-1.5 pl-2" data-testid="mesh-artifact-task" data-task-id={group.taskId ?? ''}>
                                 <div className="flex flex-wrap items-center gap-1.5 text-2xs text-text-secondary">
                                     <span className="min-w-0 truncate font-medium">{group.taskId ? (group.title || t('mesh.obs.artifactsTaskShort', { id: shortMeshRefId(group.taskId) })) : t('mesh.obs.artifactsNoTask')}</span>
                                     {group.producerRole && <Badge label={roleLabel(group.producerRole)} tone="info" />}

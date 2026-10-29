@@ -127,6 +127,8 @@ interface MeshObservabilitySurfaceProps {
     refreshToken?: number
     /** Deep link: open with this queue task's detail focused (the Tasks tab). */
     initialFocusTaskId?: string
+    /** Deep link: scroll to and highlight this mission's card on the Overview tab. */
+    initialFocusMissionId?: string
 }
 
 /**
@@ -187,6 +189,7 @@ export default function MeshObservabilitySurface({
     hideControls = false,
     refreshToken,
     initialFocusTaskId,
+    initialFocusMissionId,
 }: MeshObservabilitySurfaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -575,6 +578,7 @@ export default function MeshObservabilitySurface({
                         daemonId={daemonId}
                         meshId={canonicalStatus.meshId}
                         sendDaemonCommand={sendDaemonCommand}
+                        focusMissionId={initialFocusMissionId}
                     />
                 )}
             </div>

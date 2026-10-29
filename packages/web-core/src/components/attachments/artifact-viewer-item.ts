@@ -14,6 +14,8 @@ export interface ArtifactViewerItem {
     blob: Blob | null
     /** The workspace file changed after the artifact was registered. */
     sha256Changed?: boolean
+    /** Pop-out only: machines the opener can install a driver bundle on (the pop-out has no daemon connection). */
+    driverMachines?: Array<{ id: string; label: string }>
 }
 
 export function toArtifactViewerItem(payload: ArtifactResolvedPayload): ArtifactViewerItem {

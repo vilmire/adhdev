@@ -617,7 +617,11 @@ export function useDashboardConversationCommands({
 
     const handleSendChat = useCallback(async (rawMessage: string, attachments?: ImageAttachment[]): Promise<boolean> => {
         if (!activeConv) return false
-        if (sendInFlightRef.current) return false
+        if (sendInFlightRef.current) {
+            // The composer keeps the text (false); say why nothing happened.
+            setSendFeedbackMessage('Previous message is still sending — try again in a moment.')
+            return false
+        }
 
         const message = rawMessage.trim()
         const blockedMessage = getConversationSendBlockMessage(activeConv)
@@ -627,6 +631,13 @@ export function useDashboardConversationCommands({
             sendInFlight: sendInFlightRef.current,
         })) {
             if (blockedMessage) setSendFeedbackMessage(blockedMessage)
+            return false
+        }
+
+        // A pty session that has no session id yet is still being created: there is nothing to address.
+        // Keep the text and say so instead of sending into the void (assistant-startup report 2026-10-29).
+        if (activeConv.transport === 'pty' && !activeConv.sessionId) {
+            setSendFeedbackMessage(getInlineSendFailureMessage(new Error('Runtime not ready')))
             return false
         }
 

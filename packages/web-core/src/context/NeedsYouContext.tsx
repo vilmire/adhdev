@@ -17,7 +17,8 @@ import type { MeshStatusSnapshotUpdate } from '@adhdev/daemon-core'
 import { useTransport } from './TransportContext'
 import { useDaemons } from '../compat'
 import { subscriptionManager } from '../managers/SubscriptionManager'
-import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../hooks/useAssistantStagedWrites'
+import type { AssistantStagedWritesState } from '../hooks/useAssistantStagedWrites'
+import { useAggregatedStagedWrites } from '../hooks/useAggregatedStagedWrites'
 import { extractRepoMeshStatus } from '../utils/repo-mesh-status'
 import { deriveProviderApprovalInbox } from '../components/MeshGraph/providerApprovalInbox'
 import type { PendingApprovalItem } from '../components/MeshGraph/PendingApprovalsInbox'
@@ -55,7 +56,7 @@ export interface NeedsYouOutcome {
 export interface NeedsYouState {
     snapshot: NeedsYouSnapshot
     approvals: PendingApprovalItem[]
-    /** Owner-held writes (driver activations / destructive driver actions / assistant writes) of the primary daemon; resolve via the shared staged hook. */
+    /** Owner-held writes (driver activations / destructive driver actions / assistant writes) of every connected daemon (ids are daemon-composite; resolve routes to the owner). */
     staged: AssistantStagedWritesState
     entries: NeedsYouEntry[]
     /** Open decisions + approvals (the nav badge). */
@@ -112,12 +113,13 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
     const daemonKey = daemonIds.join(',')
     const approvals = useMemo(() => deriveProviderApprovalInbox(ides, connectionStates), [ides, connectionStates])
 
-    // Owner-held writes live on the daemon that hosts the assistant (the first connected daemon).
-    const staged = useAssistantStagedWrites({
-        daemonId: daemonIds[0] ?? null,
-        enabled: daemonIds.length > 0,
-        sendCommand,
-    })
+    // Owner-held writes live on whichever daemon staged them: aggregate across all connected daemons.
+    const machineLabels = useMemo(() => {
+        const out: Record<string, string> = {}
+        for (const d of ides as any[]) if (d && typeof d.id === 'string') out[d.id] = d.ownerMachineName || d.hostname || d.id
+        return out
+    }, [ides])
+    const staged = useAggregatedStagedWrites({ daemonIds, machineLabels, sendCommand })
     const stagedRefreshRef = useRef(staged.refresh)
     stagedRefreshRef.current = staged.refresh
 

@@ -43,6 +43,21 @@ describe('buildMeshArtifactsView', () => {
         expect(view.ordered.map(i => i.attachment.artifactId)).toEqual(['a1', 'a2', 'a3', 'a4'])
     })
 
+    it('groups task-less artifacts per producing session so a header never hides another session', () => {
+        const loose = [
+            att('b1', { taskId: undefined, missionId: undefined, originSessionId: 'sess-aaaaaaaa', createdAt: 900 }),
+            att('b2', { taskId: undefined, missionId: undefined, originSessionId: 'sess-bbbbbbbb', createdAt: 800 }),
+            att('b3', { taskId: undefined, missionId: undefined, originSessionId: 'sess-aaaaaaaa', createdAt: 700 }),
+        ]
+        const view = buildMeshArtifactsView({ attachments: loose, tasks, missions, kind: 'all', query: '' })
+        const groups = view.missions[0]!.tasks
+        expect(groups.map(g => [g.sessionId, g.items.map(i => i.attachment.artifactId)])).toEqual([
+            ['sess-aaaaaaaa', ['b1', 'b3']],
+            ['sess-bbbbbbbb', ['b2']],
+        ])
+        expect(new Set(groups.map(g => g.groupKey)).size).toBe(2)
+    })
+
     it('joins consumers from inputArtifactIds', () => {
         const view = buildMeshArtifactsView({ attachments: data, tasks, missions, kind: 'all', query: '' })
         const a1 = view.ordered.find(i => i.attachment.artifactId === 'a1')!

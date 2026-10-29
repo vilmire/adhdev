@@ -35,6 +35,8 @@ interface DashboardMeshGraphDialogProps {
     initialTab?: MeshSurfaceTab
     /** Deep link: focus this queue task once the Tasks tab is up. */
     initialFocusTaskId?: string
+    /** Deep link: scroll to / highlight this mission on the Overview tab. */
+    initialFocusMissionId?: string
 }
 
 function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation, meshId: string | null): MeshGraphLiveSessionStatus | null {
@@ -58,7 +60,7 @@ function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation
     }
 }
 
-export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose, initialTab, initialFocusTaskId }: DashboardMeshGraphDialogProps) {
+export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose, initialTab, initialFocusTaskId, initialFocusMissionId }: DashboardMeshGraphDialogProps) {
     const meshId = activeConv.coordinator?.meshId
         ?? (typeof activeConv.settings?.meshCoordinatorFor === 'string' ? activeConv.settings.meshCoordinatorFor : null)
     const daemonId = activeConv.daemonId ?? null
@@ -277,6 +279,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             onRequestRefresh={loadGraph}
                             refreshToken={refreshToken}
                             initialFocusTaskId={initialFocusTaskId}
+                            initialFocusMissionId={initialFocusMissionId}
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>

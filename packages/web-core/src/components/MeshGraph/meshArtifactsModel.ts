@@ -17,6 +17,8 @@ export interface MeshArtifactItem {
 }
 
 export interface MeshArtifactTaskGroup {
+    /** Unique within a mission: the task id, or `none:<session>` for task-less artifacts (one group per producing session). */
+    groupKey: string
     /** Producing task id; null when the artifact carries no task. */
     taskId: string | null
     title: string
@@ -96,12 +98,15 @@ export function buildMeshArtifactsView(input: MeshArtifactsViewInput): MeshArtif
     for (const att of visible) {
         const task = att.taskId ? taskById.get(att.taskId) : undefined
         const missionKey = att.missionId || task?.missionId || NO_MISSION
-        const taskKey = att.taskId || NO_TASK
+        // Task-less artifacts group per producing session: one header must not name a single session
+        // while holding another session's artifacts.
+        const taskKey = att.taskId || `${NO_TASK}:${att.originSessionId ?? ''}`
         let tasks = missionGroups.get(missionKey)
         if (!tasks) missionGroups.set(missionKey, (tasks = new Map()))
         let group = tasks.get(taskKey)
         if (!group) {
             group = {
+                groupKey: att.taskId || `none:${att.originSessionId ?? ''}`,
                 taskId: att.taskId ?? null,
                 title: att.taskId ? meshArtifactTaskTitle(task, att.taskId) : '',
                 producerRole: att.producerRole ?? null,

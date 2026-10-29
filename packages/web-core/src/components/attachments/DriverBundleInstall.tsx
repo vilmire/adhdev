@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useBaseDaemons } from '../../context/BaseDaemonContext'
 import { useTransport } from '../../context/TransportContext'
 import { trArtifact } from './artifact-i18n'
 import type { ArtifactViewerItem } from './artifact-viewer-item'
+import { requestDriverInstallViaOpener, type DriverInstallMachine, type DriverInstallOutcome } from './artifact-popout'
 
 /** Owner-side "Install driver" for a shared `*.driver-bundle.json` artifact (docs/design/2026-10-29-driver-authoring-and-sharing.md). */
 export const DRIVER_BUNDLE_FILENAME = /\.driver-bundle\.json$/i
@@ -27,14 +28,51 @@ export function unwrapDriverImportReply(reply: any): Record<string, any> {
     return inner && typeof inner === 'object' && ('success' in inner || 'code' in inner) ? inner : (reply ?? {})
 }
 
-export default function DriverBundleInstall({ item }: { item: ArtifactViewerItem }) {
-    const { t, i18n } = useTranslation('common')
-    const tr = (key: Parameters<typeof trArtifact>[2]) => trArtifact(t, i18n.language, key)
+/**
+ * The opener-side installer: this window's machines and a `driver_import` sender. Used by the modal bar
+ * and handed to the pop-out window (which has no daemon connection of its own and asks its opener).
+ */
+export function useDriverBundleInstaller(item: Pick<ArtifactViewerItem, 'text'>): {
+    machines: DriverInstallMachine[]
+    install: (targetId: string) => Promise<DriverInstallOutcome>
+} {
     const { sendCommand } = useTransport()
     const { ides } = useBaseDaemons()
     const machines = useMemo(() => (ides ?? [])
         .filter((d: any) => d && typeof d.id === 'string' && (d.daemonMode || d.type === 'adhdev-daemon'))
         .map((d: any) => ({ id: d.id as string, label: String(d.nickname || d.hostname || d.id) })), [ides])
+    const bundle = item.text
+    const install = useCallback(async (targetId: string): Promise<DriverInstallOutcome> => {
+        try {
+            const body = unwrapDriverImportReply(await sendCommand(targetId, 'driver_import', { bundle }))
+            return body.success === true ? { ok: true } : { ok: false, code: String(body.code ?? body.error ?? 'unknown') }
+        } catch (error) {
+            return { ok: false, code: error instanceof Error ? error.message : String(error) }
+        }
+    }, [sendCommand, bundle])
+    return { machines, install }
+}
+
+/** Modal viewer: the install bar wired to this window's own transport. */
+export default function DriverBundleInstall({ item }: { item: ArtifactViewerItem }) {
+    const { machines, install } = useDriverBundleInstaller(item)
+    return <DriverBundleInstallBar item={item} machines={machines} install={install} />
+}
+
+/** Pop-out viewer: no transport here — machines came with the payload and installs are relayed to the opener. */
+export function DriverBundleInstallPopout({ item }: { item: ArtifactViewerItem }) {
+    const machines = item.driverMachines ?? []
+    if (machines.length === 0) return null
+    return <DriverBundleInstallBar item={item} machines={machines} install={requestDriverInstallViaOpener} />
+}
+
+export function DriverBundleInstallBar({ item, machines, install: runInstall }: {
+    item: Pick<ArtifactViewerItem, 'text'>
+    machines: DriverInstallMachine[]
+    install: (targetId: string) => Promise<DriverInstallOutcome>
+}) {
+    const { t, i18n } = useTranslation('common')
+    const tr = (key: Parameters<typeof trArtifact>[2]) => trArtifact(t, i18n.language, key)
     const peek = useMemo(() => peekDriverBundle(item.text ?? ''), [item.text])
     const [target, setTarget] = useState('')
     const [busy, setBusy] = useState(false)
@@ -46,10 +84,10 @@ export default function DriverBundleInstall({ item }: { item: ArtifactViewerItem
         if (!effectiveTarget || busy) return
         setBusy(true); setOutcome(null)
         try {
-            const body = unwrapDriverImportReply(await sendCommand(effectiveTarget, 'driver_import', { bundle: item.text }))
-            setOutcome(body.success === true
+            const result = await runInstall(effectiveTarget)
+            setOutcome(result.ok
                 ? { ok: true, text: tr('artifact.driverInstalled') }
-                : { ok: false, text: `${tr('artifact.driverInstallFailed')}: ${String(body.code ?? body.error ?? 'unknown')}` })
+                : { ok: false, text: `${tr('artifact.driverInstallFailed')}: ${result.code ?? 'unknown'}` })
         } catch (error) {
             setOutcome({ ok: false, text: `${tr('artifact.driverInstallFailed')}: ${error instanceof Error ? error.message : String(error)}` })
         } finally { setBusy(false) }

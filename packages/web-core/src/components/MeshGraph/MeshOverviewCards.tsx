@@ -1,9 +1,10 @@
 import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText } from '../../utils/queue-task-label';
 import { Tooltip } from '../ui/InfoTip'
 import MissionStructureLine, { useMissionTitle } from './MissionStructureLine'
+import { useMissionFocus } from './useMissionFocus'
 import { filterLedgerEntriesForDisplay, ledgerEntryNodeLabel } from './meshLedgerEvents';
 import type {
     RepoMeshLedgerEntryStatus,
@@ -94,7 +95,8 @@ export default function MeshOverviewCards({
     daemonId = null,
     meshId = null,
     sendDaemonCommand = null,
-}: { status: RepoMeshStatus } & MeshCommandSeam) {
+    focusMissionId,
+}: { status: RepoMeshStatus; /** Deep link: scroll to and highlight this mission's row (expanding its section). */ focusMissionId?: string } & MeshCommandSeam) {
     // `status` is already canonicalized once at the data boundary by the parent
     // (MeshObservabilitySurface calls canonicalizeRepoMeshStatus and passes the
     // result in), so nodes/queue/ledger are guaranteed arrays and we do NOT
@@ -191,6 +193,7 @@ export default function MeshOverviewCards({
                 liveMissions={liveMissions}
                 historyMissions={historyMissions}
                 hasMissionField={Array.isArray((canonicalStatus as RepoMeshStatus).missions)}
+                focusMissionId={focusMissionId}
                 onSelect={mission => setDetail({ kind: 'mission', mission })}
             />
 
@@ -256,10 +259,11 @@ export default function MeshOverviewCards({
 
 // ── missions ──────────────────────────────────────────────────────────────
 
-function MissionRow({ meshTheme, mission, onSelect }: {
+function MissionRow({ meshTheme, mission, onSelect, highlighted = false }: {
     meshTheme: MeshGraphTheme
     mission: MeshMissionDisplay
     onSelect: () => void
+    highlighted?: boolean
 }) {
     const { t } = useTranslation('common')
     const taskStats = mission.tasks
@@ -269,7 +273,11 @@ function MissionRow({ meshTheme, mission, onSelect }: {
     const muted = taskStats.total === 0
     const title = useMissionTitle(mission)
     return (
-        <div className="min-w-0">
+        <div
+            className={`min-w-0 rounded-md transition-shadow ${highlighted ? 'ring-2 ring-accent-primary' : ''}`}
+            data-mission-row={mission.id}
+            data-mission-highlighted={highlighted ? 'true' : undefined}
+        >
             <ListRow meshTheme={meshTheme} onClick={onSelect} dimmed={muted}>
                 <StatusBadge meshTheme={meshTheme} label={missionStatusLabel(mission.status, t)} tone={missionStatusTone(mission.status)} />
                 <span className={`min-w-0 flex-1 truncate font-medium ${muted ? meshTheme.textSecondary : meshTheme.textPrimary}`}>{title}</span>
@@ -281,7 +289,8 @@ function MissionRow({ meshTheme, mission, onSelect }: {
     )
 }
 
-function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionField, onSelect }: {
+function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionField, onSelect, focusMissionId }: {
+    focusMissionId?: string
     meshTheme: MeshGraphTheme
     liveMissions: MeshMissionDisplay[]
     historyMissions: MeshMissionDisplay[]
@@ -300,7 +309,26 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
     const inlineMissions = activeMissions.length > 0 ? activeMissions : pausedMissions
     const foldedPaused = activeMissions.length > 0 ? pausedMissions : []
     const live = useRecentList(inlineMissions)
+    // Deep link: open whichever fold hides the focused mission, then scroll + highlight its row.
+    const cardRef = useRef<HTMLDivElement>(null)
+    const { expanded: liveExpanded, toggle: toggleLive } = live
+    const focusWhere = !focusMissionId ? '' : historyMissions.some(m => m.id === focusMissionId) ? 'history'
+        : foldedPaused.some(m => m.id === focusMissionId) ? 'paused'
+        : `live:${inlineMissions.findIndex(m => m.id === focusMissionId)}`
+    useEffect(() => {
+        // Keyed on WHERE the mission lives, not on the arrays, so a later manual collapse sticks.
+        if (focusWhere === 'history') setShowHistory(true)
+        else if (focusWhere === 'paused') setShowPaused(true)
+        else if (focusWhere.startsWith('live:') && live.hiddenCount > 0 && Number(focusWhere.slice(5)) >= inlineMissions.length - live.hiddenCount && !liveExpanded) toggleLive()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [focusMissionId, focusWhere])
+    const highlightedId = useMissionFocus(
+        focusMissionId,
+        cardRef,
+        `${showHistory}|${showPaused}|${liveExpanded}|${live.visible.length}|${historyMissions.length}|${foldedPaused.length}`,
+    )
     return (
+        <div ref={cardRef}>
         <Card
             meshTheme={meshTheme}
             title={t('mesh.overview.missionCard')}
@@ -308,7 +336,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
         >
             {inlineMissions.length > 0 ? (
                 <div className="flex flex-col gap-0.5">
-                    {live.visible.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
+                    {live.visible.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} highlighted={m.id === highlightedId} onSelect={() => onSelect(m)} />)}
                     <MoreToggle meshTheme={meshTheme} expanded={live.expanded} hiddenCount={live.hiddenCount} onToggle={live.toggle} />
                 </div>
             ) : (
@@ -332,7 +360,7 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                     </button>
                     {showPaused && (
                         <div className="mt-2 flex flex-col gap-0.5">
-                            {foldedPaused.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
+                            {foldedPaused.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} highlighted={m.id === highlightedId} onSelect={() => onSelect(m)} />)}
                         </div>
                     )}
                 </div>
@@ -351,12 +379,13 @@ function MissionsCard({ meshTheme, liveMissions, historyMissions, hasMissionFiel
                     </button>
                     {showHistory && (
                         <div className="mt-2 flex flex-col gap-0.5">
-                            {historyMissions.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} onSelect={() => onSelect(m)} />)}
+                            {historyMissions.map(m => <MissionRow key={m.id} meshTheme={meshTheme} mission={m} highlighted={m.id === highlightedId} onSelect={() => onSelect(m)} />)}
                         </div>
                     )}
                 </div>
             )}
         </Card>
+        </div>
     )
 }
 

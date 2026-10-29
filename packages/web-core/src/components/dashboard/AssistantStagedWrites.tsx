@@ -233,6 +233,7 @@ function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: Assi
                 </span>
                 <span className="font-medium text-text-primary">{action}</span>
                 {item.role && <span className="font-medium text-text-primary" data-staged-role={item.role}>{t(`assistantStaged.role.${item.role}`)}</span>}
+                {item.machine && <span className="rounded bg-bg-secondary px-1.5 py-px text-[10px] leading-none text-text-muted" data-staged-machine={item.machine}>{item.machine}</span>}
                 {item.target && <span className="truncate font-mono text-text-primary" title={item.target}>{item.target}</span>}
                 {item.detail && <span className="text-text-muted">· {item.detail}</span>}
             </div>

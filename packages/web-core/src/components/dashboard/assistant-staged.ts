@@ -81,6 +81,8 @@ export interface AssistantStagedItem {
     /** Launch default only — the role whose next-launch default the proposal sets or clears. */
     role?: AssistantStagedLaunchRole
     driverActivation?: DriverActivationPreview
+    /** Aggregated Needs-you inbox only: the machine that holds this write (set when more than one daemon is connected). */
+    machine?: string
 }
 
 export interface AssistantStagedGroup {
