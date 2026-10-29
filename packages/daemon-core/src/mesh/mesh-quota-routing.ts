@@ -4,6 +4,10 @@
  * (mesh-shared MeshNodeFacts.quota), with same-daemon worktree clones falling
  * back to their clone source while their own facts are not usable yet.
  *
+ * The long ranking axis is the supported 7d or 30d window; when both are
+ * measured, the tighter remainder governs. Every supported window still
+ * gates independently. Long-window reserve policy keeps its weekly wire keys.
+ *
  * Two consumers, one judgement module (mirrors mesh-node-slots.ts: a tiny
  * standalone module so importing it never drags in the assignment engine):
  *
@@ -122,6 +126,8 @@ import {
  *  SLOT MODEL GUARD's busy outcome. */
 export const PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON = 'provider_quota_session_low';
 export const PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON = 'provider_quota_weekly_low';
+export const PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON = 'provider_quota_monthly_low';
+export type QuotaRankingAxis = 'session' | 'weekly' | 'monthly';
 /** Hard-block reason: the provider itself reported its plan exhausted (a fresh
  *  'error' snapshot with metadata.failureKind 'quota-exhausted'). Same WAIT
  *  semantics as the window gates — the quota resets on its own — so this is
@@ -148,7 +154,7 @@ export interface ProviderQuotaGateBlock {
     reason: string;
     /** 'unknown' when the block comes from an explicit exhaustion signal that
      *  does not name a window (PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON). */
-    window: 'session' | 'weekly' | 'unknown';
+    window: QuotaRankingAxis | 'unknown';
     remainingPercent: number;
     thresholdPercent: number;
     /** Model group the block was judged for (antigravity-cli: 'gemini' |
@@ -253,7 +259,7 @@ export function quotaWindowsForGateTarget(
 }
 
 /**
- * The session/weekly axes a consumer should read for (provider, target): the
+ * The session/weekly/monthly axes a consumer should read for (provider, target): the
  * slot's own Antigravity pool when it can be resolved, otherwise the provider
  * headline. Shared by the gate, ranking and spread bonus so none of them reads
  * the blended worst-pool headline for a slot whose pool is known.
@@ -262,9 +268,9 @@ export function quotaAxesForTarget(
     providerType: string,
     quota: MeshNodeFactsProviderQuota,
     target?: ProviderQuotaGateTarget | null,
-): { session: QuotaGateWindow | null | undefined; weekly: QuotaGateWindow | null | undefined; group?: string } {
+): { session: QuotaGateWindow | null | undefined; weekly: QuotaGateWindow | null | undefined; monthly?: QuotaGateWindow | null; group?: string } {
     const projected = quotaWindowsForGateTarget(providerType, quota, target);
-    return projected ?? { session: quota.session, weekly: quota.weekly };
+    return projected ?? { session: quota.session, weekly: quota.weekly, monthly: quota.monthly };
 }
 
 /**
@@ -404,6 +410,8 @@ export function evaluateProviderQuotaGate(
     const targetWindows = quotaWindowsForGateTarget(providerType, quota, target);
     const sessionWindow = targetWindows ? targetWindows.session : quota.session;
     const weeklyWindow = targetWindows ? targetWindows.weekly : quota.weekly;
+    const monthlyWindow = targetWindows ? null : quota.monthly;
+    const monthlyTrustworthy = isWindowTrustworthy(monthlyWindow, facts, quota, policy, now);
     let sessionTrustworthy = true;
     let weeklyTrustworthy = true;
     if (quota.status !== 'ok') {
@@ -449,7 +457,7 @@ export function evaluateProviderQuotaGate(
     // describes a previous window and must never be used to deny a claim.
     if (sessionTrustworthy && isWindowExpired(sessionWindow, facts, quota, now)) sessionTrustworthy = false;
     if (weeklyTrustworthy && isWindowExpired(weeklyWindow, facts, quota, now)) weeklyTrustworthy = false;
-    if (quota.status === 'ok' && !sessionTrustworthy && !weeklyTrustworthy) {
+    if (quota.status === 'ok' && !sessionTrustworthy && !weeklyTrustworthy && !monthlyTrustworthy) {
         if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
             logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context);
         }
@@ -496,7 +504,33 @@ export function evaluateProviderQuotaGate(
             thresholdPercent: resolved.weeklyMinRemainingPercent,
         };
     }
+    const monthly = remainingPercent(monthlyWindow);
+    // Apply the existing long-window reserve to monthly plans too. Keep the
+    // measured window identity and reset; a billing month is never a 7d window.
+    if (monthlyTrustworthy && monthly !== undefined && monthly < resolved.weeklyMinRemainingPercent) {
+        return {
+            reason: PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON,
+            window: 'monthly',
+            remainingPercent: monthly,
+            thresholdPercent: resolved.weeklyMinRemainingPercent,
+        };
+    }
     return null;
+}
+
+/** The binding supported long window; missing Cursor data still names its 30d axis. */
+export function longQuotaAxisFor(
+    node: any, providerType: string, policy?: RepoMeshQuotaRoutingPolicy | null,
+    now: number = Date.now(), context?: QuotaFactsContext | null,
+    target?: ProviderQuotaGateTarget | null,
+): 'weekly' | 'monthly' {
+    const entry = quotaEntryFor(node, providerType, context, now);
+    if (!entry) return providerType === 'cursor-cli' ? 'monthly' : 'weekly';
+    const axes = quotaAxesForTarget(providerType, entry.quota, target);
+    const weekly = isWindowTrustworthy(axes.weekly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.weekly) : undefined;
+    const monthly = isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : undefined;
+    if (monthly !== undefined && (weekly === undefined || monthly < weekly)) return 'monthly';
+    return !axes.weekly && (axes.monthly || providerType === 'cursor-cli') ? 'monthly' : 'weekly';
 }
 
 /** Fallback weekly-window length when a snapshot reports a weekly window
@@ -633,7 +667,7 @@ interface ExpiryRisk {
 export function expiryRiskForRanking(
     node: any,
     providerType: string,
-    axis: 'session' | 'weekly',
+    axis: QuotaRankingAxis,
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
@@ -643,7 +677,7 @@ export function expiryRiskForRanking(
     if (!entry) return undefined;
     const { facts, quota } = entry;
     const axes = quotaAxesForTarget(providerType, quota, target);
-    const window = axis === 'session' ? axes.session : axes.weekly;
+    const window = axes[axis];
     // Keep ranking on the same per-window authority boundary as the launch
     // gate and spread bonus. In particular, an already-reset window is not
     // "fully elapsed" risk; it no longer says anything about the new window.
@@ -656,7 +690,7 @@ export function expiryRiskForRanking(
     if (!Number.isFinite(ageMs)) return { remainingPercent: remaining, risk: 0 };
     const reporterNowMs = Number(quota.updatedAt) + ageMs;
     const windowMinutes = Number(window?.windowMinutes);
-    const fallbackMinutes = axis === 'session' ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
+    const fallbackMinutes = axis === 'session' ? DEFAULT_SESSION_WINDOW_MINUTES : axis === 'monthly' ? 30 * 24 * 60 : DEFAULT_WEEKLY_WINDOW_MINUTES;
     const windowMs = (Number.isFinite(windowMinutes) && windowMinutes > 0
         ? windowMinutes : fallbackMinutes) * 60 * 1000;
     const timeLeftFraction = Math.min(1, Math.max(0, (resetsAt - reporterNowMs) / windowMs));
@@ -679,9 +713,9 @@ export interface ProviderQuotaRankingEvidence {
     /** The window axis this candidate's `risk` was measured on — the axis the
      *  sort used, not a per-candidate preference. `sessionAxisActive` on the
      *  ranking says which one governed overall; a candidate can still report
-     *  'weekly' while session mode is active if its session window is
+     *  'weekly' or 'monthly' while session mode is active if its session window is
      *  unreadable (the fail-open fallback in the comparator). */
-    axis: 'weekly' | 'session';
+    axis: QuotaRankingAxis;
     /** Expiry-risk score on `axis`: remaining² / (remaining + 100 ×
      *  timeLeftFraction) — see expiryRiskScore. HIGHER = spend SOONER, and the
      *  sort is DESC, so the largest risk is `clear[0]`.
@@ -843,7 +877,8 @@ export function rankProvidersByQuotaGate(
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }
-    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now, context, targetsByProvider?.get(p))]));
+    const longAxisByProvider = new Map(clear.map(p => [p, longQuotaAxisFor(node, p, policy, now, context, targetsByProvider?.get(p))]));
+    const longByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, longAxisByProvider.get(p)!, policy, now, context, targetsByProvider?.get(p))]));
     // 2′ conditional gate: the session (5h) axis ranks ONLY while every
     // weekly-readable candidate has weekly headroom to spare (strictly above
     // the threshold — a candidate AT it stays weekly-protected). With no
@@ -854,15 +889,15 @@ export function rankProvidersByQuotaGate(
     // remainingPercent: staleness does not change what the reading says, and
     // the same full-trust rule applies to both protection and ordering.
     const headroomPercent = resolveQuotaRoutingPolicy(policy).sessionAxisWeeklyHeadroomPercent;
-    const weeklyMeasured = [...weeklyByProvider.values()].filter((w): w is ExpiryRisk => w !== undefined);
-    const sessionAxisActive = weeklyMeasured.length > 0
-        && weeklyMeasured.every(w => w.remainingPercent > headroomPercent);
+    const longMeasured = [...longByProvider.values()].filter((w): w is ExpiryRisk => w !== undefined);
+    const sessionAxisActive = longMeasured.length > 0
+        && longMeasured.every(w => w.remainingPercent > headroomPercent);
     const sessionByProvider = sessionAxisActive
         ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now, context, targetsByProvider?.get(p))]))
         : undefined;
     clear.sort((a, b) => {
-        const wa = weeklyByProvider.get(a);
-        const wb = weeklyByProvider.get(b);
+        const wa = longByProvider.get(a);
+        const wb = longByProvider.get(b);
         // NO reading at all still sorts last — nothing to rank on. A retained
         // reading is NOT in this branch: it has real numbers and competes
         // below at the same weight as a fresh reading.
@@ -896,8 +931,8 @@ export function rankProvidersByQuotaGate(
     // otherwise the comparator fell back to weekly for it.
     const rankingEvidence: ProviderQuotaRankingEvidence[] = clear.map(providerType => {
         const session = sessionByProvider?.get(providerType);
-        const reading = session ?? weeklyByProvider.get(providerType);
-        const axis: 'weekly' | 'session' = session ? 'session' : 'weekly';
+        const reading = session ?? longByProvider.get(providerType);
+        const axis: QuotaRankingAxis = session ? 'session' : longAxisByProvider.get(providerType)!;
         return {
             providerType,
             axis,

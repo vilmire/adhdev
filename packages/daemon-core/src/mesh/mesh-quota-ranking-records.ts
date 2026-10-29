@@ -4,7 +4,7 @@
  * last-ranking record surfaced to observability (with its rationale and claim
  * outcome), and the quota-headroom spread bonus the fitness ranking adds.
  */
-import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, expiryRiskForRanking, isWindowTrustworthy, quotaAxesForTarget, antigravityPoolFromLeadingLabel, type ProviderQuotaGateTarget, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
+import { longQuotaAxisFor, type QuotaRankingAxis, evaluateProviderQuotaGate, rankProvidersByQuotaGate, expiryRiskForRanking, isWindowTrustworthy, quotaAxesForTarget, antigravityPoolFromLeadingLabel, type ProviderQuotaGateTarget, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
 import { resolveQuotaRoutingPolicy, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { cloneSourceNodeFor, quotaEntryFor, remainingPercent, classifyAbsentQuotaReason, type QuotaFactsContext } from './mesh-quota-sources.js';
 
@@ -147,7 +147,7 @@ export interface ProviderQuotaRiskSnapshot {
     /** Window axis used by the ranking for this provider. A provider can be
      *  weekly while session mode is active when its session window is
      *  unreadable and the comparator falls back. */
-    axis: 'weekly' | 'session';
+    axis: QuotaRankingAxis;
     remainingPercent?: number;
     /** Expiry risk compared directly by the ranking. */
     risk?: number;
@@ -174,8 +174,8 @@ export function quotaRiskSnapshotForCandidates(
     );
     return orderedProviderTypes.map(providerType => {
         const evidence = evidenceByProvider.get(providerType);
-        const axis: 'weekly' | 'session' = evidence?.axis
-            ?? (resolvedRanking.sessionAxisActive ? 'session' : 'weekly');
+        const axis: QuotaRankingAxis = evidence?.axis
+            ?? (resolvedRanking.sessionAxisActive ? 'session' : longQuotaAxisFor(node, providerType, policy, now, context));
         const w = expiryRiskForRanking(node, providerType, axis, policy, now, context);
         return {
             providerType,
@@ -386,6 +386,7 @@ export function quotaSpreadBonusByProvider(
             const ratios = [
                 isWindowTrustworthy(axes.session, facts, snapshot, policy, now) ? remainingPercent(axes.session) : undefined,
                 isWindowTrustworthy(axes.weekly, facts, snapshot, policy, now) ? remainingPercent(axes.weekly) : undefined,
+                isWindowTrustworthy(axes.monthly, facts, snapshot, policy, now) ? remainingPercent(axes.monthly) : undefined,
             ]
                 .filter((r): r is number => r !== undefined)
                 .map(r => r / 100);
@@ -459,10 +460,10 @@ export function quotaSpreadBonusDiagnosticsByProvider(
             const windowsEligible = quota.status === 'ok' || (quota as any).metadata?.lastGoodWindows === true;
             if (!windowsEligible) {
                 zeroReason = failureKind === 'no-data' ? 'no-data' : 'snapshot-error';
-            } else if (!quota.session && !quota.weekly) {
+            } else if (!axes.session && !axes.weekly && !axes.monthly) {
                 zeroReason = 'no-data';
-            } else if (!isWindowTrustworthy(axes.session, facts, quota, policy, now)
-                && !isWindowTrustworthy(axes.weekly, facts, quota, policy, now)) {
+            } else if (![axes.session, axes.weekly, axes.monthly].some(window =>
+                window && isWindowTrustworthy(window, facts, quota, policy, now))) {
                 zeroReason = 'stale';
             } else {
                 zeroReason = 'zero-headroom';

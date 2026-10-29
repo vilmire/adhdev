@@ -68545,7 +68545,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     function quotaAxesForTarget2(providerType, quota, target4) {
       const projected = quotaWindowsForGateTarget(providerType, quota, target4);
-      return projected ?? { session: quota.session, weekly: quota.weekly };
+      return projected ?? { session: quota.session, weekly: quota.weekly, monthly: quota.monthly };
     }
     function isSessionResetImminent(session, facts, quota, imminentMs, now) {
       const resetsAt = Number(session?.resetsAt);
@@ -68584,6 +68584,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const targetWindows = quotaWindowsForGateTarget(providerType, quota, target4);
       const sessionWindow = targetWindows ? targetWindows.session : quota.session;
       const weeklyWindow = targetWindows ? targetWindows.weekly : quota.weekly;
+      const monthlyWindow = targetWindows ? null : quota.monthly;
+      const monthlyTrustworthy = isWindowTrustworthy(monthlyWindow, facts, quota, policy, now);
       let sessionTrustworthy = true;
       let weeklyTrustworthy = true;
       if (quota.status !== "ok") {
@@ -68604,7 +68606,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       if (sessionTrustworthy && isWindowExpired(sessionWindow, facts, quota, now)) sessionTrustworthy = false;
       if (weeklyTrustworthy && isWindowExpired(weeklyWindow, facts, quota, now)) weeklyTrustworthy = false;
-      if (quota.status === "ok" && !sessionTrustworthy && !weeklyTrustworthy) {
+      if (quota.status === "ok" && !sessionTrustworthy && !weeklyTrustworthy && !monthlyTrustworthy) {
         if (!isQuotaSnapshotFresh(facts, quota, policy, now)) {
           logStaleQuotaFailOpen(node, providerType, facts, quota, policy, now, context2);
         }
@@ -68647,7 +68649,25 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           thresholdPercent: resolved.weeklyMinRemainingPercent
         };
       }
+      const monthly = remainingPercent(monthlyWindow);
+      if (monthlyTrustworthy && monthly !== void 0 && monthly < resolved.weeklyMinRemainingPercent) {
+        return {
+          reason: PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON,
+          window: "monthly",
+          remainingPercent: monthly,
+          thresholdPercent: resolved.weeklyMinRemainingPercent
+        };
+      }
       return null;
+    }
+    function longQuotaAxisFor(node, providerType, policy, now = Date.now(), context2, target4) {
+      const entry = quotaEntryFor(node, providerType, context2, now);
+      if (!entry) return providerType === "cursor-cli" ? "monthly" : "weekly";
+      const axes = quotaAxesForTarget2(providerType, entry.quota, target4);
+      const weekly = isWindowTrustworthy(axes.weekly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.weekly) : void 0;
+      const monthly = isWindowTrustworthy(axes.monthly, entry.facts, entry.quota, policy, now) ? remainingPercent(axes.monthly) : void 0;
+      if (monthly !== void 0 && (weekly === void 0 || monthly < weekly)) return "monthly";
+      return !axes.weekly && (axes.monthly || providerType === "cursor-cli") ? "monthly" : "weekly";
     }
     function expiryRiskScore(remainingPercent2, timeLeftFraction) {
       if (!(remainingPercent2 > 0)) return 0;
@@ -68658,7 +68678,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!entry) return void 0;
       const { facts, quota } = entry;
       const axes = quotaAxesForTarget2(providerType, quota, target4);
-      const window = axis2 === "session" ? axes.session : axes.weekly;
+      const window = axes[axis2];
       if (!isWindowTrustworthy(window, facts, quota, policy, now)) return void 0;
       const remaining = remainingPercent(window);
       if (remaining === void 0) return void 0;
@@ -68668,7 +68688,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!Number.isFinite(ageMs2)) return { remainingPercent: remaining, risk: 0 };
       const reporterNowMs = Number(quota.updatedAt) + ageMs2;
       const windowMinutes3 = Number(window?.windowMinutes);
-      const fallbackMinutes = axis2 === "session" ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
+      const fallbackMinutes = axis2 === "session" ? DEFAULT_SESSION_WINDOW_MINUTES : axis2 === "monthly" ? 30 * 24 * 60 : DEFAULT_WEEKLY_WINDOW_MINUTES;
       const windowMs = (Number.isFinite(windowMinutes3) && windowMinutes3 > 0 ? windowMinutes3 : fallbackMinutes) * 60 * 1e3;
       const timeLeftFraction = Math.min(1, Math.max(0, (resetsAt - reporterNowMs) / windowMs));
       return { remainingPercent: remaining, risk: expiryRiskScore(remaining, timeLeftFraction) };
@@ -68688,14 +68708,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         if (block2) gated.push({ providerType, block: block2 });
         else clear.push(providerType);
       }
-      const weeklyByProvider = new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "weekly", policy, now, context2, targetsByProvider?.get(p))]));
+      const longAxisByProvider = new Map(clear.map((p) => [p, longQuotaAxisFor(node, p, policy, now, context2, targetsByProvider?.get(p))]));
+      const longByProvider = new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, longAxisByProvider.get(p), policy, now, context2, targetsByProvider?.get(p))]));
       const headroomPercent = resolveQuotaRoutingPolicy(policy).sessionAxisWeeklyHeadroomPercent;
-      const weeklyMeasured = [...weeklyByProvider.values()].filter((w) => w !== void 0);
-      const sessionAxisActive = weeklyMeasured.length > 0 && weeklyMeasured.every((w) => w.remainingPercent > headroomPercent);
+      const longMeasured = [...longByProvider.values()].filter((w) => w !== void 0);
+      const sessionAxisActive = longMeasured.length > 0 && longMeasured.every((w) => w.remainingPercent > headroomPercent);
       const sessionByProvider = sessionAxisActive ? new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "session", policy, now, context2, targetsByProvider?.get(p))])) : void 0;
       clear.sort((a, b) => {
-        const wa = weeklyByProvider.get(a);
-        const wb = weeklyByProvider.get(b);
+        const wa = longByProvider.get(a);
+        const wb = longByProvider.get(b);
         if (wa === void 0 && wb === void 0) return 0;
         if (wa === void 0) return 1;
         if (wb === void 0) return -1;
@@ -68715,8 +68736,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       });
       const rankingEvidence = clear.map((providerType) => {
         const session = sessionByProvider?.get(providerType);
-        const reading = session ?? weeklyByProvider.get(providerType);
-        const axis2 = session ? "session" : "weekly";
+        const reading = session ?? longByProvider.get(providerType);
+        const axis2 = session ? "session" : longAxisByProvider.get(providerType);
         return {
           providerType,
           axis: axis2,
@@ -68730,6 +68751,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     }
     var PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON;
     var PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON;
+    var PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON;
     var PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON;
     var PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON;
     var ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON;
@@ -68742,6 +68764,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         init_mesh_quota_sources();
         PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON = "provider_quota_session_low";
         PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON = "provider_quota_weekly_low";
+        PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON = "provider_quota_monthly_low";
         PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = "provider_quota_exhausted";
         PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON = "provider_quota_group_exhausted";
         ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = "all_providers_quota_gated";
@@ -69030,7 +69053,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       );
       return orderedProviderTypes.map((providerType) => {
         const evidence = evidenceByProvider.get(providerType);
-        const axis2 = evidence?.axis ?? (resolvedRanking.sessionAxisActive ? "session" : "weekly");
+        const axis2 = evidence?.axis ?? (resolvedRanking.sessionAxisActive ? "session" : longQuotaAxisFor(node, providerType, policy, now, context2));
         const w = expiryRiskForRanking(node, providerType, axis2, policy, now, context2);
         return {
           providerType,
@@ -69101,7 +69124,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           const axes = quotaAxesForTarget2(provider, snapshot, targetsByProvider?.get(provider));
           const ratios = [
             isWindowTrustworthy(axes.session, facts, snapshot, policy, now) ? remainingPercent(axes.session) : void 0,
-            isWindowTrustworthy(axes.weekly, facts, snapshot, policy, now) ? remainingPercent(axes.weekly) : void 0
+            isWindowTrustworthy(axes.weekly, facts, snapshot, policy, now) ? remainingPercent(axes.weekly) : void 0,
+            isWindowTrustworthy(axes.monthly, facts, snapshot, policy, now) ? remainingPercent(axes.monthly) : void 0
           ].filter((r) => r !== void 0).map((r) => r / 100);
           if (ratios.length) {
             bonus = Math.round(resolved.spreadBonusMax * Math.min(...ratios));
@@ -69130,9 +69154,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           const windowsEligible = quota.status === "ok" || quota.metadata?.lastGoodWindows === true;
           if (!windowsEligible) {
             zeroReason = failureKind === "no-data" ? "no-data" : "snapshot-error";
-          } else if (!quota.session && !quota.weekly) {
+          } else if (!axes.session && !axes.weekly && !axes.monthly) {
             zeroReason = "no-data";
-          } else if (!isWindowTrustworthy(axes.session, facts, quota, policy, now) && !isWindowTrustworthy(axes.weekly, facts, quota, policy, now)) {
+          } else if (![axes.session, axes.weekly, axes.monthly].some((window) => window && isWindowTrustworthy(window, facts, quota, policy, now))) {
             zeroReason = "stale";
           } else {
             zeroReason = "zero-headroom";
@@ -128319,7 +128343,7 @@ ${grant.exp}`).digest("hex");
     }
     function axisOf(v) {
       const t = readText3(v);
-      return t === "weekly" || t === "session" ? t : void 0;
+      return t === "weekly" || t === "session" || t === "monthly" ? t : void 0;
     }
     function quotaRow(v) {
       const r = rec3(v);
@@ -147794,7 +147818,7 @@ ${tail}` : ""
             ...winner ? { winner } : {},
             reordered: !!winner && !!fitnessOrderHead && winner !== fitnessOrderHead,
             ...winner && fitnessOrderHead && winner !== fitnessOrderHead ? { displacedFitnessWinner: fitnessOrderHead } : {},
-            axis: selection.ranked.sessionAxisActive ? "session" : "weekly",
+            axis: quotaStageAxis(selection.ranked.rankingEvidence ?? [], selection.ranked.gated),
             sessionAxisActive: selection.ranked.sessionAxisActive === true
           }
         },
@@ -147882,6 +147906,13 @@ ${tail}` : ""
           "Dynamic launch gates outside provider selection (node health, dirty/stale workspace, cooldown, and live-session count) are not probed by this tool."
         ]
       };
+    }
+    function quotaStageAxis(evidence, gated) {
+      const axes = new Set(evidence.map((entry) => entry.axis));
+      if (axes.size === 0) for (const { block: block2 } of gated) {
+        if (block2.window !== "unknown") axes.add(block2.window);
+      }
+      return axes.size > 1 ? "mixed" : axes.values().next().value ?? "weekly";
     }
     init_mesh_host_ownership();
     init_mesh_events();
@@ -230293,7 +230324,7 @@ function checkDirectDispatchQuotaGate(node, providerType, quotaRoutingPolicy, mo
   if (!block) return null;
   const quota = node?.nodeFacts?.quota?.[providerType];
   const axes = quota ? (0, import_daemon_core22.quotaAxesForTarget)(providerType, quota, target) : void 0;
-  const window = block.window === "session" ? axes?.session : block.window === "weekly" ? axes?.weekly : null;
+  const window = block.window === "session" ? axes?.session : block.window === "weekly" ? axes?.weekly : block.window === "monthly" ? axes?.monthly : null;
   const resetsAt = typeof window?.resetsAt === "number" && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
   return { block, resetsAt };
 }

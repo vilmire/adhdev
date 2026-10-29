@@ -361,7 +361,7 @@ export interface RoutingQuotaRow {
     /** Headroom on the ranked axis; absent when the axis had no readable reading. */
     remainingPercent?: number;
     /** The window axis this candidate was measured on. */
-    axis?: 'weekly' | 'session';
+    axis?: 'weekly' | 'session' | 'monthly';
 }
 
 export interface RoutingNodeRow {
@@ -404,9 +404,9 @@ function routingSlot(v: unknown): RoutingSlot | null {
     return { providerType, ...(model ? { model } : {}) };
 }
 
-function axisOf(v: unknown): 'weekly' | 'session' | undefined {
+function axisOf(v: unknown): 'weekly' | 'session' | 'monthly' | undefined {
     const t = readText(v);
-    return t === 'weekly' || t === 'session' ? t : undefined;
+    return t === 'weekly' || t === 'session' || t === 'monthly' ? t : undefined;
 }
 
 function quotaRow(v: unknown): RoutingQuotaRow | null {

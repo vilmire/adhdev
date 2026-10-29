@@ -335,9 +335,9 @@ export interface RepoMeshQuotaRoutingPolicy {
      */
     sessionResetImminentMs?: number;
     /**
-     * Skip a (node, provider) whose WEEKLY window (the ~7d rolling window) has
-     * less than this percent remaining. Defaults to 15 — an exhausted weekly
-     * window strands the node for days, so the bar is more conservative.
+     * Skip a (node, provider) whose supported long window (7d or 30d) has
+     * less than this percent remaining. Defaults to 15. The weekly wire key
+     * is retained for compatibility; monthly readings keep their own axis.
      */
     weeklyMinRemainingPercent?: number;
     /**

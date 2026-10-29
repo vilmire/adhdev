@@ -186,7 +186,7 @@ export function checkDirectDispatchQuotaGate(
     if (!block) return null;
     const quota = (node as any)?.nodeFacts?.quota?.[providerType] as MeshNodeFactsProviderQuota | undefined;
     const axes = quota ? quotaAxesForTarget(providerType, quota, target) : undefined;
-    const window = block.window === 'session' ? axes?.session : block.window === 'weekly' ? axes?.weekly : null;
+    const window = block.window === 'session' ? axes?.session : block.window === 'weekly' ? axes?.weekly : block.window === 'monthly' ? axes?.monthly : null;
     const resetsAt = typeof window?.resetsAt === 'number' && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
     return { block, resetsAt };
 }

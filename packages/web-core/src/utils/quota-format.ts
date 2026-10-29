@@ -547,10 +547,10 @@ export function bindQuotaDisplayModel(fmt: QuotaTextFormatter) {
  * Which chips a machine-page surface should render.
  *
  * - `all` — Overview / full cards: every chip the model assembled.
- * - `fleet` — grid cells: per-pool buckets when present, else session/weekly axes
+ * - `fleet` — grid cells: per-pool buckets when present, else session/weekly/monthly axes
  *   (never falls back to a single compactChip while buckets exist).
  * - `row` — provider-settings header: per-pool buckets when present, else the
- *   worst-headline compactChip. Does not invent a second pool.
+ *   worst-headline compactChip, or the monthly chip for a monthly-only plan.
  */
 export function selectMachineQuotaChips(
     model: QuotaDisplayModel,
@@ -561,11 +561,11 @@ export function selectMachineQuotaChips(
         if (buckets.length > 0) return buckets
         if (mode === 'all') return model.chips
         if (mode === 'fleet') {
-            const axes = model.chips.filter((chip) => chip.hint === 'session' || chip.hint === 'weekly')
+            const axes = model.chips.filter((chip) => chip.hint === 'session' || chip.hint === 'weekly' || chip.hint === 'monthly')
             if (axes.length > 0) return axes
             return model.compactChip ? [model.compactChip] : []
         }
-        return model.compactChip ? [model.compactChip] : []
+        return model.compactChip ? [model.compactChip] : model.chips.filter(chip => chip.hint === 'monthly')
     }
     if (model.kind === 'usage' && model.compactChip) return [model.compactChip]
     return []
@@ -582,7 +582,7 @@ export function shortQuotaChipLabel(chip: QuotaDisplayChip): string {
                 : chip.key
     if (chip.usedPercent === null) return chip.hint === 'usage' ? chip.label : `${axis} —`
     if (chip.hint === 'usage') return chip.label
-    return `${axis} ${Math.round(chip.usedPercent)}%${chip.freshnessLabel ? ` · ${chip.freshnessLabel}` : ''}`
+    return `${axis} ${chip.hint === 'monthly' ? chip.usedPercent.toFixed(1) : Math.round(chip.usedPercent)}%${chip.freshnessLabel ? ` · ${chip.freshnessLabel}` : ''}`
 }
 
 export type ClaudeQuotaHint = 'setup' | 'refresh' | null

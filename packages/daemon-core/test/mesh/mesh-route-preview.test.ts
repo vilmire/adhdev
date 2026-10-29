@@ -503,3 +503,32 @@ describe('mesh route preview — Antigravity bucket-aware quota gate', () => {
         expect(exhaustedError.quotaDiagnostics[0]?.gate.outcome).toBe('hard-block');
     });
 });
+
+describe('Cursor monthly preview to project_status', () => {
+    it('passes measured monthly headroom through selection and the project_status allow-list', async () => {
+        const { projectRoutingView } = await import('../../src/assistant/project-views.js');
+        const cursor = { provider: 'cursor-cli', status: 'ok', error: null, updatedAt: NOW,
+            session: null, weekly: null,
+            monthly: { usedPercent: 12.1, windowMinutes: 43200, resetsAt: NOW + 6 * DAY + 4 * 60 * MIN } };
+        const node = nodeWith([{ provider: 'cursor-cli', model: 'cursor-model', difficulty: ['difficult'], maxParallel: 1 }], { 'cursor-cli': cursor });
+        const answer = preview(node);
+        expect(answer.stages.quota.axis).toBe('monthly');
+        expect(answer.predictedWinner?.providerType).toBe('cursor-cli');
+        expect(answer.quotaDiagnostics[0]).toMatchObject({
+            bonus: { value: 26 }, gate: { outcome: 'clear' }, ranking: { axis: 'monthly', remainingPercent: 87.9 },
+        });
+        const status = projectRoutingView({ nodes: [answer] }, 'difficult');
+        expect(status.perNode[0].quota[0]).toMatchObject({ providerType: 'cursor-cli', axis: 'monthly', remainingPercent: 87.9, gateOutcome: 'clear', bonusValue: 26 });
+        detectCliMocks.detected.add('cursor-cli');
+        const live = await __resolveUsableProviderForTests(makeComponents(), NODE_ID, node, MESH_ID, undefined, { difficulty: 'difficult' }, null, { nodes: [node] });
+        expect(live?.providerType).toBe('cursor-cli');
+
+        cursor.monthly.usedPercent = 100;
+        const blocked = preview(node);
+        expect(blocked.predictedWinner).toBeUndefined();
+        expect(blocked.stages.quota.axis).toBe('monthly');
+        expect(blocked.quotaDiagnostics[0]).toMatchObject({ gate: { outcome: 'skip', reason: 'provider_quota_monthly_low' } });
+        const blockedLive = await __resolveUsableProviderForTests(makeComponents(), NODE_ID, node, MESH_ID, undefined, { difficulty: 'difficult' }, null, { nodes: [node] });
+        expect(blockedLive?.providerType).toBeUndefined();
+    });
+});

@@ -150,3 +150,37 @@ function formatAbsoluteExpect(ms: number): string {
   // Same absolute helper path the chip uses — presence check only.
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(ms)
 }
+
+describe('Cursor 30d Machines projection', () => {
+  it('shows the same 12.1% monthly reading as Session Info, with actual reset in fleet and rows', () => {
+    const now = Date.now()
+    const resetsAt = now + (6 * 24 + 4) * 3_600_000
+    const quota = { provider: 'cursor-cli', session: null, weekly: null,
+      monthly: { usedPercent: 12.1, windowMinutes: 43200, resetsAt },
+      updatedAt: now, error: null, status: 'ok' } as any
+    const model = buildQuotaDisplayModel(quota, now)
+    for (const mode of ['fleet', 'row'] as const) {
+      const chips = selectMachineQuotaChips(model, mode)
+      expect(chips).toHaveLength(1)
+      expect(chips[0]).toMatchObject({ hint: 'monthly', usedPercent: 12.1, resetsAt })
+      expect(shortQuotaChipLabel(chips[0])).toBe('30d 12.1%')
+      expect(describeQuotaChipTooltip(chips[0], 'Monthly', now)).toContain('resets in 6d 4h')
+    }
+    const html = render([{ machineId: 'cursor-machine', label: 'Cursor box', quota: { 'cursor-cli': quota } }])
+    expect(html).toContain('30d 12.1%')
+    expect(html).toContain('data-quota-hint="monthly"')
+    expect(html).toContain('resets in 6d')
+    expect(html).not.toContain('7d ')
+  })
+
+  it('keeps missing, stale and already reset monthly readings distinct', () => {
+    const now = Date.now()
+    const base = { provider: 'cursor-cli', session: null, weekly: null, status: 'ok', error: null, updatedAt: now - 2 * 86_400_000 } as any
+    expect(selectMachineQuotaChips(buildQuotaDisplayModel(base, now), 'fleet')).toEqual([])
+    const stale = buildQuotaDisplayModel({ ...base, monthly: { usedPercent: 100, windowMinutes: 43200, resetsAt: now + 86_400_000 } }, now)
+    expect(selectMachineQuotaChips(stale, 'fleet')[0]).toMatchObject({ hint: 'monthly', usedPercent: 100 })
+    expect(shortQuotaChipLabel(selectMachineQuotaChips(stale, 'fleet')[0])).toContain('stale')
+    const reset = buildQuotaDisplayModel({ ...base, monthly: { usedPercent: 100, windowMinutes: 43200, resetsAt: now } }, now)
+    expect(shortQuotaChipLabel(selectMachineQuotaChips(reset, 'fleet')[0])).toBe('30d —')
+  })
+})

@@ -68,8 +68,8 @@ export interface NodeRoutePreview {
             winner?: string;
             reordered: boolean;
             displacedFitnessWinner?: string;
-            /** Which window axis Stage 3 ranked on — see `sessionAxisActive`. */
-            axis: 'weekly' | 'session';
+            /** Window axes used by this quota stage; mixed names differing per-candidate axes. */
+            axis: 'weekly' | 'session' | 'monthly' | 'mixed';
             /** True when every weekly-readable candidate had weekly headroom to
              *  spare, so the SESSION (5h) expiry axis governed instead of the
              *  weekly one (mesh-quota-routing.ts, the 2′ conditional gate). */
@@ -237,7 +237,7 @@ export function buildNodeRoutePreview(args: {
                 ...(winner && fitnessOrderHead && winner !== fitnessOrderHead
                     ? { displacedFitnessWinner: fitnessOrderHead }
                     : {}),
-                axis: selection.ranked.sessionAxisActive ? 'session' : 'weekly',
+                axis: quotaStageAxis(selection.ranked.rankingEvidence ?? [], selection.ranked.gated),
                 sessionAxisActive: selection.ranked.sessionAxisActive === true,
             },
         },
@@ -341,4 +341,16 @@ export function buildMeshRoutePreview(args: {
             'Dynamic launch gates outside provider selection (node health, dirty/stale workspace, cooldown, and live-session count) are not probed by this tool.',
         ],
     };
+}
+
+/** Per-candidate evidence is authoritative when providers use different windows. */
+function quotaStageAxis(
+    evidence: Array<{ axis: 'weekly' | 'session' | 'monthly' }>,
+    gated: Array<{ block: { window: 'weekly' | 'session' | 'monthly' | 'unknown' } }>,
+): 'weekly' | 'session' | 'monthly' | 'mixed' {
+    const axes = new Set(evidence.map(entry => entry.axis));
+    if (axes.size === 0) for (const { block } of gated) {
+        if (block.window !== 'unknown') axes.add(block.window);
+    }
+    return axes.size > 1 ? 'mixed' : axes.values().next().value ?? 'weekly';
 }
