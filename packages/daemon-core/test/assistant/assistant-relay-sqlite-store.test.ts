@@ -309,3 +309,19 @@ it('replaces a v1 evidence ref and refuses to store an unverified body as exact'
     expect(store.readAttemptBody('a', 'm', 's', T0, v2)).toBe('native window');
     db.close();
 });
+
+it('retains late-capture identity across database reopen, requeues once, and expires uncovered candidates', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'late-capture-')); dirs.push(dir);
+    const file = join(dir, 'relay.db');
+    let db = openDb(file); let store = new SqliteAssistantRelayStore(db);
+    const row = { attemptId: 'plain:coord:one', meshId: 'mesh', coordinatorSessionId: 'coord', committedAt: T0, kind: 'relay' as const, outcome: 'completed' };
+    store.recordCommitted(row); store.markDelivered([row.attemptId], T0 + 1, [row.attemptId]);
+    store.writeReceipt('late-capture-fixture', JSON.stringify({ attemptId: row.attemptId, reportId: 'a'.repeat(64), sourceComplete: true, deadline: T0 + DAY }), T0 + 1, 'capture');
+    db.close(); db = openDb(file); store = new SqliteAssistantRelayStore(db);
+    expect(JSON.parse(store.readReceipt('late-capture-fixture', T0 + 2)!)).toMatchObject({ attemptId: row.attemptId, reportId: 'a'.repeat(64), sourceComplete: true });
+    expect(store.listSettledUncovered(T0 + 2).map(r => r.attemptId)).toEqual([row.attemptId]);
+    expect(store.reopenUncovered(row.attemptId)).toBe(true); expect(store.reopenUncovered(row.attemptId)).toBe(false);
+    store.markDelivered([row.attemptId], T0 + 3, [row.attemptId], [{ attemptId: row.attemptId, coordinatorSessionId: 'coord', replies: [] }]);
+    expect(store.reopenUncovered(row.attemptId)).toBe(false);
+    expect(store.listSettledUncovered(T0 + DAY)).toEqual([]); db.close();
+});

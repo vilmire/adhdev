@@ -1,3 +1,5 @@
+import { readLateCaptureState, repairLateCaptures, settleLateCapture } from './late-capture-repair.js';
+import { captureFailureReason, normalizeCaptureReport } from './capture-failure.js';
 import { RelayDeliveryPolicy, unavailableReportNotice } from './relay-delivery-policy.js';
 import { RelayNudgeGate } from './relay-nudge.js';
 import { realClock, type AssistantPulledEvent, type Batch, type Item, type Part, type RelayClock, type RenderedReportPage } from './assistant-relay-types.js';
@@ -35,7 +37,7 @@ import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
 import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
-import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
+import { ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
     RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, MISSED_REPORT_WINDOW_MS, type RenderedAttemptCoverage, type AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
@@ -181,6 +183,7 @@ export class AssistantRelay {
     private dirty = false;
     private seq = 0;
 
+    private lateCaptureScan: Promise<void> | null = null;
     private readonly restoredAttempts = new Map<string, { meshId: string; sessionId: string; committedAt: number }>();
 
     constructor(private readonly ports: AssistantRelayPorts) {
@@ -429,6 +432,11 @@ export class AssistantRelay {
         this.pruneCoverage(now);
         this.pruneBodyCache(now);
         this.auditReplies(now);
+        if (!this.lateCaptureScan && this.unsubscribe) {
+            const scan = this.repairLateCaptures(now);
+            this.lateCaptureScan = scan;
+            void scan.catch(() => {}).finally(() => { if (this.lateCaptureScan === scan) this.lateCaptureScan = null; });
+        }
         for (const item of this.queue) if (item.kind === 'relay') for (const id of item.attemptIds) {
             if (!this.hasCapturedBody(id) && !this.attemptBodyCapture.has(id)) {
                 const ref = this.restoredAttempts.get(id);
@@ -639,7 +647,7 @@ export class AssistantRelay {
     private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string, retryWindow = false, restore = false): void {
         const started = this.clock.now();
         const firstProbe = this.deliveryPolicy.initial(attemptId);
-        if (!this.deliveryPolicy.due(attemptId) || (this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe))) return;
+        if (!this.deliveryPolicy.due(attemptId) || (this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe) && this.lateCaptureState(attemptId)?.sourceComplete !== true)) return;
         const initial = retryWindow && firstProbe;
         let p!: Promise<void>;
         const live = () => this.attemptBodyCapture.get(attemptId) === p;
@@ -667,7 +675,7 @@ export class AssistantRelay {
             await Promise.resolve();
             if (!live()) return;
             try {
-                const raw = await this.bounded(read, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), null);
+                const raw = await this.bounded(read, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), { body: null, completeness: 'envelope_unverified', reason: 'capture_timeout' });
                 const next = this.normalizeReport(raw);
                 if (next.body || !last.body) last = next;
             } catch {
@@ -702,23 +710,7 @@ export class AssistantRelay {
         finally { this.clock.clearTimeout(timer); this.pendingTimers.delete(timer); }
     }
 
-    private normalizeReport(raw: AttemptReportSnapshot | string | null | undefined): AttemptReportSnapshot {
-        if (typeof raw === 'string') return raw.length <= ATTEMPT_BODY_MAX_CHARS
-            ? { body: raw, completeness: 'final_native' } : { body: null, completeness: 'envelope_unverified' };
-        if (!raw || typeof raw !== 'object') return { body: null, completeness: 'envelope_unverified' };
-        if (typeof raw.body === 'string' && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: 'envelope_unverified' };
-        const validParts = raw.parts === undefined || (Array.isArray(raw.parts) && raw.parts.length <= 600
-            && raw.parts.every(p => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime())
-                && Number.isSafeInteger(p.chars) && p.chars > 0));
-        const completeness = (raw.completeness === 'final_native' || raw.completeness === 'final_adapter') && validParts
-            ? raw.completeness : 'envelope_unverified';
-        return {
-            body: typeof raw.body === 'string' ? raw.body : null,
-            completeness,
-            ...(typeof raw.source === 'string' && raw.source.length <= 128 ? { source: raw.source } : {}),
-            ...(raw.parts && validParts ? { parts: raw.parts.map(p => ({ at: p.at, chars: p.chars })) } : {}),
-        };
-    }
+    private normalizeReport(raw: AttemptReportSnapshot | string | null | undefined): AttemptReportSnapshot { return normalizeCaptureReport(raw); }
 
     private rememberReport(attemptId: string, report: AttemptReportSnapshot): void {
         this.attemptBodies.set(attemptId, report.body);
@@ -729,11 +721,30 @@ export class AssistantRelay {
     }
 
     private rememberCapture(id: string, report: AttemptReportSnapshot): void {
+        const repair = this.lateCaptureState(id);
+        if (repair?.sourceComplete && report.body && reportBodyId(report.body) !== repair.reportId) {
+            report = { body: null, completeness: 'envelope_unverified', reason: 'remote_provenance_unverified' };
+        }
         this.rememberReport(id, report);
         if (!this.hasCapturedBody(id)) {
             this.deliveryPolicy.failed(id);
-            LOG.warn('Assistant', `native relay capture unavailable attempt=${id}; retry scheduled with backoff`);
+            LOG.warn('Assistant', `native relay capture unavailable attempt=${id} reason=${captureFailureReason(report.reason)}; retry scheduled with backoff`);
         }
+    }
+
+    private lateCaptureState(id: string) { return readLateCaptureState(this.ports.store, id, this.clock.now()); }
+    private repairLateCaptures(now: number): Promise<void> {
+        const lifecycle = this.lifecycle;
+        return repairLateCaptures({ store: this.ports.store, now, live: () => lifecycle === this.lifecycle,
+            read: async row => this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(row.meshId, row.coordinatorSessionId, row.attemptId)
+                ?? Promise.resolve(null), RELAY_CAPTURE_PROBE_MS, { body: null, completeness: 'envelope_unverified', reason: 'capture_timeout' })),
+            ready: (row, report) => {
+                this.restoredAttempts.set(row.attemptId, { meshId: row.meshId, sessionId: row.coordinatorSessionId, committedAt: row.committedAt });
+                this.rememberCapture(row.attemptId, report);
+                this.queue.push({ kind: 'relay', meshId: row.meshId, coordinatorSessionId: row.coordinatorSessionId,
+                    attemptIds: [row.attemptId], outcome: row.outcome as TurnOutcome, committedAt: now, idle: false });
+                this.kick();
+            } });
     }
 
     private pruneBodyCache(now: number): void {
@@ -1116,6 +1127,9 @@ export class AssistantRelay {
         }
         // A notice or continuation cursor is a surfaced report, not a missed one (countUnrendered).
         const surfaced = new Set([...parts.flatMap(p => p.surfaced ?? []), ...[...sentReports.values()].filter(r => r.autoStopped).map(r => r.attemptId)]);
+        for (const id of settled) settleLateCapture(this.ports.store, id, at, {
+            surfacedMissing: surfaced.has(id) && !this.hasCapturedBody(id), committedAt: this.restoredAttempts.get(id)?.committedAt,
+            rendered: rendered.includes(id), reason: this.attemptMeta.get(id)?.reason });
         this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter(id => surfaced.has(id))], coverage);
         if (relayItems.length) this.loadDeliveredCoverage(at);
         for (const id of settled) {
@@ -1231,7 +1245,7 @@ export class AssistantRelay {
         try { cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2_000, null); } catch { /* absence is reported explicitly */ }
         return { source: 'relay', meshId: item.meshId,
             messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`, surfaced: [...item.attemptIds],
-            text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session }) };
+            text: `[ADHDev capture status] ${JSON.stringify(item.attemptIds.map(id => ({ attemptId: id, sourceComplete: false, reason: captureFailureReason(this.attemptMeta.get(id)?.reason) })))}\n` + unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session }) };
     }
 
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {

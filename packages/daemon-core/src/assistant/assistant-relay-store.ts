@@ -74,6 +74,9 @@ export interface AssistantRelayStore {
     listDeliveredCoverage(now: number): StoredAttemptCoverage[];
     /** Undelivered rows, oldest commit first. */
     listUndelivered(): AssistantRelayRow[];
+    /** Bounded notice-repair candidates; eligibility is a separate durable receipt. */
+    listSettledUncovered?(now: number): AssistantRelayRow[];
+    reopenUncovered?(attemptId: string): boolean;
     /**
      * Rows that settled without their own body being sent (silent loss).
      * `since` limits it to rows settled at or after that time.
@@ -282,6 +285,17 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
             .filter((r) => r.deliveredAt === null)
             .sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId))
             .map((r) => ({ ...r }));
+    }
+
+    listSettledUncovered(now: number): AssistantRelayRow[] {
+        return [...this.relays.values()].filter(r => r.deliveredAt !== null && r.committedAt > now - ATTEMPT_BODY_TTL_MS && !this.coverage.has(r.attemptId))
+            .sort((a, b) => b.committedAt - a.committedAt).slice(0, ATTEMPT_BODY_MAX_ROWS).map(r => ({ ...r }));
+    }
+    reopenUncovered(attemptId: string): boolean {
+        const row = this.relays.get(attemptId);
+        if (!row || row.deliveredAt === null || this.coverage.has(attemptId)) return false;
+        row.deliveredAt = null; row.relayedAt = null;
+        return true;
     }
 
     countUnrendered(since?: number): UnrenderedRelayCounts {

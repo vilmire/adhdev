@@ -206,6 +206,17 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return (this.db.prepare('SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id').all() as RelayDbRow[]).map(toRelay);
     }
 
+    listSettledUncovered(now: number): AssistantRelayRow[] {
+        return (this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
+            AND r.committed_at>? AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=r.attempt_id)
+            ORDER BY r.committed_at DESC, r.attempt_id LIMIT ?`).all(now - ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_ROWS) as RelayDbRow[]).map(toRelay);
+    }
+    reopenUncovered(attemptId: string): boolean {
+        return this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
+            WHERE attempt_id=? AND delivered_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+    }
+
     countUnrendered(since?: number): UnrenderedRelayCounts {
         const rows = this.db.prepare(
             'SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL AND delivered_at >= ? GROUP BY mesh_id',

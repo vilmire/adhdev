@@ -20,6 +20,7 @@ export interface AttemptReportSnapshot {
     body: string | null;
     completeness: ReportCompleteness;
     source?: string;
+    reason?: import('./capture-failure.js').CaptureFailureReason;
     parts?: Array<{ at: number; chars: number }>;
 }
 

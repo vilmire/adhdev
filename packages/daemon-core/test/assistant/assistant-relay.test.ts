@@ -838,3 +838,48 @@ it('refuses session-only tails when no exact reader is available', async () => {
     expect(h.submits[0].text).not.toContain('newest session tail');
     expect(h.store.listUndelivered()).toHaveLength(0); h.relay.stop();
 });
+
+async function deliverMissingNotice(h: Harness, reason = 'original_native_bubble_unavailable') {
+    h.relay.openThread(MESH);
+    (h.relay as any).ports.rehydrateAttemptReport = async () => ({ body: null, completeness: 'envelope_unverified', reason });
+    h.emit(turn('committed', COORD, 1, h.clock.now()));
+    await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
+    h.clock.advance(RELAY_NATIVE_GRACE_MS + RELAY_QUIET_MS); h.relay.tick(); await micro(); await settle(h);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0].text).toContain('"sourceComplete":false');
+    expect(h.submits[0].text).toContain(reason === 'private/path/secret' ? 'capture_failed' : reason);
+    expect(h.store.listUndelivered()).toHaveLength(0);
+}
+
+it('repairs a verified same-attempt final after the uncertainty notice, once', async () => {
+    const h = harness(); await deliverMissingNotice(h);
+    const calls: string[] = [];
+    (h.relay as any).ports.rehydrateAttemptReport = async (_m: string, _s: string, id: string) => {
+        calls.push(id); return { body: 'Late verified original final.', completeness: 'final_native' };
+    };
+    h.clock.advance(MIN); h.relay.tick(); await micro(); await settle(h);
+    expect(calls).toEqual(['plain:coord_blog:e1']);
+    expect(h.submits).toHaveLength(2); expect(h.submits[1].text).toContain('Late verified original final.');
+    expect(h.submits[1].text).toContain('"complete":true');
+    h.clock.advance(10 * MIN); h.relay.tick(); await micro(); await settle(h);
+    expect(h.submits).toHaveLength(2); expect(calls).toHaveLength(1); h.relay.stop();
+});
+
+it('retains bounded late-repair eligibility across relay restart and refuses unverified text', async () => {
+    const first = harness(); await deliverMissingNotice(first); first.relay.stop();
+    const second = harness(first.store); second.clock.t = first.clock.t + MIN;
+    (second.relay as any).ports.rehydrateAttemptReport = async () => ({ body: 'Unverified envelope must stay hidden', completeness: 'envelope_unverified' });
+    second.relay.tick(); await micro(); await settle(second); expect(second.submits).toHaveLength(0);
+    (second.relay as any).ports.rehydrateAttemptReport = async () => ({ body: 'Verified final after restart', completeness: 'final_native' });
+    second.clock.advance(2 * MIN); second.relay.tick(); await micro(); await settle(second);
+    expect(second.submits).toHaveLength(1); expect(second.submits[0].text).toContain('Verified final after restart'); second.relay.stop();
+});
+
+it.each(['original_terminal_evidence_unavailable', 'private/path/secret'])('sanitizes notice reason and bounds permanent/expired repair: %s', async reason => {
+    const h = harness(); await deliverMissingNotice(h, reason);
+    const read = vi.fn(async () => ({ body: 'must not deliver', completeness: 'final_native' }));
+    (h.relay as any).ports.rehydrateAttemptReport = read;
+    h.clock.advance(reason === 'original_terminal_evidence_unavailable' ? MIN : 24 * 60 * MIN);
+    h.relay.tick(); await micro(); await settle(h);
+    expect(read).not.toHaveBeenCalled(); expect(h.submits).toHaveLength(1); expect(h.submits[0].text).not.toContain('private/path/secret'); h.relay.stop();
+});
