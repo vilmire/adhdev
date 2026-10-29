@@ -42,6 +42,9 @@ test('native unknown option fails without creating a lock', { skip: process.plat
   const { existsSync } = await import('node:fs');
   const root = mkdtempSync(join(tmpdir(), 'recovery-unknown-option-')); const helper = join(root, 'guardian');
   execFileSync('/usr/bin/cc', ['-Wall', '-Wextra', '-Werror', resolve('native/instance-lock.c'), '-o', helper], { windowsHide: true });
-  assert.throws(() => execFileSync(helper, ['--misspelled-recovery'], { cwd: root, timeout: 300, windowsHide: true }), (e: any) => e.status === 64);
+  // Cold launch of a freshly compiled unsigned native binary (first-exec
+  // verification, dynamic loader setup) can exceed 300ms on a loaded host;
+  // the contract here is exit 64 with no lock file, not launch latency.
+  assert.throws(() => execFileSync(helper, ['--misspelled-recovery'], { cwd: root, timeout: 2000, windowsHide: true }), (e: any) => e.status === 64);
   assert.equal(existsSync(join(root, '--misspelled-recovery')), false);
 });
