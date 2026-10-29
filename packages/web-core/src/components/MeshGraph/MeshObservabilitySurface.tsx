@@ -125,6 +125,8 @@ interface MeshObservabilitySurfaceProps {
     /** Bumped by the host's single Refresh control; panels with their own
      *  fetches (the task graphs) reload when it changes. */
     refreshToken?: number
+    /** Deep link: open with this queue task's detail focused (the Tasks tab). */
+    initialFocusTaskId?: string
 }
 
 /**
@@ -184,6 +186,7 @@ export default function MeshObservabilitySurface({
     onHelpOpenChange,
     hideControls = false,
     refreshToken,
+    initialFocusTaskId,
 }: MeshObservabilitySurfaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -231,7 +234,7 @@ export default function MeshObservabilitySurface({
         if (activeTab === 'tasks') setTaskDagMounted(true)
     }, [activeTab])
     // "Used by" chip on an artifact → Tasks tab with that task's detail opened.
-    const [focusTask, setFocusTask] = useState<{ taskId: string; nonce: number } | null>(null)
+    const [focusTask, setFocusTask] = useState<{ taskId: string; nonce: number } | null>(initialFocusTaskId ? { taskId: initialFocusTaskId, nonce: 1 } : null)
     // Artifacts tab: nothing is fetched until it has been opened once.
     const [artifactsMounted, setArtifactsMounted] = useState(false)
     useEffect(() => {

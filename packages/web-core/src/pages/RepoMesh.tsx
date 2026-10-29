@@ -27,6 +27,7 @@ import {
 import { MeshListView } from './repo-mesh/MeshListView'
 import { MeshDetailView } from './repo-mesh/MeshDetailView'
 import { useMeshList } from './repo-mesh/useMeshList'
+import { useMeshDeepLinkRequest } from './repo-mesh/useMeshDeepLinkRequest'
 import { useMeshNodeActions } from './repo-mesh/useMeshNodeActions'
 import { useMeshQueue } from './repo-mesh/useMeshQueue'
 import { useMeshGraph } from './repo-mesh/useMeshGraph'
@@ -110,6 +111,13 @@ export default function RepoMesh() {
     })
 
     const selectedMesh = meshes.find(m => m.id === selectedMeshId) || null
+    // Chat id links (mission / task ids) land here: select that mesh, the detail view opens its dialog.
+    const { request: meshDeepLink, consume: consumeMeshDeepLink } = useMeshDeepLinkRequest()
+    useEffect(() => {
+        if (meshDeepLink && selectedMeshId !== meshDeepLink.meshId && meshes.some(m => m.id === meshDeepLink.meshId)) {
+            setSelectedMeshId(meshDeepLink.meshId)
+        }
+    }, [meshDeepLink, meshes, selectedMeshId, setSelectedMeshId])
 
     // ─── Graph ───
 
@@ -564,6 +572,8 @@ export default function RepoMesh() {
         {meshConfirmDialog}
         <MeshDetailView
             selectedMesh={selectedMesh}
+            openRequest={meshDeepLink && meshDeepLink.meshId === selectedMesh.id ? meshDeepLink : null}
+            onOpenRequestConsumed={consumeMeshDeepLink}
             error={error}
             onDismissError={() => setError(null)}
             onBack={() => { setSelectedMeshId(null) }}

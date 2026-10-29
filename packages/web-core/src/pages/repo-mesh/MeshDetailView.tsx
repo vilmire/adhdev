@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RepoMeshStatus, RepoMeshQuotaRoutingPolicy } from '@adhdev/daemon-core'
 import AppPage from '../../components/ui/AppPage'
@@ -17,6 +17,7 @@ import QuotaPolicyStep from '../../components/setup-wizard/QuotaPolicyStep'
 import CoordinatorPromptDefaultPreview from './CoordinatorPromptDefaultPreview'
 import RepoMeshJsonAppendNotice from './RepoMeshJsonAppendNotice'
 // Lazy: the graph dialog (xyflow + elkjs) only loads when it first opens.
+import type { MeshDeepLink } from '../../utils/mesh-deep-link'
 import DashboardMeshGraphDialog from '../../components/dashboard/LazyDashboardMeshGraphDialog'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import type { AvailableCliProviderOption } from '../../utils/provider-priority'
@@ -43,6 +44,9 @@ import {
 
 interface Props {
     selectedMesh: MeshEntry
+    /** A chat id link asked for this mesh's dialog (tab / task); opened once, then `onOpenRequestConsumed`. */
+    openRequest?: MeshDeepLink | null
+    onOpenRequestConsumed?: () => void
     error: string | null
     onDismissError: () => void
     onBack: () => void
@@ -133,6 +137,8 @@ interface Props {
 
 export function MeshDetailView({
     selectedMesh,
+    openRequest = null,
+    onOpenRequestConsumed,
     error,
     onDismissError,
     onBack,
@@ -239,6 +245,13 @@ export function MeshDetailView({
     // header's primary "Open" button. This page is the mesh SETTINGS surface.
     const [graphDialogOpen, setGraphDialogOpen] = useState(false)
     const canLaunchGraphDialog = !!activeDaemonId && !!selectedMesh.id
+    const [dialogInit, setDialogInit] = useState<{ tab?: MeshDeepLink['tab']; taskId?: string } | null>(null)
+    useEffect(() => {
+        if (!openRequest || openRequest.meshId !== selectedMesh.id || !canLaunchGraphDialog) return
+        setDialogInit({ tab: openRequest.tab, taskId: openRequest.taskId })
+        setGraphDialogOpen(true)
+        onOpenRequestConsumed?.()
+    }, [openRequest, selectedMesh.id, canLaunchGraphDialog, onOpenRequestConsumed])
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
 
@@ -614,7 +627,9 @@ export function MeshDetailView({
                 <DashboardMeshGraphDialog
                     activeConv={buildMeshGraphLaunchConversation({ meshId: selectedMesh.id, daemonId: activeDaemonId, meshName: selectedMesh.name })}
                     sendDaemonCommand={sendCommand}
-                    onClose={() => setGraphDialogOpen(false)}
+                    initialTab={dialogInit?.tab}
+                    initialFocusTaskId={dialogInit?.taskId}
+                    onClose={() => { setGraphDialogOpen(false); setDialogInit(null) }}
                 />
             )}
         </AppPage>

@@ -1627,6 +1627,16 @@
         "activityFallback": "アクティビティ",
         "copyMessage": "メッセージをコピー",
         "copyCode": "コードをコピー",
+        "idLink": {
+            "artifact": "アーティファクト {{id}} を開く",
+            "session": "セッション {{id}} を開く",
+            "decision": "判断 {{id}} を「要対応」で開く",
+            "mission": "ミッション {{id}} をメッシュで開く",
+            "task": "タスク {{id}} をメッシュのタスクタブで開く",
+            "newWindow": "{{id}} を新しいウィンドウで開く",
+            "artifactNotFound": "このマシンでアーティファクト {{id}} が見つかりません",
+            "artifactFailed": "アーティファクト {{id}} を開けませんでした: {{reason}}"
+        },
         "showMore": "もっと見る",
         "showLess": "折りたたむ",
         "thought": "思考",

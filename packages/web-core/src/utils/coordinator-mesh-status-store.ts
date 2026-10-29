@@ -61,6 +61,8 @@ interface Entry {
 }
 
 const entries = new Map<string, Entry>()
+/** Listeners that want to know about ANY mesh's change (chat id links). */
+const anyListeners = new Set<() => void>()
 
 function emptySnapshot(meshId: string): CoordinatorMeshStatusSnapshot {
     return { meshId, daemonId: null, status: null, response: null, loadedAt: null, loading: false, refreshing: false, error: null }
@@ -83,6 +85,24 @@ function update(meshId: string, patch: Partial<CoordinatorMeshStatusSnapshot>): 
     for (const listener of [...entry.listeners]) {
         try { listener() } catch { /* a listener must never break the store */ }
     }
+    for (const listener of [...anyListeners]) {
+        try { listener() } catch { /* a listener must never break the store */ }
+    }
+}
+
+/** Any mesh changed. Prefer the per-mesh subscription; this is for cross-mesh readers. */
+export function subscribeAnyCoordinatorMeshStatus(listener: () => void): () => void {
+    anyListeners.add(listener)
+    return () => { anyListeners.delete(listener) }
+}
+
+/** Every held mesh status (read-only view, newest object per mesh). */
+export function listCoordinatorMeshStatuses(): Array<{ meshId: string; daemonId: string | null; status: RepoMeshStatus }> {
+    const out: Array<{ meshId: string; daemonId: string | null; status: RepoMeshStatus }> = []
+    for (const [meshId, entry] of entries) {
+        if (entry.snapshot.status) out.push({ meshId, daemonId: entry.snapshot.daemonId, status: entry.snapshot.status })
+    }
+    return out
 }
 
 /** Current snapshot for a mesh (a stable object until the next change). */

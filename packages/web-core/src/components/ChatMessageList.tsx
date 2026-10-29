@@ -60,6 +60,7 @@ import type { ChatMessage } from '../types';
 
 // Re-export the pure helpers so existing import paths (tests, ChatPane) keep
 // resolving from this module after the C9 3/3 decomposition.
+import { ChatIdLinkProvider } from './ChatMessageList/ChatIdLinkProvider';
 export type { ActionLog } from './ChatMessageList/chatMessageHelpers';
 export { getChatMessageStableKey, getToolExpandStateKey, getToolExpandAddress, buildChatMessageStableKeys, type ToolExpandAddress } from './ChatMessageList/chatMessageHelpers';
 export {
@@ -603,6 +604,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         : (loadError ? t('chatList.loadErrorRetry', { error: loadError }) : t('chatList.loadOlderMessages'));
 
     return (
+        <ChatIdLinkProvider contextKey={contextKey} daemonId={daemonId} sessionId={sessionId} meshCoordinatorDaemonId={meshCoordinatorDaemonId}>
         <div className="chat-scroll-frame">
             <div
                 ref={containerRef}
@@ -757,6 +759,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 </div>
             )}
         </div>
+        </ChatIdLinkProvider>
     );
 });
 

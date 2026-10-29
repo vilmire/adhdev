@@ -1630,6 +1630,16 @@
         "activityFallback": "Actividad",
         "copyMessage": "Copiar mensaje",
         "copyCode": "Copiar código",
+        "idLink": {
+            "artifact": "Abrir artefacto {{id}}",
+            "session": "Abrir sesión {{id}}",
+            "decision": "Abrir decisión {{id}} en Requiere tu atención",
+            "mission": "Abrir misión {{id}} en su malla",
+            "task": "Abrir tarea {{id}} en la pestaña Tareas de la malla",
+            "newWindow": "Abrir {{id}} en una ventana nueva",
+            "artifactNotFound": "No se encontró el artefacto {{id}} en esta máquina",
+            "artifactFailed": "No se pudo abrir el artefacto {{id}}: {{reason}}"
+        },
         "showMore": "Mostrar más",
         "showLess": "Mostrar menos",
         "thought": "Pensamiento",

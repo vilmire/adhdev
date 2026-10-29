@@ -1627,6 +1627,16 @@
         "activityFallback": "Activity",
         "copyMessage": "Copy message",
         "copyCode": "Copy code",
+        "idLink": {
+            "artifact": "Open artifact {{id}}",
+            "session": "Open session {{id}}",
+            "decision": "Open decision {{id}} in Needs you",
+            "mission": "Open mission {{id}} in its mesh",
+            "task": "Open task {{id}} in the mesh Tasks tab",
+            "newWindow": "Open {{id}} in a new window",
+            "artifactNotFound": "Artifact {{id}} was not found on this machine",
+            "artifactFailed": "Could not open artifact {{id}}: {{reason}}"
+        },
         "showMore": "Show more",
         "showLess": "Show less",
         "thought": "Thought",

@@ -1627,6 +1627,16 @@
         "activityFallback": "活动",
         "copyMessage": "复制消息",
         "copyCode": "复制代码",
+        "idLink": {
+            "artifact": "打开工件 {{id}}",
+            "session": "打开会话 {{id}}",
+            "decision": "在“需要你处理”中打开决策 {{id}}",
+            "mission": "在其网格中打开任务集 {{id}}",
+            "task": "在网格任务标签页中打开任务 {{id}}",
+            "newWindow": "在新窗口中打开 {{id}}",
+            "artifactNotFound": "在此机器上未找到工件 {{id}}",
+            "artifactFailed": "无法打开工件 {{id}}：{{reason}}"
+        },
         "showMore": "展开",
         "showLess": "收起",
         "thought": "思考",

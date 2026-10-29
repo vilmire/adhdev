@@ -8,10 +8,10 @@
  * `~` range renders the same way everywhere.
  */
 
-import { memo, useState, useCallback, useContext, isValidElement } from 'react';
+import { memo, useState, useCallback, useContext, useMemo, isValidElement } from 'react';
 import type { ComponentPropsWithoutRef, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
@@ -27,6 +27,8 @@ import {
 } from './chatMessageHelpers';
 import type { RowBody } from './chat-row-model';
 import { ArtifactLinkContext } from '../attachments/artifact-link-context';
+import remarkChatIdLinks, { CHAT_ID_HREF_PREFIX } from './chat-id-links';
+import { ChatIdLink, ChatLinkedText, useChatIdLinks } from './chat-id-link-context';
 
 /**
  * One copy control. `size:'sm'` is the row-header control; `size:'code'` sits
@@ -156,7 +158,21 @@ function ArtifactBlockedImage(props: ComponentPropsWithoutRef<'img'>) {
     );
 }
 
-const chatMarkdownComponents = { pre: ChatCodeBlock };
+/**
+ * Chat-mode anchor: ids the host knows arrive as `adhdev-id:<id>` links (remark-chat-id-links);
+ * every other link renders exactly as the default anchor did.
+ */
+function ChatMarkdownAnchor(props: ComponentPropsWithoutRef<'a'> & { node?: unknown }) {
+    const { node: _node, href, ...rest } = props;
+    if (typeof href === 'string' && href.startsWith(CHAT_ID_HREF_PREFIX)) {
+        return <ChatIdLink id={href.slice(CHAT_ID_HREF_PREFIX.length)}>{props.children}</ChatIdLink>;
+    }
+    return <a href={href} {...rest} />;
+}
+
+const chatUrlTransform = (url: string): string => (url.startsWith(CHAT_ID_HREF_PREFIX) ? url : defaultUrlTransform(url));
+
+const chatMarkdownComponents = { pre: ChatCodeBlock, a: ChatMarkdownAnchor };
 const artifactSafeMarkdownComponents = {
     pre: ChatCodeBlock,
     a: ArtifactSafeLink,
@@ -184,18 +200,24 @@ export const ChatMarkdownBody = memo(function ChatMarkdownBody({
     renderAsMarkdown: boolean;
     artifactSafeMode?: boolean;
 }) {
+    const idLinks = useChatIdLinks();
+    const plugins = useMemo<PluggableList>(
+        () => (idLinks && !artifactSafeMode ? [...chatRemarkPlugins, [remarkChatIdLinks, { resolve: idLinks.resolve }]] : chatRemarkPlugins),
+        [idLinks, artifactSafeMode],
+    );
     if (renderAsPreformatted) return <pre className="chat-preformatted">{content}</pre>;
     if (renderAsMarkdown) {
         return (
             <ReactMarkdown
-                remarkPlugins={chatRemarkPlugins}
+                remarkPlugins={plugins}
+                urlTransform={artifactSafeMode ? undefined : chatUrlTransform}
                 components={artifactSafeMode ? artifactSafeMarkdownComponents : chatMarkdownComponents}
             >
                 {content}
             </ReactMarkdown>
         );
     }
-    return <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>;
+    return <div style={{ whiteSpace: 'pre-wrap' }}><ChatLinkedText text={content} /></div>;
 });
 
 /** Free text of unknown shape (a text part, an embedded resource). */
@@ -303,7 +325,7 @@ export function RowBodyView({ body, className, text, asPre }: { body: RowBody; c
     const content = text ?? body.text;
     if (className === null) return <>{content}</>;
     if (asPre && body.type === 'pre') return <pre className={className}>{content}</pre>;
-    if (body.type === 'plain') return <div className={className} style={{ whiteSpace: 'pre-wrap' }}>{content}</div>;
+    if (body.type === 'plain') return <div className={className} style={{ whiteSpace: 'pre-wrap' }}><ChatLinkedText text={content} /></div>;
     return (
         <div className={className}>
             <ChatMarkdownBody content={content} renderAsPreformatted={body.type === 'pre'} renderAsMarkdown={body.type === 'markdown'} />

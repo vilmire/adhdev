@@ -31,6 +31,10 @@ interface DashboardMeshGraphDialogProps {
     activeConv: ActiveConversation
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
     onClose: () => void
+    /** Deep link (chat id link): open on this tab. */
+    initialTab?: MeshSurfaceTab
+    /** Deep link: focus this queue task once the Tasks tab is up. */
+    initialFocusTaskId?: string
 }
 
 function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation, meshId: string | null): MeshGraphLiveSessionStatus | null {
@@ -54,7 +58,7 @@ function buildActiveConversationLiveSessionStatus(activeConv: ActiveConversation
     }
 }
 
-export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose }: DashboardMeshGraphDialogProps) {
+export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand, onClose, initialTab, initialFocusTaskId }: DashboardMeshGraphDialogProps) {
     const meshId = activeConv.coordinator?.meshId
         ?? (typeof activeConv.settings?.meshCoordinatorFor === 'string' ? activeConv.settings.meshCoordinatorFor : null)
     const daemonId = activeConv.daemonId ?? null
@@ -65,7 +69,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     // Hoisted from MeshObservabilitySurface so the Overview/Graph toggle + "?" help
     // controls can live in the dialog header row instead of taking their own row.
-    const [activeTab, setActiveTab] = useState<MeshSurfaceTab>('overview')
+    const [activeTab, setActiveTab] = useState<MeshSurfaceTab>(initialTab ?? (initialFocusTaskId ? 'tasks' : 'overview'))
     const [helpOpen, setHelpOpen] = useState(false)
     const activeConversationLiveSession = useMemo(
         () => buildActiveConversationLiveSessionStatus(activeConv, meshId),
@@ -272,6 +276,7 @@ export default function DashboardMeshGraphDialog({ activeConv, sendDaemonCommand
                             hideControls
                             onRequestRefresh={loadGraph}
                             refreshToken={refreshToken}
+                            initialFocusTaskId={initialFocusTaskId}
                         />
                     ) : (
                         <div className={meshTheme.dialogEmptyClass}>
