@@ -128974,12 +128974,19 @@ ${grant.exp}`).digest("hex");
           listUndelivered() {
             return [...this.relays.values()].filter((r) => r.deliveredAt === null).sort((a, b) => a.committedAt - b.committedAt || a.attemptId.localeCompare(b.attemptId)).map((r) => ({ ...r }));
           }
-          listSettledUncovered(now) {
-            return [...this.relays.values()].filter((r) => r.deliveredAt !== null && r.committedAt > now - ATTEMPT_BODY_TTL_MS && !this.coverage.has(r.attemptId)).sort((a, b) => b.committedAt - a.committedAt).slice(0, ATTEMPT_BODY_MAX_ROWS).map((r) => ({ ...r }));
+          listSettledUncovered(now, eligible = () => true) {
+            const candidates = [];
+            const rows = [...this.relays.values()].filter((r) => r.deliveredAt !== null && r.committedAt > now - ATTEMPT_BODY_TTL_MS && !this.coverage.has(r.attemptId)).sort((a, b) => b.committedAt - a.committedAt || a.attemptId.localeCompare(b.attemptId));
+            for (const row2 of rows) {
+              if (eligible(row2)) candidates.push({ ...row2 });
+              if (candidates.length >= ATTEMPT_BODY_MAX_ROWS) break;
+            }
+            return candidates;
           }
-          reopenUncovered(attemptId) {
+          reopenUncovered(attemptId, capture) {
             const row2 = this.relays.get(attemptId);
             if (!row2 || row2.deliveredAt === null || this.coverage.has(attemptId)) return false;
+            if (capture) this.writeReceipt(capture.key, capture.value, capture.at, "capture");
             row2.deliveredAt = null;
             row2.relayedAt = null;
             return true;
@@ -129203,15 +129210,26 @@ ${grant.exp}`).digest("hex");
           listUndelivered() {
             return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
           }
-          listSettledUncovered(now) {
-            return this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
+          listSettledUncovered(now, eligible = () => true) {
+            const candidates = [];
+            const rows = this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
             AND r.committed_at>? AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=r.attempt_id)
-            ORDER BY r.committed_at DESC, r.attempt_id LIMIT ?`).all(now - ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_ROWS).map(toRelay);
+            ORDER BY r.committed_at DESC, r.attempt_id`).iterate(now - ATTEMPT_BODY_TTL_MS);
+            for (const value of rows) {
+              const row2 = toRelay(value);
+              if (eligible(row2)) candidates.push(row2);
+              if (candidates.length >= ATTEMPT_BODY_MAX_ROWS) break;
+            }
+            return candidates;
           }
-          reopenUncovered(attemptId) {
-            return this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
-            WHERE attempt_id=? AND delivered_at IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+          reopenUncovered(attemptId, capture) {
+            return this.db.transaction(() => {
+              const reopened = this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
+                WHERE attempt_id=? AND delivered_at IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+              if (reopened && capture) this.writeReceipt(capture.key, capture.value, capture.at, "capture");
+              return reopened;
+            })();
           }
           countUnrendered(since) {
             const rows = this.db.prepare(
@@ -133920,7 +133938,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function repairLateCaptures(ports) {
       const { store: store4, now } = ports;
       let probes = 0;
-      for (const row2 of store4.listSettledUncovered?.(now) ?? []) {
+      const eligible = (row2) => {
+        const state2 = readLateCaptureState(store4, row2.attemptId, now);
+        return !!state2 && !state2.done && state2.deadline > now && state2.nextAt <= now && state2.probes < 24 && store4.isThreadOpen(row2.meshId);
+      };
+      for (const row2 of store4.listSettledUncovered?.(now, eligible) ?? []) {
         const state2 = readLateCaptureState(store4, row2.attemptId, now);
         if (!state2 || state2.done || state2.deadline <= now || state2.nextAt > now || state2.probes >= 24 || !store4.isThreadOpen(row2.meshId)) continue;
         if (++probes > 4 || !ports.live()) break;
@@ -133943,8 +133965,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           store4.writeReceipt(key5, JSON.stringify({ ...next, done: true }), now, "capture");
           continue;
         }
-        store4.writeReceipt(key5, JSON.stringify({ ...next, sourceComplete: true, reportId: reportBodyId(report.body) }), now, "capture");
-        if (store4.reopenUncovered?.(row2.attemptId)) ports.ready(row2, report);
+        if (store4.reopenUncovered?.(row2.attemptId, {
+          key: key5,
+          at: now,
+          value: JSON.stringify({ ...next, sourceComplete: true, reportId: reportBodyId(report.body) })
+        })) ports.ready(row2, report);
       }
     }
     var init_late_capture_repair = __esm2({

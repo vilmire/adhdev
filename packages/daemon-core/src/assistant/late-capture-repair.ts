@@ -25,7 +25,12 @@ export async function repairLateCaptures(ports: { store: AssistantRelayStore; no
     read(row: AssistantRelayRow): Promise<AttemptReportSnapshot>; ready(row: AssistantRelayRow, report: AttemptReportSnapshot): void }): Promise<void> {
     const { store, now } = ports;
     let probes = 0;
-    for (const row of store.listSettledUncovered?.(now) ?? []) {
+    const eligible = (row: AssistantRelayRow) => {
+        const state = readLateCaptureState(store, row.attemptId, now);
+        return !!state && !state.done && state.deadline > now && state.nextAt <= now && state.probes < 24
+            && store.isThreadOpen(row.meshId);
+    };
+    for (const row of store.listSettledUncovered?.(now, eligible) ?? []) {
         const state = readLateCaptureState(store, row.attemptId, now);
         if (!state || state.done || state.deadline <= now || state.nextAt > now || state.probes >= 24
             || !store.isThreadOpen(row.meshId)) continue;
@@ -46,8 +51,9 @@ export async function repairLateCaptures(ports: { store: AssistantRelayStore; no
             store.writeReceipt(key, JSON.stringify({ ...next, done: true }), now, 'capture');
             continue;
         }
-        // Persist identity before reopening: restart replays only this exact report.
-        store.writeReceipt(key, JSON.stringify({ ...next, sourceComplete: true, reportId: reportBodyId(report.body) }), now, 'capture');
-        if (store.reopenUncovered?.(row.attemptId)) ports.ready(row, report);
+        // One commit: a crash leaves either a settled row without new identity,
+        // or an undelivered row pinned to this report, even on probe 24.
+        if (store.reopenUncovered?.(row.attemptId, { key, at: now,
+            value: JSON.stringify({ ...next, sourceComplete: true, reportId: reportBodyId(report.body) }) })) ports.ready(row, report);
     }
 }

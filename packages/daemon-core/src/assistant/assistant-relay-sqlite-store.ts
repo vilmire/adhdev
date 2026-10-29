@@ -206,15 +206,28 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return (this.db.prepare('SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id').all() as RelayDbRow[]).map(toRelay);
     }
 
-    listSettledUncovered(now: number): AssistantRelayRow[] {
-        return (this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
+    listSettledUncovered(now: number, eligible: (row: AssistantRelayRow) => boolean = () => true): AssistantRelayRow[] {
+        // Stream metadata rather than LIMIT before receipt/thread eligibility: a
+        // newer rejected or not-due backlog must not hide older due attempts.
+        const candidates: AssistantRelayRow[] = [];
+        const rows = this.db.prepare(`SELECT r.* FROM assistant_relays r WHERE r.delivered_at IS NOT NULL
             AND r.committed_at>? AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=r.attempt_id)
-            ORDER BY r.committed_at DESC, r.attempt_id LIMIT ?`).all(now - ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_ROWS) as RelayDbRow[]).map(toRelay);
+            ORDER BY r.committed_at DESC, r.attempt_id`).iterate(now - ATTEMPT_BODY_TTL_MS);
+        for (const value of rows) {
+            const row = toRelay(value as RelayDbRow);
+            if (eligible(row)) candidates.push(row);
+            if (candidates.length >= ATTEMPT_BODY_MAX_ROWS) break;
+        }
+        return candidates;
     }
-    reopenUncovered(attemptId: string): boolean {
-        return this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
-            WHERE attempt_id=? AND delivered_at IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+    reopenUncovered(attemptId: string, capture?: { key: string; value: string; at: number }): boolean {
+        return this.db.transaction(() => {
+            const reopened = this.db.prepare(`UPDATE assistant_relays SET delivered_at=NULL, relayed_at=NULL
+                WHERE attempt_id=? AND delivered_at IS NOT NULL
+                AND NOT EXISTS (SELECT 1 FROM assistant_relay_coverage c WHERE c.attempt_id=assistant_relays.attempt_id)`).run(attemptId).changes > 0;
+            if (reopened && capture) this.writeReceipt(capture.key, capture.value, capture.at, 'capture');
+            return reopened;
+        })();
     }
 
     countUnrendered(since?: number): UnrenderedRelayCounts {
