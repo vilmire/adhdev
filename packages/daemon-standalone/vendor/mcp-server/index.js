@@ -47981,7 +47981,7 @@ ${error.message || ""}`;
         sourceForbidden = (p) => p === "" || p === "oss" || /(^|\/)(\.git|vendor|dist|node_modules)(\/|$)/.test(p);
       }
     });
-    function preferEligible(eligible, preferences, key5) {
+    function preferEligible2(eligible, preferences, key5) {
       const rank = (value) => {
         const i = preferences?.indexOf(key5(value)) ?? -1;
         return i < 0 ? Number.MAX_SAFE_INTEGER : i;
@@ -68967,7 +68967,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const timeLeftFraction = Math.min(1, Math.max(0, (resetsAt - reporterNowMs) / windowMs));
       return { remainingPercent: remaining, risk: expiryRiskScore(remaining, timeLeftFraction) };
     }
-    function rankProvidersByQuotaGate2(node, orderedProviderTypes, policy, now = Date.now(), context2, targetsByProvider) {
+    function rankProvidersByQuotaGate3(node, orderedProviderTypes, policy, now = Date.now(), context2, targetsByProvider) {
       const clear = [];
       const gated = [];
       for (const providerType of orderedProviderTypes) {
@@ -69321,7 +69321,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
     });
     function quotaRiskSnapshotForCandidates(node, orderedProviderTypes, policy, now = Date.now(), context2, ranking) {
-      const resolvedRanking = ranking ?? rankProvidersByQuotaGate2(node, orderedProviderTypes, policy, now, context2);
+      const resolvedRanking = ranking ?? rankProvidersByQuotaGate3(node, orderedProviderTypes, policy, now, context2);
       const evidenceByProvider = new Map(
         (resolvedRanking.rankingEvidence ?? []).map((evidence) => [evidence.providerType, evidence])
       );
@@ -69363,7 +69363,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         ...outcome === "refused" && refusalReason ? { claimRefusalReason: refusalReason } : {}
       });
     }
-    function quotaTargetsFromSlots2(slots2) {
+    function quotaTargetsFromSlots3(slots2) {
       const byProvider = /* @__PURE__ */ new Map();
       for (const slot of slots2) {
         const provider = slot.provider ?? slot.providerType;
@@ -86101,7 +86101,7 @@ ${continuationNotice}` } : task,
         }
       }
       const candidates = [...byProvider.values()];
-      const ranked = rankProvidersByQuotaGate2(
+      const ranked = rankProvidersByQuotaGate3(
         args.node,
         candidates.map((candidate) => candidate.providerType),
         args.quotaRouting,
@@ -86355,7 +86355,7 @@ ${continuationNotice}` } : task,
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
       const slots2 = resolveNodeCapabilitySlots(node, meshId);
       if (!slots2.length) return { reason: "missing_provider_priority" };
-      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots2(slots2)) : void 0;
+      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots3(slots2)) : void 0;
       const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
       const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
       if (difficultyFloorRequired && !orderedSlots.length) {
@@ -86405,7 +86405,7 @@ ${continuationNotice}` } : task,
         quotaFactsContext,
         quotaBonusByProvider,
         difficultyFloorRequired,
-        usableSlots: preferEligible(usableSlots, task?.routingPreferences?.providers, (s2) => s2.providerType),
+        usableSlots: preferEligible2(usableSlots, task?.routingPreferences?.providers, (s2) => s2.providerType),
         preScoreExclusions
       });
       if (selection.reason) return { reason: selection.reason, preScoreExclusions };
@@ -86624,7 +86624,7 @@ ${continuationNotice}` } : task,
         // include the quota-headroom spread bonus (fail-open when unset).
         { bumpCursor: true, task: { difficulty: task.difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) }
       ).map((c) => c.node);
-      return preferEligible(orderedCandidateNodes, task.routingPreferences?.nodeIds, readMeshNodeId);
+      return preferEligible2(orderedCandidateNodes, task.routingPreferences?.nodeIds, readMeshNodeId);
     }
     function screenNodeForAutoLaunch(components, meshId, task, node, nodeId, launchKey, freshnessGate, markSkip) {
       if (task.ownershipScope) {
@@ -146321,6 +146321,7 @@ ${tail}` : ""
       partitionSessionHostRecords: () => import_session_host_core5.partitionSessionHostRecords,
       performMeshHandshake: () => performMeshHandshake,
       planMeshOnboarding: () => planMeshOnboarding,
+      preferEligible: () => preferEligible2,
       preflightDiskSpace: () => preflightDiskSpace,
       presentationFromAttemptRow: () => presentationFromAttemptRow,
       preserveAuthenticatedMcpCommand: () => preserveAuthenticatedMcpCommand,
@@ -146351,8 +146352,8 @@ ${tail}` : ""
       putPeerSecret: () => putPeerSecret,
       quotaAxesForTarget: () => quotaAxesForTarget2,
       quotaRiskSnapshotForCandidates: () => quotaRiskSnapshotForCandidates,
-      quotaTargetsFromSlots: () => quotaTargetsFromSlots2,
-      rankProvidersByQuotaGate: () => rankProvidersByQuotaGate2,
+      quotaTargetsFromSlots: () => quotaTargetsFromSlots3,
+      rankProvidersByQuotaGate: () => rankProvidersByQuotaGate3,
       readAntigravityCliSession: () => readSession3,
       readAuthenticatedMcpCommand: () => readAuthenticatedMcpCommand,
       readAuthenticatedMcpScope: () => readAuthenticatedMcpScope,
@@ -148003,6 +148004,7 @@ ${tail}` : ""
     init_mesh_task_predicates();
     init_mesh_task_mode_guardrail();
     init_mesh_node_capability_tags();
+    init_mesh_task_routing_contract();
     init_mesh_work_queue();
     init_mesh_orphaned_dispatch_sweep();
     init_mesh_task_parking();
@@ -148049,7 +148051,7 @@ ${tail}` : ""
         args.quotaRouting,
         now,
         quotaFactsContext,
-        quotaTargetsFromSlots2(slots2)
+        quotaTargetsFromSlots3(slots2)
       );
       const orderedSlots = orderSlotsForProviderSelection(
         slots2,
@@ -230973,13 +230975,31 @@ function resolveRemoteDispatchProvider(node, args) {
   }
   return {
     providerPins,
-    resolvedProviderType: (callerProviderAllowed ? callerProviderType : "") || providerPriorityList[0] || "",
+    providerPriorityList,
+    // Explicit caller hint only. Unpinned / pin-without-caller leave this empty so
+    // idle auto-pick can consider every eligible idle session (queue claim parity);
+    // no-idle sessionless fills from providerPriorityList after the pick.
+    resolvedProviderType: callerProviderAllowed ? callerProviderType : "",
     adoptSessionProviderType: (session) => {
       const type2 = resolveSessionProviderType(session);
       if (!type2) return "";
       return providerPins.length === 0 || providerPins.includes(type2) ? type2 : "";
     }
   };
+}
+function sessionlessFallbackProviderType(node, provider, mesh, allowQuotaExhausted) {
+  const list = provider.providerPriorityList;
+  if (!list.length) return "";
+  if (allowQuotaExhausted) return list[0];
+  const ranked = (0, import_daemon_core22.rankProvidersByQuotaGate)(
+    node,
+    list,
+    mesh?.policy?.quotaRouting ?? null,
+    void 0,
+    void 0,
+    (0, import_daemon_core22.quotaTargetsFromSlots)(normalizeNodeCapabilitySlots(node.policy?.slots))
+  );
+  return ranked.clear[0] || list[0];
 }
 function checkExplicitRemoteSession(ctx, node, sessionId, session, provider, coordinatorDaemonId) {
   const relaySafety = classifyRemoteDelegateRelaySafety(session, ctx.mesh.id, node.id, coordinatorDaemonId);
@@ -230996,13 +231016,16 @@ async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinat
     return checkExplicitRemoteSession(ctx, node, sessionId, args.verifiedSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(args.verifiedSession) };
   }
   try {
-    const { providerPins } = provider;
+    const { providerPins, providerPriorityList } = provider;
     const sessionProviderFilter = provider.resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : "");
     const runtime = await readNodeRuntime(ctx, node);
     const sessions = runtime.probe.sessions;
     if (sessionId) {
       const explicitSession = sessions.find((session) => readSessionRecordId(session) === sessionId);
       if (!explicitSession) {
+        if (!provider.resolvedProviderType) {
+          provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
+        }
         const resolvedProviderType = provider.resolvedProviderType;
         return {
           success: false,
@@ -231023,15 +231046,30 @@ async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinat
       }
       return checkExplicitRemoteSession(ctx, node, sessionId, explicitSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(explicitSession) };
     }
-    const candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session) => {
+    let candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session) => {
       const sessionProviderType = resolveSessionProviderType(session);
       if (!sessionProviderType) return true;
       return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(session));
     });
-    const targetSession = chooseDispatchableSession(candidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
+    if (!sessionProviderFilter && providerPins.length > 1) {
+      candidates = candidates.filter((session) => {
+        const type2 = resolveSessionProviderType(session);
+        return !!type2 && providerPins.includes(type2);
+      });
+    }
+    const preferenceOrder = sessionProviderFilter ? [sessionProviderFilter] : providerPins.length ? providerPins : providerPriorityList;
+    const orderedCandidates = (0, import_daemon_core22.preferEligible)(
+      candidates,
+      preferenceOrder.length ? preferenceOrder : void 0,
+      (session) => resolveSessionProviderType(session) || ""
+    );
+    const targetSession = chooseDispatchableSession(orderedCandidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
     if (targetSession?.id || targetSession?.sessionId) {
       if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(targetSession);
       return { sessionId: targetSession.id || targetSession.sessionId, model: readSessionRecordModel(targetSession) };
+    }
+    if (!provider.resolvedProviderType) {
+      provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
     }
     return { sessionId: "" };
   } catch (e) {
@@ -231046,6 +231084,9 @@ async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinat
         success: false,
         error: `Cannot verify remote session '${sessionId}' before dispatch: ${e?.message || String(e)}`
       };
+    }
+    if (!provider.resolvedProviderType) {
+      provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
     }
     return { sessionId: "" };
   }

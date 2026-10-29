@@ -125,6 +125,9 @@ export { summarizeQueueEntryInputForView, isTaskReadonly, describeTaskDependency
 export type { MeshTaskInputSummary } from './mesh/mesh-task-predicates.js';
 export { normalizeMeshTaskMode, validateMeshTaskModeRequest, buildMeshTaskModeViolationError, formatMeshTaskModeViolations } from './mesh/mesh-task-mode-guardrail.js';
 export { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, normalizeMeshCapabilityTags, providerPinsFromRequiredTags, filterProvidersByRequiredTags } from './mesh/mesh-node-capability-tags.js';
+/** Stable preference order over an already-eligible set — never an eligibility filter (B2b direct/queue). */
+export { preferEligible } from './mesh/mesh-task-routing-contract.js';
+
 export { parkTaskTargetPin, failRetentionExpiredParkedTask, getParkedTasks } from './mesh/mesh-work-queue.js';
 // ORPHANED-UNCORRELATED-DISPATCH: the 30 min stale-assigned age, shared with mcp-server's mesh_view_queue mark.
 export { STALE_ASSIGNED_QUEUE_MS, ORPHANED_UNCORRELATED_DISPATCH_REASON } from './mesh/mesh-orphaned-dispatch-sweep.js';

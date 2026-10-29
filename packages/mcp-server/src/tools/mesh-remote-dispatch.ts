@@ -14,18 +14,21 @@ import {
     quotaAxesForTarget,
     providerPinsFromRequiredTags,
     filterProvidersByRequiredTags,
+    preferEligible,
+    rankProvidersByQuotaGate,
+    quotaTargetsFromSlots,
     classifySessionBusyWithTask,
     SESSION_BUSY_WITH_TASK_CODE,
     classifyNewWorkHeld,
     NEW_WORK_HELD_CODE,
 } from '@adhdev/daemon-core';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlots, readString } from '@adhdev/mesh-shared';
 import { type MeshTaskInput } from './mesh-tool-shared.js';
 import { supportsMeshRelay, type MeshRelayTransport } from '../transports/mode.js';
 import { readNodeProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
 import { resolveSessionProviderType, readSessionRecordId, readSessionRecordModel, unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
-import { readString } from '@adhdev/mesh-shared';
 
 // (moved to ./mesh-session-helpers.ts — session/payload record helpers)
 
@@ -253,6 +256,13 @@ type DispatchFailure = { success: false; error: string } & Record<string, unknow
 /** Provider resolution state threaded through the dispatch steps. */
 interface RemoteDispatchProvider {
     providerPins: string[];
+    /**
+     * Eligible providers after pin intersection (preference order). Used to prefer
+     * among already-eligible idle sessions and as the no-idle sessionless fallback —
+     * never as a hard filter that discards other eligible idle sessions when
+     * fallback is allowed (B2b direct/queue eligibility parity).
+     */
+    providerPriorityList: string[];
     /** The provider the dispatch will name as agentType ('' = not resolved yet). */
     resolvedProviderType: string;
     /**
@@ -269,8 +279,17 @@ interface RemoteDispatchProvider {
 /**
  * ── ★PROVIDER-PIN-BYPASS (D2) — the pin must survive provider resolution ──────
  *
- * Resolve provider type: caller arg > node policy providerPriority (slots-derived
- * when unset — readNodeProviderPriority applies the fallback, then the node-reported default) > empty (fuzzy fallback).
+ * Resolve provider type: caller arg > (later) idle-session adoption > no-idle
+ * sessionless fallback from pin-filtered providerPriority (slots-derived when
+ * unset — readNodeProviderPriority applies the fallback, then the node-reported
+ * default).
+ *
+ * ★B2b: do NOT prefill `resolvedProviderType` from providerPriority[0] before idle
+ * auto-pick. That turned preference into a hard eligibility filter and discarded
+ * sole eligible idle sessions of other providers (queue claim uses the session's
+ * own provider). Explicit caller/session/model pins still bind; priority[0] remains
+ * the no-idle sessionless fallback (and quota-clear ranking may advance past a
+ * gated preferred provider when fallback is allowed).
  *
  * ★The providerPriority[0] fallback is what silently broke required_tags. The
  * caller's node filter asks "could SOME provider here satisfy the pin?" and a node
@@ -301,13 +320,42 @@ function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDis
     }
     return {
         providerPins,
-        resolvedProviderType: (callerProviderAllowed ? callerProviderType : '') || providerPriorityList[0] || '',
+        providerPriorityList,
+        // Explicit caller hint only. Unpinned / pin-without-caller leave this empty so
+        // idle auto-pick can consider every eligible idle session (queue claim parity);
+        // no-idle sessionless fills from providerPriorityList after the pick.
+        resolvedProviderType: callerProviderAllowed ? callerProviderType : '',
         adoptSessionProviderType: (session: any): string => {
             const type = resolveSessionProviderType(session);
             if (!type) return '';
             return providerPins.length === 0 || providerPins.includes(type) ? type : '';
         },
     };
+}
+
+/**
+ * No-idle sessionless provider: prefer the first quota-clear eligible provider
+ * (same fail-open gate as launch/queue). When every eligible provider is gated,
+ * keep priority[0] so the existing final quota refusal still fires with evidence.
+ */
+function sessionlessFallbackProviderType(
+    node: LocalMeshNodeEntry,
+    provider: RemoteDispatchProvider,
+    mesh: MeshContext['mesh'],
+    allowQuotaExhausted: boolean | undefined,
+): string {
+    const list = provider.providerPriorityList;
+    if (!list.length) return '';
+    if (allowQuotaExhausted) return list[0];
+    const ranked = rankProvidersByQuotaGate(
+        node,
+        list,
+        mesh?.policy?.quotaRouting ?? null,
+        undefined,
+        undefined,
+        quotaTargetsFromSlots(normalizeNodeCapabilitySlots((node.policy as any)?.slots)),
+    );
+    return ranked.clear[0] || list[0];
 }
 
 /**
@@ -367,15 +415,20 @@ async function resolveRemoteDispatchSession(
         // providerType as "any provider will do" (its matchingProvider is
         // `!providerType || ...`). With a pin in play that is precisely the
         // wrong default, so pass the single pinned provider as the filter when
-        // the node resolution left the type blank. Unpinned dispatches still
-        // pass '' and keep the any-session behavior.
-        const { providerPins } = provider;
+        // the node resolution left the type blank. ★B2b: unpinned (and multi-pin)
+        // keep '' here so an eligible idle session of a non-priority[0] provider
+        // is not discarded solely because preference ranked another provider first;
+        // multi-pin still narrows the candidate pool below before the pick.
+        const { providerPins, providerPriorityList } = provider;
         const sessionProviderFilter = provider.resolvedProviderType || (providerPins.length === 1 ? providerPins[0] : '');
         const runtime = await readNodeRuntime(ctx, node);
         const sessions = runtime.probe.sessions;
         if (sessionId) {
             const explicitSession = sessions.find((session: any) => readSessionRecordId(session) === sessionId);
             if (!explicitSession) {
+                if (!provider.resolvedProviderType) {
+                    provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
+                }
                 const resolvedProviderType = provider.resolvedProviderType;
                 return {
                     success: false,
@@ -408,15 +461,39 @@ async function resolveRemoteDispatchSession(
         // Prefer live idle sessions launched for this mesh node. Never route
         // a new task into restored/stopped session records; that produces the
         // coordinator-visible "pending only, chat never received it" failure.
-        const candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session: any) => {
+        let candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session: any) => {
             const sessionProviderType = resolveSessionProviderType(session);
             if (!sessionProviderType) return true;
             return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(session));
         });
-        const targetSession = chooseDispatchableSession(candidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
+        // Multi-pin without a resolved type: keep only sessions that can honor a pin
+        // (single-pin uses sessionProviderFilter instead). Unpinned: do not narrow to
+        // priority[0] — that was the B2b eligibility bug vs queue idle claim.
+        if (!sessionProviderFilter && providerPins.length > 1) {
+            candidates = candidates.filter((session: any) => {
+                const type = resolveSessionProviderType(session);
+                return !!type && providerPins.includes(type);
+            });
+        }
+        // Preference among already-eligible idle sessions (preferEligible is never an
+        // eligibility gate). Bound idle reuse vs a brand-new sessionless launch may
+        // still differ — we only stop discarding sole eligible non-preferred idles.
+        const preferenceOrder = sessionProviderFilter
+            ? [sessionProviderFilter]
+            : (providerPins.length ? providerPins : providerPriorityList);
+        const orderedCandidates = preferEligible(
+            candidates,
+            preferenceOrder.length ? preferenceOrder : undefined,
+            (session: any) => resolveSessionProviderType(session) || '',
+        );
+        const targetSession = chooseDispatchableSession(orderedCandidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
         if (targetSession?.id || targetSession?.sessionId) {
             if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(targetSession);
             return { sessionId: targetSession.id || targetSession.sessionId, model: readSessionRecordModel(targetSession) };
+        }
+        // No eligible idle session: sessionless fallback (new-session / worker pick).
+        if (!provider.resolvedProviderType) {
+            provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
         }
         return { sessionId: '' };
     } catch (e: any) {
@@ -433,6 +510,9 @@ async function resolveRemoteDispatchSession(
             };
         }
         // fall through — will attempt dispatch with just providerType (fuzzy)
+        if (!provider.resolvedProviderType) {
+            provider.resolvedProviderType = sessionlessFallbackProviderType(node, provider, ctx.mesh, args.allowQuotaExhausted);
+        }
         return { sessionId: '' };
     }
 }
@@ -493,9 +573,11 @@ export interface DirectDispatchTarget {
 
 /**
  * Resolve the target of a dispatch to a node another daemon serves: the provider
- * (caller hint > node priority, intersected with any provider pin), the session
- * (verified when named, auto-picked from the coordinator's held runtime when not),
- * then the pin assert and the quota gate on the provider actually about to be sent.
+ * (caller hint > idle-session adoption > no-idle pin-filtered priority / quota-clear
+ * fallback), the session (verified when named, auto-picked from the coordinator's
+ * held runtime when not — eligible idle of any pin-satisfying provider, preference
+ * ordered), then the pin assert and the quota gate on the provider actually about
+ * to be sent.
  */
 export async function resolveRemoteDispatchTarget(
     ctx: MeshContext,
