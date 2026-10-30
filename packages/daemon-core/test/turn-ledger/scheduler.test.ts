@@ -46,6 +46,16 @@ function toGenerating(r: Rig, scope: 'mesh_queue' | 'mesh_direct' = 'mesh_queue'
     expect(r.ledger.observe(evd('turn_started', { retro: false })).rule).toBe('R4');
 }
 
+function expectReportMissing(r: Rig) {
+    const attempt = r.ledger.getAttempt('a1')!;
+    expect(attempt).toMatchObject({ state: 'finalizing', generation: 0, terminal: null });
+    expect(r.ledger.openAttemptForSession(attempt.sessionId)?.attemptId).toBe('a1');
+    expect(r.ledger.store.listEvents('a1').some(e => e.rule === 'R13q'
+        && (e.payload.notes as string[] | undefined)?.includes('queue_completion_report_missing'))).toBe(true);
+    expect(r.host.calls.some(c => c.startsWith('terminal:') || c.startsWith('requeue:'))).toBe(false);
+    expect(rowsOf(r.db, 'committed', 'a1')).toHaveLength(0);
+}
+
 function totalChanges(r: Rig): number {
     return (r.db.prepare('SELECT total_changes() AS n').get() as { n: number }).n;
 }
@@ -487,8 +497,8 @@ describe('weak expiry requires a fresh completed probe', () => {
         const read = vi.fn(() => new Promise<TurnProbeRead>(() => {}));
         const r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
         toGenerating(r);
-        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
-        r.advance(P.awaitReportMs + 1);
+        r.ledger.observe(evd('turn_end', { strength: 'weak' }));
+        r.advance(weakConfirmMs(P) + 1);
         const tick = r.scheduler.tick();
         r.advance(endProbeGraceMs(P));
         await vi.advanceTimersByTimeAsync(endProbeGraceMs(P));
@@ -507,9 +517,9 @@ describe('weak expiry requires a fresh completed probe', () => {
         });
         r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
         toGenerating(r);
-        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
+        r.ledger.observe(evd('turn_end', { strength: 'weak' }));
         r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
-        r.advance(P.awaitReportMs + 120_000);
+        r.advance(weakConfirmMs(P) + 120_000);
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
         expect(r.ledger.getAttempt('a1')!.data.unconfirmedEndDeferral?.requestedAt).toBe(r.now - 20_000);
@@ -523,8 +533,8 @@ describe('weak expiry requires a fresh completed probe', () => {
         const read = vi.fn(async () => ({ presence: 'present' as const, status: 'generating', observedAtMs: T0 }));
         const r = rig({ probe: { locate: () => ({ kind: 'local' }), reader: { read } } });
         toGenerating(r);
-        r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
-        r.advance(P.awaitReportMs + 1);
+        r.ledger.observe(evd('turn_end', { strength: 'weak' }));
+        r.advance(weakConfirmMs(P) + 1);
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
         r.advance(endProbeGraceMs(P) + 1);
@@ -617,15 +627,20 @@ describe('report gate — the rc.40 false-idle sequence commits once, on the rep
         expect(notices.filter((n) => n.notify === 'candidate')).toHaveLength(0);
     });
 
-    it('a report-capable worker that never reports is committed weak once the await_report window passes', async () => {
+    it('a report-capable worker that never reports stays explicitly report-missing and retains ownership after expiry', async () => {
         const r = rig();
         toGenerating(r);
         r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }));
         r.advance(P.awaitReportMs + 1);
         r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
-        expect(r.host.calls).toContain('terminal:t1:completed');
+        expectReportMissing(r);
+        r.advance(P.awaitReportMs);
+        await r.scheduler.tick();
+        expectReportMissing(r);
+        const notices = rowsOf(r.db, 'notify', 'a1').map(row => JSON.parse(String(row.payload_json)));
+        expect(notices.filter(n => n.notify === 'candidate')).toHaveLength(1);
+        expect(notices.filter(n => n.notify === 'completed')).toHaveLength(0);
     });
 });
 
@@ -673,14 +688,13 @@ describe('liveness probe backoff during await_report (rc.43 run 10)', () => {
         // 120 s elapsed at a >=60 s floor → at most 2 further probes (break-once:
         // before this fix every 12 s tick produced one, i.e. 10).
         expect(probesAfter).toBeLessThanOrEqual(2);
-        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull(); // await_report's own 600 s deadline still governs the commit, untouched
+        expect(r.ledger.getAttempt('a1')!.terminal).toBeNull(); // no verdict while the report is missing
 
-        // The R13r commit path is unaffected: it still fires off the
-        // await_report hold's own deadline, not the liveness hold.
+        // Expiring await_report records missing proof, independently of H4 cadence.
         r.advance(P.awaitReportMs);
         r.ledger.observe(evd('liveness', { result: 'alive' }, { at: r.now }));
         await r.scheduler.tick();
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+        expectReportMissing(r);
     });
 
     it('liveness_unknown (R32u) also backs off while await_report is held', async () => {
@@ -695,7 +709,7 @@ describe('liveness probe backoff during await_report (rc.43 run 10)', () => {
 
 
 describe('production ledger/scheduler session rebound fencing', () => {
-    it.each(['await_report', 'weak_candidate'] as const)('%s does not complete s2 from stored s1 alive, then accepts fresh s2 alive', async (reason) => {
+    it.each(['await_report', 'weak_candidate'] as const)('%s rejects stored s1 proof, accepts fresh s2 alive, and respects report ownership', async (reason) => {
         const r = rig();
         toGenerating(r);
         r.ledger.observe(evd('turn_end', reason === 'await_report'
@@ -709,7 +723,8 @@ describe('production ledger/scheduler session rebound fencing', () => {
         await r.scheduler.tick();
         expect(r.ledger.getAttempt('a1')).toMatchObject({ sessionId: 's2', terminal: null, lastLiveness: null });
         expect(r.host.calls).not.toContain('terminal:t1:completed');
-        expect(r.ledger.getAttempt('a1')!.data.unconfirmedEndDeferral?.count).toBe(1);
+        if (reason === 'weak_candidate') expect(r.ledger.getAttempt('a1')!.data.unconfirmedEndDeferral?.count).toBe(1);
+        else expectReportMissing(r);
         const late = r.ledger.observe(evd('liveness', { result: 'dead', probeStartedAtMs: r.now - 11 }, { at: r.now }));
         expect(late.verdict).toBe('rejected');
         expect(r.host.calls.some(c => c.startsWith('requeue:'))).toBe(false);
@@ -725,7 +740,13 @@ describe('production ledger/scheduler session rebound fencing', () => {
         expect(read).toHaveBeenCalledOnce();
         r.advance(1);
         await scheduler.tick();
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+        expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('alive');
+        if (reason === 'await_report') {
+            expectReportMissing(r);
+            expect(r.ledger.observe(evd('worker_report', { outcome: 'completed', hasHandoffNotes: false },
+                { sessionId: 's2', at: r.now, source: 'worker_tool' })).rule).toBe('R17');
+            expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+        } else expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
         expect(r.host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(1);
     });
 
@@ -754,7 +775,8 @@ describe('production ledger/scheduler session rebound fencing', () => {
         expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('alive');
         r.advance(endProbeGraceMs(P));
         await r.scheduler.tick();
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak' });
+        expectReportMissing(r);
+        expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe('alive');
     });
 
     it('a restart that returns to the same session id still cuts an in-flight read', async () => {
@@ -820,10 +842,15 @@ describe('async handoff respects session cuts in the production SQLite scheduler
                 expect(r.ledger.getAttempt('a1')!.terminal).toBeNull();
                 r.advance(endProbeGraceMs(P));
                 await r.scheduler.tick();
-                expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject(control === 'alive'
-                    ? { outcome: 'completed', strength: 'weak' }
-                    : { outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' });
-                expect(r.host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(control === 'alive' ? 1 : 0);
+                if (reason === 'await_report') {
+                    expectReportMissing(r);
+                    expect(r.ledger.getAttempt('a1')!.lastLiveness).toBe(control);
+                } else {
+                    expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject(control === 'alive'
+                        ? { outcome: 'completed', strength: 'weak' }
+                        : { outcome: 'failed', reason: 'weak_end_liveness_unconfirmed' });
+                    expect(r.host.calls.filter(c => c === 'terminal:t1:completed')).toHaveLength(control === 'alive' ? 1 : 0);
+                }
             }
         });
     }

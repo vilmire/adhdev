@@ -35,7 +35,7 @@ function createRouter(dispatchMeshCommand: any = vi.fn(() => new Promise<unknown
     instanceManager: { collectAllStates: () => [], listInstanceIds: () => [], getInstance: () => null } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
-    sessionHostControl: { listSessions: vi.fn(async () => []) } as any,
+    sessionHostControl: { listSessions: vi.fn(async () => []), resolveHostBootId: () => 'fixture-host-boot' } as any,
     statusInstanceId: COORD,
     dispatchMeshCommand,
   } as any) as any

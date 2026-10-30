@@ -21,7 +21,7 @@ function fixture() {
     const record: any = { sessionId, lifecycle: 'running', lastActivityAt: now - 1000, meta: state.settings };
     const instance = { getState: () => state };
     const components: any = { instanceManager: { getInstance: () => instance, getByCategory: () => [instance] },
-        router: { deps: { sessionHostControl: { listSessions: async () => [record] } } } };
+        router: { deps: { sessionHostControl: { listSessions: async () => [record], resolveHostBootId: () => 'fixture-host-boot' } } } };
     const mesh = { id: meshId, nodes: [] };
     const pass = () => runIdleSessionReapPass(sessionLifetimeDeps(components, mesh, now), { meshId, now, dryRun: true,
         policy: { delegatedSessionIdleTtlMinutes: 0, maxIdleDelegatedSessionsPerMachine: 0 } });

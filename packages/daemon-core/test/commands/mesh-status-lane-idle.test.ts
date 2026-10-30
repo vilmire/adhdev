@@ -1,9 +1,9 @@
 /**
  * End to end through the router: the mesh.status lane is fed by the real
  * `mesh_status` command over the coordinator-held store (the same wiring
- * host-runtime.ts uses). An idle mesh must send ZERO bytes after its snapshot
- * even as wall-clock time passes (no per-call age / stamp fields leak into the
- * diff), a member's push of ONE node yields a delta for that node only, and
+ * host-runtime.ts uses). An idle mesh must send zero bytes while observation freshness stays unchanged
+ * (no per-call age / stamp fields leak into the diff). Expiring a held runtime
+ * emits one real fresh-to-stale transition, a member's push of ONE node yields a delta for that node only, and
  * the coordinator sends its members nothing while they push.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DaemonCommandRouter } from '../../src/commands/router'
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
+import { MESH_NODE_STATE_STALE_MS } from '../../src/mesh/mesh-node-git-refresher'
 import { MeshNodeGitStateStore } from '../../src/mesh/mesh-node-git-state'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
@@ -45,7 +46,7 @@ function remoteGit(workspace: string, headCommit: string) {
 afterEach(resetMeshRuntimeStore)
 
 describe('mesh.status lane over the real mesh_status (coordinator-held)', () => {
-  it('idle mesh: 0 bytes after the snapshot; one member push → a delta for that node only; no coordinator→member traffic', async () => {
+  it('idle mesh: zero bytes between freshness transitions; one member push changes only that node; no coordinator→member traffic', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-lane-idle-')
     let clock = Date.now()
     const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock)
@@ -118,13 +119,28 @@ describe('mesh.status lane over the real mesh_status (coordinator-held)', () => 
       expect(frames[0]!.update.mode).toBe('snapshot')
       const snapshotBytes = frames[0]!.bytes
 
-      // Idle: an hour of flushes (time passes, nothing changes) → nothing sent.
+      // Before freshness expires, repeated reads send no age/stamp-only deltas.
+      const observedAt = clock
+      clock = observedAt + MESH_NODE_STATE_STALE_MS - 1
+      await topics.flushMeshStatus(MESH_ID)
+      await topics.flushMeshStatus(MESH_ID)
+      expect(frames).toHaveLength(1)
+
+      // An unrefreshed observation becoming stale is a real status change.
+      clock = observedAt + MESH_NODE_STATE_STALE_MS
+      await topics.flushMeshStatus(MESH_ID)
+      expect(frames).toHaveLength(2)
+      const stale = frames[1]!.update.delta.collections.nodes.upsert
+      expect(stale.map((n: any) => n.nodeId)).toEqual(['node_r1', 'node_r2'])
+      expect(stale.every((n: any) => n.heldRuntime.freshness === 'stale')).toBe(true)
+
+      // Another hour without a change sends zero further bytes.
       for (let i = 0; i < 12; i += 1) {
         clock += 5 * 60_000
         await topics.flushMeshStatus(MESH_ID)
       }
-      const idle = frames.slice(1)
-      expect(idle.map((f) => JSON.stringify(f.update.delta)).slice(0, 2)).toEqual([])
+      const idle = frames.slice(2)
+      expect(idle).toEqual([])
       expect(idle.reduce((sum, f) => sum + f.bytes, 0)).toBe(0)
 
       // One member pushes a new HEAD for its node.
@@ -134,13 +150,13 @@ describe('mesh.status lane over the real mesh_status (coordinator-held)', () => 
       }, 'mesh')
       expect(pushed).toMatchObject({ success: true, changed: true })
       await topics.flushMeshStatus(MESH_ID)
-      expect(frames).toHaveLength(2)
-      const delta = frames[1]!.update
+      expect(frames).toHaveLength(3)
+      const delta = frames[2]!.update
       expect(delta.mode).toBe('delta')
       const touched = (delta.delta.collections?.nodes?.upsert ?? []).map((n: any) => n.nodeId)
       expect(touched).toEqual(['node_r2'])
       expect(delta.delta.collections.nodes.removed).toBeUndefined()
-      expect(frames[1]!.bytes).toBeLessThan(snapshotBytes / 2)
+      expect(frames[2]!.bytes).toBeLessThan(snapshotBytes / 2)
       // The coordinator never contacted a member for any of this.
       expect(dispatchMeshCommand).not.toHaveBeenCalled()
     } finally {

@@ -99,10 +99,14 @@ describe('runtime summary — content-free allow-list', () => {
     expect(summary.sessions[2].providerType).toBeUndefined()
   })
 
-  it('signature ignores timestamps (lastMessageAt, facts/quota stamps) but not status', () => {
+  it('signature ignores envelope timestamps but preserves quota measurement clocks and status', () => {
     const a = buildMeshNodeRuntimeSummary(statusMetadata(), FACTS)!
-    const b = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ ...statusMetadata().status.sessions[0], lastMessageAt: 1_800_000_000_000 }] }), { ...FACTS, reportedAt: 9_000, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 12, updatedAt: 8_000 }] } } })!
+    const b = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ ...statusMetadata().status.sessions[0], lastMessageAt: 1_800_000_000_000 }] }), { ...FACTS, reportedAt: 9_000, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 12, updatedAt: 4_000 }] } } })!
     expect(computeMeshNodeRuntimeSignature(a)).toBe(computeMeshNodeRuntimeSignature(b))
+    const measured = buildMeshNodeRuntimeSummary(statusMetadata(), { ...FACTS, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 12, updatedAt: 8_000 }] } } })!
+    expect(computeMeshNodeRuntimeSignature(measured)).not.toBe(computeMeshNodeRuntimeSignature(a))
+    const reset = buildMeshNodeRuntimeSummary(statusMetadata(), { ...FACTS, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 12, updatedAt: 4_000, resetsAt: 9_000 }] } } })!
+    expect(computeMeshNodeRuntimeSignature(reset)).not.toBe(computeMeshNodeRuntimeSignature(a))
     const c = buildMeshNodeRuntimeSummary(statusMetadata({ sessions: [{ ...statusMetadata().status.sessions[0], status: 'idle' }] }), FACTS)!
     expect(computeMeshNodeRuntimeSignature(c)).not.toBe(computeMeshNodeRuntimeSignature(a))
     const d = buildMeshNodeRuntimeSummary(statusMetadata(), { ...FACTS, quota: { 'claude-cli': { status: 'ok', windows: [{ usedPercent: 80, updatedAt: 4_000 }] } } })!
@@ -215,7 +219,7 @@ describe('coordinator store + overlay', () => {
     expect(snapshot.nodes[1].heldRuntime.sessions[0]).toMatchObject({ id: 'sess-1', status: 'generating' })
     expect(snapshot.nodes[1].nodeFacts.reportedAt).toBe(5_000)
     expect(snapshot.nodes[1].nodeFacts.quota['claude-cli'].windows[0].usedPercent).toBe(12)
-    expect(snapshot.nodes[2].heldRuntime).toEqual({ source: 'none', observedAt: null, refreshing: false, sessions: [] })
+    expect(snapshot.nodes[2].heldRuntime).toEqual({ freshness: 'not_observed', handshakePending: false, source: 'none', observedAt: null, refreshing: false, sessions: [] })
   })
 
   it('the coordinator never reads a member: first contact nudges each node it holds nothing for, once', async () => {

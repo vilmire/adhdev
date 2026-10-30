@@ -65,22 +65,22 @@ describe('auth-failed turn — never task_completed (reducer)', () => {
         expect(r.attempt?.state).toBe('delivered');
     });
 
-    it('control: an unstamped turn_end awaits a fresh session probe before weak completion', () => {
+    it('control: a weak turn_end without a report binding awaits a fresh session probe before weak completion', () => {
         const end = reduce({
             attempt: makeAttempt('generating'), holds: [],
-            evidence: ev('turn_end', { strength: 'genuine', summary: REF, reportExpected: true }),
+            evidence: ev('turn_end', { strength: 'weak', summary: REF }),
             policy: POLICY, nowMs: NOW,
         });
-        expect(end.rule).toBe('R9r');
-        const exp = reduce({ attempt: end.attempt, holds: [makeHold('await_report')], evidence: expired('await_report'), policy: POLICY, nowMs: NOW });
+        expect(end.rule).toBe('R10');
+        const exp = reduce({ attempt: end.attempt, holds: [makeHold('weak_candidate')], evidence: expired('weak_candidate'), policy: POLICY, nowMs: NOW });
         expect(exp.rule).toBe('R13u');
         expect(exp.attempt?.terminal).toBeNull();
         expect(exp.effects.some((e) => e.kind === 'probe')).toBe(true);
-        const alive = reduce({ attempt: end.attempt, holds: [makeHold('await_report')],
+        const alive = reduce({ attempt: end.attempt, holds: [makeHold('weak_candidate')],
             evidence: ev('liveness', { result: 'alive', probeStartedAtMs: NOW }, { source: 'coordinator_probe' }), policy: POLICY, nowMs: NOW });
-        const confirmed = reduce({ attempt: alive.attempt, holds: [makeHold('await_report')],
-            evidence: expired('await_report'), policy: POLICY, nowMs: NOW });
-        expect(confirmed.rule).toBe('R13r');
+        const confirmed = reduce({ attempt: alive.attempt, holds: [makeHold('weak_candidate')],
+            evidence: expired('weak_candidate'), policy: POLICY, nowMs: NOW });
+        expect(confirmed.rule).toBe('R13a');
         expect(confirmed.attempt?.terminal).toMatchObject({ outcome: 'completed', reason: 'weak_end_confirmed' });
     });
 });

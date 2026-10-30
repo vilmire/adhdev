@@ -753,8 +753,26 @@ function idleWorkerWith(table: readonly ProcessNodeInfo[], fx: ReturnType<typeof
   });
 }
 
-describe('the guard is bounded: it can delay a weak completion, never pin the task', () => {
-  it('(A3) a child that never exits: one notice at the timeout, a RELEASE after the inactivity window, then the ordinary weak-completion path decides and the guard never re-holds', async () => {
+// Releasing a background guard proves inactivity, not a worker task verdict.
+function expectReleasedReportMissing(fx: ReturnType<typeof createFakeWorkerFixture>) {
+  expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+  expect(fx.backgroundWork.trackedAttemptIds()).toEqual([]);
+  expect(fx.store.getAttempt(fx.attemptId)).toMatchObject({ state: 'finalizing', generation: 0, terminal: null });
+  expect(fx.queueStatus()).toBe('assigned');
+  expect(fx.ledger.openAttemptForSession(fx.sessionId)?.attemptId).toBe(fx.attemptId);
+  expect(fx.store.listEvents(fx.attemptId).some(e => e.rule === 'R13q'
+    && (e.payload.notes as string[] | undefined)?.includes('queue_completion_report_missing'))).toBe(true);
+  // A late authenticated report can still settle the retained attempt exactly once.
+  expect(fx.ledger.observe(evd('worker_report', { outcome: 'completed', hasHandoffNotes: false }, {
+    sessionId: fx.sessionId, observedBy: SELF, at: fx.now, source: 'worker_tool',
+    attemptRef: { attemptId: fx.attemptId, generation: 0 },
+  })).rule).toBe('R17');
+  expect(fx.store.getAttempt(fx.attemptId)!.terminal).toMatchObject({ outcome: 'completed', strength: 'tool_report' });
+  expect(fx.queueStatus()).toBe('completed');
+}
+
+describe('the guard is bounded: release preserves independent report ownership', () => {
+  it('(A3) a child that never exits: one notice at the timeout, a RELEASE after the inactivity window, then report ownership remains and the guard never re-holds', async () => {
     const fx = createFakeWorkerFixture({ taskId: 'bound-1', sessionId: 'sess-bound-1', ptyPid: 9000, timeoutMs: 25_000, inactivityReleaseMs: 60_000 });
     idleWorkerWith([
       { pid: 9000, ppid: 1, comm: 'zsh', args: 'zsh' },
@@ -778,16 +796,13 @@ describe('the guard is bounded: it can delay a weak completion, never pin the ta
     expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
     expect(fx.backgroundWork.trackedAttemptIds()).toEqual([]);
 
-    // The ordinary path now runs to a terminal outcome even though the server is STILL alive.
+    // The ordinary report gate runs even though the server is still alive.
     for (let i = 0; i < 12 && fx.queueStatus() === 'assigned'; i += 1) {
       fx.advance(5_000);
       fx.scheduler.requestProbe(fx.attemptId);
       await fx.scheduler.tick();
     }
-    const attempt = fx.store.getAttempt(fx.attemptId)!;
-    // Terminal outcome of a held-then-released turn = exactly what a weak turn end produced before the guard existed.
-    expect(attempt.terminal).toMatchObject({ outcome: 'completed', reason: 'weak_end_confirmed', strength: 'weak' });
-    expect(fx.queueStatus()).toBe('completed');
+    expectReleasedReportMissing(fx);
     // Exactly one guard notice, no nudge (the child never exited), and no re-hold.
     expect(fx.coordinatorNotices).toHaveLength(1);
     expect(fx.nudges).toHaveLength(0);
@@ -820,7 +835,7 @@ describe('the guard is bounded: it can delay a weak completion, never pin the ta
       fx.scheduler.requestProbe(fx.attemptId);
       await fx.scheduler.tick();
     }
-    expect(fx.store.getAttempt(fx.attemptId)!.terminal).not.toBeNull();
+    expectReleasedReportMissing(fx);
     expect(fx.nudges).toHaveLength(1);
     expect(fx.coordinatorNotices).toHaveLength(1);
   });
@@ -957,7 +972,7 @@ describe('release rule: real activity never releases on a clock; only idle-but-a
       fx.scheduler.requestProbe(fx.attemptId);
       await fx.scheduler.tick();
     }
-    expect(fx.store.getAttempt(fx.attemptId)!.terminal).toMatchObject({ reason: 'weak_end_confirmed' });
+    expectReleasedReportMissing(fx);
     expect(fx.coordinatorNotices).toHaveLength(1);
   });
 
@@ -1082,7 +1097,7 @@ describe('release rule: real activity never releases on a clock; only idle-but-a
     });
     expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
 
-    // After nudgeGraceMs (60 s) without worker output, hold is released (no second notice) and turn completes.
+    // After nudgeGraceMs (60 s) without worker output, guard is released (no second notice); the report gate still owns completion.
     fx.advance(61_000);
     await fx.scheduler.tick();
     expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
@@ -1094,11 +1109,7 @@ describe('release rule: real activity never releases on a clock; only idle-but-a
       fx.scheduler.requestProbe(fx.attemptId);
       await fx.scheduler.tick();
     }
-    expect(fx.store.getAttempt(fx.attemptId)!.terminal).toMatchObject({
-      outcome: 'completed',
-      reason: 'weak_end_confirmed',
-    });
-    expect(fx.queueStatus()).toBe('completed');
+    expectReleasedReportMissing(fx);
   });
 
   it('(R9 / 7d) background work that runs >120 s, exits, and receives a new worker summary after the nudge releases immediately without waiting for nudgeGraceMs', async () => {

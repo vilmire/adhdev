@@ -133,9 +133,9 @@ describe('runtime native relay evidence wiring', () => {
 
     it('does not relax foreign attempt/session proof checks', async () => {
         remoteReply.provenance.attemptId = 'foreign';
-        expect(await ports().rehydrateAttemptReport!('remote', 'remote-coord', 'plain:a')).toBeNull();
+        expect(await ports().rehydrateAttemptReport!('remote', 'remote-coord', 'plain:a')).toEqual({ body: null, completeness: 'envelope_unverified', reason: 'remote_provenance_unverified' });
         remoteReply.provenance.attemptId = 'plain:a'; remoteReply.provenance.coordinatorSessionId = 'foreign';
-        expect(await ports().rehydrateAttemptReport!('remote', 'remote-coord', 'plain:a')).toBeNull();
+        expect(await ports().rehydrateAttemptReport!('remote', 'remote-coord', 'plain:a')).toEqual({ body: null, completeness: 'envelope_unverified', reason: 'remote_provenance_unverified' });
     });
 
     it.each(['changed body', 'changed part', 'missing parts'])('does not trust a native marker with %s', async defect => {

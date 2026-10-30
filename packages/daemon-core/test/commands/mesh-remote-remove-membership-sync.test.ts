@@ -18,7 +18,7 @@ function createRouter(dispatchMeshCommand: any) {
     } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
-    sessionHostControl: { listSessions: vi.fn(async () => []) } as any,
+    sessionHostControl: { listSessions: vi.fn(async () => []), resolveHostBootId: () => 'fixture-host-boot' } as any,
     statusInstanceId: 'daemon-local',
     dispatchMeshCommand,
   } as any)
