@@ -27,6 +27,7 @@ import {
 } from './grok-cli-transcript.js';
 import { hasExclusiveSentInput } from './sent-prompt-registry.js';
 import { SPAWN_BIND_GRACE_MS } from './constants.js';
+import { readFirstJsonlRecord } from './first-jsonl-record.js';
 import {
     antigravityOwnerToken,
     claimAntigravityConversation,
@@ -452,30 +453,20 @@ function findCodexPathByRuntime(root: string, workspace: string, sessionStartedA
 
 function readCodexSessionMeta(filePath: string): { cwd?: string; timestampMs?: number } | null {
     try {
-        const fd = fs.openSync(filePath, 'r');
-        try {
-            const buffer = Buffer.alloc(8192);
-            const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
-            if (bytes <= 0) return null;
-            const text = buffer.subarray(0, bytes).toString('utf8');
-            const firstLine = text.slice(0, text.indexOf('\n') >= 0 ? text.indexOf('\n') : text.length).trim();
-            if (!firstLine) return null;
-            const record = JSON.parse(firstLine) as Record<string, unknown>;
-            if (record.type !== 'session_meta' || !record.payload || typeof record.payload !== 'object') return null;
-            const payload = record.payload as Record<string, unknown>;
-            const timestampRaw = payload.timestamp;
-            const timestampMs = typeof timestampRaw === 'string'
-                ? Date.parse(timestampRaw)
-                : typeof timestampRaw === 'number'
-                    ? (timestampRaw < 1e12 ? timestampRaw * 1000 : timestampRaw)
-                    : NaN;
-            return {
-                cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
-                timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
-            };
-        } finally {
-            fs.closeSync(fd);
-        }
+        const record = readFirstJsonlRecord(filePath);
+        if (!record) return null;
+        if (record.type !== 'session_meta' || !record.payload || typeof record.payload !== 'object') return null;
+        const payload = record.payload as Record<string, unknown>;
+        const timestampRaw = payload.timestamp;
+        const timestampMs = typeof timestampRaw === 'string'
+            ? Date.parse(timestampRaw)
+            : typeof timestampRaw === 'number'
+                ? (timestampRaw < 1e12 ? timestampRaw * 1000 : timestampRaw)
+                : NaN;
+        return {
+            cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+            timestampMs: Number.isFinite(timestampMs) ? timestampMs : undefined,
+        };
     } catch {
         return null;
     }

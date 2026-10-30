@@ -11,6 +11,7 @@ import * as fs from 'node:fs';
 import { LOG } from '../../logging/logger.js';
 import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
 import { SPAWN_BIND_GRACE_MS } from '../native-history/constants.js';
+import { readFirstJsonlRecord } from '../native-history/first-jsonl-record.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 
 /**
@@ -701,37 +702,24 @@ export interface CandidateMeta {
 
 export function readCandidateSessionMeta(filePath: string): CandidateMeta | null {
     try {
-        // Read only the first line — meta is always the first JSONL record
-        // and full file reads here would scale O(files × file_size).
-        const fd = fs.openSync(filePath, 'r');
-        try {
-            const buf = Buffer.alloc(8192);
-            const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
-            if (bytes <= 0) return null;
-            const text = buf.subarray(0, bytes).toString('utf8');
-            const nl = text.indexOf('\n');
-            const firstLine = (nl >= 0 ? text.slice(0, nl) : text).trim();
-            if (!firstLine) return null;
-            const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-            if (String(parsed.type ?? '') !== 'session_meta') return null;
-            const payload = parsed.payload && typeof parsed.payload === 'object'
-                ? (parsed.payload as Record<string, unknown>)
-                : null;
-            if (!payload) return null;
-            const cwd = typeof payload.cwd === 'string' ? payload.cwd : undefined;
-            const tsRaw = payload.timestamp;
-            const tsMs = typeof tsRaw === 'string'
-                ? Date.parse(tsRaw)
-                : typeof tsRaw === 'number'
-                    ? (tsRaw < 1e12 ? Math.floor(tsRaw * 1000) : Math.floor(tsRaw))
-                    : NaN;
-            return {
-                cwd,
-                sessionTimestampMs: Number.isFinite(tsMs) ? tsMs : undefined,
-            };
-        } finally {
-            fs.closeSync(fd);
-        }
+        const parsed = readFirstJsonlRecord(filePath);
+        if (!parsed) return null;
+        if (String(parsed.type ?? '') !== 'session_meta') return null;
+        const payload = parsed.payload && typeof parsed.payload === 'object'
+            ? (parsed.payload as Record<string, unknown>)
+            : null;
+        if (!payload) return null;
+        const cwd = typeof payload.cwd === 'string' ? payload.cwd : undefined;
+        const tsRaw = payload.timestamp;
+        const tsMs = typeof tsRaw === 'string'
+            ? Date.parse(tsRaw)
+            : typeof tsRaw === 'number'
+                ? (tsRaw < 1e12 ? Math.floor(tsRaw * 1000) : Math.floor(tsRaw))
+                : NaN;
+        return {
+            cwd,
+            sessionTimestampMs: Number.isFinite(tsMs) ? tsMs : undefined,
+        };
     } catch {
         return null;
     }

@@ -4,24 +4,66 @@ import os from 'node:os';
 import path from 'node:path';
 import { createNativeHistoryDispatcher, clearCodexRuntimeBinding } from '../../../src/providers/native-history/dispatcher.js';
 import { recordSentPrompt, __resetSentPromptRegistry } from '../../../src/providers/native-history/sent-prompt-registry.js';
+import { FIRST_JSONL_RECORD_MAX_BYTES } from '../../../src/providers/native-history/first-jsonl-record.js';
 const homes: string[] = [];
 afterEach(() => { __resetSentPromptRegistry(); clearCodexRuntimeBinding(); for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true }); });
-function fixture() {
+function fixture(role = 'workspace') {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-verified-')); homes.push(home);
     const root = path.join(home, '.codex/sessions'); fs.mkdirSync(root, { recursive: true });
-    const start = Date.now(); const workspace = path.join(home, 'workspace'); fs.mkdirSync(workspace);
+    const start = Date.now(); const workspace = path.join(home, role); fs.mkdirSync(workspace);
     const read = createNativeHistoryDispatcher('codex-cli');
     const input = { workspace, instanceId: 'owner', sessionStartedAtMs: start, envOverrides: { HOME: home } };
-    const write = (id: string, prompt: string) => fs.writeFileSync(path.join(root, `${id}.jsonl`), [
-        { type: 'session_meta', timestamp: start, payload: { id, cwd: workspace, timestamp: start } },
+    const write = (id: string, prompt: string, cwd = workspace, timestamp = start + 2237) => fs.writeFileSync(path.join(root, `${id}.jsonl`), [
+        { type: 'session_meta', timestamp: start, payload: { base_instructions: 'x'.repeat(22000), id, cwd, timestamp } },
         { type: 'response_item', timestamp: start + 1, payload: { type: 'message', role: 'user', content: prompt } },
-        { type: 'event_msg', timestamp: start + 2, payload: { type: 'task_complete', turn_id: 'turn', last_agent_message: 'Native final' } },
+        { type: 'response_item', timestamp: start + 2, payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: 'Native final' } },
+        { type: 'event_msg', timestamp: start + 3, payload: { type: 'task_complete', turn_id: 'turn', last_agent_message: 'Native final' } },
     ].map(r => JSON.stringify(r)).join('\n'));
     return { home, root, start, workspace, read, input, write };
 }
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
 describe('Codex verified eventual native discovery', () => {
+    it.each(['assistant', 'workspace'])('discovers a fresh unpinned %s with oversized metadata and preserves a restart pin', role => {
+        const f = fixture(role); recordSentPrompt('owner', 'Synthetic exclusive discovery input');
+        f.write(A, 'Synthetic exclusive discovery input');
+        const discovered = f.read(f.input);
+        expect(discovered).toMatchObject({ providerSessionId: A, ownerConfirmed: true });
+        expect(discovered?.messages.filter(m => m.role === 'assistant' && m.kind === 'standard'))
+            .toMatchObject([{ content: 'Native final', bubbleState: 'final' }]);
+        // Clearing transient bindings models restart; the persisted exact pin is
+        // still authoritative when the rollout ages beyond discovery's window.
+        clearCodexRuntimeBinding();
+        const old = new Date(f.start - 20 * 60_000);
+        fs.utimesSync(path.join(f.root, `${A}.jsonl`), old, old);
+        const pinned = { ...f.input, providerSessionId: A, sessionId: A };
+        const restored = f.read(pinned);
+        expect(restored?.providerSessionId).toBe(A);
+        expect(restored?.messages.filter(m => m.role === 'assistant' && m.kind === 'standard')).toHaveLength(1);
+        expect(f.read(pinned)?.messages).toEqual(restored?.messages);
+        expect(f.read({ ...f.input, instanceId: 'next-generation', sessionStartedAtMs: f.start + 60_000 })).toBeNull();
+    });
+    it.each(['cwd', 'time'])('rejects a large matching-input candidate with wrong %s', mismatch => {
+        const f = fixture(); recordSentPrompt('owner', 'Exclusive guarded input');
+        f.write(A, 'Exclusive guarded input', mismatch === 'cwd' ? f.home : f.workspace,
+            mismatch === 'time' ? f.start + 10_001 : f.start);
+        expect(f.read(f.input)).toBeNull();
+    });
+    it.each(['malformed', 'truncated', 'over-cap'])('fails closed during unpinned discovery for %s metadata', failure => {
+        const f = fixture(); recordSentPrompt('owner', 'Exclusive guarded input');
+        f.write(A, 'Exclusive guarded input');
+        const file = path.join(f.root, `${A}.jsonl`);
+        const rows = fs.readFileSync(file, 'utf8').split('\n');
+        if (failure === 'malformed') rows[0] = '{broken}';
+        if (failure === 'truncated') rows[0] = rows[0].slice(0, -1);
+        if (failure === 'over-cap') {
+            const record = JSON.parse(rows[0]);
+            record.payload.base_instructions = 'x'.repeat(FIRST_JSONL_RECORD_MAX_BYTES);
+            rows[0] = JSON.stringify(record);
+        }
+        fs.writeFileSync(file, rows.join('\n'));
+        expect(f.read(f.input)).toBeNull();
+    });
     it('retries missing history, ignores a sibling, and binds only exclusive full input in the spawned HOME', () => {
         const f = fixture(); recordSentPrompt('owner', 'Distinct complete owner input'); recordSentPrompt('sibling', 'Distinct sibling input');
         expect(f.read(f.input)).toBeNull();
