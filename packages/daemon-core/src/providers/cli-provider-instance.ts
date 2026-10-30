@@ -848,7 +848,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
     nativeTurnTerminalMarker(turnStartedAt?: number): NativeTurnTerminalMarker | null {
         const pending = this.completedDebouncePending ?? this.cancelledCompletionRecheck?.pending;
-        if (pending?.completionBinding && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
+        if (pending && pending.turnStartedAt === turnStartedAt) return boundCompletionMarker(this, pending);
         return nativeTurnTerminalMarker(this, turnStartedAt);
     }
 

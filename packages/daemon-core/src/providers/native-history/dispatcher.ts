@@ -86,6 +86,7 @@ export interface NativeHistoryResult {
          * name into `content` instead.
          */
         toolName?: string;
+        bubbleState?: 'final';
         /**
          * Daemon-internal source address for the message identity ledger,
          * stamped by the reader (`chat/message-source-address.ts`). Carried by
@@ -96,6 +97,7 @@ export interface NativeHistoryResult {
     providerSessionId?: string;
     sourcePath: string;
     sourceMtimeMs: number;
+    unavailableReason?: string;
     nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
     /** True for an accepted authoritative handle or unique full sent-input
      * evidence. Spawn time and claim exclusivity alone never prove ownership. */
@@ -128,6 +130,7 @@ function toNativeHistoryMessage(m: any, workspace: string): NativeHistoryResult[
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         receivedAt: typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(m.timestamp || '') || Date.now(),
         kind: typeof m.kind === 'string' ? m.kind : 'standard',
+        ...(m.bubbleState === 'final' ? { bubbleState: 'final' as const } : {}),
         workspace: typeof m.workspace === 'string' ? m.workspace : workspace || undefined,
         // (TOOL-EXPAND) Forward the reader's ref. This projection is an
         // allow-list, so a ref the reader stamped is dropped here unless
@@ -186,7 +189,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
         // Owner-confirmation only meaningful for antigravity (see resolveAntigravityPath).
         // For other readers the file was resolved by exact per-session key already;
         // leave the flag undefined so the read-path callers treat them as before.
-        const ownerConfirmed = reader === 'antigravity-cli' ? resolved?.ownerConfirmed === true : undefined;
+        let ownerConfirmed = reader === 'antigravity-cli' ? resolved?.ownerConfirmed === true : undefined;
         if (input.forceRefresh === true || input.args?.forceRefresh === true) {
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
         }
@@ -196,6 +199,12 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             : sessionId;
         const session = readByReader(reader, sourcePath, readSessionId, workspace);
         if (!session) return null;
+        if (reader === 'codex-cli' && !requestedProviderSid && !isUuidLike(sessionId) && instanceId) {
+            ownerConfirmed = !!instanceId && sessionStartedAtMs > 0
+                && hasExclusiveSentInput(instanceId, session.messages.filter((m: { role: string }) => m.role === 'user').map((m: { content: string }) => m.content));
+            if (!ownerConfirmed) return { messages: [], sourcePath: '', sourceMtimeMs: 0,
+                ownerConfirmed: false, unavailableReason: 'native_owner_unverified' };
+        }
 
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
             return null;
@@ -248,7 +257,7 @@ interface ResolvedSource {
 function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string, homeDir?: string): ResolvedSource | null {
     switch (reader) {
         case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
-        case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
+        case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId, homeDir); return p ? { path: p } : null; }
         case 'antigravity-cli': return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId, homeDir);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
@@ -343,12 +352,12 @@ export function clearCodexRuntimeBinding(workspace?: string, sessionStartedAtMs?
         return;
     }
     const key = codexRuntimeBindingKey(workspace || '', sessionStartedAtMs || 0);
-    if (key) codexRuntimeBindings.delete(key);
+    if (key) for (const stored of codexRuntimeBindings.keys()) if (stored.endsWith('\0' + key)) codexRuntimeBindings.delete(stored);
 }
 
-function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number): string | null {
+function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId = '', homeDir?: string): string | null {
     // codex stores by UTC date: ~/.codex/sessions/<year>/<month>/<day>/<file>.jsonl
-    const root = codexSessionsRoot();
+    const root = homeDir ? path.join(homeDir, '.codex', 'sessions') : codexSessionsRoot();
     // An explicit uuid is authoritative BOTH WAYS: a hit binds exactly, and a MISS
     // returns null rather than falling through to the runtime search. The caller
     // named a specific session; resolving some other file for it is precisely the
@@ -360,7 +369,8 @@ function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAt
 
     // Sticky binding: reuse this session's previously-proven file before re-running
     // the timeboxed search, so an aged-out mtime cannot un-bind a live session.
-    const key = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+    const baseKey = codexRuntimeBindingKey(workspace, sessionStartedAtMs);
+    const key = baseKey ? [root, instanceId, baseKey].join('\0') : null;
     if (key) {
         const pinned = codexRuntimeBindings.get(key);
         if (pinned) {
@@ -369,7 +379,7 @@ function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAt
         }
     }
 
-    const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs);
+    const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId);
     if (resolved && key) codexRuntimeBindings.set(key, resolved);
     return resolved;
 }
@@ -399,7 +409,7 @@ function findCodexPathBySessionId(root: string, sessionId: string): string | nul
     return matches[0]?.p ?? null;
 }
 
-function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number): string | null {
+function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number, instanceId: string): string | null {
     if (!fs.existsSync(root) || !workspace) return null;
     const workspaceResolved = resolveRealPath(workspace);
     const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -425,10 +435,15 @@ function findCodexPathByRuntime(root: string, workspace: string, sessionStartedA
                 ? Math.abs(meta.timestampMs - sessionStartedAtMs)
                 : 0;
             if (sessionStartedAtMs > 0 && (meta.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
+            if (instanceId) {
+                const candidate = readCodexCliSession(entryPath);
+                if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter(m => m.role === 'user').map(m => m.content))) continue;
+            }
             matches.push({ p: entryPath, mtime, diff });
         }
     }
 
+    if (instanceId && matches.length !== 1) return null;
     matches.sort((a, b) => sessionStartedAtMs > 0
         ? a.diff - b.diff || b.mtime - a.mtime
         : b.mtime - a.mtime);

@@ -1,4 +1,4 @@
-import { boundCompletionMarker, completionIdentityCurrent, type CompletionBindingHost } from './native-completion-binding.js';
+import { captureCompletionIdentity, boundCompletionMarker, completionIdentityCurrent, type CompletionBindingHost } from './native-completion-binding.js';
 /**
  * CANCEL-BLIP-ORPHAN — post-cancel completion re-verification.
  *
@@ -80,7 +80,7 @@ export function armCancelledCompletionRecheck(
     pending: CompletedDebouncePending,
     reason: CancelledCompletionReason,
 ): void {
-    if (reason === 'new_pty_output' && !pending.completionBinding) return;
+    if (reason === 'new_pty_output' && !pending.completionBinding && !pending.capturedCompletionInput) return;
     const now = Date.now();
     let prior = host.cancelledCompletionRecheck;
     if (prior && (prior.pending.turnStartedAt !== pending.turnStartedAt
@@ -93,7 +93,7 @@ export function armCancelledCompletionRecheck(
     // completion we owe belongs to the turn that first went idle, not to the flap.
     const carriedPending = prior?.pending ?? pending;
     const attempts = prior ? prior.attempts : 0;
-    if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding) {
+    if (attempts >= CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS && !carriedPending.completionBinding && !carriedPending.capturedCompletionInput) {
         // Budget exhausted — the session is genuinely working, not blipping. Drop the watch;
         // the turn's own generating→idle edge will arm a fresh completion.
         clearCancelledCompletionRecheck(host);
@@ -142,9 +142,11 @@ export function runCancelledCompletionRecheck(host: CancelRecheckHost): void {
         clearCancelledCompletionRecheck(host);
         return;
     }
-    if (watch.pending.completionBinding) {
+    if (watch.pending.completionBinding || watch.pending.capturedCompletionInput) {
+        host.readExternalCompletionMessages?.();
+        captureCompletionIdentity(host as CompletionBindingHost, watch.pending);
         if (Date.now() - watch.firstCancelledAt > 120_000
-            || !completionIdentityCurrent(host as CompletionBindingHost, watch.pending)) {
+            || (watch.pending.completionBinding && !completionIdentityCurrent(host as CompletionBindingHost, watch.pending))) {
             clearCancelledCompletionRecheck(host);
             return;
         }
@@ -198,7 +200,8 @@ export function runCancelledCompletionRecheck(host: CancelRecheckHost): void {
 /** Existing attributed native hydration drives late finals after the timer budget, without polling anew. */
 export function observeCancelledNativeCompletion(host: CancelRecheckHost): void {
     const watch = host.cancelledCompletionRecheck;
-    if (!watch?.pending.completionBinding || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+    if (!watch || (!watch.pending.completionBinding && !watch.pending.capturedCompletionInput) || host.completedDebouncePending || host.cancelledCompletionRecheckTimer) return;
+    captureCompletionIdentity(host as CompletionBindingHost, watch.pending);
     if (Date.now() - watch.firstCancelledAt > 120_000 || !completionIdentityCurrent(host as CompletionBindingHost, watch.pending)) {
         clearCancelledCompletionRecheck(host);
         return;

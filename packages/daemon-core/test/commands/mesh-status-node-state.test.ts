@@ -20,7 +20,7 @@ import {
 } from '../../src/mesh/mesh-node-git-state'
 import { MeshNodeStatePusher } from '../../src/mesh/mesh-node-state-pusher'
 import { MeshNodeGitRefresher, MESH_NODE_STATE_STALE_MS } from '../../src/mesh/mesh-node-git-refresher'
-import { kickMeshNodeGitRefreshes } from '../../src/commands/high-family/mesh-status-node-state'
+import { kickMeshNodeGitRefreshes, overlayMeshNodeGitObservations } from '../../src/commands/high-family/mesh-status-node-state'
 import { applyInlineMeshBranchConvergence } from '../../src/mesh/mesh-branch-convergence'
 import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender'
 import { createDefaultGitCommandServices } from '../../src/git/git-commands'
@@ -819,5 +819,34 @@ describe('held runtime — owner resolution and the requeue guard', () => {
     expect(isHeldRemoteSessionGenerating(store, MESH_ID, 'idle', now)).toBe(false)
     expect(isHeldRemoteSessionGenerating(store, MESH_ID, 'probed-busy', now)).toBe(false)
     expect(isHeldRemoteSessionGenerating(store, 'other_mesh', 'busy', now)).toBe(false)
+  })
+})
+
+
+describe('held runtime observation metadata for project sessions', () => {
+  it('reuses member-push age and handshake freshness on every overlay without dispatch', () => {
+    const now = Date.now()
+    const store = new MeshNodeGitStateStore()
+    const dispatch = vi.fn()
+    const refresher = new MeshNodeGitRefresher({ store, nudge: dispatch } as any)
+    const render = () => {
+      const snapshot: any = { nodes: [{ nodeId: REMOTE_NODE, daemonId: REMOTE_DAEMON, workspace: REMOTE_WORKSPACE }] }
+      overlayMeshNodeGitObservations(snapshot, { meshId: MESH_ID, store, refresher,
+        locality: { localDaemonId: 'daemon_local' }, heldSessions: true })
+      return snapshot.nodes[0].heldRuntime
+    }
+    expect(render()).toMatchObject({ freshness: 'not_observed', handshakePending: false })
+    const push = (observedAt: number) => store.recordRuntimeObservation({
+      meshId: MESH_ID, nodeId: REMOTE_NODE, workspace: REMOTE_WORKSPACE,
+      source: 'member_push', observedAt, daemonId: REMOTE_DAEMON,
+      runtime: { daemonId: REMOTE_DAEMON, sessions: [] },
+    })
+    push(now - MESH_NODE_STATE_STALE_MS - 1)
+    expect(render().freshness).toBe('stale')
+    push(now)
+    expect(render()).toMatchObject({ freshness: 'fresh', observedAt: now })
+    store.markHandshakePending(MESH_ID, REMOTE_NODE, 'restart', now + 1)
+    expect(render()).toMatchObject({ freshness: 'stale', handshakePending: true })
+    expect(dispatch).not.toHaveBeenCalled()
   })
 })

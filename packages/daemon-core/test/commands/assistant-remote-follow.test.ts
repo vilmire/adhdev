@@ -380,7 +380,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 };
             }
             if (cmd === 'mesh_status_view') {
-                return { success: true, meshId: args.meshId, machines: [] };
+                return { success: true, meshId: args.meshId, machines: [],
+                    activeWork: { success: true, activeWork: { activeWork: args.meshId === MESH_PREFEX_SIM
+                        ? [{ taskId: 'task-alpha-1', nodeId: 'n-host-a', sessionId: 'worker-alpha-1' }] : [] } },
+                };
             }
             return { success: true };
         });
@@ -1232,7 +1235,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 };
             }
             if (cmd === 'mesh_status_view') {
-                return { success: true, meshId: args.meshId, machines: [] };
+                return { success: true, meshId: args.meshId, machines: [],
+                    activeWork: { success: true, activeWork: { activeWork: args.meshId === MESH_PREFEX_SIM
+                        ? [{ taskId: 'task-alpha-1', nodeId: 'n-host-a', sessionId: 'worker-alpha-1' }] : [] } },
+                };
             }
             return { success: true };
         });
@@ -1404,6 +1410,21 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
     });
 
     it('11. [F1] follower status scopes sessions strictly to the followed mesh (0 other-mesh/unstamped/assistant sessions) and strips local workspace paths & raw repoIdentity by allow-list', async () => {
+        const originalHostExecute = hostExecute.getMockImplementation()!;
+        hostExecute.mockImplementation(async (cmd: string, args: any) => {
+            const result: any = await originalHostExecute(cmd, args);
+            if (cmd === 'mesh_status_view' && args.meshId === MESH_PREFEX_SIM) {
+                const now = Date.now();
+                result.status = { nodes: [{ nodeId: 'n-member', daemonId: MEMBER_M,
+                    heldRuntime: { daemonId: MEMBER_M, source: 'member_push', observedAt: now, freshness: 'fresh',
+                        sessions: [{ id: 'worker-member', providerType: 'kimi', status: 'generating', lastMessageAt: now - 10,
+                            settings: { meshNodeFor: MESH_PREFEX_SIM, meshNodeId: 'n-member' }, turn: { attemptId: 'member-attempt' },
+                            errorMessage: 'PRIVATE_DIAGNOSTIC', activeChat: { status: 'generating', messages: ['PRIVATE_DIAGNOSTIC'] } }] },
+                }] };
+                result.activeWork.activeWork.activeWork.push({ taskId: 'member-task', nodeId: 'n-member', sessionId: 'worker-member', attemptId: 'member-attempt' });
+            }
+            return result;
+        });
         await withHostEnv(() =>
             createRouter(HOST_A).execute(
                 ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
@@ -1440,7 +1461,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         const wireBody = rawFollowerStatus.result.result;
         expect(wireBody.repo).toBe('github.com/acme/alpha-sim');
         const wireSessions = wireBody.sessions as Array<Record<string, unknown>>;
-        expect(wireSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1']);
+        expect(wireSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1', 'worker-member']);
         // 0 sessions from other meshes, 0 unstamped host sessions, 0 host assistant sessions
         expect(wireSessions.filter((s) => s.meshId !== MESH_PREFEX_SIM)).toHaveLength(0);
         expect(wireSessions.filter((s) => s.assistant === true)).toHaveLength(0);
@@ -1458,7 +1479,11 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         expect(statusRes.success).toBe(true);
         expect(statusRes.result.repo).toBe('github.com/acme/alpha-sim');
         const followerSessions = statusRes.result.sessions as Array<Record<string, unknown>>;
-        expect(followerSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1']);
+        expect(followerSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1', 'worker-member']);
+        expect(followerSessions.find(s => s.sessionId === 'worker-member')).toMatchObject({
+            provider: 'kimi', status: 'generating', evidence: { ownerDaemonId: MEMBER_M, source: 'member_push', freshness: 'fresh', taskId: 'member-task', attemptId: 'member-attempt', lastActivitySource: 'last_message', sessionError: 'unknown' },
+        });
+        expect(JSON.stringify(statusRes)).not.toContain('PRIVATE_DIAGNOSTIC');
         expect(followerSessions.filter((s) => s.meshId !== MESH_PREFEX_SIM)).toHaveLength(0);
         expect(followerSessions.filter((s) => s.workspace !== null)).toHaveLength(0);
         expect(JSON.stringify(statusRes)).not.toContain('/Users/secret');
@@ -2913,7 +2938,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 };
             }
             if (cmd === 'mesh_status_view') {
-                return { success: true, meshId: args.meshId, machines: [] };
+                return { success: true, meshId: args.meshId, machines: [],
+                    activeWork: { success: true, activeWork: { activeWork: args.meshId === MESH_PREFEX_SIM
+                        ? [{ taskId: 'task-alpha-1', nodeId: 'n-host-a', sessionId: 'worker-alpha-1' }] : [] } },
+                };
             }
             return { success: true };
         });
