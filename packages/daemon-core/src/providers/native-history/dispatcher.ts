@@ -48,6 +48,7 @@ export interface NativeHistoryInput {
      *  sessionStartedAtMs) to derive the antigravity conversation-claim owner
      *  token so two concurrent sessions never bind to the same .db. */
     instanceId?: string;
+    acknowledgedInputDigest?: string;
     workspace?: string;
     sessionStartedAtMs?: number;
     envOverrides?: Record<string, string>;
@@ -109,6 +110,7 @@ export interface NativeHistoryResult {
      * no such record — those keep the message-shape inference path.
      */
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
+    codexOpenTurn?: import('./codex-turn-provenance.js').CodexOpenTurn;
 }
 
 /**
@@ -184,7 +186,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
         const homeDir = typeof input.envOverrides?.HOME === 'string' && input.envOverrides.HOME.trim()
             ? input.envOverrides.HOME.trim()
             : undefined;
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir);
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir, input.acknowledgedInputDigest);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         // Owner-confirmation only meaningful for antigravity (see resolveAntigravityPath).
@@ -198,11 +200,11 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
         const readSessionId = reader === 'antigravity-cli'
             ? extractAntigravityConversationUuid(sourcePath) || sessionId
             : sessionId;
-        const session = readByReader(reader, sourcePath, readSessionId, workspace);
+        const session = readByReader(reader, sourcePath, readSessionId, workspace, input.acknowledgedInputDigest);
         if (!session) return null;
         if (reader === 'codex-cli' && !requestedProviderSid && !isUuidLike(sessionId) && instanceId) {
             ownerConfirmed = !!instanceId && sessionStartedAtMs > 0
-                && hasExclusiveSentInput(instanceId, session.messages.filter((m: { role: string }) => m.role === 'user').map((m: { content: string }) => m.content));
+                && hasExclusiveSentInput(instanceId, session.messages.filter((m: { role: string }) => m.role === 'user').map((m: { content: string }) => m.content), true, input.acknowledgedInputDigest);
             if (!ownerConfirmed) return { messages: [], sourcePath: '', sourceMtimeMs: 0,
                 ownerConfirmed: false, unavailableReason: 'native_owner_unverified' };
         }
@@ -235,6 +237,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             sourceMtimeMs: session.sourceMtimeMs,
             nativeHistoryCoverage: (session as any).nativeHistoryCoverage || 'full',
             ownerConfirmed,
+            codexOpenTurn: session.codexOpenTurn,
             // (NATIVE-TURN-SIGNAL) Pass the provider's own turn-terminal records through
             // untouched. Readers that surface none simply omit the field.
             ...(Array.isArray((session as any).turnTerminalMarkers) && (session as any).turnTerminalMarkers.length > 0
@@ -255,10 +258,10 @@ interface ResolvedSource {
     ownerConfirmed?: boolean;
 }
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string, homeDir?: string): ResolvedSource | null {
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string, homeDir?: string, acknowledgedInputDigest?: string): ResolvedSource | null {
     switch (reader) {
         case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
-        case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId, homeDir); return p ? { path: p } : null; }
+        case 'codex-cli':    { const p = resolveCodexPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, homeDir, acknowledgedInputDigest); return p ? { path: p } : null; }
         case 'antigravity-cli': return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId, homeDir);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
@@ -356,7 +359,7 @@ export function clearCodexRuntimeBinding(workspace?: string, sessionStartedAtMs?
     if (key) for (const stored of codexRuntimeBindings.keys()) if (stored.endsWith('\0' + key)) codexRuntimeBindings.delete(stored);
 }
 
-function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId = '', homeDir?: string): string | null {
+function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId = '', homeDir?: string, acknowledgedInputDigest?: string): string | null {
     // codex stores by UTC date: ~/.codex/sessions/<year>/<month>/<day>/<file>.jsonl
     const root = homeDir ? path.join(homeDir, '.codex', 'sessions') : codexSessionsRoot();
     // An explicit uuid is authoritative BOTH WAYS: a hit binds exactly, and a MISS
@@ -380,7 +383,7 @@ function resolveCodexPath(workspace: string, sessionId: string, sessionStartedAt
         }
     }
 
-    const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId);
+    const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest);
     if (resolved && key) codexRuntimeBindings.set(key, resolved);
     return resolved;
 }
@@ -410,7 +413,7 @@ function findCodexPathBySessionId(root: string, sessionId: string): string | nul
     return matches[0]?.p ?? null;
 }
 
-function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number, instanceId: string): string | null {
+function findCodexPathByRuntime(root: string, workspace: string, sessionStartedAtMs: number, instanceId: string, acknowledgedInputDigest?: string): string | null {
     if (!fs.existsSync(root) || !workspace) return null;
     const workspaceResolved = resolveRealPath(workspace);
     const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -435,10 +438,12 @@ function findCodexPathByRuntime(root: string, workspace: string, sessionStartedA
             const diff = sessionStartedAtMs > 0 && meta.timestampMs != null
                 ? Math.abs(meta.timestampMs - sessionStartedAtMs)
                 : 0;
-            if (sessionStartedAtMs > 0 && (meta.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
+            if (sessionStartedAtMs > 0 && (meta.timestampMs == null
+                || (instanceId ? meta.timestampMs < sessionStartedAtMs || (diff > SPAWN_BIND_GRACE_MS && (!acknowledgedInputDigest || meta.timestampMs > Date.now()))
+                    : diff > SPAWN_BIND_GRACE_MS))) continue;
             if (instanceId) {
                 const candidate = readCodexCliSession(entryPath);
-                if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter(m => m.role === 'user').map(m => m.content))) continue;
+                if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter(m => m.role === 'user').map(m => m.content), true, acknowledgedInputDigest)) continue;
             }
             matches.push({ p: entryPath, mtime, diff });
         }
@@ -581,10 +586,11 @@ function readByReader(
     sourcePath: string,
     sessionId: string,
     workspace: string,
+    acknowledgedInputDigest?: string,
 ): any | null {
     switch (reader) {
         case 'claude-cli':      return readClaudeCliSession(sourcePath);
-        case 'codex-cli':       return readCodexCliSession(sourcePath);
+        case 'codex-cli':       return readCodexCliSession(sourcePath, undefined, acknowledgedInputDigest);
         case 'antigravity-cli': return readAntigravityCliSession(sourcePath, sessionId || undefined, workspace || undefined);
         case 'grok-cli':        return readGrokCliSession(sourcePath, sessionId, workspace || undefined);
     }

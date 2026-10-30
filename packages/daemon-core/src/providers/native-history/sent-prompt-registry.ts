@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 'use strict';
 
 /**
@@ -33,16 +34,17 @@ function normalizeInput(text: string): string {
  * Shared inputs cannot distinguish their senders; only session-specific input
  * can establish ownership. The legacy snippet API remains unchanged.
  */
-export function hasExclusiveSentInput(instanceId: string, userMessages: string[]): boolean {
+export function hasExclusiveSentInput(instanceId: string, userMessages: string[], wholeInput = false, acknowledgedInputDigest?: string): boolean {
     const id = instanceId.trim();
     if (!inputsByInstance.has(id) && !shortInputsByInstance.has(id)) return false;
-    const users = userMessages.map(normalizeInput);
+    const users = userMessages.filter(user => !acknowledgedInputDigest
+        || createHash('sha256').update(user.trim()).digest('hex') === acknowledgedInputDigest).map(normalizeInput);
     let matchedOwner = '';
     for (const [sender, inputs] of inputsByInstance) {
         for (const input of inputs) {
-            if (!users.some(user => user.includes(input))) continue;
+            if (!users.some(user => wholeInput ? user === input : user.includes(input))) continue;
             const shared = [...inputsByInstance].some(([otherId, otherInputs]) =>
-                otherId !== sender && otherInputs.some(other => other.includes(input)));
+                otherId !== sender && otherInputs.some(other => wholeInput ? other === input : other.includes(input)));
             if (shared) continue;
             // One store containing distinct input from multiple owners is also
             // ambiguous, even if only one conversation UUID matches this reader.

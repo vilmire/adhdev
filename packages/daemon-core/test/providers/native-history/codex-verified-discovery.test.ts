@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { createNativeHistoryDispatcher, clearCodexRuntimeBinding } from '../../.
 import { recordSentPrompt, __resetSentPromptRegistry } from '../../../src/providers/native-history/sent-prompt-registry.js';
 import { FIRST_JSONL_RECORD_MAX_BYTES } from '../../../src/providers/native-history/first-jsonl-record.js';
 const homes: string[] = [];
-afterEach(() => { __resetSentPromptRegistry(); clearCodexRuntimeBinding(); for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true }); });
+afterEach(() => { vi.useRealTimers(); __resetSentPromptRegistry(); clearCodexRuntimeBinding(); for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true }); });
 function fixture(role = 'workspace') {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-verified-')); homes.push(home);
     const root = path.join(home, '.codex/sessions'); fs.mkdirSync(root, { recursive: true });
@@ -46,7 +47,28 @@ describe('Codex verified eventual native discovery', () => {
     it.each(['cwd', 'time'])('rejects a large matching-input candidate with wrong %s', mismatch => {
         const f = fixture(); recordSentPrompt('owner', 'Exclusive guarded input');
         f.write(A, 'Exclusive guarded input', mismatch === 'cwd' ? f.home : f.workspace,
-            mismatch === 'time' ? f.start + 10_001 : f.start);
+            mismatch === 'time' ? f.start - 10_001 : f.start);
+        expect(f.read(f.input)).toBeNull();
+    });
+    it('binds delayed post-spawn startup by exclusive whole input without widening time-only discovery', () => {
+        vi.useFakeTimers();
+        const f = fixture(); recordSentPrompt('owner', 'Delayed exclusive task input');
+        vi.setSystemTime(f.start + 20_000);
+        const acknowledged = { ...f.input, acknowledgedInputDigest: createHash('sha256').update('Delayed exclusive task input').digest('hex') };
+        f.write(A, 'Delayed exclusive task input', f.workspace, f.start + 10_455);
+        expect(f.read(acknowledged)?.providerSessionId).toBe(A);
+        clearCodexRuntimeBinding();
+        expect(f.read(f.input)).toBeNull();
+        clearCodexRuntimeBinding();
+        expect(f.read({ ...f.input, instanceId: undefined })).toBeNull();
+        f.write(B, 'Delayed exclusive task input', f.workspace, f.start + 10_456);
+        expect(f.read(acknowledged)).toBeNull();
+    });
+    it('rejects an old session refreshed after spawn and a partial input match', () => {
+        const f = fixture(); recordSentPrompt('owner', 'Complete acknowledged task input');
+        f.write(A, 'Complete acknowledged task input', f.workspace, f.start - 1);
+        expect(f.read(f.input)).toBeNull();
+        f.write(A, 'prefix Complete acknowledged task input suffix', f.workspace, f.start);
         expect(f.read(f.input)).toBeNull();
     });
     it.each(['malformed', 'truncated', 'over-cap'])('fails closed during unpinned discovery for %s metadata', failure => {

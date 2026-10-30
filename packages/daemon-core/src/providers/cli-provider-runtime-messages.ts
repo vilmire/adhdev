@@ -41,6 +41,9 @@ export interface RuntimeMessagesHost {
     recentUserInputAcks: Map<string, number>;
     lastAcknowledgedUserInputAt: number;
     lastAcknowledgedInputDigest?: string;
+    lastAcknowledgedTurnOwner?: string;
+    currentAttemptRef?(): import('@adhdev/mesh-shared').TurnAttemptRef | null;
+    completingTurnTaskId?(): string | undefined;
 }
 
 export function maybeAppendRuntimeRecoveryMessage(
@@ -183,6 +186,11 @@ export function recordAcknowledgedUserInput(
     pruneRecentUserInputAcks(host, receivedAt);
 
     host.lastAcknowledgedUserInputAt = receivedAt;
+    host.lastAcknowledgedTurnOwner = undefined;
+    if (host.type === 'codex-cli') {
+        try { host.lastAcknowledgedTurnOwner = JSON.stringify([host.completingTurnTaskId?.(), host.currentAttemptRef?.() ?? null]); }
+        catch { /* No assignment proof: preserve the ACK, grant no native idle veto. */ }
+    }
     host.lastAcknowledgedInputDigest = typeof input === 'string' || input.parts.every(part => part.type === 'text')
         ? shortHash(content, 64) : undefined;
     // The runtimeMessages dedupKey stays per-call unique (includes receivedAt)

@@ -200,3 +200,25 @@ describe('runStatusTransitionTick — turn-evidence emission', () => {
         }
     });
 });
+
+describe('Codex native idle commitment', () => {
+    it('does not arm completion or emit idle while the native turn is proven open', () => {
+        const { host } = makeHost({ lastStatus: 'generating', rawStatus: 'idle' });
+        host.type = 'codex-cli'; host.generatingStartedAt = Date.now() - 10_000;
+        host.preserveCodexGeneratingOnIdle = probe => probe === true;
+        runStatusTransitionTick(host);
+        expect(host.lastStatus).toBe('generating');
+        expect(host.completedDebouncePending).toBeNull();
+        host.preserveCodexGeneratingOnIdle = () => false;
+        runStatusTransitionTick(host);
+        expect(host.lastStatus).toBe('idle');
+        expect(host.completedDebouncePending).not.toBeNull();
+    });
+    it.each(['stopped', 'error', 'waiting_approval'])('preserves %s precedence over the native open-turn observation', rawStatus => {
+        const { host } = makeHost({ lastStatus: 'generating', rawStatus });
+        host.type = 'codex-cli'; host.generatingStartedAt = Date.now() - 10_000;
+        host.preserveCodexGeneratingOnIdle = () => true;
+        runStatusTransitionTick(host);
+        expect(host.lastStatus).toBe(rawStatus);
+    });
+});

@@ -25,6 +25,7 @@ type ProviderNativeHistoryReadResult = {
     records: HistoryMessage[];
     /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
+    codexOpenTurn?: import('../providers/native-history/codex-turn-provenance.js').CodexOpenTurn;
     sourcePath: string;
     sourceMtimeMs: number;
     stale?: boolean;
@@ -168,6 +169,7 @@ function callProviderNativeHistoryRead(
     envOverrides?: Record<string, string>,
     forceRefresh?: boolean,
     instanceId?: string,
+    acknowledgedInputDigest?: string,
 ): ProviderNativeHistoryReadResult | null {
     const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession');
     if (!fn) return null;
@@ -175,6 +177,7 @@ function callProviderNativeHistoryRead(
     const normalizedInstanceId = typeof instanceId === 'string' ? instanceId.trim() : '';
     const result = fn({
         agentType,
+        acknowledgedInputDigest,
         sessionId: normalizedSessionId,
         // Arm the native-history executor's session pin guard. When the
         // instance is already bound to a provider session, pass that id as
@@ -225,6 +228,7 @@ function callProviderNativeHistoryRead(
     }
     return {
         records,
+        codexOpenTurn: (result as any).codexOpenTurn,
         turnTerminalMarkers: Array.isArray((result as any).turnTerminalMarkers) ? (result as any).turnTerminalMarkers : undefined,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
@@ -250,11 +254,12 @@ function buildNativeHistoryReadResult(
     envOverrides?: Record<string, string>,
     forceRefresh?: boolean,
     instanceId?: string,
+    acknowledgedInputDigest?: string,
 ): ProviderNativeHistoryReadResult | null {
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || '');
     const normalizedWorkspace = typeof workspace === 'string' ? workspace.trim() : '';
     if (!canonicalHistory || (!normalizedSessionId && !normalizedWorkspace) || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId);
+    return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId, acknowledgedInputDigest);
 }
 
 function materializeNativeHistoryToMirror(
@@ -370,6 +375,7 @@ export function readProviderChatHistory(
         // derives — instead of a spawn timestamp that differs across sample
         // sites and silently breaks claim isolation.
         instanceId?: string;
+        acknowledgedInputDigest?: string;
     } = {},
 ): {
     messages: HistoryMessage[];
@@ -387,9 +393,10 @@ export function readProviderChatHistory(
     attribution?: string;
     /** (NATIVE-TURN-SIGNAL) provider-native turn-terminal records, when the reader surfaces them. */
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
+    codexOpenTurn?: import('../providers/native-history/codex-turn-provenance.js').CodexOpenTurn;
 } {
     if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
-        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId, options.acknowledgedInputDigest);
         if (!nativeResult) return { messages: [], hasMore: false, source: 'native-unavailable' };
         if (nativeResult.records.length === 0) {
             // Typed fail-closed (attribution_unknown): propagate the decision —
@@ -420,6 +427,7 @@ export function readProviderChatHistory(
             // (NATIVE-TURN-SIGNAL) Terminal markers ride alongside the paged messages —
             // deliberately NOT paged, since they are turn metadata, not chat content.
             turnTerminalMarkers: nativeResult.turnTerminalMarkers,
+            codexOpenTurn: nativeResult.codexOpenTurn,
         };
     }
     return {

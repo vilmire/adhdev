@@ -133,6 +133,7 @@ export interface NativeHistorySession {
    * whether there is any text to show.
    */
   turnTerminalMarkers?: NativeTurnTerminalMarker[];
+  codexOpenTurn?: import('./codex-turn-provenance.js').CodexOpenTurn;
 }
 
 export interface NativeHistorySessionMeta {
@@ -439,7 +440,8 @@ function parseSessionFile(
   completionSignal: NativeCompletionSignalSpec | null = CODEX_DEFAULT_COMPLETION_SIGNAL,
   /** (TOOL-EXPAND) mtime seal for refs minted here; 0 disables stamping. */
   sourceMtimeMs = 0,
-): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[]; turnTerminalMarkers: NativeTurnTerminalMarker[] } {
+  acknowledgedInputDigest?: string,
+): { messages: NativeHistoryMessage[]; usageRecords: NativeUsageRecord[]; turnTerminalMarkers: NativeTurnTerminalMarker[]; codexOpenTurn?: import('./codex-turn-provenance.js').CodexOpenTurn } {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf-8'); } catch { return { messages: [], usageRecords: [], turnTerminalMarkers: [] }; }
 
@@ -447,7 +449,7 @@ function parseSessionFile(
   const records: NativeHistoryMessage[] = [];
   const usageRecords: NativeUsageRecord[] = [];
   const turnTerminalMarkers: NativeTurnTerminalMarker[] = [];
-  const provenance = createCodexTurnProvenance(sessionId);
+  const provenance = createCodexTurnProvenance(sessionId, acknowledgedInputDigest);
   let fallbackTs = Date.now();
   let detectedWorkspace = typeof workspaceFallback === 'string' ? workspaceFallback.trim() : '';
 
@@ -554,6 +556,7 @@ function parseSessionFile(
     }
 
     if (type !== 'response_item') continue;
+    provenance(payload, extractTimestampValue(record.timestamp) || 0);
 
     if (payloadType === 'message') {
       const role = String(payload.role ?? '').trim();
@@ -623,7 +626,7 @@ function parseSessionFile(
     }
   }
 
-  return { messages: records, usageRecords, turnTerminalMarkers };
+  return { messages: records, usageRecords, turnTerminalMarkers, codexOpenTurn: provenance.openTurn() };
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -644,6 +647,7 @@ export function readSession(
    * codex's built-in default (see CODEX_DEFAULT_COMPLETION_SIGNAL).
    */
   nativeHistory?: unknown,
+  acknowledgedInputDigest?: string,
 ): NativeHistorySession | null {
   if (!sessionPath || !path.isAbsolute(sessionPath)) return null;
   if (!fs.existsSync(sessionPath)) return null;
@@ -669,7 +673,7 @@ export function readSession(
   const workspaceFallback = typeof meta?.cwd === 'string' ? meta.cwd : undefined;
   const sourceMtimeMs = statMtimeMs(sessionPath);
   const declaredSignal = resolveNativeCompletionSignalSpec(nativeHistory);
-  const { messages, usageRecords, turnTerminalMarkers } = parseSessionFile(
+  const { messages, usageRecords, turnTerminalMarkers, codexOpenTurn } = parseSessionFile(
     sessionPath,
     sessionId,
     workspaceFallback,
@@ -677,6 +681,7 @@ export function readSession(
     // Seal refs with the mtime this session reports, so an expand minted from
     // this read validates against the same number.
     sourceMtimeMs,
+    acknowledgedInputDigest,
   );
   if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
@@ -699,6 +704,7 @@ export function readSession(
     });
   }
   if (turnTerminalMarkers.length > 0) session.turnTerminalMarkers = turnTerminalMarkers;
+  session.codexOpenTurn = codexOpenTurn;
   return session;
 }
 

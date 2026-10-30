@@ -42,6 +42,7 @@ import { legacyLiveProviderApproval } from './legacy-provider-approval.js';
 /** The narrow surface of CliProviderInstance the state projection reads/writes. */
 export interface ProviderStateHost {
     type: string;
+    preserveCodexGeneratingOnIdle?(probe?: boolean): boolean;
     workingDir: string;
     instanceId: string;
     provider: ProviderModule;
@@ -186,9 +187,12 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
     let visibleStatus = parseErrorMessage || parsedStatus?.status === 'error'
         ? 'error'
         : (autoApproveActive || autoApproveHoldIdle ? 'generating' : adapterStatus.status);
+    const nativeIdleHeld = visibleStatus === 'idle' && host.lastStatus === 'generating'
+        && host.preserveCodexGeneratingOnIdle?.();
+    if (nativeIdleHeld) visibleStatus = 'generating';
     // getState() must agree with the status the FSM-driven detectStatusTransition()
     // already committed to lastStatus. The adapter's own status is authoritative; we do
-    // not second-guess it with native-transcript shape. Only reconcile a generating-like
+    // not second-guess it with native-transcript message shape. Only reconcile a generating-like
     // read down to idle when our own lastStatus has already flipped idle (avoids a
     // perpetual dashboard spinner during the brief window before the next getStatus()).
     if (isCliGeneratingLikeStatus(visibleStatus) && host.lastStatus === 'idle') {
@@ -332,7 +336,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
         summaryMetadata: host.summaryMetadata as any,
         controlValues: host.controlValues,
     });
-    const activeChatStatus = parseErrorMessage
+    const activeChatStatus = nativeIdleHeld ? 'generating' : parseErrorMessage
         ? 'error'
         : (autoApproveActive && parsedStatus?.status === 'waiting_approval') || autoApproveHoldIdle
         ? 'generating'

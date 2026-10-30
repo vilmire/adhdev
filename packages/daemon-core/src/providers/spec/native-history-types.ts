@@ -84,6 +84,7 @@ export interface NativeHistoryInput {
      *  same-cwd sessions never bind the same wire.jsonl. Empty → claiming is
      *  skipped (legacy single-session behaviour). */
     instanceId?: string;
+    acknowledgedInputDigest?: string;
     workspace?: string;
     /** Daemon-side wall clock at the moment the session was registered.
      *  Native-history file lookups use this as the lower bound: any file
@@ -146,4 +147,5 @@ export interface NativeHistoryResult {
      * path unchanged.
      */
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
+    codexOpenTurn?: import('../native-history/codex-turn-provenance.js').CodexOpenTurn;
 }

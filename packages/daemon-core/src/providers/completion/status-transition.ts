@@ -92,6 +92,7 @@ function classifySessionErrorReason(reason: ProviderErrorReason | undefined): 'p
 export interface StatusTransitionHost {
     // Identity / collaborators
     type: string;
+    preserveCodexGeneratingOnIdle?(probe?: boolean): boolean;
     instanceId: string;
     workingDir: string;
     provider: ProviderModule;
@@ -236,7 +237,8 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     const now = Date.now();
     // Status-change handling is a hot path: PTY output can fire it many times
     // during long-running CLI sessions. Keep this path on adapter-owned light
-    // state only; rich provider parsing is reserved for getState/read_chat.
+    // state normally. The Codex idle candidate below reuses the completion probe
+    // before committing an edge; cached readouts still perform no native I/O.
     // AUTOAPPROVE-FLAP-INBOX-MISSING: stabilize a flap-prone approval BEFORE it feeds
     // maybeAutoApproveStatus / newStatus / the waiting_approval emission branch below,
     // so a momentary busy blip during the flap re-presents the cached modal + status
@@ -282,7 +284,8 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // can briefly report 'idle' before the next generating phase starts. Treat that
     // transient idle as 'generating' to suppress a spurious agent:generating_completed
     // push notification. The adapter's status is otherwise authoritative — native
-    // transcript shape does NOT override the FSM's busy/idle decision.
+    // transcript message shape does NOT override the FSM; a verified open native
+    // Codex turn is handled explicitly before committing idle below.
     const autoApproveHoldIdle = host.autoApproveBusy && rawStatus === 'idle';
     // NO-TURN-EVIDENCE-AFTER-STARTUP-MASK (F2, live 2026-09-25): the auto-approve
     // mask exists to protect an IN-PROGRESS turn's UI from a momentary blip — it
@@ -313,9 +316,11 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
     // generatingStartedAt either: a startup consent modal's own waiting_approval
     // arm sets that.
     const startupMaskWithNoActiveTurn = !host.turnStartedThisBoot && !host.hasAdapterPendingResponse();
-    const newStatus = isQuestionPicker
+    let newStatus = isQuestionPicker
         ? 'waiting_choice'
         : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? 'generating' : rawStatus;
+    // A quiet Codex PTY is not a turn end while its exact native turn is open.
+    if (newStatus === 'idle' && host.lastStatus === 'generating' && host.preserveCodexGeneratingOnIdle?.(true)) newStatus = 'generating';
     const dirName = workingDirBasename(host.workingDir);
     const chatTitle = `${host.provider.name} · ${dirName}`;
     // Liveness fingerprint for the no-progress watchdog. Previously this

@@ -163,6 +163,9 @@ export interface EvidenceHost {
     lastExternalCompletionMessages?: { historySessionId: string; messages: unknown[] } | null;
     /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
+    lastCodexOpenTurn?: import('../native-history/codex-turn-provenance.js').CodexOpenTurn;
+    nativeTurnSampleAt?: number;
+    lastAcknowledgedInputDigest?: string;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
     /**
      * (SUMMARY-SCRAPE-FALLBACK) Provenance of the LAST finalSummary this module resolved.
@@ -338,6 +341,8 @@ export function recordPendingTranscriptProbe(host: EvidenceHost, pending: Comple
 }
 
 export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allowManifestNativeSource?: boolean }): unknown[] | null {
+    host.lastCodexOpenTurn = undefined;
+    host.nativeTurnSampleAt = undefined;
     host.nativeHistoryReadPending = false;
     const adapterOwnsMessagesElsewhere = (host.adapter as any)?.chatMessagesOwnedExternally === true;
     // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: production kimi routes
@@ -411,6 +416,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // the floor-based resolution above claims THIS session's db under its
         // own owner (never a sibling's).
         instanceId: host.instanceId,
+        acknowledgedInputDigest: host.lastAcknowledgedInputDigest,
         envOverrides: host.spawnedEnvOverrides(),
         forceRefresh: true,
         // (NATIVE-TURN-SIGNAL audit) excludeInProgressTurn is deliberately NOT passed
@@ -472,6 +478,8 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         host.publishTranscriptSignalObservation(null);
         return null;
     }
+    host.lastCodexOpenTurn = restoredHistory.codexOpenTurn;
+    host.nativeTurnSampleAt = Date.now();
     host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,
         restoredHistory.sourcePath,

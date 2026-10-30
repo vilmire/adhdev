@@ -1,3 +1,4 @@
+import { preserveCodexGeneratingOnIdle } from './completion/codex-idle-observation.js';
 import { captureCompletionIdentity, boundCompletionMarker } from './completion/native-completion-binding.js';
 import { observeCancelledNativeCompletion } from './completion/cancel-recheck.js';
 import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
@@ -277,6 +278,7 @@ export class CliProviderInstance implements ProviderInstance {
     lastPersistedHistoryMessages: PersistableCliHistoryMessage[] = [];
     lastAcknowledgedUserInputAt = 0;
     lastAcknowledgedInputDigest?: string;
+    lastAcknowledgedTurnOwner?: string;
     // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
     // prompt acked twice in quick succession (the worker buffers the first
     // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
@@ -408,6 +410,7 @@ export class CliProviderInstance implements ProviderInstance {
     }
 
     async onTick(): Promise<void> {
+        if (this.type === 'codex-cli' && this.adapter.getInteractivePromptTransport?.() !== 'wire' && this.lastStatus === 'generating') this.detectStatusTransition();
         scanModelFallback(this);
         if (this.providerSessionId) return;
         if (this.provider.resume?.skipProbeOnNewSession && this.launchMode === 'new') return;
@@ -626,6 +629,8 @@ export class CliProviderInstance implements ProviderInstance {
     lastExternalCompletionMessages: { historySessionId: string; messages: unknown[] } | null = null;
     // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
     // on every completion probe; null when the provider surfaces none.
+    lastCodexOpenTurn?: import('./native-history/codex-turn-provenance.js').CodexOpenTurn;
+    nativeTurnSampleAt?: number;
     lastNativeTurnTerminalMarkers: NativeTurnTerminalMarker[] | null = null;
     /** TX-FSM: lazily-created transcript signal normalizer. Fed ONLY by
      *  transcript reads this instance already performs — it adds zero I/O.
@@ -1032,6 +1037,10 @@ export class CliProviderInstance implements ProviderInstance {
         if (this.agentReadyEmitted) return;
         this.agentReadyEmitted = true;
         this.pushEvent({ event: 'agent:ready', chatTitle, timestamp: now });
+    }
+
+    preserveCodexGeneratingOnIdle(probe = false): boolean {
+        return this.adapter.getInteractivePromptTransport?.() !== 'wire' && preserveCodexGeneratingOnIdle(this, probe);
     }
 
     detectStatusTransition(cause?: AdapterChangeCause): void {

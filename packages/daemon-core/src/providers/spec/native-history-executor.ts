@@ -370,6 +370,7 @@ interface JsonlProjection {
     messages: NativeHistoryMessage[];
     usage?: NativeHistoryResult['usage'];
     turnTerminalMarkers: NativeTurnTerminalMarker[];
+    codexOpenTurn?: import('../native-history/codex-turn-provenance.js').CodexOpenTurn;
 }
 const jsonlProjections = new WeakMap<CompactJsonlRecord[], Map<string, JsonlProjection>>();
 
@@ -416,12 +417,14 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
         const usageMap = pickUsage?.(rec);
         const messages = shape ? projectMessages(rec, shape.map, i, i + 1, 1, '__projection__') : [];
         let terminal: any;
-        if (input.agentType === 'codex-cli' && rec?.type === 'event_msg') {
+        if (input.agentType === 'codex-cli' && (rec?.type === 'event_msg' || (rec?.type === 'response_item' && rec?.payload?.role === 'user'))) {
             const payload = rec?.payload;
             terminal = { type: rec.type, timestamp: rec.timestamp, payload: payload && {
                 type: payload.type, turn_id: payload.turn_id,
+                role: payload.role, content: payload.content,
+                internal_chat_message_metadata_passthrough: payload.internal_chat_message_metadata_passthrough,
                 message: typeof payload.message === 'string' ? payload.message : undefined,
-                error: payload.error && typeof payload.error === 'object' ? { type: payload.error.type } : payload.error,
+                error: payload.error && typeof payload.error === 'object' ? { type: payload.error.type, codex_error_info: payload.error.codex_error_info } : payload.error,
                 last_agent_message: flattenJsonlText(payload.last_agent_message),
             } };
         } else if (input.agentType === 'kimi' && rec?.type === 'turn.ended') {
@@ -471,7 +474,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
     // bare uuid the executor extracts from the directory segment.
     if (requested && providerSessionId && !sameSessionUuid(providerSessionId, requested)) return null;
 
-    const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]);
+    const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]) + '\0' + (input.acknowledgedInputDigest || '');
     let byContext = jsonlProjections.get(lines);
     let projection = byContext?.get(projectionContext);
     if (!projection) {
@@ -511,8 +514,9 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
         // its tail. A rewrite/replacement still invalidates all assembled data.
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
         if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
-        const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal), providerSessionId);
-        projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers,
+        const lifecycle = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal), providerSessionId, input.acknowledgedInputDigest);
+        const turnTerminalMarkers = lifecycle.markers;
+        projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers, codexOpenTurn: lifecycle.openTurn,
             ...(usageRecords.length ? { usage: foldUsageRecords(usageRecords, {
                 providerSessionId: providerSessionId || '', agent: typeof input.agentType === 'string' ? input.agentType : 'unknown',
             }) } : {}),
@@ -520,7 +524,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
         if (!byContext) jsonlProjections.set(lines, byContext = new Map());
         byContext.set(projectionContext, projection);
     }
-    const { messages, usage, turnTerminalMarkers } = projection;
+    const { messages, usage, turnTerminalMarkers, codexOpenTurn } = projection;
     if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
     const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
@@ -558,6 +562,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
             : outcome?.ownerConfirmed,
         ...(usage ? { usage } : {}),
         ...(turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}),
+        codexOpenTurn,
     };
 }
 
@@ -579,13 +584,13 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
  * code change) rather than duplicating a `completionSignal` concept into the
  * v1 spec schema.
  */
-function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[], nativeSessionId?: string): NativeTurnTerminalMarker[] {
-    if (agentType === 'kimi') return extractKimiTurnTerminalMarkers(lines);
-    if (agentType !== 'codex-cli') return [];
+function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines: any[], nativeSessionId?: string, acknowledgedInputDigest?: string): { markers: NativeTurnTerminalMarker[]; openTurn?: import('../native-history/codex-turn-provenance.js').CodexOpenTurn } {
+    if (agentType === 'kimi') return { markers: extractKimiTurnTerminalMarkers(lines) };
+    if (agentType !== 'codex-cli') return { markers: [] };
     const markers: NativeTurnTerminalMarker[] = [];
-    const provenance = createCodexTurnProvenance(nativeSessionId);
+    const provenance = createCodexTurnProvenance(nativeSessionId, acknowledgedInputDigest);
     for (const rec of lines) {
-        if (String(rec?.type ?? '') !== 'event_msg') continue;
+        if (!['event_msg', 'response_item'].includes(String(rec?.type ?? ''))) continue;
         const payload = rec?.payload;
         if (!payload || typeof payload !== 'object') continue;
         const payloadType = String(payload.type ?? '').trim();
@@ -604,7 +609,7 @@ function extractBuiltinTurnTerminalMarkers(agentType: string | undefined, lines:
         });
         if (marker) markers.push(marker);
     }
-    return markers;
+    return { markers, openTurn: provenance.openTurn() };
 }
 
 /**

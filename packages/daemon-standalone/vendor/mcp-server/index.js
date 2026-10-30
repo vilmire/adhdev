@@ -30470,7 +30470,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           cwd: normalizedWorkspace
         });
       }
-      const identity4 = {
+      const identity5 = {
         workspace: normalizedWorkspace,
         repoRoot,
         isGitRepo: true
@@ -30481,7 +30481,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           (0, import_promises.realpath)(normalizedWorkspace)
         ]);
         if (isPathInside(canonicalRepoRoot, canonicalWorkspace2)) {
-          resolvedRepoCache.set(identity4, {
+          resolvedRepoCache.set(identity5, {
             validatedWorkspace: normalizedWorkspace,
             validatedRepoRoot: repoRoot,
             canonicalRepoRoot,
@@ -30490,7 +30490,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       } catch {
       }
-      return identity4;
+      return identity5;
     }
     async function runGit(repoOrWorkspace, argv, options = {}) {
       validateGitArgv(argv);
@@ -33260,7 +33260,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const destinations = await pushDestinations(cwd, remoteName);
       const identities = destinations.urls.map(canonicalPushIdentity);
       let configured = {};
-      if (identities.some((identity4) => !REPO_KEYS.has(identity4.slice("github.com/".length)))) {
+      if (identities.some((identity5) => !REPO_KEYS.has(identity5.slice("github.com/".length)))) {
         let patterns;
         try {
           patterns = await loadPublicPushPatternsForRepo(cwd, void 0, { requireAuthorityPin: true });
@@ -33272,24 +33272,24 @@ ${renderWorkerProtocolFooter2(input)}`;
           throw new PublishDestinationError("publish_policy_unmapped", "invalid repository visibility policy");
         }
       }
-      const keyed = identities.map((identity4, index) => {
-        const path126 = identity4.slice("github.com/".length);
+      const keyed = identities.map((identity5, index) => {
+        const path126 = identity5.slice("github.com/".length);
         const builtIn = REPO_KEYS.get(path126);
-        const visibility = builtIn ? path126 === "vilmire/adhdev-cloud" ? "private" : "public" : configured[identity4];
+        const visibility = builtIn ? path126 === "vilmire/adhdev-cloud" ? "private" : "public" : configured[identity5];
         if (visibility !== "public" && visibility !== "private") {
           throw new PublishDestinationError("publish_policy_unmapped", "unknown push destination visibility; configure committed repository policy before requesting approval");
         }
-        return { url: destinations.urls[index], repoKey: builtIn || identity4, visibility };
+        return { url: destinations.urls[index], repoKey: builtIn || identity5, visibility };
       });
       const isPrivate = (value) => {
-        let identity4;
+        let identity5;
         try {
-          identity4 = canonicalPushIdentity(value);
+          identity5 = canonicalPushIdentity(value);
         } catch {
           return false;
         }
-        const path126 = identity4.slice("github.com/".length);
-        return REPO_KEYS.has(path126) ? path126 === "vilmire/adhdev-cloud" : configured[identity4] === "private";
+        const path126 = identity5.slice("github.com/".length);
+        return REPO_KEYS.has(path126) ? path126 === "vilmire/adhdev-cloud" : configured[identity5] === "private";
       };
       return { urls: destinations.urls, isPublic: [...destinations.urls, ...destinations.configuredUrls].some((url) => !isPrivate(url)), keyed };
     }
@@ -35800,8 +35800,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return { version: 1, kind: "account", key: key5 };
     }
     function accountLineageFromCliJwt(provider, token, authority) {
-      const identity4 = cliJwtIdentity(token);
-      return identity4 ? accountLineageFromStableIdentity(provider, authority, identity4.iss, identity4.sub) : UNKNOWN_ACCOUNT_LINEAGE;
+      const identity5 = cliJwtIdentity(token);
+      return identity5 ? accountLineageFromStableIdentity(provider, authority, identity5.iss, identity5.sub) : UNKNOWN_ACCOUNT_LINEAGE;
     }
     function quotaAccountLineage(value) {
       if (!value || typeof value !== "object") return UNKNOWN_ACCOUNT_LINEAGE;
@@ -37650,10 +37650,10 @@ ${res.stderr}`);
         expiresAtMs = expiryRaw < 1e11 ? expiryRaw * 1e3 : expiryRaw;
       }
       const authMethod = typeof root.auth_method === "string" && root.auth_method.trim() !== "" ? root.auth_method.trim() : null;
-      const identity4 = cliJwtIdentity(root.id_token ?? token.id_token);
+      const identity5 = cliJwtIdentity(root.id_token ?? token.id_token);
       return {
         kind: "ok",
-        credentials: { accessToken, expiresAtMs, authMethod, identity: identity4 },
+        credentials: { accessToken, expiresAtMs, authMethod, identity: identity5 },
         platform: platform10
       };
     }
@@ -39425,14 +39425,14 @@ child.on('exit', () => process.exit(0));
       try {
         const root = JSON.parse(fs10.readFileSync(path16.join(codexHome(overrides.env ?? process.env), "auth.json"), "utf8"));
         if (typeof root?.auth_mode === "string" && root.auth_mode.toLowerCase() !== "chatgpt") return UNKNOWN_ACCOUNT_LINEAGE;
-        const identity4 = cliJwtIdentity(root?.tokens?.id_token);
-        if (!identity4) return UNKNOWN_ACCOUNT_LINEAGE;
+        const identity5 = cliJwtIdentity(root?.tokens?.id_token);
+        if (!identity5) return UNKNOWN_ACCOUNT_LINEAGE;
         const accountId = typeof root.tokens.account_id === "string" && root.tokens.account_id.trim() ? root.tokens.account_id.trim() : null;
         return accountLineageFromStableIdentity(
           "codex-cli",
           CODEX_QUOTA_AUTHORITY,
-          identity4.iss,
-          JSON.stringify([identity4.sub, accountId])
+          identity5.iss,
+          JSON.stringify([identity5.sub, accountId])
         );
       } catch {
         return UNKNOWN_ACCOUNT_LINEAGE;
@@ -39773,8 +39773,8 @@ child.on('exit', () => process.exit(0));
       return accountLineageFromStableIdentity("cursor-cli", baseUrl2(env2), CURSOR_ACCOUNT_ISSUER, authId);
     }
     function credentialAgrees(accessToken, authId, strict) {
-      const identity4 = cliJwtIdentity(accessToken);
-      return identity4 ? identity4.sub === authId : !strict;
+      const identity5 = cliJwtIdentity(accessToken);
+      return identity5 ? identity5.sub === authId : !strict;
     }
     function readCursorRecordedLineage(env2, spent) {
       const authId = readCursorAuthId(env2);
@@ -42736,29 +42736,29 @@ ${error.message || ""}`;
       meshSnapshot = void 0;
     }
     function normalizeRepoIdentity(remoteUrl) {
-      let identity4 = remoteUrl.trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
-      if (!identity4) return "";
-      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(identity4)) {
+      let identity5 = remoteUrl.trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
+      if (!identity5) return "";
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(identity5)) {
         try {
-          const url = new URL(identity4);
+          const url = new URL(identity5);
           const path126 = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
           if (url.hostname && path126) return `${url.hostname.toLowerCase()}/${path126}`;
         } catch {
         }
       }
-      const scpMatch = identity4.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):(.+)$/);
+      const scpMatch = identity5.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):(.+)$/);
       if (scpMatch) {
         const host = scpMatch[1].replace(/^\[|\]$/g, "").toLowerCase();
         const repoPath = scpMatch[2].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
         if (host && repoPath) return `${host}/${repoPath}`;
       }
-      const slash = identity4.indexOf("/");
+      const slash = identity5.indexOf("/");
       if (slash > 0) {
-        const host = identity4.slice(0, slash).toLowerCase();
-        const repoPath = identity4.slice(slash + 1).replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+        const host = identity5.slice(0, slash).toLowerCase();
+        const repoPath = identity5.slice(slash + 1).replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
         if (host && repoPath) return `${host}/${repoPath}`;
       }
-      return identity4.replace(/\.git$/i, "");
+      return identity5.replace(/\.git$/i, "");
     }
     var import_path8;
     var import_fs8;
@@ -48386,25 +48386,25 @@ ${error.message || ""}`;
       if (state2.activeModal || state2.activeInteractivePrompt || state2.pendingApproval || state2.pendingPrompt || state2.activeChat?.activeModal || state2.activeChat?.activeInteractivePrompt) return false;
       return isIdleSessionState(state2);
     }
-    function recordAcceptedSessionCompletion(identity4, nowMs2) {
+    function recordAcceptedSessionCompletion(identity5, nowMs2) {
       const store4 = MeshRuntimeStore.getInstance();
       afterBridgeCommit(store4.db, () => {
         try {
-          if (!identity4.attemptId || !identity4.sessionId) return;
+          if (!identity5.attemptId || !identity5.sessionId) return;
           const recorded = store4.turnStore().insertWorkerEvent({
             eventId: (0, import_node_crypto8.randomUUID)(),
-            attemptId: identity4.attemptId,
-            sessionId: identity4.sessionId,
+            attemptId: identity5.attemptId,
+            sessionId: identity5.sessionId,
             kind: SESSION_COMPLETION_ACCEPTED_EVENT,
             dedupeKey: "accepted",
             payload: {},
             atMs: nowMs2
           });
-          if (!recorded && !store4.turnStore().listWorkerEventsForTask(identity4.meshId, identity4.taskId, SESSION_COMPLETION_ACCEPTED_EVENT).some((event) => event.attemptId === identity4.attemptId && sessionIdsEquivalent(event.sessionId, identity4.sessionId))) {
+          if (!recorded && !store4.turnStore().listWorkerEventsForTask(identity5.meshId, identity5.taskId, SESSION_COMPLETION_ACCEPTED_EVENT).some((event) => event.attemptId === identity5.attemptId && sessionIdsEquivalent(event.sessionId, identity5.sessionId))) {
             throw new Error("accepted_lifetime_audit_not_persisted");
           }
         } catch (error) {
-          LOG.warn("MeshSessionLifetime", `Accepted report lifetime audit failed for task ${identity4.taskId}: ${String(error)}; TTL/cap remain active`);
+          LOG.warn("MeshSessionLifetime", `Accepted report lifetime audit failed for task ${identity5.taskId}: ${String(error)}; TTL/cap remain active`);
         }
       });
     }
@@ -71132,8 +71132,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             const fmt = tryGit3(repoPath, ["rev-parse", "--show-object-format"])?.toString("utf8").trim();
             return { commonDir, hashAlgorithm: fmt === "sha256" ? "sha256" : "sha1" };
           }
-          resolveBlob(bindings, request, maxBytes) {
-            const root = bindings.get(request.repoBindingId);
+          resolveBlob(bindings2, request, maxBytes) {
+            const root = bindings2.get(request.repoBindingId);
             if (!root) throw new ContractRefusal("invalid_source");
             verifyBindingIdentity(root);
             if (!isFullOid(request.commitOid, root.hashAlgorithm)) throw new ContractRefusal("invalid_source");
@@ -71145,7 +71145,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const hopPath = validateContractPath(hop.path);
               const entry = lsTreeEntry(repo.repoPath, commit2, hopPath);
               if (!entry || entry.mode !== "160000" || entry.type !== "commit") throw new ContractRefusal("invalid_source");
-              const child = bindings.get(hop.childRepoBindingId);
+              const child = bindings2.get(hop.childRepoBindingId);
               if (!child) throw new ContractRefusal("invalid_source");
               verifyBindingIdentity(child);
               if (!isFullOid(entry.oid, child.hashAlgorithm)) throw new ContractRefusal("invalid_source");
@@ -71269,15 +71269,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       ISSUED.add(p);
       return p;
     }
-    function issueWorkerPrincipal(identity4) {
+    function issueWorkerPrincipal(identity5) {
       const p = Object.freeze({
         kind: "worker",
-        principalId: `worker:${identity4.sessionId}`,
-        meshId: identity4.meshId,
-        taskId: identity4.taskId,
-        attemptId: identity4.attemptId,
-        generation: identity4.generation,
-        sessionId: identity4.sessionId
+        principalId: `worker:${identity5.sessionId}`,
+        meshId: identity5.meshId,
+        taskId: identity5.taskId,
+        attemptId: identity5.attemptId,
+        generation: identity5.generation,
+        sessionId: identity5.sessionId
       });
       ISSUED.add(p);
       return p;
@@ -71857,7 +71857,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!Array.isArray(input.units) || input.units.length === 0) throw new ContractRefusal("invalid_input");
       if (input.units.length > ctx.budgets.maxUnitsPerRevision) throw new ContractRefusal("budget_exceeded");
       const baseManifest = base.revisionId ? getRevisionManifest(ctx, base.revisionId) : null;
-      const bindings = repoBindingsFor(ctx, input.namespaceId);
+      const bindings2 = repoBindingsFor(ctx, input.namespaceId);
       const seen2 = /* @__PURE__ */ new Set();
       const units = [];
       const bodies = [];
@@ -71872,7 +71872,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           total += prior.byteLength;
           continue;
         }
-        const { entry, bytes } = ctx.sourceReader.resolveBlob(bindings, u.source, ctx.budgets.maxUnitBytes);
+        const { entry, bytes } = ctx.sourceReader.resolveBlob(bindings2, u.source, ctx.budgets.maxUnitBytes);
         total += bytes.length;
         if (total > ctx.budgets.maxRevisionBytes) throw new ContractRefusal("budget_exceeded");
         bodies.push(bytes);
@@ -72269,10 +72269,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       if (!scope) return { mode: "unscoped" };
       return inTxn(ctx, () => {
         const now = ctx.rt.nowMs();
-        const bindings = listBindingsForTask(ctx, input.meshId, input.taskId);
-        const losing = bindings.filter((b) => b.recipientSessionId === input.losingSessionId && b.state === "active");
+        const bindings2 = listBindingsForTask(ctx, input.meshId, input.taskId);
+        const losing = bindings2.filter((b) => b.recipientSessionId === input.losingSessionId && b.state === "active");
         const required = losing[0]?.pinSetId ?? null;
-        const holder = bindings.filter((b) => b.recipientSessionId === input.holderSessionId && b.attemptId === input.attemptId && b.generation === input.generation && b.state !== "revoked").pop();
+        const holder = bindings2.filter((b) => b.recipientSessionId === input.holderSessionId && b.attemptId === input.attemptId && b.generation === input.generation && b.state !== "revoked").pop();
         for (const b of losing) {
           ctx.db.prepare(`UPDATE contract_bindings SET state = 'revoked', ended_at = ? WHERE binding_id = ?`).run(now, b.bindingId);
         }
@@ -72483,8 +72483,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return { ...r, evidence: JSON.parse(r.evidence_json) };
     }
     function buildSnapshot(ctx, ref2, sessionId) {
-      const bindings = listBindingsForTask(ctx, ref2.meshId, ref2.taskId).filter((b) => b.attemptId === ref2.attemptId && b.generation === ref2.generation && (!sessionId || b.recipientSessionId === sessionId));
-      const binding = bindings.filter((b) => b.state === "active").pop() ?? null;
+      const bindings2 = listBindingsForTask(ctx, ref2.meshId, ref2.taskId).filter((b) => b.attemptId === ref2.attemptId && b.generation === ref2.generation && (!sessionId || b.recipientSessionId === sessionId));
+      const binding = bindings2.filter((b) => b.state === "active").pop() ?? null;
       if (!binding) return { bindingId: null, pinSetId: null, e1: null, units: [] };
       const row2 = ctx.db.prepare("SELECT block_digest, e1_stage FROM contract_bindings WHERE binding_id = ?").get(binding.bindingId);
       const pinSet = getPinSet(ctx, binding.pinSetId);
@@ -74716,22 +74716,22 @@ ${block2.text}`,
       parts.push(agrees ? "This supersedes the earlier completion summary for the same turn; the task state is unchanged." : `\u2605The reported outcome differs from the recorded terminal (${opts.terminalOutcome}); the task state was NOT changed \u2014 decide whether follow-up work is needed.`);
       return parts.join("\n");
     }
-    function acceptLateWorkerCompletionReport(identity4, report, nowMs2) {
-      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity4.attemptId);
+    function acceptLateWorkerCompletionReport(identity5, report, nowMs2) {
+      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity5.attemptId);
       if (attempt?.terminal && ["report_correction_expired", "weak_end_liveness_unconfirmed", "weak_end_probe_unobserved"].includes(attempt.terminal.reason)) {
         return { accepted: false, refusal: "correction_too_late", detail: "The bounded report/probe recovery window ended; this attempt remains failed. The report was not accepted as a recovery." };
       }
-      const taskModeError = checkReportAgainstTaskMode(identity4, report);
+      const taskModeError = checkReportAgainstTaskMode(identity5, report);
       if (taskModeError) return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
       const nowIso = new Date(nowMs2).toISOString();
       const turns = MeshRuntimeStore.getInstance().turnStore();
-      REPORTED_SUMMARY_STORE.set(summaryKey(identity4.meshId, identity4.taskId), { summary: report.summary, recordedAtMs: nowMs2 });
+      REPORTED_SUMMARY_STORE.set(summaryKey(identity5.meshId, identity5.taskId), { summary: report.summary, recordedAtMs: nowMs2 });
       let inserted = false;
       try {
         inserted = turns.insertWorkerEvent({
           eventId: (0, import_crypto16.randomUUID)(),
-          attemptId: identity4.attemptId,
-          sessionId: identity4.sessionId || null,
+          attemptId: identity5.attemptId,
+          sessionId: identity5.sessionId || null,
           kind: WORKER_REPORT_EVENT_KIND,
           dedupeKey: report.outcome,
           payload: {
@@ -74742,63 +74742,63 @@ ${block2.text}`,
             hasHandoffNotes: !!report.handoffNotes,
             ...report.branchState ? { branchState: report.branchState } : {},
             late: true,
-            terminalOutcome: identity4.terminalOutcome,
-            lateByMs: Math.max(0, nowMs2 - identity4.terminalAtMs)
+            terminalOutcome: identity5.terminalOutcome,
+            lateByMs: Math.max(0, nowMs2 - identity5.terminalAtMs)
           },
           atMs: nowMs2
         });
       } catch (e) {
-        LOG.error("WorkerReport", `Failed to record late report evidence for task ${identity4.taskId}: ${e?.message || e}`);
-        return { accepted: false, refusal: "storage_failed", detail: `could not persist the report evidence row for task ${identity4.taskId}` };
+        LOG.error("WorkerReport", `Failed to record late report evidence for task ${identity5.taskId}: ${e?.message || e}`);
+        return { accepted: false, refusal: "storage_failed", detail: `could not persist the report evidence row for task ${identity5.taskId}` };
       }
       const duplicate = !inserted;
       let handoffNoteRecorded = false;
       let handoffNoteError = null;
       if (report.handoffNotes && !duplicate) {
-        const noteResult = recordOrHoldHandoffNote(identity4, report.handoffNotes, nowMs2, nowIso);
+        const noteResult = recordOrHoldHandoffNote(identity5, report.handoffNotes, nowMs2, nowIso);
         handoffNoteRecorded = noteResult.recorded;
         handoffNoteError = noteResult.error;
       } else if (report.handoffNotes) {
         handoffNoteRecorded = true;
       }
-      if (!duplicate) applyWorkerReportToMission(identity4.meshId, identity4.taskId, report);
+      if (!duplicate) applyWorkerReportToMission(identity5.meshId, identity5.taskId, report);
       if (!duplicate) {
         const sink2 = lateNoticeSinkOverride === void 0 ? queueWorkerLateReportNotice : lateNoticeSinkOverride;
         if (sink2) {
           try {
             sink2({
-              meshId: identity4.meshId,
-              taskId: identity4.taskId,
-              attemptId: identity4.attemptId,
-              ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
-              ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
+              meshId: identity5.meshId,
+              taskId: identity5.taskId,
+              attemptId: identity5.attemptId,
+              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
+              ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
               coordinatorMessage: buildWorkerLateReportNotice({
-                taskId: identity4.taskId,
-                nodeLabel: identity4.nodeId || identity4.sessionId || identity4.taskId,
-                terminalOutcome: identity4.terminalOutcome,
+                taskId: identity5.taskId,
+                nodeLabel: identity5.nodeId || identity5.sessionId || identity5.taskId,
+                terminalOutcome: identity5.terminalOutcome,
                 report
               }),
               nowMs: nowMs2
             });
           } catch (e) {
-            LOG.warn("WorkerReport", `Failed to queue late-report notice for task ${identity4.taskId}: ${e?.message || e}`);
+            LOG.warn("WorkerReport", `Failed to queue late-report notice for task ${identity5.taskId}: ${e?.message || e}`);
           }
         }
       }
       LOG.info(
         "WorkerReport",
-        `Accepted LATE ${report.outcome} report for task ${identity4.taskId} attempt ${identity4.attemptId} (already ${identity4.terminalOutcome} ${Math.round((nowMs2 - identity4.terminalAtMs) / 1e3)}s ago)` + (duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+        `Accepted LATE ${report.outcome} report for task ${identity5.taskId} attempt ${identity5.attemptId} (already ${identity5.terminalOutcome} ${Math.round((nowMs2 - identity5.terminalAtMs) / 1e3)}s ago)` + (duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       );
-      recordAcceptedSessionCompletion(identity4, nowMs2);
+      recordAcceptedSessionCompletion(identity5, nowMs2);
       return {
         accepted: true,
-        taskId: identity4.taskId,
-        attemptId: identity4.attemptId,
+        taskId: identity5.taskId,
+        attemptId: identity5.attemptId,
         outcome: report.outcome,
         duplicate,
         handoffNoteRecorded,
         ...handoffNoteError ? { handoffNoteError } : {},
-        late: { terminalOutcome: identity4.terminalOutcome }
+        late: { terminalOutcome: identity5.terminalOutcome }
       };
     }
     var import_crypto16;
@@ -74972,13 +74972,13 @@ ${block2.text}`,
         return null;
       }
     }
-    function fenceWorkerReportOnLedger(store4, identity4, terminalStatus) {
+    function fenceWorkerReportOnLedger(store4, identity5, terminalStatus) {
       const turns = store4.turnStore();
-      const current4 = turns.findLatestAttemptForTask(identity4.meshId, identity4.taskId);
-      const attempt = identity4.attemptId ? turns.getAttempt(identity4.attemptId) : current4;
-      if (!attempt || attempt.meshId !== identity4.meshId || attempt.taskId !== identity4.taskId) return "unknown_attempt";
+      const current4 = turns.findLatestAttemptForTask(identity5.meshId, identity5.taskId);
+      const attempt = identity5.attemptId ? turns.getAttempt(identity5.attemptId) : current4;
+      if (!attempt || attempt.meshId !== identity5.meshId || attempt.taskId !== identity5.taskId) return "unknown_attempt";
       if (current4 && current4.attemptId !== attempt.attemptId) return "stale_attempt";
-      if (identity4.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity4.sessionId, attempt.sessionId)) return "session_mismatch";
+      if (identity5.sessionId && attempt.sessionId && !sessionIdsEquivalent(identity5.sessionId, attempt.sessionId)) return "session_mismatch";
       if (attempt.terminal && attempt.terminal.outcome !== terminalStatus) return "already_terminal";
       return "ok";
     }
@@ -74988,10 +74988,10 @@ ${block2.text}`,
     function currentHandoffSink() {
       return handoffSinkOverride === void 0 ? storeHandoffNote : handoffSinkOverride;
     }
-    function checkReportAgainstTaskMode(identity4, report) {
+    function checkReportAgainstTaskMode(identity5, report) {
       let task;
       try {
-        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity4.meshId, identity4.taskId);
+        task = MeshRuntimeStore.getInstance().findQueueEntryById(identity5.meshId, identity5.taskId);
       } catch {
         return null;
       }
@@ -75008,7 +75008,7 @@ ${block2.text}`,
       ];
       if (readonly) {
         if (declaredFiles.length) {
-          return `task ${identity4.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
+          return `task ${identity5.taskId} is read-only (taskMode=${task.taskMode || "readonly"}) but the report declares ${declaredFiles.length} touched file(s) \u2014 a read-only task must report an empty touchedFiles. If you did change files, this task was the wrong place to do it; say so in \`summary\` and report \`blocked\`.`;
         }
         return null;
       }
@@ -75016,7 +75016,7 @@ ${block2.text}`,
       const topLevelProvided = report.touchedFiles !== void 0;
       const noteFilesProvided = report.handoffNotes !== void 0;
       if (!topLevelProvided && !noteFilesProvided) {
-        return `task ${identity4.taskId} changes code, so it must report touchedFiles \u2014 send the wire field \`touched_files\` (top-level array; \`[]\` is acceptable if you changed nothing) and call again.`;
+        return `task ${identity5.taskId} changes code, so it must report touchedFiles \u2014 send the wire field \`touched_files\` (top-level array; \`[]\` is acceptable if you changed nothing) and call again.`;
       }
       return null;
     }
@@ -75030,10 +75030,10 @@ ${block2.text}`,
           detail: `the report was written more than ${Math.round(WORKER_REPORT_MAX_DELIVERY_DELAY_MS / 6e4)} min ago`
         };
       }
-      const matchesPrepared = (identity4) => {
+      const matchesPrepared = (identity5) => {
         const expected = opts.preparedIdentity;
         if (!expected) return true;
-        if (identity4.meshId !== expected.meshId || identity4.taskId !== expected.taskId || identity4.attemptId !== expected.attemptId || identity4.sessionId !== expected.sessionId || identity4.nodeId !== expected.nodeId) return false;
+        if (identity5.meshId !== expected.meshId || identity5.taskId !== expected.taskId || identity5.attemptId !== expected.attemptId || identity5.sessionId !== expected.sessionId || identity5.nodeId !== expected.nodeId) return false;
         const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(expected.attemptId);
         return !!attempt && attempt.meshId === expected.meshId && attempt.taskId === expected.taskId && attempt.sessionId === expected.sessionId && attempt.nodeId === expected.nodeId && attempt.generation === expected.generation && daemonIdsEquivalent4(attempt.ownerDaemonId, expected.ownerDaemonId) && opts.isSelfDaemon?.(attempt.ownerDaemonId) === true;
       };
@@ -75070,22 +75070,22 @@ ${block2.text}`,
       if (reportedAt === "too_old") return null;
       const live = resolveWorkerIdentity(credential);
       const liveIsNewer = !!live && reportedAt !== void 0 && workerIdentityPostdates(live, reportedAt);
-      const identity4 = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
-      if (!identity4) return null;
-      return recordRefusedWorkerReportForIdentity(identity4, refusal2, { ...opts, nowMs: nowMs2 });
+      const identity5 = live && !liveIsNewer ? live : resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt);
+      if (!identity5) return null;
+      return recordRefusedWorkerReportForIdentity(identity5, refusal2, { ...opts, nowMs: nowMs2 });
     }
-    function recordRefusedWorkerReportForIdentity(identity4, refusal2, opts = {}) {
+    function recordRefusedWorkerReportForIdentity(identity5, refusal2, opts = {}) {
       const nowMs2 = opts.nowMs ?? Date.now();
       const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
-      if (reportedAt === "too_old" || typeof reportedAt === "number" && workerIdentityPostdates(identity4, reportedAt)) return null;
+      if (reportedAt === "too_old" || typeof reportedAt === "number" && workerIdentityPostdates(identity5, reportedAt)) return null;
       let attemptId;
       let generation = null;
       try {
         const turns = MeshRuntimeStore.getInstance().turnStore();
-        attemptId = identity4.attemptId ?? turns.findLatestAttemptForTask(identity4.meshId, identity4.taskId)?.attemptId;
+        attemptId = identity5.attemptId ?? turns.findLatestAttemptForTask(identity5.meshId, identity5.taskId)?.attemptId;
         if (!attemptId) return null;
         const attempt = turns.getAttempt(attemptId);
-        if (!attempt || attempt.meshId !== identity4.meshId || attempt.taskId !== identity4.taskId || attempt.sessionId !== identity4.sessionId || opts.generation !== void 0 && opts.generation !== attempt.generation || turns.findLatestAttemptForTask(identity4.meshId, identity4.taskId)?.attemptId !== attemptId) return null;
+        if (!attempt || attempt.meshId !== identity5.meshId || attempt.taskId !== identity5.taskId || attempt.sessionId !== identity5.sessionId || opts.generation !== void 0 && opts.generation !== attempt.generation || turns.findLatestAttemptForTask(identity5.meshId, identity5.taskId)?.attemptId !== attemptId) return null;
         generation = attempt.generation;
       } catch {
         return null;
@@ -75098,7 +75098,7 @@ ${block2.text}`,
         MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
           eventId: (0, import_crypto17.randomUUID)(),
           attemptId,
-          sessionId: identity4.sessionId || null,
+          sessionId: identity5.sessionId || null,
           kind: WORKER_REPORT_REFUSED_EVENT_KIND,
           // One row per delivery: re-sending the same refused entry must not
           // multiply it; a different (still invalid) call gets its own row.
@@ -75121,7 +75121,7 @@ ${block2.text}`,
             at: nowMs2,
             source: "worker_tool",
             observedBy: ledger.selfDaemonId,
-            sessionId: identity4.sessionId,
+            sessionId: identity5.sessionId,
             attemptRef: { attemptId, generation },
             kind: "worker_report_correction_requested",
             ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {}
@@ -75129,11 +75129,11 @@ ${block2.text}`,
         }
         recorded = true;
       } catch (e) {
-        LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity4.taskId} attempt ${attemptId}: ${e?.message || e}`);
+        LOG.error("WorkerReport", `Failed to record the invalid-report refusal for task ${identity5.taskId} attempt ${attemptId}: ${e?.message || e}`);
         recorded = false;
       }
       return {
-        taskId: identity4.taskId,
+        taskId: identity5.taskId,
         attemptId,
         generation,
         ...opts.deliveryId ? { deliveryId: opts.deliveryId } : {},
@@ -75147,10 +75147,10 @@ ${block2.text}`,
       if (nowMs2 - raw > WORKER_REPORT_MAX_DELIVERY_DELAY_MS) return "too_old";
       return raw;
     }
-    function workerIdentityPostdates(identity4, atMs) {
+    function workerIdentityPostdates(identity5, atMs) {
       try {
         const turns = MeshRuntimeStore.getInstance().turnStore();
-        const attempt = identity4.attemptId ? turns.getAttempt(identity4.attemptId) : turns.findLatestAttemptForTask(identity4.meshId, identity4.taskId);
+        const attempt = identity5.attemptId ? turns.getAttempt(identity5.attemptId) : turns.findLatestAttemptForTask(identity5.meshId, identity5.taskId);
         return !!attempt && attempt.acceptedAt > atMs;
       } catch {
         return false;
@@ -75161,39 +75161,39 @@ ${block2.text}`,
       const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, nowMs2);
       return !!resolveWorkerIdentity(credential) || !!resolveLateWorkerIdentity(credential, nowMs2, opts.isSelfDaemon, reportedAt === "too_old" ? void 0 : reportedAt);
     }
-    function acceptWorkerCompletionReportForIdentity(identity4, report, opts) {
-      const taskModeError = checkReportAgainstTaskMode(identity4, report);
+    function acceptWorkerCompletionReportForIdentity(identity5, report, opts) {
+      const taskModeError = checkReportAgainstTaskMode(identity5, report);
       if (taskModeError) {
         return { accepted: false, refusal: "invalid_for_task_mode", detail: taskModeError };
       }
       const nowMs2 = opts.nowMs ?? Date.now();
       const nowIso = new Date(nowMs2).toISOString();
       const store4 = MeshRuntimeStore.getInstance();
-      const recoveryAttempt = identity4.attemptId ? store4.turnStore().getAttempt(identity4.attemptId) : void 0;
+      const recoveryAttempt = identity5.attemptId ? store4.turnStore().getAttempt(identity5.attemptId) : void 0;
       const correction = recoveryAttempt?.data.reportCorrection;
       if (correction && recoveryAttempt?.data.report?.generation !== recoveryAttempt?.generation && correction.generation === recoveryAttempt?.generation && nowMs2 >= correction.until) {
         return { accepted: false, refusal: "correction_too_late", detail: "The bounded correction deadline expired; no recovery was accepted." };
       }
-      afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => REPORTED_SUMMARY_STORE.set(summaryKey(identity4.meshId, identity4.taskId), {
+      afterBridgeCommit(MeshRuntimeStore.getInstance().db, () => REPORTED_SUMMARY_STORE.set(summaryKey(identity5.meshId, identity5.taskId), {
         summary: report.summary,
         recordedAtMs: nowMs2
       }));
       const terminalStatus = report.outcome;
       let fence;
       try {
-        fence = fenceWorkerReportOnLedger(store4, identity4, terminalStatus);
+        fence = fenceWorkerReportOnLedger(store4, identity5, terminalStatus);
       } catch (e) {
         return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
       }
       if (fence === "unknown_attempt") return { accepted: false, refusal: "rejected_by_reducer", detail: fence };
-      const evidenceAttemptId = identity4.attemptId ?? store4.turnStore().findLatestAttemptForTask(identity4.meshId, identity4.taskId)?.attemptId;
+      const evidenceAttemptId = identity5.attemptId ?? store4.turnStore().findLatestAttemptForTask(identity5.meshId, identity5.taskId)?.attemptId;
       let evidenceRecorded = !evidenceAttemptId;
       if (evidenceAttemptId) {
         try {
           evidenceRecorded = store4.turnStore().insertWorkerEvent({
             eventId: (0, import_crypto17.randomUUID)(),
             attemptId: evidenceAttemptId,
-            sessionId: identity4.sessionId ?? null,
+            sessionId: identity5.sessionId ?? null,
             kind: WORKER_REPORT_EVENT_KIND,
             // UNIQUE(attempt_id, generation, kind, dedupe_key) makes a re-call for
             // the same outcome insert-once, matching the reducer's own idempotency.
@@ -75209,16 +75209,16 @@ ${block2.text}`,
             atMs: nowMs2
           });
         } catch (e) {
-          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity4.taskId}: ${e?.message || e}`);
+          LOG.error("WorkerReport", `Failed to record report evidence for task ${identity5.taskId}: ${e?.message || e}`);
           evidenceRecorded = false;
         }
         if (!evidenceRecorded) {
-          const existing = findPriorWorkerReport(identity4.meshId, identity4.taskId);
+          const existing = findPriorWorkerReport(identity5.meshId, identity5.taskId);
           if (!existing) {
             return {
               accepted: false,
               refusal: "storage_failed",
-              detail: `could not persist the report evidence row for task ${identity4.taskId}`
+              detail: `could not persist the report evidence row for task ${identity5.taskId}`
             };
           }
           evidenceRecorded = true;
@@ -75227,7 +75227,7 @@ ${block2.text}`,
       let handoffNoteRecorded = false;
       let handoffNoteError = null;
       if (report.handoffNotes) {
-        const noteResult = recordOrHoldHandoffNote(identity4, report.handoffNotes, nowMs2, nowIso);
+        const noteResult = recordOrHoldHandoffNote(identity5, report.handoffNotes, nowMs2, nowIso);
         handoffNoteRecorded = noteResult.recorded;
         handoffNoteError = noteResult.error;
       }
@@ -75236,7 +75236,7 @@ ${block2.text}`,
         const ledger2 = getActiveTurnLedger();
         if (!ledger2) return { accepted: false, refusal: "rejected_by_reducer", detail: "checkpoint_pending:no_owner_ledger" };
         observeAcceptedWorkerReport(ledger2, {
-          ...identity4,
+          ...identity5,
           outcome: report.outcome,
           summary: report.summary,
           hasHandoffNotes: !!report.handoffNotes,
@@ -75247,11 +75247,11 @@ ${block2.text}`,
       let commit2;
       try {
         commit2 = commitTaskTerminal({
-          meshId: identity4.meshId,
-          taskId: identity4.taskId,
+          meshId: identity5.meshId,
+          taskId: identity5.taskId,
           status: terminalStatus,
-          ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
-          ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
+          ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+          ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
           occurredAtMs: nowMs2,
           // The causal checks ran above (fenceWorkerReportOnLedger) — a valid
           // token buys no exemption from stale-attempt or session-mismatch.
@@ -75270,25 +75270,25 @@ ${block2.text}`,
               ...report.branchState ? { branchState: report.branchState } : {},
               ...report.blockers?.length ? { blockers: report.blockers.join("; ") } : {}
             },
-            ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
+            ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
             completedAt: nowIso
           }
         });
       } catch (e) {
-        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity4.taskId}: ${e?.message || e}`);
+        LOG.warn("WorkerReport", `Terminal commit threw for task ${identity5.taskId}: ${e?.message || e}`);
         return { accepted: false, refusal: "rejected_by_reducer", detail: e?.message || String(e) };
       }
       if (!commit2.committed) {
-        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity4.taskId}` };
+        return { accepted: false, refusal: "unknown_task", detail: `no queue row for task ${identity5.taskId}` };
       }
       const ledger = getActiveTurnLedger();
       if (ledger) {
         try {
           observeAcceptedWorkerReport(ledger, {
-            meshId: identity4.meshId,
-            taskId: identity4.taskId,
-            ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
-            ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
+            ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+            ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
             outcome: report.outcome,
             summary: report.summary,
             hasHandoffNotes: !!report.handoffNotes,
@@ -75297,23 +75297,23 @@ ${block2.text}`,
             atMs: nowMs2
           });
         } catch (e) {
-          LOG.warn("WorkerReport", `Turn-ledger observe of the report for task ${identity4.taskId} failed: ${e?.message || e}`);
+          LOG.warn("WorkerReport", `Turn-ledger observe of the report for task ${identity5.taskId} failed: ${e?.message || e}`);
         }
       }
       try {
         const contract = contractAfterAcceptedCompletion({
-          meshId: identity4.meshId,
-          taskId: identity4.taskId,
+          meshId: identity5.meshId,
+          taskId: identity5.taskId,
           ...evidenceAttemptId ? { attemptId: evidenceAttemptId } : {},
-          ...identity4.sessionId ? { sessionId: identity4.sessionId } : {}
+          ...identity5.sessionId ? { sessionId: identity5.sessionId } : {}
         });
         if (contract?.publishHandoff) publishHeldHandoffNote(contract.publishHandoff, nowMs2);
       } catch (e) {
-        LOG.warn("WorkerReport", `Contract assessment after report for task ${identity4.taskId} failed (result stays held): ${e?.message || e}`);
+        LOG.warn("WorkerReport", `Contract assessment after report for task ${identity5.taskId} failed (result stays held): ${e?.message || e}`);
       }
       let ownedPathsMismatch;
       try {
-        const taskEntry = store4.findQueueEntryById(identity4.meshId, identity4.taskId);
+        const taskEntry = store4.findQueueEntryById(identity5.meshId, identity5.taskId);
         const owned = taskEntry?.ownedPaths;
         if (owned && owned.paths.length > 0) {
           const touched = [...report.touchedFiles || [], ...report.handoffNotes?.touchedFiles || []];
@@ -75325,11 +75325,11 @@ ${block2.text}`,
               undeclaredTouched: [...undeclaredTouched]
             };
             try {
-              meshRecord(identity4.meshId, "ownership_violation", {
-                ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
-                ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
+              meshRecord(identity5.meshId, "ownership_violation", {
+                ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
+                ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
                 payload: {
-                  taskId: identity4.taskId,
+                  taskId: identity5.taskId,
                   declaredCount: ownedPathsMismatch.declared.length,
                   touchedCount: ownedPathsMismatch.touched.length,
                   undeclaredTouchedCount: ownedPathsMismatch.undeclaredTouched.length
@@ -75343,14 +75343,14 @@ ${block2.text}`,
       }
       afterBridgeCommit(store4.db, () => LOG.info(
         "WorkerReport",
-        `Accepted ${report.outcome} report for task ${identity4.taskId}` + (identity4.attemptId ? ` attempt ${identity4.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
+        `Accepted ${report.outcome} report for task ${identity5.taskId}` + (identity5.attemptId ? ` attempt ${identity5.attemptId}` : "") + (commit2.duplicate ? " (duplicate replay)" : "") + (handoffNoteRecorded ? " with handoff note" : "")
       ));
-      applyWorkerReportToMission(identity4.meshId, identity4.taskId, report);
-      recordAcceptedSessionCompletion({ ...identity4, attemptId: evidenceAttemptId }, nowMs2);
+      applyWorkerReportToMission(identity5.meshId, identity5.taskId, report);
+      recordAcceptedSessionCompletion({ ...identity5, attemptId: evidenceAttemptId }, nowMs2);
       return {
         accepted: true,
-        taskId: identity4.taskId,
-        ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
+        taskId: identity5.taskId,
+        ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
         outcome: report.outcome,
         duplicate: commit2.duplicate,
         handoffNoteRecorded,
@@ -75362,21 +75362,21 @@ ${block2.text}`,
         ...ownedPathsMismatch ? { ownedPathsMismatch } : {}
       };
     }
-    function recordOrHoldHandoffNote(identity4, notes, nowMs2, nowIso) {
+    function recordOrHoldHandoffNote(identity5, notes, nowMs2, nowIso) {
       try {
         if (contractHoldHandoffNote({
-          meshId: identity4.meshId,
-          taskId: identity4.taskId,
-          ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
-          ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
-          ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
+          meshId: identity5.meshId,
+          taskId: identity5.taskId,
+          ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+          ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+          ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
           notesJson: JSON.stringify(notes),
           nowMs: nowMs2
         })) return { recorded: true, error: null, held: true };
       } catch (e) {
         return { recorded: false, error: `handoff note could not be held for contract assessment: ${e?.message || e}` };
       }
-      return recordHandoffNote(identity4, notes, nowMs2, nowIso);
+      return recordHandoffNote(identity5, notes, nowMs2, nowIso);
     }
     function publishHeldHandoffNote(held, nowMs2) {
       let notes;
@@ -75395,19 +75395,19 @@ ${block2.text}`,
       }, notes, nowMs2, new Date(nowMs2).toISOString());
       if (!result.recorded) LOG.warn("WorkerReport", `Held handoff note for task ${held.taskId} could not be published: ${result.error}`);
     }
-    function recordHandoffNote(identity4, notes, nowMs2, nowIso) {
-      if (!identity4.attemptId) {
+    function recordHandoffNote(identity5, notes, nowMs2, nowIso) {
+      if (!identity5.attemptId) {
         return {
           recorded: false,
-          error: `task ${identity4.taskId} has no active attempt, so the note has no index row and could never be delivered`
+          error: `task ${identity5.taskId} has no active attempt, so the note has no index row and could never be delivered`
         };
       }
       {
         try {
           MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
             eventId: (0, import_crypto17.randomUUID)(),
-            attemptId: identity4.attemptId,
-            sessionId: identity4.sessionId ?? null,
+            attemptId: identity5.attemptId,
+            sessionId: identity5.sessionId ?? null,
             kind: WORKER_HANDOFF_EVENT_KIND,
             dedupeKey: "",
             payload: {
@@ -75415,13 +75415,13 @@ ${block2.text}`,
               intentLength: notes.intent.length,
               hasConflictGuidance: !!notes.conflictGuidance,
               followUpCount: notes.followUps?.length ?? 0,
-              ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
-              ...identity4.nodeId ? { nodeId: identity4.nodeId } : {}
+              ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
             },
             atMs: nowMs2
           });
         } catch (e) {
-          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity4.taskId}: ${e?.message || e}`);
+          LOG.error("WorkerReport", `Failed to index handoff note for task ${identity5.taskId}: ${e?.message || e}`);
           return { recorded: false, error: `handoff note index write failed: ${e?.message || e}` };
         }
       }
@@ -75429,16 +75429,16 @@ ${block2.text}`,
       if (handoffSink) {
         try {
           handoffSink({
-            meshId: identity4.meshId,
-            taskId: identity4.taskId,
-            ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
-            ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
-            ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
+            ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+            ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+            ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
             notes,
             recordedAtIso: nowIso
           });
         } catch (e) {
-          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity4.taskId}: ${e?.message || e}`);
+          LOG.error("WorkerReport", `Handoff note sink threw for task ${identity5.taskId}: ${e?.message || e}`);
           return { recorded: false, error: `handoff note text could not be stored: ${e?.message || e}` };
         }
       }
@@ -75763,21 +75763,21 @@ ${block2.text}`,
       shouldSurfaceProgressToCoordinator: () => shouldSurfaceProgressToCoordinator
     });
     function acceptWorkerProgressUpdate(credential, note2, opts = {}) {
-      const identity4 = resolveWorkerIdentity(credential);
-      if (!identity4) {
+      const identity5 = resolveWorkerIdentity(credential);
+      if (!identity5) {
         const unresolved = classifyUnresolvedWorkerCredential(credential);
         return { accepted: false, refusal: unresolved.refusal, ...unresolved.detail ? { detail: unresolved.detail } : {} };
       }
       const reportedAt = normalizeWorkerReportedAtMs(opts.reportedAtMs, opts.nowMs ?? Date.now());
-      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(identity4, reportedAt)) {
+      if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(identity5, reportedAt)) {
         return {
           accepted: false,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           refusal: "stale_report",
-          detail: `the note was written before task ${identity4.taskId} was dispatched to this session (or is past the delivery window) \u2014 not recorded`
+          detail: `the note was written before task ${identity5.taskId} was dispatched to this session (or is past the delivery window) \u2014 not recorded`
         };
       }
-      return acceptWorkerProgressUpdateForIdentity(identity4, note2, opts);
+      return acceptWorkerProgressUpdateForIdentity(identity5, note2, opts);
     }
     function acceptForwardedWorkerProgressUpdate(claim, note2, opts) {
       const nowMs2 = opts.nowMs ?? Date.now();
@@ -75796,37 +75796,37 @@ ${block2.text}`,
       if (reportedAt === "too_old" || reportedAt !== void 0 && workerIdentityPostdates(resolved.live, reportedAt)) return { accepted: false, refusal: "stale_report" };
       return acceptWorkerProgressUpdateForIdentity(resolved.live, note2, { nowMs: nowMs2, deliveryId: opts.deliveryId });
     }
-    function acceptWorkerProgressUpdateForIdentity(identity4, note2, opts = {}, localNoticeId) {
-      if (!identity4.attemptId) {
+    function acceptWorkerProgressUpdateForIdentity(identity5, note2, opts = {}, localNoticeId) {
+      if (!identity5.attemptId) {
         return {
           accepted: false,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           refusal: "storage_failed",
-          detail: `task ${identity4.taskId} has no active attempt to record progress against`
+          detail: `task ${identity5.taskId} has no active attempt to record progress against`
         };
       }
       const nowMs2 = opts.nowMs ?? Date.now();
       const runtime2 = MeshRuntimeStore.getInstance();
       if (!inBridgeReceiptTransaction(runtime2.db)) {
         return bridgeReceiptTransaction(runtime2.db, () => acceptWorkerProgressUpdateForIdentity(
-          identity4,
+          identity5,
           note2,
           opts,
-          `local:${identity4.attemptId}:t${nowMs2}`
+          `local:${identity5.attemptId}:t${nowMs2}`
         ));
       }
       const ledger = getActiveTurnLedger();
-      const attempt = runtime2.turnStore().getAttempt(identity4.attemptId);
-      if (!attempt || attempt.terminal || attempt.taskId !== identity4.taskId || attempt.meshId !== identity4.meshId || attempt.sessionId !== identity4.sessionId || ledger && !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) {
-        return { accepted: false, taskId: identity4.taskId, refusal: "unauthenticated", detail: "progress identity is not the current owner attempt" };
+      const attempt = runtime2.turnStore().getAttempt(identity5.attemptId);
+      if (!attempt || attempt.terminal || attempt.taskId !== identity5.taskId || attempt.meshId !== identity5.meshId || attempt.sessionId !== identity5.sessionId || ledger && !daemonIdsEquivalent4(attempt.ownerDaemonId, ledger.selfDaemonId)) {
+        return { accepted: false, taskId: identity5.taskId, refusal: "unauthenticated", detail: "progress identity is not the current owner attempt" };
       }
-      if (!ledger) return { accepted: false, taskId: identity4.taskId, refusal: "storage_failed", detail: "the owner turn ledger is not ready to consume this progress; retry" };
+      if (!ledger) return { accepted: false, taskId: identity5.taskId, refusal: "storage_failed", detail: "the owner turn ledger is not ready to consume this progress; retry" };
       let recorded = false;
       try {
         recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
           eventId: (0, import_crypto18.randomUUID)(),
-          attemptId: identity4.attemptId,
-          sessionId: identity4.sessionId ?? null,
+          attemptId: identity5.attemptId,
+          sessionId: identity5.sessionId ?? null,
           kind: WORKER_PROGRESS_EVENT_KIND,
           // Distinct per call — progress updates are a SEQUENCE, unlike the
           // completion report where the UNIQUE constraint provides idempotency.
@@ -75835,27 +75835,27 @@ ${block2.text}`,
           atMs: nowMs2
         });
       } catch (e) {
-        LOG.error("WorkerReport", `Failed to record progress update for task ${identity4.taskId}: ${e?.message || e}`);
+        LOG.error("WorkerReport", `Failed to record progress update for task ${identity5.taskId}: ${e?.message || e}`);
         return {
           accepted: false,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           refusal: "storage_failed",
           detail: e?.message || String(e)
         };
       }
-      if (!recorded && !MeshRuntimeStore.getInstance().turnStore().getAttempt(identity4.attemptId)) {
+      if (!recorded && !MeshRuntimeStore.getInstance().turnStore().getAttempt(identity5.attemptId)) {
         return {
           accepted: false,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           refusal: "storage_failed",
-          detail: `task ${identity4.taskId} has no active attempt to record progress against`
+          detail: `task ${identity5.taskId} has no active attempt to record progress against`
         };
       }
-      if (!recorded && opts.deliveryId) return { accepted: true, taskId: identity4.taskId, surfacedToCoordinator: false };
+      if (!recorded && opts.deliveryId) return { accepted: true, taskId: identity5.taskId, surfacedToCoordinator: false };
       if (!recorded) {
         return {
           accepted: false,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           refusal: "storage_failed",
           detail: "a progress update for this attempt already exists at this timestamp \u2014 retry"
         };
@@ -75867,14 +75867,14 @@ ${block2.text}`,
           source: "worker_tool",
           at: nowMs2,
           sessionId: attempt.sessionId,
-          taskId: identity4.taskId,
+          taskId: identity5.taskId,
           attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
           observedBy: ledger.selfDaemonId
         });
         if (result.verdict !== "applied") throw new Error(`worker_progress_not_applied:${result.verdict}`);
       }
-      const surfaced = notifyCoordinatorOfProgress(identity4, note2, nowMs2, opts.deliveryId ?? localNoticeId);
-      return { accepted: true, taskId: identity4.taskId, surfacedToCoordinator: surfaced };
+      const surfaced = notifyCoordinatorOfProgress(identity5, note2, nowMs2, opts.deliveryId ?? localNoticeId);
+      return { accepted: true, taskId: identity5.taskId, surfacedToCoordinator: surfaced };
     }
     function __resetProgressSurfaceForTest() {
       PROGRESS_SURFACE_LAST_MS.clear();
@@ -75891,8 +75891,8 @@ ${block2.text}`,
     function __setWorkerProgressNoticeSinkForTests(sink2) {
       progressNoticeSinkOverride = sink2;
     }
-    function notifyCoordinatorOfProgress(identity4, note2, nowMs2, deliveryId) {
-      const key5 = summaryKey(identity4.meshId, identity4.taskId);
+    function notifyCoordinatorOfProgress(identity5, note2, nowMs2, deliveryId) {
+      const key5 = summaryKey(identity5.meshId, identity5.taskId);
       if (!shouldSurfaceProgressToCoordinator({
         note: note2,
         nowMs: nowMs2,
@@ -75903,24 +75903,24 @@ ${block2.text}`,
       const sink2 = progressNoticeSinkOverride === void 0 ? queueWorkerProgressNotice : progressNoticeSinkOverride;
       if (!sink2) return false;
       const notice = {
-        meshId: identity4.meshId,
-        taskId: identity4.taskId,
-        ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
-        ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
+        meshId: identity5.meshId,
+        taskId: identity5.taskId,
+        ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
+        ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
         note: note2.trim(),
         coordinatorMessage: buildWorkerProgressNotice({
-          taskId: identity4.taskId,
-          nodeLabel: identity4.nodeId || identity4.sessionId || identity4.taskId,
+          taskId: identity5.taskId,
+          nodeLabel: identity5.nodeId || identity5.sessionId || identity5.taskId,
           note: note2
         }),
         nowMs: nowMs2,
-        ...deliveryId ? { eventId: `worker-progress:${identity4.attemptId}:delivery:${deliveryId}` } : {}
+        ...deliveryId ? { eventId: `worker-progress:${identity5.attemptId}:delivery:${deliveryId}` } : {}
       };
       const db2 = MeshRuntimeStore.getInstance().db;
       if (inBridgeReceiptTransaction(db2)) {
         if (!deliveryId) throw new Error("bridge_progress_requires_delivery_identity");
         ensureProgressNoticeSchema(db2);
-        db2.prepare("INSERT OR IGNORE INTO worker_bridge_progress_notice(event_id,mesh_id,notice_json,state) VALUES (?,?,?,'pending')").run(notice.eventId, identity4.meshId, JSON.stringify(notice));
+        db2.prepare("INSERT OR IGNORE INTO worker_bridge_progress_notice(event_id,mesh_id,notice_json,state) VALUES (?,?,?,'pending')").run(notice.eventId, identity5.meshId, JSON.stringify(notice));
         afterBridgeCommit(db2, () => {
           resumeBridgeProgressNotices(db2);
         });
@@ -75929,7 +75929,7 @@ ${block2.text}`,
       try {
         if (sink2(notice) === false) return false;
       } catch (e) {
-        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity4.taskId}: ${e?.message || e}`);
+        LOG.warn("WorkerReport", `Failed to surface progress for task ${identity5.taskId}: ${e?.message || e}`);
         return false;
       }
       PROGRESS_SURFACE_LAST_MS.set(key5, nowMs2);
@@ -76022,8 +76022,8 @@ ${block2.text}`,
       if (Object.keys(e).length !== keys2.length || Object.keys(e).some((k) => !keys2.includes(k)) || e.protocol !== BRIDGE_PROTOCOL || !["report", "progress", "refusal"].includes(e.kind) || ![e.ownerDaemonId, e.senderDaemonId, e.meshId, e.nodeId, e.taskId, e.sessionId, e.attemptId].every(id22) || !sha2.test(e.senderCommit) || !version.test(e.senderVersion) || !Number.isSafeInteger(e.generation) || e.generation < 0 || normalizeWorkerDeliveryId(e.deliveryId) !== e.deliveryId || !Number.isSafeInteger(e.reportedAtMs) || e.reportedAtMs <= 0 || !e.payload || typeof e.payload !== "object" || Array.isArray(e.payload)) return null;
       return e;
     }
-    function admitted(policy, identity4) {
-      return policy.builds.some((b) => b.commit === identity4.commit && b.version === identity4.version);
+    function admitted(policy, identity5) {
+      return policy.builds.some((b) => b.commit === identity5.commit && b.version === identity5.version);
     }
     function bridgeCapability(db2, self, meshId, nonce, deliveryClaim) {
       const policy = readBridgePolicy(db2, meshId);
@@ -76362,9 +76362,9 @@ ${block2.text}`,
       const cachedState = stateByDir.get(dirKey);
       const cached5 = forMutation && cachedState?.persistenceWarning ? void 0 : cachedState;
       try {
-        const identity4 = import_node_fs11.default.statSync(filePath2);
+        const identity5 = import_node_fs11.default.statSync(filePath2);
         const previousIdentity = diskIdentityByDir.get(dirKey);
-        if (!forMutation && cached5 && !cached5.persistenceWarning && previousIdentity && identity4.mtimeMs === previousIdentity.mtimeMs && identity4.size === previousIdentity.size && identity4.ino === previousIdentity.ino) return cached5;
+        if (!forMutation && cached5 && !cached5.persistenceWarning && previousIdentity && identity5.mtimeMs === previousIdentity.mtimeMs && identity5.size === previousIdentity.size && identity5.ino === previousIdentity.ino) return cached5;
         const raw = import_node_fs11.default.readFileSync(filePath2, "utf8");
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || typeof parsed.active !== "boolean") {
@@ -76375,7 +76375,7 @@ ${block2.text}`,
           return failClosed;
         }
         const diskState = parsePersistedStateObject(parsed, now);
-        diskIdentityByDir.set(dirKey, { mtimeMs: identity4.mtimeMs, size: identity4.size, ino: identity4.ino });
+        diskIdentityByDir.set(dirKey, { mtimeMs: identity5.mtimeMs, size: identity5.size, ino: identity5.ino });
         if (cached5 && cached5.persistenceWarning && cached5.revision >= diskState.revision) return cached5;
         stateByDir.set(dirKey, diskState);
         return diskState;
@@ -82145,13 +82145,14 @@ ${includeRefs[0]}`;
       }
       return result;
     }
-    function callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, historySessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId) {
+    function callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, historySessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId, acknowledgedInputDigest) {
       const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, "readSession");
       if (!fn) return null;
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || "");
       const normalizedInstanceId = typeof instanceId === "string" ? instanceId.trim() : "";
       const result = fn({
         agentType,
+        acknowledgedInputDigest,
         sessionId: normalizedSessionId,
         // Arm the native-history executor's session pin guard. When the
         // instance is already bound to a provider session, pass that id as
@@ -82198,6 +82199,7 @@ ${includeRefs[0]}`;
       }
       return {
         records,
+        codexOpenTurn: result.codexOpenTurn,
         turnTerminalMarkers: Array.isArray(result.turnTerminalMarkers) ? result.turnTerminalMarkers : void 0,
         sourcePath: typeof result.sourcePath === "string" ? result.sourcePath : "",
         sourceMtimeMs: Number(result.sourceMtimeMs) || 0,
@@ -82211,11 +82213,11 @@ ${includeRefs[0]}`;
         attribution
       };
     }
-    function buildNativeHistoryReadResult(agentType, canonicalHistory, scripts, historySessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId) {
+    function buildNativeHistoryReadResult(agentType, canonicalHistory, scripts, historySessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId, acknowledgedInputDigest) {
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId || "");
       const normalizedWorkspace = typeof workspace === "string" ? workspace.trim() : "";
       if (!canonicalHistory || !normalizedSessionId && !normalizedWorkspace || !isNativeSourceCanonicalHistory(canonicalHistory)) return null;
-      return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId);
+      return callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId, acknowledgedInputDigest);
     }
     function materializeNativeHistoryToMirror(agentType, canonicalHistory, historySessionId, workspace, scripts) {
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
@@ -82275,7 +82277,7 @@ ${includeRefs[0]}`;
     }
     function readProviderChatHistory(agentType, options = {}) {
       if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
-        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
+        const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId, options.acknowledgedInputDigest);
         if (!nativeResult) return { messages: [], hasMore: false, source: "native-unavailable" };
         if (nativeResult.records.length === 0) {
           return {
@@ -82302,7 +82304,8 @@ ${includeRefs[0]}`;
           attribution: nativeResult.attribution,
           // (NATIVE-TURN-SIGNAL) Terminal markers ride alongside the paged messages —
           // deliberately NOT paged, since they are turn metadata, not chat content.
-          turnTerminalMarkers: nativeResult.turnTerminalMarkers
+          turnTerminalMarkers: nativeResult.turnTerminalMarkers,
+          codexOpenTurn: nativeResult.codexOpenTurn
         };
       }
       return {
@@ -91498,9 +91501,9 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           break;
         }
       }
-      const identity4 = { exec: execName, script, scriptDirs, scriptPackage, runnerSpec, pyModule, argv };
-      identityCache.set(node, identity4);
-      return identity4;
+      const identity5 = { exec: execName, script, scriptDirs, scriptPackage, runnerSpec, pyModule, argv };
+      identityCache.set(node, identity5);
+      return identity5;
     }
     function identityNames(id4) {
       const names = [id4.exec];
@@ -105277,15 +105280,15 @@ ${result.stderr}`, result.code);
         init_chat_message_normalization();
       }
     });
-    function flattenMessage(message, identity4) {
+    function flattenMessage(message, identity5) {
       const meta2 = message.meta && typeof message.meta === "object" ? message.meta : void 0;
       const isArtifactBubble = message.kind === "artifact" && message.attachment && typeof message.attachment === "object";
       const artifactMessageId = isArtifactBubble && typeof message.messageId === "string" && message.messageId.startsWith("artifact:") ? message.messageId : void 0;
       const artifactOrd = artifactMessageId && typeof message.ord === "string" ? message.ord : void 0;
       return {
-        messageId: identity4?.messageId ?? artifactMessageId,
-        ord: identity4?.ord ?? artifactOrd,
-        srcId: identity4?.srcId ?? null,
+        messageId: identity5?.messageId ?? artifactMessageId,
+        ord: identity5?.ord ?? artifactOrd,
+        srcId: identity5?.srcId ?? null,
         role: message.role,
         kind: message.kind,
         content: flattenContent(message.content),
@@ -106485,7 +106488,7 @@ ${result.stderr}`, result.code);
       }
     });
     function sha1(text6) {
-      return (0, import_node_crypto35.createHash)("sha1").update(text6).digest("base64");
+      return (0, import_node_crypto36.createHash)("sha1").update(text6).digest("base64");
     }
     function headChangeKey(head, text6) {
       const fields = {
@@ -106514,7 +106517,7 @@ ${result.stderr}`, result.code);
     function jcsBytesOf(payload) {
       return utf8Bytes(jcs(payload));
     }
-    var import_node_crypto35;
+    var import_node_crypto36;
     var HEAD_OVERHEAD_BYTES;
     var TRIPWIRE_REWRITE_SHARE;
     var TRIPWIRE_MIN_LIVE;
@@ -106525,7 +106528,7 @@ ${result.stderr}`, result.code);
     var init_transcript_keyed_frame = __esm2({
       "src/seqscribe/transcript-keyed-frame.ts"() {
         "use strict";
-        import_node_crypto35 = require("crypto");
+        import_node_crypto36 = require("crypto");
         init_dist2();
         init_fractional_index();
         init_transcript_keyed_codec();
@@ -107389,7 +107392,7 @@ ${result.stderr}`, result.code);
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto36.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto37.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     function configureTranscriptProjection(deps) {
       activeService?.dispose();
@@ -107415,7 +107418,7 @@ ${result.stderr}`, result.code);
       activeService?.markPtyOutputActivity(sessionId);
     }
     var fs77;
-    var import_node_crypto36;
+    var import_node_crypto37;
     var MAX_TRACKED_SESSIONS;
     var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
@@ -107425,7 +107428,7 @@ ${result.stderr}`, result.code);
       "src/seqscribe/transcript-publisher.ts"() {
         "use strict";
         fs77 = __toESM2(require("fs"));
-        import_node_crypto36 = require("crypto");
+        import_node_crypto37 = require("crypto");
         init_logger();
         init_message_identity_ledger();
         init_transcript_keyed_codec();
@@ -108214,17 +108217,17 @@ ${result.stderr}`, result.code);
       const visibleMessages = includeActivity ? filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m)) : filterUserFacingChatMessages(filteredMessages);
       const observationMessages = filteredMessages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m) && isWireSafeActivityKind(m.kind));
       let messageIds = null;
-      let identity4 = null;
+      let identity5 = null;
       let identityCoverage = "full";
       try {
         const identityScope = messages.filter((m) => isUserFacingChatMessage(m) || isActivityChatMessage(m));
         const ledgerKey = presentationSessionIdHint || `provider:${providerHint || "unknown"}`;
         identityCoverage = resolveReadChatIdentityCoverage(validatedPayload.coverage, presentation.identityCoverage);
-        identity4 = assignReadChatMessageIds(ledgerKey, identityScope, identityCoverage);
-        messageIds = identity4.ids;
+        identity5 = assignReadChatMessageIds(ledgerKey, identityScope, identityCoverage);
+        messageIds = identity5.ids;
       } catch {
         messageIds = null;
-        identity4 = null;
+        identity5 = null;
       }
       const sync = buildFullTail(visibleMessages, normalizeReadChatTailLimit(args));
       const hiddenMsgCount = Math.max(0, messages.length - visibleMessages.length);
@@ -108252,10 +108255,10 @@ ${result.stderr}`, result.code);
           // The keyed chat lane stores bubbles by these ids (design 2026-09-28
           // §4.2); without them the publisher refuses the observation rather
           // than inventing identity.
-          identity: identity4 ? { assignments: identity4.assignments, retainedIds: identity4.retainedIds, ledgerEpoch: identity4.frame.epoch } : null,
+          identity: identity5 ? { assignments: identity5.assignments, retainedIds: identity5.retainedIds, ledgerEpoch: identity5.frame.epoch } : null,
           coverage: {
             mode: identityCoverage,
-            omittedBefore: identityCoverage === "window" && (identity4?.retainedIds.length ?? 0) > 0
+            omittedBefore: identityCoverage === "window" && (identity5?.retainedIds.length ?? 0) > 0
           }
         });
         if (observation && payload.stale !== true && payload.unavailableReason !== "native_history_loading") {
@@ -108438,7 +108441,7 @@ ${result.stderr}`, result.code);
           continue;
         }
         const startId = startOf(process.pid);
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto38.randomBytes)(16).toString("hex"), acquiredAt: Date.now(), ...startId ? { startId } : {} };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto39.randomBytes)(16).toString("hex"), acquiredAt: Date.now(), ...startId ? { startId } : {} };
         try {
           (0, import_node_fs18.writeFileSync)((0, import_node_path14.join)(guard2, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -108457,7 +108460,7 @@ ${result.stderr}`, result.code);
       if (observed2.kind !== "owner") return false;
       const dead = !alive(observed2.owner.pid) || pidReused(observed2.owner, probe);
       if (!dead) return false;
-      const claimed = (0, import_node_path14.join)(guard2, `${OWNER_FILE}.reaped-${(0, import_node_crypto38.randomBytes)(8).toString("hex")}`);
+      const claimed = (0, import_node_path14.join)(guard2, `${OWNER_FILE}.reaped-${(0, import_node_crypto39.randomBytes)(8).toString("hex")}`);
       try {
         (0, import_node_fs18.renameSync)((0, import_node_path14.join)(guard2, OWNER_FILE), claimed);
       } catch {
@@ -108507,7 +108510,7 @@ ${result.stderr}`, result.code);
           continue;
         }
         const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto38.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto39.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
         try {
           (0, import_node_fs18.writeFileSync)((0, import_node_path14.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -108532,7 +108535,7 @@ ${result.stderr}`, result.code);
     var import_node_fs18;
     var import_node_path14;
     var import_node_child_process16;
-    var import_node_crypto38;
+    var import_node_crypto39;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var ownProcessStartId;
@@ -108542,7 +108545,7 @@ ${result.stderr}`, result.code);
         import_node_fs18 = require("fs");
         import_node_path14 = require("path");
         import_node_child_process16 = require("child_process");
-        import_node_crypto38 = require("crypto");
+        import_node_crypto39 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
         ownProcessStartId = processStartId(process.pid);
@@ -111088,7 +111091,7 @@ ${body}`;
     });
     var import_node_fs21;
     var import_node_path17;
-    var import_node_crypto40;
+    var import_node_crypto41;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -111097,7 +111100,7 @@ ${body}`;
         "use strict";
         import_node_fs21 = require("fs");
         import_node_path17 = require("path");
-        import_node_crypto40 = require("crypto");
+        import_node_crypto41 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -111121,7 +111124,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest5);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto40.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto41.randomBytes)(8).toString("hex")}`;
             const rec7 = {
               kind: "driver_activation",
               id: id4,
@@ -111372,7 +111375,7 @@ ${body}`;
     }
     var import_node_fs222;
     var import_node_path18;
-    var import_node_crypto41;
+    var import_node_crypto422;
     var entryKeys;
     var origins;
     var integer;
@@ -111382,7 +111385,7 @@ ${body}`;
         "use strict";
         import_node_fs222 = require("fs");
         import_node_path18 = require("path");
-        import_node_crypto41 = require("crypto");
+        import_node_crypto422 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -111468,7 +111471,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto41.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto422.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs222.openSync)(temp, "wx", 384);
@@ -111607,7 +111610,7 @@ ${body}`;
       });
     }
     function digest4(value) {
-      return (0, import_node_crypto422.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto43.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -111620,7 +111623,7 @@ ${body}`;
     }
     var import_node_fs23;
     var import_node_path19;
-    var import_node_crypto422;
+    var import_node_crypto43;
     var ID2;
     var proposalKeys;
     var text2;
@@ -111631,7 +111634,7 @@ ${body}`;
         "use strict";
         import_node_fs23 = require("fs");
         import_node_path19 = require("path");
-        import_node_crypto422 = require("crypto");
+        import_node_crypto43 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -111663,7 +111666,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto422.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto43.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -111674,7 +111677,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs23.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto422.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto43.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs23.openSync)(tmp, "wx", 384);
               try {
@@ -119823,40 +119826,40 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       return { ok: true, attemptId: latestAttempt.attemptId };
     }
     function verifyLocalWorkerQueueAndLedgerFence(params) {
-      const { meshStore, identity: identity4, workerSessionId, explicitTaskId, explicitAttemptId, rawBind } = params;
-      if (explicitTaskId && explicitTaskId !== identity4.taskId) {
+      const { meshStore, identity: identity5, workerSessionId, explicitTaskId, explicitAttemptId, rawBind } = params;
+      if (explicitTaskId && explicitTaskId !== identity5.taskId) {
         return {
           ok: false,
           result: {
             success: false,
             code: "task_mismatch",
-            error: `Worker credential belongs to task "${identity4.taskId}", not "${explicitTaskId}" (task_mismatch)`
+            error: `Worker credential belongs to task "${identity5.taskId}", not "${explicitTaskId}" (task_mismatch)`
           }
         };
       }
-      if (explicitAttemptId && identity4.attemptId && explicitAttemptId !== identity4.attemptId) {
+      if (explicitAttemptId && identity5.attemptId && explicitAttemptId !== identity5.attemptId) {
         return {
           ok: false,
           result: {
             success: false,
             code: "stale_attempt",
-            error: `Worker credential attempt "${identity4.attemptId}" does not match requested attempt "${explicitAttemptId}" (stale_attempt)`
+            error: `Worker credential attempt "${identity5.attemptId}" does not match requested attempt "${explicitAttemptId}" (stale_attempt)`
           }
         };
       }
       let queueAssignedAttemptId = "";
       let queueTaskAttemptId = "";
       try {
-        const assigned = meshStore.findAssignedBySession(identity4.meshId, workerSessionId);
+        const assigned = meshStore.findAssignedBySession(identity5.meshId, workerSessionId);
         if (assigned) {
           const assignedId = trimStr2(assigned.id);
-          if (assignedId && assignedId !== identity4.taskId) {
+          if (assignedId && assignedId !== identity5.taskId) {
             return {
               ok: false,
               result: {
                 success: false,
                 code: "task_mismatch",
-                error: `Worker session "${workerSessionId}" is assigned to task "${assignedId}", not "${identity4.taskId}" (task_mismatch)`
+                error: `Worker session "${workerSessionId}" is assigned to task "${assignedId}", not "${identity5.taskId}" (task_mismatch)`
               }
             };
           }
@@ -119867,18 +119870,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               result: {
                 success: false,
                 code: "stale_attempt",
-                error: `Task "${identity4.taskId}" is no longer actively assigned (stale_attempt)`
+                error: `Task "${identity5.taskId}" is no longer actively assigned (stale_attempt)`
               }
             };
           }
           queueAssignedAttemptId = trimStr2(assigned.attemptId) || trimStr2(assigned.payload?.attemptId);
-          if (queueAssignedAttemptId && identity4.attemptId && queueAssignedAttemptId !== identity4.attemptId) {
+          if (queueAssignedAttemptId && identity5.attemptId && queueAssignedAttemptId !== identity5.attemptId) {
             return {
               ok: false,
               result: {
                 success: false,
                 code: "stale_attempt",
-                error: `Worker credential attempt "${identity4.attemptId}" does not match assigned attempt "${queueAssignedAttemptId}" (stale_attempt)`
+                error: `Worker credential attempt "${identity5.attemptId}" does not match assigned attempt "${queueAssignedAttemptId}" (stale_attempt)`
               }
             };
           }
@@ -119893,14 +119896,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             };
           }
         }
-        const taskEntry = meshStore.findQueueEntryById(identity4.meshId, identity4.taskId);
+        const taskEntry = meshStore.findQueueEntryById(identity5.meshId, identity5.taskId);
         if (!taskEntry) {
           return {
             ok: false,
             result: {
               success: false,
               code: "unauthenticated",
-              error: `Worker task "${identity4.taskId}" has no active queue assignment (unauthenticated)`
+              error: `Worker task "${identity5.taskId}" has no active queue assignment (unauthenticated)`
             }
           };
         }
@@ -119911,7 +119914,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             result: {
               success: false,
               code: "stale_attempt",
-              error: `Task "${identity4.taskId}" is not in assigned state (status="${taskStatus || "unknown"}") (stale_attempt)`
+              error: `Task "${identity5.taskId}" is not in assigned state (status="${taskStatus || "unknown"}") (stale_attempt)`
             }
           };
         }
@@ -119922,18 +119925,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             result: {
               success: false,
               code: "artifact_session_mismatch",
-              error: `Task "${identity4.taskId}" is assigned to session "${taskAssignedSession}", not "${workerSessionId}" (artifact_session_mismatch)`
+              error: `Task "${identity5.taskId}" is assigned to session "${taskAssignedSession}", not "${workerSessionId}" (artifact_session_mismatch)`
             }
           };
         }
         queueTaskAttemptId = trimStr2(taskEntry.attemptId) || trimStr2(taskEntry.payload?.attemptId);
-        if (queueTaskAttemptId && identity4.attemptId && queueTaskAttemptId !== identity4.attemptId) {
+        if (queueTaskAttemptId && identity5.attemptId && queueTaskAttemptId !== identity5.attemptId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "stale_attempt",
-              error: `Worker credential attempt "${identity4.attemptId}" is stale for task "${identity4.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`
+              error: `Worker credential attempt "${identity5.attemptId}" is stale for task "${identity5.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`
             }
           };
         }
@@ -119943,7 +119946,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             result: {
               success: false,
               code: "stale_attempt",
-              error: `Requested attempt "${explicitAttemptId}" is stale for task "${identity4.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`
+              error: `Requested attempt "${explicitAttemptId}" is stale for task "${identity5.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`
             }
           };
         }
@@ -119957,13 +119960,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           };
         }
-        if (!assigned || trimStr2(assigned.id) !== identity4.taskId) {
+        if (!assigned || trimStr2(assigned.id) !== identity5.taskId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "unauthenticated",
-              error: `Worker session "${workerSessionId}" has no active queue assignment for task "${identity4.taskId}" (unauthenticated)`
+              error: `Worker session "${workerSessionId}" has no active queue assignment for task "${identity5.taskId}" (unauthenticated)`
             }
           };
         }
@@ -119989,7 +119992,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           };
         }
-        const latestAttempt = turns.findLatestAttemptForTask?.(identity4.meshId, identity4.taskId) ?? null;
+        const latestAttempt = turns.findLatestAttemptForTask?.(identity5.meshId, identity5.taskId) ?? null;
         if (latestAttempt) {
           if (latestAttempt.terminal) {
             return {
@@ -119997,7 +120000,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               result: {
                 success: false,
                 code: "stale_attempt",
-                error: `Latest attempt "${latestAttempt.attemptId}" for task "${identity4.taskId}" is already terminal (stale_attempt)`
+                error: `Latest attempt "${latestAttempt.attemptId}" for task "${identity5.taskId}" is already terminal (stale_attempt)`
               }
             };
           }
@@ -120012,15 +120015,15 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             };
           }
         }
-        const targetAttemptId = identity4.attemptId || explicitAttemptId;
+        const targetAttemptId = identity5.attemptId || explicitAttemptId;
         const credAttempt = targetAttemptId ? turns.getAttempt?.(targetAttemptId) ?? null : latestAttempt;
-        if (!credAttempt || credAttempt.meshId !== identity4.meshId || credAttempt.taskId !== identity4.taskId) {
+        if (!credAttempt || credAttempt.meshId !== identity5.meshId || credAttempt.taskId !== identity5.taskId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "unauthenticated",
-              error: `Worker credential has no active turn attempt in ledger for task "${identity4.taskId}" (unauthenticated)`
+              error: `Worker credential has no active turn attempt in ledger for task "${identity5.taskId}" (unauthenticated)`
             }
           };
         }
@@ -120084,7 +120087,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           };
         }
-        if (latestAttempt.attemptNo > 0 && !identity4.attemptId) {
+        if (latestAttempt.attemptNo > 0 && !identity5.attemptId) {
           return {
             ok: false,
             result: {
@@ -120096,8 +120099,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
         if (typeof rawBind === "string" && rawBind.trim().length > 0 && latestAttempt.attemptNo > 0) {
           const liveTok = findWorkerTaskTokenForSession(
-            identity4.meshId,
-            identity4.taskId,
+            identity5.meshId,
+            identity5.taskId,
             workerSessionId
           );
           if (liveTok && liveTok.attemptId !== latestAttempt.attemptId) {
@@ -121419,21 +121422,21 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           };
         }
         const meshStore = getMeshRuntimeStore(ctx);
-        const identity4 = resolveWorkerIdentity(meshStore, rawBind, rawToken);
+        const identity5 = resolveWorkerIdentity(meshStore, rawBind, rawToken);
         let hasLocalWorkerRow = false;
-        if (identity4 && trimString4(identity4.sessionId)) {
+        if (identity5 && trimString4(identity5.sessionId)) {
           try {
-            const workerSid = trimString4(identity4.sessionId);
+            const workerSid = trimString4(identity5.sessionId);
             hasLocalWorkerRow = Boolean(
-              meshStore.findAssignedBySession(identity4.meshId, workerSid) || meshStore.findQueueEntryById(identity4.meshId, identity4.taskId)
+              meshStore.findAssignedBySession(identity5.meshId, workerSid) || meshStore.findQueueEntryById(identity5.meshId, identity5.taskId)
             );
           } catch {
             hasLocalWorkerRow = false;
           }
         }
-        if (!identity4 || !trimString4(identity4.sessionId) || !hasLocalWorkerRow) {
+        if (!identity5 || !trimString4(identity5.sessionId) || !hasLocalWorkerRow) {
           const bindVerified = typeof rawBind === "string" && rawBind.trim().length > 0 ? verifyWorkerSessionBind(rawBind) : null;
-          const candidateSessionId = trimString4(directToken?.sessionId) || trimString4(bindVerified?.sessionId) || trimString4(identity4?.sessionId);
+          const candidateSessionId = trimString4(directToken?.sessionId) || trimString4(bindVerified?.sessionId) || trimString4(identity5?.sessionId);
           const liveStamp = candidateSessionId ? readWorkerAssignmentStamp(ctx, candidateSessionId) : null;
           const liveStampTaskId = trimString4(liveStamp?.taskId);
           const liveStampAttemptId = trimString4(liveStamp?.attemptId);
@@ -121590,7 +121593,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             };
           }
         }
-        if (!identity4 || !trimString4(identity4.sessionId)) {
+        if (!identity5 || !trimString4(identity5.sessionId)) {
           const unresolved = classifyUnresolvedWorkerCredential({ token: rawToken, bind: rawBind });
           return {
             ok: false,
@@ -121602,40 +121605,40 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
           };
         }
-        const workerSessionId = trimString4(identity4.sessionId);
-        if (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId) || rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, workerSessionId) || explicitMeshId && explicitMeshId !== identity4.meshId) {
+        const workerSessionId = trimString4(identity5.sessionId);
+        if (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId) || rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, workerSessionId) || explicitMeshId && explicitMeshId !== identity5.meshId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "artifact_session_mismatch",
-              error: `Worker credential belongs to session "${workerSessionId}" in mesh "${identity4.meshId}", not "${explicitSessionId || rawCallerSessionId}" (artifact_session_mismatch)`
+              error: `Worker credential belongs to session "${workerSessionId}" in mesh "${identity5.meshId}", not "${explicitSessionId || rawCallerSessionId}" (artifact_session_mismatch)`
             }
           };
         }
-        if (explicitTaskId2 && explicitTaskId2 !== identity4.taskId) {
+        if (explicitTaskId2 && explicitTaskId2 !== identity5.taskId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "task_mismatch",
-              error: `Worker credential belongs to task "${identity4.taskId}", not "${explicitTaskId2}" (task_mismatch)`
+              error: `Worker credential belongs to task "${identity5.taskId}", not "${explicitTaskId2}" (task_mismatch)`
             }
           };
         }
-        if (tokenAttemptId && identity4.attemptId && tokenAttemptId !== identity4.attemptId) {
+        if (tokenAttemptId && identity5.attemptId && tokenAttemptId !== identity5.attemptId) {
           return {
             ok: false,
             result: {
               success: false,
               code: "stale_attempt",
-              error: `Worker credential attempt "${tokenAttemptId}" does not match resolved attempt "${identity4.attemptId}" (stale_attempt)`
+              error: `Worker credential attempt "${tokenAttemptId}" does not match resolved attempt "${identity5.attemptId}" (stale_attempt)`
             }
           };
         }
         const fenceRes = verifyLocalWorkerQueueAndLedgerFence({
           meshStore,
-          identity: identity4,
+          identity: identity5,
           workerSessionId,
           explicitTaskId: explicitTaskId2,
           explicitAttemptId: explicitAttemptId || tokenAttemptId,
@@ -121645,9 +121648,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           return fenceRes;
         }
         const resolved2 = await resolveRegisteredSessionWorkspace(ctx, workerSessionId, {
-          meshId: identity4.meshId,
-          nodeId: identity4.nodeId,
-          taskId: identity4.taskId,
+          meshId: identity5.meshId,
+          nodeId: identity5.nodeId,
+          taskId: identity5.taskId,
           allowTrustedWorkerFallback: true,
           allowStoredArtifactWorkspaceFallback: mode !== "register",
           artifactId: requestedArtifactId
@@ -121692,18 +121695,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
         let workerMissionId = null;
         try {
-          const taskEntry = meshStore.findQueueEntryById(identity4.meshId, identity4.taskId);
+          const taskEntry = meshStore.findQueueEntryById(identity5.meshId, identity5.taskId);
           workerMissionId = trimString4(taskEntry?.missionId) || trimString4(taskEntry?.payload?.missionId) || null;
         } catch {
           workerMissionId = null;
         }
-        const boundLocalAttemptId = tokenAttemptId || explicitAttemptId || identity4.attemptId || fenceRes.attemptId;
+        const boundLocalAttemptId = tokenAttemptId || explicitAttemptId || identity5.attemptId || fenceRes.attemptId;
         return {
           ok: true,
           authority: {
             sessionId: workerSessionId,
-            taskId: identity4.taskId,
-            meshId: identity4.meshId,
+            taskId: identity5.taskId,
+            meshId: identity5.meshId,
             missionId: workerMissionId,
             producerRole: "worker",
             originDaemonId: selfDaemonId,
@@ -121712,11 +121715,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             status: resolved2.status,
             title: resolved2.title,
             remoteClaim: {
-              meshId: identity4.meshId,
+              meshId: identity5.meshId,
               sessionId: workerSessionId,
-              taskId: identity4.taskId,
+              taskId: identity5.taskId,
               ...boundLocalAttemptId ? { attemptId: boundLocalAttemptId } : {},
-              ...identity4.nodeId ? { nodeId: identity4.nodeId } : {}
+              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
             }
           }
         };
@@ -125741,7 +125744,7 @@ ${asText(streams.stderr)}
       const entry = policy[type2];
       return Array.isArray(entry?.actions) && entry.actions.includes(action2);
     }
-    var import_node_crypto51;
+    var import_node_crypto522;
     var import_node_os8;
     var import_node_path26;
     var refused2;
@@ -125750,7 +125753,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto51 = require("crypto");
+        import_node_crypto522 = require("crypto");
         import_node_os8 = require("os");
         import_node_path26 = require("path");
         init_managed_mcp_process();
@@ -125860,19 +125863,19 @@ ${asText(streams.stderr)}
             this.ports.activations.setDisabled(installed.module, installed.treeDigest, !enabled);
             return this.describe(type2);
           }
-          async invoke(identity4, input) {
-            if (!identity4?.sessionId || !identity4.meshId || !identity4.taskId) return refused2("worker_credential_required");
+          async invoke(identity5, input) {
+            if (!identity5?.sessionId || !identity5.meshId || !identity5.taskId) return refused2("worker_credential_required");
             if (input.target !== void 0 && input.target !== "local") return refused2("unsupported");
             const caller = {
-              meshId: identity4.meshId,
-              taskId: identity4.taskId,
-              sessionId: identity4.sessionId,
-              ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
-              ...identity4.nodeId ? { nodeId: identity4.nodeId } : {}
+              meshId: identity5.meshId,
+              taskId: identity5.taskId,
+              sessionId: identity5.sessionId,
+              ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+              ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
             };
             return this.execute(caller, input);
           }
-          async execute(identity4, input, approval) {
+          async execute(identity5, input, approval) {
             const installed = this.read(input.type);
             if (!installed) return refused2("driver_not_approved");
             if (approval && this.now() >= approval.expiresAt) return refused2("expired");
@@ -125883,7 +125886,7 @@ ${asText(streams.stderr)}
               return refused2("driver_not_approved");
             }
             if (!this.ports.activations.isReady(input.type, installed.treeDigest)) return refused2("driver_not_approved");
-            const policy = await this.ports.policy(identity4.meshId).catch(() => void 0);
+            const policy = await this.ports.policy(identity5.meshId).catch(() => void 0);
             const action2 = installed.module.actions.find((a) => a.id === input.action);
             if (!action2 || !actionAllowedByPolicy(policy, input.type, input.action)) return refused2("driver_not_allowed_for_mesh");
             if (action2.risk === "destructive" && !approval) {
@@ -125892,7 +125895,7 @@ ${asText(streams.stderr)}
                 action: input.action,
                 args: input.args ?? {},
                 activationDigest: installed.treeDigest,
-                requester: identity4,
+                requester: identity5,
                 ...input.resourceKey !== void 0 ? { resourceKey: input.resourceKey } : {}
               });
               return { ...refused2("owner_approval_required"), stagedId: staged.id, expiresAt: staged.expiresAt };
@@ -125903,15 +125906,15 @@ ${asText(streams.stderr)}
             const keys2 = resourceKeys.map((key5) => JSON.stringify([input.type, key5]));
             for (const key5 of keys2) {
               const lease = this.leases.get(key5);
-              if (lease && lease.expiresAt > this.now() && lease.sessionId !== identity4.sessionId) return refused2("lease_held");
+              if (lease && lease.expiresAt > this.now() && lease.sessionId !== identity5.sessionId) return refused2("lease_held");
             }
             const added = [];
             for (const key5 of keys2) {
-              if (this.leases.get(key5)?.sessionId !== identity4.sessionId) added.push(key5);
-              this.leases.set(key5, { sessionId: identity4.sessionId, expiresAt: this.now() + LEASE_MS });
+              if (this.leases.get(key5)?.sessionId !== identity5.sessionId) added.push(key5);
+              this.leases.set(key5, { sessionId: identity5.sessionId, expiresAt: this.now() + LEASE_MS });
             }
             const releaseNew = () => {
-              for (const key5 of added) if (this.leases.get(key5)?.sessionId === identity4.sessionId) this.leases.delete(key5);
+              for (const key5 of added) if (this.leases.get(key5)?.sessionId === identity5.sessionId) this.leases.delete(key5);
             };
             if (!await validateDriverArgs(installed.cwd, action2.inputSchema, input.args ?? {})) {
               releaseNew();
@@ -125922,7 +125925,7 @@ ${asText(streams.stderr)}
               releaseNew();
               return refused2("driver_not_approved");
             }
-            const latest = await this.ports.policy(identity4.meshId).catch(() => void 0);
+            const latest = await this.ports.policy(identity5.meshId).catch(() => void 0);
             if (!actionAllowedByPolicy(latest, input.type, input.action)) {
               releaseNew();
               return refused2("driver_not_allowed_for_mesh");
@@ -125931,7 +125934,7 @@ ${asText(streams.stderr)}
               releaseNew();
               return refused2("driver_not_approved");
             }
-            if (keys2.some((key5) => this.leases.get(key5)?.sessionId !== identity4.sessionId)) {
+            if (keys2.some((key5) => this.leases.get(key5)?.sessionId !== identity5.sessionId)) {
               releaseNew();
               return refused2("lease_held");
             }
@@ -125947,21 +125950,21 @@ ${asText(streams.stderr)}
             if (instance && instance.digest !== installed.treeDigest) {
               await instance.process?.close();
               if (this.instances.get(input.type) === instance) this.instances.delete(input.type);
-              return this.execute(identity4, input, approval);
+              return this.execute(identity5, input, approval);
             }
             if (!instance) {
               instance = { digest: installed.treeDigest, state: "approved" };
               this.instances.set(input.type, instance);
             }
             const record7 = {
-              invocationId: (0, import_node_crypto51.randomUUID)(),
+              invocationId: (0, import_node_crypto522.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
               resourceKeys,
               startedAt: this.now(),
               status: "running",
-              caller: approval ? { kind: "owner", source: approval.source, stagedRequestId: approval.id, resolvedAt: this.now() } : { kind: "worker", ...identity4 }
+              caller: approval ? { kind: "owner", source: approval.source, stagedRequestId: approval.id, resolvedAt: this.now() } : { kind: "worker", ...identity5 }
             };
             this.records.push(record7);
             if (this.records.length > 100) this.records.shift();
@@ -126004,9 +126007,9 @@ ${asText(streams.stderr)}
             const delivery = this.relay(r.requester, { ...result, stagedId: id4 });
             return { ...result, stagedId: id4, delivery };
           }
-          relay(identity4, result) {
+          relay(identity5, result) {
             try {
-              return this.ports.relay(identity4, result);
+              return this.ports.relay(identity5, result);
             } catch {
               return { ok: false, error: "mailbox_unavailable" };
             }
@@ -126026,7 +126029,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto522;
+    var import_node_crypto53;
     var import_node_fs29;
     var import_node_path27;
     var ID3;
@@ -126035,7 +126038,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto522 = require("crypto");
+        import_node_crypto53 = require("crypto");
         import_node_fs29 = require("fs");
         import_node_path27 = require("path");
         init_config();
@@ -126055,7 +126058,7 @@ ${asText(streams.stderr)}
             const record7 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto522.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto53.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -126124,7 +126127,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash4 = (0, import_node_crypto53.createHash)("sha256");
+      const hash4 = (0, import_node_crypto54.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs30.readFileSync)((0, import_node_path28.join)(dir, rel));
         hash4.update(`driver/${(0, import_node_path28.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -126147,13 +126150,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest5 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta2._sourceTrust }, treeDigest: digest5 };
     }
-    var import_node_crypto53;
+    var import_node_crypto54;
     var import_node_fs30;
     var import_node_path28;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto53 = require("crypto");
+        import_node_crypto54 = require("crypto");
         import_node_fs30 = require("fs");
         import_node_path28 = require("path");
         init_manifest();
@@ -126179,11 +126182,11 @@ ${asText(streams.stderr)}
           const mesh = (await ctx.getMeshForCommand(meshId))?.mesh;
           return mesh ? mesh.policy?.drivers ?? {} : void 0;
         },
-        relay: (identity4, result) => {
+        relay: (identity5, result) => {
           const text6 = JSON.stringify({ kind: "driver_action_result", ...result });
           return depositWorkerMailboxMessage({
-            meshId: identity4.meshId,
-            taskId: identity4.taskId,
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
             text: text6.length <= 2e3 ? text6 : JSON.stringify({
               kind: "driver_action_result",
               stagedId: result.stagedId,
@@ -126221,9 +126224,9 @@ ${asText(streams.stderr)}
           driver_list: async (ctx) => getDriverService(ctx).list(),
           driver_describe: async (ctx, args) => getDriverService(ctx).describe(String(args?.type ?? "")),
           driver_invoke: async (ctx, args) => {
-            const identity4 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
-            if (!identity4) return { success: false, code: "worker_credential_required" };
-            return getDriverService(ctx).invoke(identity4, {
+            const identity5 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+            if (!identity5) return { success: false, code: "worker_credential_required" };
+            return getDriverService(ctx).invoke(identity5, {
               type: String(args?.type ?? ""),
               action: String(args?.action ?? ""),
               args: args?.args,
@@ -127735,8 +127738,8 @@ ${asText(streams.stderr)}
       if (typeof value !== "string") return null;
       const match = /^(?:https:\/\/github\.com\/|git@github\.com:)([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/.exec(value);
       if (!match || match[2] === "." || match[2] === "..") return null;
-      const identity4 = `github.com/${match[1]}/${match[2]}`.toLowerCase();
-      return { identity: identity4, url: `https://${identity4}.git` };
+      const identity5 = `github.com/${match[1]}/${match[2]}`.toLowerCase();
+      return { identity: identity5, url: `https://${identity5}.git` };
     }
     async function git4(workspace, args) {
       const isClone = args[0] === "clone";
@@ -127847,7 +127850,7 @@ ${asText(streams.stderr)}
         throw new AttachFailure(auth ? "GIT_AUTH_REQUIRED" : "REPOSITORY_ACCESS_FAILED", "repository_access", "Configure Git access to this private GitHub repository on the selected daemon, then explicitly retry.");
       }
     }
-    async function managedCheckoutPath(meshId, identity4) {
+    async function managedCheckoutPath(meshId, identity5) {
       const config = await (0, import_promises11.realpath)(getConfigDir2());
       const root = (0, import_node_path32.join)(config, "remote-projects");
       try {
@@ -127856,16 +127859,16 @@ ${asText(streams.stderr)}
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises11.lstat)(root)).isSymbolicLink() || await (0, import_promises11.realpath)(root) !== (0, import_node_path32.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key5 = (0, import_node_crypto56.createHash)("sha256").update(`${meshId}\0${identity4}`).digest("hex").slice(0, 24);
+      const key5 = (0, import_node_crypto57.createHash)("sha256").update(`${meshId}\0${identity5}`).digest("hex").slice(0, 24);
       return (0, import_node_path32.join)(root, key5);
     }
-    async function verifyCheckout(workspace, identity4) {
+    async function verifyCheckout(workspace, identity5) {
       const info = await (0, import_promises11.lstat)(workspace);
       if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises11.realpath)(workspace) !== (0, import_node_path32.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
       const root = await git4(workspace, ["rev-parse", "--show-toplevel"]);
       if (await (0, import_promises11.realpath)(root) !== await (0, import_promises11.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
       const remote = githubRemote(await git4(workspace, ["remote", "get-url", "origin"]));
-      if (remote?.identity !== identity4) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
+      if (remote?.identity !== identity5) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
     }
     async function present(path126) {
       try {
@@ -127925,7 +127928,7 @@ ${asText(streams.stderr)}
         throw busy();
       }
       const ownerPath = (0, import_node_path32.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto56.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto57.randomUUID)() };
       try {
         await (0, import_promises11.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -127951,7 +127954,7 @@ ${asText(streams.stderr)}
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises11.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto56.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto57.randomUUID)() };
         await (0, import_promises11.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -127963,14 +127966,14 @@ ${asText(streams.stderr)}
         await (0, import_promises11.rm)(lockPath);
       });
     }
-    async function completedStaging(staging, meshId, identity4) {
+    async function completedStaging(staging, meshId, identity5) {
       const marker2 = `${staging}.complete`;
       const info = await (0, import_promises11.lstat)(marker2);
       if (!info.isFile() || info.isSymbolicLink()) throw recovery();
       const evidence = JSON.parse(await (0, import_promises11.readFile)(marker2, "utf-8"));
       const dir = await (0, import_promises11.lstat)(staging);
-      if (evidence.meshId !== meshId || evidence.identity !== identity4 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
-      await verifyCheckout(staging, identity4);
+      if (evidence.meshId !== meshId || evidence.identity !== identity5 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
+      await verifyCheckout(staging, identity5);
     }
     async function discardStaleMarker(marker2) {
       let info;
@@ -128073,7 +128076,7 @@ ${asText(streams.stderr)}
     }
     var import_node_child_process222;
     var import_node_util14;
-    var import_node_crypto56;
+    var import_node_crypto57;
     var import_promises11;
     var import_node_path32;
     var exec5;
@@ -128092,7 +128095,7 @@ ${asText(streams.stderr)}
         "use strict";
         import_node_child_process222 = require("child_process");
         import_node_util14 = require("util");
-        import_node_crypto56 = require("crypto");
+        import_node_crypto57 = require("crypto");
         import_promises11 = require("fs/promises");
         import_node_path32 = require("path");
         init_config();
@@ -128132,27 +128135,27 @@ ${asText(streams.stderr)}
     function selected(ctx, args) {
       if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str11(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
     }
-    function validGrant(grant, selfId, hostId, meshId, identity4, secret) {
+    function validGrant(grant, selfId, hostId, meshId, identity5, secret) {
       if (!grant || typeof grant !== "object" || typeof secret !== "string" || !secret.trim()) return false;
-      if (!daemonIdsEquivalent4(str11(grant.target), selfId) || !daemonIdsEquivalent4(str11(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity4) return false;
+      if (!daemonIdsEquivalent4(str11(grant.target), selfId) || !daemonIdsEquivalent4(str11(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity5) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str11(grant.sig))) return false;
-      const key5 = (0, import_node_crypto57.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto57.createHmac)("sha256", key5).update(`${grant.target}
+      const key5 = (0, import_node_crypto58.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto58.createHmac)("sha256", key5).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto57.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto58.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
-    function authorizeHost(ctx, args, identity4) {
+    function authorizeHost(ctx, args, identity5) {
       const hostId = str11(args?.hostDaemonId);
       if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(hostId) || daemonIdsEquivalent4(hostId, ctx.deps.statusInstanceId)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
       const old = readMeshHostRecord(args.meshId);
       if (old && !daemonIdsEquivalent4(old.hostDaemonId, hostId)) throw new AttachFailure("PROJECT_HOST_CONFLICT", "registration", "Preserve existing membership; resolve the project host conflict locally.");
       const cfg = loadConfig();
       if (args?.grant !== void 0) {
-        if (!validGrant(args.grant, str11(ctx.deps.statusInstanceId), hostId, args.meshId, identity4, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
+        if (!validGrant(args.grant, str11(ctx.deps.statusInstanceId), hostId, args.meshId, identity5, cfg.machineSecret)) throw new AttachFailure("HOST_NOT_AUTHORIZED", "target_access", "Authorize the project host on the selected daemon before attaching.");
         return old;
       }
       const allowed = (cfg.allowedRemoteProjectHosts ?? []).some((h) => daemonIdsEquivalent4(h, hostId)) || Boolean(old && daemonIdsEquivalent4(old.hostDaemonId, hostId));
@@ -128172,7 +128175,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto57;
+    var import_node_crypto58;
     var str11;
     var fail5;
     var attachRemoteProject;
@@ -128181,7 +128184,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto57 = require("crypto");
+        import_node_crypto58 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -130035,7 +130038,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest5 = (0, import_node_crypto58.createHash)("sha256").update(body).digest("hex");
+        const digest5 = (0, import_node_crypto59.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest5;
       } catch {
         return false;
@@ -130072,7 +130075,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text6 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest5 = (0, import_node_crypto58.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest5 = (0, import_node_crypto59.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest5 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -130377,7 +130380,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash4 = (text6) => (0, import_node_crypto58.createHash)("sha256").update(text6).digest("hex");
+      const hash4 = (text6) => (0, import_node_crypto59.createHash)("sha256").update(text6).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -130454,7 +130457,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto58;
+    var import_node_crypto59;
     var rec6;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -130466,7 +130469,7 @@ ${b.text}`).join("\n\n");
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
         init_chat_history_tail();
-        import_node_crypto58 = require("crypto");
+        import_node_crypto59 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -131066,8 +131069,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (url) urls.push({ remote: section2, url: url[1] });
       }
       const pick = urls.find((u) => u.remote === "origin") ?? urls[0];
-      const identity4 = pick ? normalizeRepoIdentity(pick.url) : "";
-      return identity4 || null;
+      const identity5 = pick ? normalizeRepoIdentity(pick.url) : "";
+      return identity5 || null;
     }
     function readLastCommitAt(gitDir) {
       const log = (0, import_path42.join)(gitDir, "logs", "HEAD");
@@ -132081,13 +132084,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const path126 = (0, import_path43.resolve)(expandPath3(raw));
           if (!(0, import_fs45.existsSync)(path126) || !(0, import_fs45.statSync)(path126).isDirectory()) return fail6("path_not_found", `not a directory: ${path126}`);
           const plan = await ports.execute("plan_mesh_onboarding", { workspace: path126, operation: "auto" });
-          const identity4 = str12(plan?.discovery?.repoIdentity);
+          const identity5 = str12(plan?.discovery?.repoIdentity);
           const meshes = ports.listMeshes();
-          const existing = identity4 ? existingProject(meshes, identity4) : void 0;
+          const existing = identity5 ? existingProject(meshes, identity5) : void 0;
           if (existing || !plan?.success && PLAN_EXISTS_CODES.has(str12(plan?.code))) {
             const mesh = existing ?? meshes.find((m) => (m.nodes ?? []).some((n) => (0, import_path43.resolve)(n.workspace) === path126));
             const slug2 = mesh ? projectSlugs(meshes).get(mesh.id) ?? mesh.id : "";
-            return fail6("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity4 || null });
+            return fail6("project_exists", "project_exists", { ...mesh ? { project: slug2, meshId: mesh.id, name: mesh.name } : {}, repoIdentity: identity5 || null });
           }
           if (!plan?.success) return fail6(str12(plan?.code) || "onboarding_plan_failed", str12(plan?.error) || "onboarding plan failed", { action: plan?.action });
           const steps = Array.isArray(plan.plan?.steps) ? plan.plan.steps : [];
@@ -132096,7 +132099,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (plan.plan?.kind !== "create_mesh_and_onboard" || !createStep || !addStep2) {
             return fail6("onboarding_plan_unexpected", `unexpected onboarding plan: ${str12(plan.plan?.kind) || "none"}`);
           }
-          const name = str12(args.name) || projectSlugBase(identity4) || str12(createStep.args?.name);
+          const name = str12(args.name) || projectSlugBase(identity5) || str12(createStep.args?.name);
           const created = await ports.execute("create_mesh", { ...createStep.args, name, workspace: path126 });
           const meshId = str12(created?.mesh?.id);
           if (!created?.success || !meshId) return fail6("project_create_failed", str12(created?.error) || "create_mesh failed");
@@ -132111,11 +132114,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             await ports.execute("delete_mesh", { meshId }).catch(() => void 0);
             return fail6("project_add_node_failed", str12(node?.error) || "add_mesh_node failed", { rolledBack: true });
           }
-          const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity4) || meshId;
+          const slug = projectSlugs(ports.listMeshes()).get(meshId) || projectSlugBase(identity5) || meshId;
           return wrap(slug, meshId, {
             created: true,
             name,
-            repoIdentity: identity4,
+            repoIdentity: identity5,
             workspace: str12(node.node?.workspace) || path126,
             nodeId: str12(node.node?.id) || null,
             ...Array.isArray(plan.warnings) && plan.warnings.length ? { warnings: plan.warnings } : {}
@@ -134380,9 +134383,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
         const anchor = () => opts.db.prepare("SELECT attempt_id,generation,accepted_at FROM turn_attempts WHERE session_id=? AND scope='plain' ORDER BY accepted_at,attempt_id").all(sessionId);
-        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto59.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const scope = JSON.stringify([meshId, cliType, (0, import_node_crypto60.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now, { checkpoints, scope });
-        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto59.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
+        const currentScope = JSON.stringify([meshId, cliType, (0, import_node_crypto60.createHash)("sha256").update(JSON.stringify(anchor())).digest("hex")]);
         if (opts.isAuthorized?.(meshId, sessionId) === false || scope !== currentScope) {
           checkpoints.reset(sessionId);
           return { sessionId, skipped: true };
@@ -134428,7 +134431,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             meshId,
             messageId,
             ...attempt && window.complete && !open ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
-            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto59.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
+            ...proof ? { nativeTurnProof: { ...proof, sessionId, contentHash: (0, import_node_crypto60.createHash)("sha256").update(bubble.text.replace(/\r\n?/g, "\n").trim()).digest("hex"), generation: null } } : {},
             messageAt: bubble.at,
             chars: Array.from(bubble.text).length,
             text: bubble.text,
@@ -134441,7 +134444,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (failed && !successful) throw new Error("coordinator native audit unavailable");
       return complete ? out : Object.assign(out, { complete: false });
     }
-    var import_node_crypto59;
+    var import_node_crypto60;
     var TERMINAL2;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
@@ -134449,7 +134452,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
         init_native_scan_checkpoint();
-        import_node_crypto59 = require("crypto");
+        import_node_crypto60 = require("crypto");
         init_assistant_native_window();
         init_report_continuation();
         init_attempt_report_recovery();
@@ -134467,15 +134470,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const target4 = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target4)}.`;
     }
-    var import_node_crypto60;
+    var import_node_crypto61;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto60 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto60.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto61 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto61.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -134520,13 +134523,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 if (previous) old = JSON.parse(previous);
               } catch {
               }
-              const identity4 = page.reportId ?? id4;
-              if (old.reportId !== identity4) old = { end: 0, reportId: identity4 };
+              const identity5 = page.reportId ?? id4;
+              if (old.reportId !== identity5) old = { end: 0, reportId: identity5 };
               const offset = page.offset ?? 0;
               if (!Number.isSafeInteger(offset) || offset < 0 || offset > old.end) continue;
               const end = Math.max(old.end, Math.min(page.totalChars, Number.isSafeInteger(page.nextOffset) ? page.nextOffset : offset + page.text.length));
               const full = end === page.totalChars && page.complete === true;
-              this.store.writeReceipt(key5, full ? "full" : JSON.stringify({ end, reportId: identity4 }), this.now(), "read");
+              this.store.writeReceipt(key5, full ? "full" : JSON.stringify({ end, reportId: identity5 }), this.now(), "read");
             }
           }
         };
@@ -134803,7 +134806,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         };
       }
     });
-    var import_node_crypto61;
+    var import_node_crypto62;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -134822,7 +134825,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_assistant_relay_types();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto61 = require("crypto");
+        import_node_crypto62 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -134834,7 +134837,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text6) => (0, import_node_crypto61.createHash)("sha256").update(text6.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text6) => (0, import_node_crypto62.createHash)("sha256").update(text6.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text6) => JSON.stringify([sessionId, attemptId, at, replyHash(text6)]);
         RELAY_THREAD_STALE_CLOSE_MS = 7 * 24 * 60 * 6e4;
         AssistantRelay = class {
@@ -142389,7 +142392,7 @@ ${tail}` : ""
         };
       }
     });
-    var import_node_crypto69;
+    var import_node_crypto70;
     var import_node_perf_hooks3;
     var import_session_host_core30;
     var hash3;
@@ -142397,11 +142400,11 @@ ${tail}` : ""
     var init_operator_recovery = __esm2({
       "src/mesh/turn-ledger/operator-recovery.ts"() {
         "use strict";
-        import_node_crypto69 = require("crypto");
+        import_node_crypto70 = require("crypto");
         import_node_perf_hooks3 = require("perf_hooks");
         init_worker_bridge_transaction();
         import_session_host_core30 = require_dist();
-        hash3 = (s2) => (0, import_node_crypto69.createHash)("sha256").update(s2).digest("hex");
+        hash3 = (s2) => (0, import_node_crypto70.createHash)("sha256").update(s2).digest("hex");
         OperatorRecoveryAnchors = class {
           constructor(deps) {
             this.deps = deps;
@@ -142461,7 +142464,7 @@ ${tail}` : ""
           }
           async recover(grant, peer) {
             const assertOwner2 = this.deps.owner.reserve(grant, "anchor_recover");
-            const nonce = (0, import_node_crypto69.randomBytes)(32).toString("hex");
+            const nonce = (0, import_node_crypto70.randomBytes)(32).toString("hex");
             const nonceHash = hash3(nonce);
             const p = {
               deadline: this.now() + 3e4,
@@ -142557,10 +142560,10 @@ ${tail}` : ""
         if (!before.isFile() || before.nlink !== 1n || before.ino <= 0n || before.birthtimeNs <= 0n || before.ctimeNs <= 0n) {
           throw new Error("recovery_owner_file_identity_unproved");
         }
-        const identity4 = (s2) => [s2.dev, s2.ino, s2.birthtimeNs, s2.ctimeNs, s2.mtimeNs, s2.size].map((n) => n.toString()).join(":");
+        const identity5 = (s2) => [s2.dev, s2.ino, s2.birthtimeNs, s2.ctimeNs, s2.mtimeNs, s2.size].map((n) => n.toString()).join(":");
         ownerBytes = (0, import_node_fs42.readFileSync)(fd, "utf8");
-        ownerFileIdentity = identity4((0, import_node_fs42.fstatSync)(fd, { bigint: true }));
-        if (ownerFileIdentity !== identity4(before)) throw new Error("recovery_owner_file_changed");
+        ownerFileIdentity = identity5((0, import_node_fs42.fstatSync)(fd, { bigint: true }));
+        if (ownerFileIdentity !== identity5(before)) throw new Error("recovery_owner_file_changed");
       } finally {
         (0, import_node_fs42.closeSync)(fd);
       }
@@ -142577,7 +142580,7 @@ ${tail}` : ""
       const holds = db2.prepare("SELECT * FROM turn_holds WHERE attempt_id=? ORDER BY hold_id").all(a.attempt_id);
       const payload = JSON.parse(q2.payload);
       if (payload.id !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.taskId || payload.dispatchNonce !== import_session_host_core31.OPERATOR_RECOVERY_TARGET.dispatchNonce || payload.assignedNodeId !== q2.assigned_node_id || payload.assignedSessionId !== q2.assigned_session_id || payload.status !== q2.status) throw new Error("recovery_queue_payload_mismatch");
-      const hash4 = (s2) => (0, import_node_crypto70.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
+      const hash4 = (s2) => (0, import_node_crypto71.createHash)("sha256").update(JSON.stringify(s2)).digest("hex");
       return {
         ownerDaemonId: a.owner_daemon_id,
         meshId: a.mesh_id,
@@ -142603,14 +142606,14 @@ ${tail}` : ""
       };
     }
     var import_node_fs42;
-    var import_node_crypto70;
+    var import_node_crypto71;
     var import_session_host_core31;
     var init_operator_recovery_store = __esm2({
       "src/mesh/turn-ledger/operator-recovery-store.ts"() {
         "use strict";
         import_node_fs42 = require("fs");
         init_mesh_config_store();
-        import_node_crypto70 = require("crypto");
+        import_node_crypto71 = require("crypto");
         import_session_host_core31 = require_dist();
       }
     });
@@ -144187,7 +144190,7 @@ ${tail}` : ""
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto71.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto72.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db2.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db2.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -144197,7 +144200,7 @@ ${tail}` : ""
       return {
         begin,
         async handling(run4) {
-          const id4 = (0, import_node_crypto71.randomUUID)();
+          const id4 = (0, import_node_crypto72.randomUUID)();
           active.add(id4);
           try {
             return await run4();
@@ -144223,11 +144226,11 @@ ${tail}` : ""
         }
       };
     }
-    var import_node_crypto71;
+    var import_node_crypto72;
     var init_notice_submit_inventory = __esm2({
       "src/mesh/turn-ledger/notice-submit-inventory.ts"() {
         "use strict";
-        import_node_crypto71 = require("crypto");
+        import_node_crypto72 = require("crypto");
         init_cooperative_gate();
       }
     });
@@ -152335,15 +152338,15 @@ CONSUMED:${nonceHash}`);
           claims.set(claimName, claim);
         }
         let native = "unknown";
-        const identity4 = r.helper ?? claims.get(claimName)?.helper ?? r.owner;
+        const identity5 = r.helper ?? claims.get(claimName)?.helper ?? r.owner;
         try {
-          const birth = (0, import_node_child_process13.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity4.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
-          native = birth === identity4.birth ? "same_incarnation" : birth ? "identity_drift" : "unknown";
+          const birth = (0, import_node_child_process13.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(identity5.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
+          native = birth === identity5.birth ? "same_incarnation" : birth ? "identity_drift" : "unknown";
         } catch (e) {
           if (e.status === 1 && String(e.stdout ?? "").trim() === "" && String(e.stderr ?? "").trim() === "") native = "absent";
         }
         try {
-          for (const [file, expected] of [[identity4.nodePath, identity4.nodeSha256], [identity4.entryPath, identity4.entrySha256]]) {
+          for (const [file, expected] of [[identity5.nodePath, identity5.nodeSha256], [identity5.entryPath, identity5.entrySha256]]) {
             if (!pins.has(file)) pins.set(file, sha4(fs37.readFileSync(fs37.realpathSync(file))));
             if (pins.get(file) !== expected) native = "identity_drift";
           }
@@ -153463,15 +153466,15 @@ exec "${portableNode}" "${cliEntry}" "$@"
           const pid = Number.parseInt(fs41.readFileSync(pidFile, "utf8").trim(), 10);
           if (Number.isFinite(pid) && pid !== process.pid) {
             outcome.pid = pid;
-            const identity4 = classifySessionHostPid(pid);
-            outcome.identity = identity4;
-            if (identity4 === "unrelated") {
+            const identity5 = classifySessionHostPid(pid);
+            outcome.identity = identity5;
+            if (identity5 === "unrelated") {
               appendUpgradeLog(
                 `Session-host pidfile names pid ${pid}, which is positively identified as an unrelated process; treating the pidfile as stale and not killing it.`,
                 configDir
               );
             } else {
-              if (identity4 === "unknown") {
+              if (identity5 === "unknown") {
                 appendUpgradeLog(
                   `Could not read the command line of session-host pid ${pid} (process-inspection unavailable). The pidfile is this daemon's own record, so the pid is treated as ours and stopped \u2014 a stale host surviving an upgrade breaks every create_session with a conpty.node load failure.`,
                   configDir
@@ -155375,7 +155378,7 @@ ${marker2}`,
             providerSessionId: r.providerSessionId || void 0,
             maintenanceObservation: { observedAt: Date.now(), epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, meshId: r.coordinatorMeshId || r.meshId || void 0, nodeId: r.nodeId || void 0, daemonId: state2.daemonId, coordinator: !!r.coordinatorMeshId }
           });
-          const bindings = inventory.map((r) => {
+          const bindings2 = inventory.map((r) => {
             const binding = registry.get(r.runtimeId);
             if (!binding?.maintenanceObservation) throw new Error("maintenance_observation_binding_missing");
             return {
@@ -155400,7 +155403,7 @@ ${marker2}`,
             observedAt: Date.now(),
             sessions: inventory,
             coordinators,
-            bindings
+            bindings: bindings2
           };
           const receipt = digest2(proof);
           observed.set(host, { epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, inventoryDigest: digest2(inventory), receipt, observation: { ...proof, receipt }, sessions: inventory });
@@ -155547,20 +155550,20 @@ ${marker2}`,
     var waiting = /* @__PURE__ */ new Map();
     function mcpCollectionPoll(request) {
       const auth = authorizeMaintenanceCollection(request, "mcp_poll"), body = request.body;
-      const identity4 = validateMcpIdentity(body?.identity), dir = mcpMarkerDirectory(auth.root);
-      const file = path61.join(dir, `${key3(identity4)}.json`), s2 = fs47.lstatSync(file);
+      const identity5 = validateMcpIdentity(body?.identity), dir = mcpMarkerDirectory(auth.root);
+      const file = path61.join(dir, `${key3(identity5)}.json`), s2 = fs47.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.mode & 63 || s2.uid !== process.getuid?.()) throw new Error("maintenance_mcp_marker_untrusted");
       const marker2 = JSON.parse(fs47.readFileSync(file, "utf8"));
-      if (marker2.planDigest !== auth.state.planDigest || marker2.daemonId !== auth.state.daemonId || sha5(validateMcpIdentity(marker2.identity)) !== sha5(identity4)) throw new Error("maintenance_mcp_marker_changed");
-      const w = waiting.get(`${auth.root}:${key3(identity4)}`);
+      if (marker2.planDigest !== auth.state.planDigest || marker2.daemonId !== auth.state.daemonId || sha5(validateMcpIdentity(marker2.identity)) !== sha5(identity5)) throw new Error("maintenance_mcp_marker_changed");
+      const w = waiting.get(`${auth.root}:${key3(identity5)}`);
       return auth.reply({ challenge: w && w.epoch === auth.state.epoch ? { nonce: w.nonce, epoch: w.epoch } : null });
     }
     function mcpCollectionReply(request) {
-      const auth = authorizeMaintenanceCollection(request, "mcp_reply"), body = request.body, identity4 = validateMcpIdentity(body?.identity);
-      const name = `${auth.root}:${key3(identity4)}`, w = waiting.get(name);
-      if (!w || w.epoch !== auth.state.epoch || body.challenge !== w.nonce || sha5(identity4) !== sha5(w.identity)) throw new Error("maintenance_mcp_reply_stale");
+      const auth = authorizeMaintenanceCollection(request, "mcp_reply"), body = request.body, identity5 = validateMcpIdentity(body?.identity);
+      const name = `${auth.root}:${key3(identity5)}`, w = waiting.get(name);
+      if (!w || w.epoch !== auth.state.epoch || body.challenge !== w.nonce || sha5(identity5) !== sha5(w.identity)) throw new Error("maintenance_mcp_reply_stale");
       const v = body.inventory;
-      if (!v || v.schema !== 1 || v.pid !== identity4.pid || !Array.isArray(v.entries) || !Array.isArray(v.acknowledgments) || !Array.isArray(v.temporaryFiles) || !Array.isArray(v.unknownFiles) || ![v.activeSubmits, v.pendingNoticeCount, v.quarantinedFileCount].every((n) => Number.isSafeInteger(n) && n >= 0) || !["durable", "directoryReadable", "diskSetMatchesMemory", "memoryFallback", "flushing", "acknowledgmentsDurable"].every((k) => typeof v[k] === "boolean")) throw new Error("maintenance_mcp_inventory_invalid");
+      if (!v || v.schema !== 1 || v.pid !== identity5.pid || !Array.isArray(v.entries) || !Array.isArray(v.acknowledgments) || !Array.isArray(v.temporaryFiles) || !Array.isArray(v.unknownFiles) || ![v.activeSubmits, v.pendingNoticeCount, v.quarantinedFileCount].every((n) => Number.isSafeInteger(n) && n >= 0) || !["durable", "directoryReadable", "diskSetMatchesMemory", "memoryFallback", "flushing", "acknowledgmentsDurable"].every((k) => typeof v[k] === "boolean")) throw new Error("maintenance_mcp_inventory_invalid");
       const entries2 = v.entries.map((e) => {
         if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(e.id) || !["report", "progress"].includes(e.kind) || !/^[a-f0-9]{64}$/.test(e.payloadHash) || !Number.isSafeInteger(e.attempts) || e.attempts < 0) throw new Error("maintenance_mcp_inventory_invalid");
         return { id: e.id, kind: e.kind, payloadHash: e.payloadHash, attempts: e.attempts, quarantined: !!e.quarantined };
@@ -155572,7 +155575,7 @@ ${marker2}`,
       });
       const inventory = {
         schema: 1,
-        pid: identity4.pid,
+        pid: identity5.pid,
         entries: entries2,
         acknowledgments,
         durable: v.durable,
@@ -155590,7 +155593,7 @@ ${marker2}`,
       const reply = auth.reply({ acknowledgedChallenge: w.nonce });
       clearTimeout(w.timer);
       waiting.delete(name);
-      w.resolve({ identity: identity4, observed: true, observedAt: Date.now(), challenge: w.nonce, inventory });
+      w.resolve({ identity: identity5, observed: true, observedAt: Date.now(), challenge: w.nonce, inventory });
       return reply;
     }
     async function collectMcpInventories(root, state2, deadlineMs = 2e3) {
@@ -155608,20 +155611,20 @@ ${marker2}`,
         const file = path61.join(dir, name), s2 = fs47.lstatSync(file);
         if (!s2.isFile() || s2.isSymbolicLink() || s2.mode & 63 || s2.size > 16384 || s2.uid !== process.getuid?.()) throw new Error("maintenance_mcp_registry_untrusted");
         const r = JSON.parse(fs47.readFileSync(file, "utf8"));
-        const identity4 = validateMcpIdentity(r.identity);
-        if (name !== `${key3(identity4)}.json` || r.planDigest !== state2.planDigest || r.daemonId !== state2.daemonId) throw new Error("maintenance_mcp_registry_scope_changed");
-        return identity4;
+        const identity5 = validateMcpIdentity(r.identity);
+        if (name !== `${key3(identity5)}.json` || r.planDigest !== state2.planDigest || r.daemonId !== state2.daemonId) throw new Error("maintenance_mcp_registry_scope_changed");
+        return identity5;
       });
       const records = readRecords3();
       if (new Set(records.map((r) => r.pid)).size !== records.length) throw new Error("maintenance_mcp_pid_incarnation_ambiguous");
-      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity4) => new Promise((resolve69) => {
-        const name = `${root}:${key3(identity4)}`;
+      const membershipDigest = sha5(records), members = await Promise.all(records.map((identity5) => new Promise((resolve69) => {
+        const name = `${root}:${key3(identity5)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
         const nonce = (0, import_node_crypto29.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
-          resolve69({ identity: identity4, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
+          resolve69({ identity: identity5, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
-        waiting.set(name, { identity: identity4, nonce, epoch: state2.epoch, resolve: resolve69, timer });
+        waiting.set(name, { identity: identity5, nonce, epoch: state2.epoch, resolve: resolve69, timer });
       })));
       if (sha5(fs47.readdirSync(dir).sort()) !== sha5(names) || sha5(readRecords3()) !== membershipDigest) throw new Error("maintenance_mcp_membership_changed");
       return { observed: members.every((m) => m.observed), reason: members.some((m) => !m.observed) ? "mcp_incarnation_unreachable" : void 0, membershipDigest, members, nativeCensusRequired: true };
@@ -155632,9 +155635,9 @@ ${marker2}`,
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
     var digest3 = (v) => (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
-      const identity4 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
+      const identity5 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
-      const set2 = (name, source2, inventory, pending, reason) => channels[name] = { observed: !reason, source: source2, inventoryDigest: digest3(inventory), pending, ...reason ? { reason } : {}, identity: identity4 };
+      const set2 = (name, source2, inventory, pending, reason) => channels[name] = { observed: !reason, source: source2, inventoryDigest: digest3(inventory), pending, ...reason ? { reason } : {}, identity: identity5 };
       const read2 = (names, source2, fn) => {
         try {
           fn();
@@ -155791,7 +155794,7 @@ ${marker2}`,
         receiptsObserved = false;
       }
       const stableChannels = Object.fromEntries(Object.entries(channels).map(([name, { identity: _identity, ...value }]) => [name, value]));
-      return { identity: identity4, channels, revision, receipts, receiptsObserved, digest: digest3({ channels: stableChannels, receipts, receiptsObserved }) };
+      return { identity: identity5, channels, revision, receipts, receiptsObserved, digest: digest3({ channels: stableChannels, receipts, receiptsObserved }) };
     }
     async function collectTargetDrain(components, state2, root, nonce, deadlineMs = 2e3) {
       const before = census(components, state2, root, nonce);
@@ -159765,19 +159768,35 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     init_message_source_address();
     var import_node_crypto33 = require("crypto");
-    function createCodexTurnProvenance(nativeSessionId) {
+    function createCodexTurnProvenance(nativeSessionId, acknowledgedInputDigest) {
       let current4;
       let last;
-      return (payload, at, marker2) => {
+      const observe = (payload, at, marker2) => {
         const id4 = marker2?.turnId ?? (typeof payload.turn_id === "string" ? payload.turn_id.trim() : "");
         if (payload.type === "task_started") {
           if (last) last.supersededAt = at;
           current4 = { id: id4, startedAt: at };
         }
-        if (payload.type === "user_message" && current4 && typeof payload.message === "string" && at >= current4.startedAt) {
-          if (current4.inputAt) current4.startedAt = 0;
-          current4.inputAt = at;
-          current4.inputDigest = (0, import_node_crypto33.createHash)("sha256").update(payload.message.trim()).digest("hex");
+        if (payload.type === "message" && payload.role === "user" && acknowledgedInputDigest && current4) {
+          const meta2 = payload.internal_chat_message_metadata_passthrough;
+          if (meta2?.turn_id !== current4.id) return void 0;
+          const blocks = Array.isArray(payload.content) ? payload.content : [];
+          const text6 = typeof payload.content === "string" ? payload.content : blocks.filter((b) => b?.type === "input_text" && typeof b.text === "string").map((b) => b.text).join("\n");
+          if (/^<(environment_context|context)>[\s\S]*<\/\1>\s*$/.test(text6.trim())) return void 0;
+          const digest5 = (0, import_node_crypto33.createHash)("sha256").update(text6.trim()).digest("hex");
+          if (digest5 === acknowledgedInputDigest) {
+            payload = { type: "user_message", message: text6, turn_id: current4.id };
+          } else if (current4.inputAt) {
+            current4.startedAt = 0;
+          }
+        }
+        if (payload.type === "user_message" && current4 && (!id4 || id4 === current4.id) && typeof payload.message === "string" && at >= current4.startedAt) {
+          const digest5 = (0, import_node_crypto33.createHash)("sha256").update(payload.message.trim()).digest("hex");
+          if (current4.inputDigest && current4.inputDigest !== digest5) current4.startedAt = 0;
+          if (!current4.inputAt && (!acknowledgedInputDigest || digest5 === acknowledgedInputDigest)) {
+            current4.inputAt = at;
+            current4.inputDigest = digest5;
+          }
         }
         if (marker2 && current4 && (id4 && current4.id && id4 !== current4.id || !id4 && current4.id)) return { ...marker2, startedAt: 0 };
         if (payload.type === "error" && current4 && at < current4.startedAt) {
@@ -159786,7 +159805,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         const error = payload.error;
         if ((payload.type === "error" || marker2) && error && typeof error === "object") {
-          const code = error.type;
+          const code = error.codex_error_info ?? error.type;
           const failure7 = code === "usage_limit_exceeded" ? "usage_limit_exceeded" : code === "server_overloaded" ? "server_overloaded" : code === "auth_failed" || code === "authentication_error" || code === "unauthorized" ? "auth_failed" : "provider_error";
           if (current4 && (!id4 || id4 === current4.id)) {
             current4.failure = failure7;
@@ -159805,8 +159824,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           ...current4?.failure && (!marker2.summary || payload.error) ? { outcome: "failed", providerFailure: current4.failure, errorAt: current4.errorAt } : {}
         };
         last = result;
+        current4 = void 0;
         return result;
       };
+      return Object.assign(observe, { openTurn: () => current4 && current4.id && current4.startedAt > 0 && current4.inputAt && current4.inputDigest && !current4.failure ? {
+        nativeSessionId,
+        turnId: current4.id,
+        startedAt: current4.startedAt,
+        inputAt: current4.inputAt,
+        inputDigest: current4.inputDigest
+      } : void 0 });
     }
     var fs59 = __toESM2(require("fs"));
     var path71 = __toESM2(require("path"));
@@ -160213,6 +160240,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var path70 = __toESM2(require("path"));
     var fs56 = __toESM2(require("fs"));
     init_logger();
+    var import_node_crypto35 = require("crypto");
     var MAX_PROMPTS_PER_SESSION = 20;
     var MIN_SNIPPET_CHARS = 8;
     var MIN_SHORT_INPUT_CHARS = 2;
@@ -160223,15 +160251,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function normalizeInput(text6) {
       return text6.replace(/\s+/g, " ").trim();
     }
-    function hasExclusiveSentInput(instanceId, userMessages) {
+    function hasExclusiveSentInput(instanceId, userMessages, wholeInput = false, acknowledgedInputDigest) {
       const id4 = instanceId.trim();
       if (!inputsByInstance.has(id4) && !shortInputsByInstance.has(id4)) return false;
-      const users = userMessages.map(normalizeInput);
+      const users = userMessages.filter((user) => !acknowledgedInputDigest || (0, import_node_crypto35.createHash)("sha256").update(user.trim()).digest("hex") === acknowledgedInputDigest).map(normalizeInput);
       let matchedOwner = "";
       for (const [sender, inputs] of inputsByInstance) {
         for (const input of inputs) {
-          if (!users.some((user) => user.includes(input))) continue;
-          const shared2 = [...inputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.some((other) => other.includes(input)));
+          if (!users.some((user) => wholeInput ? user === input : user.includes(input))) continue;
+          const shared2 = [...inputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.some((other) => wholeInput ? other === input : other.includes(input)));
           if (shared2) continue;
           if (matchedOwner && matchedOwner !== sender) return false;
           matchedOwner = sender;
@@ -161716,13 +161744,16 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const usageMap = pickUsage?.(rec7);
         const messages2 = shape ? projectMessages(rec7, shape.map, i, i + 1, 1, "__projection__") : [];
         let terminal;
-        if (input.agentType === "codex-cli" && rec7?.type === "event_msg") {
+        if (input.agentType === "codex-cli" && (rec7?.type === "event_msg" || rec7?.type === "response_item" && rec7?.payload?.role === "user")) {
           const payload = rec7?.payload;
           terminal = { type: rec7.type, timestamp: rec7.timestamp, payload: payload && {
             type: payload.type,
             turn_id: payload.turn_id,
+            role: payload.role,
+            content: payload.content,
+            internal_chat_message_metadata_passthrough: payload.internal_chat_message_metadata_passthrough,
             message: typeof payload.message === "string" ? payload.message : void 0,
-            error: payload.error && typeof payload.error === "object" ? { type: payload.error.type } : payload.error,
+            error: payload.error && typeof payload.error === "object" ? { type: payload.error.type, codex_error_info: payload.error.codex_error_info } : payload.error,
             last_agent_message: flattenJsonlText(payload.last_agent_message)
           } };
         } else if (input.agentType === "kimi" && rec7?.type === "turn.ended") {
@@ -161754,7 +161785,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (m) providerSessionId = m[1];
       }
       if (requested && providerSessionId && !sameSessionUuid(providerSessionId, requested)) return null;
-      const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]);
+      const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]) + "\0" + (input.acknowledgedInputDigest || "");
       let byContext = jsonlProjections.get(lines);
       let projection = byContext?.get(projectionContext);
       if (!projection) {
@@ -161787,10 +161818,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
         if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
-        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec7) => rec7.terminal), providerSessionId);
+        const lifecycle = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec7) => rec7.terminal), providerSessionId, input.acknowledgedInputDigest);
+        const turnTerminalMarkers2 = lifecycle.markers;
         projection = {
           messages: markNativeHistorySnapshot(messages2),
           turnTerminalMarkers: turnTerminalMarkers2,
+          codexOpenTurn: lifecycle.openTurn,
           ...usageRecords.length ? { usage: foldUsageRecords(usageRecords, {
             providerSessionId: providerSessionId || "",
             agent: typeof input.agentType === "string" ? input.agentType : "unknown"
@@ -161799,7 +161832,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (!byContext) jsonlProjections.set(lines, byContext = /* @__PURE__ */ new Map());
         byContext.set(projectionContext, projection);
       }
-      const { messages, usage, turnTerminalMarkers } = projection;
+      const { messages, usage, turnTerminalMarkers, codexOpenTurn } = projection;
       if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
       const workspaceHint = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : "";
       const workspaceMatches = !workspaceHint || !transcriptWorkspace || claimKeyForPath(transcriptWorkspace) === claimKeyForPath(workspaceHint);
@@ -161827,16 +161860,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         // A timestamp/mtime pick is a candidate, not runtime ownership proof.
         ownerConfirmed: input.agentType === "codex-cli" ? codexExactConfirmed || codexPromptConfirmed : outcome?.ownerConfirmed,
         ...usage ? { usage } : {},
-        ...turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}
+        ...turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {},
+        codexOpenTurn
       };
     }
-    function extractBuiltinTurnTerminalMarkers(agentType, lines, nativeSessionId) {
-      if (agentType === "kimi") return extractKimiTurnTerminalMarkers(lines);
-      if (agentType !== "codex-cli") return [];
+    function extractBuiltinTurnTerminalMarkers(agentType, lines, nativeSessionId, acknowledgedInputDigest) {
+      if (agentType === "kimi") return { markers: extractKimiTurnTerminalMarkers(lines) };
+      if (agentType !== "codex-cli") return { markers: [] };
       const markers = [];
-      const provenance = createCodexTurnProvenance(nativeSessionId);
+      const provenance = createCodexTurnProvenance(nativeSessionId, acknowledgedInputDigest);
       for (const rec7 of lines) {
-        if (String(rec7?.type ?? "") !== "event_msg") continue;
+        if (!["event_msg", "response_item"].includes(String(rec7?.type ?? ""))) continue;
         const payload = rec7?.payload;
         if (!payload || typeof payload !== "object") continue;
         const payloadType = String(payload.type ?? "").trim();
@@ -161858,7 +161892,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         });
         if (marker2) markers.push(marker2);
       }
-      return markers;
+      return { markers, openTurn: provenance.openTurn() };
     }
     function extractKimiTurnTerminalMarkers(lines) {
       const markers = [];
@@ -162741,7 +162775,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return null;
       }
     }
-    function parseSessionFile(filePath2, sessionId, workspaceFallback, completionSignal = CODEX_DEFAULT_COMPLETION_SIGNAL, sourceMtimeMs = 0) {
+    function parseSessionFile(filePath2, sessionId, workspaceFallback, completionSignal = CODEX_DEFAULT_COMPLETION_SIGNAL, sourceMtimeMs = 0, acknowledgedInputDigest) {
       let raw;
       try {
         raw = fs63.readFileSync(filePath2, "utf-8");
@@ -162752,7 +162786,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const records = [];
       const usageRecords = [];
       const turnTerminalMarkers = [];
-      const provenance = createCodexTurnProvenance(sessionId);
+      const provenance = createCodexTurnProvenance(sessionId, acknowledgedInputDigest);
       let fallbackTs = Date.now();
       let detectedWorkspace = typeof workspaceFallback === "string" ? workspaceFallback.trim() : "";
       let recordIndex = -1;
@@ -162840,6 +162874,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           continue;
         }
         if (type2 !== "response_item") continue;
+        provenance(payload, extractTimestampValue(record7.timestamp) || 0);
         if (payloadType === "message") {
           const role = String(payload.role ?? "").trim();
           if (role !== "user" && role !== "assistant") continue;
@@ -162903,9 +162938,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           records.push(msg);
         }
       }
-      return { messages: records, usageRecords, turnTerminalMarkers };
+      return { messages: records, usageRecords, turnTerminalMarkers, codexOpenTurn: provenance.openTurn() };
     }
-    function readSession2(sessionPath, nativeHistory) {
+    function readSession2(sessionPath, nativeHistory, acknowledgedInputDigest) {
       if (!sessionPath || !path74.isAbsolute(sessionPath)) return null;
       if (!fs63.existsSync(sessionPath)) return null;
       const meta2 = readSessionMeta(sessionPath);
@@ -162919,14 +162954,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const workspaceFallback = typeof meta2?.cwd === "string" ? meta2.cwd : void 0;
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const declaredSignal = resolveNativeCompletionSignalSpec(nativeHistory);
-      const { messages, usageRecords, turnTerminalMarkers } = parseSessionFile(
+      const { messages, usageRecords, turnTerminalMarkers, codexOpenTurn } = parseSessionFile(
         sessionPath,
         sessionId,
         workspaceFallback,
         declaredSignal ?? CODEX_DEFAULT_COMPLETION_SIGNAL,
         // Seal refs with the mtime this session reports, so an expand minted from
         // this read validates against the same number.
-        sourceMtimeMs
+        sourceMtimeMs,
+        acknowledgedInputDigest
       );
       if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
@@ -162947,6 +162983,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         });
       }
       if (turnTerminalMarkers.length > 0) session.turnTerminalMarkers = turnTerminalMarkers;
+      session.codexOpenTurn = codexOpenTurn;
       return session;
     }
     var fs65 = __toESM2(require("fs"));
@@ -164506,7 +164543,7 @@ ${output}` : "";
         const sessionStartedAtMs = typeof input.sessionStartedAtMs === "number" ? input.sessionStartedAtMs : typeof input.args?.sessionStartedAtMs === "number" ? input.args.sessionStartedAtMs : 0;
         const instanceId = typeof input.instanceId === "string" ? input.instanceId : typeof input.args?.instanceId === "string" ? input.args.instanceId : "";
         const homeDir2 = typeof input.envOverrides?.HOME === "string" && input.envOverrides.HOME.trim() ? input.envOverrides.HOME.trim() : void 0;
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir2);
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir2, input.acknowledgedInputDigest);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         let ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
@@ -164517,10 +164554,10 @@ ${output}` : "";
           }
         }
         const readSessionId = reader === "antigravity-cli" ? extractAntigravityConversationUuid(sourcePath) || sessionId : sessionId;
-        const session = readByReader(reader, sourcePath, readSessionId, workspace);
+        const session = readByReader(reader, sourcePath, readSessionId, workspace, input.acknowledgedInputDigest);
         if (!session) return null;
         if (reader === "codex-cli" && !requestedProviderSid && !isUuidLike(sessionId) && instanceId) {
-          ownerConfirmed = !!instanceId && sessionStartedAtMs > 0 && hasExclusiveSentInput(instanceId, session.messages.filter((m) => m.role === "user").map((m) => m.content));
+          ownerConfirmed = !!instanceId && sessionStartedAtMs > 0 && hasExclusiveSentInput(instanceId, session.messages.filter((m) => m.role === "user").map((m) => m.content), true, input.acknowledgedInputDigest);
           if (!ownerConfirmed) return {
             messages: [],
             sourcePath: "",
@@ -164546,20 +164583,21 @@ ${output}` : "";
           sourceMtimeMs: session.sourceMtimeMs,
           nativeHistoryCoverage: session.nativeHistoryCoverage || "full",
           ownerConfirmed,
+          codexOpenTurn: session.codexOpenTurn,
           // (NATIVE-TURN-SIGNAL) Pass the provider's own turn-terminal records through
           // untouched. Readers that surface none simply omit the field.
           ...Array.isArray(session.turnTerminalMarkers) && session.turnTerminalMarkers.length > 0 ? { turnTerminalMarkers: session.turnTerminalMarkers } : {}
         };
       };
     }
-    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, providerSessionId, homeDir2) {
+    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, providerSessionId, homeDir2, acknowledgedInputDigest) {
       switch (reader) {
         case "claude-cli": {
           const p = resolveClaudePath(workspace, sessionId);
           return p ? { path: p } : null;
         }
         case "codex-cli": {
-          const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId, homeDir2);
+          const p = resolveCodexPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, homeDir2, acknowledgedInputDigest);
           return p ? { path: p } : null;
         }
         case "antigravity-cli":
@@ -164597,7 +164635,7 @@ ${output}` : "";
       if (!workspace || !(sessionStartedAtMs > 0)) return null;
       return `${resolveRealPath(workspace)}::${sessionStartedAtMs}`;
     }
-    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId = "", homeDir2) {
+    function resolveCodexPath(workspace, sessionId, sessionStartedAtMs, instanceId = "", homeDir2, acknowledgedInputDigest) {
       const root = homeDir2 ? path78.join(homeDir2, ".codex", "sessions") : codexSessionsRoot();
       if (sessionId && isUuidLike(sessionId)) {
         return findCodexPathBySessionId(root, sessionId);
@@ -164611,7 +164649,7 @@ ${output}` : "";
           codexRuntimeBindings.delete(key5);
         }
       }
-      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId);
+      const resolved = findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest);
       if (resolved && key5) codexRuntimeBindings.set(key5, resolved);
       return resolved;
     }
@@ -164643,7 +164681,7 @@ ${output}` : "";
       matches.sort((a, b) => b.mtime - a.mtime);
       return matches[0]?.p ?? null;
     }
-    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId) {
+    function findCodexPathByRuntime(root, workspace, sessionStartedAtMs, instanceId, acknowledgedInputDigest) {
       if (!fs67.existsSync(root) || !workspace) return null;
       const workspaceResolved = resolveRealPath(workspace);
       const cutoff = Date.now() - RECENT_WINDOW_MS;
@@ -164669,10 +164707,10 @@ ${output}` : "";
           const meta2 = readCodexSessionMeta(entryPath);
           if (!meta2?.cwd || resolveRealPath(meta2.cwd) !== workspaceResolved) continue;
           const diff = sessionStartedAtMs > 0 && meta2.timestampMs != null ? Math.abs(meta2.timestampMs - sessionStartedAtMs) : 0;
-          if (sessionStartedAtMs > 0 && (meta2.timestampMs == null || diff > SPAWN_BIND_GRACE_MS)) continue;
+          if (sessionStartedAtMs > 0 && (meta2.timestampMs == null || (instanceId ? meta2.timestampMs < sessionStartedAtMs || diff > SPAWN_BIND_GRACE_MS && (!acknowledgedInputDigest || meta2.timestampMs > Date.now()) : diff > SPAWN_BIND_GRACE_MS))) continue;
           if (instanceId) {
             const candidate = readSession2(entryPath);
-            if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter((m) => m.role === "user").map((m) => m.content))) continue;
+            if (!candidate || !hasExclusiveSentInput(instanceId, candidate.messages.filter((m) => m.role === "user").map((m) => m.content), true, acknowledgedInputDigest)) continue;
           }
           matches.push({ p: entryPath, mtime, diff });
         }
@@ -164775,12 +164813,12 @@ ${output}` : "";
       if (matches.length !== 1) return null;
       return accept(matches[0].uuid, matches[0].sourcePath);
     }
-    function readByReader(reader, sourcePath, sessionId, workspace) {
+    function readByReader(reader, sourcePath, sessionId, workspace, acknowledgedInputDigest) {
       switch (reader) {
         case "claude-cli":
           return readSession(sourcePath);
         case "codex-cli":
-          return readSession2(sourcePath);
+          return readSession2(sourcePath, void 0, acknowledgedInputDigest);
         case "antigravity-cli":
           return readSession3(sourcePath, sessionId || void 0, workspace || void 0);
         case "grok-cli":
@@ -168466,7 +168504,7 @@ ${output}` : "";
     }
     var fs78 = __toESM2(require("fs"));
     var path89 = __toESM2(require("path"));
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -170718,7 +170756,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto37.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto38.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target4 = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -171012,7 +171050,7 @@ ${output}` : "";
     init_outgoing_receipt();
     var import_node_fs19 = __toESM2(require("fs"));
     var import_node_path15 = __toESM2(require("path"));
-    var import_node_crypto39 = require("crypto");
+    var import_node_crypto40 = require("crypto");
     init_logger();
     init_owned_lock();
     init_outgoing_receipt();
@@ -171034,7 +171072,7 @@ ${output}` : "";
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path15.default.join(this.directory, (0, import_node_crypto39.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path15.default.join(this.directory, (0, import_node_crypto40.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -171124,7 +171162,7 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto39.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto40.randomUUID)()}.tmp`;
         const fd = import_node_fs19.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -171154,8 +171192,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto39.randomUUID)(),
-            generation: (0, import_node_crypto39.randomUUID)(),
+            attemptId: (0, import_node_crypto40.randomUUID)(),
+            generation: (0, import_node_crypto40.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -175364,7 +175402,7 @@ ${output}` : "";
     init_command_registry();
     init_command_args();
     init_mesh_sender();
-    var import_node_crypto48 = require("crypto");
+    var import_node_crypto49 = require("crypto");
     var fs92 = __toESM2(require("fs"));
     var path100 = __toESM2(require("path"));
     init_dist();
@@ -175850,7 +175888,7 @@ ${output}` : "";
       audit: 30 * 24 * 36e5
     });
     var MAX_FRAME_PAYLOAD_BYTES = TRANSFER_LIMITS.maxFrameBytes - TRANSFER_LIMITS.frameHeaderBytes;
-    var import_node_crypto43 = require("crypto");
+    var import_node_crypto44 = require("crypto");
     var EXCLUDED_DIRS = /* @__PURE__ */ new Set([
       ".git",
       ".hg",
@@ -175981,7 +176019,7 @@ ${output}` : "";
       return `{${keys2.map((k) => `${JSON.stringify(k)}:${canonicalJson2(obj[k])}`).join(",")}}`;
     }
     function sha256Hex2(text6) {
-      return (0, import_node_crypto43.createHash)("sha256").update(text6, "utf8").digest("hex");
+      return (0, import_node_crypto44.createHash)("sha256").update(text6, "utf8").digest("hex");
     }
     function byteCompare(a, b) {
       return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
@@ -176089,9 +176127,9 @@ ${output}` : "";
       if (manifestByteLength(c) > TRANSFER_LIMITS.maxManifestBytes) throw new ManifestError("LIMIT_EXCEEDED", "content manifest exceeds 2 MiB");
       return { ...c, files: sorted };
     }
-    var import_node_crypto47 = require("crypto");
+    var import_node_crypto48 = require("crypto");
     var fs90 = __toESM2(require("fs"));
-    var import_node_crypto44 = require("crypto");
+    var import_node_crypto45 = require("crypto");
     var FRAME_MAGIC = Buffer.from("ATF1", "ascii");
     var FrameError = class extends Error {
       constructor(code, message) {
@@ -176158,17 +176196,17 @@ ${output}` : "";
     }
     function computeBindingTag(linkKey, transferId, linkGen, fpA, fpB, role) {
       const [lo, hi] = [fpA, fpB].sort();
-      return (0, import_node_crypto44.createHmac)("sha256", linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
+      return (0, import_node_crypto45.createHmac)("sha256", linkKey).update(`adhdev-file/1|${role}|${transferId}|${linkGen}|${lo}|${hi}`).digest("hex");
     }
     function bindingTagsEqual(a, b) {
       const x = Buffer.from(a, "hex");
       const y = Buffer.from(b, "hex");
-      return x.length === 32 && x.length === y.length && (0, import_node_crypto44.timingSafeEqual)(x, y);
+      return x.length === 32 && x.length === y.length && (0, import_node_crypto45.timingSafeEqual)(x, y);
     }
-    var import_node_crypto46 = require("crypto");
+    var import_node_crypto47 = require("crypto");
     var fs89 = __toESM2(require("fs"));
     var path98 = __toESM2(require("path"));
-    var import_node_crypto45 = require("crypto");
+    var import_node_crypto46 = require("crypto");
     var fs88 = __toESM2(require("fs"));
     var path97 = __toESM2(require("path"));
     var fs87 = __toESM2(require("fs"));
@@ -176192,15 +176230,15 @@ ${output}` : "";
       let handle = null;
       try {
         handle = openFileRead(chain.parentHandle, chain.leafName);
-        const identity4 = getIdentity(handle);
-        if (identity4.isDirectory || identity4.isReparsePoint) {
+        const identity5 = getIdentity(handle);
+        if (identity5.isDirectory || identity5.isReparsePoint) {
           throw new TransferFsError("SYMLINK_OR_REPARSE_REJECTED", "not a regular file", "ELOOP");
         }
-        if (identity4.linkCount > 1) throw new TransferFsError("HARDLINK_REJECTED", "hardlinked file", "EMLINK");
+        if (identity5.linkCount > 1) throw new TransferFsError("HARDLINK_REJECTED", "hardlinked file", "EMLINK");
         const h = handle;
         return {
           handle: h,
-          identity: identity4,
+          identity: identity5,
           release() {
             safeClose(h);
             for (let i = chain.intermediateHandles.length - 1; i >= 0; i--) safeClose(chain.intermediateHandles[i]);
@@ -176408,7 +176446,7 @@ ${output}` : "";
           const out = fs88.openSync(spoolFilePath(spoolDir, i), "wx", 384);
           try {
             if (Number(src.identity.size) !== entry.size) throw new ManifestError("SOURCE_CHANGED", "file size changed since preview");
-            const whole = (0, import_node_crypto45.createHash)("sha256");
+            const whole = (0, import_node_crypto46.createHash)("sha256");
             const blockHashes = [];
             const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
             let done = 0;
@@ -176426,7 +176464,7 @@ ${output}` : "";
               }
               fs88.writeSync(out, buf, 0, got);
               whole.update(buf.subarray(0, got));
-              blockHashes.push((0, import_node_crypto45.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
+              blockHashes.push((0, import_node_crypto46.createHash)("sha256").update(buf.subarray(0, got)).digest("hex"));
               done += got;
               await tick();
             }
@@ -176559,7 +176597,7 @@ ${output}` : "";
               if (n <= 0) break;
               got += n;
             }
-            if (got !== len || (0, import_node_crypto46.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
+            if (got !== len || (0, import_node_crypto47.createHash)("sha256").update(buf.subarray(0, len)).digest("hex") !== f.blockHashes[b]) break;
             ok = b + 1;
           }
         } catch {
@@ -176661,8 +176699,8 @@ ${output}` : "";
           for (const h of chain.intermediateHandles.reverse()) safeClose2(h);
           throw err;
         }
-        const whole = (0, import_node_crypto46.createHash)("sha256");
-        this.cur = { index: i, parentChain: chain, handle, blockHash: (0, import_node_crypto46.createHash)("sha256"), whole, blockFill: 0 };
+        const whole = (0, import_node_crypto47.createHash)("sha256");
+        this.cur = { index: i, parentChain: chain, handle, blockHash: (0, import_node_crypto47.createHash)("sha256"), whole, blockFill: 0 };
       }
       closeCur() {
         if (!this.cur) return;
@@ -176717,7 +176755,7 @@ ${output}` : "";
         if (got !== f.blockHashes[b] || got !== senderHashHex) throw new ReceiverError("HASH_MISMATCH", `block ${b} of file ${c.index} failed verification`);
         fullFsync(c.handle);
         this.blocksDone[c.index] = b + 1;
-        c.blockHash = (0, import_node_crypto46.createHash)("sha256");
+        c.blockHash = (0, import_node_crypto47.createHash)("sha256");
         c.blockFill = 0;
         this.onCheckpoint?.(c.index, b + 1, this.bytesDone);
         const fileDone = b + 1 >= blockCount(f.size);
@@ -176748,7 +176786,7 @@ ${output}` : "";
             fh = openFileRead(chain.parentHandle, chain.leafName);
             const id4 = getIdentity(fh);
             if (Number(id4.size) !== f.size) throw new ReceiverError("VERIFY_FAILED", "size mismatch");
-            const h = (0, import_node_crypto46.createHash)("sha256");
+            const h = (0, import_node_crypto47.createHash)("sha256");
             const buf = Buffer.allocUnsafe(TRANSFER_LIMITS.blockBytes);
             for (let o = 0; o < f.size; ) {
               const n = readHandle(fh, buf, 0, Math.min(buf.length, f.size - o), o);
@@ -177054,7 +177092,7 @@ ${output}` : "";
               if (this.done) return;
               const start = b * TRANSFER_LIMITS.blockBytes;
               const end = Math.min(f.size, start + TRANSFER_LIMITS.blockBytes);
-              const hash4 = (0, import_node_crypto47.createHash)("sha256");
+              const hash4 = (0, import_node_crypto48.createHash)("sha256");
               for (let o = start; o < end; ) {
                 const len = Math.min(buf.length, end - o);
                 const n = fs90.readSync(fd, buf, 0, len, o);
@@ -177272,7 +177310,7 @@ ${output}` : "";
       }
       store;
       rate;
-      restartEpoch = (0, import_node_crypto48.randomBytes)(8).toString("hex");
+      restartEpoch = (0, import_node_crypto49.randomBytes)(8).toString("hex");
       records = /* @__PURE__ */ new Map();
       runs = /* @__PURE__ */ new Map();
       now() {
@@ -177447,7 +177485,7 @@ ${output}` : "";
           const scan = scanSelection(ws.path, input.selected.map(String));
           manifest = validateSelectionManifest({
             v: 1,
-            transferId: (0, import_node_crypto48.randomBytes)(16).toString("hex"),
+            transferId: (0, import_node_crypto49.randomBytes)(16).toString("hex"),
             sourceDaemonId: self,
             targetDaemonId: input.targetDaemonId,
             sourceWorkspaceId: ws.id,
@@ -177570,7 +177608,7 @@ ${output}` : "";
         this.guard(rec7);
         const factory = this.ports.linkFactory;
         if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
-        run4.linkKey = (0, import_node_crypto48.randomBytes)(32);
+        run4.linkKey = (0, import_node_crypto49.randomBytes)(32);
         rec7.linkGen += 1;
         this.setState(rec7, "linking");
         const reply = await this.ports.dispatchPeer(rec7.peerDaemonId, {
@@ -178625,7 +178663,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto49 = require("crypto");
+    var import_node_crypto50 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db2) {
@@ -178633,7 +178671,7 @@ ${output}` : "";
     }
     function key4(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto49.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto50.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db2, credential, claim) {
       schema2(db2);
@@ -178665,7 +178703,7 @@ ${output}` : "";
     init_runtime_defaults();
     init_worker_report_idempotency();
     init_mesh_pinned_node_identity();
-    var import_node_crypto50 = require("crypto");
+    var import_node_crypto51 = require("crypto");
     init_dist();
     init_mesh_runtime_store();
     init_cli_provider_mesh_assignment();
@@ -179059,7 +179097,7 @@ ${output}` : "";
       }
     };
     init_mesh_writer_stop_journal();
-    var BOOT = (0, import_node_crypto50.randomUUID)();
+    var BOOT = (0, import_node_crypto51.randomUUID)();
     function journal(create = false) {
       const db2 = MeshRuntimeStore.getInstance().db;
       if (create) db2.exec("CREATE TABLE IF NOT EXISTS mesh_holder_attaches (operation_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, identity_json TEXT NOT NULL, snapshot_json TEXT NOT NULL, phase TEXT NOT NULL, prepared_json TEXT NOT NULL, runtime_json TEXT NOT NULL, boot_nonce TEXT NOT NULL)");
@@ -179099,9 +179137,9 @@ ${output}` : "";
       if (!runtime(instance) || !instance.getAdapter()?.verifyRuntimeMeta) return refuse5("native_attach_ack_unavailable");
       const launch = host.deps.getSessionRegistry?.()?.get(args.targetSessionId)?.launch;
       if (launch?.launchedBy === "assistant" || launch?.roleLaunch || isWriterStopPending(args.targetSessionId)) return refuse5("protected_or_stopping_holder");
-      const db2 = journal(true), identity4 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
+      const db2 = journal(true), identity5 = JSON.stringify([args.targetSessionId, args.agentType, mc]);
       const row2 = db2.prepare("SELECT * FROM mesh_holder_attaches WHERE operation_id=?").get(op.operationId);
-      if (row2 && row2.identity_json !== identity4) return refuse5("operation_identity_changed");
+      if (row2 && row2.identity_json !== identity5) return refuse5("operation_identity_changed");
       recoverHolderAttachRollback(instance);
       const state2 = instance.getState(), s2 = state2.settings;
       if (instance.getAdapter()?.cliType !== args.agentType || op.phase === "prepare" && !liveWorkingStatus(state2)) return refuse5("holder_not_currently_working");
@@ -179136,7 +179174,7 @@ ${output}` : "";
             const stamped = host.deps.getInstanceManager().attachMeshAssignmentToInstance(args.targetSessionId, { ...mc, meshId: mc.meshId });
             if (!stamped.stamped || !current4()) throw new Error("holder_attach_failed");
             prepared = instance.captureMeshAssignment();
-            db2.prepare("INSERT INTO mesh_holder_attaches VALUES (?,?,?,?,?,?,?,?)").run(op.operationId, args.targetSessionId, identity4, JSON.stringify(before), "preparing", JSON.stringify(prepared), runtime(instance), BOOT);
+            db2.prepare("INSERT INTO mesh_holder_attaches VALUES (?,?,?,?,?,?,?,?)").run(op.operationId, args.targetSessionId, identity5, JSON.stringify(before), "preparing", JSON.stringify(prepared), runtime(instance), BOOT);
           }).immediate();
           if (!await verify3(prepared) || !current4() || JSON.stringify(instance.captureMeshAssignment()) !== JSON.stringify(prepared)) throw new Error("native_attach_unconfirmed");
           db2.prepare("UPDATE mesh_holder_attaches SET phase='prepared' WHERE operation_id=?").run(op.operationId);
@@ -179523,8 +179561,8 @@ ${output}` : "";
       worker_resolve_task: async (_ctx, args) => {
         try {
           const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
-          const identity4 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
-          if (!identity4) {
+          const identity5 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind });
+          if (!identity5) {
             const remote = await resolveRemoteWorker(_ctx, args);
             if (remote?.taskId && remote.attemptId) {
               return {
@@ -179544,11 +179582,11 @@ ${output}` : "";
           }
           return {
             success: true,
-            meshId: identity4.meshId,
-            taskId: identity4.taskId,
-            ...identity4.attemptId ? { attemptId: identity4.attemptId } : {},
-            ...identity4.sessionId ? { sessionId: identity4.sessionId } : {},
-            ...identity4.nodeId ? { nodeId: identity4.nodeId } : {}
+            meshId: identity5.meshId,
+            taskId: identity5.taskId,
+            ...identity5.attemptId ? { attemptId: identity5.attemptId } : {},
+            ...identity5.sessionId ? { sessionId: identity5.sessionId } : {},
+            ...identity5.nodeId ? { nodeId: identity5.nodeId } : {}
           };
         } catch (e) {
           return { success: false, error: e?.message || String(e) };
@@ -179971,9 +180009,9 @@ ${output}` : "";
         try {
           const { resolveWorkerIdentity: resolveWorkerIdentity2, classifyUnresolvedWorkerCredential: classifyUnresolvedWorkerCredential2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
           const credential = { token: args?.token, bind: args?.bind };
-          const identity4 = resolveWorkerIdentity2(credential);
-          const remote = identity4 ? null : await resolveRemoteWorker(_ctx, args);
-          const target4 = identity4 ? { meshId: identity4.meshId, taskId: identity4.taskId } : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
+          const identity5 = resolveWorkerIdentity2(credential);
+          const remote = identity5 ? null : await resolveRemoteWorker(_ctx, args);
+          const target4 = identity5 ? { meshId: identity5.meshId, taskId: identity5.taskId } : remote?.taskId ? { meshId: remote.meshId, taskId: remote.taskId } : null;
           if (!target4) {
             const unresolved = classifyUnresolvedWorkerCredential2(credential);
             logLocalWorkerRefusal("mailbox drain", credential, unresolved.refusal, unresolved.detail);
@@ -180023,18 +180061,18 @@ ${output}` : "";
     async function resolveWorker(args) {
       const { resolveWorkerIdentity: resolveWorkerIdentity2, classifyUnresolvedWorkerCredential: classifyUnresolvedWorkerCredential2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
       const credential = { token: args?.token, bind: args?.bind };
-      const identity4 = resolveWorkerIdentity2(credential);
-      if (!identity4) return { error: classifyUnresolvedWorkerCredential2(credential).refusal };
-      if (!identity4.attemptId || !identity4.sessionId) return { error: "binding_missing" };
-      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity4.attemptId);
+      const identity5 = resolveWorkerIdentity2(credential);
+      if (!identity5) return { error: classifyUnresolvedWorkerCredential2(credential).refusal };
+      if (!identity5.attemptId || !identity5.sessionId) return { error: "binding_missing" };
+      const attempt = MeshRuntimeStore.getInstance().turnStore().getAttempt(identity5.attemptId);
       if (!attempt) return { error: "binding_missing" };
       return {
         principal: issueWorkerPrincipal({
-          meshId: identity4.meshId,
-          taskId: identity4.taskId,
-          attemptId: identity4.attemptId,
+          meshId: identity5.meshId,
+          taskId: identity5.taskId,
+          attemptId: identity5.attemptId,
           generation: attempt.generation,
-          sessionId: identity4.sessionId
+          sessionId: identity5.sessionId
         })
       };
     }
@@ -180214,8 +180252,8 @@ ${output}` : "";
         try {
           const { resolveWorkerIdentity: resolveWorkerIdentity2 } = await Promise.resolve().then(() => (init_worker_report(), worker_report_exports));
           const remote = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind }) ? null : await resolveRemoteWorker(_ctx, args);
-          const identity4 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind }) ?? (remote ? { meshId: remote.meshId, taskId: remote.taskId ?? "" } : null);
-          if (!identity4) {
+          const identity5 = resolveWorkerIdentity2({ token: args?.token, bind: args?.bind }) ?? (remote ? { meshId: remote.meshId, taskId: remote.taskId ?? "" } : null);
+          if (!identity5) {
             return {
               success: false,
               error: "unauthenticated",
@@ -180230,14 +180268,14 @@ ${output}` : "";
           let ownMissionId;
           if (scope === "same_mission") {
             try {
-              ownMissionId = MeshRuntimeStore2.getInstance().findQueueEntryById(identity4.meshId, identity4.taskId)?.missionId;
+              ownMissionId = MeshRuntimeStore2.getInstance().findQueueEntryById(identity5.meshId, identity5.taskId)?.missionId;
             } catch {
             }
           }
-          const events = readFleetTaskActivity2(meshTopicIndexFor2(MeshRuntimeStore2.getInstance().db), identity4.meshId, PEER_EVENT_KINDS, PEER_CONTEXT_EVENT_TAIL);
+          const events = readFleetTaskActivity2(meshTopicIndexFor2(MeshRuntimeStore2.getInstance().db), identity5.meshId, PEER_EVENT_KINDS, PEER_CONTEXT_EVENT_TAIL);
           const latestByTask = /* @__PURE__ */ new Map();
           for (const event of events) {
-            if (!event.taskId || event.taskId === identity4.taskId) continue;
+            if (!event.taskId || event.taskId === identity5.taskId) continue;
             latestByTask.set(event.taskId, event);
           }
           let candidates = [];
@@ -180246,12 +180284,12 @@ ${output}` : "";
               if (!ownMissionId) continue;
               let taskMissionId2;
               try {
-                taskMissionId2 = MeshRuntimeStore2.getInstance().findQueueEntryById(identity4.meshId, taskId)?.missionId;
+                taskMissionId2 = MeshRuntimeStore2.getInstance().findQueueEntryById(identity5.meshId, taskId)?.missionId;
               } catch {
               }
               if (taskMissionId2 !== ownMissionId) continue;
             }
-            const note2 = getStoredHandoffNote2(identity4.meshId, taskId);
+            const note2 = getStoredHandoffNote2(identity5.meshId, taskId);
             const peer = {
               taskId,
               ...event.nodeId ? { nodeId: event.nodeId } : {},
@@ -180281,7 +180319,7 @@ ${output}` : "";
           const peers = candidates.slice(0, PEER_CONTEXT_MAX_PEERS);
           return {
             success: true,
-            meshId: identity4.meshId,
+            meshId: identity5.meshId,
             scope,
             peers,
             ...omitted > 0 ? { omitted } : {}
@@ -180959,8 +180997,8 @@ ${output}` : "";
       requireProof(entry && !entry.startsWith(`..${import_node_path20.sep}`) && entry !== ".." && !(0, import_node_path20.isAbsolute)(entry) && !entry.includes(import_node_path20.sep), "source_parent_external_worktree");
       requireProof(!(0, import_node_fs24.lstatSync)((0, import_node_path20.join)(workspace, ".git")).isSymbolicLink() && (0, import_node_fs24.realpathSync)((0, import_node_fs24.readFileSync)((0, import_node_path20.join)(gitDir, "gitdir"), "utf8").trim()) === (0, import_node_path20.join)(workspace, ".git"), "source_parent_invalid_backlink");
       requireProof(git3(base, "symbolic-ref", "--short", "HEAD") === (mesh.defaultBranch || "main"), "source_parent_wrong_default_branch");
-      const identity4 = normalizeRepoIdentity(mesh.repoIdentity || "");
-      requireProof(identity4 && normalizeRepoIdentity(git3(base, "remote", "get-url", "origin")) === identity4 && normalizeRepoIdentity(git3(workspace, "remote", "get-url", "origin")) === identity4, "source_parent_repo_identity_mismatch");
+      const identity5 = normalizeRepoIdentity(mesh.repoIdentity || "");
+      requireProof(identity5 && normalizeRepoIdentity(git3(base, "remote", "get-url", "origin")) === identity5 && normalizeRepoIdentity(git3(workspace, "remote", "get-url", "origin")) === identity5, "source_parent_repo_identity_mismatch");
     }
     async function reattachMeshSourceParent(ctx, args) {
       const { meshId, nodeId, parentNodeId, expectedOldParentId } = args || {};
@@ -181644,7 +181682,7 @@ ${output}` : "";
       delete overrides.arch;
       return overrides;
     }
-    async function registerClonedWorktreeNode(ctx, meshId, meshRecord2, sourceNode, sourceNodeId, result, identity4) {
+    async function registerClonedWorktreeNode(ctx, meshId, meshRecord2, sourceNode, sourceNodeId, result, identity5) {
       const { addNode: addNode2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
       const { migrateProviderRolesToSlots: migrateProviderRolesToSlots2 } = await Promise.resolve().then(() => (init_mesh_config_store(), mesh_config_store_exports));
       const clonedPolicy = { ...sourceNode.policy || {} };
@@ -181653,8 +181691,8 @@ ${output}` : "";
       const fields = {
         workspace: result.worktreePath,
         repoRoot: result.worktreePath,
-        daemonId: identity4.daemonId,
-        machineId: identity4.machineId,
+        daemonId: identity5.daemonId,
+        machineId: identity5.machineId,
         userOverrides: cloneUserOverrides(sourceNode.userOverrides),
         isLocalWorktree: true,
         worktreeBranch: result.branch,
@@ -181837,7 +181875,7 @@ ${output}` : "";
             if (sourceDaemonId && !daemonIdsEquivalent4(sourceDaemonId, ctx.deps.statusInstanceId) && ctx.deps.dispatchMeshCommand && !readMeshDirectDispatchFlag(args)) {
               return { ready: false, forward: { mesh: mesh2, sourceDaemonId } };
             }
-            const identity5 = {
+            const identity6 = {
               daemonId: readMeshNodeDaemonId(sourceNode2) || readText(ctx.deps.statusInstanceId) || void 0,
               machineId: readMeshNodeMachineId(sourceNode2) || (() => {
                 try {
@@ -181894,7 +181932,7 @@ ${output}` : "";
             };
             let node2;
             try {
-              node2 = await registerClonedWorktreeNode(ctx, meshId, meshRecord3, sourceNode2, sourceNodeId, result2, identity5);
+              node2 = await registerClonedWorktreeNode(ctx, meshId, meshRecord3, sourceNode2, sourceNodeId, result2, identity6);
             } catch (error) {
               await rollbackWorktree(error?.message || String(error));
               throw error;
@@ -181903,7 +181941,7 @@ ${output}` : "";
               await rollbackWorktree("registration returned no node");
               return { ready: false, done: { success: false, error: "Failed to register worktree node" } };
             }
-            return { ready: true, meshRecord: meshRecord3, mesh: mesh2, sourceNode: sourceNode2, result: result2, node: node2, identity: identity5, gitUserName: gitUserName2, gitUserEmail: gitUserEmail2 };
+            return { ready: true, meshRecord: meshRecord3, mesh: mesh2, sourceNode: sourceNode2, result: result2, node: node2, identity: identity6, gitUserName: gitUserName2, gitUserEmail: gitUserEmail2 };
           });
           if (!prepared.ready) {
             if ("forward" in prepared && prepared.forward) {
@@ -181911,9 +181949,9 @@ ${output}` : "";
             }
             return prepared.done;
           }
-          const { meshRecord: meshRecord2, mesh, sourceNode, result, node, identity: identity4, gitUserName, gitUserEmail } = prepared;
+          const { meshRecord: meshRecord2, mesh, sourceNode, result, node, identity: identity5, gitUserName, gitUserEmail } = prepared;
           if (typeof node?.id === "string" && node.id) noteRecentlyClonedNode(node.id);
-          const target4 = { meshId, mesh, node, worktreePath: result.worktreePath, daemonId: identity4.daemonId, machineId: identity4.machineId };
+          const target4 = { meshId, mesh, node, worktreePath: result.worktreePath, daemonId: identity5.daemonId, machineId: identity5.machineId };
           const persistWorktreeSetupState = (state2) => persistNodeBootstrapState(ctx, meshId, meshRecord2, node, state2);
           const emitBootstrapEvent = (eventStatus2, state2, startedAtMs, extraPayload) => emitCloneBootstrapEvent(ctx, target4, eventStatus2, state2, startedAtMs, extraPayload);
           const initSubmodules = sourceNode.policy?.initSubmodulesOnClone !== false;
@@ -185354,11 +185392,11 @@ ${ptyResult.output.slice(-2e3)}`);
     init_drivers();
     init_logger();
     init_config();
-    var import_node_crypto55 = require("crypto");
+    var import_node_crypto56 = require("crypto");
     var import_node_fs32 = require("fs");
     var import_node_path30 = require("path");
     init_installed_driver();
-    var import_node_crypto54 = require("crypto");
+    var import_node_crypto55 = require("crypto");
     var import_node_fs31 = require("fs");
     var import_node_path29 = require("path");
     init_manifest();
@@ -185390,7 +185428,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return typeof type2 === "string" && type2.length <= 64 && TYPE_PATTERN.test(type2);
     }
     function digestDriverFiles(type2, files) {
-      const hash4 = (0, import_node_crypto54.createHash)("sha256");
+      const hash4 = (0, import_node_crypto55.createHash)("sha256");
       for (const file of [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
         hash4.update(`driver/${type2}/${file.path}\0${file.bytes.length}\0`).update(file.bytes);
       }
@@ -185566,7 +185604,7 @@ ${lines.join("\n")}
     function installDriverPackage(configDir, pkg, existing) {
       const { type: type2, treeDigest } = pkg.report;
       const { dest, replaced } = resolveInstallDest(configDir, type2, existing);
-      const work = (0, import_node_path30.join)(configDir, "drivers", ".installing", (0, import_node_crypto55.randomBytes)(6).toString("hex"));
+      const work = (0, import_node_path30.join)(configDir, "drivers", ".installing", (0, import_node_crypto56.randomBytes)(6).toString("hex"));
       const staged = (0, import_node_path30.join)(work, type2);
       try {
         for (const file of pkg.files) {
@@ -185616,12 +185654,12 @@ ${lines.join("\n")}
       return full;
     }
     async function workerWorkspace(ctx, args) {
-      const identity4 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
-      if (!identity4?.sessionId || !identity4.meshId || !identity4.taskId) return { failure: fail3("worker_credential_required", "A worker credential is required") };
-      const ws = await resolveRegisteredSessionWorkspace(ctx, identity4.sessionId, {
-        meshId: identity4.meshId,
-        taskId: identity4.taskId,
-        ...identity4.nodeId ? { nodeId: identity4.nodeId } : {},
+      const identity5 = resolveWorkerIdentity({ token: args?.token, bind: args?.bind });
+      if (!identity5?.sessionId || !identity5.meshId || !identity5.taskId) return { failure: fail3("worker_credential_required", "A worker credential is required") };
+      const ws = await resolveRegisteredSessionWorkspace(ctx, identity5.sessionId, {
+        meshId: identity5.meshId,
+        taskId: identity5.taskId,
+        ...identity5.nodeId ? { nodeId: identity5.nodeId } : {},
         allowTrustedWorkerFallback: true
       });
       if (!ws.workspaceRoot) return { failure: fail3("workspace_unavailable", "The worker session workspace could not be resolved") };
@@ -186817,7 +186855,7 @@ ${lines.join("\n")}
     init_mesh_coordinator();
     init_worker_private_home();
     init_mcp_tool_allow();
-    var import_node_crypto62 = require("crypto");
+    var import_node_crypto63 = require("crypto");
     var import_node_fs35 = require("fs");
     var os38 = __toESM2(require("os"));
     var import_node_path35 = require("path");
@@ -187042,7 +187080,7 @@ ${lines.join("\n")}
         }
         const tmpPath = (0, import_node_path35.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto62.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto63.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -194805,7 +194843,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_debug_config();
     init_debug_trace();
     var import_session_host_core25 = require_dist();
-    var import_node_crypto63 = require("crypto");
+    var import_node_crypto64 = require("crypto");
     init_mesh_pinned_node_identity();
     init_mesh_writer_stop_journal();
     init_hidden_spawn();
@@ -194869,7 +194907,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               success: true,
               quiescent: true,
               evidence,
-              incarnation: (0, import_node_crypto63.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
+              incarnation: (0, import_node_crypto64.createHash)("sha256").update(JSON.stringify([request, evidence])).digest("hex")
             };
           }
           return pending("unknown, cannot prove dead: host still reports session");
@@ -194941,7 +194979,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs120 = __toESM2(require("fs"));
     var path116 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto64 = require("crypto");
+    var import_node_crypto65 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -194985,7 +195023,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto64.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto65.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -195029,10 +195067,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function bindProviderApprovalAssignment(approval, settings2) {
       if (!approval) return null;
-      const identity4 = providerApprovalAssignment(settings2);
-      const changed = approval.type === "tool_permission" && approval.attemptId && (approval.attemptId !== identity4.attemptId || approval.generation !== identity4.generation);
+      const identity5 = providerApprovalAssignment(settings2);
+      const changed = approval.type === "tool_permission" && approval.attemptId && (approval.attemptId !== identity5.attemptId || approval.generation !== identity5.generation);
       if (changed) return { ...approval, actionable: false, evidence: "unavailable" };
-      return { ...approval, ...identity4, actionable: approval.actionable && (!identity4.taskId || !!identity4.attemptId && identity4.generation !== null) };
+      return { ...approval, ...identity5, actionable: approval.actionable && (!identity5.taskId || !!identity5.attemptId && identity5.generation !== null) };
     }
     var fs116 = __toESM2(require("fs"));
     var os44 = __toESM2(require("os"));
@@ -198655,7 +198693,7 @@ ${text6}` : text6;
       return { status, stateHistory: history.slice(-limit), screenText: screenText ?? "" };
     }
     var fs119 = __toESM2(require("fs"));
-    var import_node_crypto65 = require("crypto");
+    var import_node_crypto66 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -198682,7 +198720,7 @@ ${text6}` : text6;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash4 = (0, import_node_crypto65.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash4 = (0, import_node_crypto66.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -201765,7 +201803,7 @@ ${text6}` : text6;
     init_logger();
     init_track_identity();
     var import_node_child_process28 = require("child_process");
-    var import_node_crypto66 = require("crypto");
+    var import_node_crypto67 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -201775,7 +201813,7 @@ ${text6}` : text6;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto66.randomUUID)();
+      generation = (0, import_node_crypto67.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -201836,7 +201874,7 @@ ${text6}` : text6;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto66.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto67.randomUUID)()}`;
         return new Promise((resolve69, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -201872,7 +201910,7 @@ ${text6}` : text6;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto67 = require("crypto");
+    var import_node_crypto68 = require("crypto");
     init_dist();
     init_interactive_prompt();
     function record6(value) {
@@ -202004,7 +202042,7 @@ ${text6}` : text6;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto67.randomUUID)(),
+          promptId: (0, import_node_crypto68.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -202541,6 +202579,67 @@ ${JSON.stringify(replies)}
     init_workspaces();
     init_recent_activity();
     init_summary_metadata();
+    var STATUS_HYDRATION_TAIL_LIMIT = 200;
+    var COMPLETED_FINALIZATION_RETRY_MS = 1e3;
+    var COMPLETED_FINALIZATION_MAX_WAIT_MS = 3e4;
+    var CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 2e4;
+    var MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 6e4;
+    var NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4e3;
+    var CANCELLED_COMPLETION_RECHECK_MS = 1500;
+    var CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS = 4;
+    var PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
+    var ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3e3;
+    var ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 6e4;
+    var TERMINAL_BLOCK_HARD_CAP_MS = 10 * 6e4;
+    var BACKGROUND_TASK_HOLD_MAX_MS = 5 * 6e4;
+    var USER_INPUT_ACK_DEDUP_WINDOW_MS = 6e4;
+    var TERMINAL_MESH_EVENTS = /* @__PURE__ */ new Set([
+      "agent:generating_completed",
+      "agent:stopped",
+      "agent:ready"
+    ]);
+    var SAMPLE_MAX_AGE_MS = 5e3;
+    var owners = /* @__PURE__ */ new WeakMap();
+    var bindings = /* @__PURE__ */ new WeakMap();
+    function identity4(h) {
+      return JSON.stringify([
+        h.generatingStartedAt,
+        h.lastAcknowledgedUserInputAt,
+        h.lastAcknowledgedInputDigest,
+        h.completingTurnTaskId?.(),
+        h.currentAttemptRef?.()
+      ]);
+    }
+    function preserveCodexGeneratingOnIdle(h, probe = false) {
+      if (h.type !== "codex-cli" || h.disposed || !h.generatingStartedAt || !h.lastAcknowledgedInputDigest) return false;
+      if (h.lastAcknowledgedTurnOwner !== JSON.stringify([h.completingTurnTaskId?.(), h.currentAttemptRef?.() ?? null])) return false;
+      const owner = identity4(h);
+      const previous = bindings.get(h);
+      if (probe && previous?.identity === owner && typeof h.nativeTurnSampleAt === "number" && Date.now() - h.nativeTurnSampleAt < COMPLETED_FINALIZATION_RETRY_MS && preserveCodexGeneratingOnIdle(h)) return true;
+      if (probe) {
+        owners.delete(h);
+        const pin = h.providerSessionId;
+        try {
+          if (h.readExternalCompletionMessages() === null) return false;
+        } catch {
+          return false;
+        }
+        if (owner !== identity4(h) || pin && pin !== h.providerSessionId) return false;
+      }
+      const open = h.lastCodexOpenTurn;
+      const now = Date.now();
+      const sampled = h.nativeTurnSampleAt;
+      const closed = open && h.lastNativeTurnTerminalMarkers?.some((marker2) => marker2.nativeSessionId === open.nativeSessionId && marker2.turnId === open.turnId && marker2.inputDigest === open.inputDigest && marker2.receivedAt >= open.inputAt);
+      const valid = !closed && !h.nativeHistoryReadPending && typeof sampled === "number" && sampled <= now && now - sampled <= SAMPLE_MAX_AGE_MS && !!open && !!h.providerSessionId && open.nativeSessionId === h.providerSessionId && !!open.turnId && open.inputDigest === h.lastAcknowledgedInputDigest && Number.isFinite(open.startedAt) && open.startedAt >= h.lastAcknowledgedUserInputAt && open.startedAt <= h.generatingStartedAt && open.startedAt <= open.inputAt && Number.isFinite(open.inputAt) && open.inputAt >= h.lastAcknowledgedUserInputAt && open.inputAt <= now;
+      if (!valid || !open || !h.providerSessionId) return false;
+      if (previous?.identity === owner && (previous.nativeSessionId !== h.providerSessionId || previous.turnId !== open.turnId)) return false;
+      if (probe) {
+        const accepted = { identity: owner, nativeSessionId: h.providerSessionId, turnId: open.turnId };
+        bindings.set(h, accepted);
+        owners.set(h, accepted);
+      }
+      return owners.get(h)?.identity === owner;
+    }
     init_native_turn_signal();
     function captureCompletionIdentity(host, pending) {
       if (pending.capturedAttemptRef === void 0) {
@@ -202576,25 +202675,6 @@ ${JSON.stringify(replies)}
       return marker2;
     }
     init_logger();
-    var STATUS_HYDRATION_TAIL_LIMIT = 200;
-    var COMPLETED_FINALIZATION_RETRY_MS = 1e3;
-    var COMPLETED_FINALIZATION_MAX_WAIT_MS = 3e4;
-    var CANON_C_MISSING_ASSISTANT_MIN_ELAPSED_MS = 2e4;
-    var MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS = 6e4;
-    var NATIVE_HISTORY_MESH_IDLE_SETTLE_MS = 4e3;
-    var CANCELLED_COMPLETION_RECHECK_MS = 1500;
-    var CANCELLED_COMPLETION_RECHECK_MAX_ATTEMPTS = 4;
-    var PTY_PARSED_FINAL_ASSISTANT_QUIET_DWELL_MS = 1200;
-    var ANTIGRAVITY_HOLD_QUIET_DWELL_MS = 3e3;
-    var ANTIGRAVITY_HOLD_HARD_CAP_MS = 5 * 6e4;
-    var TERMINAL_BLOCK_HARD_CAP_MS = 10 * 6e4;
-    var BACKGROUND_TASK_HOLD_MAX_MS = 5 * 6e4;
-    var USER_INPUT_ACK_DEDUP_WINDOW_MS = 6e4;
-    var TERMINAL_MESH_EVENTS = /* @__PURE__ */ new Set([
-      "agent:generating_completed",
-      "agent:stopped",
-      "agent:ready"
-    ]);
     function armCancelledCompletionRecheck(host, pending, reason) {
       if (reason === "new_pty_output" && !pending.completionBinding && !pending.capturedCompletionInput) return;
       const now = Date.now();
@@ -203596,6 +203676,8 @@ ${buttons.join("\n")}`;
       return probe;
     }
     function readExternalCompletionMessages(host, opts) {
+      host.lastCodexOpenTurn = void 0;
+      host.nativeTurnSampleAt = void 0;
       host.nativeHistoryReadPending = false;
       const adapterOwnsMessagesElsewhere = host.adapter?.chatMessagesOwnedExternally === true;
       const manifestNativeSource = opts?.allowManifestNativeSource === true && isNativeSourceCanonicalHistory(host.provider?.nativeHistory);
@@ -203629,6 +203711,7 @@ ${buttons.join("\n")}`;
         // the floor-based resolution above claims THIS session's db under its
         // own owner (never a sibling's).
         instanceId: host.instanceId,
+        acknowledgedInputDigest: host.lastAcknowledgedInputDigest,
         envOverrides: host.spawnedEnvOverrides(),
         forceRefresh: true
         // (NATIVE-TURN-SIGNAL audit) excludeInProgressTurn is deliberately NOT passed
@@ -203676,6 +203759,8 @@ ${buttons.join("\n")}`;
         host.publishTranscriptSignalObservation(null);
         return null;
       }
+      host.lastCodexOpenTurn = restoredHistory.codexOpenTurn;
+      host.nativeTurnSampleAt = Date.now();
       host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,
         restoredHistory.sourcePath,
@@ -203808,7 +203893,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto68 = require("crypto");
+    var import_node_crypto69 = require("crypto");
     var BUSY_BLIP_DAMP_MS = 2e3;
     var blipSince = /* @__PURE__ */ new WeakMap();
     function dampBusyBlip(host, now) {
@@ -203916,7 +204001,8 @@ ${buttons.join("\n")}`;
       const autoApproveActive = host.maybeAutoApproveStatus(adapterStatus, now);
       const autoApproveHoldIdle = host.autoApproveBusy && rawStatus === "idle";
       const startupMaskWithNoActiveTurn = !host.turnStartedThisBoot && !host.hasAdapterPendingResponse();
-      const newStatus = isQuestionPicker ? "waiting_choice" : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? "generating" : rawStatus;
+      let newStatus = isQuestionPicker ? "waiting_choice" : (autoApproveActive || autoApproveHoldIdle) && !startupMaskWithNoActiveTurn ? "generating" : rawStatus;
+      if (newStatus === "idle" && host.lastStatus === "generating" && host.preserveCodexGeneratingOnIdle?.(true)) newStatus = "generating";
       const dirName = workingDirBasename(host.workingDir);
       const chatTitle = `${host.provider.name} \xB7 ${dirName}`;
       const progressFingerprint = newStatus === "generating" ? `scr=${adapterStatus.lastScreenChangeAt ?? 0}::out=${adapterStatus.lastOutputAt ?? 0}` : void 0;
@@ -204013,7 +204099,7 @@ ${buttons.join("\n")}`;
               now
             );
             const providerApproval = adapterStatus?.waitKind === "external" || adapterStatus?.providerApproval?.lifecycle !== "pending" ? null : adapterStatus.providerApproval;
-            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto68.randomUUID)()}`;
+            const approvalModalKey = providerApproval?.modalKey ?? `modal:${(0, import_node_crypto69.randomUUID)()}`;
             host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = providerApproval?.evidence ?? (adapterStatus?.waitKind === "external" ? "live" : void 0);
             host.pushEvent({
@@ -204949,6 +205035,13 @@ ${buttons.join("\n")}`;
       host.recentUserInputAcks.set(ackContentKey, receivedAt);
       pruneRecentUserInputAcks(host, receivedAt);
       host.lastAcknowledgedUserInputAt = receivedAt;
+      host.lastAcknowledgedTurnOwner = void 0;
+      if (host.type === "codex-cli") {
+        try {
+          host.lastAcknowledgedTurnOwner = JSON.stringify([host.completingTurnTaskId?.(), host.currentAttemptRef?.() ?? null]);
+        } catch {
+        }
+      }
       host.lastAcknowledgedInputDigest = typeof input === "string" || input.parts.every((part) => part.type === "text") ? shortHash(content, 64) : void 0;
       const dedupKey = `user_input_ack:${shortHash(`${host.instanceId}:${content}:${receivedAt}${sourceId ? `:${sourceId}` : ""}`, 24)}`;
       appendRuntimeMessage(host, buildChatMessage({
@@ -205033,6 +205126,8 @@ ${buttons.join("\n")}`;
       const autoApproveActive = host.maybeAutoApproveStatus(adapterStatus, nowMs2) && !host.autoApproveMaskStalled(nowMs2);
       const autoApproveHoldIdle = host.autoApproveBusy && adapterStatus.status === "idle";
       let visibleStatus = parseErrorMessage || parsedStatus?.status === "error" ? "error" : autoApproveActive || autoApproveHoldIdle ? "generating" : adapterStatus.status;
+      const nativeIdleHeld = visibleStatus === "idle" && host.lastStatus === "generating" && host.preserveCodexGeneratingOnIdle?.();
+      if (nativeIdleHeld) visibleStatus = "generating";
       if (isCliGeneratingLikeStatus(visibleStatus) && host.lastStatus === "idle") {
         visibleStatus = "idle";
       }
@@ -205125,7 +205220,7 @@ ${buttons.join("\n")}`;
         summaryMetadata: host.summaryMetadata,
         controlValues: host.controlValues
       });
-      const activeChatStatus = parseErrorMessage ? "error" : autoApproveActive && parsedStatus?.status === "waiting_approval" || autoApproveHoldIdle ? "generating" : adapterStatus.status !== "idle" ? visibleStatus : suppressStaleParsedBusyStatus ? visibleStatus : parsedChatStatus || visibleStatus;
+      const activeChatStatus = nativeIdleHeld ? "generating" : parseErrorMessage ? "error" : autoApproveActive && parsedStatus?.status === "waiting_approval" || autoApproveHoldIdle ? "generating" : adapterStatus.status !== "idle" ? visibleStatus : suppressStaleParsedBusyStatus ? visibleStatus : parsedChatStatus || visibleStatus;
       const nativeQuestion = host.activeInteractivePrompt?.binding?.transport;
       const hasInteractivePrompt = !!host.activeInteractivePrompt && host.activeInteractivePrompt.blocking !== false && nativeQuestion !== "codex_async" && !(nativeQuestion === "codex_rpc" && adapterStatus.status === "waiting_approval");
       const finalStatus = hasInteractivePrompt ? "waiting_choice" : visibleStatus;
@@ -206410,6 +206505,7 @@ ${buttons.join("\n")}`;
       lastPersistedHistoryMessages = [];
       lastAcknowledgedUserInputAt = 0;
       lastAcknowledgedInputDigest;
+      lastAcknowledgedTurnOwner;
       // TASKBUBBLE-DUP: per-content last-ack timestamps so the same dispatched
       // prompt acked twice in quick succession (the worker buffers the first
       // send during bootstrap/busy, then a redelivery — dispatch-confirm-timeout
@@ -206477,6 +206573,7 @@ ${buttons.join("\n")}`;
         });
       }
       async onTick() {
+        if (this.type === "codex-cli" && this.adapter.getInteractivePromptTransport?.() !== "wire" && this.lastStatus === "generating") this.detectStatusTransition();
         scanModelFallback(this);
         if (this.providerSessionId) return;
         if (this.provider.resume?.skipProbeOnNewSession && this.launchMode === "new") return;
@@ -206667,6 +206764,8 @@ ${buttons.join("\n")}`;
       lastExternalCompletionMessages = null;
       // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
       // on every completion probe; null when the provider surfaces none.
+      lastCodexOpenTurn;
+      nativeTurnSampleAt;
       lastNativeTurnTerminalMarkers = null;
       /** TX-FSM: lazily-created transcript signal normalizer. Fed ONLY by
        *  transcript reads this instance already performs — it adds zero I/O.
@@ -207044,6 +207143,9 @@ ${buttons.join("\n")}`;
         if (this.agentReadyEmitted) return;
         this.agentReadyEmitted = true;
         this.pushEvent({ event: "agent:ready", chatTitle, timestamp: now });
+      }
+      preserveCodexGeneratingOnIdle(probe = false) {
+        return this.adapter.getInteractivePromptTransport?.() !== "wire" && preserveCodexGeneratingOnIdle(this, probe);
       }
       detectStatusTransition(cause) {
         runStatusTransitionTick(this, cause);
@@ -215516,7 +215618,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       return false;
     }
-    function recordSessionHostProbeFailure(endpoint2, error, identity4, invocation) {
+    function recordSessionHostProbeFailure(endpoint2, error, identity5, invocation) {
       const key5 = endpointKey(endpoint2);
       if (!isDiagnosticsRequestTimeoutError(error)) {
         probeEvidence2.delete(key5);
@@ -215533,7 +215635,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
       const prior = probeEvidence2.get(key5);
-      const evidence = prior && prior.identity === identity4 ? prior : { identity: identity4, count: 0, firstWallAt: wallNow, firstMonotonicAt: monotonicNow, invocations: /* @__PURE__ */ new Set() };
+      const evidence = prior && prior.identity === identity5 ? prior : { identity: identity5, count: 0, firstWallAt: wallNow, firstMonotonicAt: monotonicNow, invocations: /* @__PURE__ */ new Set() };
       evidence.count++;
       if (invocation !== void 0 && evidence.invocations.size < UNRESPONSIVE_INVOCATION_COUNT) {
         evidence.invocations.add(invocation);
@@ -215562,7 +215664,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         hostRuntimeCounts.set(key5, diagnostics.runtimeCount);
       }
     }
-    async function probeHost(endpoint2, requiredRequestTypes, timeoutMs, identity4, invocation) {
+    async function probeHost(endpoint2, requiredRequestTypes, timeoutMs, identity5, invocation) {
       const client = new import_session_host_core28.SessionHostClient({ endpoint: endpoint2, requestTimeoutMs: timeoutMs, registerAsShared: false });
       const deadline = Date.now() + timeoutMs;
       let connected = false;
@@ -215598,7 +215700,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (typeof record7.wallElapsedMs !== "number") record7.wallElapsedMs = wallElapsedMs;
           if (typeof record7.observerLagMs !== "number") record7.observerLagMs = observerLagMs;
         }
-        const proven = recordSessionHostProbeFailure(endpoint2, connected ? error : void 0, identity4, invocation);
+        const proven = recordSessionHostProbeFailure(endpoint2, connected ? error : void 0, identity5, invocation);
         return { ok: false, error, proven };
       } finally {
         await client.close().catch(() => {
@@ -215942,8 +216044,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return false;
         }
-        const owners = getSocketOwnerPids(endpointPath);
-        if (owners === null || owners.length !== 0) return false;
+        const owners2 = getSocketOwnerPids(endpointPath);
+        if (owners2 === null || owners2.length !== 0) return false;
         return probeSocketConnect(endpointPath) === "refused";
       }
       function getExistingHostIdentity() {
@@ -215975,11 +216077,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (isKnownDeadPid(existingPid)) {
           if (endpoint2.kind === "unix" && fs129.existsSync(endpoint2.path)) {
             if (process.platform !== "win32") {
-              const owners = getSocketOwnerPids(endpoint2.path);
-              if (owners === null) {
+              const owners2 = getSocketOwnerPids(endpoint2.path);
+              if (owners2 === null) {
                 return "unknown";
               }
-              if (owners.length !== 0) {
+              if (owners2.length !== 0) {
                 return "unknown";
               }
             }
@@ -215991,12 +216093,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!birth || birth.toLowerCase() === "win32" || birth.toLowerCase() === "unknown") return "unknown";
         if (endpoint2.kind === "unix" && fs129.existsSync(endpoint2.path)) {
           if (process.platform !== "win32") {
-            const owners = getSocketOwnerPids(endpoint2.path);
-            if (owners === null) {
+            const owners2 = getSocketOwnerPids(endpoint2.path);
+            if (owners2 === null) {
               return "unknown";
             }
-            if (owners.length > 0 && !owners.includes(existingPid)) return "unknown";
-            if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return "unknown";
+            if (owners2.length > 0 && !owners2.includes(existingPid)) return "unknown";
+            if (owners2.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return "unknown";
           }
         }
         return "alive";
@@ -221733,7 +221835,7 @@ ${notice.notice}${supersededHint}`;
     async function bootSessionHost(opts) {
       let current4 = await opts.ensureReady();
       const identityOf2 = opts.getHostIdentity ?? getObservedSessionHostIdentity;
-      let identity4 = identityOf2(current4);
+      let identity5 = identityOf2(current4);
       const replacedListeners = /* @__PURE__ */ new Set();
       const notifyHostReplaced = async () => {
         if (maintenanceHeld()) return;
@@ -221750,9 +221852,9 @@ ${notice.notice}${supersededHint}`;
         const operation = opts.ensureReady().then(async (endpoint2) => {
           const nextIdentity = identityOf2(endpoint2);
           const sameEndpoint = endpoint2.kind === current4.kind && endpoint2.path === current4.path;
-          const changed = !sameEndpoint || identity4 !== void 0 && nextIdentity !== void 0 && identity4 !== nextIdentity;
+          const changed = !sameEndpoint || identity5 !== void 0 && nextIdentity !== void 0 && identity5 !== nextIdentity;
           current4 = endpoint2;
-          identity4 = nextIdentity ?? (sameEndpoint ? identity4 : void 0);
+          identity5 = nextIdentity ?? (sameEndpoint ? identity5 : void 0);
           if (inFlight5 === operation) inFlight5 = null;
           if (changed) await notifyHostReplaced();
           return endpoint2;
