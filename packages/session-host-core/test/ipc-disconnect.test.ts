@@ -1,4 +1,4 @@
-import test from 'node:test'
+import test, { type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import * as net from 'node:net'
 import * as os from 'node:os'
@@ -28,16 +28,18 @@ interface Harness {
   cleanup(): Promise<void>
 }
 
-function makeSocketFixture(): { dir: string; sockPath: string } {
+function makeSocketFixture(t: TestContext): { dir: string; sockPath: string } {
   // Darwin truncates long Unix socket paths, even into an existing directory.
   // Keep the whole unique name within sockaddr_un when TMPDIR is deeply nested.
   const base = process.platform === 'win32' ? os.tmpdir() : '/tmp'
   const dir = fs.mkdtempSync(path.join(base, 'adhdev-ipc-'))
+  // Register before setup can fail; the temp guard does not track this short root.
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   return { dir, sockPath: path.join(dir, 'host.sock') }
 }
 
-async function makeHarness(options: { listen?: boolean; onData?: (s: net.Socket) => void } = {}): Promise<Harness> {
-  const { dir, sockPath } = makeSocketFixture()
+async function makeHarness(t: TestContext, options: { listen?: boolean; onData?: (s: net.Socket) => void } = {}): Promise<Harness> {
+  const { dir, sockPath } = makeSocketFixture(t)
   let peer: net.Socket | null = null
 
   const server = net.createServer((socket) => {
@@ -63,6 +65,44 @@ async function makeHarness(options: { listen?: boolean; onData?: (s: net.Socket)
   }
 }
 
+test('socket fixture fallback cleans failed setup and tolerates normal cleanup without touching another fixture', async (t) => {
+  const sibling = makeSocketFixture(t)
+  const marker = path.join(sibling.dir, 'keep')
+  fs.writeFileSync(marker, 'sibling fixture')
+  let failedDir = ''
+  const setupError = new Error('injected setup failure before caller finally')
+
+  await t.test('setup failure retains its registered fallback', (setup) => {
+    assert.throws(() => {
+      const fixture = makeSocketFixture(setup)
+      failedDir = fixture.dir
+      assert.notEqual(failedDir, sibling.dir)
+      fs.writeFileSync(path.join(failedDir, 'partial-setup'), 'owned fixture')
+      throw setupError
+    }, (error) => error === setupError)
+    assert.equal(fs.existsSync(failedDir), true)
+  })
+  assert.equal(fs.existsSync(failedDir), false)
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'sibling fixture')
+
+  let normalDir = ''
+  await t.test('normal explicit removal remains safe for the fallback', (normal) => {
+    const fixture = makeSocketFixture(normal)
+    normalDir = fixture.dir
+    try {
+      assert.notEqual(normalDir, sibling.dir)
+      if (process.platform !== 'win32') {
+        assert.equal(Buffer.byteLength(fixture.sockPath), 32)
+        assert.equal(fs.statSync(normalDir).mode & 0o777, 0o700)
+      }
+    } finally {
+      fs.rmSync(normalDir, { recursive: true, force: true })
+    }
+  })
+  assert.equal(fs.existsSync(normalDir), false)
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'sibling fixture')
+})
+
 /** Resolve on the next disconnect, or reject after `ms`. */
 function nextDisconnect(client: SessionHostClient, ms = 3000): Promise<SessionHostDisconnectInfo> {
   return new Promise((resolve, reject) => {
@@ -80,8 +120,8 @@ function nextDisconnect(client: SessionHostClient, ms = 3000): Promise<SessionHo
 
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms))
 
-test('reports a CLEAN server-side close (the silent case that hid the ENOSPC death)', async () => {
-  const h = await makeHarness()
+test('reports a CLEAN server-side close (the silent case that hid the ENOSPC death)', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
     const signal = nextDisconnect(h.client)
@@ -98,8 +138,8 @@ test('reports a CLEAN server-side close (the silent case that hid the ENOSPC dea
   }
 })
 
-test('reports an abrupt destroy', async () => {
-  const h = await makeHarness()
+test('reports an abrupt destroy', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
     const signal = nextDisconnect(h.client)
@@ -113,10 +153,10 @@ test('reports an abrupt destroy', async () => {
   }
 })
 
-test('rejects in-flight requests instead of hanging them to the 30s timeout', async () => {
+test('rejects in-flight requests instead of hanging them to the 30s timeout', async (t) => {
   // Server accepts the request and then dies without ever responding — the
   // session-host-crashed-mid-request case.
-  const h = await makeHarness({ onData: (s) => s.on('data', () => s.destroy()) })
+  const h = await makeHarness(t, { onData: (s) => s.on('data', () => s.destroy()) })
   try {
     await h.client.connect()
     await assert.rejects(h.client.request({ type: 'list_sessions', payload: {} } as any))
@@ -125,8 +165,8 @@ test('rejects in-flight requests instead of hanging them to the 30s timeout', as
   }
 })
 
-test('counts the abandoned in-flight requests in the disconnect signal', async () => {
-  const h = await makeHarness({ onData: (s) => s.on('data', () => { /* swallow — never respond */ }) })
+test('counts the abandoned in-flight requests in the disconnect signal', async (t) => {
+  const h = await makeHarness(t, { onData: (s) => s.on('data', () => { /* swallow — never respond */ }) })
   try {
     await h.client.connect()
     const signal = nextDisconnect(h.client)
@@ -144,8 +184,8 @@ test('counts the abandoned in-flight requests in the disconnect signal', async (
   }
 })
 
-test('clears the dead socket so the next connect() actually reconnects', async () => {
-  const h = await makeHarness()
+test('clears the dead socket so the next connect() actually reconnects', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
     const signal = nextDisconnect(h.client)
@@ -161,9 +201,9 @@ test('clears the dead socket so the next connect() actually reconnects', async (
   }
 })
 
-test('does NOT report a disconnect for a connect that never established', async () => {
+test('does NOT report a disconnect for a connect that never established', async (t) => {
   // Nothing is listening — this is "host not up yet", not "host died".
-  const h = await makeHarness({ listen: false })
+  const h = await makeHarness(t, { listen: false })
   try {
     let signalled = false
     h.client.onDisconnect(() => { signalled = true })
@@ -176,8 +216,8 @@ test('does NOT report a disconnect for a connect that never established', async 
   }
 })
 
-test('does NOT report a disconnect for a deliberate close()', async () => {
-  const h = await makeHarness()
+test('does NOT report a disconnect for a deliberate close()', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
 
@@ -192,8 +232,8 @@ test('does NOT report a disconnect for a deliberate close()', async () => {
   }
 })
 
-test('emits at most one signal per socket', async () => {
-  const h = await makeHarness()
+test('emits at most one signal per socket', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
 
@@ -210,8 +250,8 @@ test('emits at most one signal per socket', async () => {
   }
 })
 
-test('survives a throwing observer without taking down the process', async () => {
-  const h = await makeHarness()
+test('survives a throwing observer without taking down the process', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
 
@@ -227,8 +267,8 @@ test('survives a throwing observer without taking down the process', async () =>
   }
 })
 
-test('stops signalling after the listener unsubscribes', async () => {
-  const h = await makeHarness()
+test('stops signalling after the listener unsubscribes', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
 
@@ -244,9 +284,9 @@ test('stops signalling after the listener unsubscribes', async () => {
   }
 })
 
-test('one RPC timeout preserves concurrent success, late replies, events and the live socket under backpressure', async () => {
+test('one RPC timeout preserves concurrent success, late replies, events and the live socket under backpressure', async (t) => {
   let backpressured = false
-  const h = await makeHarness({ onData: socket => {
+  const h = await makeHarness(t, { onData: socket => {
     let buffer = ''
     socket.on('data', chunk => {
       buffer += chunk.toString()
@@ -290,8 +330,8 @@ test('one RPC timeout preserves concurrent success, late replies, events and the
   } finally { await h.cleanup() }
 })
 
-test('H1: client that attached to a session automatically replays attach_session on reconnect after disconnect', async () => {
-  const { dir, sockPath } = makeSocketFixture()
+test('H1: client that attached to a session automatically replays attach_session on reconnect after disconnect', async (t) => {
+  const { dir, sockPath } = makeSocketFixture(t)
   const attachedByConn = new Map<number, string[]>()
   let connectionCount = 0
 
@@ -347,8 +387,8 @@ test('H1: client that attached to a session automatically replays attach_session
   }
 })
 
-test('L3: create_session without clientId does not invent a daemon clientId on reconnect, and failed replay entries are pruned', async () => {
-  const { dir, sockPath } = makeSocketFixture()
+test('L3: create_session without clientId does not invent a daemon clientId on reconnect, and failed replay entries are pruned', async (t) => {
+  const { dir, sockPath } = makeSocketFixture(t)
   let connectionCount = 0
   const replaysByConn = new Map<number, Array<{ sessionId: string; clientId: string }>>()
 
@@ -427,8 +467,8 @@ test('L3: create_session without clientId does not invent a daemon clientId on r
   }
 })
 
-test('findConnectedClient returns an established client for the endpoint and clears after disconnectClients', async () => {
-  const h = await makeHarness()
+test('findConnectedClient returns an established client for the endpoint and clears after disconnectClients', async (t) => {
+  const h = await makeHarness(t)
   const endpoint = { kind: 'unix' as const, path: h.sockPath }
   try {
     assert.equal(h.client.isConnected(), false)
@@ -447,8 +487,8 @@ test('findConnectedClient returns an established client for the endpoint and cle
 })
 
 
-test('a per-request probe timeout overrides the 30s default on an existing connection', async () => {
-  const h = await makeHarness()
+test('a per-request probe timeout overrides the 30s default on an existing connection', async (t) => {
+  const h = await makeHarness(t)
   try {
     await h.client.connect()
     const started = Date.now()
@@ -463,8 +503,8 @@ test('a per-request probe timeout overrides the 30s default on an existing conne
   } finally { h.peer()?.destroy(); await h.cleanup() }
 })
 
-test('an isolated probe stays out of the shared client registry', async () => {
-  const h = await makeHarness()
+test('an isolated probe stays out of the shared client registry', async (t) => {
+  const h = await makeHarness(t)
   const endpoint = { kind: 'unix' as const, path: h.sockPath }
   const probe = new SessionHostClient({ endpoint, registerAsShared: false })
   try {
@@ -481,10 +521,10 @@ test('an isolated probe stays out of the shared client registry', async () => {
   }
 })
 
-test('a short request budget cannot tear down a shared connect/attachment replay', async () => {
+test('a short request budget cannot tear down a shared connect/attachment replay', async (t) => {
   let connectionCount = 0
   let attachCount = 0
-  const h = await makeHarness({ onData: socket => {
+  const h = await makeHarness(t, { onData: socket => {
     connectionCount++
     let buffer = ''
     socket.on('data', chunk => {
