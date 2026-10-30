@@ -350,6 +350,7 @@ function stopReasonOf(attempt: TurnAttempt | null): FormatStopReason {
     switch (attempt?.terminal?.reason) {
         case 'provider_auth_failed': return 'auth_failed';
         case 'provider_billing_failed': return 'billing_failed';
+        case 'provider_usage_limit_exceeded': return 'usage_limit_exceeded';
         default: return 'plain';
     }
 }

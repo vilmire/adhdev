@@ -46,7 +46,7 @@ type FormatDispatchFailureReason = 'worker_absent' | 'transport_error' | 'spawn_
 
 /** `agent:stopped` / `session_error` sub-reasons the legacy templates branch on. */
 export type FormatStopReason =
-    | 'auth_failed' | 'billing_failed' | 'quota_exceeded'
+    | 'auth_failed' | 'billing_failed' | 'quota_exceeded' | 'usage_limit_exceeded'
     | 'recovery_context' | 'direct_not_redelivered' | 'plain';
 
 /** Worktree bootstrap outcome. */
@@ -398,6 +398,9 @@ function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): str
         const kind = s.stopReason === 'billing_failed' ? 'billing/subscription' : 'authentication';
         const detail = resolve(input.refs.error, input.resolveRef, missing) ?? resolve(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
+    }
+    if (s.stopReason === 'usage_limit_exceeded') {
+        return `[System] ${nodeLabel} stopped because the provider reported a usage quota limit${metadata}. This attempt has no successful completion verdict. Check the provider quota/reset evidence before deciding whether to retry.`;
     }
     if (s.stopReason === 'quota_exceeded') {
         const detail = resolve(input.refs.error, input.resolveRef, missing) ?? resolve(input.refs.summary, input.resolveRef, missing);

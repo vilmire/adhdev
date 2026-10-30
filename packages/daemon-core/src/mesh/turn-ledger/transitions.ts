@@ -65,7 +65,7 @@ export type GuardId =
     | 'hold_await_delivery' | 'hold_await_consume_redrive' | 'hold_await_consume_exhausted' | 'hold_await_turn'
     | 'hold_liveness' | 'hold_hard_ceiling' | 'hold_suspension_before_consumed' | 'hold_weak_candidate' | 'hold_admission'
     | 'hold_await_report'
-    | 'hold_native_probe_report_only' | 'hold_direct_report_missing'
+    | 'hold_native_probe_report_only' | 'hold_direct_report_missing' | 'hold_queue_report_missing'
     | 'hold_end_unconfirmed_defer' | 'hold_end_unconfirmed_exhausted' | 'hold_end_probe_missing' | 'hold_report_correction'
     | 'finished_after_report' | 'hold_await_end';
 
@@ -138,7 +138,7 @@ const weakCandidate: readonly EffectTemplate[] = [
  * The report-awaiting idle candidate (R9r, R15p): the structured report, not
  * the idle signal, commits the attempt — R17 on the report, R12r cancels it
  * when the worker goes busy again. Direct dispatch stays incomplete on expiry
- * (R13d); the existing queue fallback uses R13r.
+ * (R13d); a queue report wait stays incomplete too (R13q).
  */
 const awaitReport: readonly EffectTemplate[] = [
     { e: 'act', act: 'await_report' },
@@ -362,7 +362,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // 37 s into a 4-minute turn and R9 committed it genuine. R9r opens an
     // `await_report` hold instead of committing; R17 commits on the report,
     // R12r cancels the candidate when the worker goes busy again (false idle),
-    // R13r commits weak when the hold expires with no report. Sessions with no
+    // R13d/R13q preserve report-missing attempts on expiry. Sessions with no
     // bind never set `reportExpected` and keep R9 exactly.
     { id: 'R9r', lane: 'current', from: [C, G, S, F], on: ['turn_end'], guard: 'end_report_awaited', to: F, verdict: 'applied', effects: awaitReport },
     { id: 'R9d', lane: 'current', from: [F], on: ['turn_end'], guard: 'end_report_awaited_held', to: 'same', verdict: 'recorded', effects: [
@@ -536,6 +536,13 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     { id: 'R13n', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_native_probe_report_only', to: 'same', verdict: 'applied', effects: [
         { e: 'release', reasons: 'expired_hold' },
         { e: 'record', note: 'native_probe_await_report_expired' },
+    ] },
+    // A queue worker that owes a report retains its exact attempt and writer.
+    // A timer plus an idle/alive probe proves no task verdict (7aa0a33b).
+    { id: 'R13q', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_queue_report_missing', to: 'same', verdict: 'applied', effects: [
+        { e: 'release', reasons: 'expired_hold' },
+        { e: 'record', note: 'queue_completion_report_missing' },
+        { e: 'notify', notify: 'candidate', when: 'candidate_once' },
     ] },
     { id: 'R13r', lane: 'current', from: [F], on: ['hold_expired'], guard: 'hold_await_report', to: 'completed', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' },

@@ -24,7 +24,15 @@ export function createNoticeSubmitInventory(ledger:Pick<TurnLedger,'store'|'self
  return {begin,async handling<T>(run:()=>Promise<T>):Promise<T>{const id=randomUUID();active.add(id);try{return await run();}finally{active.delete(id);}},
   inventory(){const rows=db.prepare('SELECT operation_id,message_id,mesh_id,writer,seq,session_id,daemon_id,pid,boot_nonce,state,outcome,revision,updated_at FROM turn_notice_submit_metadata ORDER BY operation_id LIMIT 100001').all() as any[];
    if(rows.length>100000||rows.some(r=>!['intent','started','submitted','uncertain','queued','unknown'].includes(r.state)||!/^[-a-f0-9]{36}$/.test(r.operation_id)||!Number.isSafeInteger(r.seq)||!Number.isSafeInteger(r.pid)||r.pid<=0||!Number.isSafeInteger(r.revision)||r.revision<1||r.message_id!==`notify:${r.mesh_id}:${r.writer}:${r.seq}`||typeof r.session_id!=='string'||r.daemon_id!==ledger.selfDaemonId))throw Error('notice_submit_inventory_unknown');
-   return {schema:1,daemonId:ledger.selfDaemonId,pid:process.pid,bootNonce:MAINTENANCE_BOOT_NONCE,active:[...active].sort(),rows,pending:rows.filter(r=>r.state!=='submitted')};
+   // A durable native-write receipt is not consumption/application ACK.
+   // A restored queued row has no surviving FIFO/observer authority. Never
+   // infer a safe resend from process death or an old delivery claim.
+   const evidence=rows.map(r=>({operationId:r.operation_id,messageId:r.message_id,sessionId:r.session_id,
+    durableIntent:true as const,nativeSubmission:r.state==='submitted'?'confirmed' as const:'unknown' as const,
+    consumed:'unknown' as const,applicationAck:'unknown' as const,
+    restored:r.pid!==process.pid||r.boot_nonce!==MAINTENANCE_BOOT_NONCE,
+    retry:'requires_exact_not_consumed_proof' as const}));
+   return {schema:1,evidence,daemonId:ledger.selfDaemonId,pid:process.pid,bootNonce:MAINTENANCE_BOOT_NONCE,active:[...active].sort(),rows,pending:rows.filter(r=>r.state!=='submitted')};
   }};
 }
 export type NoticeSubmitInventory=ReturnType<typeof createNoticeSubmitInventory>;

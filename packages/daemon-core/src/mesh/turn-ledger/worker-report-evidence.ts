@@ -14,6 +14,7 @@
 // notice from it — and the evidence carries no handoff pointer.
 // ---------------------------------------------------------------------------
 
+import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { TurnEvidenceOf, WorkerBranchState, WorkerReportOutcome } from '@adhdev/mesh-shared';
 import type { ObserveResult, TurnLedger } from './ledger.js';
 
@@ -41,7 +42,8 @@ export function observeAcceptedWorkerReport(ledger: TurnLedger, report: Accepted
     const attempt = report.attemptId
         ? ledger.getAttempt(report.attemptId)
         : ledger.store.findLatestAttemptForTask(report.meshId, report.taskId);
-    if (!attempt || attempt.taskId !== report.taskId) return null;
+    if (!attempt || attempt.meshId !== report.meshId || attempt.taskId !== report.taskId
+        || (report.sessionId !== undefined && !sessionIdsEquivalent(attempt.sessionId, report.sessionId))) return null;
     const evidence: TurnEvidenceOf<'worker_report'> = {
         eventId: `worker_report:${attempt.attemptId}:g${attempt.generation}:${report.outcome}`,
         at: report.atMs,

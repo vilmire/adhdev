@@ -5,6 +5,8 @@ import { createTurnEvidencePort } from '../../src/providers/turn-evidence-port.j
 import { reduce } from '../../src/mesh/turn-ledger/reducer.js';
 import { NOW, POLICY, REF, makeAttempt } from './fixtures.js';
 
+const QUOTA_REPLY = '… 69 more actions (44 reads, 3 edits, 21 commands, 1 tool: 4 failed) …\n⚠ Individual quota reached. Please upgrade your subscription to increase your\nlimits. Resets in 29h11m3s.';
+
 const CODEX_ECHO = 'API Error: 401 {"provider":"codex","url":"https://chatgpt.com/backend-api/wham/usage","error":"token_revoked"}';
 
 function complete(cliType: string, finalSummary: string, weak = false) {
@@ -42,6 +44,12 @@ describe('provider-attributed completion evidence through the real reducer', () 
             expect(result.attempt?.terminal).toMatchObject({ outcome: 'failed', reason: 'provider_auth_failed' });
         });
     }
+
+    it('carries measured quota failure through completion flush and the reducer', () => {
+        const { evidence, result } = complete('antigravity-cli', QUOTA_REPLY);
+        expect(evidence.providerFailure).toBe('usage_limit_exceeded');
+        expect(result.attempt?.terminal).toMatchObject({ outcome: 'failed', reason: 'provider_usage_limit_exceeded' });
+    });
 
     it.each(['Authentication required. Not signed in.', 'Login expired · Please run /login'])('a genuine own-only banner still fails: %s', summary => {
         const { evidence, result } = complete('antigravity-cli', summary);

@@ -58504,7 +58504,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           // 37 s into a 4-minute turn and R9 committed it genuine. R9r opens an
           // `await_report` hold instead of committing; R17 commits on the report,
           // R12r cancels the candidate when the worker goes busy again (false idle),
-          // R13r commits weak when the hold expires with no report. Sessions with no
+          // R13d/R13q preserve report-missing attempts on expiry. Sessions with no
           // bind never set `reportExpected` and keep R9 exactly.
           { id: "R9r", lane: "current", from: [C, G, S, F], on: ["turn_end"], guard: "end_report_awaited", to: F, verdict: "applied", effects: awaitReport },
           { id: "R9d", lane: "current", from: [F], on: ["turn_end"], guard: "end_report_awaited_held", to: "same", verdict: "recorded", effects: [
@@ -58673,6 +58673,13 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             { e: "release", reasons: "expired_hold" },
             { e: "record", note: "native_probe_await_report_expired" }
           ] },
+          // A queue worker that owes a report retains its exact attempt and writer.
+          // A timer plus an idle/alive probe proves no task verdict (7aa0a33b).
+          { id: "R13q", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_queue_report_missing", to: "same", verdict: "applied", effects: [
+            { e: "release", reasons: "expired_hold" },
+            { e: "record", note: "queue_completion_report_missing" },
+            { e: "notify", notify: "candidate", when: "candidate_once" }
+          ] },
           { id: "R13r", lane: "current", from: [F], on: ["hold_expired"], guard: "hold_await_report", to: "completed", verdict: "applied", effects: [
             { e: "commit", outcome: "completed", strength: "weak", reason: "weak_end_confirmed" }
           ] },
@@ -58813,8 +58820,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const r = ctx.attempt?.data.reportCorrection;
       return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
     }
+    function queueReportMissing(ctx) {
+      return ctx.attempt?.scope === "mesh_queue" && holdIs(ctx, "await_report") && !reportedThisGeneration(ctx);
+    }
     function endTimer(ctx) {
-      return holdIs(ctx, "weak_candidate", "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
+      return holdIs(ctx, "weak_candidate", "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx);
     }
     function freshAlive(ctx) {
       return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === "alive";
@@ -59549,7 +59559,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           hold_direct_report_missing: (ctx) => ctx.attempt?.scope === "mesh_direct" && holdIs(ctx, "weak_candidate", "await_report") && !correctionPending(ctx) && !reportedThisGeneration(ctx),
           hold_weak_candidate: (ctx) => holdIs(ctx, "weak_candidate") && ctx.attempt?.scope !== "mesh_direct" && !correctionPending(ctx) && freshAlive(ctx),
           hold_admission: (ctx) => holdIs(ctx, "live_pending", "transcript_quiet"),
-          hold_await_report: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
+          hold_queue_report_missing: (ctx) => queueReportMissing(ctx) && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx),
+          hold_await_report: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx) && freshAlive(ctx),
           hold_native_probe_report_only: (ctx) => holdIs(ctx, "await_report") && ctx.attempt?.scope !== "mesh_direct" && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx) && !reportedThisGeneration(ctx),
           hold_end_unconfirmed_defer: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) < MAX_UNCONFIRMED_END_DEFERRALS,
           hold_end_unconfirmed_exhausted: (ctx) => endTimer(ctx) && !freshAlive(ctx) && unconfirmedEndDeferrals(ctx) >= MAX_UNCONFIRMED_END_DEFERRALS && freshEndProbe(ctx),
@@ -59843,6 +59854,9 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
         const kind = s2.stopReason === "billing_failed" ? "billing/subscription" : "authentication";
         const detail = resolve15(input.refs.error, input.resolveRef, missing) ?? resolve15(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ""}`;
+      }
+      if (s2.stopReason === "usage_limit_exceeded") {
+        return `[System] ${nodeLabel} stopped because the provider reported a usage quota limit${metadata}. This attempt has no successful completion verdict. Check the provider quota/reset evidence before deciding whether to retry.`;
       }
       if (s2.stopReason === "quota_exceeded") {
         const detail = resolve15(input.refs.error, input.resolveRef, missing) ?? resolve15(input.refs.summary, input.resolveRef, missing);
@@ -60682,6 +60696,8 @@ Next step: ${nextStep}`;
           return "auth_failed";
         case "provider_billing_failed":
           return "billing_failed";
+        case "provider_usage_limit_exceeded":
+          return "usage_limit_exceeded";
         default:
           return "plain";
       }
@@ -74561,7 +74577,7 @@ ${block2.text}`,
     });
     function observeAcceptedWorkerReport(ledger, report) {
       const attempt = report.attemptId ? ledger.getAttempt(report.attemptId) : ledger.store.findLatestAttemptForTask(report.meshId, report.taskId);
-      if (!attempt || attempt.taskId !== report.taskId) return null;
+      if (!attempt || attempt.meshId !== report.meshId || attempt.taskId !== report.taskId || report.sessionId !== void 0 && !sessionIdsEquivalent(attempt.sessionId, report.sessionId)) return null;
       const evidence = {
         eventId: `worker_report:${attempt.attemptId}:g${attempt.generation}:${report.outcome}`,
         at: report.atMs,
@@ -74581,6 +74597,7 @@ ${block2.text}`,
     var init_worker_report_evidence = __esm2({
       "src/mesh/turn-ledger/worker-report-evidence.ts"() {
         "use strict";
+        init_dist();
       }
     });
     function resolveRecentlyTerminalAttempt(meshId, sessionId, nowMs2, isSelfDaemon, reportedAtMs) {
@@ -143713,7 +143730,18 @@ ${tail}` : ""
         inventory() {
           const rows = db2.prepare("SELECT operation_id,message_id,mesh_id,writer,seq,session_id,daemon_id,pid,boot_nonce,state,outcome,revision,updated_at FROM turn_notice_submit_metadata ORDER BY operation_id LIMIT 100001").all();
           if (rows.length > 1e5 || rows.some((r) => !["intent", "started", "submitted", "uncertain", "queued", "unknown"].includes(r.state) || !/^[-a-f0-9]{36}$/.test(r.operation_id) || !Number.isSafeInteger(r.seq) || !Number.isSafeInteger(r.pid) || r.pid <= 0 || !Number.isSafeInteger(r.revision) || r.revision < 1 || r.message_id !== `notify:${r.mesh_id}:${r.writer}:${r.seq}` || typeof r.session_id !== "string" || r.daemon_id !== ledger.selfDaemonId)) throw Error("notice_submit_inventory_unknown");
-          return { schema: 1, daemonId: ledger.selfDaemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, active: [...active].sort(), rows, pending: rows.filter((r) => r.state !== "submitted") };
+          const evidence = rows.map((r) => ({
+            operationId: r.operation_id,
+            messageId: r.message_id,
+            sessionId: r.session_id,
+            durableIntent: true,
+            nativeSubmission: r.state === "submitted" ? "confirmed" : "unknown",
+            consumed: "unknown",
+            applicationAck: "unknown",
+            restored: r.pid !== process.pid || r.boot_nonce !== MAINTENANCE_BOOT_NONCE,
+            retry: "requires_exact_not_consumed_proof"
+          }));
+          return { schema: 1, evidence, daemonId: ledger.selfDaemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, active: [...active].sort(), rows, pending: rows.filter((r) => r.state !== "submitted") };
         }
       };
     }
@@ -199787,6 +199815,11 @@ ${text5}` : text5;
       if (!detectAuthFailureOnlyReply(reply)) return null;
       return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply));
     }
+    function classifyOwnQuotaFailureOnlyReply(cliType, reply) {
+      if (cliType !== "antigravity-cli" || reply.length > 2048) return null;
+      const text5 = stripAnsi3(reply).replace(/\s+/g, " ").trim();
+      return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text5) ? "usage_limit_exceeded" : null;
+    }
     var TAIL_BYTES4 = 16 * 1024;
     var MIN_SUSPECT_AGE_MS = 5e3;
     var MID_TURN_AUTH_CONFIRM_MS = 15e3;
@@ -204918,7 +204951,7 @@ ${buttons.join("\n")}`;
           // is not a completion. The closed enum rides the evidence; the owner's
           // reducer commits it failed / provider_auth_failed (R9f). Whole-reply
           // match only — a summary that merely mentions the banner is untouched.
-          providerFailure: PROVIDER_FAILURES2.includes(opts.completionDiagnostic?.nativeProviderFailure) ? opts.completionDiagnostic.nativeProviderFailure : summary && classifyOwnAuthFailureOnlyReply(host.type, summary) ? "auth_failed" : void 0,
+          providerFailure: PROVIDER_FAILURES2.includes(opts.completionDiagnostic?.nativeProviderFailure) ? opts.completionDiagnostic.nativeProviderFailure : summary ? classifyOwnAuthFailureOnlyReply(host.type, summary) ? "auth_failed" : classifyOwnQuotaFailureOnlyReply(host.type, summary) ?? void 0 : void 0,
           // `nodeLabel` is intentionally omitted — `turn-ledger/deliver.ts`'s
           // `nodeLabelFor` already falls back to the attempt's own
           // `nodeId`/`providerType` (dispatch-time facts the ledger has),

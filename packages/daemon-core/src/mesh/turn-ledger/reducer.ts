@@ -292,10 +292,14 @@ function correctionPending(ctx: GuardCtx): boolean {
     const r = ctx.attempt?.data.reportCorrection;
     return r?.generation === ctx.attempt?.generation && !reportedThisGeneration(ctx);
 }
+function queueReportMissing(ctx: GuardCtx): boolean {
+    return ctx.attempt?.scope === 'mesh_queue' && holdIs(ctx, 'await_report')
+        && !reportedThisGeneration(ctx);
+}
 function endTimer(ctx: GuardCtx): boolean {
     return holdIs(ctx, 'weak_candidate', 'await_report')
         && ctx.attempt?.scope !== 'mesh_direct'
-        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx);
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx);
 }
 function freshAlive(ctx: GuardCtx): boolean { return freshEndProbe(ctx) && ctx.attempt?.lastLiveness === 'alive'; }
 
@@ -386,8 +390,10 @@ const GUARDS: Record<Exclude<GuardId, 'otherwise'>, (ctx: GuardCtx) => boolean> 
     hold_weak_candidate: (ctx) => holdIs(ctx, 'weak_candidate') && ctx.attempt?.scope !== 'mesh_direct'
         && !correctionPending(ctx) && freshAlive(ctx),
     hold_admission: (ctx) => holdIs(ctx, 'live_pending', 'transcript_quiet'),
+    hold_queue_report_missing: (ctx) => queueReportMissing(ctx)
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx),
     hold_await_report: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
-        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && freshAlive(ctx),
+        && expiredHold(ctx)?.data.nativeProbeReportOnly !== true && !correctionPending(ctx) && !queueReportMissing(ctx) && freshAlive(ctx),
     hold_native_probe_report_only: (ctx) => holdIs(ctx, 'await_report') && ctx.attempt?.scope !== 'mesh_direct'
         && expiredHold(ctx)?.data.nativeProbeReportOnly === true && !correctionPending(ctx)
         && !reportedThisGeneration(ctx),

@@ -583,10 +583,10 @@ describe('backlog + MCP inbox', () => {
     });
 });
 
-describe('report gate — a hold-expiry commit renders the text of the end that opened the hold (R13r)', () => {
-    it('await_report expires after a fresh session probe: the notice carries the idle end\'s local summary, committed weak', async () => {
+describe('report gate — queue report-missing expiry requests recovery (R13q)', () => {
+    it('await_report expiry after a fresh session probe delivers a recovery candidate', async () => {
         const f = fixture();
-        // Weak hold-expiry completion belongs to the queue fallback; direct tasks require a report.
+        // Queue idle/liveness evidence cannot replace a genuine task report.
         f.ledger.observe({ ...dispatch(), scope: 'mesh_queue' });
         f.ledger.observe(evd('delivered', { messageId: 'msg-1', outcome: 'delivered', via: 'local' }, { source: 'input_service' }));
         f.ledger.observe(evd('turn_started', { retro: false }));
@@ -607,13 +607,13 @@ describe('report gate — a hold-expiry commit renders the text of the end that 
             eventId: `hold_expired:${hold.holdId}:${hold.until}`, at: hold.until!, source: 'scheduler', sessionId: 's1',
             attemptRef: { attemptId: 'a1', generation: 0 }, observedBy: 'dc', kind: 'hold_expired', holdId: hold.holdId, reason: 'await_report',
         });
-        expect(expired.rule).toBe('R13r');
-        expect(f.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'completed', strength: 'weak', reason: 'weak_end_confirmed' });
+        expect(expired.rule).toBe('R13q');
+        expect(f.ledger.getAttempt('a1')!.terminal).toBeNull();
         await f.ledger.flushPublish();
         const deliver = createTurnDeliverHandler(f.deps);
         const result = await deliver(notifyEntry(f), new AbortController().signal);
         expect(result).toMatchObject({ outcome: 'delivered' });
         expect(f.port.calls).toHaveLength(1);
-        expect(f.port.calls[0]!.input.textFallback).toContain(SENTINEL);
+        expect(f.port.calls[0]!.input.textFallback).toContain('report_completion');
     });
 });

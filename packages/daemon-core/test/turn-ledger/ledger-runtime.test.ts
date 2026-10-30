@@ -28,6 +28,9 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
+import { createNoticeSubmitInventory } from '../../src/mesh/turn-ledger/notice-submit-inventory.js';
+import { createTurnDeliverHandler, createDeliverEdgeWaiter } from '../../src/mesh/turn-ledger/deliver.js';
+import { observeAcceptedWorkerReport } from '../../src/mesh/turn-ledger/worker-report-evidence.js';
 import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js';
@@ -183,6 +186,63 @@ describe('report_completion reaches the turn ledger (design §F2, rc.44 run 12)'
     afterEach(() => {
         setActiveTurnLedger(null);
         __resetWorkerTaskTokensForTest();
+    });
+
+    it('cbb1803f: stored report, queued notice and native submission survive reopen without inventing consumption ACK', async () => {
+        const mesh = meshId();
+        const { task, store, ledger, ref } = setup(mesh);
+        setActiveTurnLedger(ledger);
+        const token = mintWorkerTaskToken({ meshId: mesh, taskId: task.id, attemptId: ref.attemptRef.attemptId, sessionId: 's1' });
+        const summary = 'Bounded APPROVE; independent review and deployment gates remain.';
+        expect(acceptWorkerCompletionReport({ token: token.token }, { outcome: 'completed', summary, touchedFiles: [], branchState: 'blocked_review' }))
+            .toMatchObject({ accepted: true });
+        const output = store.getLatestTaskOutput(task.id)!;
+        expect(output).toMatchObject({ version: 1, status: 'completed' });
+        expect(output.envelopeJson).toContain(summary);
+        const hold = store.turnStore().activeHolds(ref.attemptRef.attemptId).find(h => h.reason === 'await_end')!;
+        expect(ledger.observe(evd('hold_expired', { holdId: hold.holdId, reason: hold.reason }, { ...ref, at: hold.until!, source: 'scheduler' })).rule).toBe('R13t');
+        await ledger.flushPublish();
+        const notice = store.turnStore().listEvents(ref.attemptRef.attemptId).find(e => e.kind === 'notify' && (e.payload as any).notify === 'completed')!;
+        const payload = (notice.payload as any).entry;
+        const entry = { meshId: mesh, writer: notice.srcWriter!, seq: notice.publishedSeq!, kind: 'turn.notify', payload, own: true };
+        expect(entry.writer).toBeTruthy();
+        const metadata = createNoticeSubmitInventory(ledger);
+        let nativeObserver: ((state: 'started' | 'submitted' | 'uncertain') => void) | undefined;
+        let writes = 0;
+        const handler = createTurnDeliverHandler({ ledger, selfDaemonIds: () => ['dc'], submitInventory: metadata,
+            port: { submit: async () => { throw Error('notice observer required'); }, submitNotice: async (_msg, observe) => { writes++; nativeObserver = observe; return { kind: 'queued' }; } },
+            coordinators: () => [{ sessionId: 'coord', idle: true, modalParked: false }], waiter: createDeliverEdgeWaiter({ now: Date.now }) });
+        expect((await handler(entry, new AbortController().signal)).outcome).toBe('queued');
+        nativeObserver!('submitted');
+        metadata.begin({ ...entry, seq: entry.seq + 1 }, 'coord').outcome('queued');
+        // Model a persisted prior-boot tuple; never touch a live runtime.
+        store.db.prepare('UPDATE turn_notice_submit_metadata SET boot_nonce=?').run('fixture-prior-boot');
+        await ledger.flushPublish();
+        setActiveTurnLedger(null);
+        MeshRuntimeStore.resetForTests();
+        const reopened = MeshRuntimeStore.getInstance();
+        const restored = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', publisher: fakePublisher() });
+        expect(reopened.getLatestTaskOutput(task.id)).toEqual(output);
+        expect(restored.getAttempt(ref.attemptRef.attemptId)?.terminal).toMatchObject({ strength: 'tool_report', reason: 'worker_reported' });
+        expect(createNoticeSubmitInventory(restored).inventory().evidence).toContainEqual(expect.objectContaining({
+            restored: true, nativeSubmission: 'confirmed', consumed: 'unknown', applicationAck: 'unknown', retry: 'requires_exact_not_consumed_proof',
+        }));
+        expect(createNoticeSubmitInventory(restored).inventory().evidence).toContainEqual(expect.objectContaining({
+            restored: true, nativeSubmission: 'unknown', consumed: 'unknown', applicationAck: 'unknown',
+        }));
+        expect(observeAcceptedWorkerReport(restored, { meshId: mesh, sessionId: 's1', taskId: task.id, attemptId: ref.attemptRef.attemptId,
+            outcome: 'completed', summary, hasHandoffNotes: false, atMs: Date.now() })?.verdict).toBe('duplicate');
+        const restoredHandler = createTurnDeliverHandler({ ledger: restored, selfDaemonIds: () => ['dc'],
+            port: { submit: async () => { writes++; return { kind: 'delivered' }; } },
+            coordinators: () => [{ sessionId: 'coord', idle: true, modalParked: false }], waiter: createDeliverEdgeWaiter({ now: Date.now }) });
+        expect(await restoredHandler(entry, new AbortController().signal)).toMatchObject({ outcome: 'skipped', why: 'already_delivered' });
+        expect(writes).toBe(1);
+        // Wrong mesh/session cannot transfer the persisted report to a new assignment.
+        for (const identity of [{ meshId: 'other', sessionId: 's1' }, { meshId: mesh, sessionId: 'new-session' }]) {
+            expect(observeAcceptedWorkerReport(restored, { ...identity, taskId: task.id, attemptId: ref.attemptRef.attemptId,
+                outcome: 'completed', summary, hasHandoffNotes: false, atMs: Date.now() })).toBeNull();
+        }
+        expect(reopened.getLatestTaskOutput(task.id)?.version).toBe(1);
     });
 
     it('an accepted report while generating is observed (R17g, await_end); the idle end commits it (R9t) with one completion notice', () => {

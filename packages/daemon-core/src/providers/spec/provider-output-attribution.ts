@@ -142,3 +142,15 @@ export function classifyOwnAuthFailureOnlyReply(cliType: string, reply: string):
     if (!detectAuthFailureOnlyReply(reply)) return null;
     return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply));
 }
+
+/** Measured Antigravity quota-only screen (7aa0a33b handoff seq141).
+ * Whole reply only: quoted errors, investigation prose and other providers do
+ * not acquire verdict authority. The action-count footer is provider chrome.
+ * No captured provider text or error id leaves this classifier.
+ */
+export function classifyOwnQuotaFailureOnlyReply(cliType: string, reply: string): 'usage_limit_exceeded' | null {
+    if (cliType !== 'antigravity-cli' || reply.length > 2048) return null;
+    const text = stripAnsi(reply).replace(/\s+/g, ' ').trim();
+    return /^(?:… \d+ more actions \([\d a-z,:]+\) … )?⚠ Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in (?:\d+h)?(?:\d+m)?\d+s\.(?: Error ID: [a-f0-9-]{8,80})?$/i.test(text)
+        ? 'usage_limit_exceeded' : null;
+}
