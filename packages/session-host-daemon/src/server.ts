@@ -227,12 +227,19 @@ export class SessionHostServer extends EventEmitter {
     const initialPid = readPid();
     const hasPid = (value: string): boolean => value !== 'missing' && value !== 'corrupt';
     const initialBirth = hasPid(initialPid) ? this.readProcessBirth(Number(initialPid)) : null;
+    const reclaimed = this.instanceLock?.reclaimedPid;
+    const reusedPid = !!reclaimed && reclaimed.pid === Number(initialPid) && reclaimed.birth === initialBirth;
+    const assertReclaimedIncarnation = (): boolean => {
+      if (!reusedPid || !reclaimed || this.readProcessBirth(reclaimed.pid) !== reclaimed.birth) return false;
+      try { process.kill(reclaimed.pid, 0); return true; } catch { return false; }
+    };
     const assertGeneration = (expectedEndpoint: string): void => {
       this.assertNoAutomaticReplacementContext();
+      this.instanceLock?.assertOwned();
       const currentPid = readPid();
       const [birth, alive] = hasPid(initialPid)
         ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
-      if (currentPid !== initialPid || birth !== initialBirth || alive
+      if (currentPid !== initialPid || birth !== initialBirth || (alive && !assertReclaimedIncarnation())
           || (this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity)
           || fs.realpathSync(path.dirname(this.endpoint.path)) !== endpointParent
           || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
@@ -240,14 +247,14 @@ export class SessionHostServer extends EventEmitter {
       }
       this.assertNoAutomaticReplacementContext();
     };
-    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid))) {
+    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid)) && !assertReclaimedIncarnation()) {
       throw new Error('session_host_live_owner_replacement_unauthorized');
     }
     if (initialEndpoint !== 'missing') {
       if (this.upgradeLease) throw new Error('native_host_endpoint_owner_unproved');
       // No usable PID + existing endpoint is UNKNOWN unless it is a real socket node AND
       // connect yields ECONNREFUSED; a connect that succeeds or hangs means a live/wedged host.
-      if (!hasPid(initialPid)) {
+      if (!hasPid(initialPid) || reusedPid) {
         await assertOrphanUnixSocket(this.endpoint.path);
         assertGeneration(initialEndpoint);
       }

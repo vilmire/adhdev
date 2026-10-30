@@ -1001,9 +1001,11 @@ function defaultIsPidAlive(pid) {
 }
 function observe(lock) {
   try {
-    const v = JSON.parse(fs6.readFileSync(path4.join(lock, OWNER_FILE), "utf8"));
+    const file = path4.join(lock, OWNER_FILE);
+    const stat2 = fs6.lstatSync(file, { bigint: true });
+    const v = JSON.parse(fs6.readFileSync(file, "utf8"));
     if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
-      return { kind: "owner", owner: {
+      return { kind: "owner", identity: `${stat2.dev}:${stat2.ino}:${stat2.ctimeNs}`, owner: {
         pid: v.pid,
         nonce: v.nonce,
         acquiredAt: Number(v.acquiredAt) || 0,
@@ -1023,14 +1025,23 @@ function acquireHostInstanceLock(options) {
   const alive = options.isPidAlive ?? defaultIsPidAlive;
   const readBirth = options.readBirth ?? defaultReadBirth;
   const now = options.now ?? Date.now;
+  let reclaimedPid;
   fs6.mkdirSync(path4.dirname(lockPath), { recursive: true });
   const provenGone = (o) => {
     if (o.kind === "gone") return true;
     if (o.kind === "ownerless") return now() - o.mtimeMs >= HOST_LOCK_OWNERLESS_STALE_MS;
     if (o.owner.pid === process.pid) return false;
     if (!alive(o.owner.pid)) return true;
-    const current = o.owner.birth ? readBirth(o.owner.pid) : null;
-    return !!(o.owner.birth && current && current !== o.owner.birth);
+    if (!options.isPidAlive) {
+      try {
+        process.kill(o.owner.pid, 0);
+      } catch {
+        return false;
+      }
+    }
+    if (!o.owner.birth || ["unknown", "win32"].includes(o.owner.birth.trim().toLowerCase())) return false;
+    const current = readBirth(o.owner.pid);
+    return !!(current && !["unknown", "win32"].includes(current.trim().toLowerCase()) && current !== o.owner.birth);
   };
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
@@ -1050,8 +1061,14 @@ function acquireHostInstanceLock(options) {
       }
       try {
         const again = observe(lockPath);
-        const same = again.kind === "gone" || seen.kind === "owner" && again.kind === "owner" && seen.owner.nonce === again.owner.nonce || seen.kind === "ownerless" && again.kind === "ownerless";
+        const same = again.kind === "gone" || seen.kind === "owner" && again.kind === "owner" && seen.identity === again.identity && JSON.stringify(seen.owner) === JSON.stringify(again.owner) || seen.kind === "ownerless" && again.kind === "ownerless";
         if (!same || !provenGone(again)) throw new HostInstanceLockedError(lockPath, "lock changed during reclaim");
+        if (again.kind === "owner" && again.owner.birth) {
+          const birth = readBirth(again.owner.pid);
+          if (birth && !["unknown", "win32"].includes(birth.trim().toLowerCase()) && birth !== again.owner.birth) {
+            reclaimedPid = { pid: again.owner.pid, birth };
+          }
+        }
         try {
           fs6.unlinkSync(path4.join(lockPath, OWNER_FILE));
         } catch {
@@ -1078,11 +1095,19 @@ function acquireHostInstanceLock(options) {
       }
       throw error;
     }
+    const owned = observe(lockPath);
     return {
       lockPath,
+      reclaimedPid,
+      assertOwned() {
+        const current = observe(lockPath);
+        if (current.kind !== "owner" || owned.kind !== "owner" || current.identity !== owned.identity || current.owner.pid !== owner.pid || current.owner.nonce !== owner.nonce || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) {
+          throw new HostInstanceLockedError(lockPath, "ownership changed during startup");
+        }
+      },
       release() {
         const current = observe(lockPath);
-        if (current.kind !== "owner" || current.owner.nonce !== owner.nonce) return;
+        if (current.kind !== "owner" || owned.kind !== "owner" || current.identity !== owned.identity || current.owner.nonce !== owner.nonce || current.owner.pid !== owner.pid || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) return;
         try {
           fs6.unlinkSync(path4.join(lockPath, OWNER_FILE));
         } catch {
@@ -2050,21 +2075,33 @@ var SessionHostServer = class extends import_events.EventEmitter {
     const initialPid = readPid();
     const hasPid = (value) => value !== "missing" && value !== "corrupt";
     const initialBirth = hasPid(initialPid) ? this.readProcessBirth(Number(initialPid)) : null;
+    const reclaimed = this.instanceLock?.reclaimedPid;
+    const reusedPid = !!reclaimed && reclaimed.pid === Number(initialPid) && reclaimed.birth === initialBirth;
+    const assertReclaimedIncarnation = () => {
+      if (!reusedPid || !reclaimed || this.readProcessBirth(reclaimed.pid) !== reclaimed.birth) return false;
+      try {
+        process.kill(reclaimed.pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const assertGeneration = (expectedEndpoint) => {
       this.assertNoAutomaticReplacementContext();
+      this.instanceLock?.assertOwned();
       const currentPid = readPid();
       const [birth, alive] = hasPid(initialPid) ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
-      if (currentPid !== initialPid || birth !== initialBirth || alive || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs9.realpathSync(path8.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
+      if (currentPid !== initialPid || birth !== initialBirth || alive && !assertReclaimedIncarnation() || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs9.realpathSync(path8.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
         throw new Error("session_host_endpoint_changed_during_recovery");
       }
       this.assertNoAutomaticReplacementContext();
     };
-    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid))) {
+    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid)) && !assertReclaimedIncarnation()) {
       throw new Error("session_host_live_owner_replacement_unauthorized");
     }
     if (initialEndpoint !== "missing") {
       if (this.upgradeLease) throw new Error("native_host_endpoint_owner_unproved");
-      if (!hasPid(initialPid)) {
+      if (!hasPid(initialPid) || reusedPid) {
         await assertOrphanUnixSocket(this.endpoint.path);
         assertGeneration(initialEndpoint);
       }

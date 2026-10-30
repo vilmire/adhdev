@@ -29,7 +29,13 @@ export interface HostInstanceLockOptions {
   readBirth?: (pid: number) => string | null;
   now?: () => number;
 }
-export interface HostInstanceLock { readonly lockPath: string; release(): void }
+export interface HostInstanceLock {
+  readonly lockPath: string;
+  /** Only the exact incarnation proved obsolete while reclaiming this lock. */
+  readonly reclaimedPid?: { pid: number; birth: string };
+  assertOwned(): void;
+  release(): void;
+}
 
 export class HostInstanceLockedError extends Error {
   constructor(readonly lockPath: string, detail: string) {
@@ -52,13 +58,15 @@ function defaultIsPidAlive(pid: number): boolean {
   catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
-type Observed = { kind: 'owner'; owner: LockOwner } | { kind: 'ownerless'; mtimeMs: number } | { kind: 'gone' };
+type Observed = { kind: 'owner'; owner: LockOwner; identity: string } | { kind: 'ownerless'; mtimeMs: number } | { kind: 'gone' };
 
 function observe(lock: string): Observed {
   try {
-    const v = JSON.parse(fs.readFileSync(path.join(lock, OWNER_FILE), 'utf8')) as Partial<LockOwner>;
+    const file = path.join(lock, OWNER_FILE);
+    const stat = fs.lstatSync(file, { bigint: true });
+    const v = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<LockOwner>;
     if (v && Number.isSafeInteger(v.pid) && (v.pid as number) > 0 && typeof v.nonce === 'string' && v.nonce) {
-      return { kind: 'owner', owner: { pid: v.pid as number, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0,
+      return { kind: 'owner', identity: `${stat.dev}:${stat.ino}:${stat.ctimeNs}`, owner: { pid: v.pid as number, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0,
         birth: typeof v.birth === 'string' && v.birth ? v.birth : null } };
     }
   } catch { /* absent or torn: fall back to directory age */ }
@@ -71,6 +79,7 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
   const alive = options.isPidAlive ?? defaultIsPidAlive;
   const readBirth = options.readBirth ?? defaultReadBirth;
   const now = options.now ?? Date.now;
+  let reclaimedPid: { pid: number; birth: string } | undefined;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
   const provenGone = (o: Observed): boolean => {
@@ -78,8 +87,12 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
     if (o.kind === 'ownerless') return now() - o.mtimeMs >= HOST_LOCK_OWNERLESS_STALE_MS;
     if (o.owner.pid === process.pid) return false; // never reclaim from ourselves
     if (!alive(o.owner.pid)) return true;
-    const current = o.owner.birth ? readBirth(o.owner.pid) : null;
-    return !!(o.owner.birth && current && current !== o.owner.birth); // pid reuse
+    if (!options.isPidAlive) {
+      try { process.kill(o.owner.pid, 0); } catch { return false; }
+    }
+    if (!o.owner.birth || ['unknown', 'win32'].includes(o.owner.birth.trim().toLowerCase())) return false;
+    const current = readBirth(o.owner.pid);
+    return !!(current && !['unknown', 'win32'].includes(current.trim().toLowerCase()) && current !== o.owner.birth); // pid reuse
   };
 
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -97,9 +110,15 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
       catch { throw new HostInstanceLockedError(lockPath, 'reclaim already in progress'); }
       try {
         const again = observe(lockPath);
-        const same = again.kind === 'gone' || (seen.kind === 'owner' && again.kind === 'owner' && seen.owner.nonce === again.owner.nonce)
+        const same = again.kind === 'gone' || (seen.kind === 'owner' && again.kind === 'owner' && seen.identity === again.identity && JSON.stringify(seen.owner) === JSON.stringify(again.owner))
           || (seen.kind === 'ownerless' && again.kind === 'ownerless');
         if (!same || !provenGone(again)) throw new HostInstanceLockedError(lockPath, 'lock changed during reclaim');
+        if (again.kind === 'owner' && again.owner.birth) {
+          const birth = readBirth(again.owner.pid);
+          if (birth && !['unknown', 'win32'].includes(birth.trim().toLowerCase()) && birth !== again.owner.birth) {
+            reclaimedPid = { pid: again.owner.pid, birth };
+          }
+        }
         try { fs.unlinkSync(path.join(lockPath, OWNER_FILE)); } catch { /* ownerless */ }
         try { fs.rmdirSync(lockPath); } catch { /* retry mkdir decides */ }
       } finally {
@@ -110,11 +129,21 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
     const owner: LockOwner = { pid: process.pid, nonce: randomUUID(), birth: readBirth(process.pid), acquiredAt: now() };
     try { fs.writeFileSync(path.join(lockPath, OWNER_FILE), JSON.stringify(owner), { mode: 0o600 }); }
     catch (error) { try { fs.rmdirSync(lockPath); } catch { /* noop */ } throw error; }
+    const owned = observe(lockPath);
     return {
       lockPath,
+      reclaimedPid,
+      assertOwned() {
+        const current = observe(lockPath);
+        if (current.kind !== 'owner' || owned.kind !== 'owner' || current.identity !== owned.identity || current.owner.pid !== owner.pid || current.owner.nonce !== owner.nonce
+            || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) {
+          throw new HostInstanceLockedError(lockPath, 'ownership changed during startup');
+        }
+      },
       release() {
         const current = observe(lockPath);
-        if (current.kind !== 'owner' || current.owner.nonce !== owner.nonce) return;
+        if (current.kind !== 'owner' || owned.kind !== 'owner' || current.identity !== owned.identity || current.owner.nonce !== owner.nonce || current.owner.pid !== owner.pid
+            || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) return;
         try { fs.unlinkSync(path.join(lockPath, OWNER_FILE)); } catch { /* noop */ }
         try { fs.rmdirSync(lockPath); } catch { /* noop */ }
       },

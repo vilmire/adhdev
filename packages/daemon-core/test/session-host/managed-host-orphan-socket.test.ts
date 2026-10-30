@@ -151,3 +151,66 @@ describe.skipIf(process.platform === 'win32')('managed host orphan unix socket r
     expect(cp.spawn).toHaveBeenCalledTimes(1)
   })
 })
+
+// Synthetic prior-boot metadata only; the PID belongs to our disposable child.
+describe.skipIf(process.platform === 'win32')('reused lock incarnation admission', () => {
+  async function fixture(birth: string | null = 'new-birth') {
+    const { spawn: realSpawn } = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+    const child = realSpawn(process.execPath, ['-e', 'setInterval(()=>{},1e6)'], { stdio: 'ignore' })
+    cleanups.push(() => { child.kill('SIGKILL') })
+    const host = createManagedSessionHost({
+      appName, requiredRequestTypes: [], resolveEntryOverride: () => '/fake/entry.js',
+      getProcessBirth: () => birth, getSocketOwnerPids: () => [],
+    })
+    fs.writeFileSync(host.getPidFile(), String(child.pid))
+    const lock = `${host.getPidFile()}.lock`
+    fs.mkdirSync(lock)
+    const owner = path.join(lock, 'owner.json')
+    fs.writeFileSync(owner, JSON.stringify({ pid: child.pid, birth: 'prior-boot-birth', nonce: 'prior-owner' }), { mode: 0o600 })
+    return { child, host, owner }
+  }
+
+  it('admits spawn for a prior-boot lock with a reused PID, preserving the foreign process and metadata for child validation', async () => {
+    const { child, host, owner } = await fixture()
+    const before = fs.readFileSync(owner, 'utf8')
+    host.spawnHost()
+    expect(cp.spawn).toHaveBeenCalledTimes(1)
+    expect(child.exitCode).toBeNull()
+    expect(fs.readFileSync(owner, 'utf8')).toBe(before)
+    expect(fs.readFileSync(host.getPidFile(), 'utf8')).toBe(String(child.pid))
+  })
+
+  it.each([null, 'unknown', 'win32', 'prior-boot-birth'])('refuses unproved or same birth %s', async (birth) => {
+    const { host } = await fixture(birth)
+    expect(() => host.spawnHost()).toThrow()
+    expect(cp.spawn).not.toHaveBeenCalled()
+  })
+
+  it('refuses a reused PID when the socket has a live silent listener', async () => {
+    const { host } = await fixture()
+    await bindInChild(host.endpoint.path, 'accept-silent')
+    expect(() => host.spawnHost()).toThrow()
+    expect(cp.spawn).not.toHaveBeenCalled()
+  })
+
+  it('refuses EPERM even with a different readable birth', async () => {
+    const { host } = await fixture()
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('denied'), { code: 'EPERM' }) })
+    try { expect(() => host.spawnHost()).toThrow(); expect(cp.spawn).not.toHaveBeenCalled() }
+    finally { spy.mockRestore() }
+  })
+
+  it('fences owner changes between admission and spawn', async () => {
+    const { host, owner } = await fixture()
+    const changed = createManagedSessionHost({
+      appName, requiredRequestTypes: [], getProcessBirth: () => 'new-birth',
+      resolveEntryOverride: () => {
+        fs.writeFileSync(owner, JSON.stringify({ pid: 123, birth: 'new-owner', nonce: 'changed' }))
+        return '/fake/entry.js'
+      },
+    })
+    expect(changed.getPidFile()).toBe(host.getPidFile())
+    expect(() => changed.spawnHost()).toThrow()
+    expect(cp.spawn).not.toHaveBeenCalled()
+  })
+})

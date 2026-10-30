@@ -215946,6 +215946,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           context2.ipcKey,
           pathIdentity(context2.configDir),
           pidState,
+          staleLockIdentity(),
           pid === null ? null : getProcessBirth(pid),
           pid === null ? false : isPidAlive(pid),
           endpoint2.kind,
@@ -216062,6 +216063,29 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return error.code === "ESRCH";
         }
       }
+      function staleLockIdentity() {
+        try {
+          const file = `${getPidFile()}.lock/owner.json`;
+          const stat2 = fs129.lstatSync(file, { bigint: true });
+          if (!stat2.isFile() || stat2.nlink !== 1n || (stat2.mode & 0o077n) !== 0n || process.getuid && stat2.uid !== BigInt(process.getuid())) return null;
+          return `${stat2.dev}:${stat2.ino}:${stat2.ctimeNs}:${fs129.readFileSync(file, "utf8")}`;
+        } catch {
+          return null;
+        }
+      }
+      function hasReusedLockPid(pid) {
+        const snapshot = staleLockIdentity();
+        if (!snapshot) return false;
+        try {
+          const owner = JSON.parse(fs129.readFileSync(`${getPidFile()}.lock/owner.json`, "utf8"));
+          if (owner.pid !== pid || typeof owner.nonce !== "string" || !owner.nonce || typeof owner.birth !== "string" || !owner.birth.trim() || ["unknown", "win32"].includes(owner.birth.trim().toLowerCase())) return false;
+          process.kill(pid, 0);
+          const birth = getProcessBirth(pid);
+          return !!birth && !["unknown", "win32"].includes(birth.toLowerCase()) && birth !== owner.birth && staleLockIdentity() === snapshot;
+        } catch {
+          return false;
+        }
+      }
       function inspectExistingHostState() {
         const endpoint2 = getEndpoint();
         const pidState = readPidFileState();
@@ -216087,6 +216111,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
           return "dead";
+        }
+        if (hasReusedLockPid(existingPid)) {
+          return endpoint2.kind === "unix" && (!fs129.existsSync(endpoint2.path) || isOrphanUnixSocket(endpoint2.path)) ? "dead" : "unknown";
         }
         if (!isPidAlive(existingPid) || !canSignalPid(existingPid)) return "unknown";
         const birth = getProcessBirth(existingPid);

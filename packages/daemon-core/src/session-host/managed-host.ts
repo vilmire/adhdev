@@ -239,7 +239,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         const pid = pidState.status === 'ok' ? pidState.pid : null;
         return JSON.stringify([
             context.configDir, context.canonicalConfigDir, context.ipcKey,
-            pathIdentity(context.configDir), pidState,
+            pathIdentity(context.configDir), pidState, staleLockIdentity(),
             pid === null ? null : getProcessBirth(pid),
             pid === null ? false : isPidAlive(pid),
             endpoint.kind, endpoint.path, pathIdentity(endpoint.path),
@@ -379,6 +379,35 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
     }
 
+    // The lock already records the host's native birth. A different incarnation
+    // proves that holder is gone even when the kernel has reused its numeric PID.
+    // This is read-only admission; the child must reclaim the lock independently.
+    function staleLockIdentity(): string | null {
+        try {
+            const file = `${getPidFile()}.lock/owner.json`;
+            const stat = fs.lstatSync(file, { bigint: true });
+            if (!stat.isFile() || stat.nlink !== 1n || (stat.mode & 0o077n) !== 0n
+                || (process.getuid && stat.uid !== BigInt(process.getuid()))) return null;
+            return `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${fs.readFileSync(file, 'utf8')}`;
+        } catch { return null; }
+    }
+
+    function hasReusedLockPid(pid: number): boolean {
+        const snapshot = staleLockIdentity();
+        if (!snapshot) return false;
+        try {
+            const owner = JSON.parse(fs.readFileSync(`${getPidFile()}.lock/owner.json`, 'utf8'));
+            if (owner.pid !== pid || typeof owner.nonce !== 'string' || !owner.nonce
+                || typeof owner.birth !== 'string' || !owner.birth.trim()
+                || ['unknown', 'win32'].includes(owner.birth.trim().toLowerCase())) return false;
+            // EPERM and all probe failures remain unknown, even with a birth read.
+            process.kill(pid, 0);
+            const birth = getProcessBirth(pid);
+            return !!birth && !['unknown', 'win32'].includes(birth.toLowerCase())
+                && birth !== owner.birth && staleLockIdentity() === snapshot;
+        } catch { return false; }
+    }
+
     function inspectExistingHostState(): 'alive' | 'dead' | 'unknown' {
         const endpoint = getEndpoint();
         const pidState = readPidFileState();
@@ -404,6 +433,10 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 }
             }
             return 'dead';
+        }
+        if (hasReusedLockPid(existingPid)) {
+            return endpoint.kind === 'unix' && (!fs.existsSync(endpoint.path) || isOrphanUnixSocket(endpoint.path))
+                ? 'dead' : 'unknown';
         }
         if (!isPidAlive(existingPid) || !canSignalPid(existingPid)) return 'unknown';
         const birth = getProcessBirth(existingPid);
