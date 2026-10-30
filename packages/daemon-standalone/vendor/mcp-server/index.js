@@ -202630,7 +202630,7 @@ ${JSON.stringify(replies)}
       const now = Date.now();
       const sampled = h.nativeTurnSampleAt;
       const closed = open && h.lastNativeTurnTerminalMarkers?.some((marker2) => marker2.nativeSessionId === open.nativeSessionId && marker2.turnId === open.turnId && marker2.inputDigest === open.inputDigest && marker2.receivedAt >= open.inputAt);
-      const valid = !closed && !h.nativeHistoryReadPending && typeof sampled === "number" && sampled <= now && now - sampled <= SAMPLE_MAX_AGE_MS && !!open && !!h.providerSessionId && open.nativeSessionId === h.providerSessionId && !!open.turnId && open.inputDigest === h.lastAcknowledgedInputDigest && Number.isFinite(open.startedAt) && open.startedAt >= h.lastAcknowledgedUserInputAt && open.startedAt <= h.generatingStartedAt && open.startedAt <= open.inputAt && Number.isFinite(open.inputAt) && open.inputAt >= h.lastAcknowledgedUserInputAt && open.inputAt <= now;
+      const valid = !closed && !h.nativeHistoryReadPending && typeof sampled === "number" && sampled <= now && (!probe || now - sampled <= SAMPLE_MAX_AGE_MS) && !!open && !!h.providerSessionId && open.nativeSessionId === h.providerSessionId && !!open.turnId && open.inputDigest === h.lastAcknowledgedInputDigest && Number.isFinite(open.startedAt) && open.startedAt >= h.lastAcknowledgedUserInputAt && open.startedAt <= open.inputAt && Number.isFinite(open.inputAt) && open.inputAt >= h.lastAcknowledgedUserInputAt && open.inputAt <= now;
       if (!valid || !open || !h.providerSessionId) return false;
       if (previous?.identity === owner && (previous.nativeSessionId !== h.providerSessionId || previous.turnId !== open.turnId)) return false;
       if (probe) {

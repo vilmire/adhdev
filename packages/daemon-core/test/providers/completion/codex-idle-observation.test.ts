@@ -28,7 +28,17 @@ describe('Codex native veto before committing screen idle', () => {
         expect(preserveCodexGeneratingOnIdle(host)).toBe(true); // readout does not probe
         expect(host.readExternalCompletionMessages).toHaveBeenCalledTimes(1);
         vi.advanceTimersByTime(5_001);
-        expect(preserveCodexGeneratingOnIdle(host)).toBe(false); // no indefinitely cached hold
+        expect(preserveCodexGeneratingOnIdle(host)).toBe(true); // project the committed decision until the tick
+        const refresh = host.readExternalCompletionMessages;
+        host.readExternalCompletionMessages = () => []; // a probe cannot renew an expired sample
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(false);
+        expect(preserveCodexGeneratingOnIdle(host)).toBe(false);
+        host.readExternalCompletionMessages = refresh;
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(true);
+    });
+    it('accepts ACK then PTY generating then a delayed native task_started flush', () => {
+        const { host, open } = rig();
+        open.startedAt = T + 400; open.inputAt = T + 500;
         expect(preserveCodexGeneratingOnIdle(host, true)).toBe(true);
     });
     it.each(['terminal', 'abort', 'failure', 'unavailable', 'pending'])('releases on %s without retaining a previous observation', state => {
@@ -55,6 +65,21 @@ describe('Codex native veto before committing screen idle', () => {
         if (mismatch === 'other-provider') host.type = 'claude-cli';
         expect(preserveCodexGeneratingOnIdle(host, true)).toBe(false);
     });
+    it('reuses a fresh probe for one second and preserves the accepted-turn fence after an unavailable read', () => {
+        const { host, open } = rig();
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(true);
+        vi.advanceTimersByTime(999);
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(true);
+        expect(host.readExternalCompletionMessages).toHaveBeenCalledTimes(1);
+        const refresh = host.readExternalCompletionMessages;
+        host.readExternalCompletionMessages = () => null;
+        vi.advanceTimersByTime(1);
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(false);
+        host.readExternalCompletionMessages = refresh;
+        open.turnId = 'foreign';
+        expect(preserveCodexGeneratingOnIdle(host, true)).toBe(false);
+        expect(preserveCodexGeneratingOnIdle(host)).toBe(false);
+    });
     it('rejects a task boundary during the read and a foreign native turn under the same ACK', () => {
         const { host, open } = rig();
         expect(preserveCodexGeneratingOnIdle(host, true)).toBe(true);
@@ -68,7 +93,7 @@ describe('Codex native veto before committing screen idle', () => {
 });
 
 describe('Codex instance shared status and existing tick', () => {
-    it('guards ordinary PTY transport=null, shares the idle veto with activeChat, and releases on native terminal', async () => {
+    it.each(['terminal', 'pending', 'unavailable'])('keeps the committed projection across tick jitter, then releases on %s', async release => {
         vi.useFakeTimers(); vi.setSystemTime(T);
         const id = '11111111-1111-4111-8111-111111111111';
         let observation: any;
@@ -81,22 +106,41 @@ describe('Codex instance shared status and existing tick', () => {
             'promoteHistorySession', 'writeSessionStart'].map(key => [key, vi.fn()]));
         instance.currentAttemptRef = () => ({ attemptId: 'attempt', generation: 0 });
         instance.completingTurnTaskId = () => 'task';
-        instance.adapter = { chatMessagesOwnedExternally: true, getStatus: () => ({ status: 'idle', activeModal: null, messages: [] }),
+        let screenStatus = 'generating';
+        instance.adapter = { chatMessagesOwnedExternally: true, getStatus: () => ({ status: screenStatus, activeModal: null, messages: [] }),
             getScriptParsedStatus: () => ({ status: 'idle', messages: [] }), getRuntimeMetadata: () => null,
             getInteractivePromptTransport: () => null, hasPendingResponse: () => false };
         instance.recordAcknowledgedUserInput('Synthetic acknowledged input');
-        vi.advanceTimersByTime(300);
-        instance.lastStatus = 'generating'; instance.generatingStartedAt = Date.now(); instance.turnStartedThisBoot = true;
+        vi.advanceTimersByTime(100);
+        instance.lastStatus = 'idle';
+        instance.detectStatusTransition();
+        expect(instance.generatingStartedAt).toBe(T + 100);
+        vi.advanceTimersByTime(500);
+        screenStatus = 'idle';
         observation = { providerSessionId: id, sourcePath: '/synthetic/rollout.jsonl', sourceMtimeMs: Date.now(),
-            messages: [{ role: 'user', content: 'Synthetic acknowledged input', receivedAt: T + 200 }],
-            codexOpenTurn: { nativeSessionId: id, turnId: 'one', startedAt: T + 100, inputAt: T + 200, inputDigest: instance.lastAcknowledgedInputDigest } };
+            messages: [{ role: 'user', content: 'Synthetic acknowledged input', receivedAt: T + 500 }],
+            codexOpenTurn: { nativeSessionId: id, turnId: 'one', startedAt: T + 400, inputAt: T + 500, inputDigest: instance.lastAcknowledgedInputDigest } };
         instance.detectStatusTransition();
         expect(instance.lastStatus).toBe('generating'); expect(instance.completedDebouncePending).toBeNull();
         const state = instance.getState();
         expect(state.status).toBe('generating'); expect(state.activeChat.status).toBe('generating');
+        // A dashboard read can run after sample expiry and before a delayed tick.
+        const read = vi.spyOn(instance, 'readExternalCompletionMessages');
+        vi.advanceTimersByTime(5_050);
+        const beforeProbe = instance.getState();
+        expect(beforeProbe.status).toBe(instance.lastStatus);
+        expect(beforeProbe.activeChat.status).toBe(instance.lastStatus);
+        expect(read).not.toHaveBeenCalled();
+        await instance.onTick();
+        expect(instance.lastStatus).toBe('generating');
+        expect(instance.getState().status).toBe('generating');
         observation = { ...observation, codexOpenTurn: undefined, turnTerminalMarkers: [{ ...observation.codexOpenTurn,
             receivedAt: T + 500, outcome: 'completed', summary: 'Synthetic final' }] };
-        vi.advanceTimersByTime(5_000); await instance.onTick();
+        if (release === 'pending') observation = { ...observation, stale: true, unavailableReason: 'native_history_loading' };
+        if (release === 'unavailable') observation = null;
+        vi.advanceTimersByTime(5_050);
+        expect(instance.getState().status).toBe(instance.lastStatus);
+        await instance.onTick();
         expect(instance.lastStatus).toBe('idle'); expect(instance.getState().status).toBe('idle');
         vi.clearAllTimers();
     });

@@ -3,7 +3,8 @@ import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { CodexOpenTurn } from '../native-history/codex-turn-provenance.js';
 
 // Freshness of a native read, not an idle/alarm delay. The existing instance
-// tick re-probes at 5s even when the PTY is silent; getState performs no I/O.
+// tick re-probes at 5s even when the PTY is silent; getState projects the
+// committed decision until that probe, without re-evaluating its age or doing I/O.
 const SAMPLE_MAX_AGE_MS = 5_000;
 interface Host {
     type: string;
@@ -31,7 +32,10 @@ function identity(h: Host): string {
         h.lastAcknowledgedInputDigest, h.completingTurnTaskId?.(), h.currentAttemptRef?.()]);
 }
 /** Only the Codex PTY idle candidate probes. Both status surfaces consume the
- * same exact-bound observation; unavailable/stale/foreign evidence holds nothing. */
+ * same exact-bound decision. Only probes admit native samples and check their
+ * freshness; readouts must not invent a status edge before the transition tick.
+ * A probe always revokes the old decision before reading, so pending, unavailable
+ * or expired samples cannot keep the reducer generating indefinitely. */
 export function preserveCodexGeneratingOnIdle(h: Host, probe = false): boolean {
     if (h.type !== 'codex-cli' || h.disposed || !h.generatingStartedAt || !h.lastAcknowledgedInputDigest) return false;
     if (h.lastAcknowledgedTurnOwner !== JSON.stringify([h.completingTurnTaskId?.(), h.currentAttemptRef?.() ?? null])) return false;
@@ -52,11 +56,13 @@ export function preserveCodexGeneratingOnIdle(h: Host, probe = false): boolean {
     const closed = open && h.lastNativeTurnTerminalMarkers?.some(marker => marker.nativeSessionId === open.nativeSessionId
         && marker.turnId === open.turnId && marker.inputDigest === open.inputDigest && marker.receivedAt >= open.inputAt);
     const valid = !closed && !h.nativeHistoryReadPending && typeof sampled === 'number'
-        && sampled <= now && now - sampled <= SAMPLE_MAX_AGE_MS
+        && sampled <= now && (!probe || now - sampled <= SAMPLE_MAX_AGE_MS)
         && !!open && !!h.providerSessionId && open.nativeSessionId === h.providerSessionId && !!open.turnId
         && open.inputDigest === h.lastAcknowledgedInputDigest
         && Number.isFinite(open.startedAt) && open.startedAt >= h.lastAcknowledgedUserInputAt
-        && open.startedAt <= h.generatingStartedAt && open.startedAt <= open.inputAt
+        // PTY generating may precede the native task_started flush. The ACK
+        // and exact owner/turn fences establish authority, not PTY/native order.
+        && open.startedAt <= open.inputAt
         && Number.isFinite(open.inputAt) && open.inputAt >= h.lastAcknowledgedUserInputAt && open.inputAt <= now;
     if (!valid || !open || !h.providerSessionId) return false;
     // An unexpected native turn cannot inherit the same acknowledged attempt.
