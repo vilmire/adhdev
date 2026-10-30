@@ -12,7 +12,7 @@
 // make forward progress without the loop's cooperation.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -78,14 +78,43 @@ describe('AsyncBatchWriter — lines survive a blocked event loop', () => {
     })
 
     it('still batches on the timer when the loop is healthy (no syscall per line)', async () => {
-        // Below both thresholds: nothing should hit disk synchronously...
-        AsyncBatchWriter.write(logFile, 'a\n')
-        AsyncBatchWriter.write(logFile, 'b\n')
-        expect(fs.existsSync(logFile)).toBe(false)
+        const realAppend = fs.promises.appendFile
+        let releaseIo!: () => void
+        const ioReady = new Promise<void>(resolve => { releaseIo = resolve })
+        // Hold a legitimate async append pending past the old 120ms assertion.
+        // Elapsed timer time does not imply that filesystem I/O has completed.
+        const append = vi.spyOn(fs.promises, 'appendFile').mockImplementation(async (...args) => {
+            await ioReady
+            return realAppend(...args)
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        try {
+            AsyncBatchWriter.write(logFile, 'a\n')
+            AsyncBatchWriter.write(logFile, 'b\n')
+            expect(append).not.toHaveBeenCalled()
+            expect(fs.existsSync(logFile)).toBe(false)
 
-        // ...and the timer delivers once the loop is free.
-        await new Promise(resolve => setTimeout(resolve, 120))
-        expect(fs.readFileSync(logFile, 'utf-8')).toBe('a\nb\n')
+            vi.advanceTimersByTime(49)
+            expect(append).not.toHaveBeenCalled()
+            vi.advanceTimersByTime(1)
+            expect(append).toHaveBeenCalledExactlyOnceWith(logFile, 'a\nb\n', {
+                encoding: 'utf-8', mode: 0o600,
+            })
+            vi.advanceTimersByTime(70)
+            expect(fs.existsSync(logFile)).toBe(false)
+            releaseIo()
+            await expect(append.mock.results[0].value).resolves.toBeUndefined()
+            expect(fs.readFileSync(logFile, 'utf-8')).toBe('a\nb\n')
+            expect(append).toHaveBeenCalledTimes(1)
+        } finally {
+            releaseIo()
+            try {
+                await Promise.all(append.mock.results.map(result => result.value))
+            } finally {
+                vi.useRealTimers()
+                append.mockRestore()
+            }
+        }
     })
 
     it('flushSync() is safe with nothing buffered', () => {
