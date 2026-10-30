@@ -283,7 +283,7 @@ export class SessionHostServer extends EventEmitter {
       });
     }
     try { await this.startAfterLock(); } catch (error) {
-      this.instanceLock?.release();
+      this.instanceLock?.release({ preserveReclaimedOwner: true });
       this.instanceLock = null;
       throw error;
     }

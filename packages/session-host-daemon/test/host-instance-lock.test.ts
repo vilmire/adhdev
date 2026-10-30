@@ -118,6 +118,13 @@ for (const socket of ['absent', 'orphan', 'live'] as const) {
       if (socket === 'live') {
         await assert.rejects(server.start(), /session_host_prior_owner_socket_unverified/)
         assert.equal(fs.existsSync(sock), true)
+        const retained = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'))
+        assert.equal(retained.birth, 'prior-boot', 'refusal preserves the obsolete incarnation proof')
+        assert.notEqual(retained.nonce, 'old', 'older release receipts stay fenced')
+        await reap(listener!)
+        const retry = makeServer(dir, 'r.sock', { getSocketOwnerPids: () => [] })
+        await retry.start()
+        await retry.stop()
       } else {
         await server.start()
         assert.equal(fs.existsSync(sock), true)

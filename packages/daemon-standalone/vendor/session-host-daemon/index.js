@@ -1026,6 +1026,7 @@ function acquireHostInstanceLock(options) {
   const readBirth = options.readBirth ?? defaultReadBirth;
   const now = options.now ?? Date.now;
   let reclaimedPid;
+  let reclaimedOwner;
   fs6.mkdirSync(path4.dirname(lockPath), { recursive: true });
   const provenGone = (o) => {
     if (o.kind === "gone") return true;
@@ -1067,6 +1068,7 @@ function acquireHostInstanceLock(options) {
           const birth = readBirth(again.owner.pid);
           if (birth && !["unknown", "win32"].includes(birth.trim().toLowerCase()) && birth !== again.owner.birth) {
             reclaimedPid = { pid: again.owner.pid, birth };
+            reclaimedOwner = again.owner;
           }
         }
         try {
@@ -1105,9 +1107,13 @@ function acquireHostInstanceLock(options) {
           throw new HostInstanceLockedError(lockPath, "ownership changed during startup");
         }
       },
-      release() {
+      release(releaseOptions) {
         const current = observe(lockPath);
         if (current.kind !== "owner" || owned.kind !== "owner" || current.identity !== owned.identity || current.owner.nonce !== owner.nonce || current.owner.pid !== owner.pid || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) return;
+        if (releaseOptions?.preserveReclaimedOwner && reclaimedOwner) {
+          fs6.writeFileSync(path4.join(lockPath, OWNER_FILE), JSON.stringify({ ...reclaimedOwner, nonce: (0, import_crypto.randomUUID)() }), { mode: 384 });
+          return;
+        }
         try {
           fs6.unlinkSync(path4.join(lockPath, OWNER_FILE));
         } catch {
@@ -2128,7 +2134,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     try {
       await this.startAfterLock();
     } catch (error) {
-      this.instanceLock?.release();
+      this.instanceLock?.release({ preserveReclaimedOwner: true });
       this.instanceLock = null;
       throw error;
     }

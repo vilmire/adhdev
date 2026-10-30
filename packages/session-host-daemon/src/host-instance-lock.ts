@@ -31,10 +31,10 @@ export interface HostInstanceLockOptions {
 }
 export interface HostInstanceLock {
   readonly lockPath: string;
-  /** Only the exact incarnation proved obsolete while reclaiming this lock. */
+  /** Current incarnation observed while reclaiming an obsolete lock owner. */
   readonly reclaimedPid?: { pid: number; birth: string };
   assertOwned(): void;
-  release(): void;
+  release(options?: { preserveReclaimedOwner?: boolean }): void;
 }
 
 export class HostInstanceLockedError extends Error {
@@ -80,6 +80,7 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
   const readBirth = options.readBirth ?? defaultReadBirth;
   const now = options.now ?? Date.now;
   let reclaimedPid: { pid: number; birth: string } | undefined;
+  let reclaimedOwner: LockOwner | undefined;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
   const provenGone = (o: Observed): boolean => {
@@ -117,6 +118,7 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
           const birth = readBirth(again.owner.pid);
           if (birth && !['unknown', 'win32'].includes(birth.trim().toLowerCase()) && birth !== again.owner.birth) {
             reclaimedPid = { pid: again.owner.pid, birth };
+            reclaimedOwner = again.owner;
           }
         }
         try { fs.unlinkSync(path.join(lockPath, OWNER_FILE)); } catch { /* ownerless */ }
@@ -140,10 +142,16 @@ export function acquireHostInstanceLock(options: HostInstanceLockOptions): HostI
           throw new HostInstanceLockedError(lockPath, 'ownership changed during startup');
         }
       },
-      release() {
+      release(releaseOptions) {
         const current = observe(lockPath);
         if (current.kind !== 'owner' || owned.kind !== 'owner' || current.identity !== owned.identity || current.owner.nonce !== owner.nonce || current.owner.pid !== owner.pid
             || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) return;
+        if (releaseOptions?.preserveReclaimedOwner && reclaimedOwner) {
+          // Startup refusal must not consume the only prior-incarnation witness.
+          // Rotate the nonce so an older release receipt cannot remove it.
+          fs.writeFileSync(path.join(lockPath, OWNER_FILE), JSON.stringify({ ...reclaimedOwner, nonce: randomUUID() }), { mode: 0o600 });
+          return;
+        }
         try { fs.unlinkSync(path.join(lockPath, OWNER_FILE)); } catch { /* noop */ }
         try { fs.rmdirSync(lockPath); } catch { /* noop */ }
       },
