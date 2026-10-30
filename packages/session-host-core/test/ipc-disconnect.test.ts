@@ -28,9 +28,16 @@ interface Harness {
   cleanup(): Promise<void>
 }
 
+function makeSocketFixture(): { dir: string; sockPath: string } {
+  // Darwin truncates long Unix socket paths, even into an existing directory.
+  // Keep the whole unique name within sockaddr_un when TMPDIR is deeply nested.
+  const base = process.platform === 'win32' ? os.tmpdir() : '/tmp'
+  const dir = fs.mkdtempSync(path.join(base, 'adhdev-ipc-'))
+  return { dir, sockPath: path.join(dir, 'host.sock') }
+}
+
 async function makeHarness(options: { listen?: boolean; onData?: (s: net.Socket) => void } = {}): Promise<Harness> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-test-'))
-  const sockPath = path.join(dir, 'host.sock')
+  const { dir, sockPath } = makeSocketFixture()
   let peer: net.Socket | null = null
 
   const server = net.createServer((socket) => {
@@ -284,8 +291,7 @@ test('one RPC timeout preserves concurrent success, late replies, events and the
 })
 
 test('H1: client that attached to a session automatically replays attach_session on reconnect after disconnect', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-reattach-'))
-  const sockPath = path.join(dir, 'host.sock')
+  const { dir, sockPath } = makeSocketFixture()
   const attachedByConn = new Map<number, string[]>()
   let connectionCount = 0
 
@@ -342,8 +348,7 @@ test('H1: client that attached to a session automatically replays attach_session
 })
 
 test('L3: create_session without clientId does not invent a daemon clientId on reconnect, and failed replay entries are pruned', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-l3-'))
-  const sockPath = path.join(dir, 'host.sock')
+  const { dir, sockPath } = makeSocketFixture()
   let connectionCount = 0
   const replaysByConn = new Map<number, Array<{ sessionId: string; clientId: string }>>()
 
