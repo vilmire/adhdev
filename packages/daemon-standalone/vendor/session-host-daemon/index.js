@@ -43,8 +43,8 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 var import_crypto3 = require("crypto");
-var fs11 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+var path10 = __toESM(require("path"));
 var import_session_host_core13 = require("@adhdev/session-host-core");
 
 // src/guardian-artifact.ts
@@ -83,9 +83,9 @@ function resolveGuardianArtifact(pins) {
 // src/server.ts
 var import_child_process3 = require("child_process");
 var import_events = require("events");
-var fs9 = __toESM(require("fs"));
+var fs10 = __toESM(require("fs"));
 var net2 = __toESM(require("net"));
-var path8 = __toESM(require("path"));
+var path9 = __toESM(require("path"));
 
 // src/socket-probe.ts
 var fs2 = __toESM(require("fs"));
@@ -142,11 +142,87 @@ function lsofSocketOwnerPids(socketPath) {
   }
 }
 
+// src/prior-endpoint-recovery.ts
+var fs3 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
+async function evictPriorEndpointOwners(context) {
+  context.assertNoAutomaticReplacementContext();
+  if (context.endpoint.kind !== "unix") return;
+  const identity = (file) => {
+    try {
+      const stat2 = fs3.lstatSync(file, { bigint: true });
+      return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
+    } catch (error) {
+      if (error.code === "ENOENT") return "missing";
+      throw error;
+    }
+  };
+  const configIdentity = context.instanceConfigDir ? identity(context.instanceConfigDir) : null;
+  const endpointParent = fs3.realpathSync(path2.dirname(context.endpoint.path));
+  const initialEndpoint = identity(context.endpoint.path);
+  const readPid = () => {
+    if (!context.pidFilePath) return "missing";
+    try {
+      const raw = fs3.readFileSync(context.pidFilePath, "utf8").trim();
+      if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
+        return "corrupt";
+      }
+      return raw;
+    } catch (error) {
+      if (error.code === "ENOENT") return "missing";
+      throw error;
+    }
+  };
+  const initialPid = readPid();
+  const hasPid = (value) => value !== "missing" && value !== "corrupt";
+  const initialBirth = hasPid(initialPid) ? context.readProcessBirth(Number(initialPid)) : null;
+  const reclaimed = context.getInstanceLock()?.reclaimedPid;
+  const reusedPid = !!reclaimed && reclaimed.pid === Number(initialPid) && reclaimed.birth === initialBirth;
+  const assertReclaimedIncarnation = () => {
+    if (!reusedPid || !reclaimed || context.readProcessBirth(reclaimed.pid) !== reclaimed.birth) return false;
+    try {
+      process.kill(reclaimed.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const assertGeneration = (expectedEndpoint) => {
+    context.assertNoAutomaticReplacementContext();
+    context.getInstanceLock()?.assertOwned();
+    const currentPid = readPid();
+    const [birth, alive] = hasPid(initialPid) ? [context.readProcessBirth(Number(initialPid)), context.isPidAlive(Number(initialPid))] : [null, false];
+    if (currentPid !== initialPid || birth !== initialBirth || alive && !assertReclaimedIncarnation() || context.instanceConfigDir && identity(context.instanceConfigDir) !== configIdentity || fs3.realpathSync(path2.dirname(context.endpoint.path)) !== endpointParent || identity(context.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
+      throw new Error("session_host_endpoint_changed_during_recovery");
+    }
+    context.assertNoAutomaticReplacementContext();
+  };
+  if (hasPid(initialPid) && context.isPidAlive(Number(initialPid)) && !assertReclaimedIncarnation()) {
+    throw new Error("session_host_live_owner_replacement_unauthorized");
+  }
+  if (initialEndpoint !== "missing") {
+    if (context.upgradeLease) throw new Error("native_host_endpoint_owner_unproved");
+    if (!hasPid(initialPid) || reusedPid) {
+      await assertOrphanUnixSocket(context.endpoint.path);
+      assertGeneration(initialEndpoint);
+    }
+    for (let check = 0; check < 2; check++) {
+      const owners = context.readSocketOwnerPids();
+      if (owners === null) throw new Error("session_host_prior_owner_socket_unverified");
+      if (owners.length !== 0) throw new Error("session_host_endpoint_changed_during_recovery");
+      assertGeneration(initialEndpoint);
+    }
+    fs3.unlinkSync(context.endpoint.path);
+  }
+  context.setStartupFence(() => assertGeneration("missing"));
+  context.startupFence();
+}
+
 // src/server.ts
 var import_session_host_core11 = require("@adhdev/session-host-core");
 
 // src/runtime.ts
-var fs3 = __toESM(require("fs"));
+var fs4 = __toESM(require("fs"));
 var os = __toESM(require("os"));
 var pty = __toESM(require("node-pty"));
 var import_session_host_core = require("@adhdev/session-host-core");
@@ -361,7 +437,7 @@ var PtySessionRuntime = class {
     let cwd = this.payload.workspace || process.cwd();
     if (cwd) {
       try {
-        const stat2 = fs3.statSync(cwd);
+        const stat2 = fs4.statSync(cwd);
         if (!stat2.isDirectory()) cwd = os.homedir();
       } catch {
         cwd = os.homedir();
@@ -551,8 +627,8 @@ var PtySessionRuntime = class {
 };
 
 // src/upgrade-lease.ts
-var fs4 = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var fs5 = __toESM(require("fs"));
+var path3 = __toESM(require("path"));
 var import_node_crypto2 = require("crypto");
 var import_node_child_process = require("child_process");
 var digest = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest("hex");
@@ -561,7 +637,7 @@ var HostUpgradeLease = class {
     this.binding = binding;
     this.endpoint = endpoint;
     if (process.platform !== "darwin") throw new Error("native_host_upgrade_platform_unproved");
-    this.journal = path2.join(binding.stateDir, "upgrade-lease.json");
+    this.journal = path3.join(binding.stateDir, "upgrade-lease.json");
     this.state = { schema: 1, endpoint, epoch: 0, held: false, owner: null, tokenHash: null };
   }
   bootId = (0, import_node_crypto2.randomUUID)();
@@ -572,19 +648,19 @@ var HostUpgradeLease = class {
   journal;
   async start() {
     if (this.child && this.child.exitCode === null && this.child.signalCode === null) throw new Error("native_host_binding_already_started");
-    fs4.mkdirSync(this.binding.stateDir, { recursive: true, mode: 448 });
-    const dir = fs4.lstatSync(this.binding.stateDir);
+    fs5.mkdirSync(this.binding.stateDir, { recursive: true, mode: 448 });
+    const dir = fs5.lstatSync(this.binding.stateDir);
     if (!dir.isDirectory() || dir.isSymbolicLink() || dir.uid !== process.getuid?.() || dir.mode & 63) {
       throw new Error("native_host_state_directory_untrusted");
     }
     if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error("native_host_helper_file_identity_changed");
-    if (fs4.realpathSync(this.binding.helperPath) !== this.binding.helperPath || digest(fs4.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
+    if (fs5.realpathSync(this.binding.helperPath) !== this.binding.helperPath || digest(fs5.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) {
       throw new Error("native_host_helper_pin_mismatch");
     }
     if (this.binding.helperProtocol && String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--attest"], { stdio: "pipe", windowsHide: true })).trim() !== `adhdev-host-guardian/${this.binding.helperProtocol}`) throw new Error("native_host_helper_protocol_mismatch");
     if (this.binding.helperFileIdentity && this.fileIdentity() !== this.binding.helperFileIdentity) throw new Error("native_host_helper_file_identity_changed");
-    const lockPath = path2.join(this.binding.stateDir, "instance.lock");
-    const priorLock = fs4.existsSync(lockPath);
+    const lockPath = path3.join(this.binding.stateDir, "instance.lock");
+    const priorLock = fs5.existsSync(lockPath);
     const child = (0, import_node_child_process.spawn)(this.binding.helperPath, [lockPath], { stdio: "pipe", windowsHide: true });
     this.child = child;
     child.on("exit", () => {
@@ -618,11 +694,11 @@ var HostUpgradeLease = class {
       });
     });
     try {
-      if (this.binding.helperFileIdentity && (this.fileIdentity() !== this.binding.helperFileIdentity || digest(fs4.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256)) throw new Error("native_host_helper_file_identity_changed");
-      if (fs4.existsSync(this.journal)) {
-        const stat2 = fs4.lstatSync(this.journal);
+      if (this.binding.helperFileIdentity && (this.fileIdentity() !== this.binding.helperFileIdentity || digest(fs5.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256)) throw new Error("native_host_helper_file_identity_changed");
+      if (fs5.existsSync(this.journal)) {
+        const stat2 = fs5.lstatSync(this.journal);
         if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("native_host_lease_untrusted");
-        const value = JSON.parse(fs4.readFileSync(this.journal, "utf8"));
+        const value = JSON.parse(fs5.readFileSync(this.journal, "utf8"));
         if (value.schema !== 1 || value.endpoint !== this.endpoint || !Number.isSafeInteger(value.epoch) || value.epoch < 0 || typeof value.held !== "boolean" || (value.held ? typeof value.owner !== "string" || typeof value.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(value.tokenHash) : value.owner !== null || value.tokenHash !== null)) throw new Error("native_host_lease_corrupt");
         this.state = value;
       } else {
@@ -635,25 +711,25 @@ var HostUpgradeLease = class {
     }
   }
   fileIdentity() {
-    const s = fs4.lstatSync(this.binding.helperPath);
+    const s = fs5.lstatSync(this.binding.helperPath);
     return JSON.stringify([s.dev, s.ino, s.uid, s.mode, s.size]);
   }
   persist(value) {
     const tmp = `${this.journal}.${(0, import_node_crypto2.randomUUID)()}.tmp`;
     try {
-      const fd = fs4.openSync(tmp, "wx", 384);
+      const fd = fs5.openSync(tmp, "wx", 384);
       try {
-        fs4.writeFileSync(fd, JSON.stringify(value));
-        fs4.fsyncSync(fd);
+        fs5.writeFileSync(fd, JSON.stringify(value));
+        fs5.fsyncSync(fd);
       } finally {
-        fs4.closeSync(fd);
+        fs5.closeSync(fd);
       }
-      fs4.renameSync(tmp, this.journal);
-      const dir = fs4.openSync(this.binding.stateDir, "r");
+      fs5.renameSync(tmp, this.journal);
+      const dir = fs5.openSync(this.binding.stateDir, "r");
       try {
-        fs4.fsyncSync(dir);
+        fs5.fsyncSync(dir);
       } finally {
-        fs4.closeSync(dir);
+        fs5.closeSync(dir);
       }
       this.state = value;
     } catch (error) {
@@ -674,7 +750,7 @@ var HostUpgradeLease = class {
   recoveryCoverage() {
     this.assertHealthy();
     if (this.binding.helperProtocol !== 2) return { protocol: 1, verdict: "UNKNOWN", reason: "historical_native_attribution_unavailable" };
-    if (digest(fs4.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error("native_host_helper_pin_mismatch");
+    if (digest(fs5.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256) throw new Error("native_host_helper_pin_mismatch");
     const value = JSON.parse(String((0, import_node_child_process.execFileSync)(this.binding.helperPath, ["--recovery-native-census-v2"], {
       stdio: "pipe",
       timeout: 1e3,
@@ -729,8 +805,8 @@ var HostUpgradeLease = class {
 };
 
 // src/storage.ts
-var fs5 = __toESM(require("fs"));
-var path3 = __toESM(require("path"));
+var fs6 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
 var import_session_host_core2 = require("@adhdev/session-host-core");
 var DEAD_SESSION_SNAPSHOT_MAX_CHARS = 64 * 1024;
 function findSubsequence(haystack, needle) {
@@ -823,27 +899,27 @@ var SessionHostStorage = class {
   tombstonesDir;
   constructor(options = {}) {
     const appName = options.appName || "adhdev";
-    this.rootDir = options.rootDir || path3.join((0, import_session_host_core2.resolveInstanceConfigDir)(process.env), "session-host", appName);
+    this.rootDir = options.rootDir || path4.join((0, import_session_host_core2.resolveInstanceConfigDir)(process.env), "session-host", appName);
     (0, import_session_host_core2.assertTestStorageIsolated)(this.rootDir);
-    this.runtimesDir = path3.join(this.rootDir, "runtimes");
-    this.tombstonesDir = path3.join(this.rootDir, "tombstones");
+    this.runtimesDir = path4.join(this.rootDir, "runtimes");
+    this.tombstonesDir = path4.join(this.rootDir, "tombstones");
   }
   /** Unknown/corrupt recovery files also veto idle admission; reads names only. */
   hasRuntimeEntries() {
-    if (!fs5.existsSync(this.runtimesDir)) return false;
-    const stat2 = fs5.lstatSync(this.runtimesDir);
+    if (!fs6.existsSync(this.runtimesDir)) return false;
+    const stat2 = fs6.lstatSync(this.runtimesDir);
     if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("native_host_runtime_storage_untrusted");
-    return fs5.readdirSync(this.runtimesDir).length > 0;
+    return fs6.readdirSync(this.runtimesDir).length > 0;
   }
   loadAll() {
-    if (!fs5.existsSync(this.runtimesDir)) return [];
-    const entries = fs5.readdirSync(this.runtimesDir, { withFileTypes: true });
+    if (!fs6.existsSync(this.runtimesDir)) return [];
+    const entries = fs6.readdirSync(this.runtimesDir, { withFileTypes: true });
     const states = [];
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const fullPath = path3.join(this.runtimesDir, entry.name);
+      const fullPath = path4.join(this.runtimesDir, entry.name);
       try {
-        const parsed = JSON.parse(fs5.readFileSync(fullPath, "utf8"));
+        const parsed = JSON.parse(fs6.readFileSync(fullPath, "utf8"));
         if (parsed?.record?.sessionId) {
           states.push({ ...parsed, record: expandPersistedRecord(parsed.record) });
         }
@@ -868,51 +944,51 @@ var SessionHostStorage = class {
   readRecoveryDirectory(dirPath) {
     let dir;
     try {
-      dir = fs5.lstatSync(dirPath);
+      dir = fs6.lstatSync(dirPath);
     } catch (e) {
       if (e.code === "ENOENT") return [];
       throw e;
     }
     if (!dir.isDirectory() || dir.isSymbolicLink()) throw new Error("recovery_directory_untrusted");
     const result = [];
-    const entries = fs5.readdirSync(dirPath, { withFileTypes: true });
+    const entries = fs6.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !/^[a-z0-9_-]+\.json$/.test(entry.name)) throw new Error("recovery_entry_untrusted");
-      const full = path3.join(dirPath, entry.name);
-      const fd = fs5.openSync(full, fs5.constants.O_RDONLY | fs5.constants.O_NOFOLLOW);
+      const full = path4.join(dirPath, entry.name);
+      const fd = fs6.openSync(full, fs6.constants.O_RDONLY | fs6.constants.O_NOFOLLOW);
       try {
-        const before = fs5.fstatSync(fd, { bigint: true });
+        const before = fs6.fstatSync(fd, { bigint: true });
         if (!before.isFile() || before.nlink !== 1n) throw new Error("recovery_inode_untrusted");
-        const parsed = JSON.parse(fs5.readFileSync(fd, "utf8"));
-        const after = fs5.fstatSync(fd, { bigint: true });
-        const current = fs5.lstatSync(full, { bigint: true });
+        const parsed = JSON.parse(fs6.readFileSync(fd, "utf8"));
+        const after = fs6.fstatSync(fd, { bigint: true });
+        const current = fs6.lstatSync(full, { bigint: true });
         const identity = (s) => [s.dev, s.ino, s.ctimeNs, s.mtimeNs, s.size].join(":");
         if (identity(before) !== identity(after) || identity(after) !== identity(current) || current.isSymbolicLink()) throw new Error("recovery_entry_changed");
         const id = dirPath === this.runtimesDir ? parsed?.record?.sessionId : parsed?.sessionId;
         if (typeof id !== "string" || !id || `${id}.json` !== entry.name) throw new Error("recovery_entry_name_mismatch");
         result.push(parsed);
       } finally {
-        fs5.closeSync(fd);
+        fs6.closeSync(fd);
       }
     }
-    const afterDir = fs5.lstatSync(dirPath);
+    const afterDir = fs6.lstatSync(dirPath);
     if (!afterDir.isDirectory() || afterDir.isSymbolicLink() || [dir.dev, dir.ino, dir.ctimeMs, dir.mtimeMs].join(":") !== [afterDir.dev, afterDir.ino, afterDir.ctimeMs, afterDir.mtimeMs].join(":")) throw new Error("recovery_directory_changed");
     return result;
   }
   save(record, snapshot) {
-    fs5.mkdirSync(this.runtimesDir, { recursive: true });
-    const filePath = path3.join(this.runtimesDir, `${record.sessionId}.json`);
+    fs6.mkdirSync(this.runtimesDir, { recursive: true });
+    const filePath = path4.join(this.runtimesDir, `${record.sessionId}.json`);
     const payload = {
       record: compactRecordForPersist(record),
       snapshot: pruneSnapshotForPersist(record, snapshot),
       updatedAt: Date.now()
     };
-    fs5.writeFileSync(filePath, JSON.stringify(payload), "utf8");
+    fs6.writeFileSync(filePath, JSON.stringify(payload), "utf8");
   }
   remove(sessionId) {
-    const filePath = path3.join(this.runtimesDir, `${sessionId}.json`);
+    const filePath = path4.join(this.runtimesDir, `${sessionId}.json`);
     try {
-      fs5.unlinkSync(filePath);
+      fs6.unlinkSync(filePath);
     } catch {
     }
   }
@@ -922,33 +998,33 @@ var SessionHostStorage = class {
    * remains inspectable for post-mortem diagnostics.
    */
   saveTombstone(sessionId, termination) {
-    fs5.mkdirSync(this.tombstonesDir, { recursive: true });
-    const filePath = path3.join(this.tombstonesDir, `${sessionId}.json`);
+    fs6.mkdirSync(this.tombstonesDir, { recursive: true });
+    const filePath = path4.join(this.tombstonesDir, `${sessionId}.json`);
     const payload = {
       sessionId,
       termination,
       updatedAt: Date.now()
     };
-    fs5.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+    fs6.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
   }
   loadTombstone(sessionId) {
-    const filePath = path3.join(this.tombstonesDir, `${sessionId}.json`);
+    const filePath = path4.join(this.tombstonesDir, `${sessionId}.json`);
     try {
-      const parsed = JSON.parse(fs5.readFileSync(filePath, "utf8"));
+      const parsed = JSON.parse(fs6.readFileSync(filePath, "utf8"));
       return parsed?.sessionId ? parsed : null;
     } catch {
       return null;
     }
   }
   loadAllTombstones() {
-    if (!fs5.existsSync(this.tombstonesDir)) return [];
-    const entries = fs5.readdirSync(this.tombstonesDir, { withFileTypes: true });
+    if (!fs6.existsSync(this.tombstonesDir)) return [];
+    const entries = fs6.readdirSync(this.tombstonesDir, { withFileTypes: true });
     const states = [];
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const fullPath = path3.join(this.tombstonesDir, entry.name);
+      const fullPath = path4.join(this.tombstonesDir, entry.name);
       try {
-        const parsed = JSON.parse(fs5.readFileSync(fullPath, "utf8"));
+        const parsed = JSON.parse(fs6.readFileSync(fullPath, "utf8"));
         if (parsed?.sessionId) states.push(parsed);
       } catch {
       }
@@ -956,9 +1032,9 @@ var SessionHostStorage = class {
     return states.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
   removeTombstone(sessionId) {
-    const filePath = path3.join(this.tombstonesDir, `${sessionId}.json`);
+    const filePath = path4.join(this.tombstonesDir, `${sessionId}.json`);
     try {
-      fs5.unlinkSync(filePath);
+      fs6.unlinkSync(filePath);
     } catch {
     }
   }
@@ -967,8 +1043,8 @@ var SessionHostStorage = class {
 // src/host-instance-lock.ts
 var import_child_process2 = require("child_process");
 var import_crypto = require("crypto");
-var fs6 = __toESM(require("fs"));
-var path4 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
 var HOST_LOCK_OWNERLESS_STALE_MS = 6e4;
 var OWNER_FILE = "owner.json";
 var HostInstanceLockedError = class extends Error {
@@ -1001,9 +1077,9 @@ function defaultIsPidAlive(pid) {
 }
 function observe(lock) {
   try {
-    const file = path4.join(lock, OWNER_FILE);
-    const stat2 = fs6.lstatSync(file, { bigint: true });
-    const v = JSON.parse(fs6.readFileSync(file, "utf8"));
+    const file = path5.join(lock, OWNER_FILE);
+    const stat2 = fs7.lstatSync(file, { bigint: true });
+    const v = JSON.parse(fs7.readFileSync(file, "utf8"));
     if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
       return { kind: "owner", identity: `${stat2.dev}:${stat2.ino}:${stat2.ctimeNs}`, owner: {
         pid: v.pid,
@@ -1015,7 +1091,7 @@ function observe(lock) {
   } catch {
   }
   try {
-    return { kind: "ownerless", mtimeMs: fs6.statSync(lock).mtimeMs };
+    return { kind: "ownerless", mtimeMs: fs7.statSync(lock).mtimeMs };
   } catch {
     return { kind: "gone" };
   }
@@ -1027,7 +1103,7 @@ function acquireHostInstanceLock(options) {
   const now = options.now ?? Date.now;
   let reclaimedPid;
   let reclaimedOwner;
-  fs6.mkdirSync(path4.dirname(lockPath), { recursive: true });
+  fs7.mkdirSync(path5.dirname(lockPath), { recursive: true });
   const provenGone = (o) => {
     if (o.kind === "gone") return true;
     if (o.kind === "ownerless") return now() - o.mtimeMs >= HOST_LOCK_OWNERLESS_STALE_MS;
@@ -1046,7 +1122,7 @@ function acquireHostInstanceLock(options) {
   };
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      fs6.mkdirSync(lockPath, { mode: 448 });
+      fs7.mkdirSync(lockPath, { mode: 448 });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       const seen = observe(lockPath);
@@ -1056,7 +1132,7 @@ function acquireHostInstanceLock(options) {
       }
       const guard = `${lockPath}.reclaim`;
       try {
-        fs6.mkdirSync(guard, { mode: 448 });
+        fs7.mkdirSync(guard, { mode: 448 });
       } catch {
         throw new HostInstanceLockedError(lockPath, "reclaim already in progress");
       }
@@ -1072,16 +1148,16 @@ function acquireHostInstanceLock(options) {
           }
         }
         try {
-          fs6.unlinkSync(path4.join(lockPath, OWNER_FILE));
+          fs7.unlinkSync(path5.join(lockPath, OWNER_FILE));
         } catch {
         }
         try {
-          fs6.rmdirSync(lockPath);
+          fs7.rmdirSync(lockPath);
         } catch {
         }
       } finally {
         try {
-          fs6.rmdirSync(guard);
+          fs7.rmdirSync(guard);
         } catch {
         }
       }
@@ -1089,10 +1165,10 @@ function acquireHostInstanceLock(options) {
     }
     const owner = { pid: process.pid, nonce: (0, import_crypto.randomUUID)(), birth: readBirth(process.pid), acquiredAt: now() };
     try {
-      fs6.writeFileSync(path4.join(lockPath, OWNER_FILE), JSON.stringify(owner), { mode: 384 });
+      fs7.writeFileSync(path5.join(lockPath, OWNER_FILE), JSON.stringify(owner), { mode: 384 });
     } catch (error) {
       try {
-        fs6.rmdirSync(lockPath);
+        fs7.rmdirSync(lockPath);
       } catch {
       }
       throw error;
@@ -1111,15 +1187,15 @@ function acquireHostInstanceLock(options) {
         const current = observe(lockPath);
         if (current.kind !== "owner" || owned.kind !== "owner" || current.identity !== owned.identity || current.owner.nonce !== owner.nonce || current.owner.pid !== owner.pid || current.owner.birth !== owner.birth || current.owner.acquiredAt !== owner.acquiredAt) return;
         if (releaseOptions?.preserveReclaimedOwner && reclaimedOwner) {
-          fs6.writeFileSync(path4.join(lockPath, OWNER_FILE), JSON.stringify({ ...reclaimedOwner, nonce: (0, import_crypto.randomUUID)() }), { mode: 384 });
+          fs7.writeFileSync(path5.join(lockPath, OWNER_FILE), JSON.stringify({ ...reclaimedOwner, nonce: (0, import_crypto.randomUUID)() }), { mode: 384 });
           return;
         }
         try {
-          fs6.unlinkSync(path4.join(lockPath, OWNER_FILE));
+          fs7.unlinkSync(path5.join(lockPath, OWNER_FILE));
         } catch {
         }
         try {
-          fs6.rmdirSync(lockPath);
+          fs7.rmdirSync(lockPath);
         } catch {
         }
       }
@@ -1129,15 +1205,15 @@ function acquireHostInstanceLock(options) {
 }
 
 // src/operator-recovery-fence.ts
-var fs7 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
 var import_node_crypto3 = require("crypto");
 var import_session_host_core3 = require("@adhdev/session-host-core");
 var digest2 = (s) => (0, import_node_crypto3.createHash)("sha256").update(s).digest("hex");
 var OperatorRecoveryFence = class {
   constructor(root) {
     this.root = root;
-    this.file = path5.join(root, "operator-recovery-v1.json");
+    this.file = path6.join(root, "operator-recovery-v1.json");
     try {
       this.readRecord();
     } catch (e) {
@@ -1176,23 +1252,23 @@ var OperatorRecoveryFence = class {
       namespace: binding.namespace
     };
     const bytes = JSON.stringify(state);
-    fs7.mkdirSync(this.root, { recursive: true, mode: 448 });
-    const directory = fs7.lstatSync(this.root);
+    fs8.mkdirSync(this.root, { recursive: true, mode: 448 });
+    const directory = fs8.lstatSync(this.root);
     if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid?.() || directory.mode & 63) throw new Error("operator_recovery_storage_untrusted");
     assertOwner();
     try {
-      const fd = fs7.openSync(this.file, "wx", 384);
+      const fd = fs8.openSync(this.file, "wx", 384);
       try {
-        fs7.writeFileSync(fd, bytes);
-        fs7.fsyncSync(fd);
+        fs8.writeFileSync(fd, bytes);
+        fs8.fsyncSync(fd);
       } finally {
-        fs7.closeSync(fd);
+        fs8.closeSync(fd);
       }
-      const dir = fs7.openSync(this.root, "r");
+      const dir = fs8.openSync(this.root, "r");
       try {
-        fs7.fsyncSync(dir);
+        fs8.fsyncSync(dir);
       } finally {
-        fs7.closeSync(dir);
+        fs8.closeSync(dir);
       }
       this.observedDigest = digest2(bytes);
       return this.observedDigest;
@@ -1202,20 +1278,20 @@ var OperatorRecoveryFence = class {
     }
   }
   readRecord() {
-    const root = fs7.lstatSync(this.root);
+    const root = fs8.lstatSync(this.root);
     if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== process.getuid?.() || root.mode & 63) throw new Error("operator_recovery_storage_untrusted");
-    const fd = fs7.openSync(this.file, fs7.constants.O_RDONLY | fs7.constants.O_NOFOLLOW);
+    const fd = fs8.openSync(this.file, fs8.constants.O_RDONLY | fs8.constants.O_NOFOLLOW);
     try {
-      const stat2 = fs7.fstatSync(fd);
+      const stat2 = fs8.fstatSync(fd);
       if (stat2.size > 4096 || !stat2.isFile() || stat2.nlink !== 1 || stat2.uid !== process.getuid?.() || stat2.mode & 63) {
         throw new Error("operator_recovery_storage_untrusted");
       }
-      const bytes = fs7.readFileSync(fd, "utf8");
+      const bytes = fs8.readFileSync(fd, "utf8");
       const state = JSON.parse(bytes);
       if (state.protocol !== 1 || state.target !== import_session_host_core3.recoveryTargetBytes || state.namespace !== import_session_host_core3.OPERATOR_RECOVERY_TARGET.namespace || (typeof state.installedHostBootId !== "string" || !state.installedHostBootId)) throw new Error("operator_recovery_fence_rollback");
       return { hash: digest2(bytes), state };
     } finally {
-      fs7.closeSync(fd);
+      fs8.closeSync(fd);
     }
   }
   witness(expectedDigest) {
@@ -1487,8 +1563,8 @@ function handleStopSessionIfExpected(host, payload) {
 
 // src/prior-host-identity.ts
 var import_crypto2 = require("crypto");
-var fs8 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
 var import_session_host_core8 = require("@adhdev/session-host-core");
 var INSTANCE_ARG_PREFIX = "--instance-config-key=";
 function sessionHostInstanceArg(configDir) {
@@ -1513,7 +1589,7 @@ function isManagedSessionHostCommandLine(commandLine, configDir) {
     }
     return /^--instance-config-key=[0-9a-f]{64}$/.test(instanceTokens[0]);
   };
-  const execBase = path6.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
+  const execBase = path7.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
   if (execBase === "adhdev-sessiond") {
     const subcommand2 = tokens[1]?.toLowerCase();
     if (subcommand2 && subcommand2 !== "serve" && !subcommand2.startsWith("-")) return false;
@@ -1544,7 +1620,7 @@ function isManagedSessionHostCommandLine(commandLine, configDir) {
   const scriptToken = tokens[idx];
   if (!scriptToken) return false;
   const normalizedScript = scriptToken.replace(/\\/g, "/").toLowerCase();
-  const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path6.basename(normalizedScript) === "adhdev-sessiond";
+  const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path7.basename(normalizedScript) === "adhdev-sessiond";
   if (!isSessionHostEntry) return false;
   const subcommand = tokens[idx + 1]?.toLowerCase();
   if (subcommand && subcommand !== "serve" && !subcommand.startsWith("-")) return false;
@@ -1554,15 +1630,15 @@ function readVerifiedReplacementProvenance(options) {
   const now = options.nowMs ? options.nowMs() : Date.now();
   const provenanceFile = options.provenanceFile ?? options.provenanceFilePath;
   try {
-    if (!provenanceFile || !fs8.existsSync(provenanceFile)) return void 0;
-    const stat2 = fs8.lstatSync(provenanceFile);
+    if (!provenanceFile || !fs9.existsSync(provenanceFile)) return void 0;
+    const stat2 = fs9.lstatSync(provenanceFile);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || (stat2.mode & 63) !== 0) {
       return void 0;
     }
     if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
       return void 0;
     }
-    const parsed = JSON.parse(fs8.readFileSync(provenanceFile, "utf8"));
+    const parsed = JSON.parse(fs9.readFileSync(provenanceFile, "utf8"));
     if (!parsed || parsed.schemaVersion !== 1 && parsed.schema !== 1) return void 0;
     if (options.appName !== void 0 && parsed.appName !== void 0 && parsed.appName !== options.appName) {
       return void 0;
@@ -1571,16 +1647,16 @@ function readVerifiedReplacementProvenance(options) {
     if (typeof parsed.instanceConfigDir !== "string" || (0, import_session_host_core8.resolveInstanceConfigDir)({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
       return void 0;
     }
-    if (fs8.existsSync(canonicalDir)) {
-      const provenanceFiles = fs8.readdirSync(canonicalDir).filter((entry) => entry.endsWith("-session-host-replacement.json"));
+    if (fs9.existsSync(canonicalDir)) {
+      const provenanceFiles = fs9.readdirSync(canonicalDir).filter((entry) => entry.endsWith("-session-host-replacement.json"));
       if (provenanceFiles.length > 1) return void 0;
     }
     const expectedKey = sessionHostInstanceArg(canonicalDir);
     if (parsed.instanceConfigKey !== expectedKey) return void 0;
-    const canonicalEndpointDir = fs8.existsSync(path6.dirname(options.endpointPath)) ? fs8.realpathSync(path6.dirname(options.endpointPath)) : path6.resolve(path6.dirname(options.endpointPath));
-    const canonicalEndpointPath = path6.join(canonicalEndpointDir, path6.basename(options.endpointPath));
-    const parsedEndpointDir = typeof parsed.endpointPath === "string" && fs8.existsSync(path6.dirname(parsed.endpointPath)) ? fs8.realpathSync(path6.dirname(parsed.endpointPath)) : typeof parsed.endpointPath === "string" ? path6.resolve(path6.dirname(parsed.endpointPath)) : "";
-    const parsedEndpointPath = typeof parsed.endpointPath === "string" ? path6.join(parsedEndpointDir, path6.basename(parsed.endpointPath)) : "";
+    const canonicalEndpointDir = fs9.existsSync(path7.dirname(options.endpointPath)) ? fs9.realpathSync(path7.dirname(options.endpointPath)) : path7.resolve(path7.dirname(options.endpointPath));
+    const canonicalEndpointPath = path7.join(canonicalEndpointDir, path7.basename(options.endpointPath));
+    const parsedEndpointDir = typeof parsed.endpointPath === "string" && fs9.existsSync(path7.dirname(parsed.endpointPath)) ? fs9.realpathSync(path7.dirname(parsed.endpointPath)) : typeof parsed.endpointPath === "string" ? path7.resolve(path7.dirname(parsed.endpointPath)) : "";
+    const parsedEndpointPath = typeof parsed.endpointPath === "string" ? path7.join(parsedEndpointDir, path7.basename(parsed.endpointPath)) : "";
     if (parsedEndpointPath !== canonicalEndpointPath) return void 0;
     if (typeof parsed.expectedPid !== "number" || !Number.isFinite(parsed.expectedPid) || parsed.expectedPid <= 0) {
       return void 0;
@@ -1612,21 +1688,21 @@ function readVerifiedReplacementProvenance(options) {
       }
       expectedEndpointInode = BigInt(parsed.expectedEndpointInode);
     }
-    const effectiveLeaseStateDir = options.leaseStateDir ?? path6.join(canonicalDir, "session-host");
+    const effectiveLeaseStateDir = options.leaseStateDir ?? path7.join(canonicalDir, "session-host");
     if (effectiveLeaseStateDir) {
-      const leaseFile = path6.join(effectiveLeaseStateDir, "upgrade-lease.json");
-      if (!fs8.existsSync(leaseFile)) return void 0;
-      if (fs8.existsSync(leaseFile)) {
-        const leaseStat = fs8.lstatSync(leaseFile);
+      const leaseFile = path7.join(effectiveLeaseStateDir, "upgrade-lease.json");
+      if (!fs9.existsSync(leaseFile)) return void 0;
+      if (fs9.existsSync(leaseFile)) {
+        const leaseStat = fs9.lstatSync(leaseFile);
         if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || leaseStat.nlink !== 1 || (leaseStat.mode & 63) !== 0) {
           return void 0;
         }
         if (typeof process.getuid === "function" && leaseStat.uid !== process.getuid()) {
           return void 0;
         }
-        const lease = JSON.parse(fs8.readFileSync(leaseFile, "utf8"));
-        const leaseEndpointDir = typeof lease.endpoint === "string" && fs8.existsSync(path6.dirname(lease.endpoint)) ? fs8.realpathSync(path6.dirname(lease.endpoint)) : typeof lease.endpoint === "string" ? path6.resolve(path6.dirname(lease.endpoint)) : "";
-        const leaseEndpointPath = typeof lease.endpoint === "string" ? path6.join(leaseEndpointDir, path6.basename(lease.endpoint)) : "";
+        const lease = JSON.parse(fs9.readFileSync(leaseFile, "utf8"));
+        const leaseEndpointDir = typeof lease.endpoint === "string" && fs9.existsSync(path7.dirname(lease.endpoint)) ? fs9.realpathSync(path7.dirname(lease.endpoint)) : typeof lease.endpoint === "string" ? path7.resolve(path7.dirname(lease.endpoint)) : "";
+        const leaseEndpointPath = typeof lease.endpoint === "string" ? path7.join(leaseEndpointDir, path7.basename(lease.endpoint)) : "";
         if (lease.schema !== 1 || lease.held !== true || leaseEndpointPath !== canonicalEndpointPath || lease.epoch !== parsed.expectedEpoch || lease.owner !== parsed.expectedOwner || typeof lease.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(lease.tokenHash)) {
           return void 0;
         }
@@ -1666,14 +1742,14 @@ function readVerifiedReplacementProvenance(options) {
 }
 
 // src/session-diagnostics.ts
-var path7 = __toESM(require("path"));
+var path8 = __toESM(require("path"));
 var import_session_host_core9 = require("@adhdev/session-host-core");
 var MAX_RECENT_DIAGNOSTICS = 200;
 function resolveHostEntryPath() {
   const entry = process.argv[1];
   if (typeof entry !== "string" || !entry.trim()) return void 0;
   try {
-    return path7.resolve(entry);
+    return path8.resolve(entry);
   } catch {
     return entry;
   }
@@ -1974,8 +2050,8 @@ var SessionHostServer = class extends import_events.EventEmitter {
     super();
     this.endpoint = options.endpoint || (0, import_session_host_core11.getDefaultSessionHostEndpoint)(options.appName || "adhdev");
     if (options.upgradeBinding) {
-      const relative3 = options.storageRootDir && path8.relative(options.upgradeBinding.stateDir, options.storageRootDir);
-      if (this.endpoint.kind !== "unix" || !options.storageRootDir || !path8.isAbsolute(options.storageRootDir) || !path8.isAbsolute(options.upgradeBinding.stateDir) || relative3 === ".." || relative3?.startsWith(`..${path8.sep}`) || path8.isAbsolute(relative3 || "")) {
+      const relative3 = options.storageRootDir && path9.relative(options.upgradeBinding.stateDir, options.storageRootDir);
+      if (this.endpoint.kind !== "unix" || !options.storageRootDir || !path9.isAbsolute(options.storageRootDir) || !path9.isAbsolute(options.upgradeBinding.stateDir) || relative3 === ".." || relative3?.startsWith(`..${path9.sep}`) || path9.isAbsolute(relative3 || "")) {
         throw new Error("native_host_instance_storage_binding_required");
       }
     }
@@ -1994,7 +2070,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       appName: options.appName || "adhdev",
       rootDir: options.storageRootDir
     });
-    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir || path8.join((0, import_session_host_core12.resolveInstanceConfigDir)(process.env), "session-host", options.appName || "adhdev"));
+    this.recoveryFence = new OperatorRecoveryFence(options.storageRootDir || path9.join((0, import_session_host_core12.resolveInstanceConfigDir)(process.env), "session-host", options.appName || "adhdev"));
     this.recoveryControl = new OperatorRecoveryControl(() => ({
       upgradeLease: this.upgradeLease,
       instanceConfigDir: this.instanceConfigDir,
@@ -2043,84 +2119,29 @@ var SessionHostServer = class extends import_events.EventEmitter {
   assertNoAutomaticReplacementContext() {
     if (this.isCancelled?.()) throw new Error("session_host_start_cancelled");
     if (this.hasReplacementContext) throw new Error("session_host_live_owner_replacement_unauthorized");
-    if (this.instanceConfigDir && fs9.existsSync(this.instanceConfigDir)) {
-      if (fs9.readdirSync(this.instanceConfigDir).some((name) => name.endsWith("-session-host-replacement.json"))) {
+    if (this.instanceConfigDir && fs10.existsSync(this.instanceConfigDir)) {
+      if (fs10.readdirSync(this.instanceConfigDir).some((name) => name.endsWith("-session-host-replacement.json"))) {
         throw new Error("session_host_live_owner_replacement_unauthorized");
       }
     }
     if (this.isCancelled?.()) throw new Error("session_host_start_cancelled");
   }
-  async evictPriorEndpointOwners() {
-    this.assertNoAutomaticReplacementContext();
-    if (this.endpoint.kind !== "unix") return;
-    const identity = (file) => {
-      try {
-        const stat2 = fs9.lstatSync(file, { bigint: true });
-        return `${stat2.dev}:${stat2.ino}:${stat2.mode}`;
-      } catch (error) {
-        if (error.code === "ENOENT") return "missing";
-        throw error;
-      }
-    };
-    const configIdentity = this.instanceConfigDir ? identity(this.instanceConfigDir) : null;
-    const endpointParent = fs9.realpathSync(path8.dirname(this.endpoint.path));
-    const initialEndpoint = identity(this.endpoint.path);
-    const readPid = () => {
-      if (!this.pidFilePath) return "missing";
-      try {
-        const raw = fs9.readFileSync(this.pidFilePath, "utf8").trim();
-        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
-          return "corrupt";
-        }
-        return raw;
-      } catch (error) {
-        if (error.code === "ENOENT") return "missing";
-        throw error;
-      }
-    };
-    const initialPid = readPid();
-    const hasPid = (value) => value !== "missing" && value !== "corrupt";
-    const initialBirth = hasPid(initialPid) ? this.readProcessBirth(Number(initialPid)) : null;
-    const reclaimed = this.instanceLock?.reclaimedPid;
-    const reusedPid = !!reclaimed && reclaimed.pid === Number(initialPid) && reclaimed.birth === initialBirth;
-    const assertReclaimedIncarnation = () => {
-      if (!reusedPid || !reclaimed || this.readProcessBirth(reclaimed.pid) !== reclaimed.birth) return false;
-      try {
-        process.kill(reclaimed.pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const assertGeneration = (expectedEndpoint) => {
-      this.assertNoAutomaticReplacementContext();
-      this.instanceLock?.assertOwned();
-      const currentPid = readPid();
-      const [birth, alive] = hasPid(initialPid) ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
-      if (currentPid !== initialPid || birth !== initialBirth || alive && !assertReclaimedIncarnation() || this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity || fs9.realpathSync(path8.dirname(this.endpoint.path)) !== endpointParent || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
-        throw new Error("session_host_endpoint_changed_during_recovery");
-      }
-      this.assertNoAutomaticReplacementContext();
-    };
-    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid)) && !assertReclaimedIncarnation()) {
-      throw new Error("session_host_live_owner_replacement_unauthorized");
-    }
-    if (initialEndpoint !== "missing") {
-      if (this.upgradeLease) throw new Error("native_host_endpoint_owner_unproved");
-      if (!hasPid(initialPid) || reusedPid) {
-        await assertOrphanUnixSocket(this.endpoint.path);
-        assertGeneration(initialEndpoint);
-      }
-      for (let check = 0; check < 2; check++) {
-        const owners = this.readSocketOwnerPids();
-        if (owners === null) throw new Error("session_host_prior_owner_socket_unverified");
-        if (owners.length !== 0) throw new Error("session_host_endpoint_changed_during_recovery");
-        assertGeneration(initialEndpoint);
-      }
-      fs9.unlinkSync(this.endpoint.path);
-    }
-    this.startupFence = () => assertGeneration("missing");
-    this.startupFence();
+  evictPriorEndpointOwners() {
+    return evictPriorEndpointOwners({
+      endpoint: this.endpoint,
+      instanceConfigDir: this.instanceConfigDir,
+      pidFilePath: this.pidFilePath,
+      upgradeLease: this.upgradeLease,
+      getInstanceLock: () => this.instanceLock,
+      assertNoAutomaticReplacementContext: () => this.assertNoAutomaticReplacementContext(),
+      readProcessBirth: (pid) => this.readProcessBirth(pid),
+      isPidAlive: (pid) => this.isPidAlive(pid),
+      readSocketOwnerPids: () => this.readSocketOwnerPids(),
+      setStartupFence: (fence) => {
+        this.startupFence = fence;
+      },
+      startupFence: () => this.startupFence()
+    });
   }
   async start() {
     (0, import_session_host_core11.validateSessionHostEndpoint)(this.endpoint);
@@ -2140,7 +2161,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
   }
   async startAfterLock() {
-    if (this.upgradeLease && fs9.existsSync(this.endpoint.path)) {
+    if (this.upgradeLease && fs10.existsSync(this.endpoint.path)) {
       throw new Error("native_host_endpoint_owner_unproved");
     }
     await this.evictPriorEndpointOwners();
@@ -2209,10 +2230,10 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     if (this.endpoint.kind === "unix") {
       if (this.upgradeLease) {
-        fs9.chmodSync(this.endpoint.path, 384);
+        fs10.chmodSync(this.endpoint.path, 384);
       }
       try {
-        this.endpointInode = fs9.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        this.endpointInode = fs10.lstatSync(this.endpoint.path, { bigint: true }).ino;
       } catch {
         this.endpointInode = null;
       }
@@ -2258,7 +2279,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     let endpointReplaced = false;
     if (this.endpoint.kind === "unix" && this.endpointInode !== null) {
       try {
-        const currentIno = fs9.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        const currentIno = fs10.lstatSync(this.endpoint.path, { bigint: true }).ino;
         endpointReplaced = currentIno !== this.endpointInode;
       } catch {
         endpointReplaced = true;
@@ -2276,8 +2297,8 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     if (this.endpoint.kind === "unix" && !endpointReplaced) {
       try {
-        if (this.endpointInode !== null && fs9.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
-          fs9.unlinkSync(this.endpoint.path);
+        if (this.endpointInode !== null && fs10.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
+          fs10.unlinkSync(this.endpoint.path);
         }
       } catch {
       }
@@ -3010,12 +3031,12 @@ var SessionHostServer = class extends import_events.EventEmitter {
 };
 
 // src/threadpool-watchdog.ts
-var fs10 = __toESM(require("fs"));
+var fs11 = __toESM(require("fs"));
 var os2 = __toESM(require("os"));
 var THREADPOOL_WATCHDOG_INTERVAL_MS = 15e3;
 var THREADPOOL_WATCHDOG_STALL_MS = 12e4;
 function defaultProbe(done) {
-  fs10.stat(os2.tmpdir(), () => done());
+  fs11.stat(os2.tmpdir(), () => done());
 }
 function startThreadpoolWatchdog(options) {
   const intervalMs = options.intervalMs ?? THREADPOOL_WATCHDOG_INTERVAL_MS;
@@ -3053,7 +3074,7 @@ function startThreadpoolWatchdog(options) {
 }
 function writeStderrLineSync(line) {
   try {
-    fs10.writeSync(2, `${line}
+    fs11.writeSync(2, `${line}
 `);
   } catch {
   }
@@ -3068,37 +3089,37 @@ function getSessionHostEndpoint() {
   return (0, import_session_host_core13.getDefaultSessionHostEndpoint)(SESSION_HOST_APP_NAME, { ipcKey: INSTANCE_IPC_KEY });
 }
 function getSessionHostStorageRoot() {
-  return path9.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
+  return path10.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
 }
 function getSessionHostReplacementProvenanceFile(appName, configDir = INSTANCE_CONFIG_DIR) {
   const dir = configDir;
-  if (!fs11.existsSync(dir)) fs11.mkdirSync(dir, { recursive: true });
-  return path9.join(dir, `${appName}-session-host-replacement.json`);
+  if (!fs12.existsSync(dir)) fs12.mkdirSync(dir, { recursive: true });
+  return path10.join(dir, `${appName}-session-host-replacement.json`);
 }
 function removeSessionHostReplacementProvenance(appName, configDir = INSTANCE_CONFIG_DIR) {
   try {
-    const provenanceFile = path9.join(configDir, `${appName}-session-host-replacement.json`);
-    if (fs11.existsSync(provenanceFile)) {
-      fs11.unlinkSync(provenanceFile);
+    const provenanceFile = path10.join(configDir, `${appName}-session-host-replacement.json`);
+    if (fs12.existsSync(provenanceFile)) {
+      fs12.unlinkSync(provenanceFile);
     }
   } catch {
   }
 }
 function getSessionHostPidFile(appName) {
   const dir = INSTANCE_CONFIG_DIR;
-  if (!fs11.existsSync(dir)) fs11.mkdirSync(dir, { recursive: true });
-  return path9.join(dir, `${appName}-session-host.pid`);
+  if (!fs12.existsSync(dir)) fs12.mkdirSync(dir, { recursive: true });
+  return path10.join(dir, `${appName}-session-host.pid`);
 }
 function writeSessionHostPid(appName) {
-  fs11.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
+  fs12.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
 }
 function removeSessionHostPid(appName) {
   try {
     const pidFile = getSessionHostPidFile(appName);
-    if (!fs11.existsSync(pidFile)) return;
-    const recordedPid = Number.parseInt(fs11.readFileSync(pidFile, "utf8").trim(), 10);
+    if (!fs12.existsSync(pidFile)) return;
+    const recordedPid = Number.parseInt(fs12.readFileSync(pidFile, "utf8").trim(), 10);
     if (Number.isFinite(recordedPid) && recordedPid !== process.pid) return;
-    fs11.unlinkSync(pidFile);
+    fs12.unlinkSync(pidFile);
   } catch {
   }
 }
@@ -3127,18 +3148,18 @@ async function runServer(instanceKeyArgs = []) {
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
-    const stat2 = fs11.lstatSync(pinFile);
-    if (process.platform !== "darwin" || fs11.realpathSync(pinFile) !== pinFile || !stat2.isFile() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("guardian_launch_pins_untrusted");
-    const pins = JSON.parse(fs11.readFileSync(pinFile, "utf8"));
-    if (pins.nodePath !== fs11.realpathSync(process.execPath) || pins.hostEntryPath !== fs11.realpathSync(process.argv[1]) || pins.stateDir !== path9.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
+    const stat2 = fs12.lstatSync(pinFile);
+    if (process.platform !== "darwin" || fs12.realpathSync(pinFile) !== pinFile || !stat2.isFile() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("guardian_launch_pins_untrusted");
+    const pins = JSON.parse(fs12.readFileSync(pinFile, "utf8"));
+    if (pins.nodePath !== fs12.realpathSync(process.execPath) || pins.hostEntryPath !== fs12.realpathSync(process.argv[1]) || pins.stateDir !== path10.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
     upgradeBinding = resolveGuardianArtifact(pins);
   }
   const endpoint = getSessionHostEndpoint();
   let recoveryBootstrap;
   if (process.env.ADHDEV_RECOVERY_BOOT_FD === "3") {
     delete process.env.ADHDEV_RECOVERY_BOOT_FD;
-    const bytes = fs11.readFileSync(3, "utf8");
-    fs11.closeSync(3);
+    const bytes = fs12.readFileSync(3, "utf8");
+    fs12.closeSync(3);
     if (bytes.length > 4096) throw new Error("recovery_host_bootstrap_invalid");
     recoveryBootstrap = JSON.parse(bytes);
     if (!recoveryBootstrap?.publicKey || !recoveryBootstrap.workerDaemonId) throw new Error("recovery_host_bootstrap_invalid");

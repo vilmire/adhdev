@@ -3,7 +3,8 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'node:path';
-import { assertOrphanUnixSocket, lsofSocketOwnerPids } from './socket-probe.js';
+import { lsofSocketOwnerPids } from './socket-probe.js';
+import { evictPriorEndpointOwners } from './prior-endpoint-recovery.js';
 import {
   SessionHostRegistry,
   classifyTermination,
@@ -196,80 +197,20 @@ export class SessionHostServer extends EventEmitter {
     if (this.isCancelled?.()) throw new Error('session_host_start_cancelled');
   }
 
-  private async evictPriorEndpointOwners(): Promise<void> {
-    this.assertNoAutomaticReplacementContext();
-    if (this.endpoint.kind !== 'unix') return;
-    const identity = (file: string): string => {
-      try {
-        const stat = fs.lstatSync(file, { bigint: true });
-        return `${stat.dev}:${stat.ino}:${stat.mode}`;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
-        throw error;
-      }
-    };
-    const configIdentity = this.instanceConfigDir ? identity(this.instanceConfigDir) : null;
-    const endpointParent = fs.realpathSync(path.dirname(this.endpoint.path));
-    const initialEndpoint = identity(this.endpoint.path);
-    const readPid = (): string => {
-      if (!this.pidFilePath) return 'missing';
-      try {
-        const raw = fs.readFileSync(this.pidFilePath, 'utf8').trim();
-        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
-          return 'corrupt'; // identifies no owner; handled like 'missing'
-        }
-        return raw;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
-        throw error;
-      }
-    };
-    const initialPid = readPid();
-    const hasPid = (value: string): boolean => value !== 'missing' && value !== 'corrupt';
-    const initialBirth = hasPid(initialPid) ? this.readProcessBirth(Number(initialPid)) : null;
-    const reclaimed = this.instanceLock?.reclaimedPid;
-    const reusedPid = !!reclaimed && reclaimed.pid === Number(initialPid) && reclaimed.birth === initialBirth;
-    const assertReclaimedIncarnation = (): boolean => {
-      if (!reusedPid || !reclaimed || this.readProcessBirth(reclaimed.pid) !== reclaimed.birth) return false;
-      try { process.kill(reclaimed.pid, 0); return true; } catch { return false; }
-    };
-    const assertGeneration = (expectedEndpoint: string): void => {
-      this.assertNoAutomaticReplacementContext();
-      this.instanceLock?.assertOwned();
-      const currentPid = readPid();
-      const [birth, alive] = hasPid(initialPid)
-        ? [this.readProcessBirth(Number(initialPid)), this.isPidAlive(Number(initialPid))] : [null, false];
-      if (currentPid !== initialPid || birth !== initialBirth || (alive && !assertReclaimedIncarnation())
-          || (this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity)
-          || fs.realpathSync(path.dirname(this.endpoint.path)) !== endpointParent
-          || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
-        throw new Error('session_host_endpoint_changed_during_recovery');
-      }
-      this.assertNoAutomaticReplacementContext();
-    };
-    if (hasPid(initialPid) && this.isPidAlive(Number(initialPid)) && !assertReclaimedIncarnation()) {
-      throw new Error('session_host_live_owner_replacement_unauthorized');
-    }
-    if (initialEndpoint !== 'missing') {
-      if (this.upgradeLease) throw new Error('native_host_endpoint_owner_unproved');
-      // No usable PID + existing endpoint is UNKNOWN unless it is a real socket node AND
-      // connect yields ECONNREFUSED; a connect that succeeds or hangs means a live/wedged host.
-      if (!hasPid(initialPid) || reusedPid) {
-        await assertOrphanUnixSocket(this.endpoint.path);
-        assertGeneration(initialEndpoint);
-      }
-      for (let check = 0; check < 2; check++) {
-        const owners = this.readSocketOwnerPids();
-        if (owners === null) throw new Error('session_host_prior_owner_socket_unverified');
-        if (owners.length !== 0) throw new Error('session_host_endpoint_changed_during_recovery');
-        assertGeneration(initialEndpoint);
-      }
-      fs.unlinkSync(this.endpoint.path);
-    }
-    // start() awaits this method; recheck the same generation after that seam
-    // and immediately before helper/createServer/listen effects.
-    this.startupFence = () => assertGeneration('missing');
-    this.startupFence();
+  private evictPriorEndpointOwners(): Promise<void> {
+    return evictPriorEndpointOwners({
+      endpoint: this.endpoint,
+      instanceConfigDir: this.instanceConfigDir,
+      pidFilePath: this.pidFilePath,
+      upgradeLease: this.upgradeLease,
+      getInstanceLock: () => this.instanceLock,
+      assertNoAutomaticReplacementContext: () => this.assertNoAutomaticReplacementContext(),
+      readProcessBirth: pid => this.readProcessBirth(pid),
+      isPidAlive: pid => this.isPidAlive(pid),
+      readSocketOwnerPids: () => this.readSocketOwnerPids(),
+      setStartupFence: fence => { this.startupFence = fence; },
+      startupFence: () => this.startupFence!(),
+    });
   }
 
   async start(): Promise<void> {
