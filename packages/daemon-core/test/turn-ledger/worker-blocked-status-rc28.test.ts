@@ -211,6 +211,34 @@ describe('RC28 recovery and compatibility in an isolated fixture database', () =
         await ledger.flushPublish();
     });
 
+    it('backs off repeated unsettled writer-stop inspections up to a 10 minute cap and resets on settle', async () => {
+        const mesh = meshId();
+        const { task, store, ledger, ref, ports } = setup(mesh);
+        ledger.observe(evd('session_error', { reason: 'provider_error' }, ref));
+        expect(ledger.getAttempt(ref.attemptRef.attemptId)?.state).toBe('stopping');
+        let at = T0 + 10_000; let probes = 0; let settle = false;
+        ports.cancelDispatch = (req) => { probes++; return settle ? { ...req, success: true, quiescent: true, incarnation: 'fixture-native-writer' } : { ...req, success: false, quiescent: false }; };
+        const live = createMeshRuntimeTurnLedger({ selfDaemonId: 'dc', now: () => at, publisher: fakePublisher(), ports });
+        // The first three inspections run at the 30s scheduler cadence.
+        for (let i = 0; i < 3; i++) { await live.resumeStoppingWriters(); at += 30_000; }
+        expect(probes).toBe(3);
+        // Then backoff: 60s, 120s, ... capped at 600s. A 30s tick is skipped.
+        await live.resumeStoppingWriters(); expect(probes).toBe(4);
+        at += 30_000; await live.resumeStoppingWriters(); expect(probes).toBe(4);
+        at += 30_000; await live.resumeStoppingWriters(); expect(probes).toBe(5);
+        at += 119_000; await live.resumeStoppingWriters(); expect(probes).toBe(5);
+        at += 1_000; await live.resumeStoppingWriters(); expect(probes).toBe(6);
+        for (let i = 0; i < 6; i++) { at += 1_000_000; await live.resumeStoppingWriters(); }
+        const before = probes;
+        at += 599_000; await live.resumeStoppingWriters(); expect(probes).toBe(before);
+        at += 1_000; await live.resumeStoppingWriters(); expect(probes).toBe(before + 1);
+        // An explicit attempt is always probed now; settlement ends the stopping state.
+        settle = true;
+        await live.resumeStoppingWriters(ref.attemptRef.attemptId);
+        expect(live.getAttempt(ref.attemptRef.attemptId)?.state).not.toBe('stopping');
+        expect(store.findQueueEntryById(mesh, task.id)?.status).toBe('failed');
+    });
+
     async function finishReportedTurn(mesh: string, outcome: 'blocked' | 'failed', terminalAt: number, legacy = false) {
         const r = setup(mesh);
         setActiveTurnLedger(r.ledger);

@@ -100496,6 +100496,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           }
         }
       }
+      if ((cmd === "stop_cli" || cmd === "agent_command" && args.action === "mesh_writer_stop_capability") && cls === "session_coordinator" && record3(args.meshWriterStop)) {
+        const request = args.meshWriterStop;
+        if (request.inspectOnly === true && typeof request.sessionId === "string" && request.sessionId && request.sessionId === readCommandSessionId(args) && request.meshId === readCommandMeshId(args) && sameDaemon(request.ownerDaemonId ?? void 0, sender) && typeof request.stopRequestId === "string" && request.stopRequestId.length <= 512 && !deps.getSessionSettings(request.sessionId)) {
+          const rosterVerdict = await checkRoster(deps, request.meshId, sender, args);
+          return rosterVerdict.ok ? { ok: true, sender, evidence: "absent_writer_inspect_owner" } : rosterVerdict;
+        }
+      }
       switch (cls) {
         case "authenticated_peer":
           return { ok: true, sender, evidence: "authenticated_peer" };
@@ -142890,6 +142897,8 @@ ${tail}` : ""
         missingPorts: 0
       };
       const txn = (fn) => deps.db.transaction(fn).immediate();
+      const stopInspectBackoff = /* @__PURE__ */ new Map();
+      const stopInspectDelayMs = (unsettled) => unsettled <= 3 ? 0 : Math.min(STOP_INSPECT_BACKOFF_CAP_MS, STOP_INSPECT_BACKOFF_BASE_MS * 2 ** (unsettled - 4));
       function settleWriterStop(request, receipt) {
         const r = receipt;
         const current4 = store4.getAttempt(request.attemptId);
@@ -143350,8 +143359,14 @@ ${tail}` : ""
         incarnationStartedAt,
         observe,
         async resumeStoppingWriters(attemptId) {
+          const nowMs2 = now();
+          const stillStopping = /* @__PURE__ */ new Set();
           for (const a of store4.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
             if (attemptId && a.attemptId !== attemptId || a.state !== "stopping" || !a.data.writerStop) continue;
+            const backoffKey = `${a.attemptId}:${a.data.writerStop.requestId}`;
+            stillStopping.add(backoffKey);
+            const backoff = stopInspectBackoff.get(backoffKey);
+            if (!attemptId && backoff && nowMs2 < backoff.nextDueAt) continue;
             const request = {
               attemptId: a.attemptId,
               generation: a.generation,
@@ -143372,6 +143387,13 @@ ${tail}` : ""
             } catch (error) {
               log.warn(`writer checkpoint remains pending: ${String(error)}`);
             }
+            if (store4.getAttempt(a.attemptId)?.state === "stopping") {
+              const unsettled = (backoff?.unsettled ?? 0) + 1;
+              stopInspectBackoff.set(backoffKey, { unsettled, nextDueAt: now() + stopInspectDelayMs(unsettled) });
+            } else stopInspectBackoff.delete(backoffKey);
+          }
+          if (!attemptId) {
+            for (const key5 of [...stopInspectBackoff.keys()]) if (!stillStopping.has(key5)) stopInspectBackoff.delete(key5);
           }
         },
         notifyMeshEvent,
@@ -143403,6 +143425,8 @@ ${tail}` : ""
     var REPORT_GATE_RULES;
     var DEFAULT_LOG;
     var PUBLISH_BATCH;
+    var STOP_INSPECT_BACKOFF_BASE_MS;
+    var STOP_INSPECT_BACKOFF_CAP_MS;
     var DuplicateEvidence;
     var init_ledger = __esm2({
       "src/mesh/turn-ledger/ledger.ts"() {
@@ -143428,6 +143452,8 @@ ${tail}` : ""
         }, error: () => {
         } };
         PUBLISH_BATCH = 256;
+        STOP_INSPECT_BACKOFF_BASE_MS = 6e4;
+        STOP_INSPECT_BACKOFF_CAP_MS = 6e5;
         DuplicateEvidence = class extends Error {
           constructor(eventId) {
             super(`duplicate evidence ${eventId}`);

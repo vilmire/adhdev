@@ -617,6 +617,24 @@ export async function evaluateMeshSender(
             } catch { /* An absent/mismatched capture grants no authority. */ }
         }
     }
+    // The worker session is gone from this daemon (exited / cleaned up before
+    // any stop capture existed). An inspect-only writer stop cannot stop
+    // anything: stopExactMeshWriter answers with a host-attested absence receipt
+    // or a pending result. So the exact authenticated owner, on this mesh's
+    // roster (no first-use learning), may ask whether the writer is absent.
+    if ((cmd === 'stop_cli' || (cmd === 'agent_command' && args.action === 'mesh_writer_stop_capability'))
+        && cls === 'session_coordinator' && record(args.meshWriterStop)) {
+        const request = args.meshWriterStop as unknown as CancelDispatchRequest;
+        if (request.inspectOnly === true
+            && typeof request.sessionId === 'string' && request.sessionId
+            && request.sessionId === readCommandSessionId(args) && request.meshId === readCommandMeshId(args)
+            && sameDaemon(request.ownerDaemonId ?? undefined, sender)
+            && typeof request.stopRequestId === 'string' && request.stopRequestId.length <= 512
+            && !deps.getSessionSettings(request.sessionId)) {
+            const rosterVerdict = await checkRoster(deps, request.meshId, sender, args);
+            return rosterVerdict.ok ? { ok: true, sender, evidence: 'absent_writer_inspect_owner' } : rosterVerdict;
+        }
+    }
     switch (cls) {
         case 'authenticated_peer':
             return { ok: true, sender, evidence: 'authenticated_peer' };

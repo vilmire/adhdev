@@ -244,6 +244,11 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
 
     const txn = <T>(fn: () => T): T => deps.db.transaction(fn).immediate();
 
+    // In-memory backoff for repeated unsettled writer-stop inspections (per attempt + stop request).
+    const stopInspectBackoff = new Map<string, { unsettled: number; nextDueAt: number }>();
+    const stopInspectDelayMs = (unsettled: number): number =>
+        unsettled <= 3 ? 0 : Math.min(STOP_INSPECT_BACKOFF_CAP_MS, STOP_INSPECT_BACKOFF_BASE_MS * 2 ** (unsettled - 4));
+
     function settleWriterStop(request: CancelDispatchRequest, receipt: unknown): void {
         const r = receipt as Record<string, unknown> | null;
         const current = store.getAttempt(request.attemptId);
@@ -744,8 +749,15 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         incarnationStartedAt,
         observe,
         async resumeStoppingWriters(attemptId?: string) {
+            const nowMs = now();
+            const stillStopping = new Set<string>();
             for (const a of store.listOpenAttempts({ ownerDaemonId: deps.selfDaemonId })) {
                 if ((attemptId && a.attemptId !== attemptId) || a.state !== 'stopping' || !a.data.writerStop) continue;
+                const backoffKey = `${a.attemptId}:${a.data.writerStop.requestId}`;
+                stillStopping.add(backoffKey);
+                // Repeated unsettled inspections back off; an explicit attempt is probed now.
+                const backoff = stopInspectBackoff.get(backoffKey);
+                if (!attemptId && backoff && nowMs < backoff.nextDueAt) continue;
                 const request: CancelDispatchRequest = { attemptId: a.attemptId, generation: a.generation,
                     sessionId: a.sessionId, meshId: a.meshId, taskId: a.taskId, nodeId: a.nodeId,
                     dispatchNonce: a.dispatchNonce,
@@ -753,7 +765,12 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     revokeBind: false, stopRequestId: a.data.writerStop.requestId, inspectOnly: true };
                 try { settleWriterStop(request, await ports.cancelDispatch?.(request)); }
                 catch (error) { log.warn(`writer checkpoint remains pending: ${String(error)}`); }
+                if (store.getAttempt(a.attemptId)?.state === 'stopping') {
+                    const unsettled = (backoff?.unsettled ?? 0) + 1;
+                    stopInspectBackoff.set(backoffKey, { unsettled, nextDueAt: now() + stopInspectDelayMs(unsettled) });
+                } else stopInspectBackoff.delete(backoffKey);
             }
+            if (!attemptId) for (const key of [...stopInspectBackoff.keys()]) if (!stillStopping.has(key)) stopInspectBackoff.delete(key);
         },
         notifyMeshEvent,
         claimDelivery,
@@ -778,6 +795,9 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         counters: () => ({ ...counters }),
     };
 }
+
+const STOP_INSPECT_BACKOFF_BASE_MS = 60_000;
+const STOP_INSPECT_BACKOFF_CAP_MS = 600_000;
 
 class DuplicateEvidence extends Error {
     constructor(eventId: string) {

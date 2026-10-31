@@ -357,3 +357,52 @@ describe('router mesh sender gate', () => {
         expect(result).toMatchObject({ success: false, error: 'mesh_sender_not_on_roster' });
     });
 });
+
+describe('absent-writer inspect-only stop (session not live on this daemon)', () => {
+    const stopReq = (over: Record<string, unknown> = {}) => ({
+        attemptId: 'att-1', generation: 0, sessionId: 'sess-gone', meshId: MESH, taskId: 't1', nodeId: 'node-worker',
+        providerType: 'claude-cli', ownerDaemonId: COORD, stopRequestId: 'stop-1', inspectOnly: true, ...over,
+    });
+    const cmdArgs = (sender: string, req: Record<string, unknown>) =>
+        from(sender, { sessionId: 'sess-gone', meshId: MESH, meshWriterStop: req });
+    const D = () => deps({ self: WORKER, meshes: { [MESH]: roster() } });
+
+    for (const [cmd, extra] of [['stop_cli', {}], ['agent_command', { action: 'mesh_writer_stop_capability' }]] as const) {
+        it(`${cmd}: owner on roster with inspectOnly is accepted`, async () => {
+            const v = await evaluateMeshSender('session_coordinator', { ...cmdArgs(COORD, stopReq()), ...extra }, D(), cmd);
+            expect(v).toMatchObject({ ok: true, evidence: 'absent_writer_inspect_owner' });
+        });
+    }
+
+    it('refuses when inspectOnly is false or missing', async () => {
+        for (const inspectOnly of [false, undefined]) {
+            const v = await evaluateMeshSender('session_coordinator', cmdArgs(COORD, stopReq({ inspectOnly })), D(), 'stop_cli');
+            expect(v).toMatchObject({ ok: false, refusal: 'mesh_session_not_mesh_owned' });
+        }
+    });
+
+    it('refuses when the owner is not the sender', async () => {
+        const v = await evaluateMeshSender('session_coordinator', cmdArgs(COORD, stopReq({ ownerDaemonId: OTHER })), D(), 'stop_cli');
+        expect(v).toMatchObject({ ok: false, refusal: 'mesh_session_not_mesh_owned' });
+    });
+
+    it('refuses a sender that is not on the roster (and learns nothing)', async () => {
+        const v = await evaluateMeshSender('session_coordinator', cmdArgs(OTHER, stopReq({ ownerDaemonId: OTHER })), D(), 'stop_cli');
+        expect(v).toMatchObject({ ok: false, refusal: 'mesh_sender_not_on_roster' });
+    });
+
+    it('does not apply to other commands', async () => {
+        const v = await evaluateMeshSender('session_coordinator', cmdArgs(COORD, stopReq()), D(), 'send_chat');
+        expect(v).toMatchObject({ ok: false, refusal: 'mesh_session_not_mesh_owned' });
+    });
+
+    it('a live session keeps the normal anchor checks (no new bypass)', async () => {
+        const sessions = { 'sess-gone': { meshCoordinatorDaemonId: COORD } };
+        const live = await evaluateMeshSender('session_coordinator', cmdArgs(COORD, stopReq()), deps({ self: WORKER, sessions, meshes: { [MESH]: roster() } }), 'stop_cli');
+        expect(live.evidence ?? '').not.toBe('absent_writer_inspect_owner');
+        const notAnchor = await evaluateMeshSender('session_coordinator', cmdArgs(COORD, stopReq()),
+            deps({ self: WORKER, sessions: { 'sess-gone': { meshCoordinatorDaemonId: OTHER } }, meshes: { [MESH]: roster() } }), 'stop_cli');
+        expect(notAnchor).toMatchObject({ ok: false });
+        expect(JSON.stringify(notAnchor)).not.toContain('is not live on this daemon');
+    });
+});
