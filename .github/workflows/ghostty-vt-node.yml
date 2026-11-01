@@ -105,8 +105,12 @@ jobs:
           # cache is mutable state from another run.
           use-cache: false
 
+      # --ignore-scripts: this job builds only ghostty-vt-node (cmake-js, pure JS).
+      # Workspace install scripts compile unrelated native addons — better-sqlite3
+      # for daemon-core/seqscribe — and on macos-14 + node 25 that compile fails
+      # against the node 25 V8 headers (failed 4 runs in a row, 2026-10-10..11-01).
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       # Always compile from source. Plain `npm run build` copies the tracked
       # prebuilt in a fresh checkout (sources are never "locally modified"
