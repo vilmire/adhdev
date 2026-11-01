@@ -175,6 +175,11 @@ export const REPORT_COMPLETION_TOOL = {
         items: { type: 'string' },
         description: 'Git commit SHAs this task produced (7–64 hex chars). Recorded as evidence on the mission; the summary text is never scanned for SHAs.',
       },
+      artifact_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Ids (art_*) of the artifacts you registered with `artifact_register` for this task\'s substantial findings (diagnosis, evidence, repro steps, review findings). The next task in this mission inherits them. Optional.',
+      },
     },
     required: ['outcome', 'summary'],
   },
@@ -434,6 +439,7 @@ function toDaemonReport(a: Record<string, any>): { report: Record<string, unknow
     // daemon's strict validator never sees an unknown key from an ordinary report).
     ...((a.decisions_needed ?? a.decisionsNeeded) !== undefined ? { decisionsNeeded: a.decisions_needed ?? a.decisionsNeeded } : {}),
     ...(a.commits !== undefined ? { commits: a.commits } : {}),
+    ...((a.artifact_ids ?? a.artifactIds) !== undefined ? { artifactIds: a.artifact_ids ?? a.artifactIds } : {}),
     ...(handoffNotes ? { handoffNotes } : {}),
   };
   return { report, ignoredHandoffKeys };

@@ -64,6 +64,7 @@ import { meshOnboardingSpecs } from './med-family/mesh-onboarding.js';
 import { meshWorktreeRetentionSpecs } from './med-family/mesh-worktree-retention.js';
 import { meshTaskViewCommandSpecs } from './med-family/mesh-task-view-commands.js';
 import { meshMissionGitCommandSpecs } from './med-family/mesh-mission-git-commands.js';
+import { meshMissionArtifactCommandSpecs } from './med-family/mesh-mission-artifact-commands.js';
 import { meshEventsSpecs } from './high-family/mesh-events.js';
 import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
 import { meshStatusSpecs } from './high-family/mesh-status.js';
@@ -337,6 +338,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshWorktreeRetentionSpecs,
             ...meshTaskViewCommandSpecs,
             ...meshMissionGitCommandSpecs,
+            ...meshMissionArtifactCommandSpecs,
             ...meshEventsSpecs,
             ...meshCoordinatorLaunchSpecs,
             ...meshStatusSpecs,

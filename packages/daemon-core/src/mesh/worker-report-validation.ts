@@ -30,6 +30,8 @@ export interface WorkerCompletionReport {
     decisionsNeeded?: Array<Record<string, unknown>>;
     /** Commit SHAs this task produced (§4.4) — the only source of commit evidence; the summary text is never parsed. */
     commits?: string[];
+    /** Artifact ids (`art_*`) the worker registered for this task's findings — cited so the next same-mission task inherits them. Informational; access is still the OD-4 grant. */
+    artifactIds?: string[];
 }
 
 /** Caps. Oversized input is REJECTED, never silently clipped (see validate below). */
@@ -37,6 +39,8 @@ export const WORKER_SUMMARY_MAX_CHARS = WORKER_REPORT_SUMMARY_MAX_CHARS;
 export const WORKER_INTENT_MAX_CHARS = 4_000;
 export const WORKER_GUIDANCE_MAX_CHARS = 4_000;
 export const WORKER_TOUCHED_FILES_MAX = 200;
+/** `report_completion.artifact_ids` cap. */
+export const WORKER_ARTIFACT_IDS_MAX = 24;
 export const WORKER_LIST_ITEM_MAX_CHARS = 500;
 export const WORKER_BLOCKERS_MAX = 50;
 export const WORKER_FOLLOW_UPS_MAX = 50;
@@ -73,7 +77,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
     }
     const input = raw as Record<string, unknown>;
 
-    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits']);
+    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits', 'artifactIds']);
     for (const key of Object.keys(input)) {
         if (!KNOWN.has(key)) {
             errors.push({ field: key, message: `unknown field '${key}' (expected one of: ${[...KNOWN].join(', ')})` });
@@ -135,6 +139,15 @@ export function validateWorkerCompletionReport(raw: unknown): {
         if (!normalized) errors.push({ field: 'commits', message: 'commits must be an array of git SHA strings (7–64 hex chars)' });
         else if (normalized.length > WORKER_COMMITS_MAX) errors.push({ field: 'commits', message: `commits has ${normalized.length} entries, over the ${WORKER_COMMITS_MAX} limit` });
         else if (normalized.length) commits = normalized;
+    }
+
+    let artifactIds: string[] | undefined;
+    if (input.artifactIds !== undefined) {
+        const raw = input.artifactIds;
+        const ids = Array.isArray(raw) ? raw.map(v => (typeof v === 'string' ? v.trim() : '')) : null;
+        if (!ids || ids.some(id => !id || id.length > 200)) errors.push({ field: 'artifactIds', message: 'artifactIds must be an array of artifact id strings (art_*, ≤200 chars each)' });
+        else if (ids.length > WORKER_ARTIFACT_IDS_MAX) errors.push({ field: 'artifactIds', message: `artifactIds has ${ids.length} entries, over the ${WORKER_ARTIFACT_IDS_MAX} limit` });
+        else if (ids.length) artifactIds = [...new Set(ids)];
     }
 
     let handoffNotes: WorkerHandoffNotes | undefined;
@@ -212,6 +225,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
             ...(blockers?.length ? { blockers } : {}),
             ...(decisionsNeeded ? { decisionsNeeded } : {}),
             ...(commits ? { commits } : {}),
+            ...(artifactIds ? { artifactIds } : {}),
         },
         errors: [],
     };

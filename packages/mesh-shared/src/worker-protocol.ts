@@ -159,6 +159,9 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
             + 'and a read-only task should omit it or send `[]`.',
         'If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly '
             + 'what to fix — correct that field and call it again; a refusal records nothing.',
+        'Put substantial findings (a diagnosis, evidence, repro steps, review findings) in a workspace file and register it with '
+            + '`artifact_register`, then cite the returned ids in `report_completion` `artifact_ids`. The next task in this mission '
+            + 'inherits them as input artifacts instead of re-investigating — keep each artifact self-contained and factual.',
     )
     if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(

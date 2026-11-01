@@ -123,6 +123,12 @@ export interface MeshWorkQueueEntry {
      */
     inputArtifactIds?: string[];
     /**
+     * Artifact auto-inherit opt-out: `false` keeps this mission task from inheriting the
+     * artifacts earlier tasks of the same mission produced (see mesh-input-artifacts.ts).
+     * Absent = inherit. Only an explicit `false` is persisted.
+     */
+    inheritArtifacts?: false;
+    /**
      * Model axis: model override for the session that executes this
      * task. When the task auto-launches a session, this is passed to launch_cli as
      * `initialModel` (ACP → setConfigOption; CLI → modelLaunchArgs template). Absent on
@@ -386,6 +392,9 @@ export interface MeshEnqueueTaskOptions {
     /** OD-4 (artifact sharing): artifact ids (any mission) this task's worker may read. */
     inputArtifactIds?: string[];
     input_artifact_ids?: string[];
+    /** Opt out of mission artifact auto-inherit (`false`); default inherits up to MAX_INHERITED_INPUT_ARTIFACTS. */
+    inheritArtifacts?: boolean;
+    inherit_artifacts?: boolean;
     /** Model override forwarded to the executing session's launch (initialModel). */
     model?: string;
     /** BRAIN-ROUTING: standard thinking level forwarded to launch (initialThinkingLevel). */
@@ -448,4 +457,9 @@ export interface MeshWorkQueueStats {
         sessionId?: string;
         message: string;
     }>;
+    /**
+     * Evidence-handoff metric: share of dispatched tasks that carried ≥1 input artifact.
+     * Attached by mesh_status (not by the hot getMeshQueueStats path).
+     */
+    inputArtifacts?: { dispatched: number; withInputArtifacts: number; share: number };
 }

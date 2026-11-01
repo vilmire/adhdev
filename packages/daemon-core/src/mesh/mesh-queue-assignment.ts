@@ -38,6 +38,7 @@ import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from './mesh-autolaunch-integrity.js';
 import { allowedClassifiedDifficultiesForSession, handleClaimPathDifficultyFloorRefusal, readSessionModel } from './mesh-difficulty-floor.js';
 import { isWorkerMcpEnabled, mintWorkerTaskToken } from './worker-mcp-isolation.js';
 import { readSessionWorkerMcpDelivered, resolveDispatchMessage } from './worker-handoff-dispatch.js';
+import { refreshInheritedInputArtifacts } from './mesh-input-artifacts.js';
 import { bodyCarriesPinBlock, contractAdmitDispatch, insertPinBlock } from './contract-runtime.js';
 import { isIdleSessionState, nodeHasActiveMeshWork, isLocalAutoLaunchNode, isSessionActivelyGenerating, resolveSessionBusyVerdict, type SessionBusyVerdict } from './mesh-candidacy-predicates.js';
 
@@ -625,8 +626,11 @@ export function tryAssignQueueTask(
     // the leftovers are its branch's unfinished work, to be committed.
     const continuationNotice = noteBranchContinuationDispatch(meshId, node, task, nodeId, sessionId);
     const workerMcp = readSessionWorkerMcpDelivered(claiming.claimState?.settings);
+    // Evidence handoff: pull in what the mission's earlier tasks produced SINCE enqueue (a
+    // depends_on chain is enqueued before its predecessors write anything) and persist it.
+    const dispatchTask = refreshInheritedInputArtifacts(meshId, task);
     let dispatchMessage = resolveDispatchMessage(
-        continuationNotice ? { ...task, message: `${task.message}\n\n${continuationNotice}` } : task,
+        continuationNotice ? { ...dispatchTask, message: `${task.message}\n\n${continuationNotice}` } : dispatchTask,
         meshId,
         node,
         { workerMcp },

@@ -24228,8 +24228,8 @@ var require_dist3 = __commonJS({
     function readString2(...values) {
       for (const value of values) {
         if (typeof value !== "string") continue;
-        const trimmed2 = value.trim();
-        if (trimmed2) return trimmed2;
+        const trimmed3 = value.trim();
+        if (trimmed3) return trimmed3;
       }
       return void 0;
     }
@@ -24255,10 +24255,10 @@ var require_dist3 = __commonJS({
       if (!value) return {};
       if (typeof value === "object") return readRecord2(value);
       if (typeof value !== "string") return {};
-      const trimmed2 = value.trim();
-      if (!trimmed2) return {};
+      const trimmed3 = value.trim();
+      if (!trimmed3) return {};
       try {
-        return readRecord2(JSON.parse(trimmed2));
+        return readRecord2(JSON.parse(trimmed3));
       } catch {
         return {};
       }
@@ -24458,9 +24458,9 @@ var require_dist3 = __commonJS({
     }
     function meshNodeIdMatches7(node, candidateId) {
       if (!candidateId) return false;
-      const trimmed2 = candidateId.trim();
-      if (!trimmed2) return false;
-      return normalizeMeshNodeId(node) === trimmed2;
+      const trimmed3 = candidateId.trim();
+      if (!trimmed3) return false;
+      return normalizeMeshNodeId(node) === trimmed3;
     }
     function normalizeMeshNodeFacts(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
@@ -24554,8 +24554,8 @@ var require_dist3 = __commonJS({
       return left === right;
     }
     function isRawDaemonDoId(id222) {
-      const trimmed2 = readString2(id222);
-      return !!trimmed2 && /^[0-9a-f]{64}$/i.test(trimmed2);
+      const trimmed3 = readString2(id222);
+      return !!trimmed3 && /^[0-9a-f]{64}$/i.test(trimmed3);
     }
     function isPhantomDaemonEntry(entry) {
       if (!entry) return false;
@@ -24566,17 +24566,17 @@ var require_dist3 = __commonJS({
       return !hasMachineEvidence;
     }
     function machineCoreFromDaemonId(id222) {
-      const trimmed2 = readString2(id222);
-      if (!trimmed2) return void 0;
-      const lower = trimmed2.toLowerCase();
+      const trimmed3 = readString2(id222);
+      if (!trimmed3) return void 0;
+      const lower = trimmed3.toLowerCase();
       for (const prefix of DAEMON_ID_PREFIXES) {
         if (lower.startsWith(prefix)) {
-          const core2 = trimmed2.slice(prefix.length).trim();
+          const core2 = trimmed3.slice(prefix.length).trim();
           if (!core2) return void 0;
           return /^mach_/i.test(core2) ? `mach_${core2.slice(5)}` : core2;
         }
       }
-      return /^mach_/i.test(trimmed2) ? `mach_${trimmed2.slice(5)}` : trimmed2;
+      return /^mach_/i.test(trimmed3) ? `mach_${trimmed3.slice(5)}` : trimmed3;
     }
     function canonicalDaemonId2(id222) {
       const core2 = machineCoreFromDaemonId(id222);
@@ -24795,8 +24795,8 @@ var require_dist3 = __commonJS({
         ...recipe.modelCandidates ?? []
       ];
       for (const candidate of candidates) {
-        const trimmed2 = typeof candidate === "string" ? candidate.trim() : "";
-        if (trimmed2 && available.has(trimmed2)) return trimmed2;
+        const trimmed3 = typeof candidate === "string" ? candidate.trim() : "";
+        if (trimmed3 && available.has(trimmed3)) return trimmed3;
       }
       return recipe.model;
     }
@@ -25265,10 +25265,10 @@ var require_dist3 = __commonJS({
       let itemTruncated = false;
       for (const raw of value) {
         if (typeof raw !== "string") continue;
-        const trimmed2 = raw.trim();
-        if (!trimmed2) continue;
-        if (trimmed2.length > LIST_ITEM_MAX) itemTruncated = true;
-        items.push(truncateString2(trimmed2, LIST_ITEM_MAX));
+        const trimmed3 = raw.trim();
+        if (!trimmed3) continue;
+        if (trimmed3.length > LIST_ITEM_MAX) itemTruncated = true;
+        items.push(truncateString2(trimmed3, LIST_ITEM_MAX));
       }
       if (itemTruncated) truncated.push({ field: field3, reason: "item_too_long" });
       if (items.length > LIST_MAX_ITEMS) {
@@ -25368,7 +25368,8 @@ ${line}` : line;
         "Memos from the coordinator arrive appended to the response of whichever worker tool you call next; read them and follow them.",
         "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
         "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
-        "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."
+        "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing.",
+        "Put substantial findings (a diagnosis, evidence, repro steps, review findings) in a workspace file and register it with `artifact_register`, then cite the returned ids in `report_completion` `artifact_ids`. The next task in this mission inherits them as input artifacts instead of re-investigating \u2014 keep each artifact self-contained and factual."
       );
       if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
         lines.push(
@@ -25385,8 +25386,8 @@ ${line}` : line;
     }
     function appendWorkerProtocolFooter2(body, input = {}) {
       if (hasWorkerProtocolFooter2(body)) return body;
-      const trimmed2 = body.replace(/\s+$/, "");
-      return `${trimmed2}
+      const trimmed3 = body.replace(/\s+$/, "");
+      return `${trimmed3}
 
 ${renderWorkerProtocolFooter2(input)}`;
     }
@@ -25420,12 +25421,12 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function sanitizeRemoteRepoIdentity(raw) {
       if (typeof raw !== "string") return null;
-      const trimmed2 = raw.trim();
-      if (!trimmed2) return null;
-      if (trimmed2.startsWith("/") || trimmed2.startsWith("./") || trimmed2.startsWith("../") || trimmed2.startsWith("~/") || trimmed2.startsWith("\\") || /^[a-zA-Z]:[\\/]/.test(trimmed2) || /^file:/i.test(trimmed2)) {
+      const trimmed3 = raw.trim();
+      if (!trimmed3) return null;
+      if (trimmed3.startsWith("/") || trimmed3.startsWith("./") || trimmed3.startsWith("../") || trimmed3.startsWith("~/") || trimmed3.startsWith("\\") || /^[a-zA-Z]:[\\/]/.test(trimmed3) || /^file:/i.test(trimmed3)) {
         return null;
       }
-      const withoutQuery = trimmed2.replace(/[?#].*$/, "").replace(/\/+$/, "");
+      const withoutQuery = trimmed3.replace(/[?#].*$/, "").replace(/\/+$/, "");
       if (!withoutQuery) return null;
       let host = "";
       let repoPath = "";
@@ -25682,8 +25683,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function sanitizeModelIdentifier(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      return MODEL_IDENTIFIER_PATTERN.test(trimmed2) ? trimmed2 : void 0;
+      const trimmed3 = value.trim();
+      return MODEL_IDENTIFIER_PATTERN.test(trimmed3) ? trimmed3 : void 0;
     }
     function readFiniteNumber(value) {
       return typeof value === "number" && Number.isFinite(value) ? value : void 0;
@@ -26431,12 +26432,12 @@ ${renderWorkerProtocolFooter2(input)}`;
         rejected.push({ input: String(raw), reason: "not_a_string" });
         return null;
       }
-      const trimmed2 = raw.trim();
-      if (!trimmed2) {
+      const trimmed3 = raw.trim();
+      if (!trimmed3) {
         rejected.push({ input: raw, reason: "empty" });
         return null;
       }
-      let posix4 = toPosix(trimmed2);
+      let posix4 = toPosix(trimmed3);
       if (posix4.startsWith("/") || /^[a-zA-Z]:\//.test(posix4) || posix4.startsWith("~")) {
         rejected.push({ input: raw, reason: "absolute_path" });
         return null;
@@ -27002,9 +27003,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       for (const [id222, keys] of Object.entries(change.unsetFields ?? {})) {
         const base = byId.get(id222);
         if (!base) continue;
-        const trimmed2 = { ...base };
-        for (const key5 of keys) delete trimmed2[key5];
-        byId.set(id222, trimmed2);
+        const trimmed3 = { ...base };
+        for (const key5 of keys) delete trimmed3[key5];
+        byId.set(id222, trimmed3);
       }
       const order = change.order ?? heldOrder;
       const out = [];
@@ -28737,8 +28738,8 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (yourAnswerIdx < 0) return null;
         const questionLines2 = [questionFirstLine];
         for (let i = questionHeaderLineIdx + 1; i < yourAnswerIdx; i++) {
-          const trimmed2 = lines[i].trim();
-          if (trimmed2) questionLines2.push(trimmed2);
+          const trimmed3 = lines[i].trim();
+          if (trimmed3) questionLines2.push(trimmed3);
         }
         const questionText2 = questionLines2.join(" ");
         return {
@@ -28767,12 +28768,12 @@ ${renderWorkerProtocolFooter2(input)}`;
           });
           continue;
         }
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
+        const trimmed3 = line.trim();
+        if (!trimmed3) continue;
         if (rawRows.length === 0) {
-          questionLines.push(trimmed2);
+          questionLines.push(trimmed3);
         } else {
-          rawRows[rawRows.length - 1].labelParts.push(trimmed2);
+          rawRows[rawRows.length - 1].labelParts.push(trimmed3);
         }
       }
       if (rawRows.length < 2) return null;
@@ -29636,9 +29637,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     });
     function normalizeMeshSchedulingStrategy(value) {
       if (typeof value !== "string") return DEFAULT_MESH_SCHEDULING_STRATEGY;
-      const trimmed2 = value.trim();
-      if (trimmed2 === "least_loaded" || trimmed2 === "round_robin") return "fitness";
-      return MESH_SCHEDULING_STRATEGIES.includes(trimmed2) ? trimmed2 : DEFAULT_MESH_SCHEDULING_STRATEGY;
+      const trimmed3 = value.trim();
+      if (trimmed3 === "least_loaded" || trimmed3 === "round_robin") return "fitness";
+      return MESH_SCHEDULING_STRATEGIES.includes(trimmed3) ? trimmed3 : DEFAULT_MESH_SCHEDULING_STRATEGY;
     }
     function resolveNodeSchedulingPriority(nodePolicy) {
       const raw = Number(nodePolicy?.schedulingPriority);
@@ -30706,9 +30707,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     });
     function readInjected(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      if (!trimmed2 || trimmed2 === "unknown") return void 0;
-      return trimmed2;
+      const trimmed3 = value.trim();
+      if (!trimmed3 || trimmed3 === "unknown") return void 0;
+      return trimmed3;
     }
     function getDaemonBuildInfo() {
       if (cached) return cached;
@@ -31087,11 +31088,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       const res = await runGit(scopeRepo, ["config", "-f", ".gitmodules", "--get-regexp", "path"], options);
       const paths = /* @__PURE__ */ new Set();
       for (const line of res.stdout.split("\n")) {
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
-        const idx = trimmed2.indexOf(" ");
+        const trimmed3 = line.trim();
+        if (!trimmed3) continue;
+        const idx = trimmed3.indexOf(" ");
         if (idx === -1) continue;
-        const p = trimmed2.slice(idx + 1).trim();
+        const p = trimmed3.slice(idx + 1).trim();
         if (p) paths.add(p);
       }
       return paths;
@@ -31917,11 +31918,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       return options.timeoutMs === void 0 ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
     }
     function validateBaseRef(ref2) {
-      const trimmed2 = ref2.trim();
-      if (!trimmed2 || trimmed2.startsWith("-") || trimmed2.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._/@-]*$/.test(trimmed2)) {
+      const trimmed3 = ref2.trim();
+      if (!trimmed3 || trimmed3.startsWith("-") || trimmed3.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._/@-]*$/.test(trimmed3)) {
         throw new GitCommandError("invalid_args", `Invalid base ref: ${ref2}`);
       }
-      return trimmed2;
+      return trimmed3;
     }
     async function getGitDiffSummary(workspace, options = {}) {
       const lastCheckedAt = Date.now();
@@ -33774,8 +33775,8 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMAIL}> (author AND committer). Personal paths in ANY pushed commit block the push even if a later commit removes them \u2014 rewrite the unpushed history (git rebase -i / filter-branch) and push again.`;
       }
     });
-    function resolveWin32GlobalBin(trimmed2) {
-      if (path5.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\")) {
+    function resolveWin32GlobalBin(trimmed3) {
+      if (path5.isAbsolute(trimmed3) || trimmed3.includes("/") || trimmed3.includes("\\")) {
         return null;
       }
       const extraDirs = [];
@@ -33787,7 +33788,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       for (const dir of extraDirs) {
         if (!dir) continue;
         for (const ext of WIN_EXEC_EXT) {
-          const full = path5.join(dir, trimmed2 + ext);
+          const full = path5.join(dir, trimmed3 + ext);
           if ((0, import_fs3.existsSync)(full)) return full;
         }
       }
@@ -33803,11 +33804,11 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
     }
     function resolveWin32Executable(command) {
       if (process.platform !== "win32") return command;
-      const trimmed2 = (command || "").trim();
-      if (!trimmed2) return command;
-      if (path5.isAbsolute(trimmed2) && (0, import_fs3.existsSync)(trimmed2)) return trimmed2;
+      const trimmed3 = (command || "").trim();
+      if (!trimmed3) return command;
+      if (path5.isAbsolute(trimmed3) && (0, import_fs3.existsSync)(trimmed3)) return trimmed3;
       try {
-        const out = (0, import_child_process.execFileSync)("where", [trimmed2], {
+        const out = (0, import_child_process.execFileSync)("where", [trimmed3], {
           encoding: "utf8",
           windowsHide: true
         }).trim();
@@ -33818,7 +33819,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         }
       } catch {
       }
-      const globalBin = resolveWin32GlobalBin(trimmed2);
+      const globalBin = resolveWin32GlobalBin(trimmed3);
       if (globalBin) return globalBin;
       return command;
     }
@@ -34056,10 +34057,10 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       return !!value && typeof value === "object" && !Array.isArray(value);
     }
     function tokenizeCommandString(command) {
-      const trimmed2 = command.trim();
-      if (!trimmed2) return null;
-      if (SHELL_METACHAR_RE.test(trimmed2)) return null;
-      const tokens = trimmed2.split(/\s+/).filter(Boolean);
+      const trimmed3 = command.trim();
+      if (!trimmed3) return null;
+      if (SHELL_METACHAR_RE.test(trimmed3)) return null;
+      const tokens = trimmed3.split(/\s+/).filter(Boolean);
       if (!tokens.length) return null;
       const isWin32 = process.platform === "win32";
       for (let i = 0; i < tokens.length; i++) {
@@ -34522,11 +34523,11 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
           { cwd: workspace, encoding: "utf8", timeout: 1e4, windowsHide: true }
         );
         for (const line of String(out).split(/\r?\n/)) {
-          const trimmed2 = line.trim();
-          if (!trimmed2) continue;
-          const spaceIdx = trimmed2.indexOf(" ");
+          const trimmed3 = line.trim();
+          if (!trimmed3) continue;
+          const spaceIdx = trimmed3.indexOf(" ");
           if (spaceIdx < 0) continue;
-          const value = trimmed2.slice(spaceIdx + 1).trim().replace(/\\/g, "/").replace(/\/+$/, "");
+          const value = trimmed3.slice(spaceIdx + 1).trim().replace(/\\/g, "/").replace(/\/+$/, "");
           if (value) paths.add(value);
         }
       } catch {
@@ -34544,12 +34545,12 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
         const pathByName = /* @__PURE__ */ new Map();
         const branchByName = /* @__PURE__ */ new Map();
         for (const line of String(out).split(/\r?\n/)) {
-          const trimmed2 = line.trim();
-          if (!trimmed2) continue;
-          const eq = trimmed2.indexOf("=");
+          const trimmed3 = line.trim();
+          if (!trimmed3) continue;
+          const eq = trimmed3.indexOf("=");
           if (eq < 0) continue;
-          const key5 = trimmed2.slice(0, eq);
-          const value = trimmed2.slice(eq + 1).trim();
+          const key5 = trimmed3.slice(0, eq);
+          const value = trimmed3.slice(eq + 1).trim();
           const match = /^submodule\.(.+)\.(path|branch)$/.exec(key5);
           if (!match) continue;
           const name = match[1];
@@ -36091,9 +36092,9 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return dirs;
     }
     function findBinary(name) {
-      const trimmed2 = String(name || "").trim();
-      if (!trimmed2) return trimmed2;
-      const expanded = trimmed2.startsWith("~") ? path6.join(os22.homedir(), trimmed2.slice(1)) : trimmed2;
+      const trimmed3 = String(name || "").trim();
+      if (!trimmed3) return trimmed3;
+      const expanded = trimmed3.startsWith("~") ? path6.join(os22.homedir(), trimmed3.slice(1)) : trimmed3;
       if (path6.isAbsolute(expanded) || expanded.includes("/") || expanded.includes("\\")) {
         return path6.isAbsolute(expanded) ? expanded : path6.resolve(expanded);
       }
@@ -36110,7 +36111,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       for (const p of searchDirs) {
         if (!p) continue;
         for (const ext of exes) {
-          const fullPath = path6.join(p, trimmed2 + ext);
+          const fullPath = path6.join(p, trimmed3 + ext);
           try {
             const fs132 = require("fs");
             if (fs132.existsSync(fullPath)) {
@@ -36123,7 +36124,7 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
           }
         }
       }
-      return isWin ? `${trimmed2}.cmd` : trimmed2;
+      return isWin ? `${trimmed3}.cmd` : trimmed3;
     }
     function isScriptBinary(binaryPath) {
       if (!path6.isAbsolute(binaryPath)) return false;
@@ -36251,19 +36252,19 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
       return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
     }
     function expandHome(value) {
-      const trimmed2 = value.trim();
-      if (!trimmed2.startsWith("~")) return trimmed2;
-      return path7.join(os32.homedir(), trimmed2.slice(1));
+      const trimmed3 = value.trim();
+      if (!trimmed3.startsWith("~")) return trimmed3;
+      return path7.join(os32.homedir(), trimmed3.slice(1));
     }
     function isExplicitCommandPath(command) {
-      const trimmed2 = command.trim();
-      return path7.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\") || trimmed2.startsWith("~");
+      const trimmed3 = command.trim();
+      return path7.isAbsolute(trimmed3) || trimmed3.includes("/") || trimmed3.includes("\\") || trimmed3.startsWith("~");
     }
     function resolveCommandPath(command) {
-      const trimmed2 = command.trim();
-      if (!trimmed2) return null;
-      if (isExplicitCommandPath(trimmed2)) {
-        const expanded = expandHome(trimmed2);
+      const trimmed3 = command.trim();
+      if (!trimmed3) return null;
+      if (isExplicitCommandPath(trimmed3)) {
+        const expanded = expandHome(trimmed3);
         const candidate = path7.isAbsolute(expanded) ? expanded : path7.resolve(expanded);
         return (0, import_fs6.existsSync)(candidate) ? candidate : null;
       }
@@ -37430,8 +37431,8 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function getPlatformVersionCommand(versionCommand, currentOs) {
       if (!versionCommand) return void 0;
       if (typeof versionCommand === "string") {
-        const trimmed2 = versionCommand.trim();
-        return trimmed2 || void 0;
+        const trimmed3 = versionCommand.trim();
+        return trimmed3 || void 0;
       }
       const platformValue = versionCommand[currentOs];
       if (typeof platformValue === "string" && platformValue.trim()) {
@@ -38656,9 +38657,9 @@ child.on('exit', () => process.exit(0));
       }
       const tmpRoots = [env2.TMPDIR, env2.TEMP, env2.TMP, os7.tmpdir()];
       for (const root of tmpRoots) {
-        const trimmed2 = root?.trim();
-        if (!trimmed2) continue;
-        const normalizedRoot = normalize(trimmed2);
+        const trimmed3 = root?.trim();
+        if (!trimmed3) continue;
+        const normalizedRoot = normalize(trimmed3);
         if (resolved === normalizedRoot || resolved.startsWith(normalizedRoot + path12.sep)) {
           return {
             volatile: true,
@@ -38669,20 +38670,20 @@ child.on('exit', () => process.exit(0));
       return { volatile: false, reason: null };
     }
     function inspectEmbeddedPath(referencedPath, env2 = process.env) {
-      const trimmed2 = typeof referencedPath === "string" ? referencedPath.trim() : "";
-      if (trimmed2 === "") {
+      const trimmed3 = typeof referencedPath === "string" ? referencedPath.trim() : "";
+      if (trimmed3 === "") {
         return { state: "absent", referencedPath: null, volatile: false, volatileReason: null };
       }
-      const { volatile, reason } = classifyVolatilePath(trimmed2, env2);
+      const { volatile, reason } = classifyVolatilePath(trimmed3, env2);
       let exists = false;
       try {
-        exists = fs6.statSync(trimmed2).isFile();
+        exists = fs6.statSync(trimmed3).isFile();
       } catch {
         exists = false;
       }
       return {
         state: exists ? "ok" : "missing",
-        referencedPath: trimmed2,
+        referencedPath: trimmed3,
         volatile,
         volatileReason: reason
       };
@@ -39224,12 +39225,12 @@ child.on('exit', () => process.exit(0));
       return windowFromPercent(toNumber(record7.used_percent), minutes, toEpochResetMs(record7.resets_at));
     }
     function parseRolloutLine(line) {
-      const trimmed2 = line.trim();
-      if (trimmed2 === "" || !trimmed2.startsWith("{")) return null;
-      if (!trimmed2.includes('"rate_limits"')) return null;
+      const trimmed3 = line.trim();
+      if (trimmed3 === "" || !trimmed3.startsWith("{")) return null;
+      if (!trimmed3.includes('"rate_limits"')) return null;
       let record7;
       try {
-        const parsed = JSON.parse(trimmed2);
+        const parsed = JSON.parse(trimmed3);
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
         record7 = parsed;
       } catch {
@@ -39873,12 +39874,12 @@ child.on('exit', () => process.exit(0));
       return "cli-unknown";
     }
     function parseStoredCredential(raw) {
-      const trimmed2 = raw.trim();
-      if (trimmed2 === "") return { kind: "missing" };
-      if (!trimmed2.startsWith("{")) return { kind: "ok", accessToken: trimmed2 };
+      const trimmed3 = raw.trim();
+      if (trimmed3 === "") return { kind: "missing" };
+      if (!trimmed3.startsWith("{")) return { kind: "ok", accessToken: trimmed3 };
       let parsed;
       try {
-        parsed = JSON.parse(trimmed2);
+        parsed = JSON.parse(trimmed3);
       } catch {
         return { kind: "invalid", reason: "Cursor auth file is not valid JSON" };
       }
@@ -44638,9 +44639,9 @@ ${error.message || ""}`;
     function readClamped(env2, name, min, max) {
       const raw = env2[name];
       if (typeof raw !== "string" || raw.trim() === "") return null;
-      const trimmed2 = raw.trim();
-      if (!/^\d+$/.test(trimmed2)) return null;
-      const parsed = Number.parseInt(trimmed2, 10);
+      const trimmed3 = raw.trim();
+      if (!/^\d+$/.test(trimmed3)) return null;
+      const parsed = Number.parseInt(trimmed3, 10);
       if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return null;
       return parsed;
     }
@@ -46958,9 +46959,9 @@ ${error.message || ""}`;
     });
     function readId(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      if (!trimmed2 || trimmed2.length > MAX_ID_CHARS || /[\r\n]/.test(trimmed2)) return void 0;
-      return trimmed2;
+      const trimmed3 = value.trim();
+      if (!trimmed3 || trimmed3.length > MAX_ID_CHARS || /[\r\n]/.test(trimmed3)) return void 0;
+      return trimmed3;
     }
     function readBool(value) {
       return typeof value === "boolean" ? value : void 0;
@@ -50015,10 +50016,10 @@ ${mergeTreeErr?.stderr || ""}`;
         try {
           const status = git9(["submodule", "status"]);
           for (const line of status.split("\n")) {
-            const trimmed2 = line.trimEnd();
-            if (!trimmed2) continue;
-            if (trimmed2.startsWith("+")) {
-              const parts = trimmed2.slice(1).trim().split(/\s+/);
+            const trimmed3 = line.trimEnd();
+            if (!trimmed3) continue;
+            if (trimmed3.startsWith("+")) {
+              const parts = trimmed3.slice(1).trim().split(/\s+/);
               const path127 = parts[1] || parts[0] || "(unknown)";
               submoduleHints.push({
                 path: path127,
@@ -51773,11 +51774,11 @@ ${mergeTreeErr?.stderr || ""}`;
       let applied = 0;
       const pending = [];
       for await (const line of lines) {
-        const trimmed2 = line.trim();
-        if (trimmed2 === "")
+        const trimmed3 = line.trim();
+        if (trimmed3 === "")
           continue;
         if (header === null) {
-          const h = JSON.parse(trimmed2);
+          const h = JSON.parse(trimmed3);
           if (h.seqscribe !== "export/v1")
             throw new SeqscribeError("ERR_ENTRY_ENCODING", "not a seqscribe export/v1 stream");
           if (h.topic !== topic)
@@ -51797,7 +51798,7 @@ ${mergeTreeErr?.stderr || ""}`;
           }
           continue;
         }
-        const entry = validateEntry(JSON.parse(trimmed2), deps.constants);
+        const entry = validateEntry(JSON.parse(trimmed3), deps.constants);
         if (entry.topic !== topic)
           throw new SeqscribeError("ERR_ENTRY_ENCODING", "entry topic differs from export topic");
         pending.push(deps.core.applyExternal(entry, "import").then((r) => {
@@ -59430,9 +59431,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function baseField(value) {
       if (typeof value !== "string") return null;
-      const trimmed2 = value.trim();
-      if (trimmed2.length === 0) return null;
-      return trimmed2.length <= MAX_PROJECTED_STRING ? trimmed2 : trimmed2.slice(0, MAX_PROJECTED_STRING);
+      const trimmed3 = value.trim();
+      if (trimmed3.length === 0) return null;
+      return trimmed3.length <= MAX_PROJECTED_STRING ? trimmed3 : trimmed3.slice(0, MAX_PROJECTED_STRING);
     }
     function projectMeshLedgerEntry(entry) {
       const payload = {};
@@ -63326,10 +63327,10 @@ ${line}`;
       const seen2 = /* @__PURE__ */ new Set();
       const out = [];
       const push = (type2) => {
-        const trimmed2 = typeof type2 === "string" ? type2.trim() : "";
-        if (!trimmed2 || seen2.has(trimmed2)) return;
-        seen2.add(trimmed2);
-        out.push(trimmed2);
+        const trimmed3 = typeof type2 === "string" ? type2.trim() : "";
+        if (!trimmed3 || seen2.has(trimmed3)) return;
+        seen2.add(trimmed3);
+        out.push(trimmed3);
       };
       for (const slot of normalizeNodeCapabilitySlots2(record7.slots)) push(slot.provider);
       if (Array.isArray(record7.providerPriority)) {
@@ -63676,15 +63677,15 @@ ${line}`;
     });
     function readId2(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      if (!trimmed2 || trimmed2.length > MAX_ID_CHARS2 || /[\r\n]/.test(trimmed2)) return void 0;
-      return trimmed2;
+      const trimmed3 = value.trim();
+      if (!trimmed3 || trimmed3.length > MAX_ID_CHARS2 || /[\r\n]/.test(trimmed3)) return void 0;
+      return trimmed3;
     }
     function readPath2(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      if (!trimmed2 || trimmed2.length > MAX_PATH_CHARS || /[\r\n\0]/.test(trimmed2)) return void 0;
-      return trimmed2;
+      const trimmed3 = value.trim();
+      if (!trimmed3 || trimmed3.length > MAX_PATH_CHARS || /[\r\n\0]/.test(trimmed3)) return void 0;
+      return trimmed3;
     }
     function readPlainObject(value) {
       const record7 = readOptionalRecord2(value);
@@ -64690,11 +64691,11 @@ ${pattern}
       }
     });
     function resolveWorkerMcpConfigPath(declaredPath, workspace, workerHome, configRootPrefix) {
-      const trimmed2 = String(declaredPath || "").trim();
+      const trimmed3 = String(declaredPath || "").trim();
       const home = workerHome || os17.homedir();
-      if (trimmed2 === "~") return home;
-      if (trimmed2.startsWith("~/")) {
-        let rest = trimmed2.slice(2);
+      if (trimmed3 === "~") return home;
+      if (trimmed3.startsWith("~/")) {
+        let rest = trimmed3.slice(2);
         const prefix = String(configRootPrefix || "").trim();
         if (workerHome && prefix) {
           if (rest === prefix) return home;
@@ -64702,8 +64703,8 @@ ${pattern}
         }
         return path322.join(home, rest);
       }
-      if (path322.isAbsolute(trimmed2)) return trimmed2;
-      return path322.join(workspace, trimmed2);
+      if (path322.isAbsolute(trimmed3)) return trimmed3;
+      return path322.join(workspace, trimmed3);
     }
     function resolvePrivateWorkerMcpConfigPath(input) {
       if (!input.forcedConfigFile) return null;
@@ -67679,6 +67680,184 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         QUEUE_DEPENDENCY_NOTICE_LIST_CAP = 10;
       }
     });
+    function rowToInheritable(row2) {
+      return {
+        artifactId: row2.artifact_id,
+        taskId: row2.task_id,
+        meshId: row2.mesh_id,
+        missionId: row2.mission_id,
+        producerRole: row2.producer_role,
+        kind: row2.kind,
+        title: row2.title,
+        previewText: row2.preview_text,
+        createdAt: row2.created_at
+      };
+    }
+    function trimmed(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function isSameBoundMesh(recordMeshId, taskMeshId) {
+      const a = trimmed(recordMeshId);
+      return a.length > 0 && a === trimmed(taskMeshId);
+    }
+    function isArtifactInheritanceEnabled(opts) {
+      return (opts?.inheritArtifacts ?? opts?.inherit_artifacts) !== false;
+    }
+    function mergeInputArtifactIds(explicit, inherited) {
+      const seen2 = /* @__PURE__ */ new Set();
+      const out = [];
+      for (const id4 of [...explicit, ...inherited]) {
+        const clean3 = trimmed(id4);
+        if (!clean3 || seen2.has(clean3)) continue;
+        seen2.add(clean3);
+        out.push(clean3);
+      }
+      return out;
+    }
+    function listInheritableArtifacts(meshId, missionId, opts = {}) {
+      const mesh = trimmed(meshId);
+      const mission = trimmed(missionId);
+      if (!mesh || !mission) return [];
+      const limit = Math.max(0, Math.min(opts.limit ?? MAX_INHERITED_INPUT_ARTIFACTS, MAX_INHERITED_INPUT_ARTIFACTS));
+      if (limit === 0) return [];
+      try {
+        const runtime2 = MeshRuntimeStore.getInstance();
+        const missionTaskStatus = /* @__PURE__ */ new Map();
+        for (const entry of runtime2.getQueueEntries(mesh)) {
+          if (trimmed(entry.missionId) === mission) missionTaskStatus.set(entry.id, entry.status);
+        }
+        const exclude = new Set((opts.excludeIds ?? []).map(trimmed));
+        const excludeTask = trimmed(opts.excludeTaskId);
+        const records = runtime2.db.prepare(
+          `SELECT ${ROW_COLUMNS} FROM session_artifacts WHERE mission_id = ? AND mesh_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`
+        ).all(mission, mesh, MISSION_SCAN_LIMIT).map(rowToInheritable);
+        const eligible = records.filter((rec7) => {
+          if (!isSameBoundMesh(rec7.meshId, mesh) || trimmed(rec7.missionId) !== mission) return false;
+          if (exclude.has(rec7.artifactId)) return false;
+          const producerTask = trimmed(rec7.taskId);
+          if (producerTask) {
+            if (producerTask === excludeTask) return false;
+            return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? "");
+          }
+          return trimmed(rec7.producerRole) !== "worker";
+        });
+        return eligible.sort((a, b) => b.createdAt - a.createdAt || b.artifactId.localeCompare(a.artifactId)).slice(0, limit);
+      } catch {
+        return [];
+      }
+    }
+    function resolveInheritedArtifactIds(meshId, missionId, opts = {}) {
+      if (!trimmed(missionId)) return [];
+      return listInheritableArtifacts(meshId, missionId, {
+        excludeTaskId: opts.excludeTaskId,
+        excludeIds: opts.explicit,
+        limit: opts.limit
+      }).map((rec7) => rec7.artifactId);
+    }
+    function refreshInheritedInputArtifacts(meshId, task) {
+      try {
+        if (task.inheritArtifacts === false || !trimmed(task.missionId)) return task;
+        const current5 = Array.isArray(task.inputArtifactIds) ? task.inputArtifactIds : [];
+        const inherited = resolveInheritedArtifactIds(meshId, task.missionId, { excludeTaskId: task.id, explicit: current5 });
+        if (inherited.length === 0) return task;
+        const merged = mergeInputArtifactIds(current5, inherited);
+        const store5 = MeshRuntimeStore.getInstance();
+        const fresh = store5.findQueueEntryById(meshId, task.id);
+        if (fresh) {
+          fresh.inputArtifactIds = mergeInputArtifactIds(fresh.inputArtifactIds ?? [], merged);
+          store5.updateQueueEntry(fresh);
+        }
+        return { ...task, inputArtifactIds: merged };
+      } catch {
+        return task;
+      }
+    }
+    function previewLine(rec7) {
+      const preview = (rec7.previewText ?? "").replace(/\s+/g, " ").trim();
+      if (!preview) return "";
+      return preview.length > INPUT_ARTIFACT_PREVIEW_CHARS ? `${preview.slice(0, INPUT_ARTIFACT_PREVIEW_CHARS - 1)}\u2026` : preview;
+    }
+    function buildInputArtifactManifestAppendix(meshId, task) {
+      const ids = mergeInputArtifactIds(Array.isArray(task.inputArtifactIds) ? task.inputArtifactIds : [], []);
+      if (ids.length === 0) return null;
+      let records = [];
+      try {
+        const stmt = MeshRuntimeStore.getInstance().db.prepare(`SELECT ${ROW_COLUMNS} FROM session_artifacts WHERE artifact_id = ?`);
+        records = ids.map((id4) => stmt.get(id4)).filter((row2) => !!row2).map(rowToInheritable).filter((rec7) => isSameBoundMesh(rec7.meshId, meshId));
+      } catch {
+      }
+      const header = `${INPUT_ARTIFACTS_HEADING}
+
+Earlier work on this task already wrote these artifacts. Read the relevant ones first with \`artifact_read\` and treat what they establish as your starting point; do not redo investigation they already cover unless you are verifying a specific claim.`;
+      if (records.length === 0) {
+        return `${header}
+
+Artifact ids: ${ids.join(", ")}`;
+      }
+      const render2 = (rows, omitted) => {
+        const blocks2 = rows.map((rec7) => ({
+          attributes: {
+            artifact_id: rec7.artifactId,
+            kind: rec7.kind,
+            ...rec7.taskId ? { producer_task: rec7.taskId } : {},
+            ...rec7.producerRole ? { producer_role: String(rec7.producerRole) } : {}
+          },
+          text: [`title: ${rec7.title}`, previewLine(rec7) ? `preview: ${previewLine(rec7)}` : ""].filter(Boolean).join("\n")
+        }));
+        const env2 = renderUntrustedEvidenceEnvelopes(blocks2, { kind: "input_artifacts", taskId: task.id });
+        const unlisted = ids.length - rows.length;
+        const tail = omitted > 0 || unlisted > 0 ? `
+
+_${Math.max(omitted, unlisted)} more artifact id(s) not shown: ${ids.filter((id4) => !rows.some((r) => r.artifactId === id4)).join(", ")}_` : "";
+        return `${header}
+
+${env2.preamble}
+
+${env2.envelopes.join("\n\n")}${tail}`;
+      };
+      for (let keep = records.length; keep >= 1; keep -= 1) {
+        const text7 = render2(records.slice(0, keep), records.length - keep);
+        if (Buffer.byteLength(text7, "utf8") <= INPUT_ARTIFACTS_MAX_BYTES || keep === 1) return text7;
+      }
+      return null;
+    }
+    function getInputArtifactDispatchStats(meshId) {
+      try {
+        const store5 = MeshRuntimeStore.getInstance();
+        store5.ensureLegacyQueueMigrated(meshId);
+        const row2 = store5.db.prepare(
+          `SELECT COUNT(*) AS dispatched,
+                    COALESCE(SUM(CASE WHEN COALESCE(json_array_length(json_extract(payload, '$.inputArtifactIds')), 0) > 0 THEN 1 ELSE 0 END), 0) AS withInputs
+             FROM mesh_queue WHERE mesh_id = ? AND status IN ('assigned', 'completed', 'failed', 'blocked')`
+        ).get(meshId);
+        const dispatched = row2?.dispatched ?? 0;
+        const withInputArtifacts = row2?.withInputs ?? 0;
+        return { dispatched, withInputArtifacts, share: dispatched > 0 ? Math.round(withInputArtifacts / dispatched * 1e3) / 1e3 : 0 };
+      } catch {
+        return { dispatched: 0, withInputArtifacts: 0, share: 0 };
+      }
+    }
+    var MAX_INHERITED_INPUT_ARTIFACTS;
+    var INHERIT_FROM_STATUSES;
+    var INPUT_ARTIFACTS_HEADING;
+    var INPUT_ARTIFACT_PREVIEW_CHARS;
+    var INPUT_ARTIFACTS_MAX_BYTES;
+    var MISSION_SCAN_LIMIT;
+    var ROW_COLUMNS;
+    var init_mesh_input_artifacts = __esm2({
+      "src/mesh/mesh-input-artifacts.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_untrusted_evidence();
+        MAX_INHERITED_INPUT_ARTIFACTS = 12;
+        INHERIT_FROM_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "blocked"]);
+        INPUT_ARTIFACTS_HEADING = "## Input artifacts";
+        INPUT_ARTIFACT_PREVIEW_CHARS = 160;
+        INPUT_ARTIFACTS_MAX_BYTES = 6 * 1024;
+        MISSION_SCAN_LIMIT = 200;
+        ROW_COLUMNS = "artifact_id, task_id, mesh_id, mission_id, producer_role, kind, title, preview_text, created_at";
+      }
+    });
     function normalizeDependsOn(value) {
       if (!Array.isArray(value)) return [];
       const seen2 = /* @__PURE__ */ new Set();
@@ -67739,7 +67918,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       }
       const id4 = typeof opts?.id === "string" && opts.id.trim() ? opts.id.trim() : (0, import_crypto13.randomUUID)();
       const dependsOn = normalizeDependsOn(opts?.dependsOn);
-      const inputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
+      const explicitInputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
+      const inheritArtifacts = isArtifactInheritanceEnabled(opts);
       const ownedPathsResult = normalizeOwnedPaths(opts?.ownedPaths);
       const ownedPaths = ownedPathsResult.declaration.paths.length > 0 ? ownedPathsResult.declaration : void 0;
       const priority = normalizeMeshTaskPriority2(opts?.priority);
@@ -67773,6 +67953,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         const missionIdForScope = typeof opts?.missionId === "string" && opts.missionId.trim() ? opts.missionId.trim() : void 0;
         const contractTags = contractRequiredTagsForNewTask(meshId, id4, missionIdForScope, dependsOn);
         const resolvedRequiredTags = contractTags.length ? normalizeMeshCapabilityTags2([...callerTags, ...contractTags]) : callerTags;
+        const inputArtifactIds = inheritArtifacts && missionIdForScope ? mergeInputArtifactIds(explicitInputArtifactIds, resolveInheritedArtifactIds(meshId, missionIdForScope, { excludeTaskId: id4, explicit: explicitInputArtifactIds })) : explicitInputArtifactIds;
         const entry = {
           id: id4,
           meshId,
@@ -67786,6 +67967,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           ...ownedPaths ? { ownedPaths } : {},
           ...dependsOn.length > 0 ? { dependsOn } : {},
           ...inputArtifactIds.length > 0 ? { inputArtifactIds } : {},
+          ...!inheritArtifacts ? { inheritArtifacts: false } : {},
           // G6: only persist a non-default priority so legacy/normal rows stay minimal.
           ...priority && priority !== "normal" ? { priority } : {},
           // G7: hold-until gate (stored ISO). Omitted when absent/immediate.
@@ -67868,12 +68050,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const now = opts.dispatchedAt && opts.dispatchedAt.trim() ? opts.dispatchedAt : (/* @__PURE__ */ new Date()).toISOString();
       const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
       const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : void 0;
-      const directInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
+      const explicitDirectInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
+      const directInheritArtifacts = isArtifactInheritanceEnabled(opts);
       return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
           return null;
         }
         contractRequiredTagsForNewTask(meshId, taskId, missionId || void 0, []);
+        const directInputArtifactIds = directInheritArtifacts && missionId ? mergeInputArtifactIds(explicitDirectInputArtifactIds, resolveInheritedArtifactIds(meshId, missionId, { excludeTaskId: taskId, explicit: explicitDirectInputArtifactIds })) : explicitDirectInputArtifactIds;
         const entry = {
           id: taskId,
           meshId,
@@ -67883,6 +68067,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           ...readonly ? { readonly: true } : {},
           ...missionId ? { missionId } : {},
           ...directInputArtifactIds.length > 0 ? { inputArtifactIds: directInputArtifactIds } : {},
+          ...!directInheritArtifacts ? { inheritArtifacts: false } : {},
           ...directOwnedPaths ? { ownedPaths: directOwnedPaths } : {},
           difficulty: taskDifficulty,
           ...opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {},
@@ -67903,6 +68088,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
     var init_mesh_work_queue_enqueue = __esm2({
       "src/mesh/mesh-work-queue-enqueue.ts"() {
         "use strict";
+        init_mesh_input_artifacts();
         init_mesh_work_queue();
         init_dist();
         init_mesh_host_ownership();
@@ -77632,6 +77818,7 @@ ${block2.text}`,
           "handoffNotes",
           "decisionsNeeded",
           "commits",
+          "artifactIds",
           "handoffNotes.intent",
           "handoffNotes.conflictGuidance",
           "handoffNotes.touchedFiles",
@@ -78363,8 +78550,8 @@ ${block2.text}`,
     }
     function readOptionalString(value) {
       if (typeof value !== "string") return null;
-      const trimmed2 = value.trim();
-      return trimmed2.length > 0 ? trimmed2 : null;
+      const trimmed3 = value.trim();
+      return trimmed3.length > 0 ? trimmed3 : null;
     }
     function normalizeMeshIds2(meshIds, singleMeshId) {
       const seen2 = /* @__PURE__ */ new Set();
@@ -81071,12 +81258,12 @@ ${includeRefs[0]}`;
       if (settings2.launchedByCoordinator === true || meshSetting("meshNodeFor") || meshSetting("meshCoordinatorFor")) return "mesh";
       return "api";
     }
-    function trimmed(value) {
+    function trimmed2(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
     function buildModelSelection(input, at) {
-      const requested = trimmed(input.requested);
-      const launchValue = requested ? trimmed(input.launchValue) : void 0;
+      const requested = trimmed2(input.requested);
+      const launchValue = requested ? trimmed2(input.launchValue) : void 0;
       if (requested) {
         const declared = input.declaredSource;
         const source2 = declared && declared !== "provider_default" ? declared : "unspecified";
@@ -81088,7 +81275,7 @@ ${includeRefs[0]}`;
           history: [{ at, value: inForce, via: "launch" }]
         };
       }
-      const resolvedDefault = trimmed(input.providerDefault);
+      const resolvedDefault = trimmed2(input.providerDefault);
       if (resolvedDefault) {
         return {
           source: "provider_default",
@@ -81099,9 +81286,9 @@ ${includeRefs[0]}`;
       return { source: "unspecified", history: [] };
     }
     function buildSessionLaunchRecord(input) {
-      const providerVersion = trimmed(input.providerVersion);
-      const workspace = trimmed(input.workspace);
-      const autoApproveModeId = trimmed(input.autoApproveModeId);
+      const providerVersion = trimmed2(input.providerVersion);
+      const workspace = trimmed2(input.workspace);
+      const autoApproveModeId = trimmed2(input.autoApproveModeId);
       const model = buildModelSelection(input.model, input.launchedAt);
       const thinkingLevel = buildModelSelection(input.thinkingLevel, input.launchedAt);
       if (input.roleLaunch?.applied.model.source === "provider_default") model.source = "provider_default";
@@ -81478,10 +81665,10 @@ ${includeRefs[0]}`;
       return "preflight_blocked";
     }
     function parseUpstreamTarget(upstream) {
-      const trimmed2 = upstream.trim();
-      const slash = trimmed2.indexOf("/");
-      if (slash <= 0 || slash >= trimmed2.length - 1) return null;
-      return { remote: trimmed2.slice(0, slash), remoteBranch: trimmed2.slice(slash + 1) };
+      const trimmed3 = upstream.trim();
+      const slash = trimmed3.indexOf("/");
+      if (slash <= 0 || slash >= trimmed3.length - 1) return null;
+      return { remote: trimmed3.slice(0, slash), remoteBranch: trimmed3.slice(slash + 1) };
     }
     async function verifyUpstreamIsAncestorOfHead(workspace, upstream, timeoutMs) {
       if (!upstream) return { ok: false, error: "missing upstream" };
@@ -83613,13 +83800,13 @@ ${includeRefs[0]}`;
         const newLines = appended.toString("utf-8").split("\n");
         if (newLines.length && newLines[newLines.length - 1] === "") newLines.pop();
         const merged = cached5.lines.concat(newLines);
-        const trimmed2 = merged.length > TAIL_LINES_RETAINED ? merged.slice(merged.length - TAIL_LINES_RETAINED) : merged;
-        const coversWholeFile = cached5.coversWholeFile && trimmed2.length === merged.length;
-        storeIncrementalTailCache(filePath2, size, mtimeMs, trimmed2, coversWholeFile);
-        if (coversWholeFile || trimmed2.length >= needed) {
-          return { lines: trimmed2, coversWholeFile };
+        const trimmed3 = merged.length > TAIL_LINES_RETAINED ? merged.slice(merged.length - TAIL_LINES_RETAINED) : merged;
+        const coversWholeFile = cached5.coversWholeFile && trimmed3.length === merged.length;
+        storeIncrementalTailCache(filePath2, size, mtimeMs, trimmed3, coversWholeFile);
+        if (coversWholeFile || trimmed3.length >= needed) {
+          return { lines: trimmed3, coversWholeFile };
         }
-        return { lines: trimmed2, coversWholeFile };
+        return { lines: trimmed3, coversWholeFile };
       } catch {
         return null;
       } finally {
@@ -84946,10 +85133,10 @@ ${includeRefs[0]}`;
       const fenced = text7.match(/```(?:json)?\s*([\s\S]*?)```/i);
       const candidates = [fenced?.[1], text7].filter(Boolean);
       for (const candidate of candidates) {
-        const trimmed2 = candidate.trim();
-        if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
+        const trimmed3 = candidate.trim();
+        if (!trimmed3.startsWith("{") || !trimmed3.endsWith("}")) continue;
         try {
-          const parsed = JSON.parse(trimmed2);
+          const parsed = JSON.parse(trimmed3);
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             const hasWorkerShape = "status" in parsed && ("changedFiles" in parsed || "errors" in parsed || "gitStatus" in parsed || "nextAction" in parsed || "validationResults" in parsed);
             if (hasWorkerShape) return parsed;
@@ -85079,10 +85266,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       const fenced = text7.match(/```(?:json)?\s*([\s\S]*?)```/i);
       const candidates = [fenced?.[1], text7].filter(Boolean);
       for (const candidate of candidates) {
-        const trimmed2 = candidate.trim();
-        if (!trimmed2.startsWith("{") || !trimmed2.endsWith("}")) continue;
+        const trimmed3 = candidate.trim();
+        if (!trimmed3.startsWith("{") || !trimmed3.endsWith("}")) continue;
         try {
-          const parsed = JSON.parse(trimmed2);
+          const parsed = JSON.parse(trimmed3);
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
             return true;
           }
@@ -86138,6 +86325,18 @@ ${upstream}`;
       } catch (e) {
         LOG.warn("UpstreamResults", `Failed to build upstream results for ${task.id}: ${e?.message || e}`);
       }
+      try {
+        const explicitIds = Array.isArray(task.inputArtifactIds) ? task.inputArtifactIds : [];
+        const ids = task.inheritArtifacts !== false && task.missionId ? mergeInputArtifactIds(explicitIds, resolveInheritedArtifactIds(meshId, task.missionId, { excludeTaskId: task.id, explicit: explicitIds })) : explicitIds;
+        const manifest = ids.length > 0 ? buildInputArtifactManifestAppendix(meshId, { id: task.id, inputArtifactIds: ids }) : null;
+        if (manifest) messageWithUpstream = `${messageWithUpstream}
+
+---
+
+${manifest}`;
+      } catch (e) {
+        LOG.warn("InputArtifacts", `Failed to build input-artifact manifest for ${task.id}: ${e?.message || e}`);
+      }
       let body = messageWithUpstream;
       let enclosedHandoffNotes = 0;
       if (isWorkerMcpEnabled()) {
@@ -86208,6 +86407,7 @@ ${upstream}`;
         init_mesh_work_queue();
         init_mesh_missions();
         init_mesh_upstream_results();
+        init_mesh_input_artifacts();
       }
     });
     function localCoordinatorDaemonId2() {
@@ -86347,8 +86547,8 @@ ${upstream}`;
       }
     });
     function normalize3(value) {
-      const trimmed2 = typeof value === "string" ? value.trim() : "";
-      return trimmed2 ? trimmed2 : void 0;
+      const trimmed3 = typeof value === "string" ? value.trim() : "";
+      return trimmed3 ? trimmed3 : void 0;
     }
     function buildRedriveProvenance(lastReclaim, dispatchedProviderType) {
       if (!lastReclaim) return null;
@@ -87603,10 +87803,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           recordTaskClaimed({ meshId, task, nodeId, sessionId, providerType, attemptId: dispatchAttemptRef.attemptId });
           const continuationNotice = noteBranchContinuationDispatch(meshId, node, task, nodeId, sessionId);
           const workerMcp = readSessionWorkerMcpDelivered(claiming.claimState?.settings);
+          const dispatchTask = refreshInheritedInputArtifacts(meshId, task);
           let dispatchMessage = resolveDispatchMessage2(
-            continuationNotice ? { ...task, message: `${task.message}
+            continuationNotice ? { ...dispatchTask, message: `${task.message}
 
-${continuationNotice}` } : task,
+${continuationNotice}` } : dispatchTask,
             meshId,
             node,
             { workerMcp }
@@ -87764,6 +87965,7 @@ ${continuationNotice}` } : task,
         init_mesh_difficulty_floor();
         init_worker_mcp_isolation();
         init_worker_handoff_dispatch();
+        init_mesh_input_artifacts();
         init_contract_runtime();
         init_mesh_candidacy_predicates();
         init_mesh_queue_dispatch();
@@ -89662,8 +89864,8 @@ ${continuationNotice}` } : task,
     }
     function readOptionalString2(value) {
       if (typeof value !== "string") return null;
-      const trimmed2 = value.trim();
-      return trimmed2.length > 0 ? trimmed2 : null;
+      const trimmed3 = value.trim();
+      return trimmed3.length > 0 ? trimmed3 : null;
     }
     function isPlainRecord2(value) {
       return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -92532,6 +92734,7 @@ Index only \u2014 each tool's own description carries its parameters and contrac
 - Drivers: \`driver_list\`, \`driver_describe\`. invoke is delegated to a worker task.
 - Artifacts: \`artifact_list\`, \`artifact_read\`, \`artifact_register\`. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBCF4\uC5EC\uC904 \uACB0\uACFC\uBB3C(\uC2A4\uD06C\uB9B0\uC0F7\xB7\uBCF4\uACE0\uC11C\xB7\uC0B0\uCD9C\uBB3C)\uC740 artifact_register\uB85C \uB4F1\uB85D.
 - Owner-attached images arrive as read-only artifacts named in the message (\`Owner-attached images \u2026\`). Pass those ids unchanged in a worker task's \`input_artifact_ids\`; do not paste or re-read their bytes. Read one yourself only when your own routing needs it, and then only a small \`artifact_read\` page.
+- Evidence handoff: put evidence you already hold (a diagnosis, repro, log excerpt, review findings) in an artifact (\`artifact_register\`) and pass its id in \`input_artifact_ids\` instead of restating it in the task text. Tasks with a \`mission_id\` automatically inherit the artifacts earlier tasks of the SAME mission produced (newest first, at most 12; set \`inherit_artifacts: false\` to opt out), so for same-mission follow-ups (fix after investigate, re-review after fix) just say what is new. \`artifact_list\` with \`mission_id\` shows what a mission has produced.
 - Status: \`mesh_status\`, \`mesh_list_nodes\`, \`mesh_route_preview\`, \`mesh_git_status\`, \`mesh_read_node_logs\`
 - Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_direct_cancel\` (cancel a \`mesh_send_task\` attempt via the turn ledger; the stop settles with proof, never a forced release), \`mesh_queue_requeue\`, \`mesh_queue_revise\` (revise a pending task with its expected revision; source anchors and dependency revisions must remain current)
 - Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
@@ -94113,21 +94316,21 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       }
     });
     function extractExecToken(raw) {
-      const trimmed2 = raw.trim();
-      if (!trimmed2) return "";
-      if (trimmed2.startsWith('"')) {
-        const endQuote = trimmed2.indexOf('"', 1);
-        return endQuote > 1 ? trimmed2.slice(1, endQuote) : trimmed2.slice(1);
+      const trimmed3 = raw.trim();
+      if (!trimmed3) return "";
+      if (trimmed3.startsWith('"')) {
+        const endQuote = trimmed3.indexOf('"', 1);
+        return endQuote > 1 ? trimmed3.slice(1, endQuote) : trimmed3.slice(1);
       }
-      if (trimmed2.startsWith("'")) {
-        const endQuote = trimmed2.indexOf("'", 1);
-        return endQuote > 1 ? trimmed2.slice(1, endQuote) : trimmed2.slice(1);
+      if (trimmed3.startsWith("'")) {
+        const endQuote = trimmed3.indexOf("'", 1);
+        return endQuote > 1 ? trimmed3.slice(1, endQuote) : trimmed3.slice(1);
       }
-      const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(trimmed2);
+      const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(trimmed3);
       if (winExeMatch) {
         return winExeMatch[1];
       }
-      return trimmed2.split(/\s+/)[0] ?? "";
+      return trimmed3.split(/\s+/)[0] ?? "";
     }
     function cleanExecBasename(execToken) {
       const unquoted = execToken.replace(/^['"]+|['"]+$/g, "");
@@ -94332,11 +94535,11 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       return out;
     }
     function parseWin32ProcessOutput(stdout) {
-      const trimmed2 = stdout.trim();
-      if (!trimmed2) return [];
-      if (trimmed2.startsWith("[") || trimmed2.startsWith("{")) {
+      const trimmed3 = stdout.trim();
+      if (!trimmed3) return [];
+      if (trimmed3.startsWith("[") || trimmed3.startsWith("{")) {
         try {
-          const parsed = JSON.parse(trimmed2);
+          const parsed = JSON.parse(trimmed3);
           const items = Array.isArray(parsed) ? parsed : [parsed];
           const out2 = [];
           for (const item of items) {
@@ -94364,7 +94567,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         }
       }
       const out = [];
-      const lines = trimmed2.split(/\r?\n/);
+      const lines = trimmed3.split(/\r?\n/);
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line || /^Node\s*,/i.test(line)) continue;
@@ -94558,10 +94761,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     }
     function isPendingBackgroundWorkSummary(text7) {
       if (typeof text7 !== "string") return false;
-      const trimmed2 = text7.trim();
-      if (!trimmed2 || trimmed2.length > 600) return false;
-      if (trimmed2.startsWith("{") && trimmed2.endsWith("}")) return false;
-      const tail = trimmed2.slice(-PENDING_TEXT_TAIL_CHARS);
+      const trimmed3 = text7.trim();
+      if (!trimmed3 || trimmed3.length > 600) return false;
+      if (trimmed3.startsWith("{") && trimmed3.endsWith("}")) return false;
+      const tail = trimmed3.slice(-PENDING_TEXT_TAIL_CHARS);
       for (const rule of PENDING_BACKGROUND_WORK_ALLOWLIST) {
         if (rule.pattern.test(tail)) return true;
       }
@@ -97090,11 +97293,11 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       );
     }
     function resolveMcpConfigPath(configPath, workspace) {
-      const trimmed2 = configPath.trim();
-      if (trimmed2 === "~") return os21.homedir();
-      if (trimmed2.startsWith("~/")) return (0, import_node_path14.join)(os21.homedir(), trimmed2.slice(2));
-      if ((0, import_node_path14.isAbsolute)(trimmed2)) return trimmed2;
-      return (0, import_node_path14.join)(workspace, trimmed2);
+      const trimmed3 = configPath.trim();
+      if (trimmed3 === "~") return os21.homedir();
+      if (trimmed3.startsWith("~/")) return (0, import_node_path14.join)(os21.homedir(), trimmed3.slice(2));
+      if ((0, import_node_path14.isAbsolute)(trimmed3)) return trimmed3;
+      return (0, import_node_path14.join)(workspace, trimmed3);
     }
     function resolveAdhdevMcpServerLaunch(options) {
       const directEntryPath = resolveAdhdevMcpEntryPath(options.adhdevMcpEntryPath);
@@ -101733,19 +101936,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return typeof value === "string" ? value.trim() : "";
     }
     function canonGrantDaemonId(daemonId) {
-      const trimmed2 = trimStr(daemonId);
-      if (!trimmed2) return "";
-      return canonicalDaemonId2(trimmed2) ?? trimmed2;
+      const trimmed3 = trimStr(daemonId);
+      if (!trimmed3) return "";
+      return canonicalDaemonId2(trimmed3) ?? trimmed3;
     }
     function parseOriginGrantPublicKeyObject(rawPublicKey) {
-      const trimmed2 = trimStr(rawPublicKey);
-      if (!trimmed2) return null;
+      const trimmed3 = trimStr(rawPublicKey);
+      if (!trimmed3) return null;
       try {
-        if (trimmed2.startsWith("-----BEGIN")) {
-          const keyObj2 = crypto6.createPublicKey(trimmed2);
+        if (trimmed3.startsWith("-----BEGIN")) {
+          const keyObj2 = crypto6.createPublicKey(trimmed3);
           return keyObj2.asymmetricKeyType === "ed25519" ? keyObj2 : null;
         }
-        const der = Buffer.from(trimmed2.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""), "base64url");
+        const der = Buffer.from(trimmed3.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""), "base64url");
         const keyObj = crypto6.createPublicKey({
           key: der,
           format: "der",
@@ -104574,8 +104777,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function getPlatformVersionCommand2(versionCommand) {
       if (!versionCommand) return void 0;
       if (typeof versionCommand === "string") {
-        const trimmed2 = versionCommand.trim();
-        return trimmed2 || void 0;
+        const trimmed3 = versionCommand.trim();
+        return trimmed3 || void 0;
       }
       const platformValue = versionCommand[process.platform];
       if (typeof platformValue === "string" && platformValue.trim()) {
@@ -107224,8 +107427,8 @@ ${result.stderr}`, result.code);
       }
     });
     function normalizeCliVersion(version2) {
-      const trimmed2 = typeof version2 === "string" ? version2.trim() : "";
-      return trimmed2 ? trimmed2 : void 0;
+      const trimmed3 = typeof version2 === "string" ? version2.trim() : "";
+      return trimmed3 ? trimmed3 : void 0;
     }
     function hydrateModelCache(env2 = process.env) {
       const stored = loadModelCache(env2);
@@ -116485,10 +116688,10 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             error: "Invalid base64 chunk in artifact origin response (artifact_too_large)"
           };
         }
-        const trimmed2 = raw.trim();
-        if (trimmed2.length === 0) continue;
-        const pad = trimmed2.endsWith("==") ? 2 : trimmed2.endsWith("=") ? 1 : 0;
-        const decodedEst = Math.max(0, Math.floor(trimmed2.length * 3 / 4) - pad);
+        const trimmed3 = raw.trim();
+        if (trimmed3.length === 0) continue;
+        const pad = trimmed3.endsWith("==") ? 2 : trimmed3.endsWith("=") ? 1 : 0;
+        const decodedEst = Math.max(0, Math.floor(trimmed3.length * 3 / 4) - pad);
         if (decodedEst > ORIGIN_FETCH_CHUNK_BYTES || estimatedBytes + decodedEst > maxBytes) {
           return {
             ok: false,
@@ -116497,7 +116700,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           };
         }
         estimatedBytes += decodedEst;
-        normalized.push(trimmed2);
+        normalized.push(trimmed3);
       }
       if (normalized.length === 0) {
         return { ok: true, content: "" };
@@ -119415,11 +119618,11 @@ ${detail.join("\n")}` : stripped;
       const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
       for (let j = openIdx + 1; j < limit; j += 1) {
         const candidate = lines[j];
-        const trimmed2 = candidate.trim();
+        const trimmed3 = candidate.trim();
         if (TRUNCATED_OUTPUT_LINE_RE.test(candidate) || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate) || TOOL_HEADER_LINE_RE.test(candidate) || COL0_COMPOSER_DIVIDER_LINE_RE.test(candidate) && j + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[j + 1])) {
           return expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew ? lastDiffIdx : -1;
         }
-        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S|@@\s+-\d+|```+|~~~+)/i.test(trimmed2)) {
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S|@@\s+-\d+|```+|~~~+)/i.test(trimmed3)) {
           return oldSeen > 0 || newSeen > 0 ? lastDiffIdx : -1;
         }
         if (candidate.startsWith("+")) {
@@ -119466,7 +119669,7 @@ ${detail.join("\n")}` : stripped;
       const lines = raw.split("\n");
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
-        const trimmed2 = line.trim();
+        const trimmed3 = line.trim();
         if (inFence !== null && fenceCloseIdx !== -1) {
           if (i < fenceCloseIdx) {
             continue;
@@ -119497,7 +119700,7 @@ ${detail.join("\n")}` : stripped;
           inAssistantProseBlock = false;
           continue;
         }
-        const fenceMatch = trimmed2.match(/^(```+|~~~+)/);
+        const fenceMatch = trimmed3.match(/^(```+|~~~+)/);
         if (fenceMatch) {
           const ch = fenceMatch[1][0];
           const fenceLen = fenceMatch[1].length;
@@ -119512,7 +119715,7 @@ ${detail.join("\n")}` : stripped;
             inAssistantProseBlock = false;
             continue;
           }
-          if (inFence === ch && fenceLen >= inFenceLen && new RegExp(`^${ch}{${inFenceLen},}\\s*$`).test(trimmed2)) {
+          if (inFence === ch && fenceLen >= inFenceLen && new RegExp(`^${ch}{${inFenceLen},}\\s*$`).test(trimmed3)) {
             inFence = null;
             inFenceLen = 0;
             fenceCloseIdx = -1;
@@ -119533,14 +119736,14 @@ ${detail.join("\n")}` : stripped;
             continue;
           }
         }
-        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed2)) {
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed3)) {
           inDiffHunk = false;
           diffHunkCloseIdx = -1;
           diffHunkLines = 0;
           inAssistantProseBlock = false;
           continue;
         }
-        if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
+        if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed3)) {
           inDiffHunk = true;
           diffHunkCloseIdx = findClosedDiffHunkEnd(lines, i);
           diffHunkLines = 0;
@@ -119575,11 +119778,11 @@ ${detail.join("\n")}` : stripped;
             continue;
           }
         }
-        if (!trimmed2) {
+        if (!trimmed3) {
           inAssistantProseBlock = false;
           continue;
         }
-        if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
+        if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed3) || TOOL_HEADER_LINE_RE.test(line)) {
           inToolBlock = true;
           inAssistantProseBlock = false;
           continue;
@@ -119596,9 +119799,9 @@ ${detail.join("\n")}` : stripped;
           }
           inAssistantProseBlock = false;
         }
-        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
-        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
-        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw)\s+\S|(?:if|else\s+if|expect|it|test|describe|assert)\s*(?:\(|\.[a-z]+\s*\())/.test(trimmed2)) continue;
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed3)) continue;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed3)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw)\s+\S|(?:if|else\s+if|expect|it|test|describe|assert)\s*(?:\(|\.[a-z]+\s*\())/.test(trimmed3)) continue;
         out.push(line);
       }
       return out.join("\n");
@@ -123738,6 +123941,7 @@ ${detail.join("\n")}` : stripped;
     });
     var worker_report_validation_exports = {};
     __export2(worker_report_validation_exports, {
+      WORKER_ARTIFACT_IDS_MAX: () => WORKER_ARTIFACT_IDS_MAX,
       WORKER_BLOCKERS_MAX: () => WORKER_BLOCKERS_MAX,
       WORKER_FOLLOW_UPS_MAX: () => WORKER_FOLLOW_UPS_MAX,
       WORKER_GUIDANCE_MAX_CHARS: () => WORKER_GUIDANCE_MAX_CHARS,
@@ -123753,7 +123957,7 @@ ${detail.join("\n")}` : stripped;
         return { errors: [{ field: "", message: "report must be an object" }] };
       }
       const input = raw;
-      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers", "decisionsNeeded", "commits"]);
+      const KNOWN = /* @__PURE__ */ new Set(["outcome", "summary", "handoffNotes", "touchedFiles", "branchState", "blockers", "decisionsNeeded", "commits", "artifactIds"]);
       for (const key5 of Object.keys(input)) {
         if (!KNOWN.has(key5)) {
           errors.push({ field: key5, message: `unknown field '${key5}' (expected one of: ${[...KNOWN].join(", ")})` });
@@ -123807,6 +124011,14 @@ ${detail.join("\n")}` : stripped;
         if (!normalized) errors.push({ field: "commits", message: "commits must be an array of git SHA strings (7\u201364 hex chars)" });
         else if (normalized.length > WORKER_COMMITS_MAX) errors.push({ field: "commits", message: `commits has ${normalized.length} entries, over the ${WORKER_COMMITS_MAX} limit` });
         else if (normalized.length) commits = normalized;
+      }
+      let artifactIds;
+      if (input.artifactIds !== void 0) {
+        const raw2 = input.artifactIds;
+        const ids = Array.isArray(raw2) ? raw2.map((v) => typeof v === "string" ? v.trim() : "") : null;
+        if (!ids || ids.some((id4) => !id4 || id4.length > 200)) errors.push({ field: "artifactIds", message: "artifactIds must be an array of artifact id strings (art_*, \u2264200 chars each)" });
+        else if (ids.length > WORKER_ARTIFACT_IDS_MAX) errors.push({ field: "artifactIds", message: `artifactIds has ${ids.length} entries, over the ${WORKER_ARTIFACT_IDS_MAX} limit` });
+        else if (ids.length) artifactIds = [...new Set(ids)];
       }
       let handoffNotes;
       if (input.handoffNotes !== void 0) {
@@ -123872,7 +124084,8 @@ ${detail.join("\n")}` : stripped;
           ...input.branchState ? { branchState: input.branchState } : {},
           ...blockers?.length ? { blockers } : {},
           ...decisionsNeeded ? { decisionsNeeded } : {},
-          ...commits ? { commits } : {}
+          ...commits ? { commits } : {},
+          ...artifactIds ? { artifactIds } : {}
         },
         errors: []
       };
@@ -123893,13 +124106,13 @@ ${detail.join("\n")}` : stripped;
           errors.push({ field: field3, message: `${field3} must contain only strings` });
           return void 0;
         }
-        const trimmed2 = item.trim();
-        if (!trimmed2) continue;
-        if (trimmed2.length > WORKER_LIST_ITEM_MAX_CHARS) {
+        const trimmed3 = item.trim();
+        if (!trimmed3) continue;
+        if (trimmed3.length > WORKER_LIST_ITEM_MAX_CHARS) {
           errors.push({ field: field3, message: `${field3} contains an entry over the ${WORKER_LIST_ITEM_MAX_CHARS} char limit` });
           return void 0;
         }
-        out.push(trimmed2);
+        out.push(trimmed3);
       }
       return out;
     }
@@ -123907,6 +124120,7 @@ ${detail.join("\n")}` : stripped;
     var WORKER_INTENT_MAX_CHARS;
     var WORKER_GUIDANCE_MAX_CHARS;
     var WORKER_TOUCHED_FILES_MAX;
+    var WORKER_ARTIFACT_IDS_MAX;
     var WORKER_LIST_ITEM_MAX_CHARS;
     var WORKER_BLOCKERS_MAX;
     var WORKER_FOLLOW_UPS_MAX;
@@ -123918,6 +124132,7 @@ ${detail.join("\n")}` : stripped;
         WORKER_INTENT_MAX_CHARS = 4e3;
         WORKER_GUIDANCE_MAX_CHARS = 4e3;
         WORKER_TOUCHED_FILES_MAX = 200;
+        WORKER_ARTIFACT_IDS_MAX = 24;
         WORKER_LIST_ITEM_MAX_CHARS = 500;
         WORKER_BLOCKERS_MAX = 50;
         WORKER_FOLLOW_UPS_MAX = 50;
@@ -125018,7 +125233,7 @@ ${detail.join("\n")}` : stripped;
         initializedNonceDbs = /* @__PURE__ */ new WeakSet();
       }
     });
-    function isSameBoundMesh(recordMeshId, taskMeshId) {
+    function isSameBoundMesh2(recordMeshId, taskMeshId) {
       const a = (recordMeshId ?? "").trim();
       const b = (taskMeshId ?? "").trim();
       return a.length > 0 && a === b;
@@ -125388,7 +125603,7 @@ ${detail.join("\n")}` : stripped;
         const taskPayload = taskEntry?.payload ?? {};
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : authority.remoteInputArtifactIds ?? [];
         const allowedIds = new Set(rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0));
-        const sameMesh = isSameBoundMesh(record7.meshId, authority.meshId);
+        const sameMesh = isSameBoundMesh2(record7.meshId, authority.meshId);
         if (!sameMesh || !allowedIds.has(artifactId)) {
           return {
             ok: false,
@@ -125450,7 +125665,7 @@ ${detail.join("\n")}` : stripped;
         if (!id4 || seen2.has(id4)) continue;
         const record7 = store5.get(id4) ?? remoteArtifactById.get(id4);
         if (!record7) continue;
-        const sameMesh = isSameBoundMesh(record7.meshId, authority.meshId);
+        const sameMesh = isSameBoundMesh2(record7.meshId, authority.meshId);
         if (sameMesh) {
           seen2.add(id4);
           merged.push(record7);
@@ -125734,7 +125949,7 @@ ${detail.join("\n")}` : stripped;
                 const rec7 = store5.get(id4);
                 if (!rec7) continue;
                 const recMissionId = resolveRecMission(rec7);
-                const sameMesh = isSameBoundMesh(rec7.meshId, meshId);
+                const sameMesh = isSameBoundMesh2(rec7.meshId, meshId);
                 if (sameMesh) {
                   inputArtifacts.push({
                     ...rec7,
@@ -125751,7 +125966,7 @@ ${detail.join("\n")}` : stripped;
                   return { success: false, code: "artifact_not_found", error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
                 }
                 const reqMissionId = resolveRecMission(reqRec);
-                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || isSameBoundMesh(reqRec.meshId, meshId) && allowedSet.has(reqArtifactId);
+                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || isSameBoundMesh2(reqRec.meshId, meshId) && allowedSet.has(reqArtifactId);
                 if (!isAllowed) {
                   return {
                     success: false,
@@ -126023,12 +126238,12 @@ ${detail.join("\n")}` : stripped;
       return typeof value === "string" ? value.trim() : "";
     }
     function canonicalizeDir(dirPath) {
-      const trimmed2 = trimString4(dirPath);
-      if (!trimmed2) return null;
+      const trimmed3 = trimString4(dirPath);
+      if (!trimmed3) return null;
       try {
-        const stat2 = fs97.statSync(trimmed2);
+        const stat2 = fs97.statSync(trimmed3);
         if (!stat2.isDirectory()) return null;
-        return fs97.realpathSync(trimmed2);
+        return fs97.realpathSync(trimmed3);
       } catch {
         return null;
       }
@@ -147497,10 +147712,10 @@ ${defangRelayBody(text7)}`;
         const stdout = await git7(repoRoot, ["config", "--file", ".gitmodules", "--get-regexp", "path"]);
         const paths = /* @__PURE__ */ new Set();
         for (const line of stdout.split("\n")) {
-          const trimmed2 = line.trim();
-          const spaceIdx = trimmed2.indexOf(" ");
+          const trimmed3 = line.trim();
+          const spaceIdx = trimmed3.indexOf(" ");
           if (spaceIdx === -1) continue;
-          const value = trimmed2.slice(spaceIdx + 1).trim();
+          const value = trimmed3.slice(spaceIdx + 1).trim();
           if (value) paths.add(value);
         }
         return paths;
@@ -148868,8 +149083,8 @@ ${hintLines.join("\n")}` : "",
       const push = (v) => {
         if (v === null || v === void 0) return;
         const s2 = typeof v === "string" ? v : typeof v?.toString === "function" ? String(v) : "";
-        const trimmed2 = s2.trim();
-        if (trimmed2) parts.push(trimmed2);
+        const trimmed3 = s2.trim();
+        if (trimmed3) parts.push(trimmed3);
       };
       push(e.stderr);
       push(e.stdout);
@@ -152889,10 +153104,10 @@ ${tail}` : ""
       const lines = viewportText.split("\n").map((l) => l.trimEnd());
       const tail = lines.filter((l) => l.trim().length > 0).slice(-6);
       for (const line of tail) {
-        const trimmed2 = line.trimStart();
+        const trimmed3 = line.trimStart();
         for (const marker2 of COMPOSER_PROMPT_MARKERS) {
-          if (!trimmed2.startsWith(marker2)) continue;
-          const content = trimmed2.slice(marker2.length).trim();
+          if (!trimmed3.startsWith(marker2)) continue;
+          const content = trimmed3.slice(marker2.length).trim();
           if (content.length >= 8) return content.length;
         }
       }
@@ -156331,11 +156546,11 @@ ${tail}` : ""
         );
       }
       const configDir = explicitDir || resolveConfigDir(env2, homeDir2);
-      const trimmed2 = configDir.replace(/[\\/]+$/, "");
+      const trimmed3 = configDir.replace(/[\\/]+$/, "");
       return {
         configDir,
         canonicalConfigDir: (0, import_session_host_core3.canonicalizeInstancePath)(configDir),
-        instanceDir: path24.basename(trimmed2) || ".adhdev",
+        instanceDir: path24.basename(trimmed3) || ".adhdev",
         isDefault: (0, import_session_host_core3.isDefaultInstanceConfigDir)(configDir, homeDir2),
         ipcKey: (0, import_session_host_core3.resolveSessionHostIpcKey)(configDir, homeDir2),
         sessionHostAppName: resolveSessionHostAppName({ standalone: options.standalone, env: env2 })
@@ -158074,18 +158289,18 @@ ${tail}` : ""
       const out = [];
       for (const item of value) {
         if (typeof item !== "string") return { ok: false };
-        const trimmed2 = item.trim();
-        if (!trimmed2 || trimmed2.length > 64) return { ok: false };
-        out.push(trimmed2);
+        const trimmed3 = item.trim();
+        if (!trimmed3 || trimmed3.length > 64) return { ok: false };
+        out.push(trimmed3);
       }
       return { ok: true, value: out };
     }
     function parseOptionalOriginGrantPublicKey(value) {
       if (value === void 0) return { ok: true };
       if (typeof value !== "string") return { ok: false };
-      const trimmed2 = value.trim();
-      if (!trimmed2 || !isValidOriginGrantPublicKey(trimmed2)) return { ok: false };
-      return { ok: true, value: trimmed2 };
+      const trimmed3 = value.trim();
+      if (!trimmed3 || !isValidOriginGrantPublicKey(trimmed3)) return { ok: false };
+      return { ok: true, value: trimmed3 };
     }
     function parseOptionalKeyRotation(value) {
       if (value === void 0) return { ok: true };
@@ -160658,8 +160873,8 @@ ${tail}` : ""
     }
     var DEFAULT_INSTANCE_DIR = ".adhdev";
     function normalizeInstanceDir(instanceDir) {
-      const trimmed2 = instanceDir?.trim();
-      return trimmed2 ? trimmed2 : DEFAULT_INSTANCE_DIR;
+      const trimmed3 = instanceDir?.trim();
+      return trimmed3 ? trimmed3 : DEFAULT_INSTANCE_DIR;
     }
     function resolveWindowsInstallerLayout(options) {
       if ((options.platform || process.platform) !== "win32" || !options.installPrefix) return null;
@@ -166571,10 +166786,10 @@ ${marker2}`,
       return [...merged.values()];
     }
     function findCliCommand(command) {
-      const trimmed2 = String(command || "").trim();
-      if (!trimmed2) return null;
-      if (path62.isAbsolute(trimmed2) || trimmed2.includes("/") || trimmed2.includes("\\") || trimmed2.startsWith("~")) {
-        const candidate = trimmed2.startsWith("~") ? path62.join((0, import_os3.homedir)(), trimmed2.slice(1)) : trimmed2;
+      const trimmed3 = String(command || "").trim();
+      if (!trimmed3) return null;
+      if (path62.isAbsolute(trimmed3) || trimmed3.includes("/") || trimmed3.includes("\\") || trimmed3.startsWith("~")) {
+        const candidate = trimmed3.startsWith("~") ? path62.join((0, import_os3.homedir)(), trimmed3.slice(1)) : trimmed3;
         const resolved = path62.isAbsolute(candidate) ? candidate : path62.resolve(candidate);
         return (0, import_fs29.existsSync)(resolved) ? resolved : null;
       }
@@ -166584,7 +166799,7 @@ ${marker2}`,
       for (const p of paths) {
         if (!p) continue;
         for (const ext of exes) {
-          const fullPath = path62.join(p, trimmed2 + ext);
+          const fullPath = path62.join(p, trimmed3 + ext);
           try {
             if ((0, import_fs29.existsSync)(fullPath)) {
               const stat2 = (0, import_fs29.statSync)(fullPath);
@@ -167943,10 +168158,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const settled = lastNewline >= 0 ? text7.slice(0, lastNewline + 1) : "";
       const fragment = lastNewline >= 0 ? text7.slice(lastNewline + 1) : text7;
       for (const line of settled.split("\n")) {
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
+        const trimmed3 = line.trim();
+        if (!trimmed3) continue;
         try {
-          out.push(JSON.parse(trimmed2));
+          out.push(JSON.parse(trimmed3));
         } catch {
         }
       }
@@ -169221,12 +169436,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return v < 1e12 ? Math.floor(v * 1e3) : Math.floor(v);
       }
       if (typeof v === "string" && v) {
-        const trimmed2 = v.trim();
-        const asNum = Number(trimmed2);
+        const trimmed3 = v.trim();
+        const asNum = Number(trimmed3);
         if (Number.isFinite(asNum) && asNum > 0) {
           return asNum < 1e12 ? Math.floor(asNum * 1e3) : Math.floor(asNum);
         }
-        const parsed = Date.parse(trimmed2);
+        const parsed = Date.parse(trimmed3);
         if (Number.isFinite(parsed)) return parsed;
       }
       return null;
@@ -170483,8 +170698,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function extractAssistantContentParts(content) {
       if (typeof content === "string") {
-        const trimmed2 = content.trim();
-        return trimmed2 ? [{ content: trimmed2, kind: "standard", blockIndex: -1, truncated: false }] : [];
+        const trimmed3 = content.trim();
+        return trimmed3 ? [{ content: trimmed3, kind: "standard", blockIndex: -1, truncated: false }] : [];
       }
       if (!Array.isArray(content)) return [];
       const parts = [];
@@ -170512,8 +170727,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function extractUserContentParts(content) {
       if (typeof content === "string") {
-        const trimmed2 = content.trim();
-        return trimmed2 ? [{ role: "user", content: trimmed2, kind: "standard", blockIndex: -1, truncated: false }] : [];
+        const trimmed3 = content.trim();
+        return trimmed3 ? [{ role: "user", content: trimmed3, kind: "standard", blockIndex: -1, truncated: false }] : [];
       }
       if (!Array.isArray(content)) return [];
       const parts = [];
@@ -170782,11 +170997,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function codexToolCallArguments(payload) {
       const rawArguments = payload.arguments ?? payload.input;
       if (typeof rawArguments === "string") {
-        const trimmed2 = rawArguments.trim();
+        const trimmed3 = rawArguments.trim();
         try {
-          return summarizeToolArguments(JSON.parse(trimmed2));
+          return summarizeToolArguments(JSON.parse(trimmed3));
         } catch {
-          return trimmed2;
+          return trimmed3;
         }
       }
       return summarizeToolArguments(rawArguments);
@@ -170820,11 +171035,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const rawArguments = payload.arguments ?? payload.input;
         let callArgs = "";
         if (typeof rawArguments === "string") {
-          const trimmed2 = rawArguments.trim();
+          const trimmed3 = rawArguments.trim();
           try {
-            callArgs = JSON.stringify(JSON.parse(trimmed2), null, 2);
+            callArgs = JSON.stringify(JSON.parse(trimmed3), null, 2);
           } catch {
-            callArgs = trimmed2;
+            callArgs = trimmed3;
           }
         } else if (rawArguments != null) {
           try {
@@ -171285,8 +171500,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const parts = decoded.split(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]+/);
       const runs = [];
       for (const part of parts) {
-        const trimmed2 = part.trim();
-        if (trimmed2.length >= MIN_PRINTABLE_RUN) runs.push(trimmed2);
+        const trimmed3 = part.trim();
+        if (trimmed3.length >= MIN_PRINTABLE_RUN) runs.push(trimmed3);
       }
       return runs;
     }
@@ -172385,12 +172600,12 @@ ${output}` : "";
         if (!call2 || typeof call2 !== "object") continue;
         const args = call2.arguments;
         if (typeof args === "string") {
-          const trimmed2 = args.trim();
-          if (!trimmed2) continue;
+          const trimmed3 = args.trim();
+          if (!trimmed3) continue;
           try {
-            parts.push(JSON.stringify(JSON.parse(trimmed2), null, 2));
+            parts.push(JSON.stringify(JSON.parse(trimmed3), null, 2));
           } catch {
-            parts.push(trimmed2);
+            parts.push(trimmed3);
           }
         } else if (args != null) {
           try {
@@ -172501,11 +172716,11 @@ ${output}` : "";
       const parsed = [];
       let recordIndex = -1;
       for (const line of text7.split("\n")) {
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
+        const trimmed3 = line.trim();
+        if (!trimmed3) continue;
         let record7;
         try {
-          record7 = JSON.parse(trimmed2);
+          record7 = JSON.parse(trimmed3);
         } catch {
           continue;
         }
@@ -173103,8 +173318,8 @@ ${output}` : "";
               const trimResult = (input, result) => {
                 const wantsTrim = input?.excludeInProgressTurn === true || input?.args?.excludeInProgressTurn === true;
                 if (!wantsTrim || !result || !Array.isArray(result.messages)) return result;
-                const trimmed2 = trimInProgressTurnToolTail(result.messages);
-                return trimmed2 === result.messages ? result : { ...result, messages: trimmed2 };
+                const trimmed3 = trimInProgressTurnToolTail(result.messages);
+                return trimmed3 === result.messages ? result : { ...result, messages: trimmed3 };
               };
               const read2 = (input) => trimResult(input, reader(input));
               if (typeof reader.readAsync === "function") {
@@ -175059,8 +175274,8 @@ ${output}` : "";
       getOptionalStringSetting(type2, key5) {
         const value = this.getSettingValue(type2, key5);
         if (typeof value !== "string") return null;
-        const trimmed2 = value.trim();
-        return trimmed2 ? trimmed2 : null;
+        const trimmed3 = value.trim();
+        return trimmed3 ? trimmed3 : null;
       }
       readConfig() {
         try {
@@ -175913,9 +176128,9 @@ ${output}` : "";
       });
     }
     function normalizeMacAppPath(appPath) {
-      const trimmed2 = String(appPath || "").trim();
-      if (!trimmed2) return null;
-      return trimmed2.replace(/\/+$/, "");
+      const trimmed3 = String(appPath || "").trim();
+      if (!trimmed3) return null;
+      return trimmed3.replace(/\/+$/, "");
     }
     function parsePsLine(line) {
       const match = line.match(/^\s*(\d+)\s+(.+)$/);
@@ -177146,9 +177361,9 @@ ${output}` : "";
       if (last && last.fromState === next.fromState && last.toState === next.toState && last.event === next.event && last.cause === next.cause) {
         return existing;
       }
-      const trimmed2 = existing.length >= TRANSITION_HISTORY_LIMIT ? existing.slice(existing.length - TRANSITION_HISTORY_LIMIT + 1) : [...existing];
-      trimmed2.push(next);
-      return trimmed2;
+      const trimmed3 = existing.length >= TRANSITION_HISTORY_LIMIT ? existing.slice(existing.length - TRANSITION_HISTORY_LIMIT + 1) : [...existing];
+      trimmed3.push(next);
+      return trimmed3;
     }
     function buildV1NativePresentObservation(args) {
       const identities = [];
@@ -181604,24 +181819,24 @@ ${output}` : "";
       return { success: true, agents };
     }
     function normalizeWindowsRequestedPath(requestedPath) {
-      const trimmed2 = requestedPath.trim();
-      if (!trimmed2) return ".";
-      const slashDriveMatch = trimmed2.match(/^[/\\]([A-Za-z])(?:[/\\](.*))?$/);
+      const trimmed3 = requestedPath.trim();
+      if (!trimmed3) return ".";
+      const slashDriveMatch = trimmed3.match(/^[/\\]([A-Za-z])(?:[/\\](.*))?$/);
       if (slashDriveMatch) {
         const drive = slashDriveMatch[1].toUpperCase();
         const rest = (slashDriveMatch[2] || "").replace(/[/\\]+/g, "\\");
         return rest ? `${drive}:\\${rest}` : `${drive}:\\`;
       }
-      if (/^[A-Za-z]:$/.test(trimmed2)) {
-        return `${trimmed2[0].toUpperCase()}:\\`;
+      if (/^[A-Za-z]:$/.test(trimmed3)) {
+        return `${trimmed3[0].toUpperCase()}:\\`;
       }
-      if (/^[A-Za-z]:[^/\\].*$/.test(trimmed2)) {
-        return `${trimmed2[0].toUpperCase()}:\\${trimmed2.slice(2).replace(/[/\\]+/g, "\\")}`;
+      if (/^[A-Za-z]:[^/\\].*$/.test(trimmed3)) {
+        return `${trimmed3[0].toUpperCase()}:\\${trimmed3.slice(2).replace(/[/\\]+/g, "\\")}`;
       }
-      if (/^[A-Za-z]:[/\\]/.test(trimmed2)) {
-        return `${trimmed2[0].toUpperCase()}:${trimmed2.slice(2)}`;
+      if (/^[A-Za-z]:[/\\]/.test(trimmed3)) {
+        return `${trimmed3[0].toUpperCase()}:${trimmed3.slice(2)}`;
       }
-      return trimmed2;
+      return trimmed3;
     }
     function resolveSafePath(requestedPath) {
       const rawPath = typeof requestedPath === "string" ? requestedPath.trim() : "";
@@ -181755,8 +181970,8 @@ ${output}` : "";
     init_config();
     function normalizeProviderDir(value) {
       if (typeof value !== "string") return void 0;
-      const trimmed2 = value.trim();
-      return trimmed2 ? trimmed2 : void 0;
+      const trimmed3 = value.trim();
+      return trimmed3 ? trimmed3 : void 0;
     }
     function parseProviderSourceConfigUpdate(input) {
       const updates = {};
@@ -189714,8 +189929,8 @@ ${output}` : "";
           syncProviderPriorityFromSlots(policy, finalSlots);
           const patch = { policy };
           if (typeof args?.systemPrompt === "string") {
-            const trimmed2 = args.systemPrompt.trim();
-            patch.systemPrompt = trimmed2 || void 0;
+            const trimmed3 = args.systemPrompt.trim();
+            patch.systemPrompt = trimmed3 || void 0;
           } else if (args?.systemPrompt === null) {
             patch.systemPrompt = void 0;
           }
@@ -191892,6 +192107,29 @@ ${output}` : "";
     var meshMissionGitCommandSpecs = defineCommandSpecs("med", meshMissionGitCommandHandlers, {
       mesh_ref_containment_probe: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
+    init_dist();
+    init_artifacts();
+    init_command_registry();
+    init_artifact_runtime();
+    var MESH_MISSION_ARTIFACT_LIST_MAX = 50;
+    var meshMissionArtifactCommandHandlers = {
+      mesh_mission_artifact_list: async (ctx, args) => {
+        const meshId = readString2(args?.meshId);
+        const missionId = readString2(args?.missionId);
+        if (!meshId || !missionId) return { success: false, code: "invalid_arguments", error: "meshId and missionId are required" };
+        const rawLimit = args?.limit;
+        const limit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), MESH_MISSION_ARTIFACT_LIST_MAX) : MESH_MISSION_ARTIFACT_LIST_MAX;
+        try {
+          const artifacts = getArtifactStore(ctx).listByMission(missionId, { meshId, limit }).filter((rec7) => rec7.meshId === meshId && rec7.missionId === missionId);
+          return { success: true, meshId, missionId, artifacts, attachments: artifacts.map((rec7) => toChatAttachmentMeta(rec7)) };
+        } catch (e) {
+          return { success: false, error: `mission artifact listing failed: ${e?.message || e}` };
+        }
+      }
+    };
+    var meshMissionArtifactCommandSpecs = defineCommandSpecs("med", meshMissionArtifactCommandHandlers, {
+      mesh_mission_artifact_list: { sources: ["ipc"] }
+    });
     init_mesh_events();
     init_deliver();
     init_interactive_prompt();
@@ -192985,6 +193223,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_refine_status();
     init_runtime_surface();
     init_command_registry();
+    init_mesh_input_artifacts();
     function peekCoordinatorNotices(meshId) {
       try {
         return meshNoticeRuntime.current()?.readNotices(meshId, { ack: false }) ?? [];
@@ -193138,7 +193377,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const rawQueue = getQueue2(meshId, { status: ["pending", "assigned"] });
           const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
-          const queueSummary = getMeshQueueStats2(meshId);
+          const queueSummary = { ...getMeshQueueStats2(meshId), inputArtifacts: getInputArtifactDispatchStats(meshId) };
           const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime2 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
           const schedulingRuntime = buildMeshSchedulingRuntime2(mesh, queue);
           const schedulingByNode = new Map(schedulingRuntime.nodes.map((n) => [n.nodeId, n]));
@@ -196777,10 +197016,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           try {
             const { stdout } = await execFileAsync7("git", ["config", "--file", ".gitmodules", "--get-regexp", "path"], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
             for (const line of stdout.split("\n")) {
-              const trimmed2 = line.trim();
-              const spaceIdx = trimmed2.indexOf(" ");
+              const trimmed3 = line.trim();
+              const spaceIdx = trimmed3.indexOf(" ");
               if (spaceIdx === -1) continue;
-              const value = trimmed2.slice(spaceIdx + 1).trim();
+              const value = trimmed3.slice(spaceIdx + 1).trim();
               if (value) subPaths.add(value);
             }
           } catch {
@@ -198762,22 +199001,22 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_dist();
     init_mesh_node_identity();
     function resolveRemoteMeshSessionOwnerDaemonId(self, sessionId, ownerNodeIdHint) {
-      const trimmed2 = typeof sessionId === "string" ? sessionId.trim() : "";
+      const trimmed3 = typeof sessionId === "string" ? sessionId.trim() : "";
       const nodeHint = typeof ownerNodeIdHint === "string" ? ownerNodeIdHint.trim() : "";
-      if (!trimmed2 && !nodeHint) return void 0;
+      if (!trimmed3 && !nodeHint) return void 0;
       const selfDaemonId = self.deps.statusInstanceId;
       const candidates = collectMeshSessionOwnerCandidateNodes(self);
-      if (trimmed2) {
+      if (trimmed3) {
         for (const node of candidates) {
-          if (!collectMeshNodeHostedSessionIds(node).has(trimmed2)) continue;
+          if (!collectMeshNodeHostedSessionIds(node).has(trimmed3)) continue;
           const nodeDaemonId = readMeshNodeDaemonId(readObjectRecord(node));
           if (!nodeDaemonId) continue;
           if (selfDaemonId && daemonIdsEquivalent4(nodeDaemonId, selfDaemonId)) return void 0;
           return nodeDaemonId;
         }
       }
-      if (trimmed2) {
-        for (const match of self.meshNodeGitState?.findRuntimeSessions(trimmed2) ?? []) {
+      if (trimmed3) {
+        for (const match of self.meshNodeGitState?.findRuntimeSessions(trimmed3) ?? []) {
           const rosterNode = candidates.find((node) => meshNodeIdMatches7(node, match.nodeId));
           const nodeDaemonId = (rosterNode ? readMeshNodeDaemonId(readObjectRecord(rosterNode)) : void 0) ?? match.daemonId ?? void 0;
           if (!nodeDaemonId) continue;
@@ -199230,6 +199469,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           ...meshWorktreeRetentionSpecs,
           ...meshTaskViewCommandSpecs,
           ...meshMissionGitCommandSpecs,
+          ...meshMissionArtifactCommandSpecs,
           ...meshEventsSpecs,
           ...meshCoordinatorLaunchSpecs,
           ...meshStatusSpecs,
@@ -204658,10 +204898,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (start > 0 && rawLines.length > 0) rawLines.shift();
       const out = [];
       for (const line of rawLines) {
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
+        const trimmed3 = line.trim();
+        if (!trimmed3) continue;
         try {
-          out.push(JSON.parse(trimmed2));
+          out.push(JSON.parse(trimmed3));
         } catch {
         }
       }
@@ -209194,9 +209434,9 @@ ${text7}` : text7;
         if (!chunk) return;
         const before = this.buf.length;
         const next = (this.buf + chunk).slice(-this.capBytes);
-        const trimmed2 = before + chunk.length - next.length;
+        const trimmed3 = before + chunk.length - next.length;
         this.buf = next;
-        this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed2);
+        this.lineCursorPos = Math.max(0, this.lineCursorPos - trimmed3);
         this.strippedCache = void 0;
         this.seqCounter++;
       }
@@ -210253,10 +210493,10 @@ ${text7}` : text7;
         if (this.interactivePromptScheme() !== "claude_tui" || !chunk) return;
         const lines = this.rawTail.takeCompleteLines();
         for (const line of lines) {
-          const trimmed2 = line.trim();
-          if (!trimmed2.startsWith("{") || !trimmed2.includes("AskUserQuestion")) continue;
+          const trimmed3 = line.trim();
+          if (!trimmed3.startsWith("{") || !trimmed3.includes("AskUserQuestion")) continue;
           try {
-            const parsed = JSON.parse(trimmed2);
+            const parsed = JSON.parse(trimmed3);
             const prompt = detectClaudeAskUserQuestionPromptFromJson(parsed, this.cliType);
             if (!prompt) continue;
             this.activeInteractivePrompt = prompt;
@@ -216021,11 +216261,11 @@ ${buttons.join("\n")}`;
       }
     }
     function resolveSettingsStorePath(declaredPath, storeHome, workspaceRealpath) {
-      const trimmed2 = declaredPath.trim();
-      if (trimmed2 === "~") return path119.resolve(storeHome);
-      if (trimmed2.startsWith("~/")) return path119.resolve(storeHome, trimmed2.slice(2));
-      if (path119.isAbsolute(trimmed2)) return path119.resolve(trimmed2);
-      return path119.resolve(workspaceRealpath, trimmed2);
+      const trimmed3 = declaredPath.trim();
+      if (trimmed3 === "~") return path119.resolve(storeHome);
+      if (trimmed3.startsWith("~/")) return path119.resolve(storeHome, trimmed3.slice(2));
+      if (path119.isAbsolute(trimmed3)) return path119.resolve(trimmed3);
+      return path119.resolve(workspaceRealpath, trimmed3);
     }
     function resolveLaunchTrustPlan(input) {
       if ("scheme" in input.trust) {
@@ -216597,9 +216837,9 @@ ${buttons.join("\n")}`;
       });
     }
     function planSessionStart(host, cliType, workingDir, options) {
-      const trimmed2 = (workingDir || "").trim();
-      if (!trimmed2) throw new Error("working directory required");
-      const resolvedDir = trimmed2.startsWith("~") ? trimmed2.replace(/^~/, os47.homedir()) : path121.resolve(trimmed2);
+      const trimmed3 = (workingDir || "").trim();
+      if (!trimmed3) throw new Error("working directory required");
+      const resolvedDir = trimmed3.startsWith("~") ? trimmed3.replace(/^~/, os47.homedir()) : path121.resolve(trimmed3);
       const normalizedType = host.providerLoader.resolveAlias(cliType);
       const rawProvider = host.providerLoader.getByAlias(cliType);
       const provider = rawProvider ? host.providerLoader.resolve(normalizedType) || rawProvider : void 0;
@@ -218561,15 +218801,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (data === true) return { focused: true };
         if (data === false || data == null) return { focused: false };
         if (typeof data === "string") {
-          const trimmed2 = data.trim();
-          const normalized = trimmed2.toLowerCase();
+          const trimmed3 = data.trim();
+          const normalized = trimmed3.toLowerCase();
           if (normalized === "true" || normalized === "ok" || normalized === "success" || normalized === "focused" || normalized === "visible") {
             return { focused: true };
           }
           if (normalized === "false" || normalized === "not_found" || normalized === "not found" || normalized === "missing" || normalized === "panel_hidden" || normalized === "hidden") {
             return { focused: false };
           }
-          return { focused: false, ...trimmed2 ? { error: trimmed2 } : {} };
+          return { focused: false, ...trimmed3 ? { error: trimmed3 } : {} };
         }
         if (data && typeof data === "object") {
           const error = this.getOptionalError(data.error);
@@ -218587,8 +218827,8 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (data === true) return { opened: true, visible: true };
         if (data === false || data == null) return { opened: false, visible: false };
         if (typeof data === "string") {
-          const trimmed2 = data.trim();
-          const normalized = trimmed2.toLowerCase();
+          const trimmed3 = data.trim();
+          const normalized = trimmed3.toLowerCase();
           if (normalized === "true" || normalized === "ok" || normalized === "opened" || normalized === "open" || normalized === "success") {
             return { opened: true, visible: true };
           }
@@ -218601,7 +218841,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           if (normalized === "false" || normalized === "panel_hidden" || normalized === "hidden" || normalized === "not_found" || normalized === "not found" || normalized === "missing") {
             return { opened: false, visible: false };
           }
-          return { opened: false, visible: false, ...trimmed2 ? { error: trimmed2 } : {} };
+          return { opened: false, visible: false, ...trimmed3 ? { error: trimmed3 } : {} };
         }
         if (data && typeof data === "object") {
           const error = this.getOptionalError(data.error);
@@ -231363,7 +231603,8 @@ function renderWorkerProtocolFooter(input = {}) {
     "Memos from the coordinator arrive appended to the response of whichever worker tool you call next; read them and follow them.",
     "You have no coordinator tools (no `mesh_*`) by design: do not enqueue, dispatch, or restart anything. If you need a decision from the coordinator, finish with `report_completion` and outcome `blocked`, listing what you need in `blockers`.",
     "On a code-changing task, `report_completion` with outcome `completed` requires `touched_files` \u2014 send `[]` if you changed nothing, omitting the field is what gets refused. `blocked`/`failed` never need it, and a read-only task should omit it or send `[]`.",
-    "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing."
+    "If `report_completion` is refused, the response carries `validationErrors` (or a `hint`) naming exactly what to fix \u2014 correct that field and call it again; a refusal records nothing.",
+    "Put substantial findings (a diagnosis, evidence, repro steps, review findings) in a workspace file and register it with `artifact_register`, then cite the returned ids in `report_completion` `artifact_ids`. The next task in this mission inherits them as input artifacts instead of re-investigating \u2014 keep each artifact self-contained and factual."
   );
   if (input.enclosedHandoffNotes && input.enclosedHandoffNotes > 0) {
     lines.push(
@@ -234579,6 +234820,15 @@ async function callCoordinatorArtifactList(ctx, args = {}) {
   const coordSessionId = trimString(ctx.coordinatorSessionId);
   const meshId = trimString(ctx.mesh?.id);
   const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
+  if (meshId && authorizedSessions.size === 0 && requestedMissionId && !requestedSessionId) {
+    const missionLimit = typeof args.limit === "number" && Number.isFinite(args.limit) && args.limit > 0 ? Math.trunc(args.limit) : void 0;
+    const missionResult = await ctx.transport.command("mesh_mission_artifact_list", {
+      meshId,
+      missionId: requestedMissionId,
+      ...missionLimit !== void 0 ? { limit: missionLimit } : {}
+    });
+    return JSON.stringify(missionResult, null, 2);
+  }
   if (!meshId || authorizedSessions.size === 0) {
     return JSON.stringify(
       {
@@ -235129,7 +235379,8 @@ var MESH_ENQUEUE_TASK_TOOL = {
       target_node_id: { type: "string", description: "HARD pin: only this node may claim. Beats prefer_worktree; unresolvable id rejected." },
       prefer_worktree: { type: "boolean", description: "Route to the most recently cloned idle worktree node (no-op if none)." },
       depends_on: { type: "array", items: { type: "string" }, description: 'Task ids that must complete first; completion summaries are appended ("Upstream results"). Cycles rejected.' },
-      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission, OD-4)." },
+      input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission)." },
+      inherit_artifacts: { type: "boolean", description: "Default true: mission tasks also get \u226412 newest artifacts of earlier same-mission tasks; false = off." },
       mission_id: { type: "string", description: "Mission id (full, exact); unknown id rejected (mission_not_found)." },
       priority: { ...enumOf(MESH_TASK_PRIORITIES), description: "high jumps older normal/low work; default normal." },
       model: { type: "string", description: "Model override, e.g. opus (best-effort)." },
@@ -235167,6 +235418,7 @@ var MESH_ENQUEUE_BATCH_TOOL = {
             prefer_worktree: { type: "boolean" },
             depends_on: { type: "array", items: { type: "string" }, description: "Sibling refs and/or existing task ids that must complete first." },
             input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission)." },
+            inherit_artifacts: { type: "boolean", description: "As mesh_enqueue_task: false opts out of same-mission artifact auto-inherit." },
             mission_id: { type: "string", description: "Overrides the top-level mission_id." },
             priority: enumOf(MESH_TASK_PRIORITIES),
             model: { type: "string" },
@@ -235446,6 +235698,7 @@ var MESH_SEND_TASK_TOOL = {
       readonly: { type: "boolean", description: "Read-only axis (any task_mode): no write isolation, read-only cap, exempt from the per-node write limit and the dirty/stale gates, rejects write instructions. The worker's own tools are NOT restricted." },
       owned_paths: { type: "array", items: { type: "string" }, description: "As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing \u2014 feeds the overlap check and the touched_files comparison." },
       input_artifact_ids: { type: "array", items: { type: "string" }, description: "Artifact ids this task may read (any mission, OD-4)." },
+      inherit_artifacts: { type: "boolean", description: "Default true: a task with mission_id automatically also receives (up to 12, newest first) the artifacts earlier tasks of the SAME mission produced. false = only input_artifact_ids." },
       mission_id: { type: "string", description: "Full/exact mission id (attributes the task and its completion); unresolvable \u2192 REJECTED (mission_not_found)." },
       difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: "REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger)." },
       delivery_mode: {
@@ -238179,6 +238432,7 @@ var ENQUEUE_TASK_FIELD_ALIASES = {
   preferWorktree: "prefer_worktree",
   dependsOn: "depends_on",
   inputArtifactIds: "input_artifact_ids",
+  inheritArtifacts: "inherit_artifacts",
   missionId: "mission_id",
   thinkingLevel: "thinking_level",
   notBefore: "not_before",
@@ -238235,6 +238489,7 @@ var MESH_ACCEPTED_ARG_ALIASES = {
       read_only: "readonly",
       ownedPaths: "owned_paths",
       inputArtifactIds: "input_artifact_ids",
+      inheritArtifacts: "inherit_artifacts",
       missionId: "mission_id",
       deliveryMode: "delivery_mode",
       allowStaleNode: "allow_stale_node",
@@ -238619,6 +238874,7 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
   const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : void 0;
   const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
   const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? rawInputArtifactIds : void 0;
+  const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false : void 0;
   return {
     ok: true,
     value: {
@@ -238629,6 +238885,7 @@ async function normalizeEnqueueTaskArgs(ctx, rawArgs, callerLabel) {
       requiredTags,
       dependsOn,
       inputArtifactIds,
+      inheritArtifacts,
       missionId,
       priority,
       model,
@@ -238667,6 +238924,7 @@ async function meshEnqueueTask(ctx, args) {
     requiredTags,
     dependsOn,
     inputArtifactIds,
+    inheritArtifacts,
     missionId,
     priority,
     model,
@@ -238701,6 +238959,7 @@ async function meshEnqueueTask(ctx, args) {
         requiredTags,
         dependsOn,
         ...inputArtifactIds ? { inputArtifactIds } : {},
+        ...inheritArtifacts === false ? { inheritArtifacts: false } : {},
         missionId,
         targetNodeId,
         ...priority ? { priority } : {},
@@ -238853,6 +239112,7 @@ async function meshEnqueueBatch(ctx, args) {
       // tool forwards.
       ...v.ownedPaths ? { ownedPaths: v.ownedPaths } : {},
       ...v.inputArtifactIds ? { inputArtifactIds: v.inputArtifactIds } : {},
+      ...v.inheritArtifacts === false ? { inheritArtifacts: false } : {},
       ...ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}
     });
   }
@@ -240883,6 +241143,7 @@ async function parseSendTaskRequest(ctx, args) {
   const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : void 0;
   const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
   const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? rawInputArtifactIds : void 0;
+  const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false : void 0;
   if (missionId && !(await missionQuery(ctx.transport, { meshId: ctx.mesh.id, id: missionId })).missions[0]) {
     return JSON.stringify({
       success: false,
@@ -240935,6 +241196,7 @@ async function parseSendTaskRequest(ctx, args) {
     missionId,
     ownedPaths,
     inputArtifactIds,
+    inheritArtifacts,
     difficulty: difficultyRaw,
     taskMode: modeValidation.taskMode,
     delivery,
@@ -241028,7 +241290,7 @@ async function resolveExplicitWorkerSession(ctx, node, args, req) {
   }
 }
 async function enqueueSendTask(ctx, args, req) {
-  const { taskInput, readonly, missionId, ownedPaths, inputArtifactIds } = req;
+  const { taskInput, readonly, missionId, ownedPaths, inputArtifactIds, inheritArtifacts } = req;
   return (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: req.message, options: {
     targetNodeId: args.node_id,
     targetSessionId: args.session_id,
@@ -241041,6 +241303,7 @@ async function enqueueSendTask(ctx, args, req) {
     ...missionId ? { missionId } : {},
     ...ownedPaths ? { ownedPaths } : {},
     ...inputArtifactIds ? { inputArtifactIds } : {},
+    ...inheritArtifacts === false ? { inheritArtifacts: false } : {},
     // COORD-EVENT-MISROUTE (anchor preservation): stamp the originating coordinator
     // SESSION anchor exactly as meshEnqueueTask does (mesh-tools-queue.ts). Without it
     // the queued task carries no sourceCoordinatorSessionId, so at claim time
@@ -241181,7 +241444,9 @@ ${dirtyWorkspaceNotice}` : req.message;
       taskMode,
       difficulty,
       ...readonly ? { readonly: true } : {},
-      ...missionId ? { missionId } : {}
+      ...missionId ? { missionId } : {},
+      ...req.inputArtifactIds ? { inputArtifactIds: req.inputArtifactIds } : {},
+      ...req.inheritArtifacts === false ? { inheritArtifacts: false } : {}
     },
     ctx.mesh.id,
     node
@@ -241235,7 +241500,7 @@ async function recordTaskDispatched(ctx, req, p) {
   });
 }
 async function recordDirectDispatch(ctx, req, p) {
-  const { missionId, ownedPaths, inputArtifactIds, readonly } = req;
+  const { missionId, ownedPaths, inputArtifactIds, inheritArtifacts, readonly } = req;
   await directDispatchRecord(ctx.transport, {
     meshId: ctx.mesh.id,
     taskId: p.taskId,
@@ -241244,6 +241509,7 @@ async function recordDirectDispatch(ctx, req, p) {
       ...missionId ? { missionId } : {},
       ...ownedPaths ? { ownedPaths } : {},
       ...inputArtifactIds ? { inputArtifactIds } : {},
+      ...inheritArtifacts === false ? { inheritArtifacts: false } : {},
       assignedNodeId: p.nodeId,
       assignedSessionId: p.sessionId,
       taskMode: req.taskMode,
@@ -245614,6 +245880,11 @@ var REPORT_COMPLETION_TOOL = {
         type: "array",
         items: { type: "string" },
         description: "Git commit SHAs this task produced (7\u201364 hex chars). Recorded as evidence on the mission; the summary text is never scanned for SHAs."
+      },
+      artifact_ids: {
+        type: "array",
+        items: { type: "string" },
+        description: "Ids (art_*) of the artifacts you registered with `artifact_register` for this task's substantial findings (diagnosis, evidence, repro steps, review findings). The next task in this mission inherits them. Optional."
       }
     },
     required: ["outcome", "summary"]
@@ -245777,6 +246048,7 @@ function toDaemonReport(a) {
     // daemon's strict validator never sees an unknown key from an ordinary report).
     ...(a.decisions_needed ?? a.decisionsNeeded) !== void 0 ? { decisionsNeeded: a.decisions_needed ?? a.decisionsNeeded } : {},
     ...a.commits !== void 0 ? { commits: a.commits } : {},
+    ...(a.artifact_ids ?? a.artifactIds) !== void 0 ? { artifactIds: a.artifact_ids ?? a.artifactIds } : {},
     ...handoffNotes ? { handoffNotes } : {}
   };
   return { report, ignoredHandoffKeys };

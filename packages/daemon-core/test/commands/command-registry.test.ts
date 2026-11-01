@@ -314,7 +314,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'artifact_fetch', 'artifact_fetch_origin', 'artifact_index_forwarded', 'artifact_list', 'artifact_read', 'artifact_register',
     'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
     // Mission git refs (design 2026-11-01-mission-git-refs): read-only containment projection + member-node probe.
-    'mesh_mission_git_eval', 'mesh_ref_containment_probe',
+    'mesh_mission_git_eval', 'mesh_ref_containment_probe', 'mesh_mission_artifact_list',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */

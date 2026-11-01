@@ -645,7 +645,7 @@ export interface WorkerReportRefusalReceipt {
  * recorded only as `(unknown_field)` — never verbatim.
  */
 const REFUSAL_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
-    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes', 'decisionsNeeded', 'commits',
+    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes', 'decisionsNeeded', 'commits', 'artifactIds',
     'handoffNotes.intent', 'handoffNotes.conflictGuidance', 'handoffNotes.touchedFiles', 'handoffNotes.followUps',
 ]);
 const REFUSAL_FIELDS_MAX = 16;

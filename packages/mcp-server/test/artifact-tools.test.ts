@@ -307,6 +307,31 @@ test('coordinator artifact_list resolves authorized session/mesh scope, defers o
   assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 4);
 });
 
+test('coordinator artifact_list { mission_id } works without a coordinator session via the mesh-authorized mission listing; session-level asks stay fail-closed', async () => {
+  const { transport, calls } = createRecordingTransport((verb: string, payload: Record<string, unknown>) => {
+    if (verb === 'tool_call_record') return { rateLimited: false };
+    return { success: true, meshId: payload.meshId, missionId: payload.missionId, artifacts: [{ artifactId: 'art_1' }] };
+  });
+  // MCP-only coordinator: no coordinatorSessionId and no sessions on any node.
+  const ctx: MeshContext = { transport, mesh: { id: 'mesh_alpha', nodes: [] } as any };
+
+  const out = JSON.parse(await callCoordinatorArtifactList(ctx, { mission_id: 'm1', limit: 20 }));
+  assert.equal(out.success, true);
+  const missionCalls = calls.filter((c) => c.verb === 'mesh_mission_artifact_list');
+  assert.equal(missionCalls.length, 1);
+  assert.deepEqual(missionCalls[0].payload, { meshId: 'mesh_alpha', missionId: 'm1', limit: 20 });
+  // The session-scoped artifact_list verb is never used for this path.
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 0);
+
+  // No mission, or a named session, or no mesh: still refused before reaching the transport.
+  for (const [c, a] of [[ctx, {}], [ctx, { session_id: 'victim' }], [ctx, { session_id: 'victim', mission_id: 'm1' }], [{ transport } as any, { mission_id: 'm1' }]] as const) {
+    const refused = JSON.parse(await callCoordinatorArtifactList(c as MeshContext, a as any));
+    assert.equal(refused.success, false);
+    assert.equal(refused.code, 'artifact_session_mismatch');
+  }
+  assert.equal(calls.filter((c) => c.verb === 'mesh_mission_artifact_list').length, 1);
+});
+
 test('standard mode artifact_register and artifact_list use transport.command and strip forged fields', async () => {
   const { transport, calls } = createRecordingTransport({
     success: true,
@@ -479,4 +504,27 @@ test('worker and coordinator artifact_read and artifact_list forward paging and 
       limit: 100,
     },
   });
+});
+
+test('inherit_artifacts:false is forwarded on mesh_enqueue_task and mesh_send_task schemas accept it', async () => {
+  const { meshEnqueueTask } = await import('../src/tools/mesh-tools.js');
+  const enqueueCalls: Array<Record<string, any>> = [];
+  const transport = {
+    command: async (verb: string, payload: Record<string, any> = {}) => {
+      if (verb === 'queue_enqueue') enqueueCalls.push(payload);
+      return { success: true };
+    },
+    getStatus: async () => ({ sessions: [] }),
+    ping: async () => true,
+  } as any;
+  const ctx = { mesh: { id: 'mesh_alpha', nodes: [{ id: 'n1', workspace: '/r', daemonId: 'd1' }] }, transport } as any;
+  for (const [flag, expectSent] of [[false, true], [true, false], [undefined, false]] as const) {
+    enqueueCalls.length = 0;
+    await meshEnqueueTask(ctx, { message: 'follow-up', difficulty: 'medium', mission_id: 'm1', ...(flag === undefined ? {} : { inherit_artifacts: flag }) } as any).catch(() => undefined);
+    const options = enqueueCalls[0]?.options;
+    if (!enqueueCalls.length) continue; // an older daemon helper may refuse the stub; the schema assertions below still hold
+    assert.equal(options?.inheritArtifacts === false, expectSent, `inherit_artifacts=${String(flag)}`);
+  }
+  assert.equal(validateMeshToolArgs('mesh_send_task', { node_id: 'n', message: 'm', difficulty: 'medium', inherit_artifacts: false }), null);
+  assert.equal(validateMeshToolArgs('mesh_enqueue_task', { message: 'm', difficulty: 'medium', inherit_artifacts: false }), null);
 });

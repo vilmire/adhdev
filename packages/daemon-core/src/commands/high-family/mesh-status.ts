@@ -95,6 +95,7 @@ import {
     overlayMeshNodeGitObservations,
 } from './mesh-status-node-state.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { getInputArtifactDispatchStats } from '../../mesh/mesh-input-artifacts.js';
 
 /**
  * The `sections: ['nodes']` answer: node statuses (+ the held-runtime marker and
@@ -341,7 +342,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // chunk ceiling). Summarize at the read, before anything downstream sees it.
                     const rawQueue = getQueue(meshId, { status: ['pending', 'assigned'] });
                     const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map(task => ({ ...summarizeQueueEntryInputForView(task), ...(task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {}) }));
-                    const queueSummary = getMeshQueueStats(meshId);
+                    const queueSummary = { ...getMeshQueueStats(meshId), inputArtifacts: getInputArtifactDispatchStats(meshId) };
 
                     // Scheduling-runtime projection — the load-balancer's live view (tie-break
                     // strategy, global parallel caps + consumption, per-node load/priority/provider

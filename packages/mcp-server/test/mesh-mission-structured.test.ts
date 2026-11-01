@@ -192,7 +192,9 @@ test('report_completion: new optional fields are forwarded only when the worker 
         outcome: 'completed', summary: 'done', touched_files: ['a.ts'],
         decisions_needed: [{ question: 'Which DB?', options: [{ label: 'sqlite' }, { label: 'pg' }] }],
         commits: ['abc1234'],
+        artifact_ids: ['art_0123456789abcdef'],
     });
     assert.deepEqual(rich.last.report.commits, ['abc1234']);
+    assert.deepEqual(rich.last.report.artifactIds, ['art_0123456789abcdef']);
     assert.equal(rich.last.report.decisionsNeeded[0].question, 'Which DB?');
 });

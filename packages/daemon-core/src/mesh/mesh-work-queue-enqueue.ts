@@ -3,6 +3,7 @@
 // materialises), with the dependency / difficulty validation they share. Split
 // out of mesh-work-queue.ts (re-exported there).
 
+import { isArtifactInheritanceEnabled, mergeInputArtifactIds, resolveInheritedArtifactIds } from './mesh-input-artifacts.js';
 import { readQueue, withQueueLock, scheduleMissionCloseCandidateCheck } from './mesh-work-queue.js';
 import {
     type MeshTaskDifficulty,
@@ -140,7 +141,8 @@ export function enqueueTask(
     }
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
-    const inputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
+    const explicitInputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
+    const inheritArtifacts = isArtifactInheritanceEnabled(opts);
     // H1: normalize path ownership once, at the single enqueue choke point (mirrors
     // dependsOn above). An absent/empty declaration stores nothing on the entry —
     // opt-in only, per normalizeOwnedPaths's own backward-compat contract.
@@ -195,6 +197,11 @@ export function enqueueTask(
         const missionIdForScope = typeof opts?.missionId === 'string' && opts.missionId.trim() ? opts.missionId.trim() : undefined;
         const contractTags = contractRequiredTagsForNewTask(meshId, id, missionIdForScope, dependsOn);
         const resolvedRequiredTags = contractTags.length ? normalizeMeshCapabilityTags([...callerTags, ...contractTags]) : callerTags;
+        // Evidence handoff: a mission task inherits what earlier tasks of the same mission
+        // produced (bounded, same-mesh/same-mission only) unless it opted out.
+        const inputArtifactIds = inheritArtifacts && missionIdForScope
+            ? mergeInputArtifactIds(explicitInputArtifactIds, resolveInheritedArtifactIds(meshId, missionIdForScope, { excludeTaskId: id, explicit: explicitInputArtifactIds }))
+            : explicitInputArtifactIds;
         const entry: MeshWorkQueueEntry = {
             id,
             meshId,
@@ -208,6 +215,7 @@ export function enqueueTask(
             ...(ownedPaths ? { ownedPaths } : {}),
             ...(dependsOn.length > 0 ? { dependsOn } : {}),
             ...(inputArtifactIds.length > 0 ? { inputArtifactIds } : {}),
+            ...(!inheritArtifacts ? { inheritArtifacts: false as const } : {}),
             // G6: only persist a non-default priority so legacy/normal rows stay minimal.
             ...(priority && priority !== 'normal' ? { priority } : {}),
             // G7: hold-until gate (stored ISO). Omitted when absent/immediate.
@@ -362,6 +370,9 @@ export function recordDirectDispatchTask(
         /** OD-4 (artifact sharing): artifact ids (any mission) this task's worker may read. */
         inputArtifactIds?: string[];
         input_artifact_ids?: string[];
+        /** Opt out of mission artifact auto-inherit (see MeshEnqueueTaskOptions.inheritArtifacts). */
+        inheritArtifacts?: boolean;
+        inherit_artifacts?: boolean;
         dispatchedAt?: string;
         /**
          * C2/C-W7: the attempt this dispatch delivers, opened by the CALLER before
@@ -404,7 +415,8 @@ export function recordDirectDispatchTask(
     // H1: same normalization as enqueueTask (see the note on MeshEnqueueTaskOptions.ownedPaths).
     const directOwnedPathsResult = normalizeOwnedPaths(opts.ownedPaths);
     const directOwnedPaths = directOwnedPathsResult.declaration.paths.length > 0 ? directOwnedPathsResult.declaration : undefined;
-    const directInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
+    const explicitDirectInputArtifactIds = normalizeInputArtifactIds(opts.inputArtifactIds ?? opts.input_artifact_ids);
+    const directInheritArtifacts = isArtifactInheritanceEnabled(opts);
     return withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)) {
             // Already materialised (e.g. retry of the same dispatch) — leave it untouched.
@@ -415,6 +427,9 @@ export function recordDirectDispatchTask(
         // (no binding ⇒ missing evidence) instead of silently compat-open. mesh_send_task
         // refuses such missions up front; this is the daemon-side backstop.
         contractRequiredTagsForNewTask(meshId, taskId, missionId || undefined, []);
+        const directInputArtifactIds = directInheritArtifacts && missionId
+            ? mergeInputArtifactIds(explicitDirectInputArtifactIds, resolveInheritedArtifactIds(meshId, missionId, { excludeTaskId: taskId, explicit: explicitDirectInputArtifactIds }))
+            : explicitDirectInputArtifactIds;
         const entry: MeshWorkQueueEntry = {
             id: taskId,
             meshId,
@@ -424,6 +439,7 @@ export function recordDirectDispatchTask(
             ...(readonly ? { readonly: true } : {}),
             ...(missionId ? { missionId } : {}),
             ...(directInputArtifactIds.length > 0 ? { inputArtifactIds: directInputArtifactIds } : {}),
+            ...(!directInheritArtifacts ? { inheritArtifacts: false as const } : {}),
             ...(directOwnedPaths ? { ownedPaths: directOwnedPaths } : {}),
             difficulty: taskDifficulty,
             ...(opts.assignedNodeId ? { targetNodeId: opts.assignedNodeId, assignedNodeId: opts.assignedNodeId } : {}),

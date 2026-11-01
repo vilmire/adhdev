@@ -106,6 +106,15 @@ describe('renderWorkerProtocolFooter — MCP usage audit (workspace/refusal/touc
         expect(footer).toMatch(/refusal records nothing/)
     })
 
+    it('asks the worker to register findings as artifacts and cite them in report_completion (tool footer only)', () => {
+        const footer = renderWorkerProtocolFooter({ taskId: 't1' })
+        expect(footer).toContain('`artifact_register`')
+        expect(footer).toContain('`artifact_ids`')
+        expect(footer).toMatch(/inherits them/)
+        // The no-worker-MCP footer does not send the worker looking for tools it cannot call.
+        expect(renderWorkerProtocolFooter({ taskId: 't1', workerMcp: false })).not.toContain('artifact_register')
+    })
+
     it('states the touched_files rule: required on completed+code-changing, [] means nothing changed, not needed on blocked/failed', () => {
         const footer = renderWorkerProtocolFooter({ taskId: 't1' })
         expect(footer).toMatch(/`touched_files`/)

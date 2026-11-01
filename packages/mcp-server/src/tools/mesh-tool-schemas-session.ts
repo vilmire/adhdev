@@ -22,6 +22,7 @@ export const MESH_SEND_TASK_TOOL = {
             readonly: { type: 'boolean', description: 'Read-only axis (any task_mode): no write isolation, read-only cap, exempt from the per-node write limit and the dirty/stale gates, rejects write instructions. The worker\'s own tools are NOT restricted.' },
             owned_paths: { type: 'array', items: { type: 'string' }, description: 'As mesh_enqueue_task: repo-relative files/dirs (trailing /** = subtree) this code_change task touches; opt-in, not routing — feeds the overlap check and the touched_files comparison.' },
             input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Artifact ids this task may read (any mission, OD-4).' },
+            inherit_artifacts: { type: 'boolean', description: 'Default true: a task with mission_id automatically also receives (up to 12, newest first) the artifacts earlier tasks of the SAME mission produced. false = only input_artifact_ids.' },
             mission_id: { type: 'string', description: 'Full/exact mission id (attributes the task and its completion); unresolvable → REJECTED (mission_not_found).' },
             difficulty: { ...enumOf(MESH_TASK_DIFFICULTIES), description: 'REQUIRED. Does not route here; recorded for analytics, mission aggregates and recovery relaunch (inherited from the ledger).' },
             delivery_mode: {

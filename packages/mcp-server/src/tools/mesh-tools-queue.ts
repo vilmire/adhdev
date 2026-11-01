@@ -149,6 +149,8 @@ interface EnqueueTaskArgsShape {
     owned_paths?: unknown; ownedPaths?: unknown;
     /** OD-4 (artifact sharing) — artifact IDs (any mission) this worker task may read. */
     input_artifact_ids?: unknown; inputArtifactIds?: unknown;
+    /** Opt out of mission artifact auto-inherit: `false` keeps the task's input artifacts to the explicit ids. */
+    inherit_artifacts?: unknown; inheritArtifacts?: unknown;
 }
 
 interface NormalizedEnqueueTaskArgs {
@@ -160,6 +162,8 @@ interface NormalizedEnqueueTaskArgs {
     requiredTags: string[];
     dependsOn: string[] | undefined;
     inputArtifactIds: string[] | undefined;
+    /** `false` = opt out of mission artifact auto-inherit; undefined = default (inherit). */
+    inheritArtifacts: false | undefined;
     missionId: string | undefined;
     priority: ReturnType<typeof normalizeMeshTaskPriority> | undefined;
     model: string | undefined;
@@ -325,10 +329,11 @@ async function normalizeEnqueueTaskArgs(
     const ownedPaths = Array.isArray(rawOwnedPaths) ? (rawOwnedPaths as string[]) : undefined;
     const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
     const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? (rawInputArtifactIds as string[]) : undefined;
+    const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false as const : undefined;
     return {
         ok: true,
         value: {
-            message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, missionId, priority,
+            message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
             explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
         },
@@ -391,7 +396,7 @@ export async function meshEnqueueTask(
         return respond({ success: false, code: normalized.code, error: normalized.error, ...(normalized.extra ?? {}) });
     }
     const {
-        message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, missionId, priority,
+        message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
         explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
     } = normalized.value;
@@ -426,7 +431,7 @@ export async function meshEnqueueTask(
             meshId: ctx.mesh.id,
             message,
             options: {
-                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, ...(inputArtifactIds ? { inputArtifactIds } : {}), missionId, targetNodeId,
+                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, ...(inputArtifactIds ? { inputArtifactIds } : {}), ...(inheritArtifacts === false ? { inheritArtifacts: false } : {}), missionId, targetNodeId,
                 ...(priority ? { priority } : {}),
                 ...(model ? { model } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -642,6 +647,7 @@ export async function meshEnqueueBatch(
             // tool forwards.
             ...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {}),
             ...(v.inputArtifactIds ? { inputArtifactIds: v.inputArtifactIds } : {}),
+            ...(v.inheritArtifacts === false ? { inheritArtifacts: false } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
     }

@@ -282,6 +282,21 @@ export async function callCoordinatorArtifactList(
     const meshId = trimString(ctx.mesh?.id);
     const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
 
+    // MCP-only coordinator (no coordinator session, no live roster sessions): it can still
+    // discover a mission's artifacts through the mesh-authorized `mesh_mission_artifact_list`
+    // (mesh+mission scoped; the daemon returns only records bound to this mesh and mission).
+    // artifact_list itself, and any session-level request below, still require an authorized session.
+    if (meshId && authorizedSessions.size === 0 && requestedMissionId && !requestedSessionId) {
+        const missionLimit =
+            typeof args.limit === 'number' && Number.isFinite(args.limit) && args.limit > 0 ? Math.trunc(args.limit) : undefined;
+        const missionResult = await ctx.transport.command('mesh_mission_artifact_list', {
+            meshId,
+            missionId: requestedMissionId,
+            ...(missionLimit !== undefined ? { limit: missionLimit } : {}),
+        });
+        return JSON.stringify(missionResult, null, 2);
+    }
+
     if (!meshId || authorizedSessions.size === 0) {
         return JSON.stringify(
             {

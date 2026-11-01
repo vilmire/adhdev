@@ -43,6 +43,7 @@ import { composeTaskDispatchBody } from './worker-handoff-notes.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { getMeshMission } from './mesh-missions.js';
 import { buildUpstreamResultsAppendix } from './mesh-upstream-results.js';
+import { buildInputArtifactManifestAppendix, mergeInputArtifactIds, resolveInheritedArtifactIds } from './mesh-input-artifacts.js';
 
 function readNonEmpty(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -65,12 +66,18 @@ export interface DispatchableTask {
     touchedFiles?: unknown;
     /** Queue-level predecessors — drives the D4 "Upstream results" appendix. */
     dependsOn?: unknown;
+    /** OD-4 input artifacts (explicit + already-inherited) — drives the "Input artifacts" manifest. */
+    inputArtifactIds?: string[];
+    /** `false` = the task opted out of mission artifact auto-inherit. */
+    inheritArtifacts?: boolean;
 }
 
 /**
  * The body to actually send for this task:
  *
  *   1. `task.message` — the coordinator's authored text, verbatim;
+ *   1b. the "Input artifacts" manifest (mesh-input-artifacts.ts), when the task
+ *      carries explicit or mission-inherited input artifacts;
  *   2. the "Upstream results" appendix (D4, mesh-upstream-results.ts), when
  *      the task has predecessors (queue `dependsOn`) —
  *      their accepted completion summaries in untrusted-evidence envelopes;
@@ -119,6 +126,19 @@ export function resolveDispatchMessage(
         if (upstream) messageWithUpstream = `${task.message}\n\n---\n\n${upstream}`;
     } catch (e: any) {
         LOG.warn('UpstreamResults', `Failed to build upstream results for ${task.id}: ${e?.message || e}`);
+    }
+
+    // Evidence handoff: manifest of the artifacts earlier work in this mission left for the
+    // task (explicit + inherited). Best-effort, like the appendices around it.
+    try {
+        const explicitIds = Array.isArray(task.inputArtifactIds) ? task.inputArtifactIds : [];
+        const ids = task.inheritArtifacts !== false && task.missionId
+            ? mergeInputArtifactIds(explicitIds, resolveInheritedArtifactIds(meshId, task.missionId, { excludeTaskId: task.id, explicit: explicitIds }))
+            : explicitIds;
+        const manifest = ids.length > 0 ? buildInputArtifactManifestAppendix(meshId, { id: task.id, inputArtifactIds: ids }) : null;
+        if (manifest) messageWithUpstream = `${messageWithUpstream}\n\n---\n\n${manifest}`;
+    } catch (e: any) {
+        LOG.warn('InputArtifacts', `Failed to build input-artifact manifest for ${task.id}: ${e?.message || e}`);
     }
 
     let body = messageWithUpstream;
