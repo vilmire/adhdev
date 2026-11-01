@@ -121,6 +121,9 @@ jobs:
       - name: Build ghostty-vt-node
         env:
           ADHDEV_GHOSTTY_VT_FORCE_COMPILE: '1'
+          # Keep darwin binaries loadable on older macOS (value mirrors scripts/macos-min-version.mjs;
+          # the build script sets it too, and verify-prebuilt fails if minos exceeds it).
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: npm run build -w packages/ghostty-vt-node
 
       - name: Test ghostty-vt-node

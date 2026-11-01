@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { withMacosDeploymentTarget } from './macos-min-version.mjs';
 import { emitPrebuilt } from './prebuilt-manifest.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -193,7 +194,8 @@ if (forceCompile) {
 console.log(`[ghostty-vt-node] compiling ${triplet} (${decision.reason}) via ${command} ${args.join(' ')}`);
 const result = spawnSync(command, args, {
   cwd: packageDir,
-  env: process.env,
+  // darwin: pin the deployment target so the addon loads on older macOS (see macos-min-version.mjs).
+  env: withMacosDeploymentTarget(process.env),
   stdio: 'inherit',
 });
 
