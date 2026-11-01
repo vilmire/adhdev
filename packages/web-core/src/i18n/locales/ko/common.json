@@ -1086,6 +1086,8 @@
         "blueprint": {
             "schedPrediction": "예측",
             "readonlyBadge": "읽기 전용",
+            "lightBadge": "라이트",
+            "lightLanding": { "ready": "착륙 대기", "conflict": "충돌", "blocked": "차단됨", "landed": "착륙됨", "discarded": "폐기됨" },
             "schedObservedAt": "{{time}} 기준",
             "schedNoNodes": "라우팅 가능한 노드가 없습니다.",
             "schedQuotaButton": "쿼터",

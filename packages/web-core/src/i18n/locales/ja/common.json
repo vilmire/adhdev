@@ -1086,6 +1086,8 @@
         "blueprint": {
             "schedPrediction": "予測",
             "readonlyBadge": "読み取り専用",
+            "lightBadge": "ライト",
+            "lightLanding": { "ready": "着地待ち", "conflict": "競合", "blocked": "ブロック", "landed": "着地済み", "discarded": "破棄" },
             "schedObservedAt": "{{time}} 時点",
             "schedNoNodes": "ルーティング可能なノードがありません。",
             "schedQuotaButton": "クォータ",

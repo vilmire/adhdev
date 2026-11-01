@@ -131,7 +131,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             {/* Badge row — only rendered when it has something to say. */}
             {(row.awaitingApproval || row.awaitingChoice || row.dependencyFailureCount > 0
                 || row.waitingOn.length > 0 || row.missingDeps.length > 0 || pinnedSlot || task.difficulty
-                || (task.priority && task.priority !== 'normal') || task.readonly || task.taskMode === 'live_debug_readonly'
+                || (task.priority && task.priority !== 'normal') || task.readonly || task.taskMode === 'live_debug_readonly' || task.light
                 || missionTitle || provider || nodeLabel) && (
                 <div className="flex min-w-0 flex-wrap items-center gap-1 pl-4">
                     {row.awaitingApproval && (
@@ -170,6 +170,8 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                     )}
                     {task.difficulty && <span className={neutralChip()}>{task.difficulty}</span>}
                     {task.priority && task.priority !== 'normal' && <span className={neutralChip()}>{task.priority}</span>}
+                    {task.light && <span className={neutralChip()}>{t('mesh.blueprint.lightBadge')}</span>}
+                    {task.light && task.lightResult?.landing && <span className={task.lightResult.landing === 'ready' || task.lightResult.landing === 'landed' ? neutralChip() : amberChip()}>{t(`mesh.blueprint.lightLanding.${task.lightResult.landing}`, { defaultValue: task.lightResult.landing })}</span>}
                     {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip()}>{t('mesh.blueprint.readonlyBadge')}</span>}
                     {missionTitle && task.missionId && (
                         <button

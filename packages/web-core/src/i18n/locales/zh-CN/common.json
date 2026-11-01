@@ -1086,6 +1086,8 @@
         "blueprint": {
             "schedPrediction": "预测",
             "readonlyBadge": "只读",
+            "lightBadge": "轻量",
+            "lightLanding": { "ready": "待合入", "conflict": "冲突", "blocked": "已阻止", "landed": "已合入", "discarded": "已丢弃" },
             "schedObservedAt": "截至 {{time}}",
             "schedNoNodes": "没有可路由的节点。",
             "schedQuotaButton": "配额",

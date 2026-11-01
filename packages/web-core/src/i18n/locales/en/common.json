@@ -1086,6 +1086,8 @@
         "blueprint": {
             "schedPrediction": "Prediction",
             "readonlyBadge": "read-only",
+            "lightBadge": "light",
+            "lightLanding": { "ready": "ready to land", "conflict": "conflict", "blocked": "blocked", "landed": "landed", "discarded": "discarded" },
             "schedObservedAt": "as of {{time}}",
             "schedNoNodes": "No routable nodes.",
             "schedQuotaButton": "Quota",
