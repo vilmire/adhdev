@@ -263,7 +263,7 @@ describe('KeyedChatSessionState — bounded first tail SNAP (2026-10-29)', () =>
         const frame = driver.step(observation(specs))!;
         expect(frame.capped).toBe(true);
         expect(driver.state.liveBytes()).toBeLessThanOrEqual(CHAT_LIVE_BYTES_MAX);
-        expect(CHAT_LIVE_BYTES_MAX).toBeLessThanOrEqual(2 * 1024 * 1024);
+        expect(CHAT_LIVE_BYTES_MAX).toBeLessThanOrEqual(512 * 1024);
         const live = frame.commit.liveCount;
         expect(live).toBeGreaterThan(100);
         expect(live).toBeLessThan(4283);

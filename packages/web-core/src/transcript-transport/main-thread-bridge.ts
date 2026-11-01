@@ -38,6 +38,13 @@ export interface MainThreadBridgeOptions {
 export interface MainThreadBridgeHandle {
     /** Number of frames currently buffered, waiting for the transport to open. */
     pendingCount(): number;
+    /**
+     * Clock (`Date.now()`) of the last inbound frame, or null before the first.
+     * Opaque liveness only (the bytes are never read): a lane still receiving
+     * is mid-transfer, which callers use to avoid abandoning a large in-flight
+     * SNAP on a slow relay.
+     */
+    lastReceivedAt(): number | null;
     close(): void;
 }
 
@@ -60,6 +67,7 @@ export function bridgeTranscriptTransport(
     const cap = options.preOpenQueueCap ?? DEFAULT_PRE_OPEN_QUEUE_CAP;
     const preOpen: string[] = [];
     let closed = false;
+    let lastRxAt: number | null = null;
 
     const flushPreOpen = (): void => {
         for (const frame of preOpen.splice(0)) transport.send(frame);
@@ -99,7 +107,10 @@ export function bridgeTranscriptTransport(
         // the design's wire format is JSON text (§3.3) carried as string
         // frames (§3.6 "seqscribe Channel contract"); a transport delivering
         // anything else here is outside the current wire contract.
-        if (typeof raw === 'string') workerPort.postMessage(raw);
+        if (typeof raw === 'string') {
+            lastRxAt = Date.now();
+            workerPort.postMessage(raw);
+        }
     });
 
     transport.addEventListener('open', () => {
@@ -119,6 +130,7 @@ export function bridgeTranscriptTransport(
         pendingCount(): number {
             return preOpen.length;
         },
+        lastReceivedAt: () => lastRxAt,
         close(): void {
             if (closed) return;
             closed = true;

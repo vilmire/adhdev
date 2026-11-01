@@ -577,9 +577,12 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
     const cue = (readUnconfirmedReading(quota) ? 'unconfirmed' : quotaWindowCue(quota, now)) as QuotaWindowCue | undefined
     // Kept numbers from an idle-expired agy token read "updates on next agy run"
     // instead of the generic stale cue.
-    const agyKept = isAgyShortLivedTokenExpiry(quota) && hasQuotaReading(quota)
+    // agy's token file carries no account identity, so its kept copy often sits in
+    // the unconfirmed-account slot; between runs that is the same "updates on
+    // next agy run" state, not an account question.
+    const agyKept = isAgyShortLivedTokenExpiry(quota) && (hasQuotaReading(quota) || !!readUnconfirmedReading(quota))
     const fmt: QuotaTextFormatter = agyKept
-        ? { ...baseFmt, cue: (c, n) => (c === 'stale' ? baseFmt.agyUpdatesOnNextRun() : baseFmt.cue(c, n)) }
+        ? { ...baseFmt, cue: (c, n) => (c === 'stale' || c === 'unconfirmed' ? baseFmt.agyUpdatesOnNextRun() : baseFmt.cue(c, n)) }
         : baseFmt
     const { quota: shown, unconfirmed } = prepareDisplayQuota(quota)
     const nextCheckAt = cue === 'stale' ? quotaNextCheckAt(shown, now) : undefined

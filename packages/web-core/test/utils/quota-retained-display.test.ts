@@ -84,6 +84,15 @@ describe('antigravity idle-expired token', () => {
         expect(labels.every(l => l.includes('updates on next agy run') && l.includes('3h 0m ago'))).toBe(true)
         expect(labels.join(' ')).not.toMatch(/stale|token expired/i)
     })
+    it('a kept copy in the unconfirmed-account slot also reads "updates on next agy run", not "account unconfirmed"', () => {
+        const quota = { ...base, session: null, weekly: null, buckets: [], metadata: { ...base.metadata, unconfirmedReading: { measuredAt: NOW - 34 * 60_000, buckets } } } as unknown as MeshNodeFactsProviderQuota
+        const model = buildQuotaDisplayModel(quota, NOW)
+        expect(model.kind).toBe('chips')
+        const labels = model.chips.map(shortQuotaChipLabel)
+        expect(labels.length).toBe(3)
+        expect(labels.every(l => l.includes('updates on next agy run') && l.includes('34m ago'))).toBe(true)
+        expect(labels.join(' ')).not.toMatch(/unconfirmed/i)
+    })
     it('without any earlier reading says to run agy once, not "token expired"', () => {
         const quota = { ...base, session: null, weekly: null, buckets: [] } as unknown as MeshNodeFactsProviderQuota
         const model = buildQuotaDisplayModel(quota, NOW)

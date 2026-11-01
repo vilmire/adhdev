@@ -116,6 +116,12 @@ export interface TranscriptWorkerHostOptions {
 export interface TranscriptWorkerHostHandle {
     /** Frames buffered on the main→transport hop, awaiting transport open. */
     pendingCount(): number;
+    /**
+     * `Date.now()` of the last wire frame received from the daemon, or null.
+     * Content-blind liveness: a lane that is still receiving is mid-transfer
+     * (e.g. a chunked first SNAP crawling over a relay).
+     */
+    lastWireReceiveAt(): number | null;
     /** True until `stop()`. */
     running(): boolean;
     /**
@@ -179,6 +185,7 @@ export function startTranscriptWorkerHost(
 
     return {
         pendingCount: () => bridge?.pendingCount() ?? 0,
+        lastWireReceiveAt: () => bridge?.lastReceivedAt() ?? null,
         running: () => !stopped,
         activateSessions(sessionIds: readonly string[], ownerDaemonId?: string): void {
             if (stopped) return;

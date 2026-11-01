@@ -157,3 +157,20 @@ describe('bridgeTranscriptTransport', () => {
         ])
     })
 })
+
+describe('bridge wire-liveness (slow-relay SNAP in progress)', () => {
+    it('lastReceivedAt is null before any frame and tracks the last inbound string frame', () => {
+        const transport = new FakeTransport()
+        const worker = fakeWorkerPort()
+        const bridge = bridgeTranscriptTransport(transport as never, worker.port)
+        expect(bridge.lastReceivedAt()).toBeNull()
+        const before = Date.now()
+        transport.emit('message', { data: '{"t":"SNAP"}' })
+        const at = bridge.lastReceivedAt()
+        expect(at).not.toBeNull()
+        expect(at!).toBeGreaterThanOrEqual(before)
+        transport.emit('message', { data: new ArrayBuffer(4) }) // non-string frames are outside the wire contract
+        expect(bridge.lastReceivedAt()).toBe(at)
+    })
+})
+

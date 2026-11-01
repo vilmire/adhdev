@@ -57196,6 +57196,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           unacked = [];
           outQueue = [];
           retryTimer = null;
+          // Clock of the last ACK that retired at least one frame. Stall detection counts
+          // an advancing ACK as progress (see stallCheck).
+          lastAckProgressAt = 0;
           // data lane — receiver
           recvContigMid = 0;
           recvBuffer = /* @__PURE__ */ new Map();
@@ -57369,7 +57372,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (this.stateNow === "closed")
               return;
             const oldest = this.unacked[0];
-            if (oldest && this.o.clock() - oldest.at > this.c.CHANNEL_STALL_MS) {
+            const sinceProgress = Math.max(oldest ? oldest.at : 0, this.lastAckProgressAt);
+            if (oldest && this.o.clock() - sinceProgress > this.c.CHANNEL_STALL_MS) {
               this.close("stall");
               return;
             }
@@ -57476,6 +57480,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
               while (i < this.unacked.length && this.unacked[i].mid <= m.upTo)
                 i++;
               this.unacked.splice(0, i);
+              if (i > 0)
+                this.lastAckProgressAt = this.o.clock();
               this.pumpData();
               if (this.hasSendCapacity())
                 this.o.onCapacity?.(this);
@@ -109224,7 +109230,7 @@ ${result.stderr}`, result.code);
         CHAT_META_KEY = "meta";
         CHAT_COMMIT_KEY = "commit";
         CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
-        CHAT_LIVE_BYTES_MAX = 2 * 1024 * 1024;
+        CHAT_LIVE_BYTES_MAX = 512 * 1024;
         CHAT_META_TEXT_MAX = 16 * 1024;
         CHAT_META_LABEL_MAX = 1024;
         CHAT_META_LIST_MAX = 32;

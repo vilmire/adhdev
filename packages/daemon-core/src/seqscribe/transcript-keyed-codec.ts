@@ -92,7 +92,7 @@ export const CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
 
 /**
  * Live bytes kept per session (owner decision Q1, §11; lowered 16 MiB -> 2 MiB
- * on 2026-10-29). Beyond it the oldest bubbles are tombstoned and
+ * on 2026-10-29, then 2 MiB -> 512 KiB on 2026-11-01). Beyond it the oldest bubbles are tombstoned and
  * `coverage.omittedBefore` turns true; the full record stays in the provider's
  * own history file (dashboards page older rows through `chat_history`).
  *
@@ -105,10 +105,20 @@ export const CHAT_PART_MAX_JCS_BYTES = 24 * 1024;
  * (SHA-256 over ALL live (id, rev) pairs, verified by the reader), so the
  * digest-preserving way to bound the SNAP is to bound the live set itself:
  * the oldest bubbles are tombstoned (omittedBefore=true) and old rows come
- * from `chat_history`. Trade-off: keyed-lane readers see ~2 MiB of recent
+ * from `chat_history`. Trade-off: keyed-lane readers see ~512 KiB of recent
  * bubbles instead of ~16 MiB; the provider history file is unchanged.
+ *
+ * Why 512 KiB (2026-11-01): a ~1 MiB first SNAP (base64 + JSON ≈ 1.8 MiB on the
+ * wire) of a long coordinator transcript never finished over a slow TURN relay
+ * — the lane was torn down (stall/transport) and each reattach restarted the
+ * transfer, so the pane stayed at `awaiting-first-view`. The stall detector
+ * now counts ACK progress (seqscribe session.ts), but the first view should
+ * also be small: 512 KiB keeps the newest ~hundreds of bubbles, which is
+ * what a pane shows first, and compatibility is unchanged — it only changes
+ * how many bubbles the producer keeps live; older and newer readers fold it
+ * exactly like any other `omittedBefore` transcript.
  */
-export const CHAT_LIVE_BYTES_MAX = 2 * 1024 * 1024;
+export const CHAT_LIVE_BYTES_MAX = 512 * 1024;
 
 /** Presentation strings in `meta` are bounded so the entry stays far below 64 KiB. */
 export const CHAT_META_TEXT_MAX = 16 * 1024;
