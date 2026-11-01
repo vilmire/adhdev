@@ -59,6 +59,7 @@ import {
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import type { MeshLedgerEntry } from '../../mesh/mesh-ledger.js';
 import { meshRecord } from '../../mesh/mesh-record.js';
+import { presentRefineFailureKinds, storedKindsForRequest } from '../../mesh/mesh-refine-failure-kind.js';
 import { getLocalRecordSummary, getSessionRecoveryContext, readLocalRecords, recoveryContextRecords } from '../../mesh/mesh-local-records.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { getLastQuotaRanking } from '../../mesh/mesh-quota-ranking-records.js';
@@ -139,12 +140,19 @@ const ledgerQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
     const req = decodeLedgerQueryRequest(args);
     if (!req) return badRequest('ledger_query');
     try {
-        const entries = readLocalRecords(req.meshId, {
-            ...(req.tail !== undefined ? { tail: req.tail } : {}),
+        // Refinery job failures are stored as `task_failed`; the history shows them as
+        // their own `refine_job_failed` kind and keeps them out of `task_failed`. When the
+        // request can involve them, over-read so the post-filter tail still fills.
+        const storedKinds = storedKindsForRequest(req.kind);
+        const refineSensitive = !storedKinds || storedKinds.includes('task_failed');
+        const readTail = req.tail !== undefined && refineSensitive ? Math.min(req.tail * 4, 2000) : req.tail;
+        let entries = presentRefineFailureKinds(readLocalRecords(req.meshId, {
+            ...(readTail !== undefined ? { tail: readTail } : {}),
             ...(req.since !== undefined ? { since: req.since } : {}),
-            ...(req.kind ? { kind: [...req.kind] as MeshLedgerEntry['kind'][] } : {}),
+            ...(storedKinds ? { kind: storedKinds as MeshLedgerEntry['kind'][] } : {}),
             ...(req.node ? { node: req.node } : {}),
-        });
+        }), req.kind);
+        if (req.tail !== undefined && entries.length > req.tail) entries = entries.slice(-req.tail);
         const response: LedgerQueryResponse = {
             entries: entries.map(toLedgerQueryEntry).filter((e): e is LedgerQueryEntryWire => e !== null),
             ...(req.includeSummary ? { summary: getLocalRecordSummary(req.meshId) } : {}),

@@ -24,6 +24,7 @@ vi.mock('../../src/config/config.js', () => ({
 
 import { MAX_LEDGER_SLICE_LIMIT, isIntentionalCleanupStopEntry } from '../../src/mesh/mesh-ledger.js';
 import { readLocalRecords, readLocalRecordSlice, getLocalRecordSummary, readTurnTerminalViews, readRefineJobRecords, pruneLocalRecords } from '../../src/mesh/mesh-local-records.js';
+import { presentRefineFailureKinds, storedKindsForRequest } from '../../src/mesh/mesh-refine-failure-kind.js';
 import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
@@ -275,6 +276,28 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             const summary = getLocalRecordSummary(testMeshId);
             expect(summary.taskFailed).toBe(1);
             expect(summary.recentFailures).toBe(1);
+        });
+
+        it('counts failed refine jobs in refineFailed, apart from taskFailed and recentFailures', () => {
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { source: 'refine_mesh_node_async_job', status: 'failed' } });
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { source: 'refine_mesh_node_async_job', status: 'failed' } });
+            seedLocalRecord(testMeshId, { kind: 'task_completed', payload: { source: 'refine_mesh_node_async_job' } });
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: {} });
+            const summary = getLocalRecordSummary(testMeshId);
+            expect(summary.refineFailed).toBe(2);
+            expect(summary.taskFailed).toBe(1);
+            expect(summary.recentFailures).toBe(1);
+        });
+
+        it('task history presentation: refine failures are their own kind and leave task_failed', () => {
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { source: 'refine_mesh_node_async_job', status: 'failed' } });
+            seedLocalRecord(testMeshId, { kind: 'task_failed', payload: { reason: 'x' } });
+            const all = readLocalRecords(testMeshId);
+            expect(presentRefineFailureKinds(all, undefined).map((e) => e.kind).sort()).toEqual(['refine_job_failed', 'task_failed']);
+            const taskOnly = presentRefineFailureKinds(readLocalRecords(testMeshId, { kind: ['task_failed'] }), ['task_failed']);
+            expect(taskOnly.map((e) => e.kind)).toEqual(['task_failed']);
+            const refineOnly = presentRefineFailureKinds(readLocalRecords(testMeshId, { kind: storedKindsForRequest(['refine_job_failed']) as any }), ['refine_job_failed']);
+            expect(refineOnly.map((e) => e.kind)).toEqual(['refine_job_failed']);
         });
 
         it('does not count intentional_cleanup cancellations as taskFailed (regression)', () => {

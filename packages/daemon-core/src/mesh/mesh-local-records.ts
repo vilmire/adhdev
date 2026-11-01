@@ -311,6 +311,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     let taskBlocked = counts.get('task_blocked') ?? 0;
     let taskFailed = 0;
     let taskStalled = 0;
+    let refineFailed = 0;
     let recentFailures = 0;
     const failureRows = (counts.get('task_failed') || counts.get('task_stalled'))
         ? readLocalRecordHeads(meshId, ['task_failed', 'task_stalled'], CLEANUP_STOP_PROJECTION, { turnTerminals: false })
@@ -321,8 +322,11 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         if (isIntentionalCleanupStopEntry(row)) continue;
         // A refine (merge) job is not a task: a rebase conflict a worker then
         // resolved read as a red "Failed" task here. Refine results have their
-        // own card (refine jobs).
-        if (isRefineJobRecord(row)) continue;
+        // own card (refine jobs); the failures are counted apart (`refineFailed`).
+        if (isRefineJobRecord(row)) {
+            if (row.kind === 'task_failed') refineFailed++;
+            continue;
+        }
         if (row.kind === 'task_stalled') { taskStalled++; continue; }
         taskFailed++;
         if (new Date(row.timestamp).getTime() >= recentFailureCutoff) recentFailures++;
@@ -347,6 +351,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         taskCompleted,
         taskBlocked,
         taskFailed,
+        refineFailed,
         taskStalled,
         sessionLaunched: counts.get('session_launched') ?? 0,
         checkpointCreated: counts.get('checkpoint_created') ?? 0,
@@ -355,7 +360,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     };
 }
 
-function isRefineJobRecord(entry: { payload?: Record<string, unknown> | undefined }): boolean {
+export function isRefineJobRecord(entry: { payload?: Record<string, unknown> | undefined }): boolean {
     const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload as Record<string, unknown> : {};
     return payload.source === 'refine_mesh_node_async_job';
 }

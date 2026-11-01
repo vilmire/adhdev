@@ -236,7 +236,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     // the section, never blocks launch.
                     const buildRecentActivityBestEffort = async (id: string) => {
                         try {
-                            const { getLocalRecordSummary, readLocalRecords } = await import('../../mesh/mesh-local-records.js');
+                            const { getLocalRecordSummary, readLocalRecords, isRefineJobRecord } = await import('../../mesh/mesh-local-records.js');
                             const { isIntentionalCleanupStopEntry } = await import('../../mesh/mesh-ledger.js');
                             const { getMeshQueueStats } = await import('../../mesh/mesh-work-queue.js');
                             const summary = getLocalRecordSummary(id);
@@ -244,7 +244,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                             // Failures = the turn ledger's failed commits (+ local task_failed
                             // records, e.g. undeliverable dispatches); a cancel is not a failure.
                             const failureEntries = readLocalRecords(id, { kind: ['task_failed'], tail: 20 })
-                                .filter((e) => !isIntentionalCleanupStopEntry(e))
+                                .filter((e) => !isIntentionalCleanupStopEntry(e) && !isRefineJobRecord(e))
                                 .slice(-5);
                             const recentFailures = failureEntries.map((e) => {
                                 const p = (e.payload || {}) as Record<string, unknown>;

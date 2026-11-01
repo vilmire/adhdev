@@ -393,11 +393,13 @@ export interface MeshLedgerSummary {
     taskCompleted: number;
     taskBlocked?: number;
     taskFailed: number;
+    /** Failed Refinery (merge) jobs — recorded as `task_failed` rows without being tasks; counted here, never in `taskFailed`. */
+    refineFailed?: number;
     taskStalled: number;
     sessionLaunched: number;
     checkpointCreated: number;
     lastActivityAt: string | null;
-    recentFailures: number; // failures in last 30 minutes
+    recentFailures: number; // task failures in last 30 minutes (refine jobs excluded)
 }
 
 export interface ReadLedgerOptions {
