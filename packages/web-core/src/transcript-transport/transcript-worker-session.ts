@@ -96,8 +96,10 @@ export function runTranscriptWorkerSession(
     const openSubscription = (sessionId: string, peer: PeerHandle): void => {
         if (subscriptions.has(sessionId)) return;
         if (peer.state() === 'closed') return; // deferred until a new peer / retryDeferred
-        let handle: TranscriptSessionSubscriptionHandle | undefined;
-        handle = subscribeSessionChat(options.node, {
+        // onUnavailable can fire synchronously while the subscription is being
+        // built (a closed peer), before `handle` is bound: read it through a ref.
+        const ref: { handle?: TranscriptSessionSubscriptionHandle } = {};
+        const handle = subscribeSessionChat(options.node, {
             sessionId,
             peer,
             ...(activation?.ownerDaemonId ? { ownerDaemonId: activation.ownerDaemonId } : {}),
@@ -113,10 +115,11 @@ export function runTranscriptWorkerSession(
             // A resync that finds the peer closed: drop the dead handle so the
             // next reconcile (retryDeferred / activation re-send) rebuilds it.
             onUnavailable: () => {
-                if (handle && subscriptions.get(sessionId) === handle) closeSubscription(sessionId);
+                if (ref.handle && subscriptions.get(sessionId) === ref.handle) closeSubscription(sessionId);
             },
             ...(options.schedule ? { schedule: options.schedule } : {}),
         });
+        ref.handle = handle;
         if (!handle.active()) {
             // initial subscribe deferred: do not register a dead handle
             handle.close();
