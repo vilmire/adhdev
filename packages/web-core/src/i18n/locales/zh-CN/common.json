@@ -3916,12 +3916,15 @@
                 "cue": {
                     "stale": "已过时",
                     "staleNextCheck": "已过时 · {{minutes}} 分钟内重新检查",
+                    "unconfirmed": "账户未确认",
                     "refreshing": "刷新中"
                 },
                 "resetsInDays": "{{days}} 天 {{hours}} 小时后重置",
                 "resetsInHours": "{{hours}} 小时 {{minutes}} 分钟后重置",
                 "resetsInMinutes": "{{minutes}} 分钟后重置",
                 "resetsNow": "即将重置",
+                "agyUpdatesOnNextRun": "下次运行 agy 时更新",
+                "agyRunOnce": "运行一次 agy 即可读取用量",
                 "resetUnknown": "重置时间未知",
                 "resetAtAbsolute": "{{when}} 重置",
                 "used": "已用 {{percent}}%"
@@ -3929,7 +3932,7 @@
             "title": "套餐用量",
             "sessionHint": "该机器上报的 5 小时滚动套餐窗口",
             "weeklyHint": "该机器上报的 7 天滚动套餐窗口",
-            "monthlyHint": "此机器报告的 30 天计费周期窗口",
+            "monthlyHint": "此机器报告的计费周期窗口",
             "bucketHint": "此机器报告的按池配额桶 — 同一套餐内的池各自独立重置",
             "failureHint": "该机器报告无法读取此提供程序的用量",
             "okNoWindows": "无限制",

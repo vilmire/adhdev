@@ -147,7 +147,7 @@ describe('fetchCursorQuota', () => {
             weekly: null,
             monthly: {
                 usedPercent: 24.68,
-                windowMinutes: MONTHLY_WINDOW_MINUTES,
+                windowMinutes: 31 * 24 * 60,
                 resetsAt: RESET_AT,
             },
             metadata: {
@@ -216,16 +216,51 @@ describe('fetchCursorQuota', () => {
         }
     });
 
-    it('drops the included-usage axis once spent when on-demand is unlimited (not "100% used")', async () => {
+    it('reads the real at-limit response: 100% headline, 7d window, auto/api buckets; int32-max hardLimit is not unlimited', async () => {
         const config = makeConfig({ accessToken: 'cursor-access-token' });
-        const current = fixedUsage();
-        current.plan_usage = { total_spend: 2000, limit: 2000 };
-        delete (current.spend_limit_usage as Record<string, unknown>).individual_limit;
-        const stub = stubFetch([jsonResponse(current), jsonResponse({ hardLimit: 2_147_483_647, noUsageBasedAllowed: false })]);
+        const start = 1793202442054;
+        const end = 1793807242054;
+        const stub = stubFetch([
+            jsonResponse({
+                billingCycleStart: String(start),
+                billingCycleEnd: String(end),
+                planUsage: { remainingBonus: false, autoPercentUsed: 100, apiPercentUsed: 0, totalPercentUsed: 100 },
+                spendLimitUsage: { limitType: 'user' },
+                enabled: true,
+                displayMessage: "You've hit your usage limit",
+                autoModelSelectedDisplayMessage: "You've used 100% of your included total usage",
+                namedModelSelectedDisplayMessage: "You've used 0% of your included API usage",
+            }),
+            jsonResponse({ hardLimit: 2147483647 }),
+        ]);
         const quota = await fetchCursorQuota(deps(config, stub.fetch));
         expect(quota.status).toBe('ok');
-        expect(quota.monthly).toBeNull();
-        expect(quota.metadata?.cursorUsage?.kind).toBe('unlimited');
+        expect(quota.monthly).toEqual({ usedPercent: 100, windowMinutes: 10080, resetsAt: end });
+        expect(quota.buckets).toEqual([
+            { name: 'auto', usedPercent: 100, windowMinutes: 10080, resetsAt: end },
+            { name: 'api', usedPercent: 0, windowMinutes: 10080, resetsAt: end },
+        ]);
+        // No pool group: routing never treats these as a model pool.
+        expect(quota.buckets?.every((b) => b.group === undefined)).toBe(true);
+    });
+
+    it('falls back to the monthly window length when the billing cycle bounds are absent or insane', async () => {
+        for (const start of [undefined, String(RESET_AT + 1000)]) {
+            const config = makeConfig({ accessToken: 'cursor-access-token' });
+            const stub = stubFetch([
+                jsonResponse({
+                    ...(start ? { billingCycleStart: start } : {}),
+                    billingCycleEnd: String(RESET_AT),
+                    planUsage: { totalPercentUsed: 40 },
+                    spendLimitUsage: { limitType: 'user' },
+                    enabled: true,
+                }),
+                jsonResponse({ hardLimit: 2147483647 }),
+            ]);
+            const quota = await fetchCursorQuota(deps(config, stub.fetch));
+            expect(quota.monthly).toMatchObject({ usedPercent: 40, windowMinutes: MONTHLY_WINDOW_MINUTES });
+            expect(quota.buckets).toBeUndefined();
+        }
     });
 
     it('reports missing-credentials without touching the network', async () => {
@@ -296,7 +331,7 @@ describe('fetchCursorQuota', () => {
 
         expect(quota.status).toBe('ok')
         expect(quota.monthly?.usedPercent).toBeCloseTo(0.35) // 7 / 2000
-        expect(quota.monthly?.windowMinutes).toBe(MONTHLY_WINDOW_MINUTES)
+        expect(quota.monthly?.windowMinutes).toBe(31 * 24 * 60) // derived from billingCycleStart..End
         expect(quota.monthly?.resetsAt).toBe(RESET_AT)
         expect(quota.metadata?.cursorUsage).toMatchObject({ kind: 'disabled', displayMessage: "You've used 0% of your included usage" })
     })
@@ -324,7 +359,7 @@ describe('fetchCursorQuota', () => {
 
         expect(quota.status).toBe('ok')
         expect(quota.monthly?.usedPercent).toBeCloseTo(0.35) // (2000 − 1993) / 2000
-        expect(quota.monthly?.windowMinutes).toBe(MONTHLY_WINDOW_MINUTES)
+        expect(quota.monthly?.windowMinutes).toBe(31 * 24 * 60) // derived from billingCycleStart..End
         expect(quota.monthly?.resetsAt).toBe(RESET_AT)
     })
 

@@ -3919,12 +3919,15 @@
                 "cue": {
                     "stale": "desactualizado",
                     "staleNextCheck": "desactualizado, próxima comprobación en ~{{minutes}} min",
+                    "unconfirmed": "cuenta sin confirmar",
                     "refreshing": "actualizando"
                 },
                 "resetsInDays": "se reinicia en {{days}} d {{hours}} h",
                 "resetsInHours": "se reinicia en {{hours}} h {{minutes}} min",
                 "resetsInMinutes": "se reinicia en {{minutes}} min",
                 "resetsNow": "se reinicia ahora",
+                "agyUpdatesOnNextRun": "se actualiza en la próxima ejecución de agy",
+                "agyRunOnce": "ejecuta agy una vez para leer el uso",
                 "resetUnknown": "hora de reinicio desconocida",
                 "resetAtAbsolute": "se reinicia {{when}}",
                 "used": "{{percent}}% usado"
@@ -3932,7 +3935,7 @@
             "title": "Cuota del plan",
             "sessionHint": "Ventana móvil de 5 horas del plan reportada por esta máquina",
             "weeklyHint": "Ventana móvil de 7 días del plan reportada por esta máquina",
-            "monthlyHint": "Ventana de facturación de 30 días reportada por esta máquina",
+            "monthlyHint": "Ventana del ciclo de facturación reportada por esta máquina",
             "bucketHint": "Cubo de cuota por grupo reportado por esta máquina — los grupos de un plan se restablecen de forma independiente",
             "failureHint": "Esta máquina informó que no pudo leer la cuota de este proveedor",
             "okNoWindows": "Sin límite",

@@ -38994,13 +38994,44 @@ child.on('exit', () => process.exit(0));
       }
       return windowFromPercent(record7.usedPercent, windowMinutes3, record7.resetsAt);
     }
+    function accountChangedNearCapture(changedAt, capturedAt) {
+      return changedAt !== null && changedAt > capturedAt - ACCOUNT_CHANGE_SAFETY_MARGIN_MS;
+    }
+    function observedAccountPath(env2) {
+      return path14.join(adhdevHome(env2), "quota", "claude-account-observed.json");
+    }
+    function observeClaudeAccount(overrides, current5) {
+      if (current5.kind !== "account") return null;
+      const env2 = overrides.env ?? process.env;
+      const file = observedAccountPath(env2);
+      const now = overrides.now?.() ?? Date.now();
+      let stored = null;
+      try {
+        stored = JSON.parse(fs8.readFileSync(file, "utf8"));
+      } catch {
+      }
+      const storedKey = typeof stored?.key === "string" ? stored.key : null;
+      const storedChangedAt = typeof stored?.changedAt === "number" ? stored.changedAt : null;
+      if (storedKey === current5.key) return storedChangedAt;
+      const changedAt = storedKey === null ? null : now;
+      try {
+        fs8.mkdirSync(path14.dirname(file), { recursive: true, mode: 448 });
+        fs8.writeFileSync(file, JSON.stringify({ key: current5.key, changedAt }), { encoding: "utf8", mode: 384 });
+      } catch {
+      }
+      return changedAt;
+    }
     async function fetchClaudeQuota(overrides = {}) {
       const before = readClaudeQuotaAccountLineage(overrides);
       const quota = await readClaudeSnapshotQuota(overrides);
       const after = readClaudeQuotaAccountLineage(overrides);
+      const changedAt = observeClaudeAccount(overrides, after);
       if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
       const producer = quotaAccountLineage(quota.metadata?.accountLineage);
       if (sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)) return quota;
+      if (producer.kind === "unknown" && before.kind === "account" && sameQuotaAccount(before, after) && !accountChangedNearCapture(changedAt, quota.updatedAt)) {
+        return withQuotaAccountLineage(quota, before);
+      }
       const switched = isConfirmedAccountSwitch(producer, before) || isConfirmedAccountSwitch(producer, after) || isConfirmedAccountSwitch(before, after);
       return unconfirmedQuotaReading(quota, producer, { retainDisplay: !switched, switched });
     }
@@ -39132,6 +39163,7 @@ child.on('exit', () => process.exit(0));
     var path14;
     var STALE_AFTER_MS;
     var SOURCE;
+    var ACCOUNT_CHANGE_SAFETY_MARGIN_MS;
     var CLAUDE_QUOTA_AUTHORITY;
     var CLAUDE_ACCOUNT_ISSUER;
     var init_claude = __esm2({
@@ -39147,9 +39179,11 @@ child.on('exit', () => process.exit(0));
         init_refresh_command_hint();
         init_track_identity();
         init_config_dir();
+        init_paths();
         init_account_lineage();
         STALE_AFTER_MS = 10 * 60 * 1e3;
         SOURCE = "statusline";
+        ACCOUNT_CHANGE_SAFETY_MARGIN_MS = 60 * 60 * 1e3;
         CLAUDE_QUOTA_AUTHORITY = "claude-code:statusline-rate-limits";
         CLAUDE_ACCOUNT_ISSUER = "claude-code:oauthAccount";
       }
@@ -39983,22 +40017,22 @@ child.on('exit', () => process.exit(0));
       if (hardLimit > 0) return { kind: "fixed", usedDollars, limitDollars: hardLimit };
       return { kind: "disabled", usedDollars };
     }
-    function includedPlanWindow(planUsage, resetAt) {
+    function includedPlanWindow(planUsage, resetAt, windowMinutes3) {
       const limit = toNumber(field(planUsage, "limit", "limit"));
       const spend = toNumber(field(planUsage, "total_spend", "totalSpend"));
-      const fromSpend = windowFromUsage(spend, limit, MONTHLY_WINDOW_MINUTES, resetAt);
+      const fromSpend = windowFromUsage(spend, limit, windowMinutes3, resetAt);
       if (fromSpend) return fromSpend;
       const remaining = toNumber(field(planUsage, "remaining", "remaining"));
       const fromRemaining = windowFromUsage(
         remaining !== null && limit !== null ? Math.max(0, limit - remaining) : null,
         limit,
-        MONTHLY_WINDOW_MINUTES,
+        windowMinutes3,
         resetAt
       );
       if (fromRemaining) return fromRemaining;
       return windowFromPercent(
         toNumber(field(planUsage, "total_percent_used", "totalPercentUsed")),
-        MONTHLY_WINDOW_MINUTES,
+        windowMinutes3,
         resetAt
       );
     }
@@ -40031,19 +40065,29 @@ child.on('exit', () => process.exit(0));
       cursorUsage = { ...cursorUsage, ...enabled === void 0 ? {} : { enabled }, ...displayMessage ? { displayMessage } : {} };
       const resetRaw = toNumber(field(current5, "billing_cycle_end", "billingCycleEnd"));
       const resetAt = resetRaw !== null && resetRaw > 0 ? resetRaw : null;
+      const startRaw = toNumber(field(current5, "billing_cycle_start", "billingCycleStart"));
+      const cycleMinutes = resetAt !== null && startRaw !== null && startRaw > 0 ? Math.round((resetAt - startRaw) / 6e4) : null;
+      const windowMinutes3 = cycleMinutes !== null && cycleMinutes >= MIN_CYCLE_MINUTES && cycleMinutes <= MAX_CYCLE_MINUTES ? cycleMinutes : MONTHLY_WINDOW_MINUTES;
       const monthly = (cursorUsage.kind === "fixed" ? windowFromUsage(
         cursorUsage.usedDollars,
         cursorUsage.limitDollars ?? null,
-        MONTHLY_WINDOW_MINUTES,
+        windowMinutes3,
         resetAt
-      ) : null) ?? includedPlanWindow(planUsage, resetAt);
-      const unlimitedOnDemand = cursorUsage.kind === "unlimited" && cursorUsage.enabled !== false;
-      const monthlyShown = unlimitedOnDemand && monthly && monthly.usedPercent >= 100 ? null : monthly;
+      ) : null) ?? includedPlanWindow(planUsage, resetAt, windowMinutes3);
+      const buckets = [];
+      for (const [name, camel, snake] of [
+        ["auto", "autoPercentUsed", "auto_percent_used"],
+        ["api", "apiPercentUsed", "api_percent_used"]
+      ]) {
+        const w = windowFromPercent(toNumber(field(planUsage, snake, camel)), windowMinutes3, resetAt);
+        if (w) buckets.push({ name, ...w });
+      }
       return {
         provider: "cursor-cli",
         session: null,
         weekly: null,
-        monthly: monthlyShown,
+        monthly,
+        ...buckets.length > 0 ? { buckets } : {},
         updatedAt: nowMs2,
         error: null,
         status: "ok",
@@ -40174,6 +40218,8 @@ child.on('exit', () => process.exit(0));
     var REQUEST_TIMEOUT_MS3;
     var CREDENTIAL_STORE_TIMEOUT_MS;
     var UNLIMITED_HARD_LIMIT;
+    var MIN_CYCLE_MINUTES;
+    var MAX_CYCLE_MINUTES;
     var KEYCHAIN_SERVICE_CANDIDATES;
     var CURSOR_ACCOUNT_ISSUER;
     var init_cursor = __esm2({
@@ -40192,6 +40238,8 @@ child.on('exit', () => process.exit(0));
         REQUEST_TIMEOUT_MS3 = 1e4;
         CREDENTIAL_STORE_TIMEOUT_MS = 5e3;
         UNLIMITED_HARD_LIMIT = 2147483647;
+        MIN_CYCLE_MINUTES = 60;
+        MAX_CYCLE_MINUTES = 60 * 24 * 62;
         KEYCHAIN_SERVICE_CANDIDATES = ["cursor-access-token", "cursor"];
         CURSOR_ACCOUNT_ISSUER = "cursor-agent:authInfo.authId";
       }
@@ -166534,8 +166582,8 @@ ${marker2}`,
           if ((0, import_fs29.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os49 === "win32") {
-          const { dirname: dirname69 } = await import("path");
-          const appDir = dirname69(appPath);
+          const { dirname: dirname70 } = await import("path");
+          const appDir = dirname70(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -190659,8 +190707,8 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync71, writeFileSync: writeFileSync58 } = await import("fs");
-          const { dirname: dirname69, join: join167 } = await import("path");
+          const { mkdirSync: mkdirSync72, writeFileSync: writeFileSync59 } = await import("fs");
+          const { dirname: dirname70, join: join167 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -190700,8 +190748,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync71(dirname69(absolutePath), { recursive: true });
-          writeFileSync58(absolutePath, `${scaffoldJson}
+          mkdirSync72(dirname70(absolutePath), { recursive: true });
+          writeFileSync59(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
             success: true,
@@ -190769,8 +190817,8 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync137, readFileSync: readFileSync126, mkdirSync: mkdirSync71, writeFileSync: writeFileSync58 } = await import("fs");
-          const { dirname: dirname69, join: join167 } = await import("path");
+          const { existsSync: existsSync137, readFileSync: readFileSync126, mkdirSync: mkdirSync72, writeFileSync: writeFileSync59 } = await import("fs");
+          const { dirname: dirname70, join: join167 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
@@ -190834,8 +190882,8 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync71(dirname69(absolutePath), { recursive: true });
-          writeFileSync58(absolutePath, serialized, "utf-8");
+          mkdirSync72(dirname70(absolutePath), { recursive: true });
+          writeFileSync59(absolutePath, serialized, "utf-8");
           return {
             success: true,
             written: true,
@@ -192573,8 +192621,8 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync137, readFileSync: readFileSync126, writeFileSync: writeFileSync58, mkdirSync: mkdirSync71 } = await import("fs");
-          const { dirname: dirname69 } = await import("path");
+          const { existsSync: existsSync137, readFileSync: readFileSync126, writeFileSync: writeFileSync59, mkdirSync: mkdirSync72 } = await import("fs");
+          const { dirname: dirname70 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -192602,7 +192650,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync71(dirname69(mcpConfigPath), { recursive: true });
+              mkdirSync72(dirname70(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
@@ -192639,11 +192687,11 @@ ${ptyResult.output.slice(-2e3)}`);
               if (nextMcpConfigText !== existingMcpConfigText) {
                 if (hadExistingMcpConfig) {
                   const backupDir = (0, import_path39.join)(getConfigDir2(), "mcp-config-backups");
-                  mkdirSync71(backupDir, { recursive: true });
+                  mkdirSync72(backupDir, { recursive: true });
                   const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
-                  writeFileSync58((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
+                  writeFileSync59((0, import_path39.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
                 }
-                writeFileSync58(mcpConfigPath, nextMcpConfigText, "utf-8");
+                writeFileSync59(mcpConfigPath, nextMcpConfigText, "utf-8");
               }
             } catch (error) {
               const message = `Could not write MCP config for automatic setup: ${error?.message || error}`;

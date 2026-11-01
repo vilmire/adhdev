@@ -22,6 +22,7 @@ import {
     windowFromPercent,
     windowFromUsage,
     type ProviderQuota,
+    type QuotaBucket,
     type QuotaMetadata,
     type QuotaWindow,
 } from '../types.js';
@@ -41,7 +42,10 @@ const DEFAULT_BASE_URL = 'https://api2.cursor.sh';
 const DASHBOARD_SERVICE = 'aiserver.v1.DashboardService';
 const REQUEST_TIMEOUT_MS = 10_000;
 const CREDENTIAL_STORE_TIMEOUT_MS = 5_000;
+/** int32 max: Cursor's "no on-demand hard limit configured" sentinel, NOT unlimited usage. */
 const UNLIMITED_HARD_LIMIT = 2_147_483_647;
+const MIN_CYCLE_MINUTES = 60;
+const MAX_CYCLE_MINUTES = 60 * 24 * 62;
 
 type CursorUsage = NonNullable<QuotaMetadata['cursorUsage']>;
 
@@ -313,24 +317,24 @@ function mapCursorUsage(current: Record<string, unknown>, hard: Record<string, u
  *   3. total_percent_used — vendor-computed, kept last because it is rounded
  *      (a live 7/2000 spend arrived as 0.02 while remaining/limit said 0.35%).
  */
-function includedPlanWindow(planUsage: Record<string, unknown>, resetAt: number | null): QuotaWindow | null {
+function includedPlanWindow(planUsage: Record<string, unknown>, resetAt: number | null, windowMinutes: number): QuotaWindow | null {
     const limit = toNumber(field(planUsage, 'limit', 'limit'));
     const spend = toNumber(field(planUsage, 'total_spend', 'totalSpend'));
-    const fromSpend = windowFromUsage(spend, limit, MONTHLY_WINDOW_MINUTES, resetAt);
+    const fromSpend = windowFromUsage(spend, limit, windowMinutes, resetAt);
     if (fromSpend) return fromSpend;
 
     const remaining = toNumber(field(planUsage, 'remaining', 'remaining'));
     const fromRemaining = windowFromUsage(
         remaining !== null && limit !== null ? Math.max(0, limit - remaining) : null,
         limit,
-        MONTHLY_WINDOW_MINUTES,
+        windowMinutes,
         resetAt,
     );
     if (fromRemaining) return fromRemaining;
 
     return windowFromPercent(
         toNumber(field(planUsage, 'total_percent_used', 'totalPercentUsed')),
-        MONTHLY_WINDOW_MINUTES,
+        windowMinutes,
         resetAt,
     );
 }
@@ -372,6 +376,14 @@ function mapUsageResponse(
 
     const resetRaw = toNumber(field(current, 'billing_cycle_end', 'billingCycleEnd'));
     const resetAt = resetRaw !== null && resetRaw > 0 ? resetRaw : null;
+    // Window length = the real billing cycle (live: a 7-day cycle on some
+    // accounts, not 30d). Fall back to the monthly default when either bound
+    // is absent or the span is not a sane cycle length.
+    const startRaw = toNumber(field(current, 'billing_cycle_start', 'billingCycleStart'));
+    const cycleMinutes = resetAt !== null && startRaw !== null && startRaw > 0
+        ? Math.round((resetAt - startRaw) / 60_000) : null;
+    const windowMinutes = cycleMinutes !== null && cycleMinutes >= MIN_CYCLE_MINUTES && cycleMinutes <= MAX_CYCLE_MINUTES
+        ? cycleMinutes : MONTHLY_WINDOW_MINUTES;
     // Two distinct spend axes (live shape verified 2026-08-24):
     //   1. ON-DEMAND (spend_limit_usage / hard limit) — cursorUsage above,
     //      charted only for kind 'fixed'.
@@ -383,24 +395,30 @@ function mapUsageResponse(
         ? windowFromUsage(
             cursorUsage.usedDollars,
             cursorUsage.limitDollars ?? null,
-            MONTHLY_WINDOW_MINUTES,
+            windowMinutes,
             resetAt,
         )
         : null)
-        ?? includedPlanWindow(planUsage, resetAt);
-    // An UNLIMITED on-demand budget keeps working after the included allowance
-    // is spent, so "100% of included usage" is not exhaustion: drop that axis
-    // (owner report 2026-11-01) instead of rendering a red 100% that the
-    // routing reserve would treat as no headroom. Below 100% the included
-    // axis is real information and stays.
-    const unlimitedOnDemand = cursorUsage.kind === 'unlimited' && cursorUsage.enabled !== false;
-    const monthlyShown = unlimitedOnDemand && monthly && monthly.usedPercent >= 100 ? null : monthly;
+        ?? includedPlanWindow(planUsage, resetAt, windowMinutes);
+    // Display-only split of the included allowance (live: "You've used 100% of
+    // your included total usage" / "0% of your included API usage"). Buckets
+    // carry no pool `group`, so mesh routing ignores them and gates on the
+    // headline window alone.
+    const buckets: QuotaBucket[] = [];
+    for (const [name, camel, snake] of [
+        ['auto', 'autoPercentUsed', 'auto_percent_used'],
+        ['api', 'apiPercentUsed', 'api_percent_used'],
+    ] as const) {
+        const w = windowFromPercent(toNumber(field(planUsage, snake, camel)), windowMinutes, resetAt);
+        if (w) buckets.push({ name, ...w });
+    }
 
     return {
         provider: 'cursor-cli',
         session: null,
         weekly: null,
-        monthly: monthlyShown,
+        monthly,
+        ...(buckets.length > 0 ? { buckets } : {}),
         updatedAt: nowMs,
         error: null,
         status: 'ok',

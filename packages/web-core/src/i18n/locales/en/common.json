@@ -3923,7 +3923,8 @@
                 "resetsInHours": "resets in {{hours}}h {{minutes}}m",
                 "resetsInMinutes": "resets in {{minutes}}m",
                 "resetsNow": "resets now",
-                "unlimited": "unlimited on-demand · ${{usd}} used",
+                "agyUpdatesOnNextRun": "updates on next agy run",
+                "agyRunOnce": "run agy once to read usage",
                 "resetUnknown": "reset time unknown",
                 "resetAtAbsolute": "resets {{when}}",
                 "used": "{{percent}}% used"
@@ -3931,7 +3932,7 @@
             "title": "Plan quota",
             "sessionHint": "Rolling 5-hour plan window reported by this machine",
             "weeklyHint": "Rolling 7-day plan window reported by this machine",
-            "monthlyHint": "Rolling 30-day billing window reported by this machine",
+            "monthlyHint": "Billing-cycle window reported by this machine",
             "bucketHint": "Per-pool quota bucket reported by this machine — pools on one plan reset independently",
             "failureHint": "This machine reported that it could not read this provider's quota",
             "okNoWindows": "No limit",

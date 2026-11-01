@@ -181,8 +181,8 @@ describe('quotaWindowCue — antigravity expired token reads stale, not refreshi
     expect(model.cue).toBe('stale')
     expect(model.message).toBeNull()
     expect(model.chips.map(c => c.label).sort()).toEqual([
-      'Claude/GPT 5h 12.0% used · stale',
-      'Gemini 5h 44.5% used · stale',
+      'Claude/GPT 5h 12.0% used · updates on next agy run',
+      'Gemini 5h 44.5% used · updates on next agy run',
     ])
   })
 })

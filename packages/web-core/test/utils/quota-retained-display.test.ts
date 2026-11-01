@@ -46,22 +46,55 @@ describe('account-unconfirmed Claude reading', () => {
     })
 })
 
-describe('cursor unlimited and failure labels', () => {
-    it('an unlimited plan with spent included usage is not 100% used', () => {
+describe('cursor usage and failure labels', () => {
+    it('a spent included allowance reads as used, never as unlimited, with a 7d cycle label and auto/api split', () => {
         const quota = {
             provider: 'cursor-cli', status: 'ok', error: null, updatedAt: NOW, session: null, weekly: null,
-            monthly: win(100, 43200, NOW + H),
+            monthly: win(100, 10080, NOW + H),
+            buckets: [{ name: 'auto', ...win(100, 10080, NOW + H) }, { name: 'api', ...win(0, 10080, NOW + H) }],
             metadata: { cursorUsage: { kind: 'unlimited', usedDollars: 0, enabled: true, displayMessage: "You've hit your usage limit" } },
         } as unknown as MeshNodeFactsProviderQuota
         const model = buildQuotaDisplayModel(quota, NOW)
-        expect(model.kind).toBe('okNoWindows')
-        expect(model.chips).toEqual([])
-        expect(model.message).toBe('unlimited on-demand · $0.00 used')
+        expect(model.kind).toBe('chips')
+        expect(model.chips.map(shortQuotaChipLabel)).toEqual(['7d 100%', 'Auto 100% · API 0%'])
+        expect(model.chips[0].usedPercent).toBe(100)
+        expect(JSON.stringify(model)).not.toMatch(/unlimited/i)
     })
     it('names not-signed-in and expired-token instead of a generic failure', () => {
         const mk = (failureKind: string) => ({ provider: 'grok-cli', status: 'unavailable', error: 'Not signed in', updatedAt: NOW, session: null, weekly: null, metadata: { failureKind } }) as unknown as MeshNodeFactsProviderQuota
         expect(buildQuotaDisplayModel(mk('missing-credentials'), NOW).failureLabel).toBe('missing credentials')
         expect(buildQuotaDisplayModel(mk('expired-token'), NOW).failureLabel).toBe('expired token')
         expect(buildQuotaDisplayModel(mk('parse'), NOW).failureLabel).toBeUndefined()
+    })
+})
+
+describe('antigravity idle-expired token', () => {
+    const buckets = [
+        { name: 'Gemini Models · 5h', ...win(0.7, 300, NOW + H) },
+        { name: 'Gemini Models · 7d', ...win(1.5, 10080, NOW + 24 * H) },
+        { name: 'Claude/GPT · 7d', ...win(100, 10080, NOW + 24 * H) },
+    ]
+    const base = { provider: 'antigravity-cli', status: 'unavailable', error: 'Antigravity quota reading unavailable until next CLI use', updatedAt: NOW - 3 * H, metadata: { failureKind: 'expired-token' } }
+    it('keeps last-good numbers with age and says they update on the next agy run', () => {
+        const quota = { ...base, session: win(0.7, 300, NOW + H), weekly: win(100, 10080, NOW + 24 * H), buckets, metadata: { ...base.metadata, lastGoodWindows: true } } as unknown as MeshNodeFactsProviderQuota
+        const model = buildQuotaDisplayModel(quota, NOW)
+        expect(model.kind).toBe('chips')
+        expect(model.chips.length).toBe(3)
+        const labels = model.chips.map(shortQuotaChipLabel)
+        expect(labels.every(l => l.includes('updates on next agy run') && l.includes('3h 0m ago'))).toBe(true)
+        expect(labels.join(' ')).not.toMatch(/stale|token expired/i)
+    })
+    it('without any earlier reading says to run agy once, not "token expired"', () => {
+        const quota = { ...base, session: null, weekly: null, buckets: [] } as unknown as MeshNodeFactsProviderQuota
+        const model = buildQuotaDisplayModel(quota, NOW)
+        expect(model.kind).toBe('failure')
+        expect(model.failureLabel).toBe('run agy once to read usage')
+        expect(model.message).toBe('run agy once to read usage')
+    })
+    it('other providers keep the generic expired-token label; grok sign-in label only for missing-credentials', () => {
+        const mk = (provider: string, failureKind: string) => ({ provider, status: 'unavailable', error: null, updatedAt: NOW, session: null, weekly: null, metadata: { failureKind } }) as unknown as MeshNodeFactsProviderQuota
+        expect(buildQuotaDisplayModel(mk('grok-cli', 'expired-token'), NOW).failureLabel).toBe('expired token')
+        expect(buildQuotaDisplayModel(mk('kimi', 'expired-token'), NOW).failureLabel).toBe('expired token')
+        expect(buildQuotaDisplayModel(mk('grok-cli', 'missing-credentials'), NOW).failureLabel).toBe('missing credentials')
     })
 })

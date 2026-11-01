@@ -99,30 +99,84 @@ describe('fetchClaudeQuota', () => {
         ['legacy', undefined],
         ['unknown', { version: 1, kind: 'unknown' }],
         ['malformed', { version: 1, kind: 'account', key: 'not-a-digest' }],
-    ])('never trusts a %s snapshot just because current account is stable', async (_label, accountLineage) => {
-        writeSnapshot({ accountLineage, capturedAt: NOW - STALE_AFTER_MS - 1 });
+    ])('binds a %s-producer snapshot to the stable current account (real usage counts)', async (_label, accountLineage) => {
+        writeSnapshot({ accountLineage });
+        const quota = await fetch();
+        expect(quota.status).toBe('ok');
+        expect(quota.session?.usedPercent).toBe(23.5);
+        expect(quota.weekly?.usedPercent).toBe(41.2);
+        expect(quota.metadata?.lineageUncertain).toBeUndefined();
+        expect(quota.metadata?.unconfirmedReading).toBeUndefined();
+        expect(quota.metadata?.accountLineage).toEqual(statuslineProducerLineage(PRODUCER_ENV));
+        expect(quotaGate(quota)).not.toBeNull();
+    });
+
+    it('binds a stale unknown-producer snapshot too, as a retained last-good reading', async () => {
+        writeSnapshot({ accountLineage: undefined, capturedAt: NOW - STALE_AFTER_MS - 1 });
+        const quota = await fetch();
+        expect(quota.status).toBe('error');
+        expect(quota.metadata?.lastGoodWindows).toBe(true);
+        expect(quota.metadata?.lineageUncertain).toBeUndefined();
+        expect(quota.session?.usedPercent).toBe(23.5);
+    });
+
+    it('refuses to bind an unknown-producer snapshot captured within 1h of an observed account change', async () => {
+        const TEN_MIN = 10 * 60_000;
+        writeCurrentAccount('fixture-account-b');
+        await fetch(NOW - 3 * 3_600_000); // daemon observes account B
+        writeCurrentAccount('fixture-account-a');
+        await fetch(NOW - TEN_MIN); // daemon observes the change to A, 10 min before capture
+        writeSnapshot({ accountLineage: undefined });
         const quota = await fetch();
         expect(quota.metadata?.lineageUncertain).toBe(true);
-        expect(quota.metadata?.lastGoodWindows).toBeUndefined();
         expect(quota.session).toBeNull();
         expect(quota.weekly).toBeNull();
         expect(quotaGate(quota)).toBeNull();
+        expect(quota.metadata?.unconfirmedReading?.session).toBeTruthy();
+        expect(quota.metadata?.accountSwitched).toBeUndefined();
     });
 
-    it('shows an unconfirmed local reading display-only; never across a confirmed switch', async () => {
-        // Producer unknown (legacy snapshot): numbers are parked for display only.
+    it('binds once the observed account change is more than 1h older than the capture', async () => {
+        writeCurrentAccount('fixture-account-b');
+        await fetch(NOW - 4 * 3_600_000);
+        writeCurrentAccount('fixture-account-a');
+        await fetch(NOW - 2 * 3_600_000); // change observed 2h before capture
         writeSnapshot({ accountLineage: undefined });
-        const unknown = await fetch();
-        expect(unknown.session).toBeNull();
-        expect(quotaGate(unknown)).toBeNull();
-        expect(unknown.metadata?.unconfirmedReading?.measuredAt).toBe(unknown.updatedAt);
-        expect(unknown.metadata?.unconfirmedReading?.session || unknown.metadata?.unconfirmedReading?.weekly).toBeTruthy();
-        // Confirmed different current account: nothing is retained.
+        const quota = await fetch();
+        expect(quota.status).toBe('ok');
+        expect(quota.session?.usedPercent).toBe(23.5);
+        expect(quotaGate(quota)).not.toBeNull();
+    });
+
+    it('never binds when the account changes while the snapshot is read', async () => {
+        writeSnapshot({ accountLineage: undefined });
+        const quota = await fetchClaudeQuota({ env, now: () => {
+            writeCurrentAccount('fixture-account-b');
+            return NOW;
+        } });
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quota.session).toBeNull();
+        expect(quotaGate(quota)).toBeNull();
+    });
+
+    it('a KNOWN different producer yields no numbers and no display copy', async () => {
         writeSnapshot();
         writeCurrentAccount('fixture-account-b');
-        const switched = await fetch();
-        expect(switched.metadata?.unconfirmedReading).toBeUndefined();
-        expect(switched.metadata?.accountSwitched).toBe(true);
+        const quota = await fetch();
+        expect(quota.session).toBeNull();
+        expect(quota.weekly).toBeNull();
+        expect(quota.metadata?.unconfirmedReading).toBeUndefined();
+        expect(quota.metadata?.accountSwitched).toBe(true);
+        expect(quotaGate(quota)).toBeNull();
+    });
+
+    it('never carries numbers across a confirmed switch even with an unknown producer snapshot', async () => {
+        writeSnapshot({ accountLineage: undefined });
+        await fetch();
+        writeCurrentAccount('fixture-account-b');
+        const quota = await fetch(); // change observed now; capture is not older than it by 1h
+        expect(quota.session).toBeNull();
+        expect(quotaGate(quota)).toBeNull();
     });
 
     it('isolates an organization mismatch', async () => {

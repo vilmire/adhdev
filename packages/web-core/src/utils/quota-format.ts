@@ -56,8 +56,10 @@ export interface QuotaTextFormatter {
     agoMinutes(minutes: number): string
     agoHours(hours: number, minutes: number): string
     agoDays(days: number, hours: number): string
-    /** "Unlimited on-demand · $0.00 used" — cursor plan whose on-demand budget is unlimited. */
-    unlimited(usedDollars: string): string
+    /** Antigravity: last-good numbers kept while its short-lived token is expired. */
+    agyUpdatesOnNextRun(): string
+    /** Antigravity: token expired and there is no earlier reading to show. */
+    agyRunOnce(): string
     /** Explicit when the provider reported no usable resetsAt. */
     resetUnknown(): string
     /** Absolute local-timezone reset line — `when` is already localized. */
@@ -84,7 +86,8 @@ export const ENGLISH_QUOTA_TEXT: QuotaTextFormatter = {
     agoMinutes: (m) => `${m}m ago`,
     agoHours: (h, m) => `${h}h ${m}m ago`,
     agoDays: (d, h) => `${d}d ${h}h ago`,
-    unlimited: (usd) => `unlimited on-demand · $${usd} used`,
+    agyUpdatesOnNextRun: () => 'updates on next agy run',
+    agyRunOnce: () => 'run agy once to read usage',
     resetUnknown: () => 'reset time unknown',
     resetAtAbsolute: (when) => `resets ${when}`,
 }
@@ -118,7 +121,8 @@ export function createQuotaTextFormatter(t: TFunction): QuotaTextFormatter {
         agoMinutes: (minutes) => t(`${K}agoMinutes`, { minutes }),
         agoHours: (hours, minutes) => t(`${K}agoHours`, { hours, minutes }),
         agoDays: (days, hours) => t(`${K}agoDays`, { days, hours }),
-        unlimited: (usd) => t(`${K}unlimited`, { usd }),
+        agyUpdatesOnNextRun: () => t(`${K}agyUpdatesOnNextRun`),
+        agyRunOnce: () => t(`${K}agyRunOnce`),
         resetUnknown: () => t(`${K}resetUnknown`),
         resetAtAbsolute: (when) => t(`${K}resetAtAbsolute`, { when }),
     }
@@ -376,6 +380,26 @@ export function collectQuotaBucketChips(quota: MeshNodeFactsProviderQuota, fmt: 
     return chips.sort((a, b) => a.label.localeCompare(b.label))
 }
 
+/** Cursor's display-only auto/api split: ungrouped buckets named exactly auto + api. */
+function isCursorBreakdown(quota: MeshNodeFactsProviderQuota): boolean {
+    const raw = quota.buckets
+    if (!Array.isArray(raw) || raw.length === 0) return false
+    return raw.every(b => !!b && typeof b === 'object' && !(b as { group?: unknown }).group
+        && (b.name === 'auto' || b.name === 'api'))
+}
+
+function cursorBreakdownChip(quota: MeshNodeFactsProviderQuota, now: number): QuotaDisplayChip | null {
+    if (!isCursorBreakdown(quota)) return null
+    const parts: string[] = []
+    for (const [name, label] of [['auto', 'Auto'], ['api', 'API']] as const) {
+        const bucket = quota.buckets!.find(b => b.name === name)
+        const pct = Number(bucket?.usedPercent)
+        if (bucket && Number.isFinite(pct) && !isQuotaWindowReset({ usedPercent: pct, windowMinutes: Number(bucket.windowMinutes), resetsAt: typeof bucket.resetsAt === 'number' ? bucket.resetsAt : null }, now)) parts.push(`${label} ${Math.round(pct)}%`)
+    }
+    if (parts.length === 0) return null
+    return { key: 'breakdown', label: parts.join(' · '), usedPercent: null, hint: 'usage', tone: 'info' }
+}
+
 /**
  * Summary line for an 'ok' snapshot that carries NO usage windows at all —
  * cursor-cli's included-usage accounts are the canonical case: the fetch
@@ -418,17 +442,6 @@ export function describeQuotaFailure(quota: MeshNodeFactsProviderQuota, fmt: Quo
     return quota.status === 'unavailable' ? fmt.unavailable() : fmt.unreadable()
 }
 
-/** Cursor plan with an unlimited, enabled on-demand budget. */
-function isCursorUnlimited(quota: MeshNodeFactsProviderQuota): boolean {
-    const usage = (quota.metadata as Record<string, unknown> | undefined)?.cursorUsage as { kind?: unknown; enabled?: unknown } | undefined
-    return !!usage && usage.kind === 'unlimited' && usage.enabled !== false
-}
-
-function cursorUsedDollars(quota: MeshNodeFactsProviderQuota): number {
-    const usage = (quota.metadata as Record<string, unknown> | undefined)?.cursorUsage as { usedDollars?: unknown } | undefined
-    return typeof usage?.usedDollars === 'number' && Number.isFinite(usage.usedDollars) ? usage.usedDollars : 0
-}
-
 /**
  * The display-only reading a daemon parks in `metadata.unconfirmedReading` when
  * it cannot prove the numbers belong to the current account. Used ONLY when the
@@ -440,6 +453,10 @@ interface UnconfirmedReading {
     weekly?: MeshNodeFactsQuotaWindow | null
     monthly?: MeshNodeFactsQuotaWindow | null
     buckets?: MeshNodeFactsProviderQuota['buckets']
+}
+
+function hasQuotaReading(quota: MeshNodeFactsProviderQuota): boolean {
+    return !!quota.session || !!quota.weekly || !!quota.monthly || (Array.isArray(quota.buckets) && quota.buckets.length > 0)
 }
 
 function readUnconfirmedReading(quota: MeshNodeFactsProviderQuota): UnconfirmedReading | null {
@@ -454,9 +471,20 @@ function readUnconfirmedReading(quota: MeshNodeFactsProviderQuota): UnconfirmedR
 /** Failure kinds worth a short, visible reason in a tight cell (the full text stays in the tooltip). */
 const VISIBLE_FAILURE_KINDS = new Set(['missing-credentials', 'expired-token', 'unauthorized', 'setup-required', 'quota-exhausted', 'rate-limited', 'cli-unavailable'])
 
+/**
+ * Antigravity's cached access token is short-lived and only the `agy` CLI
+ * refreshes it (the daemon deliberately never does), so `expired-token` there
+ * is the ordinary idle state, not a sign-in problem.
+ */
+function isAgyShortLivedTokenExpiry(quota: MeshNodeFactsProviderQuota): boolean {
+    return quota.provider === 'antigravity-cli' && quota.status !== 'ok'
+        && quota.metadata?.failureKind === 'expired-token'
+}
+
 /** "Login required" / "Access token expired" — null for generic or unknown failures. */
 export function describeQuotaFailureLabel(quota: MeshNodeFactsProviderQuota, fmt: QuotaTextFormatter = ENGLISH_QUOTA_TEXT): string | null {
     const kind = typeof quota.metadata?.failureKind === 'string' ? quota.metadata.failureKind.trim() : ''
+    if (isAgyShortLivedTokenExpiry(quota)) return fmt.agyRunOnce()
     return kind && VISIBLE_FAILURE_KINDS.has(kind) ? fmt.failureKind(kind, kind.replace(/[_-]+/g, ' ')) : null
 }
 
@@ -477,6 +505,8 @@ export interface QuotaDisplayChip {
     freshnessLabel?: string
     /** Age of a retained (stale / unconfirmed) reading — "2d 3h ago". */
     ageLabel?: string
+    /** Window-length label for an axis chip ("5h" / "7d" / "30d"); compact labels fall back to the hint default. */
+    axisLabel?: string
     /** Same 70/90 thresholds as the `adhdev quota` CLI ('info' for usage chips). */
     tone: QuotaTone
     /**
@@ -518,22 +548,17 @@ export interface QuotaDisplayModel {
 }
 
 /**
- * Display-only adjustments applied before axes are assembled: a cursor plan
- * with unlimited on-demand spend never shows its spent included allowance as
- * "100% used" (new daemons already omit the axis; this covers older reports),
- * and an unconfirmed-account entry is swapped for its display-only copy.
+ * Display-only adjustment applied before axes are assembled: an
+ * unconfirmed-account entry is swapped for its display-only copy. (Cursor's
+ * int32-max on-demand hard limit means "no limit configured", never "unlimited
+ * usage", so a spent included allowance is always shown as spent.)
  */
-function prepareDisplayQuota(rawQuota: MeshNodeFactsProviderQuota, fmt: QuotaTextFormatter) {
-    const cursorUnlimited = isCursorUnlimited(rawQuota)
-    const unlimitedLabel = cursorUnlimited ? fmt.unlimited(cursorUsedDollars(rawQuota).toFixed(2)) : null
-    const withoutSpentAxis = cursorUnlimited && (rawQuota.monthly?.usedPercent ?? 0) >= 100
-        ? { ...rawQuota, monthly: null }
-        : rawQuota
-    const unconfirmed = readUnconfirmedReading(withoutSpentAxis)
+function prepareDisplayQuota(rawQuota: MeshNodeFactsProviderQuota) {
+    const unconfirmed = readUnconfirmedReading(rawQuota)
     const quota: MeshNodeFactsProviderQuota = unconfirmed
-        ? { ...withoutSpentAxis, session: unconfirmed.session ?? null, weekly: unconfirmed.weekly ?? null, monthly: unconfirmed.monthly ?? null, buckets: unconfirmed.buckets ?? [], updatedAt: unconfirmed.measuredAt }
-        : withoutSpentAxis
-    return { quota, unconfirmed, unlimitedLabel }
+        ? { ...rawQuota, session: unconfirmed.session ?? null, weekly: unconfirmed.weekly ?? null, monthly: unconfirmed.monthly ?? null, buckets: unconfirmed.buckets ?? [], updatedAt: unconfirmed.measuredAt }
+        : rawQuota
+    return { quota, unconfirmed }
 }
 
 /**
@@ -548,9 +573,15 @@ function prepareDisplayQuota(rawQuota: MeshNodeFactsProviderQuota, fmt: QuotaTex
  * live here. Consumers must not reassemble axes from the raw snapshot — the
  * drift-guard test (test/utils/quota-display-model.test.ts) pins that.
  */
-export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = Date.now(), fmt = ENGLISH_QUOTA_TEXT): QuotaDisplayModel {
+export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = Date.now(), baseFmt = ENGLISH_QUOTA_TEXT): QuotaDisplayModel {
     const cue = (readUnconfirmedReading(quota) ? 'unconfirmed' : quotaWindowCue(quota, now)) as QuotaWindowCue | undefined
-    const { quota: shown, unconfirmed, unlimitedLabel } = prepareDisplayQuota(quota, fmt)
+    // Kept numbers from an idle-expired agy token read "updates on next agy run"
+    // instead of the generic stale cue.
+    const agyKept = isAgyShortLivedTokenExpiry(quota) && hasQuotaReading(quota)
+    const fmt: QuotaTextFormatter = agyKept
+        ? { ...baseFmt, cue: (c, n) => (c === 'stale' ? baseFmt.agyUpdatesOnNextRun() : baseFmt.cue(c, n)) }
+        : baseFmt
+    const { quota: shown, unconfirmed } = prepareDisplayQuota(quota)
     const nextCheckAt = cue === 'stale' ? quotaNextCheckAt(shown, now) : undefined
     const measuredAt = unconfirmed
         ? unconfirmed.measuredAt
@@ -567,16 +598,16 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
         const usedPercent = window!.usedPercent
         const reset = isQuotaWindowReset(window, now) && retained === undefined
         const resetsAt = typeof window!.resetsAt === 'number' && Number.isFinite(window!.resetsAt) ? window!.resetsAt : null
-        return { key: hint, label: `${prefix} ${text}`, usedPercent: reset ? null : usedPercent, hint, ...chipExtras, tone: reset ? 'default' : (isQuotaWindowReset(window, now) ? 'default' : quotaUsageTone(usedPercent)), resetsAt }
+        return { key: hint, label: `${prefix} ${text}`, axisLabel: prefix, usedPercent: reset ? null : usedPercent, hint, ...chipExtras, tone: reset ? 'default' : (isQuotaWindowReset(window, now) ? 'default' : quotaUsageTone(usedPercent)), resetsAt }
     }
     const session = axisChip(shown.session, 'session', '5h')
     const weekly = axisChip(shown.weekly, 'weekly', '7d')
-    const monthly = axisChip(shown.monthly, 'monthly', '30d')
+    const monthly = axisChip(shown.monthly, 'monthly', shown.monthly ? shortWindowLabel(Number(shown.monthly.windowMinutes)) : '30d')
 
     // Multi-pool providers (antigravity): the per-pool buckets REPLACE the
     // collapsed worst-of-pools axes — showing both would render the same
     // numbers twice. Fewer than two buckets keeps the axes (never invent a pool).
-    const bucketChips: QuotaDisplayChip[] = collectQuotaBucketChips(shown, fmt).map(chip => {
+    const bucketChips: QuotaDisplayChip[] = (monthly && isCursorBreakdown(shown) ? [] : collectQuotaBucketChips(shown, fmt)).map(chip => {
         const reset = isQuotaWindowReset(chip.window, now)
         return {
             key: chip.label,
@@ -588,9 +619,14 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
             resetsAt: typeof chip.window.resetsAt === 'number' && Number.isFinite(chip.window.resetsAt) ? chip.window.resetsAt : null,
         }
     })
-    const chips = bucketChips.length > 0
-        ? bucketChips
-        : [session, weekly, monthly].filter((c): c is QuotaDisplayChip => c !== null)
+    // Cursor's included allowance is split into ungrouped "auto" / "api"
+    // buckets for display only: they ride NEXT TO the headline window as one
+    // info chip ("Auto 100% · API 0%") instead of replacing it.
+    const breakdown = monthly ? cursorBreakdownChip(shown, now) : null
+    const axisChips = [session, weekly, monthly].filter((c): c is QuotaDisplayChip => c !== null)
+    const chips = breakdown
+        ? [...axisChips, breakdown]
+        : bucketChips.length > 0 ? bucketChips : axisChips
 
     // Usage-shaped provider (opencode): absolute tokens/cost, no percent
     // windows to chip. Only reached when no window rendered.
@@ -613,9 +649,6 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
     if (usageChip) {
         return { kind: 'usage', cue, chips: [], usageLabel, message: null, compactChip }
     }
-    if (unlimitedLabel && shown.status === 'ok') {
-        return { kind: 'okNoWindows', cue, chips: [], usageLabel: null, message: unlimitedLabel, compactChip: null }
-    }
     if (shown.status === 'ok') {
         // 'ok' with no windows at all = a SUCCESSFUL reading whose provider has
         // no percentage axis (cursor included-usage) — its own message when it
@@ -623,7 +656,8 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
         return { kind: 'okNoWindows', cue, chips: [], usageLabel: null, message: describeQuotaOkWithoutWindows(shown), compactChip: null }
     }
     const failureLabel = describeQuotaFailureLabel(shown, fmt)
-    return { kind: 'failure', cue, chips: [], usageLabel: null, message: describeQuotaFailure(shown, fmt), ...(failureLabel ? { failureLabel } : {}), compactChip: null }
+    const message = isAgyShortLivedTokenExpiry(shown) && failureLabel ? failureLabel : describeQuotaFailure(shown, fmt)
+    return { kind: 'failure', cue, chips: [], usageLabel: null, message, ...(failureLabel ? { failureLabel } : {}), compactChip: null }
 }
 
 /**
@@ -674,11 +708,11 @@ export function shortQuotaChipLabel(chip: QuotaDisplayChip): string {
         : chip.hint === 'weekly'
             ? '7d'
             : chip.hint === 'monthly'
-                ? '30d'
+                ? (chip.axisLabel ?? '30d')
                 : chip.key
     if (chip.usedPercent === null) return chip.hint === 'usage' ? chip.label : `${axis} —`
     if (chip.hint === 'usage') return chip.label
-    return `${axis} ${chip.hint === 'monthly' ? chip.usedPercent.toFixed(1) : Math.round(chip.usedPercent)}%${chip.freshnessLabel ? ` · ${chip.freshnessLabel}` : ''}${chip.ageLabel ? ` · ${chip.ageLabel}` : ''}`
+    return `${axis} ${chip.hint === 'monthly' && !Number.isInteger(chip.usedPercent) ? chip.usedPercent.toFixed(1) : Math.round(chip.usedPercent)}%${chip.freshnessLabel ? ` · ${chip.freshnessLabel}` : ''}${chip.ageLabel ? ` · ${chip.ageLabel}` : ''}`
 }
 
 export type ClaudeQuotaHint = 'setup' | 'refresh' | null

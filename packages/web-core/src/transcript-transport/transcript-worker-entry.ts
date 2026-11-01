@@ -116,13 +116,24 @@ scope.onmessage = (ev) => {
             currentPeer: () => peer,
         });
 
+        peer?.onStateChange((state) => {
+            // A seqscribe session-level close (not a transport reset) leaves no
+            // control event: drop the dead handles so they are not kept as live.
+            if (state === 'closed') session.detach();
+        });
+
         onControl((event) => {
             // `transport_closed`/`queue_overflow` already closed the channel
             // (`message-port-channel.ts`), so the peer and every subscription
             // on it are dead. Drop them and let the next attach rebuild from
             // the retained activation set — never resume across a gap that may
             // have dropped bytes (§3.6 criterion 4).
-            if (event.event === 'transport_open') return;
+            if (event.event === 'transport_open') {
+                // Open again: give deferred sessions (subscribe refused while
+                // the peer session was not open) their SUB now.
+                session.retryDeferred();
+                return;
+            }
             peer = null;
             session.detach();
         });

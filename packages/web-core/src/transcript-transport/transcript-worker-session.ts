@@ -57,6 +57,12 @@ export interface TranscriptWorkerSessionOptions {
 export interface TranscriptWorkerSessionHandle {
     /** Re-subscribe everything currently activated — call after a fresh attach. */
     resubscribe(): void;
+    /**
+     * Re-run the activation reconcile without touching healthy subscriptions —
+     * call when the peer's session is open again so sessions whose subscribe
+     * was deferred (no open session) get their SUB.
+     */
+    retryDeferred(): void;
     /** Drop all live subscriptions, keeping the activation set for the next attach. */
     detach(): void;
     /** Sessions currently subscribed — diagnostics/tests. */
@@ -89,7 +95,9 @@ export function runTranscriptWorkerSession(
 
     const openSubscription = (sessionId: string, peer: PeerHandle): void => {
         if (subscriptions.has(sessionId)) return;
-        const handle = subscribeSessionChat(options.node, {
+        if (peer.state() === 'closed') return; // deferred until a new peer / retryDeferred
+        let handle: TranscriptSessionSubscriptionHandle | undefined;
+        handle = subscribeSessionChat(options.node, {
             sessionId,
             peer,
             ...(activation?.ownerDaemonId ? { ownerDaemonId: activation.ownerDaemonId } : {}),
@@ -102,8 +110,18 @@ export function runTranscriptWorkerSession(
                 if (closed) return;
                 options.port.postMessage(transcriptBridgeBaseRequestMessage(sessionId));
             },
+            // A resync that finds the peer closed: drop the dead handle so the
+            // next reconcile (retryDeferred / activation re-send) rebuilds it.
+            onUnavailable: () => {
+                if (handle && subscriptions.get(sessionId) === handle) closeSubscription(sessionId);
+            },
             ...(options.schedule ? { schedule: options.schedule } : {}),
         });
+        if (!handle.active()) {
+            // initial subscribe deferred: do not register a dead handle
+            handle.close();
+            return;
+        }
         subscriptions.set(sessionId, handle);
     };
 
@@ -132,6 +150,9 @@ export function runTranscriptWorkerSession(
             // The old handles belong to a dead peer; drop them so `apply`
             // rebuilds against the current one.
             for (const sessionId of [...subscriptions.keys()]) closeSubscription(sessionId);
+            apply();
+        },
+        retryDeferred(): void {
             apply();
         },
         detach(): void {

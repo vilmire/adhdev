@@ -82,6 +82,13 @@ export interface TranscriptSessionSubscriptionOptions {
     onBaseRequest?(): void;
     /** Defers the resubscribe off the ingest call stack. Defaults to `setTimeout(cb, 0)`. */
     schedule?(cb: () => void): void;
+    /**
+     * The peer had no open seqscribe session when a (re)subscribe was attempted
+     * (`ERR_MISUSE: no open session for peer`). The attempt is swallowed — the
+     * folder keeps its last committed view — and the owner is told so it can
+     * drop this handle and subscribe again once the peer is open.
+     */
+    onUnavailable?(error: unknown): void;
 }
 
 export interface TranscriptSessionSubscriptionHandle {
@@ -91,6 +98,8 @@ export interface TranscriptSessionSubscriptionHandle {
     view(): ReplicatedTranscriptViewV2 | null;
     /** Subscriptions restarted after a folder resync — diagnostics/tests. */
     resubscribes(): number;
+    /** False while the last subscribe attempt failed (peer session not open). */
+    active(): boolean;
     /** Idempotent. */
     close(): void;
 }
@@ -204,7 +213,20 @@ export function subscribeSessionChat(
     const attach = (): void => {
         generation += 1;
         const gen = generation;
-        const sub = node.subscribe(options.peer, { view: 'tail', params: { topic } });
+        let sub: Subscription;
+        try {
+            sub = node.subscribe(options.peer, { view: 'tail', params: { topic } });
+        } catch (error) {
+            // ★ The peer's seqscribe session is not open (closed lane, or a
+            // SUB racing a lane that died). Must never escape as an uncaught
+            // error out of a timer/message handler: defer to the owner, which
+            // re-subscribes when the peer is open again. The folder (and so
+            // the last committed view) is untouched.
+            subscription = null;
+            unsubs = [];
+            options.onUnavailable?.(error);
+            return;
+        }
         subscription = sub;
         unsubs = [
             sub.onSnapshot((rows) => {
@@ -232,6 +254,7 @@ export function subscribeSessionChat(
         topic,
         view: () => folder.view(),
         resubscribes: () => resubscribes,
+        active: () => subscription !== null && !closed,
         close(): void {
             if (closed) return;
             closed = true;

@@ -239,6 +239,50 @@ describe('runTranscriptWorkerSession', () => {
         }
     })
 
+    it('★ lane close → reopen: ERR_MISUSE on a closed peer is deferred (never thrown) and the pane gets its view after reopen', async () => {
+        const r = await rig([SESSION_A])
+        const port = fakePort()
+        // The worker keeps a handle whose seqscribe session is gone but whose
+        // reported state is stale (control event not yet processed).
+        const stalePeer: PeerHandle = r.peer
+        const liar: PeerHandle = {
+            peerId: stalePeer.peerId,
+            state: () => 'ready',
+            onStateChange: (cb) => stalePeer.onStateChange(cb),
+            detach: () => stalePeer.detach(),
+        }
+        let peer: PeerHandle | null = liar
+        try {
+            const session = runTranscriptWorkerSession({
+                node: r.consumer,
+                port,
+                currentPeer: () => peer,
+            })
+            await r.chat(SESSION_A).publish({ upserts: [{ id: 'a1', ord: 'a1', text: 'committed before close' }] })
+
+            // Lane closes: the seqscribe session is gone (subscribe -> ERR_MISUSE).
+            stalePeer.detach()
+            expect(() => r.consumer.subscribe(liar, { view: 'tail', params: { topic: sessionChatTopic(SESSION_A) } })).toThrow(/no open session/)
+
+            // Activation while closed must not throw out of the message handler.
+            expect(() => port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })).not.toThrow()
+            expect(session.activeSessionIds()).toEqual([])
+
+            // Lane reopens: new peer; the deferred session is subscribed again.
+            peer = r.reattach()
+            session.retryDeferred()
+            expect(session.activeSessionIds()).toEqual([SESSION_A])
+
+            const frames = () => port.posted.filter(isTranscriptBridgeFrameMessage)
+            await waitFor(() => frames().length > 0)
+            expect(frames()[0].reset).toBe(true)
+            expect(frames()[0].upserts[0].content).toBe('committed before close')
+            session.close()
+        } finally {
+            await r.close()
+        }
+    })
+
     it('forwards the folder\'s base-frame request to the main thread as a bridge message', async () => {
         const r = await rig([SESSION_A])
         const port = fakePort()

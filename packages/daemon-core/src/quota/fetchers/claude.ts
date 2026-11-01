@@ -48,6 +48,7 @@ import { resolveDeps } from './deps.js';
 import { FILE_AXIS_REREAD_NOTE, quotaReadNowClause } from '../refresh-command-hint.js';
 import { IDENTITY } from '../../track-identity.js';
 import { isTestRuntimeEnv } from '../../config/config-dir.js';
+import { adhdevHome } from '../statusline/paths.js';
 import {
     accountLineageFromStableIdentity,
     isConfirmedAccountSwitch,
@@ -55,6 +56,7 @@ import {
     quotaAccountLineage,
     sameQuotaAccount,
     unconfirmedQuotaReading,
+    withQuotaAccountLineage,
     UNKNOWN_ACCOUNT_LINEAGE,
     type QuotaAccountLineage,
 } from '../account-lineage.js';
@@ -82,6 +84,43 @@ function toWindow(
     return windowFromPercent(record.usedPercent, windowMinutes, record.resetsAt);
 }
 
+/** A reading captured within this margin of an observed account change is not bound to the new account. */
+export const ACCOUNT_CHANGE_SAFETY_MARGIN_MS = 60 * 60 * 1000;
+
+function accountChangedNearCapture(changedAt: number | null, capturedAt: number): boolean {
+    return changedAt !== null && changedAt > capturedAt - ACCOUNT_CHANGE_SAFETY_MARGIN_MS;
+}
+
+function observedAccountPath(env: NodeJS.ProcessEnv): string {
+    return path.join(adhdevHome(env), 'quota', 'claude-account-observed.json');
+}
+
+/**
+ * Persist the last Claude account key the daemon observed and when it last
+ * CHANGED (null = never seen to change since first observation). Returns the
+ * change time. Best-effort: an unreadable/unwritable file means "no known
+ * change". An unknown current account is not recorded (no key to compare).
+ */
+function observeClaudeAccount(overrides: QuotaFetchDeps, current: QuotaAccountLineage): number | null {
+    if (current.kind !== 'account') return null;
+    const env = overrides.env ?? process.env;
+    const file = observedAccountPath(env);
+    const now = overrides.now?.() ?? Date.now();
+    let stored: { key?: unknown; changedAt?: unknown } | null = null;
+    try {
+        stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch { /* first observation or unreadable */ }
+    const storedKey = typeof stored?.key === 'string' ? stored.key : null;
+    const storedChangedAt = typeof stored?.changedAt === 'number' ? stored.changedAt : null;
+    if (storedKey === current.key) return storedChangedAt;
+    const changedAt = storedKey === null ? null : now;
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(file, JSON.stringify({ key: current.key, changedAt }), { encoding: 'utf8', mode: 0o600 });
+    } catch { /* best-effort */ }
+    return changedAt;
+}
+
 /**
  * Read the quota Claude Code last reported to the statusline wrapper.
  *
@@ -94,10 +133,22 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
     const before = readClaudeQuotaAccountLineage(overrides);
     const quota = await readClaudeSnapshotQuota(overrides);
     const after = readClaudeQuotaAccountLineage(overrides);
+    const changedAt = observeClaudeAccount(overrides, after);
     // Preserve actionable setup/parse failures (which contain no measurement).
     if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
     const producer = quotaAccountLineage(quota.metadata?.accountLineage);
     if (sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)) return quota;
+    // Ordinary local Claude Code never supplies a producer identity (owner
+    // decision 2026-11-01: real usage must count). When the producer is
+    // unknown but the signed-in account is known and identical before and
+    // after the read, and the daemon has not seen a different account since
+    // shortly before the capture, the reading belongs to the current account.
+    // A known-but-different producer, or any before/after disagreement, is NOT
+    // bound and keeps the unconfirmed/no-carry-over handling below.
+    if (producer.kind === 'unknown' && before.kind === 'account' && sameQuotaAccount(before, after)
+        && !accountChangedNearCapture(changedAt, quota.updatedAt)) {
+        return withQuotaAccountLineage(quota, before);
+    }
     // Routing keeps treating this as unknown (empty windows). The dashboard may
     // still show the local statusline numbers, marked "account unconfirmed",
     // unless a CONFIRMED different account is involved (a real switch).

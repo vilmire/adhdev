@@ -3916,12 +3916,15 @@
                 "cue": {
                     "stale": "古い値",
                     "staleNextCheck": "古い値・{{minutes}}分以内に再確認",
+                    "unconfirmed": "アカウント未確認",
                     "refreshing": "更新中"
                 },
                 "resetsInDays": "{{days}}日{{hours}}時間後にリセット",
                 "resetsInHours": "{{hours}}時間{{minutes}}分後にリセット",
                 "resetsInMinutes": "{{minutes}}分後にリセット",
                 "resetsNow": "まもなくリセット",
+                "agyUpdatesOnNextRun": "次回の agy 実行時に更新",
+                "agyRunOnce": "agy を一度実行すると使用量を読み取れます",
                 "resetUnknown": "リセット時刻不明",
                 "resetAtAbsolute": "{{when}} にリセット",
                 "used": "{{percent}}% 使用"
@@ -3929,7 +3932,7 @@
             "title": "プラン使用量",
             "sessionHint": "このマシンが報告した5時間ローリングのプラン枠",
             "weeklyHint": "このマシンが報告した7日間ローリングのプラン枠",
-            "monthlyHint": "このマシンが報告した30日課金サイクル枠",
+            "monthlyHint": "このマシンが報告した課金サイクル枠",
             "bucketHint": "このマシンが報告したプール別クォータバケット — 同一プラン内のプールは独立してリセットされます",
             "failureHint": "このマシンはこのプロバイダーの使用量を読み取れなかったと報告しました",
             "okNoWindows": "上限なし",

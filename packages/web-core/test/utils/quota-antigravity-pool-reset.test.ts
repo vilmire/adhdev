@@ -124,8 +124,10 @@ describe('buildQuotaDisplayModel + selectMachineQuotaChips — pool visibility',
             metadata: { failureKind: 'expired-token', lastGoodWindows: true },
         }), NOW)
         expect(model.cue).toBe('stale')
-        expect(model.chips.every((c) => c.label.includes('stale'))).toBe(true)
-        expect(selectMachineQuotaChips(model, 'fleet').every((c) => c.label.includes('stale'))).toBe(true)
+        // An idle-expired agy token is not a "stale" problem the user must fix:
+        // the kept numbers say they update on the next agy run.
+        expect(model.chips.every((c) => c.label.includes('updates on next agy run'))).toBe(true)
+        expect(selectMachineQuotaChips(model, 'fleet').every((c) => c.label.includes('updates on next agy run'))).toBe(true)
     })
 
     it('shortQuotaChipLabel keeps full reset detail out of the visible fleet cell', () => {
