@@ -316,14 +316,14 @@ function parseBrainTranscript(
 
 // ─── History JSONL parser ────────────────────────────────────────────────────
 
-interface HistoryRow {
+export interface HistoryRow {
   conversationId: string;
   display: string;
   workspace: string;
   receivedAt: number;
 }
 
-function readHistoryRows(): HistoryRow[] {
+export function readHistoryRows(): HistoryRow[] {
   const sourcePath = historyJsonlPath();
   let lines: string[] = [];
   try { lines = fs.readFileSync(sourcePath, 'utf-8').split('\n').filter(Boolean); } catch { return []; }
@@ -639,7 +639,7 @@ function listBrainSessionMetas(workspaceBySession: ReadonlyMap<string, string>, 
 }
 
 /** Step 2: history.jsonl entries without brain transcripts (user prompts only). */
-function listHistoryJsonlSessionMetas(historyRows: HistoryRow[], seen: Set<string>): NativeHistorySessionMeta[] {
+export function listHistoryJsonlSessionMetas(historyRows: HistoryRow[], seen: Set<string>): NativeHistorySessionMeta[] {
   const results: NativeHistorySessionMeta[] = [];
   const grouped = new Map<
     string,

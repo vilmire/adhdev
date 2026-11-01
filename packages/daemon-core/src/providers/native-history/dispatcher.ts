@@ -25,6 +25,7 @@ import {
     listSessionsAllWorkspaces as listGrokCliSessionsAllWorkspaces,
     resolveGrokPath,
 } from './grok-cli-transcript.js';
+import { listAntigravityCliSessionsSync } from './antigravity-cli-summaries.js';
 import { hasExclusiveSentInput } from './sent-prompt-registry.js';
 import { SPAWN_BIND_GRACE_MS } from './constants.js';
 import { readFirstJsonlRecord } from './first-jsonl-record.js';
@@ -642,6 +643,13 @@ function safeSize(p: string): number {
 export function createNativeHistoryListDispatcher(
     reader: ReaderId,
 ): ((input: NativeHistoryInput) => unknown) | null {
+    if (reader === 'antigravity-cli') {
+        return (input: NativeHistoryInput) => {
+            const limitRaw = (input.args as Record<string, unknown> | undefined)?.limit;
+            const limit = typeof limitRaw === 'number' && limitRaw > 0 ? Math.floor(limitRaw) : 50;
+            return { sessions: listAntigravityCliSessionsSync(limit) };
+        };
+    }
     if (reader !== 'grok-cli') return null;
     return (input: NativeHistoryInput) => {
         const limitRaw = (input.args as Record<string, unknown> | undefined)?.limit;
