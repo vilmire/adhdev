@@ -19,6 +19,7 @@
 
 import { LOG } from '../logging/logger.js';
 import { migrateMeshTaskOutputs } from './mesh-task-outputs.js';
+import { ensureLightWorkspaceSchema } from './mesh-light-workspace-store.js';
 import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
 import { LocalRecordStore } from './mesh-local-record-store.js';
 import { ensureMeshNodeGitStateSchema } from './mesh-node-git-state.js';
@@ -230,6 +231,7 @@ export function migrate(self: MeshRuntimeStore): void {
     // mesh_task_outputs + the one-way drop of the retired graph-orchestration
     // tables (see mesh-task-outputs.ts).
     migrateMeshTaskOutputs(self.db);
+    ensureLightWorkspaceSchema(self.db);
     // Wiring-unification C3: the turn-ledger tables (additive, idempotent). The
     // destructive fold of the legacy tables is migrate-v1 — run explicitly after
     // the store is open (MeshRuntimeStore.runTurnLedgerMigrationV1), never from
