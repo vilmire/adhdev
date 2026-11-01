@@ -12,6 +12,7 @@ import type { NativeHistoryInput, NativeHistoryResult, NativeHistoryMessage } fr
 import { expandPath, safeMtimeMs } from './native-history-paths.js';
 import { projectMessages } from './native-history-projection.js';
 import { claimTranscript, isTranscriptClaimedByOther, transcriptClaimOwnerToken } from '../native-history/transcript-claim-registry.js';
+import { recoverSqliteSessionFromPersistedInputs } from './native-history-restart-recovery-sources.js';
 import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -98,6 +99,7 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
             return pickSqliteSessionByPromptEvidence(candidates, resolved, input, resolveMessagesFor, src.message_map);
         };
 
+        let recoveredOwner = false;
         let sessionId: string;
         let messageRows: any[] | null;
         if (requested) {
@@ -124,6 +126,14 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
             sessionId = resolveNewestSessionId();
             messageRows = resolveMessagesFor(sessionId);
         }
+        if (!sessionId) {
+            // Restart recovery (after the exact pin and the live evidence): the
+            // time floor died with the daemon, so an idle session falls outside
+            // session_query. Map it from the persisted per-instance inputs.
+            const owner = transcriptClaimOwnerToken(input.instanceId);
+            const rec = owner ? recoverSqliteSessionFromPersistedInputs(src, input, owner, resolved) : null;
+            if (rec) { sessionId = rec; messageRows = resolveMessagesFor(rec); recoveredOwner = true; }
+        }
         if (!sessionId) return null;
         if (!messageRows || messageRows.length === 0) return null;
 
@@ -147,6 +157,7 @@ export function executeSqlite(src: NativeHistorySqliteSource, input: NativeHisto
             sourcePath: resolved,
             sourceMtimeMs: mtime,
             nativeHistoryCoverage: 'full',
+            ...(recoveredOwner ? { ownerConfirmed: true } : {}),
             ...(resultWorkspace ? { workspace: resultWorkspace } : {}),
         };
     } finally {

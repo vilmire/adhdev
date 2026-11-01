@@ -46,6 +46,7 @@ import {
 } from './native-history-paths.js';
 export { claimKeyForPath } from './native-history-paths.js';
 import { recoverCodexSourceFromPersistedInputs } from './native-history-codex-recovery.js';
+import { recoverCursorSourceFromPersistedInputs, recoverKimiSourceFromPersistedInputs } from './native-history-restart-recovery-sources.js';
 import { pinnedTranscript, rankPromptEvidenceCandidates } from './native-history-prompt-bind.js';
 import {
     containsSentPrompt, hasExclusiveSentInput, hasRecordedSentInput, sentPromptSnippets,
@@ -733,7 +734,7 @@ export function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, in
             // one transcript, one transcript is claimed by at most one live
             // session, and ambiguity fails closed — newest-mtime is never the
             // deciding fallback under same-cwd concurrency.
-            return resolveSidecarClaimSource(resolved, filePat, windowMs, sessionFloor, workspaceHint, requestedSessionId, src.workspace_from_sidecar, input);
+            return resolveSidecarClaimSource(resolved, filePat, windowMs, sessionFloor, workspaceHint, requestedSessionId, src.workspace_from_sidecar, input, src);
         }
         if (src.session_id_from === 'dir_uuid') {
             sourcePath = pickDirUuidFileAcrossGlob(resolved, filePat, requestedSessionId);
@@ -745,7 +746,12 @@ export function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, in
             if (exact) claimOwnTranscript(exact, input);
             sourcePath = exact || pickSessionBoundFileAcrossGlob(resolved, filePat, windowMs, sessionFloor, workspaceHint);
             if (!sourcePath) {
-                return pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input, filePat, sessionFloor);
+                const live = pickRecentByPromptEvidence(recentFilesAcrossGlob(resolved, filePat, windowMs, sessionFloor), input, filePat, sessionFloor);
+                if (requestedSessionId || live.outcome?.ownerConfirmed === true || live.outcome?.unavailableReason) return live;
+                // Restart recovery (after the exact pin and the live evidence): persisted per-instance inputs.
+                const owner = transcriptClaimOwnerToken(input.instanceId);
+                const rec = owner && src.workspace_from_input ? recoverCursorSourceFromPersistedInputs(src, input, owner) : null;
+                return rec ? { path: rec, outcome: { attribution: 'claimed', ownerConfirmed: true } } : live;
             }
         }
     } else {
@@ -1035,7 +1041,7 @@ export function pickUniqueSpawnEvidence(
 function resolveSidecarClaimSource(
     template: string, pattern: RegExp, windowMs: number, sessionFloorMs: number,
     workspaceHint: string, requestedSessionId: string,
-    sidecar: { rel_path: string; workspace_path: string }, input: NativeHistoryInput,
+    sidecar: { rel_path: string; workspace_path: string }, input: NativeHistoryInput, src?: NativeHistoryJsonlSource,
 ): JsonlSourceResolution {
     const exact = requestedSessionId ? pickDirUuidFileAcrossGlob(template, pattern, requestedSessionId) : null;
     const legacy = !requestedSessionId && !workspaceHint ? newestRecentFileAcrossGlob(template, pattern, windowMs, sessionFloorMs) : null;
@@ -1044,12 +1050,25 @@ function resolveSidecarClaimSource(
         : listSidecarWorkspaceCandidates(template, pattern, windowMs, sessionFloorMs, workspaceHint, sidecar);
     const candidates = entries.map(c => ({ ...c, key: claimKeyForPath(c.p), workspaceMatches: true }));
     return selectSidecarClaimSource(candidates, input, windowMs,
-        (p, snippets) => containsSentPrompt(readForPromptEvidence(p), snippets));
+        (p, snippets) => containsSentPrompt(readForPromptEvidence(p), snippets), src);
 }
 
 /** The SAME selection/claim transaction serves synchronous history and async
  * status. All filesystem evidence is gathered before entering this function. */
 function selectSidecarClaimSource(
+    candidates: SidecarSourceCandidate[], input: NativeHistoryInput, windowMs: number,
+    matchesPrompt: (p: string, snippets: string[]) => boolean,
+    src?: NativeHistoryJsonlSource,
+): JsonlSourceResolution {
+    const live = selectSidecarClaimSourceLive(candidates, input, windowMs, matchesPrompt);
+    if (!src || readRequestedSessionId(input) || live.outcome?.ownerConfirmed === true || live.outcome?.unavailableReason) return live;
+    // Restart recovery (after the exact pin and the live evidence): persisted per-instance inputs.
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    const rec = owner && src.workspace_from_sidecar ? recoverKimiSourceFromPersistedInputs(src, input, owner) : null;
+    return rec ? { path: rec, outcome: { attribution: 'claimed', ownerConfirmed: true }, claimKey: claimKeyForPath(rec) } : live;
+}
+
+function selectSidecarClaimSourceLive(
     candidates: SidecarSourceCandidate[], input: NativeHistoryInput, windowMs: number,
     matchesPrompt: (p: string, snippets: string[]) => boolean,
 ): JsonlSourceResolution {
@@ -1109,7 +1128,7 @@ export function resolveJsonlSidecarSourceFromEvidence(
         return { path: chosen?.p ?? null, evidence };
     }
     const result = selectSidecarClaimSource(evidence.candidates, input, src.recent_window_ms ?? 5 * 60_000,
-        (p, snippets) => JSON.stringify(snippets) === evidence.promptIdentity && evidence.candidates.find(c => c.p === p)?.promptMatches === true);
+        (p, snippets) => JSON.stringify(snippets) === evidence.promptIdentity && evidence.candidates.find(c => c.p === p)?.promptMatches === true, src);
     return { ...result, evidence, claimKey: evidence.candidates.find(c => c.p === result.path)?.key };
 }
 
