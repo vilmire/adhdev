@@ -690,7 +690,7 @@ export interface JsonlSourceResolution {
     stale?: boolean;
 }
 
-function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: NativeHistoryInput): JsonlSourceResolution {
+export function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: NativeHistoryInput): JsonlSourceResolution {
     const resolved = expandPath(src.path, input);
     if (!resolved) return { path: null };
 

@@ -363,6 +363,8 @@ export interface SpecDriverOpts {
      * manifest keep logging `vunknown` rather than breaking.
      */
     manifestProviderVersion?: string;
+    /** Codex: veto generating->idle while the native rollout shows an open turn (native-turn-hold.ts). */
+    nativeTurnHold?: import('./native-turn-hold.js').NativeTurnHold;
 }
 
 // ── Driver-internal evaluation snapshot shapes (shared with the modal /

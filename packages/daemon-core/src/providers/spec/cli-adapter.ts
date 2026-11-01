@@ -27,7 +27,7 @@ import { invokeSpecControl } from './picker-controls.js';
 import { executeNativeHistory } from './native-history-executor.js';
 import type { NativeHistoryInput } from './native-history-types.js';
 import { expandToolBlock, type ToolBlockExpandResult } from './tool-block-expand.js';
-import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
+import { createCodexNativeTurnHold } from './native-turn-hold.js'; import { detectBackgroundTaskActive, backgroundTaskSnapshot, type BackgroundTaskDetection } from './background-task-detector.js';
 import {
     buildSpecDebugSnapshot, buildSpecTraceState, extractCodexSessionIdFromScreen,
     scrapeScreenAssistantMessages, screenScrapeSupported, type SpecDebugView,
@@ -288,6 +288,7 @@ export class SpecCliAdapter implements CliAdapter {
             removeSpawnArgs: manifestTuning?.removeArgs,
             manifestProviderVersion: manifestTuning?.providerVersion,
             resolvedTrustPlan,
+            nativeTurnHold: this.cliType === 'codex-cli' ? createCodexNativeTurnHold({ sessionId, getConfig: () => this.spec.native_history, getInput: () => this.nativeHistoryInput({ withOwner: true }) }) : undefined,
         });
         this.driver.subscribe((ev) => this.handleEvent(ev));
         this.attachedExistingRuntime = transportFactory?.attachesExistingRuntime === true;

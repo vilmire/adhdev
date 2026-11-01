@@ -79,8 +79,15 @@ export function createWorkerSessionHealthMonitor(
         state.active = signals;
     }
     return {
-        transition(owner: WorkerSessionHealthOwner, prev: string, next: string, at: number): void {
+        /**
+         * `nativeTurn`: the provider's own turn lifecycle, when it has one (Codex rollout). An
+         * `idle` read while the native turn is still open is a screen-only pulse inside one
+         * continuous turn: it is not recorded, so neither it nor its resume count as flap edges.
+         * Absent / 'unknown' keeps the screen-derived behaviour.
+         */
+        transition(owner: WorkerSessionHealthOwner, prev: string, next: string, at: number, nativeTurn?: 'open' | 'closed' | 'unknown'): void {
             if (!owner.meshId || !owner.taskId || prev === next) return;
+            if (nativeTurn === 'open' && next === 'idle') return;
             const state = stateFor(owner);
             if (!state.status) { state.status = prev; state.statusAt = at; }
             if (!statusEdge(state, next, at)) return;

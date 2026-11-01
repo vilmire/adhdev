@@ -37,6 +37,7 @@ import {
 } from './fsm-types.js';
 import { loadFsmSpec, reportFsmSpecWarnings } from './fsm-loader.js';
 import { SendSubmitEngine, type ClaimedQueuedSend, type SubmitState } from './send-submit-engine.js';
+import { applyNativeTurnHold } from './native-turn-hold.js';
 import { RedrawNudger } from './redraw-nudge.js';
 import {
     createStartupDismissState, decideStartupDismiss, normalizeStartupDismissConfig, recordStartupDismiss,
@@ -402,6 +403,7 @@ export class FsmDriver implements ISpecDriver {
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
         if (this.bgMarkerTimer) { clearTimeout(this.bgMarkerTimer); this.bgMarkerTimer = null; }
         this.redrawNudge.dispose();
+        this.opts.nativeTurnHold?.dispose();
         this.focusPrimer.dispose();
         // ENTER-LOSS layer ① scope note: clearing these timers DROPS any submit
         // still in flight — which is exactly why shutdownDaemonComponents runs
@@ -699,7 +701,7 @@ export class FsmDriver implements ISpecDriver {
             ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines, currentLines.length - screen.split('\n').length))
             : null;
         const prevForEval = this.prevScreenLines;
-        const ev = this.evalFsmNow(this.bgMarker.frame(guard, markerScan), screen, cursor, now);
+        const ev = applyNativeTurnHold(this.evalFsmNow(this.bgMarker.frame(guard, markerScan), screen, cursor, now), this.spec, this.currentStateId, this.opts.nativeTurnHold, () => this.reevaluate(), now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
         this.logShadowDivergence(ev);

@@ -64,6 +64,7 @@ import { resolveEventSessionId, readWorkerResultMetadata, resolveMeshSurfacedSes
 import { isMeshCoordinatorEvent } from './mesh-event-classify.js';
 import type { CoordinatorSessionView } from './turn-ledger/routing.js';
 import { meshNoticeRuntime, notifyMeshCoordinator, type CoordinatorNotice } from './turn-ledger/deliver.js';
+import { nativeTurnStateFor } from '../shared/native-turn-registry.js';
 import { workerSessionHealthFor, type WorkerSessionHealthOwner } from './turn-ledger/worker-session-health.js';
 import { resolveMeshPolicy } from '../repo-mesh-types.js';
 
@@ -584,7 +585,8 @@ function consumeWorkerSessionHealth(components: DaemonComponents, input: MeshEve
     const at = typeof event.timestamp === 'number' ? event.timestamp : Date.now();
     const monitor = workerSessionHealthFor(components);
     if (eventName === 'worker:status_changed') {
-        monitor.transition(owner, readText(event.prevStatus), readText(event.nextStatus), at);
+        monitor.transition(owner, readText(event.prevStatus), readText(event.nextStatus), at,
+            readText(event.nextStatus) === 'idle' ? nativeTurnStateFor(sessionId) : undefined);
     } else {
         const stalledMs = typeof event.stalledMs === 'number' ? event.stalledMs
             : typeof event.elapsedSec === 'number' ? event.elapsedSec * 1000 : NaN;
