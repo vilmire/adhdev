@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { computeBindingDigest, pinnedGhosttyRevision, pinnedZigVersion } from './binding-digest.mjs';
 import { scanHostPaths } from './host-path-scan.mjs';
+import { macosMinVersionProblems, MACOS_MIN_VERSION } from './macos-min-version.mjs';
 import { checkNativeFile } from './native-format.mjs';
 import { ADDON_FILE, RUNTIME_FILE_PATTERN, expectedApiLevel } from './prebuilt-manifest.mjs';
 
@@ -42,6 +43,10 @@ export function verifyPrebuilt(dir, { hostPathScan = true } = {}) {
     for (const name of readdirSync(dir).filter((entry) => RUNTIME_FILE_PATTERN.test(entry)).sort()) {
         const problems = checkNativeFile(name, readFileSync(resolve(dir, name)), process.platform, process.arch);
         checks.push({ name: `native format of ${name}`, ok: problems.length === 0, detail: problems.length ? problems.join('; ') : `${process.platform}-${process.arch} shared library` });
+    }
+    for (const name of readdirSync(dir).filter((entry) => RUNTIME_FILE_PATTERN.test(entry)).sort()) {
+        const problems = macosMinVersionProblems(name, readFileSync(resolve(dir, name)));
+        if (problems.length) checks.push({ name: `macOS ${MACOS_MIN_VERSION} floor of ${name}`, ok: false, detail: problems.join('; ') });
     }
     const file = resolve(dir, ADDON_FILE);
     let addon;

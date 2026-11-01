@@ -6,29 +6,29 @@
   "sourceDigest": "e4ca3372235a1289373e172996a5e7804bc4d5f3eac630d91d9160dd932e0627",
   "ghosttyRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
   "napiVersion": 8,
-  "builtWithNode": "v22.17.0",
+  "builtWithNode": "v24.22.1",
   "release": true,
   "provenance": {
     "problems": [],
     "ghosttySourceRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
     "ghosttySourceClean": true,
     "zigVersion": "0.15.2",
-    "cCompiler": "AppleClang 17.0.0.17000316",
-    "cxxCompiler": "AppleClang 17.0.0.17000316",
+    "cCompiler": "AppleClang 17.0.0.17000013",
+    "cxxCompiler": "AppleClang 17.0.0.17000013",
     "buildType": "Release"
   },
   "files": {
     "ghostty_vt_node.node": {
-      "sha256": "fbdbf5e197b99d43b609b875d3621ce3e873ac8e0e04608cd057fba987a8555a",
+      "sha256": "dc33247d1de680b96e451a27e1103407e7ba9fb70a0a1fe3cba17c5aa34b458f",
       "size": 100536
     },
     "libghostty-vt.0.1.0.dylib": {
-      "sha256": "d2f92f4bdbaa734b014fe8d38615ccaa5a97f9f07847e5476e87a4c7a64f3c00",
-      "size": 1528392
+      "sha256": "8b270a58ffd6125741f3d87d5e6e47be66129f9067236330c996e7c7cc24b547",
+      "size": 1531560
     },
     "libghostty-vt.dylib": {
-      "sha256": "d2f92f4bdbaa734b014fe8d38615ccaa5a97f9f07847e5476e87a4c7a64f3c00",
-      "size": 1528392
+      "sha256": "8b270a58ffd6125741f3d87d5e6e47be66129f9067236330c996e7c7cc24b547",
+      "size": 1531560
     }
   }
 }
