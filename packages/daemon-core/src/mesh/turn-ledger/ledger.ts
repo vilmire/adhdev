@@ -222,6 +222,8 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     // This capability exists only around a validated reply from the locally
     // configured stop port. Received topics and operator evidence cannot mint it.
     const confirmedStops = new Set<string>();
+    // Same capability shape for a bounded-unreachable settlement (see settleUnreachableWriter).
+    const unreachableSettles = new Map<string, 'unreachable_bound' | 'node_removed'>();
     const store = deps.store ?? new TurnStore(deps.db);
     const policy = deps.policy ?? DEFAULT_TURN_POLICY;
     const now = deps.now ?? (() => Date.now());
@@ -270,6 +272,42 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 status: 'failed', reason: 'operator_update' }, { writerStopReceipt: r });
             if (settled.rule === 'writer_settled') ports.revokeWorkerBind?.(request);
         } finally { confirmedStops.delete(eventId); }
+    }
+
+    // First time (this process) a stopping attempt's writer node was seen unreachable; any
+    // reachable sample resets it. In memory on purpose: a restart restarts the bound.
+    const unreachableSince = new Map<string, number>();
+    const removedSeen = new Set<string>();
+
+    /** Did this stop inspection fail to reach the writer node (vs. reaching it and it not being quiescent yet)? */
+    function inspectionUnreachable(outcome: { error?: unknown; receipt?: unknown }): boolean {
+        if (outcome.error !== undefined) return true;
+        const r = outcome.receipt as Record<string, unknown> | null | undefined;
+        if (!r || typeof r !== 'object') return true;
+        if (r.success === true) return false;
+        return r.code === 'writer_checkpoint_pending'
+            && (r.reason === 'worker_host_unresolved' || r.reason === 'strict_stop_peer_capability_unconfirmed' || r.reason === 'uncaptured_legacy_stop_identity');
+    }
+
+    /** Settle a stopping attempt whose writer node is gone/unreachable past the bound. Returns true when it settled. */
+    function settleUnreachable(a: TurnAttempt, mode: 'unreachable_bound' | 'node_removed'): boolean {
+        const stop = a.data.writerStop;
+        if (!stop) return false;
+        const eventId = `writer_unreachable:${stop.requestId}`;
+        unreachableSettles.set(eventId, mode);
+        try {
+            const settled = observe({ eventId, kind: 'operator_status', source: 'scheduler', at: now(),
+                observedBy: deps.selfDaemonId, sessionId: a.sessionId,
+                attemptRef: { attemptId: a.attemptId, generation: a.generation },
+                status: 'failed', reason: 'operator_update' });
+            if (settled.rule !== 'writer_unreachable_settled') return false;
+            // The returning node must not be able to keep reporting into a settled attempt.
+            ports.revokeWorkerBind?.({ attemptId: a.attemptId, generation: a.generation, sessionId: a.sessionId, meshId: a.meshId,
+                taskId: a.taskId, nodeId: a.nodeId, dispatchNonce: a.dispatchNonce, providerType: a.providerType,
+                ownerDaemonId: a.ownerDaemonId, messageId: a.messageId, revokeBind: true, stopRequestId: stop.requestId });
+            log.warn(`turn-ledger: stopping attempt ${a.attemptId} settled as writer_unreachable (${mode})`);
+            return true;
+        } finally { unreachableSettles.delete(eventId); }
     }
 
     function resolveAttempt(evidence: TurnEvidence): TurnAttempt | null {
@@ -401,7 +439,8 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 }
             }
         }
-        let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId) });
+        let result = reduce({ attempt, holds, evidence, policy, nowMs, stopConfirmed: confirmedStops.has(evidence.eventId),
+            ...(unreachableSettles.has(evidence.eventId) ? { writerUnreachable: unreachableSettles.get(evidence.eventId)! } : {}) });
         if (triggerBackgroundWorkProbe && attempt) {
             result = {
                 ...result,
@@ -750,14 +789,31 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     dispatchNonce: a.dispatchNonce,
                     providerType: a.providerType, ownerDaemonId: a.ownerDaemonId, messageId: a.messageId,
                     revokeBind: false, stopRequestId: a.data.writerStop.requestId, inspectOnly: true };
-                try { settleWriterStop(request, await ports.cancelDispatch?.(request)); }
-                catch (error) { log.warn(`writer checkpoint remains pending: ${String(error)}`); }
+                let outcome: { error?: unknown; receipt?: unknown } = {};
+                try { const receipt = await ports.cancelDispatch?.(request); outcome = { receipt }; settleWriterStop(request, receipt); }
+                catch (error) { outcome = { error }; log.warn(`writer checkpoint remains pending: ${String(error)}`); }
                 if (store.getAttempt(a.attemptId)?.state === 'stopping') {
+                    const removed = !!a.meshId && !!a.nodeId && ports.writerNodeRemoved?.({ meshId: a.meshId, nodeId: a.nodeId }) === true;
+                    if (removed) {
+                        // Two consecutive sightings: a transiently incomplete membership cache must not settle a live writer.
+                        if (!removedSeen.has(backoffKey)) removedSeen.add(backoffKey);
+                        else if (settleUnreachable(a, 'node_removed')) { unreachableSince.delete(backoffKey); removedSeen.delete(backoffKey); continue; }
+                    }
+                    else if (removedSeen.delete(backoffKey), inspectionUnreachable(outcome)) {
+                        const since = unreachableSince.get(backoffKey) ?? nowMs;
+                        unreachableSince.set(backoffKey, since);
+                        if (policy.stoppingUnreachableMaxMs > 0 && nowMs - since >= policy.stoppingUnreachableMaxMs
+                            && settleUnreachable(a, 'unreachable_bound')) { unreachableSince.delete(backoffKey); continue; }
+                    } else unreachableSince.delete(backoffKey);
                     const unsettled = (backoff?.unsettled ?? 0) + 1;
                     stopInspectBackoff.set(backoffKey, { unsettled, nextDueAt: now() + stopInspectDelayMs(unsettled) });
                 } else stopInspectBackoff.delete(backoffKey);
             }
-            if (!attemptId) for (const key of [...stopInspectBackoff.keys()]) if (!stillStopping.has(key)) stopInspectBackoff.delete(key);
+            if (!attemptId) {
+                for (const key of [...stopInspectBackoff.keys()]) if (!stillStopping.has(key)) stopInspectBackoff.delete(key);
+                for (const key of [...unreachableSince.keys()]) if (!stillStopping.has(key)) unreachableSince.delete(key);
+                for (const key of [...removedSeen]) if (!stillStopping.has(key)) removedSeen.delete(key);
+            }
         },
         notifyMeshEvent,
         claimDelivery,

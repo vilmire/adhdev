@@ -525,6 +525,15 @@ describe('turn-ipc — ledger_query (C-W9b)', () => {
         expect(decodeLedgerQueryResponse(res)).toEqual(res)
     })
 
+    it('decodes a summary carrying taskBlocked and refineFailed, rejects a non-count refineFailed', () => {
+        const summary = {
+            meshId: 'm1', totalEntries: 0, taskDispatched: 0, taskCompleted: 0, taskBlocked: 1, taskFailed: 0, refineFailed: 2, taskStalled: 0,
+            sessionLaunched: 0, checkpointCreated: 0, lastActivityAt: null, recentFailures: 0,
+        }
+        expect(decodeLedgerQueryResponse({ entries: [], summary })).toEqual({ entries: [], summary })
+        expect(decodeLedgerQueryResponse({ entries: [], summary: { ...summary, refineFailed: -1 } })).toBeNull()
+    })
+
     it('rejects an entry missing a required field', () => {
         expect(decodeLedgerQueryResponse({ entries: [{ id: 'e1', meshId: 'm1', kind: 'x', payload: {} }] })).toBeNull()
     })

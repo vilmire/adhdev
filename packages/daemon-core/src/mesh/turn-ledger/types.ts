@@ -51,6 +51,8 @@ interface TurnTerminal {
 export interface TurnAttemptData {
     /** A cap/reclaim retains the exact writer until the stop port proves quiescence. */
     writerStop?: { requestId: string; reason: TurnReason; requestedAt: number; tries: number; escalated: boolean; confirmed?: boolean;
+        /** Settled without a quiescence receipt: the writer node was unreachable past the bound, or removed from the mesh. */
+        settledBy?: 'unreachable_bound' | 'node_removed';
         terminal?: { outcome: TurnOutcome; strength: CommitStrength; adoptSessionId?: string; summary?: SummaryRef; textEventId?: string; source?: EvidenceSourceId } };
     providerSuspension?: { generation: number; modalKey: string | null; providerSetup?: boolean; at: number | null; resolvedAt: number | null };
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };

@@ -72,6 +72,8 @@ import {
 export interface ReduceInput {
     /** Local executor capability, never derived from received evidence fields. */
     stopConfirmed?: boolean;
+    /** Local executor capability like `stopConfirmed`: the ledger proved the writer node unreachable past the bound / removed. */
+    writerUnreachable?: 'unreachable_bound' | 'node_removed';
     attempt: TurnAttempt | null;
     /** Active holds of this attempt. */
     holds: readonly TurnHold[];
@@ -711,6 +713,25 @@ function beginWriterStop(draft: Draft, reason: TurnReason): void {
     requestWriterStop(draft);
 }
 
+/**
+ * The writer node cannot confirm quiescence (offline past the bound, or removed
+ * from the mesh): stop waiting. A terminal the writer itself produced (report,
+ * genuine end, operator cancel) stands; a pending failure — the hard ceiling or a
+ * reclaim cause — becomes the distinct `writer_unreachable` failure, never a
+ * requeue (a returning node could still hold the session). The attempt is then
+ * terminal, so everything the node sends later is rejected.
+ */
+function settleUnreachableWriter(draft: Draft, stop: NonNullable<TurnAttempt['data']['writerStop']>, by: 'unreachable_bound' | 'node_removed'): void {
+    stop.confirmed = true;
+    stop.settledBy = by;
+    if (stop.terminal && stop.terminal.outcome !== 'failed') {
+        commit(draft, stop.terminal.outcome, stop.terminal.strength, stop.reason, stop.terminal);
+        return;
+    }
+    stop.terminal = { outcome: 'failed', strength: 'genuine', source: 'scheduler' };
+    commit(draft, 'failed', 'genuine', 'writer_unreachable', stop.terminal);
+}
+
 /** Stopping is exclusive and nonterminal. All ordinary lifecycle proposals
  * remain evidence; neither a late idle nor an operator requeue releases it. */
 function reduceStopping(input: ReduceInput): ReduceResult {
@@ -728,7 +749,9 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         stop.reason = ev.reason;
         stop.terminal = { outcome: 'cancelled', strength: 'genuine', source: ev.source };
     }
-    if (input.stopConfirmed) {
+    if (input.writerUnreachable && !input.stopConfirmed && ev.kind !== 'cancel') {
+        settleUnreachableWriter(draft, stop, input.writerUnreachable);
+    } else if (input.stopConfirmed) {
         stop.confirmed = true;
         if (stop.terminal) {
             if (stop.terminal.adoptSessionId) {
@@ -751,7 +774,7 @@ function reduceStopping(input: ReduceInput): ReduceResult {
         }
     } else if (ev.kind === 'worker_report') ACTIONS.record_report(draft);
     else draft.effects.push({ kind: 'record', note: 'writer_stop_checkpoint_pending' });
-    return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : 'WR' };
+    return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: 'applied', rule: input.stopConfirmed ? 'writer_settled' : input.writerUnreachable && a.data.writerStop?.confirmed ? 'writer_unreachable_settled' : 'WR' };
 }
 
 function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAttempt, 'attemptId' | 'scope'>): TurnAttempt {

@@ -199,6 +199,8 @@ export const TURN_REASONS = [
     'operator_cancel', 'intentional_cleanup', 'task_removed', 'mission_abandoned', 'superseded',
     'operator_update', 'refine_terminal', 'validation_terminal',
     'hard_ceiling', 'reclaim_budget_exhausted', 'hollow_max_retries', 'migration_orphan',
+    // a stopping attempt whose writer node stayed unreachable (or was removed) past the bound
+    'writer_unreachable',
     // reclaims (generation + 1)
     'dispatch_refused_session_exited', 'dispatch_refused_no_target', 'dispatch_refused_unsupported_input', 'dispatch_failed',
     'session_exit', 'session_exit_before_turn', 'session_dead', 'hollow_completion',

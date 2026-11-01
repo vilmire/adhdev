@@ -107,6 +107,8 @@ export interface TurnLedgerPorts {
     bus?(event: TurnBusEvent, at: number): void;
     /** Local `SessionInputService.withdraw(messageId)` / `stop_cli`, or remote `dispatchMeshCommand(..., 'stop_cli')`. */
     cancelDispatch?(request: CancelDispatchRequest): unknown | Promise<unknown>;
+    /** True when `nodeId` is no longer a member of the mesh (the writer can never be asked to stop). */
+    writerNodeRemoved?(e: { meshId: string; nodeId: string }): boolean;
     /** Worker-bind + task-token revoke for a cut session (default: worker-mcp-isolation). */
     revokeWorkerBind?(request: CancelDispatchRequest): void;
     /** The instance drops its `attemptRef` (C-W5). */

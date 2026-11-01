@@ -32,6 +32,11 @@ export interface TurnPolicy {
     /** Hard ceiling (was QUEUE_HOLD_HARD_DEADLINE / ACKED_HOLD_HARD_CEILING). */
     hardCeilingMs: number;
     /**
+     * A `stopping` attempt whose writer node has been continuously unreachable (or was
+     * removed from the mesh) this long settles as failed `writer_unreachable`. Default 24 h.
+     */
+    stoppingUnreachableMaxMs: number;
+    /**
      * How long a genuine FSM end of a report-capable mesh worker waits for the
      * structured report before committing weak (R9r → R13r; live rc.40: a Bash
      * tool call showed an idle screen 37 s into a 4-minute turn). Added 2026-09-24.
@@ -82,6 +87,7 @@ export const DEFAULT_TURN_POLICY: Readonly<TurnPolicy> = Object.freeze({
     noTurnDeadlineMs: 900_000,
     stallNoticeMs: 180_000,
     hardCeilingMs: 5_400_000,
+    stoppingUnreachableMaxMs: 24 * 3_600_000,
     awaitReportMs: 600_000,
     livenessProbeIntervalFinalizingMs: 60_000,
     awaitEndMs: 60_000,
@@ -163,6 +169,7 @@ export const TURN_POLICY_ENV_BINDINGS: readonly EnvBinding[] = [
     { field: 'stallNoticeMs', canonical: 'ADHDEV_TURN_STALL_NOTICE_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'hardCeilingMs', canonical: 'ADHDEV_TURN_HARD_CEILING_MS', min: 0, max: 24 * HOUR,
       aliases: [{ name: 'MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS', min: 0, max: 24 * HOUR }] },
+    { field: 'stoppingUnreachableMaxMs', canonical: 'ADHDEV_STOPPING_UNREACHABLE_MAX_MS', min: 0, max: 30 * 24 * HOUR, aliases: [] },
     { field: 'awaitReportMs', canonical: 'ADHDEV_TURN_AWAIT_REPORT_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'livenessProbeIntervalFinalizingMs', canonical: 'ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS', min: 0, max: HOUR, aliases: [] },
     { field: 'awaitEndMs', canonical: 'ADHDEV_TURN_AWAIT_END_MS', min: 0, max: HOUR, aliases: [] },

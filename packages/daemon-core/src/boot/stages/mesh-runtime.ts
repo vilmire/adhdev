@@ -83,7 +83,8 @@ import { setupQuotaRefreshLoop } from '../../quota/refresh-loop.js';
 import { wireAssistantRuntime } from '../../assistant/assistant-runtime.js';
 import { getMachineId } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
-import { daemonIdsEquivalent, expandDaemonIdForms, type SummaryRef } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, expandDaemonIdForms, meshNodeIdMatches, type SummaryRef } from '@adhdev/mesh-shared';
+import { getMeshWithCache } from '../../mesh/mesh-queue-mesh-view.js';
 import type { DaemonComponents } from '../daemon-components.js';
 import type { MeshRuntimeStage, ProjectionsStage } from './types.js';
 import { redeliverDispatch } from '../../mesh/mesh-dispatch-redelivery.js';
@@ -288,6 +289,14 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
                 writerStop: request,
                 reason: 'turn_ledger_cancel_dispatch',
             });
+        },
+        // The writer's node left the mesh: nobody can be asked to confirm its stop. Unknown
+        // mesh / unreadable membership is never "removed".
+        writerNodeRemoved: ({ meshId, nodeId }) => {
+            try {
+                const mesh = getMeshWithCache(components, meshId);
+                return Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 && !mesh.nodes.some((n: any) => meshNodeIdMatches(n, nodeId));
+            } catch { return false; }
         },
         releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId),
         // WORKER-BIND-IDLE-DETACH: the default (bind/token revoke) plus the
