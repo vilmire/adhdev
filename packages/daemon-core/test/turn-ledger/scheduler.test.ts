@@ -250,6 +250,18 @@ describe('invariants', () => {
     });
 });
 
+describe('hard_ceiling invariant and stopping attempts', () => {
+    it('does not flag a stopping attempt (its ceiling is spent; the writer-stop authority bounds it)', async () => {
+        const r = rig();
+        toGenerating(r);
+        r.db.prepare(`DELETE FROM turn_holds WHERE reason = 'hard_ceiling'`).run();
+        r.db.prepare(`UPDATE turn_attempts SET state = 'stopping' WHERE terminal_outcome IS NULL AND scope != 'plain'`).run();
+        const report = await r.scheduler.tick();
+        expect(report.missingCeiling).toBe(0);
+        expect(r.logs.filter((l) => l.includes('without a hard_ceiling hold'))).toHaveLength(0);
+    });
+});
+
 describe('plain-attempt prune (C10-4)', () => {
     it('prunes terminal plain attempts older than 7 d, at most once per hour', async () => {
         const r = rig();

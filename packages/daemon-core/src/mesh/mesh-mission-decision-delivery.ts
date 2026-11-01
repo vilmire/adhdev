@@ -217,6 +217,10 @@ export function createDecisionReceiptChecker(getPorts: () => Promise<import('../
     return async (sessionId, wireMessageId, text) => {
         const ports = await getPorts();
         const out: any = await ports.execute('outgoing_receipts', { targetSessionId: sessionId, messageIds: [wireMessageId] });
+        // A definitive "session is gone": its queue died with it, so the queued body can
+        // never be submitted. Say 'lost' (re-arm) instead of throwing, which would leave
+        // the delivery 'waiting' and re-ask a dead session on every housekeeping tick.
+        if (!out?.success && /Live session not found/i.test(String(out?.error || ''))) return 'lost';
         if (!out?.success) throw new Error(out?.error || 'outgoing_receipts failed');
         const receipt = Array.isArray(out.receipts) ? out.receipts.find((r: any) => r?.messageId === wireMessageId) : undefined;
         if (receipt?.state === 'submitted') return 'submitted';

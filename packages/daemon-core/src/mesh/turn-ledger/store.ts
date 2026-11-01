@@ -709,6 +709,11 @@ export class TurnStore {
             WHERE event_id = ? AND publish_state = 'pending'`).run(seq, writer, eventId).changes > 0;
     }
 
+    /** `pending → none`: a permanently refused entry stops being retried (the row stays as a local audit record). */
+    markPublishRefused(eventId: string): boolean {
+        return this.stmt(`UPDATE turn_events SET publish_state = 'none' WHERE event_id = ? AND publish_state = 'pending'`).run(eventId).changes > 0;
+    }
+
     // ── worker-MCP audit rows (C-W8: moved off the legacy turn-event table) ──
     //
     // The worker's structured report / progress note / handoff-note index are

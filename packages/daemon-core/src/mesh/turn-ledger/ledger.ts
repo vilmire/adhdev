@@ -27,7 +27,7 @@ import { isDeepStrictEqual } from 'node:util';
 // ---------------------------------------------------------------------------
 
 import { afterBridgeCommit } from '../worker-bridge-transaction.js';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
@@ -203,6 +203,7 @@ const REPORT_GATE_RULES: ReadonlySet<string> = new Set(['R9r', 'R15p', 'R12r', '
 
 const DEFAULT_LOG: TurnLedgerLog = { info: () => {}, warn: () => {}, error: () => {} };
 const PUBLISH_BATCH = 256;
+const MAX_TOPIC_EVENT_ID = 256;
 
 function holdAttemptId(holdId: string): string {
     const at = holdId.lastIndexOf(':');
@@ -647,7 +648,16 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
         const meshId = row.meshId ?? (typeof row.payload.meshId === 'string' ? row.payload.meshId : null);
         if (!entry || !meshId) return null;
         const ref = row.payload.ref as SummaryRef | undefined;
-        return { meshId, entry, ...(ref ? { ref } : {}) };
+        return { meshId, entry: compactEntryEventId(entry), ...(ref ? { ref } : {}) };
+    }
+
+    // Rows written before the id fix (and any future long producer id) carry an
+    // eventId over the topic's 256-char identifier limit: shorten it deterministically
+    // (stable across retries) instead of leaving the row refused forever.
+    function compactEntryEventId(entry: MeshTopicEntry): MeshTopicEntry {
+        if (typeof entry.eventId !== 'string' || entry.eventId.length <= MAX_TOPIC_EVENT_ID) return entry;
+        const digest = createHash('sha1').update(entry.eventId).digest('hex').slice(0, 16);
+        return { ...entry, eventId: `${entry.eventId.slice(0, MAX_TOPIC_EVENT_ID - 17)}#${digest}` } as MeshTopicEntry;
     }
 
     async function drain(): Promise<PublishReport> {
@@ -678,6 +688,15 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                     counters.published++;
                     progressed++;
                 } catch (error) {
+                    if ((error as { code?: unknown } | null)?.code === 'content_guard') {
+                        // Permanent: the entry itself is invalid, retrying cannot help and would
+                        // head-of-line block the mesh. Park the row as local-only and say so once.
+                        store.markPublishRefused(row.eventId);
+                        report.failed++;
+                        counters.publishFailed++;
+                        log.error(`turn-ledger: publish refused permanently mesh=${target.meshId} eventId=${row.eventId.slice(0, 120)}: entry fails the content-boundary guard — row parked as local-only (publish_state=none)`);
+                        continue;
+                    }
                     blocked.add(target.meshId);
                     report.failed++;
                     counters.publishFailed++;

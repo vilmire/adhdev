@@ -75,6 +75,7 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                 if (!sessionStopRetryDue(retryKey, now)) continue;
                 let failure: unknown;
                 for (const c of anchors) {
+                    if (isDeadInventoryAnchor(daemonId, c.sessionId, now)) continue;
                     try {
                         if (!components.dispatchMeshCommand) throw new Error('P2P_unavailable');
                         const result = unwrapMeshRelayResult(await components.dispatchMeshCommand(daemonId, 'agent_command', {
@@ -84,7 +85,8 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
                         if (!result.success || !Array.isArray(result.sessions) || typeof result.hostBootId !== 'string' || !result.hostBootId) {
                             failure = result.error || (result.success ? 'lifetime_host_boot_unknown' : 'inventory_unconfirmed');
                             // A stopped historical anchor is not proof the peer is down.
-                            if (result.error === 'mesh_session_not_mesh_owned') continue;
+                            // Remember it: a stopped session never comes back, so do not re-ask the peer about it.
+                            if (result.error === 'mesh_session_not_mesh_owned') { markDeadInventoryAnchor(daemonId, c.sessionId, now); continue; }
                             throw new Error(String(failure));
                         }
                         clearSessionStopRetry(retryKey);
@@ -179,3 +181,30 @@ export function sessionLifetimeDeps(components: DaemonComponents, mesh: any, now
         },
     };
 }
+
+// Historical inventory anchors (completed/cancelled queue rows) whose session the peer
+// has definitively answered "not live": skipped for a day so the lifetime pass does not
+// re-send an agent_command per dead anchor on every retry (a stopped session id is never reused).
+const DEAD_ANCHOR_TTL_MS = 24 * 60 * 60_000;
+const DEAD_ANCHOR_MAX = 2000;
+const deadInventoryAnchors = new Map<string, number>();
+
+function deadAnchorKey(daemonId: string, sessionId: string): string { return `${daemonId}\u0000${sessionId}`; }
+
+export function isDeadInventoryAnchor(daemonId: string, sessionId: string, now: number): boolean {
+    const key = deadAnchorKey(daemonId, sessionId);
+    const until = deadInventoryAnchors.get(key);
+    if (until === undefined) return false;
+    if (until <= now) { deadInventoryAnchors.delete(key); return false; }
+    return true;
+}
+
+export function markDeadInventoryAnchor(daemonId: string, sessionId: string, now: number): void {
+    if (deadInventoryAnchors.size >= DEAD_ANCHOR_MAX) {
+        for (const [k, until] of deadInventoryAnchors) if (until <= now) deadInventoryAnchors.delete(k);
+        if (deadInventoryAnchors.size >= DEAD_ANCHOR_MAX) deadInventoryAnchors.delete(deadInventoryAnchors.keys().next().value as string);
+    }
+    deadInventoryAnchors.set(deadAnchorKey(daemonId, sessionId), now + DEAD_ANCHOR_TTL_MS);
+}
+
+export function resetDeadInventoryAnchorsForTest(): void { deadInventoryAnchors.clear(); }

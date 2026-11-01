@@ -378,7 +378,7 @@ export function publishMeshTopicEntry(meshId: string, entry: MeshTopicEntry, opt
     if (!projected) {
         counters.invalidEntries++;
         LOG.error('Seqscribe', `mesh publisher refused an entry that fails the content guard k=${(entry as { k?: unknown })?.k}`);
-        return Promise.reject(new Error('mesh topic entry failed the content-boundary guard'));
+        return Promise.reject(Object.assign(new Error('mesh topic entry failed the content-boundary guard'), { code: 'content_guard' as const }));
     }
     if (Object.keys(projected).length !== Object.keys(entry).length) {
         counters.invalidEntries++;

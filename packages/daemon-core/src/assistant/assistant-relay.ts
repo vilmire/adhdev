@@ -1,4 +1,5 @@
 import { readLateCaptureState, repairLateCaptures, settleLateCapture } from './late-capture-repair.js';
+import { RelayAuditFailureLog } from './relay-audit-failure-log.js';
 import { captureFailureReason, normalizeCaptureReport } from './capture-failure.js';
 import { RelayDeliveryPolicy, unavailableReportNotice } from './relay-delivery-policy.js';
 import { RelayNudgeGate } from './relay-nudge.js';
@@ -763,6 +764,8 @@ export class AssistantRelay {
         this.gaps.recordRead(result, recipient);
     }
 
+    private readonly auditLog = new RelayAuditFailureLog();
+
     /** Native finals not covered by delivery/read receipts, grouped per attempt. */
     private auditReplies(now: number): void {
         const port = this.ports.auditCoordinatorReplies;
@@ -781,7 +784,7 @@ export class AssistantRelay {
                 this.kick();
                 if (replies.complete !== false) this.lastAuditAt = now;
             })
-            .catch((e) => LOG.warn('Assistant', `relay gap audit failed: ${(e as Error)?.message ?? e}`))
+            .then(() => { this.auditLog.note(null, now); }, (e) => { this.auditLog.note(String((e as Error)?.message ?? e), now); })
             .finally(() => { if (this.lifecycle === lifecycle) this.auditing = false; });
     }
 

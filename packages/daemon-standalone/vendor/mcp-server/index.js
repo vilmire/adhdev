@@ -44442,6 +44442,10 @@ ${error.message || ""}`;
             return this.stmt(`UPDATE turn_events SET publish_state = 'published', published_seq = ?, src_writer = COALESCE(src_writer, ?)
             WHERE event_id = ? AND publish_state = 'pending'`).run(seq2, writer, eventId).changes > 0;
           }
+          /** `pending → none`: a permanently refused entry stops being retried (the row stays as a local audit record). */
+          markPublishRefused(eventId) {
+            return this.stmt(`UPDATE turn_events SET publish_state = 'none' WHERE event_id = ? AND publish_state = 'pending'`).run(eventId).changes > 0;
+          }
           // ── worker-MCP audit rows (C-W8: moved off the legacy turn-event table) ──
           //
           // The worker's structured report / progress note / handoff-note index are
@@ -59761,7 +59765,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!projected) {
         counters.invalidEntries++;
         LOG.error("Seqscribe", `mesh publisher refused an entry that fails the content guard k=${entry?.k}`);
-        return Promise.reject(new Error("mesh topic entry failed the content-boundary guard"));
+        return Promise.reject(Object.assign(new Error("mesh topic entry failed the content-boundary guard"), { code: "content_guard" }));
       }
       if (Object.keys(projected).length !== Object.keys(entry).length) {
         counters.invalidEntries++;
@@ -80554,6 +80558,10 @@ ${includeRefs[0]}`;
         persistHold(store5, task);
       });
     }
+    function blockerDigest(ids) {
+      if (ids.length === 0) return "none";
+      return `${ids.length}-${(0, import_crypto20.createHash)("sha1").update([...ids].sort().join(",")).digest("hex").slice(0, 12)}`;
+    }
     function notifyHeldQueueTasks(meshId, now = Date.now()) {
       const store5 = MeshRuntimeStore.getInstance();
       const queue = store5.getQueueEntries(meshId, ["pending", "assigned"]);
@@ -80564,7 +80572,7 @@ ${includeRefs[0]}`;
         store5.transaction(() => {
           const task = store5.findQueueEntryById(meshId, snapshot.id);
           if (!task || task.status !== "pending" || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
-          const eventId = `queue-hold:${meshId}:${task.id}:${view2.since}:${view2.reason}:${view2.blockingTaskIds.join(",")}`;
+          const eventId = `queue-hold:${meshId}:${task.id}:${view2.since}:${view2.reason}:${blockerDigest(view2.blockingTaskIds)}`;
           const blockers = view2.blockingTasks.map((b) => `${b.taskId} (${b.title})`).join(", ");
           const coordinatorMessage = `[System] Queue task ${task.id} has been held for ${Math.floor(view2.ageMs / 6e4)} min: ${view2.reason}${blockers ? ` by ${blockers}` : ""}. ${JSON.stringify(view2.detail)}`;
           if (notifyMeshCoordinator({
@@ -80584,9 +80592,11 @@ ${includeRefs[0]}`;
         });
       }
     }
+    var import_crypto20;
     var init_mesh_queue_hold_store = __esm2({
       "src/mesh/mesh-queue-hold-store.ts"() {
         "use strict";
+        import_crypto20 = require("crypto");
         init_mesh_runtime_store();
         init_mesh_queue_hold();
         init_deliver();
@@ -84067,7 +84077,7 @@ ${includeRefs[0]}`;
       }
     });
     function lineageToken(historySessionId) {
-      return (0, import_crypto20.createHash)("sha256").update(String(historySessionId)).digest("hex").slice(0, 8);
+      return (0, import_crypto21.createHash)("sha256").update(String(historySessionId)).digest("hex").slice(0, 8);
     }
     function recordBlockAddress(recordIndex, blockIndex) {
       if (!Number.isInteger(recordIndex) || recordIndex < 0) return void 0;
@@ -84136,7 +84146,7 @@ ${includeRefs[0]}`;
     function recordBlockSource(historySessionId, recordIndex, blockIndex) {
       return nativeSourceAddress(historySessionId, recordBlockAddress(recordIndex, blockIndex));
     }
-    var import_crypto20;
+    var import_crypto21;
     var NATIVE_ID_TOKEN_MAX_BYTES;
     var SESSION_START_ADDRESS;
     var ADDR_RE;
@@ -84145,7 +84155,7 @@ ${includeRefs[0]}`;
     var init_message_source_address = __esm2({
       "src/chat/message-source-address.ts"() {
         "use strict";
-        import_crypto20 = require("crypto");
+        import_crypto21 = require("crypto");
         NATIVE_ID_TOKEN_MAX_BYTES = 40;
         SESSION_START_ADDRESS = "s";
         ADDR_RE = /^[a-z0-9._-]{1,48}$/;
@@ -86619,7 +86629,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
     }
     function deliverTaskToSession(dispatchThunk, ctx, warmup) {
-      const delivery = { id: `dlv-${(0, import_crypto21.randomUUID)()}` };
+      const delivery = { id: `dlv-${(0, import_crypto22.randomUUID)()}` };
       const activeHold = evaluateNewWorkHold({ meshId: ctx.meshId });
       if (activeHold.held) {
         handleDispatchFailure(
@@ -86849,7 +86859,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       return true;
     }
-    var import_crypto21;
+    var import_crypto22;
     var DISPATCH_CONFIRM_TIMEOUT_MS;
     var DISPATCH_CONNECT_TIMEOUT_MS;
     var dispatchWarmupGetterMissingWarned;
@@ -86869,7 +86879,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_redrive_provenance();
         init_mesh_record();
         init_mesh_event_trace();
-        import_crypto21 = require("crypto");
+        import_crypto22 = require("crypto");
         init_mesh_warmup_deadline();
         init_mesh_relay_result();
         init_mesh_queue_dispatch_evidence();
@@ -91858,7 +91868,7 @@ ${continuationNotice}` } : task,
         ...input.sourceCoordinator ? { sourceCoordinator: input.sourceCoordinator } : {}
       };
       const row2 = {
-        noteId: (0, import_crypto22.randomUUID)(),
+        noteId: (0, import_crypto23.randomUUID)(),
         meshId,
         text: text7,
         category: input.category ?? null,
@@ -91888,7 +91898,7 @@ ${continuationNotice}` } : task,
           if (store5.tombstoneOperatingNote(meshId, note2.noteId, nowMs2)) matched += 1;
         }
       }
-      const tombstoneId = (0, import_crypto22.randomUUID)();
+      const tombstoneId = (0, import_crypto23.randomUUID)();
       if (text7) {
         store5.insertOperatingNote({
           noteId: tombstoneId,
@@ -91933,7 +91943,7 @@ ${continuationNotice}` } : task,
       const deadline = created + ttlDays * MS_PER_DAY;
       return { effectiveExpiresAt: new Date(deadline).toISOString(), expired: now >= deadline };
     }
-    var import_crypto22;
+    var import_crypto23;
     var OPERATING_NOTE_KIND;
     var OPERATING_NOTE_DEDUPE_WINDOW;
     var OPERATING_NOTE_KEEP_LATEST;
@@ -91943,7 +91953,7 @@ ${continuationNotice}` } : task,
     var init_mesh_operating_notes = __esm2({
       "src/mesh/mesh-operating-notes.ts"() {
         "use strict";
-        import_crypto22 = require("crypto");
+        import_crypto23 = require("crypto");
         init_mesh_runtime_store();
         OPERATING_NOTE_KIND = "coordinator_operating_note";
         OPERATING_NOTE_DEDUPE_WINDOW = 40;
@@ -92584,17 +92594,17 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       };
     }
     function newReleaseId() {
-      return `rel_${(0, import_crypto23.randomBytes)(6).toString("hex")}`;
+      return `rel_${(0, import_crypto24.randomBytes)(6).toString("hex")}`;
     }
     function meshReleases() {
       return new MeshReleaseStore(MeshRuntimeStore.getInstance().db);
     }
-    var import_crypto23;
+    var import_crypto24;
     var MeshReleaseStore;
     var init_mesh_release_store = __esm2({
       "src/mesh/mesh-release-store.ts"() {
         "use strict";
-        import_crypto23 = require("crypto");
+        import_crypto24 = require("crypto");
         init_mesh_runtime_store();
         MeshReleaseStore = class {
           constructor(db3) {
@@ -102564,7 +102574,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return (0, import_path23.join)(getConfigDir2(opts.env), MESH_PEER_SECRETS_FILE);
     }
     function mintPeerSecret() {
-      return (0, import_crypto25.randomBytes)(32).toString("base64");
+      return (0, import_crypto26.randomBytes)(32).toString("base64");
     }
     function canonicalOrThrow(id4, what) {
       const canonical2 = canonicalDaemonId2(id4);
@@ -102729,7 +102739,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function resetPeerSecretsWarningsForTest() {
       warnedPaths.clear();
     }
-    var import_crypto25;
+    var import_crypto26;
     var import_fs28;
     var import_path23;
     var MESH_PEER_SECRETS_FILE;
@@ -102739,7 +102749,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var init_mesh_peer_secrets = __esm2({
       "src/mesh/transport/mesh-peer-secrets.ts"() {
         "use strict";
-        import_crypto25 = require("crypto");
+        import_crypto26 = require("crypto");
         import_fs28 = require("fs");
         import_path23 = require("path");
         init_dist();
@@ -103501,7 +103511,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     function toModalKeyIdentifier(key5) {
       if (MODAL_KEY_IDENTIFIER_RE.test(key5)) return key5;
-      return `fp:${(0, import_crypto27.createHash)("sha256").update(key5).digest("hex").slice(0, 32)}`;
+      return `fp:${(0, import_crypto28.createHash)("sha256").update(key5).digest("hex").slice(0, 32)}`;
     }
     function emitSuspensionResolved(port, opts) {
       guardEmit(port, "suspension_resolved", opts.sessionId, () => ({
@@ -103513,7 +103523,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         ...opts.modalKey ? { modalKey: toModalKeyIdentifier(opts.modalKey) } : {}
       }));
     }
-    var import_crypto27;
+    var import_crypto28;
     var SUMMARY_REF_KINDS;
     var TURN_EVIDENCE_HANDOFF_KIND;
     var eventSeq;
@@ -103523,7 +103533,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "src/providers/turn-evidence-port.ts"() {
         "use strict";
         init_dist();
-        import_crypto27 = require("crypto");
+        import_crypto28 = require("crypto");
         init_logger();
         SUMMARY_REF_KINDS = /* @__PURE__ */ new Set(["turn_end", "transcript_final"]);
         TURN_EVIDENCE_HANDOFF_KIND = "turn.evidence.text";
@@ -107520,7 +107530,7 @@ ${result.stderr}`, result.code);
       if (rawText.length <= 256) {
         return `${depth}:raw:${rawText}`;
       }
-      const digest6 = (0, import_crypto29.createHash)("sha256").update(rawText).digest("base64url");
+      const digest6 = (0, import_crypto30.createHash)("sha256").update(rawText).digest("base64url");
       return `${depth}:${rawText.length}:${digest6}`;
     }
     function scanPercentRuns(text7, patterns, liveCred, depth, budget) {
@@ -107704,7 +107714,7 @@ ${result.stderr}`, result.code);
       }
       return redacted;
     }
-    var import_crypto29;
+    var import_crypto30;
     var CREDENTIAL_KEY_SET;
     var CREDENTIAL_KEY_PATTERN;
     var KEY_VALUE_CREDENTIAL_RE;
@@ -107728,7 +107738,7 @@ ${result.stderr}`, result.code);
     var init_credential_redactor = __esm2({
       "src/logging/credential-redactor.ts"() {
         "use strict";
-        import_crypto29 = require("crypto");
+        import_crypto30 = require("crypto");
         CREDENTIAL_KEY_SET = /* @__PURE__ */ new Set([
           "token",
           "bind",
@@ -108152,7 +108162,7 @@ ${result.stderr}`, result.code);
       return m ? { cls: "n", L: m[1], addr: m[2] } : void 0;
     }
     function newEpochToken() {
-      return (0, import_crypto30.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+      return (0, import_crypto31.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
     function contentKey(role, kind, text7) {
       return `${role}\0${kind}\0${text7}`;
@@ -108334,7 +108344,7 @@ ${result.stderr}`, result.code);
     function dropMessageIdentityLedger(sessionKey2) {
       ledgers.delete(sessionKey2);
     }
-    var import_crypto30;
+    var import_crypto31;
     var TOMBSTONE_POOL_MAX;
     var LIVE_ENTRIES_MAX;
     var LCS_MAX_CELLS;
@@ -108349,7 +108359,7 @@ ${result.stderr}`, result.code);
     var init_message_identity_ledger = __esm2({
       "src/chat/message-identity-ledger.ts"() {
         "use strict";
-        import_crypto30 = require("crypto");
+        import_crypto31 = require("crypto");
         init_fractional_index();
         init_message_source_address();
         TOMBSTONE_POOL_MAX = 256;
@@ -111355,7 +111365,7 @@ ${result.stderr}`, result.code);
       return text7.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
     }
     function coreEntryId(text7) {
-      return (0, import_crypto32.createHash)("sha1").update(normalizeMemoryText(text7)).digest("hex").slice(0, 10);
+      return (0, import_crypto33.createHash)("sha1").update(normalizeMemoryText(text7)).digest("hex").slice(0, 10);
     }
     function tokenJaccard(a, b) {
       const toks = (s2) => new Set(s2.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
@@ -111366,13 +111376,13 @@ ${result.stderr}`, result.code);
       for (const t of A3) if (B2.has(t)) inter += 1;
       return inter / (A3.size + B2.size - inter);
     }
-    var import_crypto32;
+    var import_crypto33;
     var MAX_MEMORY_ENTRY_CHARS;
     var CONTROL_CHARS;
     var init_memory_content = __esm2({
       "src/assistant/memory/memory-content.ts"() {
         "use strict";
-        import_crypto32 = require("crypto");
+        import_crypto33 = require("crypto");
         MAX_MEMORY_ENTRY_CHARS = 500;
         CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
       }
@@ -111412,7 +111422,7 @@ ${result.stderr}`, result.code);
     function isReviewOriginName(origin) {
       return origin === "review" || origin === "review_tainted";
     }
-    var import_crypto33;
+    var import_crypto34;
     var ARCHIVE_KINDS;
     var DAY_MS3;
     var ARCHIVE_MAX_ACTIVE_PER_SCOPE;
@@ -111428,7 +111438,7 @@ ${result.stderr}`, result.code);
     var init_memory_archive = __esm2({
       "src/assistant/memory/memory-archive.ts"() {
         "use strict";
-        import_crypto33 = require("crypto");
+        import_crypto34 = require("crypto");
         init_store_guards();
         init_memory_content();
         ARCHIVE_KINDS = ["rule", "env", "preference", "lesson"];
@@ -111456,8 +111466,8 @@ ${result.stderr}`, result.code);
             const used2 = this.countActive(input.scope, projectRef);
             if (used2 >= ARCHIVE_MAX_ACTIVE_PER_SCOPE) return { result: "memory_budget_exceeded", used: used2, budget: ARCHIVE_MAX_ACTIVE_PER_SCOPE };
             const at = this.now();
-            let id4 = (0, import_crypto33.createHash)("sha1").update(`${input.scope}|${projectRef ?? ""}|${input.text}`).digest("hex").slice(0, 10);
-            if (this.get(id4)) id4 = (0, import_crypto33.randomBytes)(5).toString("hex");
+            let id4 = (0, import_crypto34.createHash)("sha1").update(`${input.scope}|${projectRef ?? ""}|${input.text}`).digest("hex").slice(0, 10);
+            if (this.get(id4)) id4 = (0, import_crypto34.randomBytes)(5).toString("hex");
             this.db.prepare(`INSERT INTO assistant_memory_entry
             (id, scope, project_ref, kind, text, origin, created_at, updated_at, expires_at, source_ref)
             VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
@@ -111769,7 +111779,7 @@ ${result.stderr}`, result.code);
         journalFail("staged", text7, stagedId);
         return { result: "staged", stagedId };
       }
-      const batchId = extra.batchId ?? `b${Date.now().toString(36)}${(0, import_crypto34.randomBytes)(3).toString("hex")}`;
+      const batchId = extra.batchId ?? `b${Date.now().toString(36)}${(0, import_crypto35.randomBytes)(3).toString("hex")}`;
       const added = archive.add({ scope: "global", kind, text: text7, origin });
       if (added.result !== "applied") {
         return added.result === "memory_duplicate" ? fail13({ result: "memory_duplicate" }, text7) : fail13({ result: "memory_budget_exceeded", used: added.used, budget: added.budget }, text7);
@@ -111796,12 +111806,12 @@ ${result.stderr}`, result.code);
       host.emit({ tier: "archive", target: op.target, action: "add", origin, text: text7, reverted: false, scope: "archive", kind });
       return { result: "applied" };
     }
-    var import_crypto34;
+    var import_crypto35;
     var CANDIDATE_PREVIEW_CHARS;
     var init_memory_archive_ops = __esm2({
       "src/assistant/memory/memory-archive-ops.ts"() {
         "use strict";
-        import_crypto34 = require("crypto");
+        import_crypto35 = require("crypto");
         init_store_guards();
         init_memory_content();
         init_memory_archive();
@@ -111927,7 +111937,7 @@ ${result.stderr}`, result.code);
       }
     });
     function newBatch(prefix, now) {
-      return `${prefix}${now.toString(36)}${(0, import_crypto35.randomBytes)(3).toString("hex")}`;
+      return `${prefix}${now.toString(36)}${(0, import_crypto36.randomBytes)(3).toString("hex")}`;
     }
     function groupBy(items, key5) {
       const m = /* @__PURE__ */ new Map();
@@ -112060,14 +112070,14 @@ ${result.stderr}`, result.code);
       }
       return { result: "applied", batchId };
     }
-    var import_crypto35;
+    var import_crypto36;
     var SIMILAR_THRESHOLD;
     var SUGGESTIONS_MAX;
     var archiveScopeField;
     var init_memory_consolidate = __esm2({
       "src/assistant/memory/memory-consolidate.ts"() {
         "use strict";
-        import_crypto35 = require("crypto");
+        import_crypto36 = require("crypto");
         init_memory_content();
         SIMILAR_THRESHOLD = 0.8;
         SUGGESTIONS_MAX = 30;
@@ -112351,7 +112361,7 @@ ${result.stderr}`, result.code);
     }
     var import_fs31;
     var import_path25;
-    var import_crypto36;
+    var import_crypto37;
     var MEMORY_FILE_NAMES;
     var MEMORY_JOURNAL_FILE;
     var DEFAULT_MEMORY_BUDGETS;
@@ -112371,7 +112381,7 @@ ${result.stderr}`, result.code);
         "use strict";
         import_fs31 = require("fs");
         import_path25 = require("path");
-        import_crypto36 = require("crypto");
+        import_crypto37 = require("crypto");
         init_config();
         init_store_guards();
         init_memory_content();
@@ -112810,7 +112820,7 @@ ${result.stderr}`, result.code);
             const ts2 = this.now().toISOString();
             const full = {
               ts: ts2,
-              jid: `${this.now().getTime().toString(36)}${(0, import_crypto36.randomBytes)(3).toString("hex")}`,
+              jid: `${this.now().getTime().toString(36)}${(0, import_crypto37.randomBytes)(3).toString("hex")}`,
               ...rec7,
               before: scrub("before", rec7.before),
               after: scrub("after", rec7.after)
@@ -112833,7 +112843,7 @@ ${result.stderr}`, result.code);
             return (0, import_path25.join)(this.stagedDir, `${id4}.json`);
           }
           stage(op, origin, reviewTurnId) {
-            const id4 = `mem-${this.now().getTime()}-${(0, import_crypto36.randomBytes)(4).toString("hex")}`;
+            const id4 = `mem-${this.now().getTime()}-${(0, import_crypto37.randomBytes)(4).toString("hex")}`;
             const rec7 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
             writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec7, null, 2));
             return id4;
@@ -114079,7 +114089,7 @@ ${body}`;
     });
     var import_fs36;
     var import_path29;
-    var import_crypto37;
+    var import_crypto38;
     var REDACT_RESULTS;
     var SkillJournal;
     var SkillStaging;
@@ -114088,7 +114098,7 @@ ${body}`;
         "use strict";
         import_fs36 = require("fs");
         import_path29 = require("path");
-        import_crypto37 = require("crypto");
+        import_crypto38 = require("crypto");
         init_store_guards();
         REDACT_RESULTS = /* @__PURE__ */ new Set(["skill_secret_rejected", "skill_hidden_chars_rejected", "skill_injection_rejected"]);
         SkillJournal = class {
@@ -114134,7 +114144,7 @@ ${body}`;
             return (0, import_path29.join)(this.dir, `${id4}.json`);
           }
           write(rec7) {
-            const id4 = `skl-${this.now().getTime()}-${(0, import_crypto37.randomBytes)(4).toString("hex")}`;
+            const id4 = `skl-${this.now().getTime()}-${(0, import_crypto38.randomBytes)(4).toString("hex")}`;
             const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec7 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
@@ -115289,7 +115299,7 @@ ${body}`;
     });
     var import_fs39;
     var import_path32;
-    var import_crypto38;
+    var import_crypto39;
     var PROJECT_NOTE_CATEGORIES;
     var ID_RE2;
     var AssistantNoteStaging;
@@ -115298,7 +115308,7 @@ ${body}`;
         "use strict";
         import_fs39 = require("fs");
         import_path32 = require("path");
-        import_crypto38 = require("crypto");
+        import_crypto39 = require("crypto");
         init_config();
         init_store_guards();
         PROJECT_NOTE_CATEGORIES = ["provider_quirk", "pattern_to_avoid", "recovery_lesson"];
@@ -115314,7 +115324,7 @@ ${body}`;
             return (0, import_path32.join)(this.dir, `${id4}.json`);
           }
           write(rec7) {
-            const id4 = `note-${this.now().getTime()}-${(0, import_crypto38.randomBytes)(4).toString("hex")}`;
+            const id4 = `note-${this.now().getTime()}-${(0, import_crypto39.randomBytes)(4).toString("hex")}`;
             const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec7 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
@@ -122808,13 +122818,13 @@ ${detail.join("\n")}` : stripped;
     function readId3(value) {
       return typeof value === "string" && ID_RE3.test(value.trim()) ? value.trim() : void 0;
     }
-    var import_crypto39;
+    var import_crypto40;
     var ID_RE3;
     var meshDirectCancel2;
     var init_mesh_direct_cancel = __esm2({
       "src/commands/low-family/mesh-direct-cancel.ts"() {
         "use strict";
-        import_crypto39 = require("crypto");
+        import_crypto40 = require("crypto");
         init_dist();
         init_active_ledger();
         init_types3();
@@ -122857,7 +122867,7 @@ ${detail.join("\n")}` : stripped;
               };
             }
             const evidence = {
-              eventId: (0, import_crypto39.randomUUID)(),
+              eventId: (0, import_crypto40.randomUUID)(),
               at: Date.now(),
               source: "mcp_probe",
               sessionId: attempt.sessionId,
@@ -122974,7 +122984,7 @@ ${detail.join("\n")}` : stripped;
         (ctx, args) => run4(ctx, stripRouterInternalArgs(args))
       ]));
     }
-    var import_crypto40;
+    var import_crypto41;
     var import_node_util9;
     var indexSlot;
     var turnObserve2;
@@ -122995,7 +123005,7 @@ ${detail.join("\n")}` : stripped;
     var init_turn_ledger_ipc = __esm2({
       "src/commands/low-family/turn-ledger-ipc.ts"() {
         "use strict";
-        import_crypto40 = require("crypto");
+        import_crypto41 = require("crypto");
         import_node_util9 = require("util");
         init_dist();
         init_dist();
@@ -123074,7 +123084,7 @@ ${detail.join("\n")}` : stripped;
               return { success: false, error: "turn_cancel: no attempt found for the given attemptId/taskId", code: "ledger_not_owner" };
             }
             const evidence = {
-              eventId: (0, import_crypto40.randomUUID)(),
+              eventId: (0, import_crypto41.randomUUID)(),
               at: Date.now(),
               source: "mcp_probe",
               sessionId: attempt.sessionId,
@@ -123105,7 +123115,7 @@ ${detail.join("\n")}` : stripped;
               return { success: true, ...response2 };
             }
             const evidence = {
-              eventId: (0, import_crypto40.randomUUID)(),
+              eventId: (0, import_crypto41.randomUUID)(),
               at: Date.now(),
               source: "mcp_probe",
               sessionId: attempt.sessionId,
@@ -126919,7 +126929,7 @@ ${detail.join("\n")}` : stripped;
       const mesh = config.meshes.find((m) => m.id === meshId);
       if (!mesh) return void 0;
       const now = opts.now || (/* @__PURE__ */ new Date()).toISOString();
-      const token = (opts.token || `mhj_${(0, import_crypto41.randomBytes)(24).toString("base64url")}`).trim();
+      const token = (opts.token || `mhj_${(0, import_crypto42.randomBytes)(24).toString("base64url")}`).trim();
       if (!token) throw new Error("token required");
       const tokenId = tokenIdForManualPairing(token);
       const expiresAt = normalizeTokenExpiry(opts.expiresAt) ?? new Date(new Date(now).getTime() + MESH_HOST_PAIRING_TOKEN_TTL_MS).toISOString();
@@ -126995,7 +127005,7 @@ ${detail.join("\n")}` : stripped;
       } else {
         assertMeshNodeCapacity(mesh);
         node = {
-          id: memberId || `node_${(0, import_crypto41.randomUUID)().replace(/-/g, "")}`,
+          id: memberId || `node_${(0, import_crypto42.randomUUID)().replace(/-/g, "")}`,
           workspace,
           repoRoot: opts.memberNode.repoRoot,
           daemonId: opts.memberNode.daemonId,
@@ -127132,7 +127142,7 @@ ${detail.join("\n")}` : stripped;
       saveMeshConfig(config);
       return { mesh, meshHost: mesh.meshHost };
     }
-    var import_crypto41;
+    var import_crypto42;
     var MESH_HOST_PAIRING_TOKEN_TTL_MS;
     var MESH_HOST_PAIRING_TOKEN_USED_REASON;
     var init_mesh_config_host_pairing = __esm2({
@@ -127144,7 +127154,7 @@ ${detail.join("\n")}` : stripped;
         init_mesh_config_store();
         init_mesh_node_limit();
         init_mesh_host_ownership();
-        import_crypto41 = require("crypto");
+        import_crypto42 = require("crypto");
         init_dist();
         MESH_HOST_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1e3;
         MESH_HOST_PAIRING_TOKEN_USED_REASON = "host pairing token already used";
@@ -128508,7 +128518,7 @@ ${asText(streams.stderr)}
       }
     }
     async function runScheduledRefineValidation(schedule, commandsToRun, summary, runOne) {
-      const runId = (0, import_crypto42.randomUUID)();
+      const runId = (0, import_crypto43.randomUUID)();
       const started = Date.now();
       const runEnv = { ADHDEV_REFINE_RUN_ID: runId };
       summary.schedule = { mode: "lanes", runId, wallMs: 0, prepareRun: [] };
@@ -128645,7 +128655,7 @@ ${asText(streams.stderr)}
     }
     var import_path36;
     var fs99;
-    var import_crypto42;
+    var import_crypto43;
     var REFINE_VALIDATION_TIMEOUT_MS;
     var REFINE_VALIDATION_OUTPUT_LIMIT_BYTES;
     var REFINE_VALIDATION_LOG_DIR;
@@ -128661,7 +128671,7 @@ ${asText(streams.stderr)}
         init_mesh_refine_env_sanitize();
         init_mesh_refine_lanes();
         init_refine_schedule();
-        import_crypto42 = require("crypto");
+        import_crypto43 = require("crypto");
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_submodule_converge();
         init_mesh_refine_generated_bundles();
@@ -131295,6 +131305,7 @@ ${asText(streams.stderr)}
             if (!sessionStopRetryDue(retryKey, now)) continue;
             let failure8;
             for (const c of anchors) {
+              if (isDeadInventoryAnchor(daemonId, c.sessionId, now)) continue;
               try {
                 if (!components.dispatchMeshCommand) throw new Error("P2P_unavailable");
                 const result = unwrapMeshRelayResult(await components.dispatchMeshCommand(daemonId, "agent_command", {
@@ -131305,7 +131316,10 @@ ${asText(streams.stderr)}
                 }), { command: "agent_command", peerDaemonId: daemonId });
                 if (!result.success || !Array.isArray(result.sessions) || typeof result.hostBootId !== "string" || !result.hostBootId) {
                   failure8 = result.error || (result.success ? "lifetime_host_boot_unknown" : "inventory_unconfirmed");
-                  if (result.error === "mesh_session_not_mesh_owned") continue;
+                  if (result.error === "mesh_session_not_mesh_owned") {
+                    markDeadInventoryAnchor(daemonId, c.sessionId, now);
+                    continue;
+                  }
                   throw new Error(String(failure8));
                 }
                 clearSessionStopRetry(retryKey);
@@ -131406,7 +131420,30 @@ ${asText(streams.stderr)}
         }
       };
     }
+    function deadAnchorKey(daemonId, sessionId) {
+      return `${daemonId}\0${sessionId}`;
+    }
+    function isDeadInventoryAnchor(daemonId, sessionId, now) {
+      const key5 = deadAnchorKey(daemonId, sessionId);
+      const until = deadInventoryAnchors.get(key5);
+      if (until === void 0) return false;
+      if (until <= now) {
+        deadInventoryAnchors.delete(key5);
+        return false;
+      }
+      return true;
+    }
+    function markDeadInventoryAnchor(daemonId, sessionId, now) {
+      if (deadInventoryAnchors.size >= DEAD_ANCHOR_MAX) {
+        for (const [k, until] of deadInventoryAnchors) if (until <= now) deadInventoryAnchors.delete(k);
+        if (deadInventoryAnchors.size >= DEAD_ANCHOR_MAX) deadInventoryAnchors.delete(deadInventoryAnchors.keys().next().value);
+      }
+      deadInventoryAnchors.set(deadAnchorKey(daemonId, sessionId), now + DEAD_ANCHOR_TTL_MS);
+    }
     var import_session_host_core12;
+    var DEAD_ANCHOR_TTL_MS;
+    var DEAD_ANCHOR_MAX;
+    var deadInventoryAnchors;
     var init_mesh_session_lifetime_runtime = __esm2({
       "src/mesh/mesh-session-lifetime-runtime.ts"() {
         "use strict";
@@ -131423,6 +131460,9 @@ ${asText(streams.stderr)}
         init_mesh_work_queue();
         init_mesh_candidacy_predicates();
         init_mesh_node_identity();
+        DEAD_ANCHOR_TTL_MS = 24 * 60 * 6e4;
+        DEAD_ANCHOR_MAX = 2e3;
+        deadInventoryAnchors = /* @__PURE__ */ new Map();
       }
     });
     function applyOwnerConfirmationAnswer(meshId, itemId) {
@@ -133754,7 +133794,7 @@ ${grant.exp}`).digest("hex");
     }
     function reportMessageId(message) {
       const m = message;
-      return (0, import_crypto43.createHash)("sha256").update(JSON.stringify([
+      return (0, import_crypto44.createHash)("sha256").update(JSON.stringify([
         // read_chat stamps presentation ids; chat_history returns native rows.
         // A timestamped native reply must keep one cursor across both lanes.
         m?.timestamp == null && m?.receivedAt == null && m?.createdAt == null ? m?.messageId ?? m?.bubbleId ?? m?.id ?? null : null,
@@ -133764,7 +133804,7 @@ ${grant.exp}`).digest("hex");
         messageText(m)
       ])).digest("hex");
     }
-    var import_crypto43;
+    var import_crypto44;
     var STALE_MISSION_AFTER_MS;
     var PROJECT_STATUS_ROUTING_DIFFICULTY;
     var PROJECT_READ_DEFAULT_TAIL;
@@ -133777,7 +133817,7 @@ ${grant.exp}`).digest("hex");
         init_mission_git_digest();
         init_release_digest();
         init_project_session_view();
-        import_crypto43 = require("crypto");
+        import_crypto44 = require("crypto");
         init_dist();
         init_mesh_host_ownership();
         STALE_MISSION_AFTER_MS = 3 * 24 * 60 * 6e4;
@@ -133866,14 +133906,14 @@ ${grant.exp}`).digest("hex");
       }
       return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
     }
-    var import_crypto44;
+    var import_crypto45;
     var reportBodyId;
     var init_report_continuation = __esm2({
       "src/assistant/report-continuation.ts"() {
         "use strict";
-        import_crypto44 = require("crypto");
+        import_crypto45 = require("crypto");
         init_project_views();
-        reportBodyId = (body) => (0, import_crypto44.createHash)("sha256").update(body).digest("hex");
+        reportBodyId = (body) => (0, import_crypto45.createHash)("sha256").update(body).digest("hex");
       }
     });
     function readTaskReportPage(db3, meshId, cursor) {
@@ -136653,7 +136693,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
       const runtime2 = MeshRuntimeStore.getInstance();
       return recoverAttemptReport(runtime2.db, runtime2.turnStore().getAttempt(attemptId), meshId, sessionId, ports.execute);
     }
-    var import_crypto45;
+    var import_crypto46;
     var import_fs46;
     var import_os8;
     var import_path44;
@@ -136685,7 +136725,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
         init_mesh_runtime_store();
         init_environment_inventory();
         init_report_continuation();
-        import_crypto45 = require("crypto");
+        import_crypto46 = require("crypto");
         import_fs46 = require("fs");
         import_os8 = require("os");
         import_path44 = require("path");
@@ -136883,7 +136923,7 @@ ${renderAttachmentBlock(committed.refs)}`, attachmentsImported: committed.refs.l
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
           const where = { project: p.slug, meshId };
-          const clientId = str13(args.messageId) || (0, import_crypto45.randomUUID)();
+          const clientId = str13(args.messageId) || (0, import_crypto46.randomUUID)();
           if (uploads.length > 0 && !str13(args.messageId)) return fail7("invalid_args", "messageId is required when sending attachments (it makes a retry safe)", where);
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           const svc = getAssistantServices();
@@ -137263,6 +137303,7 @@ ${committed.block}`;
       return async (sessionId, wireMessageId, text7) => {
         const ports = await getPorts();
         const out = await ports.execute("outgoing_receipts", { targetSessionId: sessionId, messageIds: [wireMessageId] });
+        if (!out?.success && /Live session not found/i.test(String(out?.error || ""))) return "lost";
         if (!out?.success) throw new Error(out?.error || "outgoing_receipts failed");
         const receipt = Array.isArray(out.receipts) ? out.receipts.find((r) => r?.messageId === wireMessageId) : void 0;
         if (receipt?.state === "submitted") return "submitted";
@@ -141535,7 +141576,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       }
     });
     function terminalRetryIdentity(intent) {
-      return (0, import_crypto46.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
+      return (0, import_crypto47.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
     }
     function readTerminalEvents(db3, meshId, kind, entityId, since, receipts) {
       const ids = receipts.slice(0, 256);
@@ -141605,7 +141646,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         recorded.add(event.eventId);
       }
     }
-    var import_crypto46;
+    var import_crypto47;
     var TERMINAL_WATCH_TTL_MS;
     var TERMINAL_WATCH_MAX;
     var TERMINAL_WATCH_SCHEMA;
@@ -141613,7 +141654,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     var init_terminal_watch = __esm2({
       "src/assistant/terminal-watch.ts"() {
         "use strict";
-        import_crypto46 = require("crypto");
+        import_crypto47 = require("crypto");
         init_mesh_local_records();
         TERMINAL_WATCH_TTL_MS = 24 * 60 * 6e4;
         TERMINAL_WATCH_MAX = 32;
@@ -141632,7 +141673,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           }
           subscribe(meshId, kind, entityId, recipient, now = Date.now()) {
             this.prune(now);
-            const watchId = (0, import_crypto46.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
+            const watchId = (0, import_crypto47.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
             const existing = this.get(watchId);
             if (existing) return { success: true, watchId, expiresAt: existing.expires_at, duplicate: true };
             const count2 = this.db.prepare("SELECT COUNT(*) n FROM assistant_terminal_watches WHERE expires_at > ?").get(now);
@@ -141653,7 +141694,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             return this.db.prepare("SELECT * FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").get(id4, eventId);
           }
           beginDelivery(id4, eventId, sid) {
-            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto46.randomBytes)(24).toString("hex"), Date.now());
+            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto47.randomBytes)(24).toString("hex"), Date.now());
             return this.intent(id4, eventId);
           }
           retryDelivery(id4, eventId) {
@@ -142275,6 +142316,31 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_report_continuation();
       }
     });
+    var RelayAuditFailureLog;
+    var init_relay_audit_failure_log = __esm2({
+      "src/assistant/relay-audit-failure-log.ts"() {
+        "use strict";
+        init_logger();
+        RelayAuditFailureLog = class _RelayAuditFailureLog {
+          static REWARN_MS = 30 * 6e4;
+          last = null;
+          note(message, now) {
+            const prev = this.last;
+            if (message === null) {
+              if (prev) LOG.info("Assistant", "relay gap audit recovered");
+              this.last = null;
+              return;
+            }
+            if (!prev || prev.message !== message || now - prev.warnedAt >= _RelayAuditFailureLog.REWARN_MS) {
+              LOG.warn("Assistant", `relay gap audit failed: ${message}${prev ? " (still failing)" : " (repeats are logged at debug)"}`);
+              this.last = { message, warnedAt: now };
+            } else {
+              LOG.debug("Assistant", `relay gap audit failed: ${message}`);
+            }
+          }
+        };
+      }
+    });
     function unavailableReportNotice(count2, project2, cursor, attemptPointer) {
       const attemptNote = attemptPointer ? ` (attempt ${attemptPointer.attemptId})` : "";
       const status = `[ADHDev relay gap] ${count2} coordinator ${count2 === 1 ? "report could" : "reports could"} not be captured in full${attemptNote}: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
@@ -142492,6 +142558,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       "src/assistant/assistant-relay.ts"() {
         "use strict";
         init_late_capture_repair();
+        init_relay_audit_failure_log();
         init_capture_failure();
         init_relay_delivery_policy();
         init_relay_nudge();
@@ -143117,6 +143184,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           recordProjectRead(result, recipient = this.ports.assistantSessionId()) {
             this.gaps.recordRead(result, recipient);
           }
+          auditLog = new RelayAuditFailureLog();
           /** Native finals not covered by delivery/read receipts, grouped per attempt. */
           auditReplies(now) {
             const port = this.ports.auditCoordinatorReplies;
@@ -143129,7 +143197,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
               this.kick();
               if (replies.complete !== false) this.lastAuditAt = now;
-            }).catch((e) => LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`)).finally(() => {
+            }).then(() => {
+              this.auditLog.note(null, now);
+            }, (e) => {
+              this.auditLog.note(String(e?.message ?? e), now);
+            }).finally(() => {
               if (this.lifecycle === lifecycle) this.auditing = false;
             });
           }
@@ -145103,7 +145175,7 @@ Stop and tell the user if any step fails; do not skip ahead.
       const key5 = followerWakeKey(trimmedMeshId, canonSender);
       const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
       followerWakePersistSeq += 1;
-      const wakeId = `wake:${key5}:${now}:${followerWakePersistSeq}:${(0, import_crypto47.randomUUID)()}`;
+      const wakeId = `wake:${key5}:${now}:${followerWakePersistSeq}:${(0, import_crypto48.randomUUID)()}`;
       const receiptKey2 = `${FOLLOWER_WAKE_QUOTA_RECEIPT_KIND}:${wakeId}`;
       const recentMap = /* @__PURE__ */ new Map();
       for (const [id4, rawT] of followerWakeRecords.get(key5) ?? []) {
@@ -145301,7 +145373,7 @@ Stop and tell the user if any step fails; do not skip ahead.
 
 ${defangRelayBody(text7)}`;
     }
-    var import_crypto47;
+    var import_crypto48;
     var FOLLOWER_SEND_RECEIPT_MAX_ENTRIES;
     var FOLLOWER_SEND_RECEIPT_TTL_MS;
     var FOLLOWER_WAKE_WINDOW_MS;
@@ -145322,7 +145394,7 @@ ${defangRelayBody(text7)}`;
     var init_assistant_follower_wake_quota = __esm2({
       "src/commands/high-family/assistant-follower-wake-quota.ts"() {
         "use strict";
-        import_crypto47 = require("crypto");
+        import_crypto48 = require("crypto");
         init_dist();
         init_assistant_relay_format();
         init_logger();
@@ -145610,7 +145682,7 @@ ${defangRelayBody(text7)}`;
       const clientId = str23(args.clientId);
       if (!clientId || clientId.length > 200) return fail11("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str23(args.expectedCoordinatorSessionId);
-      const bodyHash = (0, import_crypto48.createHash)("sha256").update(text7, "utf8").digest("hex");
+      const bodyHash = (0, import_crypto49.createHash)("sha256").update(text7, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
       const deadSessionIds = /* @__PURE__ */ new Set();
       const admitted2 = await withMeshRemoteAccessMutex(meshId, async () => {
@@ -146035,7 +146107,7 @@ ${defangRelayBody(text7)}`;
           return note(meshId, args);
       }
     }
-    var import_crypto48;
+    var import_crypto49;
     var REMOTE_SEND_MAX_CHARS;
     var REMOTE_POLL_MAX_COMMITS;
     var ASSISTANT_REMOTE_OWNER_SOURCES;
@@ -146053,7 +146125,7 @@ ${defangRelayBody(text7)}`;
         init_terminal_watch();
         init_mesh_runtime_store();
         init_report_continuation();
-        import_crypto48 = require("crypto");
+        import_crypto49 = require("crypto");
         init_assistant_decisions_core();
         init_dist();
         init_command_registry();
@@ -150879,7 +150951,7 @@ ${tail}` : ""
         )) return;
         const evidence = r.evidence;
         if (evidence?.kind === "host_session_absent" && (typeof evidence.hostBootId !== "string" || !evidence.hostBootId.trim())) return;
-        const eventId = `writer_settled:${request.stopRequestId}:${(0, import_crypto53.randomUUID)()}`;
+        const eventId = `writer_settled:${request.stopRequestId}:${(0, import_crypto54.randomUUID)()}`;
         confirmedStops.add(eventId);
         try {
           const settled = observe({
@@ -151157,7 +151229,7 @@ ${tail}` : ""
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto53.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto54.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {
@@ -151225,7 +151297,12 @@ ${tail}` : ""
         const meshId = row2.meshId ?? (typeof row2.payload.meshId === "string" ? row2.payload.meshId : null);
         if (!entry || !meshId) return null;
         const ref2 = row2.payload.ref;
-        return { meshId, entry, ...ref2 ? { ref: ref2 } : {} };
+        return { meshId, entry: compactEntryEventId(entry), ...ref2 ? { ref: ref2 } : {} };
+      }
+      function compactEntryEventId(entry) {
+        if (typeof entry.eventId !== "string" || entry.eventId.length <= MAX_TOPIC_EVENT_ID) return entry;
+        const digest6 = (0, import_crypto54.createHash)("sha1").update(entry.eventId).digest("hex").slice(0, 16);
+        return { ...entry, eventId: `${entry.eventId.slice(0, MAX_TOPIC_EVENT_ID - 17)}#${digest6}` };
       }
       async function drain() {
         const report = { published: 0, failed: 0, pending: 0 };
@@ -151253,6 +151330,13 @@ ${tail}` : ""
               counters4.published++;
               progressed++;
             } catch (error) {
+              if (error?.code === "content_guard") {
+                store5.markPublishRefused(row2.eventId);
+                report.failed++;
+                counters4.publishFailed++;
+                log.error(`turn-ledger: publish refused permanently mesh=${target.meshId} eventId=${row2.eventId.slice(0, 120)}: entry fails the content-boundary guard \u2014 row parked as local-only (publish_state=none)`);
+                continue;
+              }
               blocked.add(target.meshId);
               report.failed++;
               counters4.publishFailed++;
@@ -151349,10 +151433,11 @@ ${tail}` : ""
       };
     }
     var import_node_util16;
-    var import_crypto53;
+    var import_crypto54;
     var REPORT_GATE_RULES;
     var DEFAULT_LOG;
     var PUBLISH_BATCH;
+    var MAX_TOPIC_EVENT_ID;
     var STOP_INSPECT_BACKOFF_BASE_MS;
     var STOP_INSPECT_BACKOFF_CAP_MS;
     var DuplicateEvidence;
@@ -151362,7 +151447,7 @@ ${tail}` : ""
         init_mesh_pinned_node_identity();
         import_node_util16 = require("util");
         init_worker_bridge_transaction();
-        import_crypto53 = require("crypto");
+        import_crypto54 = require("crypto");
         init_dist();
         init_dist();
         init_background_work_guard();
@@ -151376,6 +151461,7 @@ ${tail}` : ""
         }, error: () => {
         } };
         PUBLISH_BATCH = 256;
+        MAX_TOPIC_EVENT_ID = 256;
         STOP_INSPECT_BACKOFF_BASE_MS = 6e4;
         STOP_INSPECT_BACKOFF_CAP_MS = 6e5;
         DuplicateEvidence = class extends Error {
@@ -151710,10 +151796,10 @@ ${tail}` : ""
         }
         try {
           const ceilinged = new Set(store5.db.prepare(`SELECT attempt_id FROM turn_holds WHERE status = 'active' AND reason = 'hard_ceiling'`).all().map((r) => r.attempt_id));
-          const missing = store5.listOpenAttempts().filter((a) => a.scope !== "plain" && daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
+          const missing = store5.listOpenAttempts().filter((a) => a.scope !== "plain" && a.state !== "stopping" && daemonIdsEquivalent4(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
           report.missingCeiling = missing.length;
           if (missing.length > 0) {
-            warnThrottled("missing_ceiling", missing.length, at, `turn-scheduler: invariant \u2014 ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => a.attemptId).join(", ")}) \u2014 nothing bounds them`);
+            warnThrottled("missing_ceiling", missing.length, at, `turn-scheduler: invariant \u2014 ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => `${a.attemptId} [${a.state}]`).join(", ")}) \u2014 nothing bounds them`);
           } else {
             lastWarnAt.delete("missing_ceiling");
           }
@@ -157696,7 +157782,7 @@ ${tail}` : ""
     init_p2p_relay_failure();
     init_mask_daemon_id();
     init_origin_grant_keypair();
-    var import_crypto24 = require("crypto");
+    var import_crypto25 = require("crypto");
     init_dist();
     init_logger();
     init_mesh_host_memory();
@@ -157718,16 +157804,16 @@ ${tail}` : ""
     var CAP_SENTINEL_BYTES = 6;
     var CAP_SENTINEL_PREFIX_BYTES = NONCE_BYTES - CAP_SENTINEL_BYTES;
     function mintHandshakeNonce() {
-      return (0, import_crypto24.randomBytes)(NONCE_BYTES).toString("base64");
+      return (0, import_crypto25.randomBytes)(NONCE_BYTES).toString("base64");
     }
     function computeCapableNonceSentinel(secret, role, meshId, daemonId, prefixBytes) {
-      const hmac2 = (0, import_crypto24.createHmac)("sha256", secret);
+      const hmac2 = (0, import_crypto25.createHmac)("sha256", secret);
       hmac2.update(`adhdev.mesh.cap_sentinel.v1|${role}|${meshId}|${canon(daemonId)}|`, "utf8");
       hmac2.update(prefixBytes);
       return hmac2.digest().subarray(0, CAP_SENTINEL_BYTES);
     }
     function mintCapableHandshakeNonce(secret, role, meshId, daemonId) {
-      const prefix = (0, import_crypto24.randomBytes)(CAP_SENTINEL_PREFIX_BYTES);
+      const prefix = (0, import_crypto25.randomBytes)(CAP_SENTINEL_PREFIX_BYTES);
       const sentinel = computeCapableNonceSentinel(secret, role, meshId, daemonId, prefix);
       return Buffer.concat([prefix, sentinel]).toString("base64");
     }
@@ -157737,7 +157823,7 @@ ${tail}` : ""
       const prefix = raw.subarray(0, CAP_SENTINEL_PREFIX_BYTES);
       const actual = raw.subarray(CAP_SENTINEL_PREFIX_BYTES);
       const expected = computeCapableNonceSentinel(secret, role, meshId, daemonId, prefix);
-      return (0, import_crypto24.timingSafeEqual)(actual, expected);
+      return (0, import_crypto25.timingSafeEqual)(actual, expected);
     }
     function isNonce(value) {
       if (typeof value !== "string" || value.length === 0) return false;
@@ -157790,7 +157876,7 @@ ${tail}` : ""
       );
     }
     function computeTranscriptHmac(prefix, input) {
-      const hmac2 = (0, import_crypto24.createHmac)("sha256", input.secret);
+      const hmac2 = (0, import_crypto25.createHmac)("sha256", input.secret);
       hmac2.update(prefix, "utf8");
       if (hasKeyMaterial(input)) {
         const capsC = encodeCapsForTranscript(input.clientCaps, input.clientOriginGrantPublicKey);
@@ -157847,7 +157933,7 @@ ${tail}` : ""
       const a = Buffer.from(expected, "base64");
       const b = Buffer.from(actual, "base64");
       if (a.length === 0 || a.length !== b.length) return false;
-      return (0, import_crypto24.timingSafeEqual)(a, b);
+      return (0, import_crypto25.timingSafeEqual)(a, b);
     }
     function parseOptionalCaps(value) {
       if (value === void 0) return { ok: true };
@@ -158195,7 +158281,7 @@ ${tail}` : ""
     function createHandshakeResponder(opts) {
       let state2 = "awaiting_hello";
       let step = PENDING2;
-      const decoySecret = (0, import_crypto24.randomBytes)(32).toString("base64");
+      const decoySecret = (0, import_crypto25.randomBytes)(32).toString("base64");
       const localCaps = opts.caps !== void 0 ? opts.caps : opts.originGrantPublicKey ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : void 0;
       const localHasOriginGrantCap = hasOriginGrantCap(localCaps);
       const localPubKey = localHasOriginGrantCap ? opts.originGrantPublicKey : void 0;
@@ -160117,7 +160203,7 @@ ${tail}` : ""
     var http = __toESM2(require("http"));
     var path50 = __toESM2(require("path"));
     init_track_identity();
-    var import_crypto26 = require("crypto");
+    var import_crypto27 = require("crypto");
     var path49 = __toESM2(require("path"));
     var import_child_process7 = require("child_process");
     init_logger();
@@ -160212,7 +160298,7 @@ ${tail}` : ""
       return idx === -1 ? rest : rest.slice(0, idx);
     }
     function sessionHostInstanceArg(configDir) {
-      return `--instance-config-key=${(0, import_crypto26.createHash)("sha256").update(path49.resolve(configDir)).digest("hex")}`;
+      return `--instance-config-key=${(0, import_crypto27.createHash)("sha256").update(path49.resolve(configDir)).digest("hex")}`;
     }
     function isManagedSessionHostCommandLine(commandLine, configDir) {
       if (!commandLine) return false;
@@ -172736,7 +172822,7 @@ ${output}` : "";
     init_contract();
     var fs67 = __toESM2(require("fs"));
     var path77 = __toESM2(require("path"));
-    var import_crypto28 = require("crypto");
+    var import_crypto29 = require("crypto");
     init_contract();
     var TREE_DIGEST_ALGORITHM = "adhdev-provider-tree-sha256-v1";
     function computeProviderTreeDigest(rootDir, providerType) {
@@ -172750,7 +172836,7 @@ ${output}` : "";
         );
       }
       relPaths.sort();
-      const hash3 = (0, import_crypto28.createHash)("sha256");
+      const hash3 = (0, import_crypto29.createHash)("sha256");
       for (const relPath of relPaths) {
         const absPath = path77.join(rootDir, ...relPath.split("/"));
         const bytes = fs67.readFileSync(absPath);
@@ -178972,9 +179058,9 @@ ${output}` : "";
     };
     init_config_dir();
     init_provider_approval();
-    var import_crypto31 = require("crypto");
+    var import_crypto32 = require("crypto");
     function modalIdentity(modal) {
-      return (0, import_crypto31.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
+      return (0, import_crypto32.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
     }
     function parseAssistantAction(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -179017,7 +179103,7 @@ ${output}` : "";
         if (!this.available(state2)) return { success: false, code: state2.enabled ? "assistant_execution_not_enforced" : "assistant_execution_off" };
         for (const [token, c] of this.consents) if (c.expiresAt <= now) this.consents.delete(token);
         if (this.consents.size >= 32) return { success: false, code: "assistant_consent_capacity" };
-        const authorization = (0, import_crypto31.randomBytes)(32).toString("hex");
+        const authorization = (0, import_crypto32.randomBytes)(32).toString("hex");
         const expiresAt = now + 2 * 6e4;
         this.consents.set(authorization, {
           origin: "OWNER",
@@ -194996,7 +195082,7 @@ ${lines.join("\n")}
         return refused3(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", `${message}; namespace ${owner.namespace}`);
       }
     }
-    var import_crypto49 = require("crypto");
+    var import_crypto50 = require("crypto");
     var import_fs49 = require("fs");
     var import_path46 = require("path");
     init_dist();
@@ -195603,7 +195689,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const configDir = getConfigDir2();
       const workspace = assistantWorkspaceDir(configDir);
       const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: "", workspace, toolset: { kind: "assistant" } });
-      const assistantSessionKey = (0, import_crypto49.randomUUID)();
+      const assistantSessionKey = (0, import_crypto50.randomUUID)();
       const mcp = planAssistantMcp({
         cliType,
         setup,
@@ -196135,7 +196221,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_mesh_remote_worktree_membership();
     init_mesh_runtime_store();
-    var import_crypto50 = require("crypto");
+    var import_crypto51 = require("crypto");
     init_config();
     init_cli_detector();
     init_build_info();
@@ -198961,7 +199047,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
        * sees it change knows this member restarted).
        */
-      meshCoordinatorBootId = (0, import_crypto50.randomUUID)();
+      meshCoordinatorBootId = (0, import_crypto51.randomUUID)();
       meshNodeStatePushRestore = null;
       async closeDrivers() {
         await closeDriverService(this.deps);
@@ -223462,7 +223548,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function isLostRuntimeError(error) {
       return typeof error === "string" && (/^(?:Runtime not found for session|Unknown session):/.test(error) || error === "session_absent");
     }
-    var import_crypto51 = require("crypto");
+    var import_crypto52 = require("crypto");
     var import_session_host_core21 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -223560,7 +223646,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto51.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto52.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core21.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -225673,7 +225759,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    var import_crypto52 = require("crypto");
+    var import_crypto53 = require("crypto");
     var import_fs54 = require("fs");
     var import_path51 = require("path");
     init_config();
@@ -225735,7 +225821,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto52.randomBytes)(32).toString("hex");
+      return (0, import_crypto53.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);

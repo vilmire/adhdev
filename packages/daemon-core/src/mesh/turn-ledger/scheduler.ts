@@ -335,10 +335,14 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         try {
             const ceilinged = new Set((store.db.prepare(`SELECT attempt_id FROM turn_holds WHERE status = 'active' AND reason = 'hard_ceiling'`).all() as Array<{ attempt_id: string }>).map((r) => r.attempt_id));
             const missing = store.listOpenAttempts()
-                .filter((a) => a.scope !== 'plain' && daemonIdsEquivalent(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
+                // A 'stopping' attempt has already spent its hard_ceiling (the ceiling firing is what
+                // moves it there) and is bounded by the writer-stop authority instead: it waits for
+                // the owned writer to confirm quiescence (e.g. its node is offline) and is resumed by
+                // resumeStoppingWriters. It is exclusive and cannot leak, so it is not an invariant breach.
+                .filter((a) => a.scope !== 'plain' && a.state !== 'stopping' && daemonIdsEquivalent(a.ownerDaemonId, selfDaemonId) && !ceilinged.has(a.attemptId));
             report.missingCeiling = missing.length;
             if (missing.length > 0) {
-                warnThrottled('missing_ceiling', missing.length, at, `turn-scheduler: invariant — ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => a.attemptId).join(', ')}) — nothing bounds them`);
+                warnThrottled('missing_ceiling', missing.length, at, `turn-scheduler: invariant — ${missing.length} open mesh attempt(s) without a hard_ceiling hold (${missing.slice(0, 5).map((a) => `${a.attemptId} [${a.state}]`).join(', ')}) — nothing bounds them`);
             } else {
                 lastWarnAt.delete('missing_ceiling');
             }

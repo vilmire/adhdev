@@ -238,6 +238,14 @@ describe('peer lifetime retry and acknowledgement', () => {
         const records = await sessionLifetimeDeps(components(dispatch), mesh, now).listSessions();
         expect(records.map(r => r.sessionId)).toEqual(['worker']); expect(dispatch).toHaveBeenCalledTimes(2);
     });
+    it('does not re-ask the peer about an anchor it already answered "not live"', async () => {
+        remotes.push({ nodeId: 'remote-node', sessionId: 'gone-2', providerType: 'codex-cli' }, { nodeId: 'remote-node', sessionId: 'worker', providerType: 'codex-cli' });
+        const dispatch = vi.fn(async (_peer, _command, args) => args.targetSessionId === 'gone-2'
+            ? { success: false, error: 'mesh_session_not_mesh_owned' } : inventoryOk);
+        await sessionLifetimeDeps(components(dispatch), mesh, now).listSessions();
+        await sessionLifetimeDeps(components(dispatch), mesh, now + 60_000).listSessions();
+        expect(dispatch.mock.calls.filter(c => c[2].targetSessionId === 'gone-2')).toHaveLength(1);
+    });
 });
 
 describe('lifetime stop race', () => {
