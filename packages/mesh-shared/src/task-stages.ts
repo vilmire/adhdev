@@ -52,6 +52,8 @@ export const STAGE_BLOCKED_REASONS = [
     'self_check_failed',
     'stage_pipeline_ceiling',
     'reviewer_mutated_source',
+    // The read-lease checkout could not be fingerprinted (start or end): the review's integrity cannot be verified.
+    'reviewer_integrity_unverifiable',
 ] as const
 export type MeshStageBlockedReason = typeof STAGE_BLOCKED_REASONS[number]
 
@@ -129,6 +131,8 @@ export interface MeshTaskStageState {
     workerArtifactIds?: string[]
     /** Read-lease reviews only: HEAD + working-tree fingerprint of the parent checkout taken when the review child was created (§11). */
     reviewFingerprint?: string
+    /** Read-lease review whose baseline fingerprint could not be taken (after one retry): the verdict is never accepted. */
+    reviewFingerprintUnavailable?: boolean
     /** True once the parent was released to a terminal by the pipeline (hold lifted). */
     released?: boolean
 }

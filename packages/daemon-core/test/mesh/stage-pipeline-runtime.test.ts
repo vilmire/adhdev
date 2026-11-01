@@ -24,14 +24,14 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
     rows.set(PARENT, parent);
     const selfChecks = [...(opts.selfChecks ?? [])];
     let head = 0;
-    const fp = { value: 'fp0' as string | null };
+    const fp = { value: 'fp0' as string | null, queue: [] as Array<string | null | 'throw'> };
     const ports: StageRuntimePorts = {
         now: () => nowMs,
         selfCheck: { run: async () => selfChecks.shift() ?? { status: 'passed', log: 'ok' } },
         reviewerWorkspace: { prepare: async () => null },
         git: {
             baseSha: async () => 'base0000', headSha: async () => (opts.diff === false ? 'base0000' : `head${++head}`),
-            diff: async () => 'diff text', isClean: async () => true, fingerprint: async () => fp.value,
+            diff: async () => 'diff text', isClean: async () => true, fingerprint: async () => { const next = fp.queue.shift(); if (next === 'throw') throw new Error('git failed'); if (next !== undefined) return next; return fp.value; },
         },
         artifacts: { register: i => { const id = `art_${i.kind}_${log.artifacts.length}`; log.artifacts.push(id); return id; } },
         queue: {
@@ -40,7 +40,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
             listStageParents: () => [...rows.values()].filter(r => r.stagePlan),
             enqueueReviewChild: (p, spec) => {
                 const id = `${p.id}:child${rows.size}`;
-                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, createdAt: '', updatedAt: '' };
+                const c: MeshWorkQueueEntry = { id, meshId: MESH, message: spec.message, status: 'pending', origin: 'stage', parentTaskId: p.id, stageRole: 'review', stageRound: spec.round, readonly: true, review: { sourceTaskId: p.id, independence: spec.independence }, ...(spec.reviewerWorkspace ? { reviewerWorkspace: spec.reviewerWorkspace } : {}), createdAt: '', updatedAt: '' };
                 rows.set(id, c); return c;
             },
             cancel: (_m, id, reason) => { const e = rows.get(id); if (e) { e.status = 'cancelled'; e.cancelReason = reason; } log.cancelled.push(id); },
@@ -141,6 +141,48 @@ describe('stage pipeline runtime', () => {
         await ok.implDone('a1');
         await ok.review({ verdict: 'approve' }); // unchanged fingerprint → verdict stands
         expect(ok.log.commits[0].status).toBe('completed');
+    });
+
+    it('fails closed: an unreadable fingerprint at the end blocks with reviewer_integrity_unverifiable', async () => {
+        for (const bad of [null, 'throw'] as const) {
+            const h = harness();
+            await h.implDone('a1');
+            h.fp.queue.push(bad);
+            await h.review({ verdict: 'approve' });
+            expect(h.parent().stageState!.blockedReason).toBe('reviewer_integrity_unverifiable');
+            expect(h.log.commits[0].status).toBe('blocked');
+        }
+    });
+
+    it('fails closed: a baseline that cannot be taken (retried once) is flagged and blocks at the end', async () => {
+        const h = harness();
+        h.fp.queue.push(null, null); // both baseline attempts fail
+        await h.implDone('a1');
+        expect(h.parent().stageState!.reviewFingerprint).toBeUndefined();
+        expect(h.parent().stageState!.reviewFingerprintUnavailable).toBe(true);
+        await h.review({ verdict: 'approve' }); // the end fingerprint is readable, but there is nothing to compare with
+        expect(h.parent().stageState!.blockedReason).toBe('reviewer_integrity_unverifiable');
+        expect(h.log.commits[0].status).toBe('blocked');
+        const r = harness();
+        r.fp.queue.push('throw'); // first attempt throws, the retry succeeds
+        await r.implDone('a1');
+        expect(r.parent().stageState!.reviewFingerprint).toBe('fp0');
+        expect(r.parent().stageState!.reviewFingerprintUnavailable).toBeUndefined();
+        await r.review({ verdict: 'approve' });
+        expect(r.log.commits[0].status).toBe('completed');
+    });
+
+    it('takes the baseline before the review child exists and records it with the child id', async () => {
+        const h = harness();
+        let order = '';
+        const ports = (h.rt as unknown as { ports: StageRuntimePorts }).ports;
+        const fpOrig = ports.git.fingerprint; const enqOrig = ports.queue.enqueueReviewChild;
+        ports.git.fingerprint = async w => { order += 'F'; return fpOrig(w); };
+        ports.queue.enqueueReviewChild = (p, spec) => { order += 'E'; return enqOrig(p, spec); };
+        await h.implDone('a1');
+        expect(order.startsWith('FE')).toBe(true);
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(1);
+        expect(h.parent().stageState!.reviewFingerprint).toBe('fp0');
     });
 
     it('a prepared reviewer workspace is exempt from the mutation check', async () => {

@@ -75,11 +75,17 @@ export class StagePipelineRuntime {
             const fresh = this.ports.queue.get(meshId, childId)!;
             const report = peekStageReport(meshId, childId);
             const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const;
-            // §11: the reviewer must leave a read-lease checkout exactly as it found it (light workspaces are exempt: no fingerprint).
-            if (st.reviewFingerprint) {
+            // §11 (fail closed): a read-lease reviewer must leave the checkout exactly as it found it. No baseline, an
+            // unreadable current fingerprint, or any difference all void the verdict. Light-workspace reviewers are exempt.
+            if (!fresh.reviewerWorkspace && fresh.status === 'completed') {
                 const workspace = this.ports.workspaceOf(parent);
-                const now = workspace ? await this.ports.git.fingerprint(workspace) : null;
-                if (now && now !== st.reviewFingerprint) {
+                const now = workspace ? await this.safeFingerprint(workspace) : null;
+                if (!st.reviewFingerprint || st.reviewFingerprintUnavailable || !now) {
+                    dropStageReport(meshId, childId);
+                    await this.apply(meshId, parentId, { kind: 'reviewer_integrity_unverifiable', childTaskId: childId, at: this.iso() });
+                    return;
+                }
+                if (now !== st.reviewFingerprint) {
                     dropStageReport(meshId, childId);
                     await this.apply(meshId, parentId, { kind: 'reviewer_mutated_source', childTaskId: childId, at: this.iso() });
                     return;
@@ -255,17 +261,25 @@ export class StagePipelineRuntime {
                     baseSha: st.baseSha || '(unknown)', headSha: head || '(unknown)',
                 });
                 const inputs = selectStageInputArtifacts(st);
+                // §11 (fail closed): a read-lease reviewer works IN the parent's checkout. Take the baseline fingerprint
+                // BEFORE the child exists so it cannot act first; retry once, else flag it unavailable (the verdict is then never accepted).
+                const readLease = !ws;
+                let fingerprint: string | null = null;
+                if (readLease && workspace) {
+                    fingerprint = await this.safeFingerprint(workspace);
+                    if (!fingerprint) fingerprint = await this.safeFingerprint(workspace);
+                }
                 const child = this.ports.queue.enqueueReviewChild(parent, {
                     round: effect.round, message: msg, inputArtifactIds: inputs,
                     independence: 'different_provider',
                     ...(reuse ? { targetSessionId: reuse } : {}),
                     ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
                 });
-                // §11: a read-lease reviewer works IN the parent's checkout — fingerprint it so a mutation is detectable.
-                const fingerprint = !ws && workspace ? await this.ports.git.fingerprint(workspace) : null;
                 this.ports.queue.mutate(meshId, id, e => {
                     e.stageState!.reviewTaskIds = [...e.stageState!.reviewTaskIds, child.id];
-                    if (fingerprint) e.stageState!.reviewFingerprint = fingerprint; else delete e.stageState!.reviewFingerprint;
+                    delete e.stageState!.reviewFingerprint;
+                    delete e.stageState!.reviewFingerprintUnavailable;
+                    if (readLease) { if (fingerprint) e.stageState!.reviewFingerprint = fingerprint; else e.stageState!.reviewFingerprintUnavailable = true; }
                 });
                 this.ports.events.progress(meshId, id, `stage: review round ${effect.round} queued`);
                 return;
@@ -301,6 +315,10 @@ export class StagePipelineRuntime {
                 return;
             }
         }
+    }
+
+    private async safeFingerprint(workspace: string): Promise<string | null> {
+        try { return (await this.ports.git.fingerprint(workspace)) || null; } catch { return null; }
     }
 
     private async registerDiff(parentId: string, workspace: string, base: string, head: string): Promise<void> {

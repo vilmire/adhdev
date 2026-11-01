@@ -26,6 +26,8 @@ export type StageEvent =
     | { kind: 'reviewer_unavailable'; childTaskId: string; at: string }
     /** The read-lease reviewer changed the parent's checkout: its verdict is void (§11). */
     | { kind: 'reviewer_mutated_source'; childTaskId: string; at: string }
+    /** Fail closed: the checkout fingerprint could not be taken, so the read-lease review cannot be verified. */
+    | { kind: 'reviewer_integrity_unverifiable'; childTaskId: string; at: string }
     | { kind: 'ceiling'; at: string }
     | { kind: 'decide_revise_once'; at: string }
     | { kind: 'decide_rereview'; at: string };
@@ -147,6 +149,10 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
         case 'reviewer_mutated_source': {
             if (state.phase !== 'reviewing' && state.phase !== 'awaiting_review') return noop;
             return block(state, 'reviewer_mutated_source', event.at);
+        }
+        case 'reviewer_integrity_unverifiable': {
+            if (state.phase !== 'reviewing' && state.phase !== 'awaiting_review') return noop;
+            return block(state, 'reviewer_integrity_unverifiable', event.at);
         }
         case 'ceiling': {
             return block(state, 'stage_pipeline_ceiling', event.at);

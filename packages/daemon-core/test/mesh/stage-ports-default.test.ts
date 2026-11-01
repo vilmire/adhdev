@@ -35,6 +35,38 @@ describe('production stage ports', () => {
         expect(await defaultStageGit.fingerprint('/opt/absent/workspace')).toBeNull();
     });
 
+    it('fingerprint is content-based: ignored-file edits, skip-worktree flags and untracked edits are all detected', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'stage-fp-')); dirs.push(dir);
+        git(dir, 'init', '-b', 'main');
+        writeFileSync(join(dir, '.gitignore'), 'secret.cfg\nbuild/\n'); writeFileSync(join(dir, 'a.txt'), '1\n'); writeFileSync(join(dir, 'secret.cfg'), 'v1');
+        git(dir, 'add', '.'); git(dir, 'commit', '-m', 'one');
+        const base = (await defaultStageGit.fingerprint(dir))!;
+        expect(await defaultStageGit.fingerprint(dir)).toBe(base);
+        // 1. content change of an IGNORED file (status shows nothing for it)
+        await new Promise(r => setTimeout(r, 15));
+        writeFileSync(join(dir, 'secret.cfg'), 'v2-longer');
+        const afterIgnored = (await defaultStageGit.fingerprint(dir))!;
+        expect(afterIgnored).not.toBe(base);
+        // 2. an edit inside an ignored directory
+        const { mkdirSync } = await import('node:fs');
+        mkdirSync(join(dir, 'build')); writeFileSync(join(dir, 'build', 'out.js'), 'x');
+        const withBuild = (await defaultStageGit.fingerprint(dir))!;
+        expect(withBuild).not.toBe(afterIgnored);
+        await new Promise(r => setTimeout(r, 15));
+        writeFileSync(join(dir, 'build', 'out.js'), 'xyz');
+        expect(await defaultStageGit.fingerprint(dir)).not.toBe(withBuild);
+        // 3. skip-worktree flag (hides later edits from status/diff)
+        const before = (await defaultStageGit.fingerprint(dir))!;
+        git(dir, 'update-index', '--skip-worktree', 'a.txt');
+        expect(await defaultStageGit.fingerprint(dir)).not.toBe(before);
+        // 4. tracked content edit under skip-worktree is hidden from diff, but the flag change above already tripped it;
+        //    an ordinary tracked edit is caught by the diff hash
+        git(dir, 'update-index', '--no-skip-worktree', 'a.txt');
+        const clean = (await defaultStageGit.fingerprint(dir))!;
+        writeFileSync(join(dir, 'a.txt'), '2\n');
+        expect(await defaultStageGit.fingerprint(dir)).not.toBe(clean);
+    });
+
     it('fallback seams: self-check unavailable (no bounce), reviewer workspace null (read lease)', async () => {
         expect((await unavailableSelfCheck.run({ meshId: 'm', taskId: 't', workspace: '/opt/ws', baseSha: 'b', profile: 'fast' })).status).toBe('unavailable');
         expect(await noReviewerWorkspace.prepare({} as never)).toBeNull();

@@ -32,6 +32,8 @@ import { isStageChild, isStageParent } from './stage-state.js';
 import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, ReviewerWorkspaceProvider } from './stage-ports.js';
 
 const execFileAsync = promisify(execFile);
+/** Past this many untracked/ignored files the stat hash is not attempted: the fingerprint is unavailable (fail closed). */
+const MAX_FINGERPRINT_OTHER_FILES = 300_000;
 
 async function git(cwd: string, args: string[], maxBuffer = 8 * 1024 * 1024): Promise<string> {
     const { stdout } = await execFileAsync('git', args, { cwd, windowsHide: true, timeout: 30_000, maxBuffer });
@@ -47,11 +49,29 @@ export const defaultStageGit: StageGitPort = {
     },
     async headSha(workspace) { try { return (await git(workspace, ['rev-parse', 'HEAD'])).trim() || null; } catch { return null; } },
     async diff(workspace, base, head) { return git(workspace, ['diff', '--no-color', `${base}..${head}`], 16 * 1024 * 1024); },
+    /**
+     * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked and ignored
+     * entries; a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
+     * bits); and a stat hash (path, size, mtime) of every untracked/ignored file, since status names those without
+     * reflecting content edits. fsmonitor is disabled so a stale daemon cannot hide changes. Any failure → null (the
+     * caller treats that as "cannot verify").
+     */
     async fingerprint(workspace) {
         try {
-            const head = (await git(workspace, ['rev-parse', 'HEAD'])).trim();
-            const status = await git(workspace, ['status', '--porcelain=v1', '--untracked-files=all']);
-            return `${head}\n${createHash('sha256').update(status).digest('hex')}`;
+            const g = (args: string[], max = 64 * 1024 * 1024) => git(workspace, ['-c', 'core.fsmonitor=false', ...args], max);
+            const sha = (text: string) => createHash('sha256').update(text).digest('hex');
+            const head = (await g(['rev-parse', 'HEAD'])).trim();
+            const status = await g(['status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching']);
+            const diff = await g(['diff', 'HEAD', '--binary']);
+            const lsv = await g(['ls-files', '-v']);
+            const others = (await g(['ls-files', '-z', '-o'])).split('\0').filter(Boolean);
+            if (others.length > MAX_FINGERPRINT_OTHER_FILES) return null;
+            const stat = createHash('sha256');
+            for (const rel of others.sort()) {
+                try { const st = fs.lstatSync(path.join(workspace, rel)); stat.update(`${rel}\0${st.size}\0${st.mtimeMs}\n`); }
+                catch { stat.update(`${rel}\0gone\n`); }
+            }
+            return [head, sha(status), sha(diff), sha(lsv), stat.digest('hex')].join('\n');
         } catch { return null; }
     },
     async isClean(workspace) { try { return (await git(workspace, ['status', '--porcelain'])).trim() === ''; } catch { return false; } },
