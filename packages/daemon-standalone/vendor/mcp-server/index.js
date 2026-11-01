@@ -35802,9 +35802,29 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
     function canTransferQuotaReading(prior, fresh) {
       return !!prior && prior.provider === fresh.provider && fresh.metadata?.lineageUncertain !== true && prior.metadata?.lineageUncertain !== true && sameQuotaAccount(prior.metadata?.accountLineage, fresh.metadata?.accountLineage);
     }
-    function unconfirmedQuotaReading(quota, lineage = UNKNOWN_ACCOUNT_LINEAGE) {
+    function holdsWindows(q2) {
+      return !!q2 && (!!q2.session || !!q2.weekly || !!q2.monthly || Array.isArray(q2.buckets) && q2.buckets.length > 0);
+    }
+    function isConfirmedAccountSwitch(a, b) {
+      const left = quotaAccountLineage(a);
+      const right = quotaAccountLineage(b);
+      return left.kind === "account" && right.kind === "account" && left.key !== right.key;
+    }
+    function displayCopy(quota, measuredAt) {
+      return {
+        measuredAt,
+        ...quota.session ? { session: quota.session } : {},
+        ...quota.weekly ? { weekly: quota.weekly } : {},
+        ...quota.monthly ? { monthly: quota.monthly } : {},
+        ...Array.isArray(quota.buckets) && quota.buckets.length > 0 ? { buckets: quota.buckets } : {}
+      };
+    }
+    function unconfirmedQuotaReading(quota, lineage = UNKNOWN_ACCOUNT_LINEAGE, options = {}) {
       const metadata = { ...quota.metadata, accountLineage: lineage, lineageUncertain: true };
-      for (const field3 of ["lastGood", "lastGoodWindows", "accountEmail", "planType", "usage", "cursorUsage"]) delete metadata[field3];
+      const display = options.retainDisplay && holdsWindows(quota) ? displayCopy(quota, metadata.lastGood?.measuredAt ?? quota.updatedAt) : options.retainDisplay ? metadata.unconfirmedReading : void 0;
+      for (const field3 of ["accountSwitched", "lastGood", "lastGoodWindows", "accountEmail", "planType", "usage", "cursorUsage", "unconfirmedReading"]) delete metadata[field3];
+      if (display) metadata.unconfirmedReading = display;
+      if (options.switched) metadata.accountSwitched = true;
       return {
         ...quota,
         session: null,
@@ -35817,6 +35837,21 @@ ${String(stdout || "")}`, stderr: String(stderr || ""), refspec };
         // retry bookkeeping even when its account numbers cannot be restored.
         metadata: { ...metadata, failureKind: quota.metadata?.failureKind === "rate-limited" ? "rate-limited" : "no-data" }
       };
+    }
+    function retainUnconfirmedDisplay(prev, fresh) {
+      if (!prev || fresh.metadata?.accountSwitched === true || fresh.status === "ok" || holdsWindows(fresh) || fresh.metadata?.unconfirmedReading) return fresh;
+      if (sameQuotaAccount(prev.metadata?.accountLineage, fresh.metadata?.accountLineage) && prev.metadata?.lineageUncertain !== true && fresh.metadata?.lineageUncertain !== true) return fresh;
+      if (fresh.metadata?.failureKind === "quota-exhausted") return fresh;
+      if (prev.provider !== fresh.provider || isConfirmedAccountSwitch(prev.metadata?.accountLineage, fresh.metadata?.accountLineage)) return fresh;
+      const prevMeasured = prev.status === "ok" || prev.metadata?.lastGoodWindows === true;
+      let display;
+      if (prevMeasured && holdsWindows(prev)) {
+        display = displayCopy(prev, prev.metadata?.lastGood?.measuredAt ?? prev.updatedAt);
+      } else {
+        const held = prev.metadata?.unconfirmedReading;
+        if (held && typeof held.measuredAt === "number") display = held;
+      }
+      return display ? { ...fresh, metadata: { ...fresh.metadata, unconfirmedReading: display } } : fresh;
     }
     function withQuotaAccountLineage(quota, lineage) {
       return { ...quota, metadata: { ...quota.metadata, accountLineage: lineage } };
@@ -38965,7 +39000,9 @@ child.on('exit', () => process.exit(0));
       const after = readClaudeQuotaAccountLineage(overrides);
       if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
       const producer = quotaAccountLineage(quota.metadata?.accountLineage);
-      return sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after) ? quota : unconfirmedQuotaReading(quota, producer);
+      if (sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)) return quota;
+      const switched = isConfirmedAccountSwitch(producer, before) || isConfirmedAccountSwitch(producer, after) || isConfirmedAccountSwitch(before, after);
+      return unconfirmedQuotaReading(quota, producer, { retainDisplay: !switched, switched });
     }
     function claudeAccountStatePath(env2) {
       const override = env2.CLAUDE_CONFIG_DIR?.trim();
@@ -40000,11 +40037,13 @@ child.on('exit', () => process.exit(0));
         MONTHLY_WINDOW_MINUTES,
         resetAt
       ) : null) ?? includedPlanWindow(planUsage, resetAt);
+      const unlimitedOnDemand = cursorUsage.kind === "unlimited" && cursorUsage.enabled !== false;
+      const monthlyShown = unlimitedOnDemand && monthly && monthly.usedPercent >= 100 ? null : monthly;
       return {
         provider: "cursor-cli",
         session: null,
         weekly: null,
-        monthly,
+        monthly: monthlyShown,
         updatedAt: nowMs2,
         error: null,
         status: "ok",
@@ -41137,7 +41176,7 @@ child.on('exit', () => process.exit(0));
       if (fresh.status === "ok") return fresh;
       const kind = typeof fresh.metadata?.failureKind === "string" ? fresh.metadata.failureKind : "";
       const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind);
-      if (!transient || !canTransferQuotaReading(prev, fresh)) return fresh;
+      if (!transient || !canTransferQuotaReading(prev, fresh)) return retainUnconfirmedDisplay(prev, fresh);
       const prevIsFreshOk = !!prev && prev.status === "ok";
       const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
       const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && quotaEntryHoldsReading(prev);
@@ -41227,7 +41266,10 @@ child.on('exit', () => process.exit(0));
       for (const [provider, quota] of Object.entries(restored)) {
         if (cache.has(provider)) continue;
         if (isEnabled && !isEnabled(provider)) continue;
-        const settle2 = (current6) => quota.provider === provider && quota.metadata?.lineageUncertain !== true && sameQuotaAccount(quota.metadata?.accountLineage, current6) ? quota : unconfirmedQuotaReading(quota, current6);
+        const settle2 = (current6) => quota.provider === provider && quota.metadata?.lineageUncertain !== true && sameQuotaAccount(quota.metadata?.accountLineage, current6) ? quota : unconfirmedQuotaReading(quota, current6, (() => {
+          const switched = isConfirmedAccountSwitch(quota.metadata?.accountLineage, current6);
+          return { retainDisplay: !switched, switched };
+        })());
         let current5 = UNKNOWN_ACCOUNT_LINEAGE;
         try {
           current5 = readLineage(provider);
@@ -41289,7 +41331,8 @@ child.on('exit', () => process.exit(0));
               } catch {
               }
               if (!sameQuotaAccount(fresh.metadata?.accountLineage, current5)) {
-                fresh = unconfirmedQuotaReading(fresh, current5);
+                const switched = isConfirmedAccountSwitch(fresh.metadata?.accountLineage, current5);
+                fresh = unconfirmedQuotaReading(fresh, current5, { retainDisplay: !switched, switched });
               }
             }
             cache.set(

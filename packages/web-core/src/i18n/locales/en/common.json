@@ -3916,12 +3916,14 @@
                 "cue": {
                     "stale": "stale",
                     "staleNextCheck": "stale, next check within ~{{minutes}}m",
+                    "unconfirmed": "account unconfirmed",
                     "refreshing": "refreshing"
                 },
                 "resetsInDays": "resets in {{days}}d {{hours}}h",
                 "resetsInHours": "resets in {{hours}}h {{minutes}}m",
                 "resetsInMinutes": "resets in {{minutes}}m",
                 "resetsNow": "resets now",
+                "unlimited": "unlimited on-demand · ${{usd}} used",
                 "resetUnknown": "reset time unknown",
                 "resetAtAbsolute": "resets {{when}}",
                 "used": "{{percent}}% used"

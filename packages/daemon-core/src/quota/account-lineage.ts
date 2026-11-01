@@ -74,15 +74,80 @@ export function canTransferQuotaReading(prior: MeshNodeFactsProviderQuota | unde
         && sameQuotaAccount(prior.metadata?.accountLineage, fresh.metadata?.accountLineage);
 }
 
-/** Remove every account-scoped reading/label; keep observation/attempt clocks separate. */
-export function unconfirmedQuotaReading<T extends MeshNodeFactsProviderQuota | ProviderQuota>(quota: T, lineage: QuotaAccountLineage = UNKNOWN_ACCOUNT_LINEAGE): T {
+type Readings = Pick<MeshNodeFactsProviderQuota, 'session' | 'weekly' | 'monthly' | 'buckets'>;
+
+function holdsWindows(q: Partial<Readings> | undefined): boolean {
+    return !!q && (!!q.session || !!q.weekly || !!q.monthly || (Array.isArray(q.buckets) && q.buckets.length > 0));
+}
+
+/** Two CONFIRMED accounts that differ = a real switch; anything involving an unknown is not proof. */
+export function isConfirmedAccountSwitch(a: unknown, b: unknown): boolean {
+    const left = quotaAccountLineage(a);
+    const right = quotaAccountLineage(b);
+    return left.kind === 'account' && right.kind === 'account' && left.key !== right.key;
+}
+
+type UnconfirmedReading = NonNullable<NonNullable<MeshNodeFactsProviderQuota['metadata']>['unconfirmedReading']>;
+
+function displayCopy(quota: Partial<Readings>, measuredAt: number): UnconfirmedReading {
+    return {
+        measuredAt,
+        ...(quota.session ? { session: quota.session } : {}),
+        ...(quota.weekly ? { weekly: quota.weekly } : {}),
+        ...(quota.monthly ? { monthly: quota.monthly } : {}),
+        ...(Array.isArray(quota.buckets) && quota.buckets.length > 0 ? { buckets: quota.buckets as UnconfirmedReading['buckets'] } : {}),
+    };
+}
+
+/** Remove every account-scoped reading/label; keep observation/attempt clocks separate.
+ *  `retainDisplay` additionally parks the stripped numbers in `metadata.unconfirmedReading`
+ *  (display-only, marked "account unconfirmed" by dashboards; routing never reads it).
+ *  Callers pass it only when no CONFIRMED account switch is established. */
+export function unconfirmedQuotaReading<T extends MeshNodeFactsProviderQuota | ProviderQuota>(
+    quota: T,
+    lineage: QuotaAccountLineage = UNKNOWN_ACCOUNT_LINEAGE,
+    options: { retainDisplay?: boolean; switched?: boolean } = {},
+): T {
     const metadata: NonNullable<MeshNodeFactsProviderQuota['metadata']> = { ...quota.metadata, accountLineage: lineage, lineageUncertain: true };
-    for (const field of ['lastGood', 'lastGoodWindows', 'accountEmail', 'planType', 'usage', 'cursorUsage']) delete metadata[field];
+    const display = options.retainDisplay && holdsWindows(quota as Partial<Readings>)
+        ? displayCopy(quota as Partial<Readings>, metadata.lastGood?.measuredAt ?? quota.updatedAt)
+        : options.retainDisplay ? metadata.unconfirmedReading : undefined;
+    for (const field of ['accountSwitched', 'lastGood', 'lastGoodWindows', 'accountEmail', 'planType', 'usage', 'cursorUsage', 'unconfirmedReading']) delete metadata[field];
+    if (display) metadata.unconfirmedReading = display;
+    // A CONFIRMED switch is remembered so a later carry-forward cannot re-attach the old account's numbers.
+    if (options.switched) metadata.accountSwitched = true;
     return { ...quota, session: null, weekly: null, monthly: null, buckets: [],
         status: 'unavailable', error: 'Quota account lineage could not be confirmed; previous readings were not transferred.',
         // A provider-method 429 cooldown is not account headroom. Retain its
         // retry bookkeeping even when its account numbers cannot be restored.
         metadata: { ...metadata, failureKind: quota.metadata?.failureKind === 'rate-limited' ? 'rate-limited' : 'no-data' } } as T;
+}
+
+/**
+ * A failed fresh read that could not inherit `prev`'s numbers (lineage unknown
+ * on either side) still shows them on the dashboard — display-only, as
+ * `metadata.unconfirmedReading`. Routing is unaffected: `fresh` keeps empty
+ * windows and unknown lineage. A CONFIRMED switch (both accounts known and
+ * different) retains nothing. Chains off an earlier display copy so the
+ * original measurement time survives repeated failures.
+ */
+export function retainUnconfirmedDisplay(prev: MeshNodeFactsProviderQuota | undefined, fresh: MeshNodeFactsProviderQuota): MeshNodeFactsProviderQuota {
+    if (!prev || fresh.metadata?.accountSwitched === true || fresh.status === 'ok' || holdsWindows(fresh) || fresh.metadata?.unconfirmedReading) return fresh;
+    // Same CONFIRMED account + a non-transient failure = a real problem the old
+    // numbers must not mask; only an UNPROVABLE account earns the display copy.
+    if (sameQuotaAccount(prev.metadata?.accountLineage, fresh.metadata?.accountLineage)
+        && prev.metadata?.lineageUncertain !== true && fresh.metadata?.lineageUncertain !== true) return fresh;
+    if (fresh.metadata?.failureKind === 'quota-exhausted') return fresh;
+    if (prev.provider !== fresh.provider || isConfirmedAccountSwitch(prev.metadata?.accountLineage, fresh.metadata?.accountLineage)) return fresh;
+    const prevMeasured = prev.status === 'ok' || prev.metadata?.lastGoodWindows === true;
+    let display: UnconfirmedReading | undefined;
+    if (prevMeasured && holdsWindows(prev)) {
+        display = displayCopy(prev, prev.metadata?.lastGood?.measuredAt ?? prev.updatedAt);
+    } else {
+        const held = prev.metadata?.unconfirmedReading as UnconfirmedReading | undefined;
+        if (held && typeof held.measuredAt === 'number') display = held;
+    }
+    return display ? { ...fresh, metadata: { ...fresh.metadata, unconfirmedReading: display } } : fresh;
 }
 
 export function withQuotaAccountLineage(quota: ProviderQuota, lineage: QuotaAccountLineage): ProviderQuota {

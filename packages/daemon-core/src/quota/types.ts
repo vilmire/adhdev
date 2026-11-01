@@ -279,6 +279,22 @@ export interface QuotaMetadata {
      * implicitly — every fetch builds a fresh entry without it.
      */
     retryExhausted?: boolean;
+    /**
+     * Display-only copy of the last measured numbers when the account they
+     * belong to cannot be confirmed (see mesh-shared node-facts). Set only by
+     * `retainUnconfirmedDisplay` / `unconfirmedQuotaReading({ retainDisplay })`
+     * (./account-lineage.ts); routing never reads it.
+     */
+    /** A CONFIRMED account switch isolated this snapshot; no display retention may re-attach the old account's numbers. */
+    accountSwitched?: boolean;
+    unconfirmedReading?: {
+        measuredAt: number;
+        session?: QuotaWindow | null;
+        weekly?: QuotaWindow | null;
+        monthly?: QuotaWindow | null;
+        /** Same loose shape as mesh-shared's node-facts copy (the display copy rides that bundle). */
+        buckets?: Array<Partial<QuotaBucket> & { [extra: string]: unknown }> | null;
+    };
 }
 
 /** Normalized quota snapshot for a single provider. */

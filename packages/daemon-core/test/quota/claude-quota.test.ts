@@ -109,6 +109,22 @@ describe('fetchClaudeQuota', () => {
         expect(quotaGate(quota)).toBeNull();
     });
 
+    it('shows an unconfirmed local reading display-only; never across a confirmed switch', async () => {
+        // Producer unknown (legacy snapshot): numbers are parked for display only.
+        writeSnapshot({ accountLineage: undefined });
+        const unknown = await fetch();
+        expect(unknown.session).toBeNull();
+        expect(quotaGate(unknown)).toBeNull();
+        expect(unknown.metadata?.unconfirmedReading?.measuredAt).toBe(unknown.updatedAt);
+        expect(unknown.metadata?.unconfirmedReading?.session || unknown.metadata?.unconfirmedReading?.weekly).toBeTruthy();
+        // Confirmed different current account: nothing is retained.
+        writeSnapshot();
+        writeCurrentAccount('fixture-account-b');
+        const switched = await fetch();
+        expect(switched.metadata?.unconfirmedReading).toBeUndefined();
+        expect(switched.metadata?.accountSwitched).toBe(true);
+    });
+
     it('isolates an organization mismatch', async () => {
         writeSnapshot();
         writeCurrentAccount('fixture-account-a', 'fixture-other-org');

@@ -36,7 +36,7 @@
 
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
-import { canTransferQuotaReading, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage, withQuotaAccountLineage } from './account-lineage.js';
+import { canTransferQuotaReading, isConfirmedAccountSwitch, retainUnconfirmedDisplay, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage, withQuotaAccountLineage } from './account-lineage.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetchers/antigravity.js';
@@ -290,7 +290,7 @@ export function carryForwardLastGoodWindows(
     if (fresh.status === 'ok') return fresh;
     const kind = typeof fresh.metadata?.failureKind === 'string' ? fresh.metadata.failureKind : '';
     const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind as any);
-    if (!transient || !canTransferQuotaReading(prev, fresh)) return fresh;
+    if (!transient || !canTransferQuotaReading(prev, fresh)) return retainUnconfirmedDisplay(prev, fresh);
     const prevIsFreshOk = !!prev && prev.status === 'ok';
     const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
     // ★A REAL READING IS NOT ONLY session/weekly (owner report 2026-09-13:
@@ -577,7 +577,10 @@ export function hydrateQuotaCacheFromDisk(
         const settle = (current: QuotaAccountLineage): MeshNodeFactsProviderQuota =>
             quota.provider === provider && quota.metadata?.lineageUncertain !== true
                 && sameQuotaAccount(quota.metadata?.accountLineage, current)
-                ? quota : unconfirmedQuotaReading(quota, current);
+                ? quota : unconfirmedQuotaReading(quota, current, (() => {
+                    const switched = isConfirmedAccountSwitch(quota.metadata?.accountLineage, current);
+                    return { retainDisplay: !switched, switched };
+                })());
         let current: QuotaAccountLineage | Promise<QuotaAccountLineage> = UNKNOWN_ACCOUNT_LINEAGE;
         try { current = readLineage(provider); } catch { /* uncertainty stays explicit */ }
         if (current instanceof Promise) {
@@ -722,7 +725,8 @@ export async function refreshQuotaCacheOnce(
                     try { current = options.readAccountLineage ? options.readAccountLineage(provider)
                         : provider === 'grok-cli' ? readGrokQuotaAccountLineage() : readKimiQuotaAccountLineage(); } catch { /* no proof */ }
                     if (!sameQuotaAccount(fresh.metadata?.accountLineage, current)) {
-                        fresh = unconfirmedQuotaReading(fresh, current);
+                        const switched = isConfirmedAccountSwitch(fresh.metadata?.accountLineage, current);
+                        fresh = unconfirmedQuotaReading(fresh, current, { retainDisplay: !switched, switched });
                     }
                 }
                 // stampFetchedAt runs AFTER the carry-forward so the attempt

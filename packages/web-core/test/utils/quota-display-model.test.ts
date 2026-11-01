@@ -201,7 +201,7 @@ describe('Grok quota measurement age', () => {
     expect(stale.cue).toBe('stale')
     expect(stale.compactChip?.label).toContain('24.0% used')
     expect(stale.compactChip?.label).toContain('stale')
-    expect(shortQuotaChipLabel(stale.compactChip!)).toBe('7d 24% · stale')
+    expect(shortQuotaChipLabel(stale.compactChip!)).toBe('7d 24% · stale · 1h 1m ago')
     const fresh = buildQuotaDisplayModel({ ...old, updatedAt: now,
       weekly: { usedPercent: 97, windowMinutes: 10080, resetsAt: now + 86_400_000 } }, now)
     expect(fresh.cue).toBeUndefined()

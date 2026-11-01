@@ -111,7 +111,9 @@ export default function FleetQuotaCard({ machines }: { machines: FleetQuotaMachi
                                                             title={model.message ?? model.usageLabel ?? undefined}
                                                             className="text-3xs text-text-muted"
                                                         >
-                                                            {model.kind === 'failure' ? t('machine.fleetQuota.unreadable') : '—'}
+                                                            {model.kind === 'failure'
+                                                                ? (model.failureLabel ?? t('machine.fleetQuota.unreadable'))
+                                                                : model.kind === 'okNoWindows' ? (model.message ?? '—') : '—'}
                                                         </span>
                                                     )}
                                                 </div>

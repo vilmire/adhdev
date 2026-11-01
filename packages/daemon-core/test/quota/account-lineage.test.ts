@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { accountLineageFromCliJwt, sameQuotaAccount, UNKNOWN_ACCOUNT_LINEAGE, settleCredentialQuota } from '../../src/quota/account-lineage.js';
+import { accountLineageFromCliJwt, sameQuotaAccount, UNKNOWN_ACCOUNT_LINEAGE, settleCredentialQuota, unconfirmedQuotaReading } from '../../src/quota/account-lineage.js';
 import { carryForwardLastGoodWindows, clearQuotaCache, hydrateQuotaCacheFromDisk, readQuotaCache, refreshQuotaCacheOnce } from '../../src/quota/refresh.js';
 import { loadQuotaCache, mergeLastGoodForPersist, saveQuotaCache } from '../../src/quota/persist.js';
 import type { ProviderQuota } from '../../src/quota/types.js';
@@ -58,7 +58,12 @@ describe('memory and disk transfer boundary', () => {
     it('does not transfer legacy or unknown lineage, even when account labels/source match', () => {
         for (const old of [reading(UNKNOWN_ACCOUNT_LINEAGE), { ...reading(), metadata: { source: 'oauth' } }]) {
             const fresh = failed(UNKNOWN_ACCOUNT_LINEAGE);
-            expect(carryForwardLastGoodWindows(old, fresh)).toBe(fresh);
+            // Routing-visible windows are NOT transferred; the old numbers survive
+            // only as a display-only copy marked unconfirmed.
+            const carried = carryForwardLastGoodWindows(old, fresh);
+            expect(carried.weekly).toBeNull();
+            expect(carried.metadata?.lastGoodWindows).toBeUndefined();
+            expect(carried.metadata?.unconfirmedReading?.measuredAt).toBe(old.updatedAt);
             expect(mergeLastGoodForPersist({ p: fresh }, { p: old }).p).toBe(fresh);
         }
         expect(carryForwardLastGoodWindows(reading(), failed(UNKNOWN_ACCOUNT_LINEAGE)).weekly).toBeNull();
@@ -174,5 +179,20 @@ describe('collection/publication races', () => {
         const old = refreshQuotaCacheOnce([{ provider: 'antigravity-cli', fetch: () => pending }]);
         clearQuotaCache(); release(reading()); await old;
         expect(readQuotaCache()).toBeUndefined();
+    });
+});
+
+describe('unconfirmed display retention', () => {
+    it('never re-attaches numbers across a confirmed account switch', () => {
+        const switched = carryForwardLastGoodWindows(reading(A), failed(B, 'network'));
+        expect(switched.metadata?.unconfirmedReading).toBeUndefined();
+        const iso = unconfirmedQuotaReading(reading(A), B, { retainDisplay: false, switched: true });
+        expect(carryForwardLastGoodWindows(reading(A), iso).metadata?.unconfirmedReading).toBeUndefined();
+    });
+    it('keeps the ORIGINAL measurement time across repeated unknown failures', () => {
+        const first = carryForwardLastGoodWindows(reading(), failed(UNKNOWN_ACCOUNT_LINEAGE, 'missing-credentials'));
+        const second = carryForwardLastGoodWindows(first, failed(UNKNOWN_ACCOUNT_LINEAGE, 'missing-credentials'));
+        expect(second.metadata?.unconfirmedReading?.measuredAt).toBe(reading().updatedAt);
+        expect(second.weekly).toBeNull();
     });
 });

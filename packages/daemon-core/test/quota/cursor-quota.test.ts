@@ -216,6 +216,18 @@ describe('fetchCursorQuota', () => {
         }
     });
 
+    it('drops the included-usage axis once spent when on-demand is unlimited (not "100% used")', async () => {
+        const config = makeConfig({ accessToken: 'cursor-access-token' });
+        const current = fixedUsage();
+        current.plan_usage = { total_spend: 2000, limit: 2000 };
+        delete (current.spend_limit_usage as Record<string, unknown>).individual_limit;
+        const stub = stubFetch([jsonResponse(current), jsonResponse({ hardLimit: 2_147_483_647, noUsageBasedAllowed: false })]);
+        const quota = await fetchCursorQuota(deps(config, stub.fetch));
+        expect(quota.status).toBe('ok');
+        expect(quota.monthly).toBeNull();
+        expect(quota.metadata?.cursorUsage?.kind).toBe('unlimited');
+    });
+
     it('reports missing-credentials without touching the network', async () => {
         const config = makeConfig(null);
         const stub = stubFetch([]);

@@ -145,6 +145,22 @@ export interface MeshNodeFactsProviderQuota {
          * is not evidence about a running session's sign-in.
          */
         collectorScope?: string
+        /**
+         * DISPLAY-ONLY copy of the last numbers this node measured when it can
+         * no longer prove they belong to the CURRENT account (lineage unknown,
+         * or the failure left no confirmed match). Never read by routing, gates
+         * or ranking: those keep treating the entry as unknown. Dashboards show
+         * it marked "account unconfirmed" with its age. Never set across a
+         * CONFIRMED account switch (both accounts known and different).
+         */
+        unconfirmedReading?: {
+            /** Unix ms the numbers were measured. */
+            measuredAt: number
+            session?: MeshNodeFactsQuotaWindow | null
+            weekly?: MeshNodeFactsQuotaWindow | null
+            monthly?: MeshNodeFactsQuotaWindow | null
+            buckets?: MeshNodeFactsProviderQuota['buckets']
+        }
         [extra: string]: unknown
     }
     [extra: string]: unknown

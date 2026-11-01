@@ -388,12 +388,19 @@ function mapUsageResponse(
         )
         : null)
         ?? includedPlanWindow(planUsage, resetAt);
+    // An UNLIMITED on-demand budget keeps working after the included allowance
+    // is spent, so "100% of included usage" is not exhaustion: drop that axis
+    // (owner report 2026-11-01) instead of rendering a red 100% that the
+    // routing reserve would treat as no headroom. Below 100% the included
+    // axis is real information and stays.
+    const unlimitedOnDemand = cursorUsage.kind === 'unlimited' && cursorUsage.enabled !== false;
+    const monthlyShown = unlimitedOnDemand && monthly && monthly.usedPercent >= 100 ? null : monthly;
 
     return {
         provider: 'cursor-cli',
         session: null,
         weekly: null,
-        monthly,
+        monthly: monthlyShown,
         updatedAt: nowMs,
         error: null,
         status: 'ok',

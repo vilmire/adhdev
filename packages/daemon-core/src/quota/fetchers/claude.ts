@@ -50,6 +50,7 @@ import { IDENTITY } from '../../track-identity.js';
 import { isTestRuntimeEnv } from '../../config/config-dir.js';
 import {
     accountLineageFromStableIdentity,
+    isConfirmedAccountSwitch,
     settleAccountQuota,
     quotaAccountLineage,
     sameQuotaAccount,
@@ -96,8 +97,13 @@ export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<
     // Preserve actionable setup/parse failures (which contain no measurement).
     if (!quota.session && !quota.weekly) return settleAccountQuota(quota, before, after);
     const producer = quotaAccountLineage(quota.metadata?.accountLineage);
-    return sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)
-        ? quota : unconfirmedQuotaReading(quota, producer);
+    if (sameQuotaAccount(producer, before) && sameQuotaAccount(producer, after)) return quota;
+    // Routing keeps treating this as unknown (empty windows). The dashboard may
+    // still show the local statusline numbers, marked "account unconfirmed",
+    // unless a CONFIRMED different account is involved (a real switch).
+    const switched = isConfirmedAccountSwitch(producer, before) || isConfirmedAccountSwitch(producer, after)
+        || isConfirmedAccountSwitch(before, after);
+    return unconfirmedQuotaReading(quota, producer, { retainDisplay: !switched, switched });
 }
 
 /**
