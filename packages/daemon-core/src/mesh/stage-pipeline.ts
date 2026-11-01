@@ -24,6 +24,8 @@ export type StageEvent =
     | { kind: 'review_started'; childTaskId: string; reviewerSessionId?: string; at: string }
     | { kind: 'review_verdict'; childTaskId: string; report: MeshReviewReport; reviewerSessionId?: string; independenceUsed?: MeshStageIndependenceUsed; at: string }
     | { kind: 'reviewer_unavailable'; childTaskId: string; at: string }
+    /** The read-lease reviewer changed the parent's checkout: its verdict is void (§11). */
+    | { kind: 'reviewer_mutated_source'; childTaskId: string; at: string }
     | { kind: 'ceiling'; at: string }
     | { kind: 'decide_revise_once'; at: string }
     | { kind: 'decide_rereview'; at: string };
@@ -141,6 +143,10 @@ export function reduceStage(plan: MeshTaskStagePlan, prev: MeshTaskStageState, e
             // Another reviewer, same round: never reuse the session that just failed.
             delete state.reviewerSessionId;
             return { state, effects: [{ kind: 'create_review_child', round: state.round }] };
+        }
+        case 'reviewer_mutated_source': {
+            if (state.phase !== 'reviewing' && state.phase !== 'awaiting_review') return noop;
+            return block(state, 'reviewer_mutated_source', event.at);
         }
         case 'ceiling': {
             return block(state, 'stage_pipeline_ceiling', event.at);

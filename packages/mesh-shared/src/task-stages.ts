@@ -127,6 +127,8 @@ export interface MeshTaskStageState {
     originalMessage?: string
     /** Artifact ids the implementer cited in its own report (feed the next stage's input, top 4). */
     workerArtifactIds?: string[]
+    /** Read-lease reviews only: HEAD + working-tree fingerprint of the parent checkout taken when the review child was created (§11). */
+    reviewFingerprint?: string
     /** True once the parent was released to a terminal by the pipeline (hold lifted). */
     released?: boolean
 }

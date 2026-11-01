@@ -27,6 +27,12 @@ describe('production stage ports', () => {
         expect(head).not.toBe(base);
         expect(await defaultStageGit.diff(dir, base, head)).toContain('+2');
         expect(await defaultStageGit.isClean('/opt/absent/workspace')).toBe(false);
+        const fp = await defaultStageGit.fingerprint(dir);
+        expect(fp).toBeTruthy();
+        expect(await defaultStageGit.fingerprint(dir)).toBe(fp);
+        writeFileSync(join(dir, 'new.txt'), 'x'); // an untracked file is a mutation too
+        expect(await defaultStageGit.fingerprint(dir)).not.toBe(fp);
+        expect(await defaultStageGit.fingerprint('/opt/absent/workspace')).toBeNull();
     });
 
     it('fallback seams: self-check unavailable (no bounce), reviewer workspace null (read lease)', async () => {

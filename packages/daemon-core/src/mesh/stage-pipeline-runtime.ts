@@ -75,6 +75,16 @@ export class StagePipelineRuntime {
             const fresh = this.ports.queue.get(meshId, childId)!;
             const report = peekStageReport(meshId, childId);
             const independenceUsed = reviewIndependenceOf(fresh.review ?? {}) === 'fresh_session' ? 'fresh_session_fallback' as const : 'different_provider' as const;
+            // §11: the reviewer must leave a read-lease checkout exactly as it found it (light workspaces are exempt: no fingerprint).
+            if (st.reviewFingerprint) {
+                const workspace = this.ports.workspaceOf(parent);
+                const now = workspace ? await this.ports.git.fingerprint(workspace) : null;
+                if (now && now !== st.reviewFingerprint) {
+                    dropStageReport(meshId, childId);
+                    await this.apply(meshId, parentId, { kind: 'reviewer_mutated_source', childTaskId: childId, at: this.iso() });
+                    return;
+                }
+            }
             if (fresh.status === 'completed' && report?.review) {
                 const verdictArt = this.ports.artifacts.register({
                     meshId, ...(parent.missionId ? { missionId: parent.missionId } : {}), taskId: parentId, kind: 'review_verdict',
@@ -251,7 +261,12 @@ export class StagePipelineRuntime {
                     ...(reuse ? { targetSessionId: reuse } : {}),
                     ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
                 });
-                this.ports.queue.mutate(meshId, id, e => { e.stageState!.reviewTaskIds = [...e.stageState!.reviewTaskIds, child.id]; });
+                // §11: a read-lease reviewer works IN the parent's checkout — fingerprint it so a mutation is detectable.
+                const fingerprint = !ws && workspace ? await this.ports.git.fingerprint(workspace) : null;
+                this.ports.queue.mutate(meshId, id, e => {
+                    e.stageState!.reviewTaskIds = [...e.stageState!.reviewTaskIds, child.id];
+                    if (fingerprint) e.stageState!.reviewFingerprint = fingerprint; else delete e.stageState!.reviewFingerprint;
+                });
                 this.ports.events.progress(meshId, id, `stage: review round ${effect.round} queued`);
                 return;
             }

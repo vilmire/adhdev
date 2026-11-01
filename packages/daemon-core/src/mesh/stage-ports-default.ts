@@ -7,6 +7,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -46,6 +47,13 @@ export const defaultStageGit: StageGitPort = {
     },
     async headSha(workspace) { try { return (await git(workspace, ['rev-parse', 'HEAD'])).trim() || null; } catch { return null; } },
     async diff(workspace, base, head) { return git(workspace, ['diff', '--no-color', `${base}..${head}`], 16 * 1024 * 1024); },
+    async fingerprint(workspace) {
+        try {
+            const head = (await git(workspace, ['rev-parse', 'HEAD'])).trim();
+            const status = await git(workspace, ['status', '--porcelain=v1', '--untracked-files=all']);
+            return `${head}\n${createHash('sha256').update(status).digest('hex')}`;
+        } catch { return null; }
+    },
     async isClean(workspace) { try { return (await git(workspace, ['status', '--porcelain'])).trim() === ''; } catch { return false; } },
 };
 

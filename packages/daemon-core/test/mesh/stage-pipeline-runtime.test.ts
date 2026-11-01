@@ -24,13 +24,14 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
     rows.set(PARENT, parent);
     const selfChecks = [...(opts.selfChecks ?? [])];
     let head = 0;
+    const fp = { value: 'fp0' as string | null };
     const ports: StageRuntimePorts = {
         now: () => nowMs,
         selfCheck: { run: async () => selfChecks.shift() ?? { status: 'passed', log: 'ok' } },
         reviewerWorkspace: { prepare: async () => null },
         git: {
             baseSha: async () => 'base0000', headSha: async () => (opts.diff === false ? 'base0000' : `head${++head}`),
-            diff: async () => 'diff text', isClean: async () => true,
+            diff: async () => 'diff text', isClean: async () => true, fingerprint: async () => fp.value,
         },
         artifacts: { register: i => { const id = `art_${i.kind}_${log.artifacts.length}`; log.artifacts.push(id); return id; } },
         queue: {
@@ -66,7 +67,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
         await rt.onChildTerminal(MESH, c.id); await rt.idle();
     };
     const f = (id: string, severity: 'major' | 'nit' = 'major') => ({ id, severity, category: 'correctness' as const, claim: `claim ${id}`, evidence: 'ev' });
-    return { rt, rows, log, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
+    return { fp, rt, rows, log, parent: () => rows.get(PARENT)!, implDone, review, lastChild, advance: (ms: number) => { nowMs += ms; } , f };
 }
 
 beforeEach(() => { __resetStageReportStashForTests(); __resetIndependenceTrackerForTests(); });
@@ -126,6 +127,31 @@ describe('stage pipeline runtime', () => {
         await z.review({ verdict: 'changes_requested', findings: [z.f('f1')] });
         expect(z.parent().stageState!.blockedReason).toBe('review_unresolved');
         expect(z.log.revisions).toHaveLength(0);
+    });
+
+    it('a read-lease reviewer that changed the checkout voids its verdict (reviewer_mutated_source)', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        expect(h.parent().stageState!.reviewFingerprint).toBe('fp0');
+        h.fp.value = 'fp-changed';
+        await h.review({ verdict: 'approve' });
+        expect(h.parent().stageState!.blockedReason).toBe('reviewer_mutated_source');
+        expect(h.log.commits[0].status).toBe('blocked');
+        const ok = harness();
+        await ok.implDone('a1');
+        await ok.review({ verdict: 'approve' }); // unchanged fingerprint → verdict stands
+        expect(ok.log.commits[0].status).toBe('completed');
+    });
+
+    it('a prepared reviewer workspace is exempt from the mutation check', async () => {
+        const h = harness();
+        // swap in a provider that returns a light workspace
+        (h.rt as unknown as { ports: StageRuntimePorts }).ports.reviewerWorkspace = { prepare: async () => ({ path: '/opt/light', headSha: 'h', release: async () => undefined }) };
+        await h.implDone('a1');
+        expect(h.parent().stageState!.reviewFingerprint).toBeUndefined();
+        h.fp.value = 'fp-changed';
+        await h.review({ verdict: 'approve' });
+        expect(h.log.commits[0].status).toBe('completed');
     });
 
     it('reject_approach blocks immediately without a loop', async () => {
