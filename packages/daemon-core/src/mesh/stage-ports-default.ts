@@ -60,9 +60,8 @@ export const defaultStageGit: StageGitPort = {
     /**
      * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked and ignored
      * entries; a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
-     * bits); and a stat hash (path, size, mtime) of untracked files (enumerated) and ignored entries (summarised: an ignored
-     * directory is one `--directory` entry, so a node_modules-sized tree is not walked file by file; only the directory's
-     * own stat is hashed). fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
+     * bits); and a stat hash (path, size, mtime) of every untracked and ignored file (all enumerated, so an in-place edit
+     * inside an ignored directory is detected). fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
      * bounded concurrency under a wall-clock budget and an incremental file cap; any failure, cap or timeout → null (the
      * caller treats that as "cannot verify" and fails closed).
      */
@@ -79,7 +78,7 @@ export const defaultStageGit: StageGitPort = {
             const diff = await g(['diff', 'HEAD', '--binary']);
             const lsv = await g(['ls-files', '-v']);
             const untracked = (await g(['ls-files', '-z', '-o', '--exclude-standard'])).split('\0').filter(Boolean);
-            const ignored = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--directory'])).split('\0').filter(Boolean);
+            const ignored = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard'])).split('\0').filter(Boolean);
             const entries = [...untracked.map(p => `u:${p}`), ...ignored.map(p => `i:${p}`)];
             if (entries.length > maxEntries) return null;
             entries.sort();

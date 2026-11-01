@@ -22,7 +22,7 @@ test('reviewToDaemon leaves non-objects for the daemon validator to reject', () 
 
 test('enqueue schema advertises review and stays within the 4 KB budget; stage decide enumerates actions', () => {
   assert.ok('review' in (MESH_ENQUEUE_TASK_TOOL.inputSchema.properties as Record<string, unknown>));
-  assert.ok(JSON.stringify(MESH_ENQUEUE_TASK_TOOL).length <= 4000);
+  assert.ok(JSON.stringify(MESH_ENQUEUE_TASK_TOOL).length <= 4000, 'enqueue schema over budget');
   assert.deepEqual((MESH_TASK_STAGE_DECIDE_TOOL.inputSchema.properties.action as { enum: string[] }).enum, ['accept', 'revise_once', 'rereview', 'abandon']);
 });
 

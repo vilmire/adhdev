@@ -47,13 +47,13 @@ describe('production stage ports', () => {
         writeFileSync(join(dir, 'secret.cfg'), 'v2-longer');
         const afterIgnored = (await defaultStageGit.fingerprint(dir))!;
         expect(afterIgnored).not.toBe(base);
-        // 2. an ignored DIRECTORY is summarised by its own stat (not enumerated): adding an entry to it is detected
+        // 2. an in-place edit of an EXISTING file inside an ignored directory is detected (every ignored file is enumerated)
         const { mkdirSync } = await import('node:fs');
         mkdirSync(join(dir, 'build')); writeFileSync(join(dir, 'build', 'out.js'), 'x');
         const withBuild = (await defaultStageGit.fingerprint(dir))!;
         expect(withBuild).not.toBe(afterIgnored);
         await new Promise(r => setTimeout(r, 15));
-        writeFileSync(join(dir, 'build', 'second.js'), 'y');
+        writeFileSync(join(dir, 'build', 'out.js'), 'xyz');
         expect(await defaultStageGit.fingerprint(dir)).not.toBe(withBuild);
         // 3. skip-worktree flag (hides later edits from status/diff)
         const before = (await defaultStageGit.fingerprint(dir))!;

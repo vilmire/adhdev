@@ -28,6 +28,7 @@
     "mesh_enqueue_batch",
     "mesh_view_queue",
     "mesh_queue_cancel",
+    "mesh_task_stage_decide",
     "mesh_direct_cancel",
     "mesh_queue_requeue",
     "mesh_queue_revise",
