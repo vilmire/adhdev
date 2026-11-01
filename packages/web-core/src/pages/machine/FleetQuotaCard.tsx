@@ -19,7 +19,7 @@ import {
     createQuotaTextFormatter,
     quotaProviderLabel,
     selectMachineQuotaChips,
-    shortQuotaChipLabel,
+    compactQuotaChipLabels,
     type QuotaChipHint,
 } from '../../utils/quota-format'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
@@ -93,19 +93,23 @@ export default function FleetQuotaCard({ machines }: { machines: FleetQuotaMachi
                                         }
                                         const model = buildModel(quota)
                                         const shown = selectMachineQuotaChips(model, 'fleet')
+                                        const { labels, sharedNote } = compactQuotaChipLabels(shown)
                                         return (
                                             <td key={provider} className="px-2 align-top">
                                                 <div className="flex max-w-[18rem] flex-wrap gap-1">
-                                                    {shown.map(chip => (
+                                                    {shown.map((chip, i) => (
                                                         <MachineQuotaChip
                                                             key={chip.key}
                                                             chip={chip}
                                                             kindHint={t(QUOTA_CHIP_TITLE_KEYS[chip.hint])}
-                                                            label={shortQuotaChipLabel(chip)}
+                                                            label={labels[i]}
                                                             fmt={fmt}
                                                             locale={i18n.language}
                                                         />
                                                     ))}
+                                                    {sharedNote && (
+                                                        <span className="text-4xs text-text-muted whitespace-nowrap" data-quota-shared-note>{sharedNote}</span>
+                                                    )}
                                                     {shown.length === 0 && (
                                                         <span
                                                             title={model.message ?? model.usageLabel ?? undefined}

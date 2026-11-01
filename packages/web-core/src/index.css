@@ -4876,6 +4876,37 @@
         color: var(--text-primary);
         font-size: 13px;
     }
+
+    /* Shared form control look for `.input` (To do drawer) and `.machine-input`
+       (provider launch defaults, provider settings, sources). Both classes were
+       referenced but had no rule, so those controls rendered as bare browser
+       defaults (thin black border, white field even in dark mode). Font size is
+       left to the element's own text-* utility. */
+    .input,
+    .machine-input {
+        padding: 5px 10px;
+        min-height: 30px;
+        border-radius: var(--radius-sm, 8px);
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-subtle);
+        color: var(--text-primary);
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .input::placeholder,
+    .machine-input::placeholder {
+        color: var(--text-muted);
+    }
+    .input:focus-visible,
+    .machine-input:focus-visible {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    }
+    .input:disabled,
+    .machine-input:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
 }
 
 /* end @layer base */

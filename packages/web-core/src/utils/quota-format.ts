@@ -709,6 +709,23 @@ export function selectMachineQuotaChips(
     return []
 }
 
+/**
+ * Several chips of one provider (Antigravity pools) usually share one freshness
+ * cue and age ("updates on next agy run · 4h ago"). Repeating it on every chip
+ * blows tight rows apart, so surfaces say it ONCE: labels drop it, and the note
+ * is rendered after the chips. A single chip, or chips that differ, keep it inline.
+ */
+export function compactQuotaChipLabels(chips: readonly QuotaDisplayChip[]): { labels: string[]; sharedNote: string | null } {
+    const first = chips[0]
+    const shared = chips.length > 1 && !!first && (!!first.freshnessLabel || !!first.ageLabel)
+        && chips.every(c => c.freshnessLabel === first.freshnessLabel && c.ageLabel === first.ageLabel)
+    if (!shared) return { labels: chips.map(shortQuotaChipLabel), sharedNote: null }
+    return {
+        labels: chips.map(c => shortQuotaChipLabel({ ...c, freshnessLabel: undefined, ageLabel: undefined })),
+        sharedNote: [first.freshnessLabel, first.ageLabel].filter(Boolean).join(' · '),
+    }
+}
+
 /** Compact grid/row label — "Gemini 5h 45%", full text stays in the tooltip. */
 export function shortQuotaChipLabel(chip: QuotaDisplayChip): string {
     const axis = chip.hint === 'session'

@@ -16,7 +16,7 @@ import { Switch } from '../../components/ui/Switch'
 import type { ProviderInfo, ProviderSettingsEntry } from './types'
 import TrustBadge, { type ProviderTrust } from './TrustBadge'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
-import { bindQuotaDisplayModel, createQuotaTextFormatter, selectMachineQuotaChips, shortQuotaChipLabel, type QuotaChipHint } from '../../utils/quota-format'
+import { bindQuotaDisplayModel, createQuotaTextFormatter, selectMachineQuotaChips, compactQuotaChipLabels, type QuotaChipHint } from '../../utils/quota-format'
 import { PROVIDER_CATEGORY_COLOR, type ProviderCategory } from './providerCategoryConfig'
 import { ProviderLogo } from '../../components/ProviderLogo'
 import { localizeProviderSetting, localizeProviderSettingOption } from '../../utils/provider-setting-copy'
@@ -256,35 +256,39 @@ export default function InstalledProviderRow({
         if (!quota) return []
         const fmt = createQuotaTextFormatter(t)
         const buildQuotaDisplayModel = bindQuotaDisplayModel(fmt)
-        return selectMachineQuotaChips(buildQuotaDisplayModel(quota), 'row').map(chip => ({
+        const chips = selectMachineQuotaChips(buildQuotaDisplayModel(quota), 'row')
+        const { labels, sharedNote } = compactQuotaChipLabels(chips)
+        return chips.map((chip, i) => ({
             chip,
             kindHint: t(QUOTA_CHIP_TITLE_KEYS[chip.hint]),
-            label: shortQuotaChipLabel(chip),
+            label: labels[i],
             fmt,
+            sharedNote,
         }))
     })()
+    const quotaSharedNote = quotaChips[0]?.sharedNote ?? null
 
     return (
         <Card padding="none">
             {/* Compact header */}
             <button
                 onClick={() => setExpanded(v => !v)}
-                className="w-full px-4 py-2.5 flex items-center gap-3 text-left"
+                className="w-full px-4 py-2.5 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 text-left"
             >
                 <ProviderLogo type={prov.type} label={prov.displayName} size={20} className="shrink-0" />
-                <span className="text-xxs font-semibold text-text-primary truncate">{prov.displayName}</span>
-                <span className={`text-4xs font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
+                <span className="text-xxs font-semibold text-text-primary truncate min-w-[5rem]">{prov.displayName}</span>
+                <span className={`hidden sm:inline shrink-0 whitespace-nowrap text-4xs font-semibold px-1.5 py-px rounded border ${PROVIDER_CATEGORY_COLOR[prov.category as ProviderCategory]?.badge ?? 'border-border-subtle text-text-muted'}`}>
                     {prov.category.toUpperCase()}
                 </span>
                 {(providerInfo as any)?.trust && (
-                    <TrustBadge
+                    <span className="hidden sm:inline-flex shrink-0"><TrustBadge
                         trust={(providerInfo as any).trust as ProviderTrust}
                         sourceName={(providerInfo as any).sourceName ?? null}
                         description={(providerInfo as any).trustDescription}
-                    />
+                    /></span>
                 )}
                 {isRuntime && (
-                    <span className={`text-4xs font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
+                    <span className={`shrink-0 whitespace-nowrap text-4xs font-semibold px-1.5 py-px rounded border ${STATUS_CLASS[machineStatus] ?? STATUS_CLASS.disabled}`}>
                         {STATUS_LABEL_I18N[machineStatus] ?? machineStatus}
                     </span>
                 )}
@@ -338,6 +342,9 @@ export default function InstalledProviderRow({
                                     className="text-4xs font-semibold"
                                 />
                             ))}
+                            {quotaSharedNote && (
+                                <span className="text-4xs text-text-muted whitespace-nowrap" data-quota-shared-note>{quotaSharedNote}</span>
+                            )}
                         </span>
                     )}
                     {/* Enable is a SWITCH, not a red/green text button (owner

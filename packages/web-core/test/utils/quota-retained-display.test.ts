@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildQuotaDisplayModel, shortQuotaChipLabel } from '../../src/utils/quota-format'
+import { buildQuotaDisplayModel, shortQuotaChipLabel, compactQuotaChipLabels } from '../../src/utils/quota-format'
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared'
 
 const NOW = 1_800_000_000_000
@@ -105,5 +105,21 @@ describe('antigravity idle-expired token', () => {
         expect(buildQuotaDisplayModel(mk('grok-cli', 'expired-token'), NOW).failureLabel).toBe('expired token')
         expect(buildQuotaDisplayModel(mk('kimi', 'expired-token'), NOW).failureLabel).toBe('expired token')
         expect(buildQuotaDisplayModel(mk('grok-cli', 'missing-credentials'), NOW).failureLabel).toBe('missing credentials')
+    })
+})
+
+describe('compactQuotaChipLabels', () => {
+    const chip = (key: string, pct: number, extra: Record<string, unknown> = {}) => ({ key, hint: 'bucket', usedPercent: pct, label: key, tone: 'good', ...extra }) as any
+    it('says a shared freshness cue and age once instead of on every chip', () => {
+        const chips = [chip('Gemini 5h', 1, { freshnessLabel: 'updates on next agy run', ageLabel: '4h ago' }), chip('Gemini 7d', 2, { freshnessLabel: 'updates on next agy run', ageLabel: '4h ago' })]
+        const { labels, sharedNote } = compactQuotaChipLabels(chips)
+        expect(labels).toEqual(['Gemini 5h 1%', 'Gemini 7d 2%'])
+        expect(sharedNote).toBe('updates on next agy run · 4h ago')
+    })
+    it('keeps the cue inline for a single chip or chips that differ', () => {
+        expect(compactQuotaChipLabels([chip('Gemini 5h', 1, { ageLabel: '4h ago', freshnessLabel: 'stale' })]).sharedNote).toBeNull()
+        const mixed = compactQuotaChipLabels([chip('a', 1, { ageLabel: '1h ago' }), chip('b', 2, { ageLabel: '2h ago' })])
+        expect(mixed.sharedNote).toBeNull()
+        expect(mixed.labels[0]).toContain('1h ago')
     })
 })
