@@ -1060,7 +1060,11 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
                 // The evidence already classified the error. Keep the two classes a
                 // coordinator can act on (re-login, top up) instead of collapsing every
                 // session error into one opaque reason; the rest stay `session_error`.
-                const cls = (ev as TurnEvidenceOf<'session_error'>).reason;
+                // Only daemon-observed classifications (FSM edge, registry, dispatch) are
+                // promoted; anything else stays the generic class.
+                const sev = ev as TurnEvidenceOf<'session_error'>;
+                const trusted = sev.source === 'fsm_edge' || sev.source === 'session_registry' || sev.source === 'dispatch';
+                const cls = trusted ? sev.reason : undefined;
                 reason = cls === 'auth_failed' ? 'provider_auth_failed' : cls === 'billing_failed' ? 'provider_billing_failed' : 'session_error';
             } else reason = template.reason;
             commit(draft, outcome, template.strength, reason, template.text === 'recorded_report' ? recordedReportText(draft) : undefined);

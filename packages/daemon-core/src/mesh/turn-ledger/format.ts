@@ -26,6 +26,7 @@
 // ---------------------------------------------------------------------------
 
 import type { NotifyKind, SummaryRef } from '@adhdev/mesh-shared';
+import { redactCredentialString } from '../../logging/credential-redactor.js';
 
 // ─── injected dependencies ─────────────────────────────────────────────────
 
@@ -389,6 +390,11 @@ function renderChoice(input: RenderTurnNotifyInput, missing: SummaryRef[]): stri
     return lines.join('\n');
 }
 
+function clipAuthDetail(text: string): string {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return flat.length > 200 ? `${flat.slice(0, 199)}…` : flat;
+}
+
 function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): string {
     const s = input.scalars;
     const nodeLabel = s.nodeLabel;
@@ -396,7 +402,11 @@ function renderStopped(input: RenderTurnNotifyInput, missing: SummaryRef[]): str
 
     if (s.stopReason === 'auth_failed' || s.stopReason === 'billing_failed') {
         const kind = s.stopReason === 'billing_failed' ? 'billing/subscription' : 'authentication';
-        const detail = resolve(input.refs.error, input.resolveRef, missing) ?? resolve(input.refs.summary, input.resolveRef, missing);
+        const raw = resolve(input.refs.error, input.resolveRef, missing) ?? resolve(input.refs.summary, input.resolveRef, missing);
+        // Provider auth/billing error text can carry account identifiers or token
+        // fragments: mask credentials and e-mail addresses and clip before it is
+        // republished to the coordinator.
+        const detail = raw ? clipAuthDetail(redactCredentialString(raw).replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]')) : null;
         return `[System] ${nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ''}`;
     }
     if (s.stopReason === 'usage_limit_exceeded') {

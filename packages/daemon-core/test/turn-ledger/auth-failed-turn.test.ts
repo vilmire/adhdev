@@ -147,6 +147,16 @@ describe('session_error evidence keeps its actionable class (R21)', () => {
         expect(r.attempt?.terminal).toMatchObject({ outcome: 'failed', strength: 'genuine', reason: terminalReason });
     });
 
+    it.each(['completion_flush_genuine', 'worker_tool', 'mcp_probe'] as const)('an auth class from untrusted source %s stays session_error', (source) => {
+        const r = reduce({
+            attempt: makeAttempt('generating'), holds: [makeHold('liveness'), makeHold('hard_ceiling')],
+            evidence: ev('session_error', { reason: 'auth_failed' }, { source }),
+            policy: POLICY, nowMs: NOW,
+        });
+        const reason = r.attempt?.terminal?.reason ?? r.attempt?.data.writerStop?.reason;
+        expect(reason).toBe('session_error');
+    });
+
     it('a mesh attempt keeps the class through the writer-stop settlement', () => {
         const r = commitOf('auth_failed', 'mesh_direct');
         expect(r.attempt?.state).toBe('stopping');
