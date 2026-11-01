@@ -10,7 +10,7 @@ import { type MeshWorkQueueEntry, requeueTask, requeueTaskForLedgerReclaim } fro
 import { buildNewWorkHeldRefusal, classifyNewWorkHeld, evaluateNewWorkHold, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 import type { MeshTaskRoutingDecision } from './mesh-routing-decision.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
-import { type TurnAttemptRef, type TurnEvidence, sessionIdsEquivalent, meshNodeIdMatches, sanitizeRefusalCode, readText } from '@adhdev/mesh-shared';
+import { type TurnAttemptRef, type TurnEvidence, sessionIdsEquivalent, meshNodeIdMatches, sanitizeRefusalCode, sanitizeDispatchRefusalDetail, readText } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
 import { localCoordinatorDaemonId } from './mesh-queue-mesh-view.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -590,7 +590,16 @@ function handleDispatchFailure(rawFailure: any, ctx: DeliverTaskContext, deliver
             meshRecord(ctx.meshId, 'dispatch_failed', {
                 nodeId: ctx.nodeId,
                 sessionId: ctx.sessionId,
-                payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport },
+                payload: {
+                    taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport,
+                    // Bounded refusal detail so the committed task_failed view (mesh_task_history)
+                    // can still say WHY after the daemon logs rotate; see readTurnTerminalViews.
+                    ...(ctx.attemptRef ? { attemptId: ctx.attemptRef.attemptId } : {}),
+                    ...(() => {
+                        const detail = sanitizeDispatchRefusalDetail(applicationRefusalCode ?? e?.code, e?.message);
+                        return detail ? { detail } : {};
+                    })(),
+                },
             }, { local: true });
         } catch { /* ledger write is best-effort */ }
     }

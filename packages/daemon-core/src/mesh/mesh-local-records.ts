@@ -38,7 +38,7 @@ import {
     type SessionRecoveryContext,
 } from './mesh-ledger.js';
 import type { Database } from 'better-sqlite3';
-import type { LocalRecordProjection } from './mesh-local-record-store.js';
+import { LocalRecordStore, type LocalRecordProjection } from './mesh-local-record-store.js';
 
 export const DEFAULT_LOCAL_RECORD_SLICE_LIMIT = 100;
 export const MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
@@ -124,6 +124,23 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
         where.push(`attempt_id || '#committed' NOT IN (${opts.excludeIds.map(() => '?').join(',')})`);
         args.push(...opts.excludeIds);
     }
+    // A committed `dispatch_failed` carries only the closed reason; the refusal text
+    // lives in the local `dispatch_failed` record written at the dispatch site.
+    const refusalStore = opts.db ? new LocalRecordStore(opts.db) : store();
+    const refusalDetailFor = (row: TerminalRow): { code?: string; message?: string } | undefined => {
+        if (row.terminal_outcome !== 'failed' || row.terminal_reason !== 'dispatch_failed') return undefined;
+        try {
+            const records = refusalStore.query(meshId, { kinds: ['dispatch_failed'], taskId: row.task_id });
+            for (let i = records.length - 1; i >= 0; i--) {
+                const payload = records[i].payload as Record<string, unknown> | undefined;
+                const detail = payload?.detail;
+                if (!detail || typeof detail !== 'object') continue;
+                if (typeof payload?.attemptId === 'string' && payload.attemptId !== row.attempt_id) continue;
+                return detail as { code?: string; message?: string };
+            }
+        } catch { /* detail is best-effort */ }
+        return undefined;
+    };
     const toView = (row: TerminalRow): MeshLedgerEntry => {
         const completed = row.terminal_outcome === 'completed';
         const cancelled = row.terminal_outcome === 'cancelled';
@@ -150,6 +167,7 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
                 ...(row.terminal_source ? { terminalSource: row.terminal_source } : {}),
                 ...(completed && row.terminal_strength === 'weak' ? { evidenceLevel: 'weak' } : {}),
                 ...(!completed && !blocked && !cancelled && row.terminal_reason ? { error: row.terminal_reason } : {}),
+                ...(() => { const detail = refusalDetailFor(row); return detail ? { detail } : {}; })(),
                 ...(cancelled ? { intentional: true, intentionalStopReason: 'operator_cleanup' } : {}),
             },
         };

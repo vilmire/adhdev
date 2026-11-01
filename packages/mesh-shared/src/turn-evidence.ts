@@ -79,6 +79,33 @@ export function sanitizeRefusalCode(value: unknown): string | undefined {
     return normalized.slice(0, 64)
 }
 
+/** Longest refusal message kept on a failed dispatch (see {@link sanitizeDispatchRefusalDetail}). */
+export const DISPATCH_REFUSAL_DETAIL_MAX = 200
+
+/**
+ * Bounded, sanitized "why was this dispatch refused" detail for triage:
+ * `{code, message}` with the code in the refusal-code identifier shape and the
+ * message a single printable line of at most {@link DISPATCH_REFUSAL_DETAIL_MAX}
+ * chars (home-directory prefixes collapsed to `~`). Refusal texts are generated
+ * by the daemon / transport, never by a user or an agent. LOCAL records only:
+ * it is deliberately NOT part of the replicated turn evidence (content-free).
+ */
+export function sanitizeDispatchRefusalDetail(code: unknown, message: unknown): { code?: string; message?: string } | undefined {
+    const cleanCode = sanitizeRefusalCode(code)
+    let cleanMessage: string | undefined
+    if (typeof message === 'string') {
+        const line = message
+            .replace(/(?:[A-Za-z]:)?[\\/](?:Users|home)[\\/][^\s\\/]+/g, '~')
+            // eslint-disable-next-line no-control-regex
+            .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+        if (line) cleanMessage = line.length > DISPATCH_REFUSAL_DETAIL_MAX ? `${line.slice(0, DISPATCH_REFUSAL_DETAIL_MAX - 1)}…` : line
+    }
+    if (!cleanCode && !cleanMessage) return undefined
+    return { ...(cleanCode ? { code: cleanCode } : {}), ...(cleanMessage ? { message: cleanMessage } : {}) }
+}
+
 export const CONSUME_PROFILES = ['default', 'native_source'] as const
 export type ConsumeProfile = typeof CONSUME_PROFILES[number]
 

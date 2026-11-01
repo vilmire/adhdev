@@ -4,8 +4,8 @@
 // transport delivery happens independently around these calls.
 
 import type { MeshContext } from './mesh-tools-internal.js';
-import { turnObserve, TurnIpcCommandError } from '../ipc/turn-commands.js';
-import { sanitizeRefusalCode } from '@adhdev/mesh-shared';
+import { turnObserve, recordLocal, TurnIpcCommandError } from '../ipc/turn-commands.js';
+import { sanitizeRefusalCode, sanitizeDispatchRefusalDetail } from '@adhdev/mesh-shared';
 import { classifySessionBusyWithTask } from '@adhdev/daemon-core';
 
 /**
@@ -181,6 +181,18 @@ export async function observeDirectDispatchOutcome(
                     ...(refusalCode ? { refusalCode } : {}),
                 },
             });
+            // Local-only triage record (never replicated): the bounded refusal text, so the
+            // committed task_failed view in mesh_task_history can still say why the
+            // dispatch failed after the daemon logs have rotated.
+            const detail = sanitizeDispatchRefusalDetail(opts.refusalCode, opts.refusalDetail);
+            if (detail && ctx.mesh?.id) {
+                try {
+                    await recordLocal(ctx.transport, {
+                        meshId: ctx.mesh.id, kind: 'dispatch_failed', nodeId: opts.nodeId, sessionId: opts.sessionId, taskId: opts.taskId,
+                        payload: { taskId: opts.taskId, attemptId: attemptRef.attemptId, transport: 'mcp_direct', detail },
+                    });
+                } catch { /* best-effort */ }
+            }
             // (4) one WARN line on the owner, local-only — never in the replicated
             // evidence above. Detail text is exactly what the transport/worker
             // answer already carried into the JSON response returned to the

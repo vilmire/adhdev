@@ -25,6 +25,7 @@ vi.mock('../../src/config/config.js', () => ({
 import { MAX_LEDGER_SLICE_LIMIT, isIntentionalCleanupStopEntry } from '../../src/mesh/mesh-ledger.js';
 import { readLocalRecords, readLocalRecordSlice, getLocalRecordSummary, readTurnTerminalViews, readRefineJobRecords, pruneLocalRecords } from '../../src/mesh/mesh-local-records.js';
 import { presentRefineFailureKinds, storedKindsForRequest } from '../../src/mesh/mesh-refine-failure-kind.js';
+import { sanitizeDispatchRefusalDetail } from '@adhdev/mesh-shared';
 import { meshRecord } from '../../src/mesh/mesh-record.js';
 import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import { getLedgerDir } from '../../src/mesh/mesh-ledger-paths.js';
@@ -421,6 +422,37 @@ describe('mesh-local-records (C-W9a: meshRecord local leg + readers)', () => {
             for (let i = 0; i < 6; i++) seedMeshAttempt({ meshId: testMeshId, taskId: `t-c${i}`, sessionId: `sc${i}`, stage: 'completed', nowMs: now - 1000 + i });
             expect(readLocalRecords(testMeshId, { kind: ['task_failed'], tail: 1 }).map((e) => e.taskId)).toEqual(['t-f']);
             expect(readTurnTerminalViews(testMeshId, { kinds: ['task_failed'], tail: 1 }).map((e) => e.taskId)).toEqual(['t-f']);
+        });
+    });
+
+    describe('dispatch refusal detail on the committed failure view', () => {
+        it('attaches the bounded refusal detail of the same attempt to a dispatch_failed task_failed view', () => {
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-ref', sessionId: 's-ref', attemptId: 'att-ref', stage: 'failed', terminalReason: 'dispatch_failed' });
+            const detail = sanitizeDispatchRefusalDetail('mesh_session_not_mesh_owned', `session is not live on this daemon ${'x'.repeat(400)}`);
+            meshRecord(testMeshId, 'dispatch_failed', { taskId: 't-ref', payload: { taskId: 't-ref', attemptId: 'att-ref', detail } }, { local: true });
+            // A stale refusal of a different attempt must not be shown.
+            meshRecord(testMeshId, 'dispatch_failed', { taskId: 't-ref', payload: { taskId: 't-ref', attemptId: 'other', detail: { message: 'stale' } } }, { local: true });
+            const [view] = readTurnTerminalViews(testMeshId, { kinds: ['task_failed'], taskId: 't-ref' });
+            const got = (view.payload as any).detail;
+            expect(got.code).toBe('mesh_session_not_mesh_owned');
+            expect(got.message.length).toBeLessThanOrEqual(200);
+            expect(got.message.startsWith('session is not live')).toBe(true);
+            expect((view.payload as any).reason).toBe('dispatch_failed');
+        });
+
+        it('adds no detail to other failures and none when nothing was recorded', () => {
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-none', sessionId: 's-none', attemptId: 'att-none', stage: 'failed', terminalReason: 'dispatch_failed' });
+            seedMeshAttempt({ meshId: testMeshId, taskId: 't-hc', sessionId: 's-hc', attemptId: 'att-hc', stage: 'failed', terminalReason: 'hard_ceiling' });
+            meshRecord(testMeshId, 'dispatch_failed', { taskId: 't-hc', payload: { taskId: 't-hc', attemptId: 'att-hc', detail: { message: 'x' } } }, { local: true });
+            const views = readTurnTerminalViews(testMeshId, { kinds: ['task_failed'] });
+            expect(views.map((v) => (v.payload as any).detail)).toEqual([undefined, undefined]);
+        });
+
+        it('sanitizeDispatchRefusalDetail bounds, flattens and strips home paths', () => {
+            const d = sanitizeDispatchRefusalDetail('CLI Agent!', 'CLI agent not running\n at /Users/someone/work/x\tC:\\Users\\bob\\y');
+            expect(d?.code).toBe('cli_agent');
+            expect(d?.message).toBe('CLI agent not running at ~/work/x ~\\y');
+            expect(sanitizeDispatchRefusalDetail(undefined, '   ')).toBeUndefined();
         });
     });
 
