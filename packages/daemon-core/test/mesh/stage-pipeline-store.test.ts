@@ -80,7 +80,7 @@ describe('terminal choke point hold', () => {
     it('holds an intermediate completed on a stage parent and fires the hook; release commits', async () => {
         const mesh = newMesh();
         const calls: string[] = [];
-        setStageHookTarget({ onImplCompleted: async (_m, id, a) => { calls.push(`impl:${id}:${a}`); }, onChildTerminal: async (_m, id) => { calls.push(`child:${id}`); } });
+        setStageHookTarget({ onImplCompleted: async (_m, id, a) => { calls.push(`impl:${id}:${a}`); }, onChildTerminal: async (_m, id) => { calls.push(`child:${id}`); }, onChildClaimed: async () => undefined });
         const parent = enqueueTask(mesh, 'fix', stagey);
         assigned(mesh, parent.id);
         const held = commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', source: 'worker_tool_report' });
@@ -105,7 +105,7 @@ describe('terminal choke point hold', () => {
     it('a non-stage task is never held; a child terminal fires the child hook', async () => {
         const mesh = newMesh();
         const calls: string[] = [];
-        setStageHookTarget({ onImplCompleted: async () => undefined, onChildTerminal: async (_m, id) => { calls.push(id); } });
+        setStageHookTarget({ onImplCompleted: async () => undefined, onChildTerminal: async (_m, id) => { calls.push(id); }, onChildClaimed: async () => undefined });
         const plain = enqueueTask(mesh, 'easy', { ...medium, difficulty: 'easy' }); assigned(mesh, plain.id);
         expect(commitTaskTerminal({ meshId: mesh, taskId: plain.id, status: 'completed', source: 'worker_tool_report' }).held).toBeUndefined();
         const parent = enqueueTask(mesh, 'fix', stagey); assigned(mesh, parent.id);

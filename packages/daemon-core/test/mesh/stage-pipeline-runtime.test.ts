@@ -98,6 +98,20 @@ describe('stage pipeline runtime', () => {
         expect(h.log.commits[0].text).toMatch(/2 rounds.*1 finding fixed, 1 nit open/);
     });
 
+    it('claiming the review child moves the parent awaiting_review → reviewing and records the reviewer session', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        expect(h.parent().stageState!.phase).toBe('awaiting_review');
+        const c = h.lastChild(); c.status = 'assigned'; c.assignedSessionId = 'rev-s';
+        await h.rt.onChildClaimed(MESH, c.id); await h.rt.idle();
+        expect(h.parent().stageState!.phase).toBe('reviewing');
+        expect(h.parent().stageState!.reviewerSessionId).toBe('rev-s');
+        await h.rt.onChildClaimed(MESH, c.id); await h.rt.idle(); // replay is a no-op
+        expect(h.parent().stageState!.phase).toBe('reviewing');
+        await h.review({ verdict: 'approve' });
+        expect(h.log.commits[0].status).toBe('completed');
+    });
+
     it('exhausted rounds block with review_unresolved; maxRevisions 0 blocks at once', async () => {
         const h = harness({ maxRevisions: 1 });
         await h.implDone('a1');
@@ -244,5 +258,18 @@ describe('stage footer input + review stats', () => {
         expect(stats.blockedByReason).toEqual({ review_unresolved: 1 });
         expect(stats.firstReviewFoundDefects).toBe(1);
         expect(stats.independenceFallback).toEqual({ used: 1, total: 2, share: 0.5 });
+    });
+});
+
+import { setStageHookTarget, notifyStageChildClaimed } from '../../src/mesh/stage-hooks.js';
+describe('claim hook forwarding', () => {
+    it('forwards a claimed review child to the registered target and is a no-op without one', async () => {
+        const seen: string[] = [];
+        notifyStageChildClaimed('m', 'none');
+        setStageHookTarget({ onImplCompleted: async () => undefined, onChildTerminal: async () => undefined, onChildClaimed: async (_m, id) => { seen.push(id); } });
+        notifyStageChildClaimed('m', 'c1');
+        await Promise.resolve();
+        setStageHookTarget(null);
+        expect(seen).toEqual(['c1']);
     });
 });

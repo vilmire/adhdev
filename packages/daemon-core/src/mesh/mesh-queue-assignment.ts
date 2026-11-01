@@ -1,4 +1,5 @@
 import { getMachineId } from '../config/config.js';
+import { notifyStageChildClaimed } from './stage-hooks.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import { isNewWorkHeld } from '../maintenance/new-work-hold.js';
 import { findLocalCliInstance } from './cli-instance-lookup.js';
@@ -382,6 +383,7 @@ function openClaimAttempt(p: {
 /** Bookkeeping for a claimed task whose attempt is open, before it is dispatched. */
 function recordTaskClaimed(p: { meshId: string; task: MeshWorkQueueEntry; nodeId: string; sessionId: string; providerType: string; attemptId: string }): void {
     const { meshId, task, nodeId, sessionId, providerType } = p;
+    if (task.origin === 'stage') notifyStageChildClaimed(meshId, task.id); // review-in-task: parent → reviewing
     // WORKER-MCP (design §9.2.1): mint the per-task worker token now that the attempt
     // exists (the direct-dispatch arm mints in recordDirectDispatchTask). AFTER the
     // attempt open so the token carries a real attemptId: binding to the task alone

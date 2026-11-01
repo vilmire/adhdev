@@ -5,6 +5,7 @@
 export interface StageHookTarget {
     onImplCompleted(meshId: string, parentId: string, attemptId?: string): Promise<void>;
     onChildTerminal(meshId: string, childId: string): Promise<void>;
+    onChildClaimed(meshId: string, childId: string): Promise<void>;
 }
 
 let target: StageHookTarget | null = null;
@@ -17,4 +18,9 @@ export function notifyStageImplCompleted(meshId: string, parentId: string, attem
 
 export function notifyStageChildTerminal(meshId: string, taskId: string): void {
     if (target) void target.onChildTerminal(meshId, taskId).catch(() => undefined);
+}
+
+/** A review child was claimed (assigned): the parent moves awaiting_review → reviewing. */
+export function notifyStageChildClaimed(meshId: string, taskId: string): void {
+    if (target) void target.onChildClaimed(meshId, taskId).catch(() => undefined);
 }
