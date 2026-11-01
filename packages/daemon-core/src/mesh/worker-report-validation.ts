@@ -3,7 +3,7 @@
  * `report_completion`, its field limits, and the validator that turns a raw tool
  * payload into a typed WorkerCompletionReport or a list of field errors.
  */
-import { normalizeMissionItemInput, WORKER_COMMITS_MAX, WORKER_DECISIONS_NEEDED_MAX, normalizeReportCommits, isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
+import { normalizeMissionItemInput, WORKER_COMMITS_MAX, WORKER_DECISIONS_NEEDED_MAX, normalizeReportCommits, isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, LIGHT_TESTS_RUN_MAX, type LightTestRun, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
 
 export interface WorkerHandoffNotes {
     /** What the change was FOR — the thing a diff cannot say. */
@@ -28,6 +28,8 @@ export interface WorkerCompletionReport {
      * (the mcp-server sends it only when the worker used it).
      */
     decisionsNeeded?: Array<Record<string, unknown>>;
+    /** Light task: the tests the worker ran (self-reported evidence, never trusted as a verdict). */
+    testsRun?: LightTestRun[];
     /** Commit SHAs this task produced (§4.4) — the only source of commit evidence; the summary text is never parsed. */
     commits?: string[];
     /** Artifact ids (`art_*`) the worker registered for this task's findings — cited so the next same-mission task inherits them. Informational; access is still the OD-4 grant. */
@@ -77,7 +79,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
     }
     const input = raw as Record<string, unknown>;
 
-    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits', 'artifactIds']);
+    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits', 'artifactIds', 'testsRun']);
     for (const key of Object.keys(input)) {
         if (!KNOWN.has(key)) {
             errors.push({ field: key, message: `unknown field '${key}' (expected one of: ${[...KNOWN].join(', ')})` });
@@ -207,6 +209,8 @@ export function validateWorkerCompletionReport(raw: unknown): {
         }
     }
 
+    const testsRun = validateTestsRun(input.testsRun, errors);
+
     if (errors.length) return { errors };
     return {
         report: {
@@ -226,6 +230,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
             ...(decisionsNeeded ? { decisionsNeeded } : {}),
             ...(commits ? { commits } : {}),
             ...(artifactIds ? { artifactIds } : {}),
+            ...(testsRun?.length ? { testsRun } : {}),
         },
         errors: [],
     };
@@ -260,5 +265,30 @@ function validateStringList(
         }
         out.push(trimmed);
     }
+    return out;
+}
+
+/** `testsRun`: at most LIGHT_TESTS_RUN_MAX entries of {command, exit, passed?, failed?, note?}. */
+function validateTestsRun(value: unknown, errors: WorkerReportValidationError[]): LightTestRun[] | undefined {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) { errors.push({ field: 'testsRun', message: 'testsRun must be an array' }); return undefined; }
+    if (value.length > LIGHT_TESTS_RUN_MAX) { errors.push({ field: 'testsRun', message: `testsRun has ${value.length} entries, over the ${LIGHT_TESTS_RUN_MAX} limit` }); return undefined; }
+    const out: LightTestRun[] = [];
+    value.forEach((raw, i) => {
+        const where = `testsRun[${i}]`;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { errors.push({ field: where, message: 'must be an object {command, exit}' }); return; }
+        const t = raw as Record<string, unknown>;
+        for (const key of Object.keys(t)) if (!['command', 'exit', 'passed', 'failed', 'note'].includes(key)) errors.push({ field: `${where}.${key}`, message: `unknown field '${key}'` });
+        const command = typeof t.command === 'string' ? t.command.trim() : '';
+        if (!command || command.length > 500) errors.push({ field: `${where}.command`, message: 'command must be a non-empty string of at most 500 chars' });
+        if (typeof t.exit !== 'number' || !Number.isInteger(t.exit)) errors.push({ field: `${where}.exit`, message: 'exit must be an integer' });
+        for (const k of ['passed', 'failed'] as const) {
+            if (t[k] !== undefined && (typeof t[k] !== 'number' || !Number.isInteger(t[k]) || (t[k] as number) < 0)) errors.push({ field: `${where}.${k}`, message: `${k} must be a non-negative integer` });
+        }
+        if (t.note !== undefined && (typeof t.note !== 'string' || t.note.length > 500)) errors.push({ field: `${where}.note`, message: 'note must be a string of at most 500 chars' });
+        if (command && typeof t.exit === 'number') {
+            out.push({ command, exit: t.exit as number, ...(typeof t.passed === 'number' ? { passed: t.passed } : {}), ...(typeof t.failed === 'number' ? { failed: t.failed } : {}), ...(typeof t.note === 'string' && t.note ? { note: t.note } : {}) });
+        }
+    });
     return out;
 }

@@ -180,6 +180,22 @@ export const REPORT_COMPLETION_TOOL = {
         items: { type: 'string' },
         description: 'Ids (art_*) of the artifacts you registered with `artifact_register` for this task\'s substantial findings (diagnosis, evidence, repro steps, review findings). The next task in this mission inherits them. Optional.',
       },
+      tests_run: {
+        type: 'array',
+        maxItems: 20,
+        items: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            exit: { type: 'integer' },
+            passed: { type: 'integer' },
+            failed: { type: 'integer' },
+            note: { type: 'string' },
+          },
+          required: ['command', 'exit'],
+        },
+        description: 'Light-workspace tasks: the tests you ran (command + exit code). Self-reported evidence; optional.',
+      },
     },
     required: ['outcome', 'summary'],
   },
@@ -440,6 +456,7 @@ function toDaemonReport(a: Record<string, any>): { report: Record<string, unknow
     ...((a.decisions_needed ?? a.decisionsNeeded) !== undefined ? { decisionsNeeded: a.decisions_needed ?? a.decisionsNeeded } : {}),
     ...(a.commits !== undefined ? { commits: a.commits } : {}),
     ...((a.artifact_ids ?? a.artifactIds) !== undefined ? { artifactIds: a.artifact_ids ?? a.artifactIds } : {}),
+    ...((a.tests_run ?? a.testsRun) !== undefined ? { testsRun: a.tests_run ?? a.testsRun } : {}),
     ...(handoffNotes ? { handoffNotes } : {}),
   };
   return { report, ignoredHandoffKeys };

@@ -86,6 +86,8 @@ export interface LightTaskResult {
     warnings?: LightWarning[]
     landedAt?: string
     landedVia?: LightLandMode
+    /** The verified source packet (`MeshSourceCandidate`) for this result; tests carry no log hashes. */
+    sourceCandidate?: import('./task-source-phase').MeshSourceCandidate
     capturedAt: string
 }
 

@@ -16,6 +16,7 @@ import { resolveMeshPolicy } from '../repo-mesh-types.js';
 import { resolveMaxLightParallelTasks } from '../repo-mesh-policy-resolve.js';
 import { getMachineId } from '../config/config.js';
 import { admitLightBaseNode } from './light-task-admission.js';
+import { saveLightFingerprint, takeLightCheckoutFingerprint } from './light-checkout-fingerprint.js';
 import { LightWorkspaceError, prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
 import { countLiveLightWorkspaces } from './mesh-light-workspace-store.js';
 import { getMeshWithCache } from './mesh-queue-mesh-view.js';
@@ -100,6 +101,9 @@ async function dispatchOne(components: DaemonComponents, meshId: string, mesh: a
     try {
         assertMaintenanceAdmission([meshId]);
         assertMaintenanceNode(meshId, nodeId);
+        // Shared-checkout detector baseline (design §8): compared again when the result is captured.
+        try { saveLightFingerprint(handle.path, await takeLightCheckoutFingerprint(admission.checkoutRoot, admission.config.linkNodeModules, Object.keys(handle.submoduleBases))); }
+        catch (e: any) { LOG.warn('LightTask', `fingerprint baseline for ${task.id} not taken: ${e?.message || e}`); }
         const launch: any = await components.router.execute('launch_cli', {
             cliType: plan.effectiveProviderType,
             dir: handle.path,

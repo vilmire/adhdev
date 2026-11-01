@@ -278,7 +278,7 @@ export async function removeLightWorkspace(input: RemoveLightWorkspaceInput): Pr
             await git(where === '.' ? checkout : path.join(checkout, where), ['branch', '-D', branch], true);
         }
     }
-    try { fs.rmSync(`${lw}${MARKER_SUFFIX}`, { force: true }); } catch { /* ignore */ }
+    for (const suffix of [MARKER_SUFFIX, '.adhdev-light-fp.json']) { try { fs.rmSync(`${lw}${suffix}`, { force: true }); } catch { /* ignore */ } }
     const gone = !fs.existsSync(lwReal);
     if (gone && input.db && input.workspaceId) setLightWorkspaceState(input.db, input.workspaceId, 'removed');
     return { removed: gone, ...(gone ? {} : { reason: 'leftover_directory' }), linksUnlinked };
@@ -338,8 +338,9 @@ export async function sweepLightWorkspaces(input: SweepLightWorkspacesInput): Pr
     let names: string[] = [];
     try { names = fs.readdirSync(repoDir); } catch { /* none */ }
     for (const name of names) {
-        if (name.endsWith(MARKER_SUFFIX)) continue;
+        if (name.endsWith(MARKER_SUFFIX) || name.endsWith('.adhdev-light-fp.json')) continue;
         const dir = path.join(repoDir, name);
+        try { if (!fs.statSync(dir).isDirectory()) { report.unmarked++; continue; } } catch { continue; }
         const marker = `${dir}${MARKER_SUFFIX}`;
         if (!fs.existsSync(marker)) { report.unmarked++; continue; }
         if (known.has(path.resolve(dir))) continue;

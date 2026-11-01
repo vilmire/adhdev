@@ -355,8 +355,8 @@ async function forwardReportToOwner(
     // are optional extras, so degrade automatically — resend ONCE without them and keep the report —
     // instead of making the worker resend. (The bridge path retains its envelope verbatim, so it is
     // not rewritten here.)
-    if (first.success !== true && (report.decisionsNeeded || report.commits) && onlyUnknownStructuredFieldErrors(first)) {
-        const { decisionsNeeded: _d, commits: _c, ...legacy } = report;
+    if (first.success !== true && (report.decisionsNeeded || report.commits || report.testsRun) && onlyUnknownStructuredFieldErrors(first)) {
+        const { decisionsNeeded: _d, commits: _c, testsRun: _t, ...legacy } = report;
         LOG.warn('WorkerReport', `Owner ${remote.ownerDaemonId.slice(0, 16)} does not know decisions_needed/commits (older version) — resending the ${report.outcome} report for task ${remote.taskId ?? '?'} without them`);
         return send(legacy as WorkerCompletionReport);
     }
@@ -366,7 +366,7 @@ async function forwardReportToOwner(
 /** True when an owner's `invalid_report` refusal names only the structured-missions report fields as unknown. */
 function onlyUnknownStructuredFieldErrors(answer: Record<string, unknown>): boolean {
     if (answer.error !== 'invalid_report' || !Array.isArray(answer.validationErrors) || answer.validationErrors.length === 0) return false;
-    return answer.validationErrors.every((e: any) => (e?.field === 'decisionsNeeded' || e?.field === 'commits') && /unknown field/.test(String(e?.message)));
+    return answer.validationErrors.every((e: any) => (e?.field === 'decisionsNeeded' || e?.field === 'commits' || e?.field === 'testsRun') && /unknown field/.test(String(e?.message)));
 }
 
 /**

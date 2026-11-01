@@ -1,3 +1,4 @@
+import { captureLightResultInBackground } from './light-task-result.js';
 import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
 import { applyWorkerReportToMission } from './mesh-mission-structured.js';
 /**
@@ -645,7 +646,7 @@ export interface WorkerReportRefusalReceipt {
  * recorded only as `(unknown_field)` — never verbatim.
  */
 const REFUSAL_FIELD_ALLOWLIST: ReadonlySet<string> = new Set([
-    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes', 'decisionsNeeded', 'commits', 'artifactIds',
+    '', '(root)', '(unknown_field)', 'outcome', 'summary', 'touchedFiles', 'branchState', 'blockers', 'handoffNotes', 'decisionsNeeded', 'commits', 'artifactIds', 'testsRun',
     'handoffNotes.intent', 'handoffNotes.conflictGuidance', 'handoffNotes.touchedFiles', 'handoffNotes.followUps',
 ]);
 const REFUSAL_FIELDS_MAX = 16;
@@ -1088,6 +1089,7 @@ export function acceptWorkerCompletionReportForIdentity(
     // worker-requested decision items and its branch_state/touched_files/commits become evidence on
     // the task's mission. Best-effort inside — never turns an accepted report into a refusal.
     applyWorkerReportToMission(identity.meshId, identity.taskId, report);
+    captureLightResultInBackground(identity.meshId, identity.taskId, report);
 
     recordAcceptedSessionCompletion({ ...identity, attemptId: evidenceAttemptId }, nowMs);
     return {
