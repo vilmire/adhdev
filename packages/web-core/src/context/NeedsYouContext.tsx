@@ -25,6 +25,7 @@ import type { PendingApprovalItem } from '../components/MeshGraph/PendingApprova
 import {
     EMPTY_NEEDS_YOU_SNAPSHOT,
     NEEDS_YOU_ANSWER_COMMAND,
+    NEEDS_YOU_LIVE_CHECK_COMMAND,
     NEEDS_YOU_LIST_COMMAND,
     buildNeedsYouEntries,
     mergeNeedsYouSnapshots,
@@ -43,6 +44,14 @@ export interface NeedsYouAnswerInput {
     optionId?: string
     text?: string
     undo?: boolean
+}
+
+export interface NeedsYouLiveCheckInput {
+    daemonId: string
+    meshId: string
+    itemId: string
+    verdict: 'works' | 'doesnt_work'
+    note?: string
 }
 
 export interface NeedsYouOutcome {
@@ -68,6 +77,8 @@ export interface NeedsYouState {
     busyIds: ReadonlySet<string>
     refresh: () => Promise<void>
     answer: (input: NeedsYouAnswerInput) => Promise<NeedsYouOutcome>
+    /** Owner verdict on a live check ("Works" / "Doesn't work" + optional note) — stored as item state + evidence on the daemon. */
+    resolveLiveCheck: (input: NeedsYouLiveCheckInput) => Promise<NeedsYouOutcome>
 }
 
 const EMPTY_STAGED: AssistantStagedWritesState = {
@@ -76,7 +87,7 @@ const EMPTY_STAGED: AssistantStagedWritesState = {
 
 const EMPTY_STATE: NeedsYouState = {
     snapshot: EMPTY_NEEDS_YOU_SNAPSHOT, approvals: [], staged: EMPTY_STAGED, entries: [], count: 0, loaded: true, outcomes: {},
-    busyIds: new Set(), refresh: async () => {}, answer: async () => ({ ok: false, code: 'unavailable' }),
+    busyIds: new Set(), refresh: async () => {}, answer: async () => ({ ok: false, code: 'unavailable' }), resolveLiveCheck: async () => ({ ok: false, code: 'unavailable' }),
 }
 
 const NeedsYouCtx = createContext<NeedsYouState | null>(null)
@@ -212,10 +223,34 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
         return outcome
     }, [refresh])
 
+    const resolveLiveCheck = useCallback(async (input: NeedsYouLiveCheckInput): Promise<NeedsYouOutcome> => {
+        setBusyIds(prev => new Set(prev).add(input.itemId))
+        let outcome: NeedsYouOutcome
+        try {
+            const raw = await sendRef.current(input.daemonId, NEEDS_YOU_LIVE_CHECK_COMMAND, {
+                meshId: input.meshId,
+                itemId: input.itemId,
+                verdict: input.verdict,
+                ...(input.note ? { note: input.note } : {}),
+                via: 'dashboard',
+            })
+            const body = unwrapCommandBody(raw)
+            outcome = body?.success === true
+                ? { ok: true, ...(typeof body.state === 'string' ? { action: body.state } : {}) }
+                : { ok: false, code: String(body?.code ?? body?.error ?? 'failed') }
+        } catch (e) {
+            outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
+        }
+        setOutcomes(prev => ({ ...prev, [input.itemId]: outcome }))
+        setBusyIds(prev => { const next = new Set(prev); next.delete(input.itemId); return next })
+        await refresh()
+        return outcome
+    }, [refresh])
+
     const entries = useMemo(() => buildNeedsYouEntries(snapshot, approvals, staged.items ?? []), [snapshot, approvals, staged.items])
     const value = useMemo<NeedsYouState>(() => ({
-        snapshot, approvals, staged, entries, count: needsYouCount(entries), loaded, outcomes, busyIds, refresh, answer,
-    }), [snapshot, approvals, staged, entries, loaded, outcomes, busyIds, refresh, answer])
+        snapshot, approvals, staged, entries, count: needsYouCount(entries), loaded, outcomes, busyIds, refresh, answer, resolveLiveCheck,
+    }), [snapshot, approvals, staged, entries, loaded, outcomes, busyIds, refresh, answer, resolveLiveCheck])
 
     return <NeedsYouCtx.Provider value={value}>{children}</NeedsYouCtx.Provider>
 }

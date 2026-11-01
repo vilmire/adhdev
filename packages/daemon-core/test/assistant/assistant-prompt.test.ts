@@ -108,7 +108,8 @@ describe('buildAssistantSystemPrompt', () => {
         // (every assistant tool must be); the whole prompt stays under its own cap below.
         // 2026-10-18: +choices line, no-preamble and attention-first rules, and the
         // previous-session / digest markers (assistant review).
-        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(7_300);
+        // 2026-11-01: 7_300 → 7_900 for the memory archive rules (memory_search, archive action, project scope) and the [ADHDev memory] notice.
+        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(7_900);
     });
 
     it('stays well under the limit with full memory/skill budgets and 20 projects', () => {
@@ -135,7 +136,8 @@ describe('buildAssistantSystemPrompt', () => {
         });
         expect(p.withinLimit).toBe(true);
         expect(p.length).toBeLessThan(ASSISTANT_PROMPT_MAX_LENGTH);
-        expect(p.length).toBeLessThan(29_300); // headroom under 30k for the CLI's own arguments (at 8,800/5,500 max memory)
+        // headroom under 30k for the CLI's own arguments (at 8,800/5,500 max memory); 29_300 → 29_800 (worst case 29,762; the hard 30,000 cap is still asserted) for the memory archive rules and notice
+        expect(p.length).toBeLessThan(29_800);
         expect(p.text.endsWith(ASSISTANT_SAFETY_TAIL)).toBe(true);
     });
 

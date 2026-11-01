@@ -16,7 +16,7 @@
  * a DENIED capability (the command is refused), on every other verb the frame
  * runs exactly as a credential-less `ipc` command does today.
  */
-import { MCP_ATTRIBUTED_COMMANDS, attachAuthenticatedMcpCommand, verifyMcpSessionCredential } from './mcp-command-ingress.js';
+import { MCP_ATTRIBUTED_COMMANDS, MCP_ROLE_CLASSIFIED_COMMANDS, attachAuthenticatedMcpCommand, verifyMcpSessionCredential } from './mcp-command-ingress.js';
 import {
     isLiveWorkerMcpCredential,
     matchesLiveArtifactWorkerCredential,
@@ -133,7 +133,7 @@ export function attachIpcMcpAuthority(
     const credential = workerCredential as string;
     // Attribution-only verbs (owner-decision answers): any worker credential marks the call
     // MCP-origin and denied, whether or not the credential is live — never an owner CLI call.
-    if (MCP_ATTRIBUTED_COMMANDS.has(command)) {
+    if (MCP_ATTRIBUTED_COMMANDS.has(command) || MCP_ROLE_CLASSIFIED_COMMANDS.has(command)) {
         attachAuthenticatedMcpCommand(args, command, () => false, null);
         return { ok: true };
     }

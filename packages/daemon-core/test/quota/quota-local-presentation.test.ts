@@ -35,7 +35,7 @@ describe('local quota presentation on cached aggregate serves', () => {
       expect(node.nodeFacts.quota['grok-cli'].updatedAt).toBe(NOW)
       expect(node.nodeFacts.reportedAt).toBe(oldFacts.reportedAt)
       expect(node.nodeFacts.quota).toEqual(readQuotaCache())
-      const block = evaluateProviderQuotaGate(node, 'grok-cli', { weeklyMinRemainingPercent: 15 }, NOW,
+      const block = evaluateProviderQuotaGate(node, 'grok-cli', null, NOW,
         { liveLocalQuota: liveLocalQuotaForRouting(n => n.daemonId === 'owner') })
       expect(block).toMatchObject({ reason: 'provider_quota_weekly_low', remainingPercent: 3, window: 'weekly' })
     }

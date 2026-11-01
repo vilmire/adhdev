@@ -5,9 +5,24 @@ import { pinnedMeshNodeIdMatches } from '../mesh/mesh-pinned-node-identity.js';
 import { captureWriterStop, readWriterStopCapture, markWriterStopQuiescent } from './mesh-writer-stop-journal.js';
 import { hiddenExecFileAsync } from '../process/hidden-spawn.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { resolveHostBootId } from '@adhdev/session-host-core';
 import type { CancelDispatchRequest } from '../mesh/turn-ledger/effects.js';
 import type { DaemonCliManager } from './cli-manager.js';
 import { nativeMeshAssignmentMeta } from '../providers/cli-provider-mesh-assignment.js';
+
+type WriterStopHostControl = NonNullable<DaemonCliManager['deps']['idleSessionLifetimeControl']>;
+
+/** The session host's boot id (same resolution order as idle-lifetime/operator cleanup), or null when unknowable. */
+async function writerStopHostBootId(control: WriterStopHostControl | undefined): Promise<string | null> {
+    if (!control) return null;
+    try {
+        if (typeof control.resolveHostBootId === 'function') return (await control.resolveHostBootId()) || null;
+        if (typeof control.getDiagnostics !== 'function') return null;
+        const diagnostics = await control.getDiagnostics({});
+        if (typeof diagnostics.hostBootId === 'string' && diagnostics.hostBootId) return diagnostics.hostBootId;
+        return resolveHostBootId({ hostStartedAt: diagnostics.hostStartedAt }) || null;
+    } catch { return null; }
+}
 
 export interface NativeWriterProcess { pid: number; ppid: number; pgid: number; birth: string; uid: number }
 export interface WriterStopPorts {
@@ -65,10 +80,17 @@ export async function stopExactMeshWriter(
     if (!previous && !host.adapters.has(request.sessionId)) {
         try {
             if (!host.deps.listHostedCliRuntimes) return pending('unknown, cannot prove dead: host inventory unavailable');
+            // The census is only meaningful for ONE host incarnation: bind it to the
+            // host boot id read before AND after the listing. An unknown or changed
+            // boot id (host restarted mid-census, older host) stays pending.
+            const control = host.deps.idleSessionLifetimeControl;
+            const bootBefore = await writerStopHostBootId(control);
             const records = await host.deps.listHostedCliRuntimes();
             if (host.adapters.has(request.sessionId)) return pending('writer_reappeared');
             if (!records.some(r => r.runtimeId === request.sessionId)) {
-                const evidence = { kind: 'host_session_absent', sessionId: request.sessionId, observedAt: Date.now() };
+                const hostBootId = await writerStopHostBootId(control);
+                if (!bootBefore || !hostBootId || bootBefore !== hostBootId) return pending('unknown, cannot prove dead: host boot id unavailable or changed');
+                const evidence = { kind: 'host_session_absent', sessionId: request.sessionId, hostBootId, observedAt: Date.now() };
                 return { ...request, success: true, quiescent: true, evidence,
                     incarnation: createHash('sha256').update(JSON.stringify([request, evidence])).digest('hex') };
             }

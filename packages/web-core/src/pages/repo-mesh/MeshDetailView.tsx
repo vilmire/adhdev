@@ -26,6 +26,7 @@ import { COORDINATOR_PROMPT_PLACEHOLDERS } from './coordinator-prompt-placeholde
 import { MeshProviderAutoApproveSection } from './MeshProviderAutoApproveSection'
 import { MeshNodeList } from './MeshNodeList'
 import { MeshHostDaemonSection } from './MeshHostDaemonSection'
+import { MeshHostHandoffDialog } from './MeshHostHandoffDialog'
 import { buildMeshGraphLaunchConversation } from './graph-launch'
 import {
     readMeshPolicy,
@@ -254,6 +255,7 @@ export function MeshDetailView({
     }, [openRequest, selectedMesh.id, canLaunchGraphDialog, onOpenRequestConsumed])
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
+    const [handoffOpen, setHandoffOpen] = useState(false)
 
     const selectCls = 'w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary'
     // quotaRouting editors work on the stored OVERRIDES (not the resolved thresholds),
@@ -281,7 +283,11 @@ export function MeshDetailView({
                     onHostRebindDaemonIdChange={id => { onHostRebindDaemonIdChange(id); onRefreshGraph() }}
                     settingMeshHost={settingMeshHost}
                     onSetMeshHost={onSetMeshHost}
+                    onOpenHandoff={hostPinned && coordinatorDaemonId ? () => setHandoffOpen(true) : undefined}
                 />
+            )}
+            {features.meshHostDaemonSection && hostPinned && coordinatorDaemonId && handoffOpen && (
+                <MeshHostHandoffDialog open onClose={() => setHandoffOpen(false)} meshId={selectedMesh.id} hostDaemonId={coordinatorDaemonId} daemons={daemons} sendCommand={sendCommand} />
             )}
 
             <MeshNodeList

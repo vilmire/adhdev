@@ -1342,6 +1342,60 @@
             "machineTabsLabel": "このメッシュのマシン",
             "machineTabCounts": "ノード {{nodes}} 個 · スロット {{slots}} 個"
         },
+        "handoff": {
+            "title": "ホスト移管",
+            "close": "閉じる",
+            "open": "ホストを移す…",
+            "disabled": "ホスト移管は実験機能で、このマシンでは無効です (experimental.hostHandoff)。",
+            "explain": "ホストはキュー、ミッション、決定を保持します。移管すると選んだマシンへコピーし、コピーを検証してから切り替えます。実行中の作業は中断されず、新しい作業は完了まで保留されます。",
+            "target": "新しいホストのマシン",
+            "pickTarget": "マシンを選択…",
+            "preflight": "確認",
+            "start": "ホストを移す",
+            "retry": "再試行",
+            "abort": "キャンセル",
+            "abortDisabled": "切り替えが始まった後はキャンセルできません — 新ホストの確認を待ってください。",
+            "awaitingAck": "新ホストがコピーを確認するのを待っています…",
+            "done": "ホストを移しました。コーディネーターは新しいマシンで再起動します。",
+            "aborted": "キャンセルしました — 変更なし。{{reason}}",
+            "uncertain": "切り替えを送信しましたが、まだ確認できていません。新ホストが応答するまで両方のマシンは停止したままで、接続できれば自動的に解決します。",
+            "warning": "コーディネーターが新しいマシンで再起動します。",
+            "step": {
+                "freeze": "凍結",
+                "transfer": "コピー",
+                "verify": "検証",
+                "ack": "確認",
+                "switch": "切替"
+            },
+            "check": {
+                "is_host": "このマシンがホスト",
+                "target_not_self": "対象は別のマシン",
+                "target_is_member": "対象はこのプロジェクトのメンバー",
+                "no_other_handoff": "進行中の移管なし",
+                "target_online": "対象がオンライン",
+                "peer_capability": "対象がホスト移管に対応",
+                "target_launchable": "対象でコーディネーターを実行可能",
+                "disk_space": "ディスク容量が十分",
+                "snapshot_readable": "プロジェクトデータを読み取れる",
+                "no_open_writer_checkpoint": "未完了のワーカー停止なし"
+            },
+            "code": {
+                "not_host": "このマシンはホストではありません",
+                "target_is_self": "別のマシンを選んでください",
+                "target_not_member": "このプロジェクトのマシンではありません",
+                "handoff_in_progress": "すでに移管が進行中です",
+                "target_offline": "マシンがオフラインです",
+                "peer_capability_unconfirmed": "マシンのADHDevが古いか、ホスト移管がオフです",
+                "insufficient_disk": "ディスク容量が不足しています",
+                "target_not_launchable": "マシンでコーディネーターを実行できません",
+                "writer_checkpoint_pending": "ワーカーの停止処理中です — 後でもう一度試してください",
+                "host_handoff_disabled": "このマシンでは無効です",
+                "abort_requires_target_confirmation": "先に新ホストの確認が必要です",
+                "hold_failed": "新しい作業を保留できませんでした",
+                "ack_timeout": "新ホストが時間内に確認しませんでした",
+                "freeze_timeout": "作業が時間内に落ち着きませんでした"
+            }
+        },
         "host": {
             "setHostConfirmTitle": "{{name}} をホストに設定しますか？",
             "setupNode": "セットアップノード",
@@ -1538,6 +1592,51 @@
             "showMore": "他 {{count}} 件",
             "noActiveMissions": "アクティブなミッションはありません",
             "missionDataUnavailable": "ミッションを表示するにはデーモンを更新してください",
+            "releases": {
+                "card": "リリース",
+                "empty": "リリースはまだありません。一緒に出荷されるミッションをまとめて追跡するには作成してください。",
+                "newRelease": "新しいリリース",
+                "namePlaceholder": "例: 1.0.82-rc.34",
+                "channelPreview": "プレビュー",
+                "channelStable": "安定版",
+                "create": "作成",
+                "missionCount": "ミッション {{count}} 件",
+                "noMissions": "このリリースにはまだミッションがありません",
+                "needsNote": "リリースノートなし {{count}} 件",
+                "liveChecksOpen": "未完了のライブ確認 {{count}} 件",
+                "freeze": "凍結",
+                "markVerified": "検証済みにする",
+                "verifiedSuggested": "これらのミッションのライブ確認はすべて完了しています。リリースを検証済みにできます。",
+                "verifyWaiting": "ライブ確認があと {{count}} 件開いています",
+                "suggested": "このデプロイに含まれる可能性",
+                "suggestedHint": "デフォルトブランチに入っているようですが、どのリリースにも属さないミッションです。自動では追加されません。",
+                "add": "追加",
+                "remove": "削除",
+                "moveTo": "別のリリースへ移動…",
+                "draft": "CHANGELOG 草案",
+                "generateDraft": "草案を生成",
+                "copyDraft": "コピー",
+                "draftEmpty": "項目がありません。",
+                "draftWarnings": "デフォルトブランチで未確認",
+                "draftNeedsWording": "ユーザー向けの文言が必要",
+                "deployFacts": "{{commit}} をデプロイ済み",
+                "notDeployed": "まだデプロイされていません",
+                "badgeTitle": "リリース {{name}}",
+                "moveBadge": "別のリリースへ移す",
+                "noRelease": "リリースなし",
+                "error": "リリースを更新できませんでした: {{error}}",
+                "unavailable": "リリースを表示するにはデーモンの更新が必要です。",
+                "statusLabel": "リリースの状態",
+                "afterDeploy": "このリリースはすでにデプロイ済みです。変更は記録されます。",
+                "status": {
+                    "planned": "計画中",
+                    "frozen": "凍結",
+                    "deployed": "デプロイ済み",
+                    "verified": "検証済み",
+                    "superseded": "置き換え済み",
+                    "cancelled": "取り消し"
+                }
+            },
             "completedHistory": "完了 / 中止の履歴",
             "noQueueActivity": "キューのアクティビティはありません。",
             "noNodes": "この mesh にはまだノードがありません。",
@@ -1761,6 +1860,95 @@
         "noDescription": "プロバイダーからリクエスト内容が届いていません。",
         "requestChanged": "リクエストが変更されたか終了したため、一覧から削除しました。"
     },
+    "assistantSkills": {
+        "title": "アシスタントのスキル",
+        "hint": "各スキルの内容がプロジェクトへの依頼に添付された回数です。添付は内容がコーディネーターに渡されたことを示し、実際に従ったかどうかは追跡していません。",
+        "summary": "直近{{days}}日間：プロジェクトへの依頼{{sends}}件にスキルを{{attaches}}回添付",
+        "empty": "スキルはまだありません。",
+        "attached": "添付 {{count}}回",
+        "viewed": "閲覧 {{count}}回",
+        "lastUsed": "最終使用",
+        "neverUsed": "未使用",
+        "attachedTooltip": "スキルの内容がプロジェクトへの依頼に添付された回数です。実際に従ったかどうかは分かりません。",
+        "pinned": "固定中",
+        "pin": "固定",
+        "unpin": "固定を解除",
+        "archive": "アーカイブ",
+        "restore": "復元",
+        "actionFailed": "実行できませんでした：{{code}}",
+        "origin": {
+            "starter": "標準搭載",
+            "owner": "あなた",
+            "agent": "アシスタント",
+            "imported": "インポート"
+        },
+        "status": {
+            "stale": "古い",
+            "archived": "アーカイブ済み"
+        }
+    },
+    "assistantMemoryDigest": {
+        "badge": "記憶 {{count}} 件",
+        "badgeTitle": "アシスタントが最近メモリに保存した内容",
+        "title": "最近記憶したこと",
+        "close": "閉じる",
+        "undo": "元に戻す",
+        "undoMove": "移動を元に戻す",
+        "undone": "取り消し済み",
+        "staged": "承認待ち",
+        "promoted": "繰り返しの回答から学習",
+        "older": "古い項目は表示されません。",
+        "failed": "取り消せませんでした: {{code}}",
+        "suggestions": {
+            "title": "あなたの判断が必要です",
+            "duplicate": "同じメモが2件",
+            "similar": "とてもよく似たメモ",
+            "unused": "6 か月使われていません",
+            "mergeKeepFirst": "1つ目を残して2つ目を削除"
+        },
+        "counts": "追加 {{added}} · 変更 {{replaced}} · 削除 {{removed}} · 学習 {{promoted}}",
+        "action": {
+            "add": "追加",
+            "replace": "変更",
+            "remove": "削除",
+            "archive": "アーカイブへ移動"
+        },
+        "tier": {
+            "core": "コアメモ",
+            "archive": "アーカイブ",
+            "project": "プロジェクトのアーカイブ"
+        },
+        "target": {
+            "memory": "メモリ",
+            "user": "ユーザー"
+        },
+        "origin": {
+            "human": "あなたの発言",
+            "relay": "プロジェクトの出力",
+            "review": "レビューターン",
+            "review_tainted": "外部入力後のレビュー",
+            "owner": "ダッシュボード(直接)",
+            "decision_promotion": "あなたの決定",
+            "curator": "整理処理"
+        }
+    },
+    "assistantControl": {
+        "title": "アシスタントCLI",
+        "switchLabel": "アシスタントを別のCLIに切り替える",
+        "providerPlaceholder": "例: codex-cli",
+        "switchAction": "切替",
+        "switchQueued": "現在の返信の後に切り替えます。",
+        "switchDone": "切り替えました。",
+        "failover": "クォータが尽きたとき",
+        "failoverNotify": "確認する",
+        "failoverAuto": "自動で切り替える",
+        "failoverOff": "何もしない",
+        "roleAssistant": "アシスタント",
+        "roleCoordinator": "コーディネーター",
+        "autoNote": "自動切替は1日2回まで、6時間以上あけて行われます。",
+        "open": "CLIとクォータ",
+        "failed": "失敗: {{code}}"
+    },
     "assistantStaged": {
         "badge": "保留 {{count}} 件",
         "badgeTitle": "承認待ちのアシスタントの書き込み",
@@ -1776,6 +1964,15 @@
         "failed": "未処理: {{code}}",
         "noText": "(テキストなし)",
         "protectedSkill": "あなたが書いたスキルを変更",
+        "proposedProcedureTitle": "この手順をスキルとして保存しますか？",
+        "proposedProcedureEvidence": "直近{{days}}日間に似た依頼が{{count}}回",
+        "proposedProcedureSave": "保存",
+        "proposedProcedureEdit": "編集して保存",
+        "proposedProcedureSaveEdited": "変更を保存",
+        "proposedProcedureCancel": "キャンセル",
+        "proposedProcedureDismiss": "いいえ、今後は聞かない",
+        "proposedProcedureDescription": "スキルの説明",
+        "proposedProcedureBody": "スキルの内容",
         "driverActivation": {
             "advisory": "アクセス宣言 · OSレベルでは強制されません",
             "name": "名前",
@@ -1798,7 +1995,9 @@
             "note": "ノート",
             "launchDefault": "起動デフォルト",
             "driver_activation": "ドライバーの有効化",
-            "driver_action_request": "破壊的なドライバー操作"
+            "driver_action_request": "破壊的なドライバー操作",
+            "session_control": "セッション制御",
+            "host_handoff": "ホスト移管"
         },
         "action": {
             "add": "追加",
@@ -1811,7 +2010,11 @@
             "forget": "削除",
             "set": "設定",
             "clear": "解除",
-            "activate": "有効化"
+            "activate": "有効化",
+            "stop": "停止",
+            "restart": "再起動",
+            "switch_provider": "CLI切替",
+            "start": "開始"
         },
         "origin": {
             "relay": "リレー後",
@@ -1819,11 +2022,23 @@
             "review_tainted": "信頼できない入力後のレビュー",
             "human": "あなた",
             "owner": "あなた",
-            "driver": "インストール済みドライバー"
+            "driver": "インストール済みドライバー",
+            "quota": "クォータ枯渇",
+            "assistant": "アシスタントの提案"
         },
         "role": {
             "assistant": "アシスタント",
-            "coordinator": "コーディネーター"
+            "coordinator": "コーディネーター",
+            "worker": "ワーカー"
+        },
+        "control": {
+            "handoff": "このプロジェクトのホスト役割とデータを別のマシンへ移します。コーディネーターはそのマシンで再起動します。",
+            "quota": "{{from}} のクォータが尽きました(残り {{fromPct}}%)。{{to}}(残り {{toPct}}%)へ切り替えます。",
+            "switch": "{{role}}を {{to}} に切り替えます。",
+            "simple": "{{role}}を{{action}}します。",
+            "busy": "現在作業中か承認待ちです — 承認すると中断されます。",
+            "resets": "クォータのリセット: {{at}}。",
+            "expires": "{{at}} に失効します。"
         }
     },
     "chatPane": {
@@ -3636,6 +3851,35 @@
             "waitingForStats": "ライブ統計を待っています…",
             "waitingForStatsWithTotal": "ライブ統計を待っています… ・ 合計 {{total}}"
         },
+        "quotaReserve": {
+            "title": "クォータ予備",
+            "subtitle": "このマシンで自動作業があなたのために残すプランのクォータです。手動チャットとコーディネーターの起動はブロックされず、下に状態だけが表示されます。",
+            "usedBy": "このマシンのメッシュルーティング、自動起動、直接ディスパッチ、アイドル時のアシスタントレビューに適用されます。",
+            "machineDefault": "マシンの既定値",
+            "perProvider": "プロバイダー別",
+            "minutes": "分",
+            "fields": {
+                "routingSessionMinPercent": "セッション下限",
+                "routingLongMinPercent": "週次/月次下限",
+                "routingSessionResetImminentMs": "リセット猶予",
+                "assistantReviewMinPercent": "アシスタントレビュー下限"
+            },
+            "withinReserve": "予備の範囲内: 残り {{remaining}}% / 予備 {{reserve}}%",
+            "remaining": "残り {{remaining}}%",
+            "noReading": "クォータの測定値なし",
+            "resetRow": "既定値に戻す",
+            "accountOverrides": "{{provider}}: アカウント別の上書き",
+            "accountLabel": "アカウント …{{suffix}}",
+            "migrated": "{{count}} 個のメッシュのしきい値をこのマシンに統合しました。最も保守的な値を採用しています。",
+            "saving": "保存中…",
+            "blankMeansDefault": "空欄にするとマシンの既定値（薄い値）を使います。",
+            "loadFailed": "クォータ予備を読み込めませんでした: {{error}}",
+            "errors": {
+                "notANumber": "数値を入力してください。",
+                "percentRange": "0〜100 の範囲で指定してください。",
+                "negative": "負の値は指定できません。"
+            }
+        },
         "fleetQuota": {
             "title": "マシン別のサブスク使用量",
             "subtitle": "各マシンで各サブスクの 5 時間枠と週間枠がどれだけ残っているかを表示します。タスクキューは上限間近のプランを避け、リセットで消える残量から先に使います。",
@@ -4502,6 +4746,19 @@
         "undo": "元に戻す",
         "change": "変更",
         "mayBeInProgress": "回答から時間が経っており、作業がすでに進んでいる可能性があります。",
+        "liveCheckWorks": "動作した",
+        "liveCheckDoesntWork": "動作しない",
+        "liveCheckNotePlaceholder": "メモ(任意・確認した内容)",
+        "liveCheckFailedBadge": "失敗",
+        "liveCheckToastWorks": "記録しました: ライブチェック合格",
+        "liveCheckToastFailed": "記録しました: ライブチェック失敗",
+        "liveCheckResolveFailed": "結果を記録できませんでした ({{code}})",
+        "machineFilter": "マシン: {{machine}} ✕",
+        "liveChecksPrompt": "{{machine}} でライブチェック {{count}} 件が待機中 (現在 v{{version}})",
+        "liveChecksPromptOpen": "開く",
+        "liveChecksPromptDismiss": "閉じる",
+        "scopeNotRecorded": "検証範囲が未記録",
+        "scopeNotRecordedHint": "何を確認し何を確認しなかったかが記録されないまま終了したミッションです(結果理由に \"scope:\" がありません)。",
         "delivery": {
             "pending": "配信待ち",
             "queued": "コーディネーターのキューに登録済み",
@@ -4538,7 +4795,41 @@
         "decisionsWaiting": "決定 {{count}} 件待ち",
         "openItems": "未完了 {{count}} 件",
         "liveChecksOpen": "ライブ確認 {{count}} 件",
-        "decisionBadgeLabel": "あなたを待っている決定"
+        "decisionBadgeLabel": "あなたを待っている決定",
+        "gitLanded": "反映済み",
+        "gitPartial": "一部反映",
+        "gitNotLanded": "未反映",
+        "gitUnknown": "Git確認不可",
+        "gitTooltip": "このミッションが参照するコミットが既定ブランチにあるか",
+        "gitTitle": "Git の根拠",
+        "gitBase": "{{base}} @ {{sha}} と比較",
+        "gitEvaluated": "{{time}} に確認",
+        "gitRefresh": "再確認",
+        "gitRefreshing": "確認中…",
+        "gitLandedNote": "「反映済み」は、参照されたコミットが既定ブランチに入っているという意味だけです。作業が承認・完了したことを意味せず、ライブ確認と残り項目は別に閉じる必要があります。",
+        "gitUnknownNote": "「確認不可」は git が答えられなかったという意味です（コミット欠落、浅いクローン、マシンのオフライン）。「未反映」ではありません。",
+        "gitPartialUnknown": "確認できなかった ref があります",
+        "gitMayBeModified": "反映後に既定ブランチでこれらの行が変更された可能性があります。",
+        "gitRefStatus": {
+            "contained_ancestor": "既定ブランチにあります",
+            "contained_patch_equivalent": "別のコミットとして反映済み（cherry-pick・rebase・squash）",
+            "not_contained": "既定ブランチにありません",
+            "unknown": "確認できませんでした"
+        },
+        "gitReason": {
+            "object_missing": "このマシンにコミットがありません",
+            "shallow": "浅いクローン — 履歴が不完全",
+            "undeterminable": "git が答えられませんでした",
+            "base_missing": "ここには既定ブランチがありません",
+            "branch_not_found": "ブランチが見つかりません",
+            "base_branch_ref": "ref が既定ブランチそのものです",
+            "gitlink_undeterminable": "サブモジュールのポインタを比較できませんでした",
+            "merge_tree_failed": "比較に失敗しました",
+            "node_offline": "マシンがオフライン",
+            "no_repo": "このマシンにリポジトリがありません",
+            "budget": "ref が多すぎるため確認していません",
+            "not_a_git_ref": "git ref ではありません"
+        }
     },
     "approvals": {
         "pageTitle": "承認",
@@ -4580,13 +4871,9 @@
         "quotaPolicy": {
             "blankMeansDefaultShort": "空欄 = 既定値",
             "title": "クォータ対応ルーティング",
-            "description": "ノードが AI プロバイダーのクォータ残量を報告すると、コーディネーターは残量の少ないノードを回避し、余裕のあるノードを優先できます。以下のしきい値がその基準です。未報告や古い値は常に無視されるため、古いデータでノードが除外されることはありません。",
-            "sessionMin": "セッション下限",
-            "sessionMinHint": "短いローリングウィンドウの残量がこれ未満のプロバイダーをスキップします。",
-            "weeklyMin": "週次下限",
-            "weeklyMinHint": "週次ウィンドウの残量がこれ未満のプロバイダーをスキップします。",
-            "resetImminent": "リセット猶予",
-            "resetImminentHint": "この時間内にセッションウィンドウがリセットされる場合、残量不足を無視します。",
+            "description": "ノードが AI プロバイダーのクォータ残量を報告すると、コーディネーターは余裕のあるノードを優先できます。以下はこのメッシュのスケジューリング設定です。未報告や古い値は常に無視されるため、古いデータでノードが除外されることはありません。",
+            "reserveMovedToMachine": "自動作業があなたのために残すクォータの下限は、マシン設定になりました。",
+            "openMachineReserve": "マシンのクォータ予備を開く",
             "staleAfter": "測定値の有効期限",
             "staleAfterHint": "フォールバック専用: 測定値はそのウィンドウがリセットされるまで有効で、この期限はリセット時刻のない測定値にのみ適用されます。",
             "spreadBonus": "残量の優先度",

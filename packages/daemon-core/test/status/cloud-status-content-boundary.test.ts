@@ -731,3 +731,30 @@ describe('owner-decision push — widened exception (owner decision D1, 2026-10-
         expect(wire).toContain('Ship it?');
     });
 });
+
+describe('procedure skills — no skill or recurring-request data on the status path (design 2026-11-01 §4.5)', () => {
+    it('drops skill hints, attached skills, proposals and procedure candidates from the server payload', () => {
+        const leak = {
+            skillHints: [{ name: 'deploy-verify-checklist', why: 'matched: deploy' }],
+            attachedSkills: ['deploy-verify-checklist'],
+            skillProposals: [{ excerpt: 'Deploy the preview build then verify' }],
+            procedureCandidates: [{ excerpt: 'Deploy the preview build then verify' }],
+            skills: [{ name: 'x', attachCount: 3 }],
+        };
+        const out = buildCloudStatusReportPayload([sessionWithContent(leak)], undefined, 1);
+        const text = JSON.stringify(out);
+        for (const needle of ['skillHints', 'attachedSkills', 'skillProposals', 'procedureCandidates', 'attachCount', 'Deploy the preview build']) {
+            expect(text).not.toContain(needle);
+        }
+    });
+
+    it('the status / push modules do not import the signal store or the skill matcher', async () => {
+        const { readdirSync, readFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const dir = join(__dirname, '../../src/status');
+        for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+            const src = readFileSync(join(dir, f), 'utf-8');
+            expect(src, f).not.toMatch(/procedure-signal|skill-match|assistant_procedure_/);
+        }
+    });
+});

@@ -4924,6 +4924,12 @@
     }
 
     .assistant-chat-activity-bar > .assistant-session-controls { margin-left: 0; }
+    /* More assistant controls than fit one phone row (memory digest, control
+       settings, staged writes…) wrap to a second line instead of running off-screen. */
+    /* row-gap 14px: each pill's touch area reaches 7px above and below, so wrapped
+       rows must not let one pill's touch area cover the next row's pill. */
+    .assistant-chat-activity-bar { flex-wrap: wrap; row-gap: 14px; }
+    .assistant-chat-activity-bar > .assistant-session-controls { flex-wrap: wrap; justify-content: flex-end; min-width: 0; row-gap: 14px; }
     /* The desktop rule reserves 40px for pills floating over the transcript;
        here the row is in flow, so the transcript keeps its normal top gap. */
     .assistant-chat-activity-bar + * .chat-container { padding-top: 8px; }

@@ -91,7 +91,7 @@ export default function DashboardMobileChatRoom({
                         </div>
                     </div>
                     <div className="mobile-room-header-actions flex items-center justify-end gap-1 shrink-0">
-                        <TodoButton />
+                        <TodoButton compact />
                         {isCli && cliViewMode && (
                             <CliViewModeToggle mode={cliViewMode} onChange={onSetCliViewMode} compact />
                         )}

@@ -234,6 +234,24 @@ export interface MeshNodeFacts {
      * Booleans keyed by provider type only — no free text, no credentials.
      */
     providerEnablement?: Record<string, MeshNodeFactsProviderEnablement>
+    /**
+     * The reporting machine's stored quota RESERVE (daemon-core
+     * `ADHDevConfig.quotaReserve`, sparse, ≤ 2 KB, migration audit trail
+     * stripped): the "how much quota to leave for the person" bar that the
+     * coordinator's launch gate applies to THIS machine's snapshots.
+     * ★ABSENT means "this node did not tell us" (older daemon) and resolves to
+     * the code defaults — the same fail-open direction as before the field
+     * existed. Percentages, durations and hashed account keys only; no free
+     * text, no emails. Resolve with daemon-core `resolveQuotaReserve`; never
+     * read its fields directly.
+     */
+    quotaReserve?: {
+        version: 1
+        defaults?: Record<string, number>
+        pools?: Record<string, Record<string, number>>
+        accounts?: Record<string, Record<string, Record<string, number>>>
+        updatedAt?: string
+    }
     /** Future fields ride through opaquely — do not enumerate them in relays. */
     [extra: string]: unknown
 }

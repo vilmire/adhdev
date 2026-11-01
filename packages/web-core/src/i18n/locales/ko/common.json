@@ -1342,6 +1342,60 @@
             "machineTabsLabel": "이 메시의 머신",
             "machineTabCounts": "노드 {{nodes}}개 · 슬롯 {{slots}}개"
         },
+        "handoff": {
+            "title": "호스트 이전",
+            "close": "닫기",
+            "open": "호스트 이전…",
+            "disabled": "호스트 이전은 실험 기능이며 이 머신에서 꺼져 있습니다 (experimental.hostHandoff).",
+            "explain": "호스트는 큐, 미션, 결정을 보관합니다. 이전하면 선택한 머신으로 복사하고, 복사본을 검증한 뒤에만 전환합니다. 실행 중인 작업은 중단되지 않으며, 새 작업은 끝날 때까지 보류됩니다.",
+            "target": "새 호스트 머신",
+            "pickTarget": "머신 선택…",
+            "preflight": "점검",
+            "start": "호스트 이전",
+            "retry": "재시도",
+            "abort": "취소",
+            "abortDisabled": "전환이 시작된 뒤에는 취소할 수 없습니다 — 새 호스트의 확인을 기다리세요.",
+            "awaitingAck": "새 호스트가 복사본을 확인하길 기다리는 중…",
+            "done": "호스트가 이전되었습니다. 코디네이터가 새 머신에서 다시 시작됩니다.",
+            "aborted": "취소됨 — 변경 없음. {{reason}}",
+            "uncertain": "전환 요청을 보냈지만 아직 확인되지 않았습니다. 새 호스트가 응답할 때까지 양쪽이 멈춘 상태로 유지되며, 연결되면 자동으로 해결됩니다.",
+            "warning": "코디네이터가 새 머신에서 다시 시작됩니다.",
+            "step": {
+                "freeze": "동결",
+                "transfer": "복사",
+                "verify": "검증",
+                "ack": "확인",
+                "switch": "전환"
+            },
+            "check": {
+                "is_host": "이 머신이 호스트임",
+                "target_not_self": "대상이 다른 머신임",
+                "target_is_member": "대상이 이 프로젝트의 멤버임",
+                "no_other_handoff": "진행 중인 이전 없음",
+                "target_online": "대상이 온라인임",
+                "peer_capability": "대상이 호스트 이전을 지원함",
+                "target_launchable": "대상이 코디네이터를 실행할 수 있음",
+                "disk_space": "디스크 공간 충분",
+                "snapshot_readable": "프로젝트 데이터 읽기 가능",
+                "no_open_writer_checkpoint": "끝나지 않은 워커 중지 없음"
+            },
+            "code": {
+                "not_host": "이 머신은 호스트가 아닙니다",
+                "target_is_self": "다른 머신을 선택하세요",
+                "target_not_member": "이 프로젝트에 속한 머신이 아닙니다",
+                "handoff_in_progress": "이미 이전이 진행 중입니다",
+                "target_offline": "머신이 오프라인입니다",
+                "peer_capability_unconfirmed": "머신의 ADHDev가 오래됐거나 호스트 이전이 꺼져 있습니다",
+                "insufficient_disk": "디스크 공간이 부족합니다",
+                "target_not_launchable": "머신이 코디네이터를 실행할 수 없습니다",
+                "writer_checkpoint_pending": "워커를 아직 중지하는 중입니다 — 나중에 다시 시도하세요",
+                "host_handoff_disabled": "이 머신에서 꺼져 있습니다",
+                "abort_requires_target_confirmation": "새 호스트의 확인이 먼저 필요합니다",
+                "hold_failed": "새 작업을 보류하지 못했습니다",
+                "ack_timeout": "새 호스트가 제때 확인하지 않았습니다",
+                "freeze_timeout": "작업이 제때 정리되지 않았습니다"
+            }
+        },
         "host": {
             "setHostConfirmTitle": "{{name}}을(를) 호스트로 설정할까요?",
             "setupNode": "설정 노드",
@@ -1538,6 +1592,51 @@
             "showMore": "+{{count}}개 더",
             "noActiveMissions": "활성 미션 없음",
             "missionDataUnavailable": "미션을 보려면 데몬을 업데이트하세요",
+            "releases": {
+                "card": "릴리스",
+                "empty": "아직 릴리스가 없습니다. 함께 배포되는 미션을 묶어 추적하려면 하나 만드세요.",
+                "newRelease": "새 릴리스",
+                "namePlaceholder": "예: 1.0.82-rc.34",
+                "channelPreview": "프리뷰",
+                "channelStable": "안정",
+                "create": "만들기",
+                "missionCount": "미션 {{count}}개",
+                "noMissions": "이 릴리스에는 아직 미션이 없습니다",
+                "needsNote": "릴리스 노트 없음 {{count}}개",
+                "liveChecksOpen": "열린 라이브 확인 {{count}}개",
+                "freeze": "동결",
+                "markVerified": "검증 완료로 표시",
+                "verifiedSuggested": "이 미션들의 라이브 확인이 모두 끝났습니다. 릴리스를 검증 완료로 표시할 수 있습니다.",
+                "verifyWaiting": "라이브 확인 {{count}}개가 아직 열려 있습니다",
+                "suggested": "이번 배포에 포함됐을 수 있음",
+                "suggestedHint": "기본 브랜치에 들어간 것으로 보이지만 어느 릴리스에도 속하지 않은 미션입니다. 자동으로 추가되지 않습니다.",
+                "add": "추가",
+                "remove": "제거",
+                "moveTo": "다른 릴리스로 이동…",
+                "draft": "CHANGELOG 초안",
+                "generateDraft": "초안 생성",
+                "copyDraft": "복사",
+                "draftEmpty": "항목이 없습니다.",
+                "draftWarnings": "기본 브랜치에서 확인되지 않음",
+                "draftNeedsWording": "사용자용 문구 필요",
+                "deployFacts": "{{commit}} 배포됨",
+                "notDeployed": "아직 배포되지 않음",
+                "badgeTitle": "릴리스 {{name}}",
+                "moveBadge": "다른 릴리스로 옮기기",
+                "noRelease": "릴리스 없음",
+                "error": "릴리스를 갱신하지 못했습니다: {{error}}",
+                "unavailable": "릴리스를 보려면 데몬을 업데이트해야 합니다.",
+                "statusLabel": "릴리스 상태",
+                "afterDeploy": "이미 배포된 릴리스입니다 — 변경 내용은 기록됩니다.",
+                "status": {
+                    "planned": "계획됨",
+                    "frozen": "동결됨",
+                    "deployed": "배포됨",
+                    "verified": "검증됨",
+                    "superseded": "대체됨",
+                    "cancelled": "취소됨"
+                }
+            },
             "completedHistory": "완료 / 포기 기록",
             "noQueueActivity": "큐 활동이 없습니다.",
             "noNodes": "이 mesh에 노드가 아직 없습니다.",
@@ -1761,6 +1860,95 @@
         "noDescription": "프로바이더가 요청 내용을 보내지 않았습니다.",
         "requestChanged": "요청이 바뀌었거나 이미 끝나 목록에서 지웠습니다."
     },
+    "assistantSkills": {
+        "title": "비서 스킬",
+        "hint": "각 스킬의 내용이 프로젝트 요청에 첨부된 횟수입니다. 첨부됨은 코디네이터에게 내용이 전달됐다는 뜻이며, 실제로 따랐는지는 확인하지 않습니다.",
+        "summary": "최근 {{days}}일: 프로젝트 요청 {{sends}}건에 스킬 {{attaches}}번 첨부",
+        "empty": "아직 스킬이 없습니다.",
+        "attached": "첨부 {{count}}회",
+        "viewed": "조회 {{count}}회",
+        "lastUsed": "마지막 사용",
+        "neverUsed": "아직 사용 안 함",
+        "attachedTooltip": "스킬 내용이 프로젝트 요청에 첨부된 횟수입니다. 실제로 따랐는지는 확인되지 않습니다.",
+        "pinned": "고정됨",
+        "pin": "고정",
+        "unpin": "고정 해제",
+        "archive": "보관",
+        "restore": "복원",
+        "actionFailed": "처리 안 됨: {{code}}",
+        "origin": {
+            "starter": "기본 제공",
+            "owner": "직접 작성",
+            "agent": "비서",
+            "imported": "가져옴"
+        },
+        "status": {
+            "stale": "오래됨",
+            "archived": "보관됨"
+        }
+    },
+    "assistantMemoryDigest": {
+        "badge": "기억 {{count}}건",
+        "badgeTitle": "비서가 최근 기억에 저장한 내용",
+        "title": "최근 기억한 것",
+        "close": "닫기",
+        "undo": "되돌리기",
+        "undoMove": "이동 되돌리기",
+        "undone": "되돌림",
+        "staged": "승인 대기",
+        "promoted": "반복한 답변에서 학습",
+        "older": "이전 항목은 표시하지 않습니다.",
+        "failed": "되돌리지 못함: {{code}}",
+        "suggestions": {
+            "title": "직접 정리해 주세요",
+            "duplicate": "같은 메모가 두 번",
+            "similar": "매우 비슷한 메모",
+            "unused": "6개월간 쓰이지 않음",
+            "mergeKeepFirst": "첫째를 남기고 둘째를 지움"
+        },
+        "counts": "추가 {{added}} · 변경 {{replaced}} · 삭제 {{removed}} · 학습 {{promoted}}",
+        "action": {
+            "add": "추가됨",
+            "replace": "변경됨",
+            "remove": "삭제됨",
+            "archive": "보관함으로 이동"
+        },
+        "tier": {
+            "core": "핵심 메모",
+            "archive": "보관함",
+            "project": "프로젝트 보관함"
+        },
+        "target": {
+            "memory": "메모리",
+            "user": "사용자"
+        },
+        "origin": {
+            "human": "직접 말함",
+            "relay": "프로젝트 출력",
+            "review": "리뷰 턴",
+            "review_tainted": "외부 입력 뒤의 리뷰",
+            "owner": "대시보드(직접)",
+            "decision_promotion": "내 결정",
+            "curator": "정리 작업"
+        }
+    },
+    "assistantControl": {
+        "title": "비서 CLI",
+        "switchLabel": "비서를 다른 CLI로 전환",
+        "providerPlaceholder": "예: codex-cli",
+        "switchAction": "전환",
+        "switchQueued": "현재 답변이 끝난 뒤 전환합니다.",
+        "switchDone": "전환했습니다.",
+        "failover": "쿼터가 소진되면",
+        "failoverNotify": "물어보기",
+        "failoverAuto": "자동 전환",
+        "failoverOff": "아무것도 안 함",
+        "roleAssistant": "비서",
+        "roleCoordinator": "코디네이터",
+        "autoNote": "자동 전환은 하루 2회, 6시간 간격으로 제한됩니다.",
+        "open": "CLI·쿼터",
+        "failed": "실패: {{code}}"
+    },
     "assistantStaged": {
         "badge": "대기 {{count}}건",
         "badgeTitle": "승인을 기다리는 비서의 쓰기",
@@ -1776,6 +1964,15 @@
         "failed": "처리 안 됨: {{code}}",
         "noText": "(내용 없음)",
         "protectedSkill": "직접 쓴 스킬을 고침",
+        "proposedProcedureTitle": "이 절차를 스킬로 저장할까요?",
+        "proposedProcedureEvidence": "최근 {{days}}일간 비슷한 요청 {{count}}번",
+        "proposedProcedureSave": "저장",
+        "proposedProcedureEdit": "수정 후 저장",
+        "proposedProcedureSaveEdited": "변경 저장",
+        "proposedProcedureCancel": "취소",
+        "proposedProcedureDismiss": "아니요, 다시 묻지 않기",
+        "proposedProcedureDescription": "스킬 설명",
+        "proposedProcedureBody": "스킬 내용",
         "driverActivation": {
             "advisory": "선언된 접근 권한 · OS 수준 강제 아님",
             "name": "이름",
@@ -1798,7 +1995,9 @@
             "note": "노트",
             "launchDefault": "실행 기본값",
             "driver_activation": "드라이버 활성화",
-            "driver_action_request": "파괴적 드라이버 작업"
+            "driver_action_request": "파괴적 드라이버 작업",
+            "session_control": "세션 제어",
+            "host_handoff": "호스트 이전"
         },
         "action": {
             "add": "추가",
@@ -1811,7 +2010,11 @@
             "forget": "지움",
             "set": "설정",
             "clear": "해제",
-            "activate": "활성화"
+            "activate": "활성화",
+            "stop": "중지",
+            "restart": "재시작",
+            "switch_provider": "CLI 전환",
+            "start": "시작"
         },
         "origin": {
             "relay": "릴레이 뒤",
@@ -1819,11 +2022,23 @@
             "review_tainted": "신뢰할 수 없는 입력 뒤 리뷰",
             "human": "직접 입력",
             "owner": "직접 입력",
-            "driver": "설치된 드라이버"
+            "driver": "설치된 드라이버",
+            "quota": "쿼터 소진",
+            "assistant": "비서가 제안"
         },
         "role": {
             "assistant": "어시스턴트",
-            "coordinator": "코디네이터"
+            "coordinator": "코디네이터",
+            "worker": "워커"
+        },
+        "control": {
+            "handoff": "이 프로젝트의 호스트 역할과 데이터를 다른 머신으로 옮깁니다. 코디네이터는 그 머신에서 다시 시작됩니다.",
+            "quota": "{{from}} 쿼터가 소진됐습니다(잔여 {{fromPct}}%). {{to}}(잔여 {{toPct}}%)로 전환합니다.",
+            "switch": "{{role}}을(를) {{to}}(으)로 전환합니다.",
+            "simple": "{{role}}을(를) {{action}}합니다.",
+            "busy": "지금 작업 중이거나 승인 대기 중입니다 — 승인하면 중단됩니다.",
+            "resets": "쿼터 초기화: {{at}}.",
+            "expires": "{{at}}에 만료됩니다."
         }
     },
     "chatPane": {
@@ -3636,6 +3851,35 @@
             "waitingForStats": "실시간 통계 대기 중…",
             "waitingForStatsWithTotal": "실시간 통계 대기 중… · 총 {{total}}"
         },
+        "quotaReserve": {
+            "title": "쿼터 예비분",
+            "subtitle": "이 머신에서 자동 작업이 당신을 위해 남겨 두는 요금제 쿼터입니다. 수동 채팅과 코디네이터 실행은 막지 않으며, 아래에 상태만 표시합니다.",
+            "usedBy": "이 머신의 메시 라우팅, 자동 실행, 직접 디스패치, 유휴 어시스턴트 리뷰 턴에 적용됩니다.",
+            "machineDefault": "머신 기본값",
+            "perProvider": "제공자별",
+            "minutes": "분",
+            "fields": {
+                "routingSessionMinPercent": "세션 하한",
+                "routingLongMinPercent": "주간/월간 하한",
+                "routingSessionResetImminentMs": "리셋 유예",
+                "assistantReviewMinPercent": "어시스턴트 리뷰 하한"
+            },
+            "withinReserve": "예비분 이내: {{remaining}}% 남음 / 예비분 {{reserve}}%",
+            "remaining": "{{remaining}}% 남음",
+            "noReading": "쿼터 측정값 없음",
+            "resetRow": "기본값으로 되돌리기",
+            "accountOverrides": "{{provider}}: 계정별 덮어쓰기",
+            "accountLabel": "계정 …{{suffix}}",
+            "migrated": "메시 {{count}}개의 임계값을 이 머신으로 합쳤습니다. 가장 보수적인 값을 유지했습니다.",
+            "saving": "저장 중…",
+            "blankMeansDefault": "비워 두면 머신 기본값(흐린 값)을 따릅니다.",
+            "loadFailed": "쿼터 예비분을 불러오지 못했습니다: {{error}}",
+            "errors": {
+                "notANumber": "숫자를 입력하세요.",
+                "percentRange": "0에서 100 사이여야 합니다.",
+                "negative": "음수일 수 없습니다."
+            }
+        },
         "fleetQuota": {
             "title": "머신별 구독 사용량",
             "subtitle": "머신마다 각 구독의 5시간·주간 한도가 얼마나 남았는지 보여줍니다. 작업 큐는 거의 다 쓴 플랜은 건너뛰고, 리셋 때 그냥 사라질 남은 사용량부터 씁니다.",
@@ -4502,6 +4746,19 @@
         "undo": "되돌리기",
         "change": "바꾸기",
         "mayBeInProgress": "답한 지 시간이 지나 이미 작업이 진행됐을 수 있습니다.",
+        "liveCheckWorks": "정상 동작",
+        "liveCheckDoesntWork": "동작 안 함",
+        "liveCheckNotePlaceholder": "메모(선택, 본 내용)",
+        "liveCheckFailedBadge": "실패",
+        "liveCheckToastWorks": "기록됨: 라이브 점검 통과",
+        "liveCheckToastFailed": "기록됨: 라이브 점검 실패",
+        "liveCheckResolveFailed": "결과를 기록하지 못했습니다 ({{code}})",
+        "machineFilter": "머신: {{machine}} ✕",
+        "liveChecksPrompt": "{{machine}}에서 대기 중인 라이브 점검 {{count}}건 (현재 v{{version}})",
+        "liveChecksPromptOpen": "열기",
+        "liveChecksPromptDismiss": "닫기",
+        "scopeNotRecorded": "검증 범위 미기록",
+        "scopeNotRecordedHint": "무엇을 확인했고 무엇을 확인하지 않았는지 없이 종료된 미션입니다(결과 사유에 \"scope:\" 없음).",
         "delivery": {
             "pending": "전달 대기",
             "queued": "코디 대기열에 있음",
@@ -4538,7 +4795,41 @@
         "decisionsWaiting": "결정 {{count}}건 대기",
         "openItems": "열린 항목 {{count}}",
         "liveChecksOpen": "라이브 확인 {{count}}",
-        "decisionBadgeLabel": "나를 기다리는 결정"
+        "decisionBadgeLabel": "나를 기다리는 결정",
+        "gitLanded": "반영됨",
+        "gitPartial": "일부 반영",
+        "gitNotLanded": "미반영",
+        "gitUnknown": "Git 확인 불가",
+        "gitTooltip": "이 미션이 참조하는 커밋이 기본 브랜치에 있는지 여부",
+        "gitTitle": "Git 근거",
+        "gitBase": "{{base}} @ {{sha}} 기준",
+        "gitEvaluated": "{{time}} 확인",
+        "gitRefresh": "다시 확인",
+        "gitRefreshing": "확인 중…",
+        "gitLandedNote": "반영됨은 참조된 커밋이 기본 브랜치에 들어갔다는 뜻일 뿐입니다. 작업이 수용·완료됐다는 뜻이 아니며, 라이브 확인과 남은 항목은 따로 닫아야 합니다.",
+        "gitUnknownNote": "확인 불가는 git이 답하지 못했다는 뜻입니다(커밋 없음, 얕은 복제, 머신 오프라인). \"미반영\"이 아닙니다.",
+        "gitPartialUnknown": "일부 ref는 확인하지 못했습니다",
+        "gitMayBeModified": "반영된 뒤 기본 브랜치에서 이 줄들이 다시 수정됐을 수 있습니다.",
+        "gitRefStatus": {
+            "contained_ancestor": "기본 브랜치에 있음",
+            "contained_patch_equivalent": "다른 커밋으로 반영됨(체리픽·리베이스·스쿼시)",
+            "not_contained": "기본 브랜치에 없음",
+            "unknown": "확인하지 못함"
+        },
+        "gitReason": {
+            "object_missing": "이 머신에 커밋이 없음",
+            "shallow": "얕은 복제 — 이력이 불완전",
+            "undeterminable": "git이 답하지 못함",
+            "base_missing": "여기에는 기본 브랜치가 없음",
+            "branch_not_found": "브랜치를 찾지 못함",
+            "base_branch_ref": "ref가 기본 브랜치 자체임",
+            "gitlink_undeterminable": "서브모듈 포인터를 비교하지 못함",
+            "merge_tree_failed": "비교 실패",
+            "node_offline": "머신 오프라인",
+            "no_repo": "이 머신에 저장소 없음",
+            "budget": "ref가 너무 많아 확인하지 않음",
+            "not_a_git_ref": "git ref가 아님"
+        }
     },
     "approvals": {
         "pageTitle": "승인",
@@ -4580,13 +4871,9 @@
         "quotaPolicy": {
             "blankMeansDefaultShort": "비워 두면 기본값",
             "title": "쿼터 기반 라우팅",
-            "description": "노드가 AI 제공자 쿼터 잔량을 보고하면, 코디네이터는 거의 소진된 노드를 건너뛰고 여유가 많은 노드를 선호할 수 있습니다. 아래 임계값이 그 기준입니다. 보고가 없거나 오래된 값은 항상 무시되므로, 낡은 데이터 때문에 노드가 제외되는 일은 없습니다.",
-            "sessionMin": "세션 하한",
-            "sessionMinHint": "짧은 롤링 윈도우 잔량이 이 값 미만인 제공자를 건너뜁니다.",
-            "weeklyMin": "주간 하한",
-            "weeklyMinHint": "주간 윈도우 잔량이 이 값 미만인 제공자를 건너뜁니다.",
-            "resetImminent": "리셋 유예",
-            "resetImminentHint": "이 시간 안에 세션 윈도우가 리셋되면 잔량 부족을 무시합니다.",
+            "description": "노드가 AI 제공자 쿼터 잔량을 보고하면, 코디네이터는 여유가 많은 노드를 선호할 수 있습니다. 이 항목들은 이 메시의 스케줄링 선호도입니다. 보고가 없거나 오래된 값은 항상 무시되므로, 낡은 데이터 때문에 노드가 제외되는 일은 없습니다.",
+            "reserveMovedToMachine": "자동 작업이 당신 몫으로 남겨 둘 쿼터 하한은 이제 머신 설정입니다.",
+            "openMachineReserve": "머신 쿼터 예비분 열기",
             "staleAfter": "측정값 만료",
             "staleAfterHint": "폴백 전용: 측정값은 해당 윈도우가 리셋될 때까지 유효하며, 이 나이 제한은 리셋 시각이 없는 측정값에만 적용됩니다.",
             "spreadBonus": "여유량 선호도",

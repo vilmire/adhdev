@@ -20,6 +20,7 @@ import { transcriptReplicaHandlers } from '../../src/commands/low-family/transcr
 import { turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js'
 import { maintenanceHoldSpecs } from '../../src/commands/low-family/maintenance-hold.js'
 import { projectTransferSpecs } from '../../src/commands/low-family/project-transfer.js'
+import { quotaReserveSpecs } from '../../src/commands/low-family/quota-reserve-commands.js'
 import { operatorRecoverySpecs } from '../../src/commands/low-family/operator-recovery.js'
 import { cooperativeMaintenanceSpecs } from '../../src/commands/low-family/cooperative-maintenance.js'
 
@@ -106,7 +107,7 @@ const TRANSCRIPT_REPLICA_CMDS = ['ensure_transcript_subscription', 'read_transcr
 // wiring-unification C2 / C-W6: the MCP server's turn-ledger IPC surface
 // (mesh-runtime.db is the daemon's alone — check:boundaries C8).
 const TURN_LEDGER_IPC_CMDS = [
-  'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
+  'turn_observe', 'mesh_record', 'turn_cancel', 'mesh_direct_cancel', 'operator_status', 'turn_query',
   'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
   // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
@@ -137,6 +138,8 @@ const PROJECT_TRANSFER_CMDS = [
 
 // Exact-target operator recovery (low-family/operator-recovery.ts): owner command + mesh census.
 const OPERATOR_RECOVERY_CMDS = ['operator_recovery', 'mesh_operator_recovery_census']
+// Machine quota reserve (owner-only set, readable get): commands/low-family/quota-reserve-commands.ts.
+const QUOTA_RESERVE_CMDS = ['quota_reserve_get', 'quota_reserve_set']
 
 const NEW_WORK_HOLD_CMDS = [
   'maintenance_new_work_hold_set',
@@ -152,14 +155,14 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 126 LOW family commands once, no overlap', () => {
+  it('registers all 128 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
       ...NOTIFICATION_CMDS, ...DAEMON_LIFECYCLE_CMDS, ...MESH_LEDGER_CMDS, ...MESH_NODE_LOGS_CMDS,
       ...WORKER_REPORT_CMDS, ...WORKER_BRIDGE_CMDS, ...WORKER_MAILBOX_CMDS, ...WORKER_PEER_CONTEXT_CMDS,
       ...TRANSCRIPT_REPLICA_CMDS, ...TURN_LEDGER_IPC_CMDS, ...COOPERATIVE_MAINTENANCE_CMDS, ...NEW_WORK_HOLD_CMDS,
-      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...OPERATOR_RECOVERY_CMDS,
+      ...CONTRACT_CMDS, ...PROJECT_TRANSFER_CMDS, ...OPERATOR_RECOVERY_CMDS, ...QUOTA_RESERVE_CMDS,
     ]
     // 69 − import_mesh_ledger_slice (C-W9a) + 13 store IPC commands + 1
     // report_transcript_transport (G2b, 2026-09-24) + 8 C-W9c graph/stats/prune/
@@ -176,7 +179,9 @@ describe('low-family registry', () => {
     // + 6 contract-versioning Cut A commands = 115; + 9 project file transfer
     // commands (8 owner + 1 mesh peer, 2026-10-28) = 124; + 2 operator recovery
     // commands (owner + mesh census, rc33 lock recovery merged 2026-10-28) = 126.
-    expect(all).toHaveLength(126)
+    // rc.37: + mesh_direct_cancel = 127; + 2 machine quota reserve commands
+    // (quota_reserve_get/set, 2026-11-01) = 129.
+    expect(all).toHaveLength(129)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)
@@ -201,6 +206,7 @@ describe('low-family registry', () => {
     expect(Object.keys(turnLedgerIpcHandlers)).toEqual(TURN_LEDGER_IPC_CMDS)
     expect(maintenanceHoldSpecs.map(spec => spec.name)).toEqual(NEW_WORK_HOLD_CMDS)
     expect(projectTransferSpecs.map(spec => spec.name)).toEqual(PROJECT_TRANSFER_CMDS)
+    expect(quotaReserveSpecs.map(spec => spec.name)).toEqual(QUOTA_RESERVE_CMDS)
   })
 
   // The lists above are written by hand, which is what makes them a real gate:
@@ -225,7 +231,7 @@ describe('low-family registry', () => {
       // cooperative-maintenance.ts exports the already-built spec ARRAY
       // (defineCommandSpecs returns CommandSpec[]), not a name→handler map, so
       // its names come off .name rather than Object.keys.
-      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name), projectTransferSpecs.map((spec) => spec.name), operatorRecoverySpecs.map((spec) => spec.name))
+      .concat(cooperativeMaintenanceSpecs.map((spec) => spec.name), maintenanceHoldSpecs.map((spec) => spec.name), projectTransferSpecs.map((spec) => spec.name), operatorRecoverySpecs.map((spec) => spec.name), quotaReserveSpecs.map((spec) => spec.name))
 
     expect(new Set(union).size).toBe(union.length)
     expect(lowFamilyNames().sort()).toEqual([...union].sort())

@@ -45,7 +45,7 @@ function quotaClaimBlockDescription(providerType: string, block: ProviderQuotaGa
     if (block.reason === PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON) {
         return `provider '${providerType}' reported quota exhausted`;
     }
-    return `provider '${providerType}' had ${block.remainingPercent.toFixed(1)}% ${block.window} quota remaining (< ${block.thresholdPercent}% threshold)`;
+    return `provider '${providerType}' had ${block.remainingPercent.toFixed(1)}% ${block.window} quota remaining (< ${block.thresholdPercent}% machine quota reserve)`;
 }
 
 function rememberBounded(map: Map<string, string>, key: string, value: string): void {

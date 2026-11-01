@@ -22,8 +22,8 @@ import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../..
 
 type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<any>
 
-const KNOWN_ORIGINS = new Set(['relay', 'review', 'review_tainted', 'human', 'owner', 'driver'])
-const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget', 'set', 'clear', 'activate'])
+const KNOWN_ORIGINS = new Set(['relay', 'review', 'review_tainted', 'human', 'owner', 'driver', 'quota', 'assistant'])
+const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget', 'set', 'clear', 'activate', 'stop', 'restart', 'switch_provider', 'start'])
 
 export interface AssistantStagedWritesProps {
     daemonId: string | null | undefined
@@ -222,6 +222,7 @@ function StagedGroupCard({ group, state }: { group: AssistantStagedGroup; state:
 function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: AssistantStagedWritesState }) {
     const { t } = useTranslation('common')
     const busy = state.busyIds.has(item.id)
+    if (item.reason === 'proposed_procedure' && item.skillDraft) return <ProposedProcedureCard item={item} state={state} />
     const outcome = state.outcomes[item.id]
     const origin = KNOWN_ORIGINS.has(item.origin) ? t(`assistantStaged.origin.${item.origin}`) : item.origin
     const action = KNOWN_ACTIONS.has(item.action) ? t(`assistantStaged.action.${item.action}`) : item.action
@@ -273,10 +274,85 @@ function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: Assi
     )
 }
 
+/**
+ * "Save this procedure as a skill?" — a recurring request the assistant drafted
+ * a skill for (design 2026-11-01-procedure-skills.md §5.4). One tap saves it,
+ * "edit" changes the text first, "no" drops it and does not ask again for 90 days.
+ */
+function ProposedProcedureCard({ item, state }: { item: AssistantStagedItem; state: AssistantStagedWritesState }) {
+    const { t } = useTranslation('common')
+    const draft = item.skillDraft!
+    const busy = state.busyIds.has(item.id)
+    const outcome = state.outcomes[item.id]
+    const [editing, setEditing] = useState(false)
+    const [description, setDescription] = useState(draft.description)
+    const [body, setBody] = useState(draft.body)
+    const ev = item.proposal
+    const field = 'w-full rounded border border-border-default bg-bg-secondary px-2 py-1 font-mono text-[11px] leading-4 text-text-primary'
+    return (
+        <div className="flex flex-col gap-1.5 px-2.5 py-2 [&+&]:border-t [&+&]:border-border-subtle" data-staged-item={item.id} data-staged-proposal>
+            <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-accent-primary/15 px-1.5 py-px text-[10px] leading-none font-bold uppercase tracking-wide text-accent-primary">{t('assistantStaged.kind.skill')}</span>
+                <span className="font-medium text-text-primary">{t('assistantStaged.proposedProcedureTitle')}</span>
+                <span className="truncate font-mono text-text-primary" title={draft.name}>{draft.name}</span>
+            </div>
+            {ev && ev.signalCount > 0 && (
+                <div className="text-text-muted" data-proposal-evidence>
+                    {t('assistantStaged.proposedProcedureEvidence', { count: ev.signalCount, days: ev.spanDays })}
+                    {ev.excerpt && <span className="italic"> · “{ev.excerpt}”</span>}
+                </div>
+            )}
+            {editing ? (
+                <div className="flex flex-col gap-1">
+                    <input className={field} value={description} onChange={e => setDescription(e.target.value)} aria-label={t('assistantStaged.proposedProcedureDescription')} data-proposal-input="description" />
+                    <textarea className={cn(field, 'min-h-32')} value={body} onChange={e => setBody(e.target.value)} aria-label={t('assistantStaged.proposedProcedureBody')} data-proposal-input="body" />
+                </div>
+            ) : (
+                <div className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-bg-secondary px-2 py-1 font-mono text-[11px] leading-snug text-text-primary">
+                    {item.text}
+                </div>
+            )}
+            <div className="flex flex-wrap items-center justify-end gap-1">
+                {editing ? (
+                    <>
+                        <button type="button" className="btn btn-sm btn-primary" disabled={busy || !description.trim() || !body.trim() || !state.saveEditedSkill}
+                            data-staged-action="save-edited" onClick={() => void state.saveEditedSkill?.(item.id, { ...draft, description, body })}>
+                            {t('assistantStaged.proposedProcedureSaveEdited')}
+                        </button>
+                        <button type="button" className="btn btn-sm btn-secondary" disabled={busy} data-staged-action="cancel-edit" onClick={() => setEditing(false)}>
+                            {t('assistantStaged.proposedProcedureCancel')}
+                        </button>
+                    </>
+                ) : (
+                    <>
+                        <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-staged-action="apply" onClick={() => void state.resolve({ id: item.id }, 'apply')}>
+                            {t('assistantStaged.proposedProcedureSave')}
+                        </button>
+                        {state.saveEditedSkill && (
+                            <button type="button" className="btn btn-sm btn-secondary" disabled={busy} data-staged-action="edit" onClick={() => setEditing(true)}>
+                                {t('assistantStaged.proposedProcedureEdit')}
+                            </button>
+                        )}
+                        <button type="button" className="btn btn-sm btn-secondary" disabled={busy} data-staged-action="discard" onClick={() => void state.resolve({ id: item.id }, 'discard')}>
+                            {t('assistantStaged.proposedProcedureDismiss')}
+                        </button>
+                    </>
+                )}
+            </div>
+            {outcome && !outcome.ok && (
+                <div className="text-status-error" data-staged-error={outcome.code || ''}>
+                    {t('assistantStaged.failed', { code: outcome.code || 'failed' })}
+                </div>
+            )}
+        </div>
+    )
+}
+
 function StagedBody({ item }: { item: AssistantStagedItem }) {
     const { t } = useTranslation('common')
     const pre = 'max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-bg-secondary px-2 py-1 font-mono text-[11px] leading-snug'
     if (item.kind === 'driver_activation') return <DriverActivationBody item={item} />
+    if (item.control) return <ControlBody item={item} />
     if (item.diff) {
         return (
             <div className={pre}>
@@ -288,6 +364,25 @@ function StagedBody({ item }: { item: AssistantStagedItem }) {
     if (item.text) return <div className={cn(pre, 'text-text-primary')}>{item.text}</div>
     if (item.action === 'archive') return null
     return <div className="italic text-text-muted">{t('assistantStaged.noText')}</div>
+}
+
+/** Session-control / host-handoff card: what will happen to which session, and why it waits for the owner. */
+function ControlBody({ item }: { item: AssistantStagedItem }) {
+    const { t } = useTranslation('common')
+    const c = item.control!
+    const lines: string[] = []
+    if (item.kind === 'host_handoff') lines.push(t('assistantStaged.control.handoff'))
+    else if (c.quota) lines.push(t('assistantStaged.control.quota', { from: c.quota.fromProvider, to: c.quota.toProvider, fromPct: c.quota.fromRemainingPct ?? 0, toPct: c.quota.toRemainingPct ?? '?' }))
+    else if (item.action === 'switch_provider') lines.push(t('assistantStaged.control.switch', { role: t(`assistantStaged.role.${c.role ?? 'coordinator'}`), to: c.provider ?? '' }))
+    else lines.push(t('assistantStaged.control.simple', { action: t(`assistantStaged.action.${item.action}`), role: t(`assistantStaged.role.${c.role ?? 'coordinator'}`) }))
+    if (c.trigger === 'busy_target') lines.push(t('assistantStaged.control.busy'))
+    if (c.quota?.resetsAt) lines.push(t('assistantStaged.control.resets', { at: new Date(c.quota.resetsAt).toLocaleString() }))
+    if (c.expiresAt) lines.push(t('assistantStaged.control.expires', { at: new Date(c.expiresAt).toLocaleTimeString() }))
+    return (
+        <div className="rounded bg-bg-secondary px-2 py-1" data-staged-control={c.trigger}>
+            {lines.map((line, i) => <div key={i}>{line}</div>)}
+        </div>
+    )
 }
 
 /** Driver consent is displayed separately from memory/skill text diffs. */

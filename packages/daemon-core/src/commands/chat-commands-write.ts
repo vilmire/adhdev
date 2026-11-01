@@ -3,6 +3,7 @@ import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 import { matchesProviderApprovalTarget, projectProviderApproval } from '../status/provider-approval.js';
 import { prepareOwnerActionChat } from '../assistant/assistant-action-ingress.js';
+import { captureOwnerUploads, withOwnerUploadNote } from './owner-upload-ingress.js';
 import { modalIdentity, checkAssistantExecutionGuard } from '../assistant/assistant-execution.js';
 /**
  * Chat Commands — write side: handleSendChat, handleListChats, handleNewChat,
@@ -269,29 +270,34 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
     }
     if (!messageId) messageId = mintLegacyMessageId();
     let prepared: ReturnType<typeof prepareOwnerActionChat> | undefined;
+    const uploadNote = captureOwnerUploads(args, sessionKey, messageId, input);
+    const decorate = (env: InputEnvelope): InputEnvelope => (uploadNote ? withOwnerUploadNote(env, uploadNote) : env);
+    // The note rides on the submitted input itself so a FIFO-parked body carries it too.
+    const outbound = decorate(input);
     const outcome = await service.submit(preserveTrustedOwnerIngress(args, {
         messageId,
         sessionId: sessionKey,
-        input,
+        input: outbound,
         origin: readOutboundOrigin(args, 'dashboard'),
         policy,
         createdAt: Date.now(),
     }), () => {
         prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity, args?.expectedOwnerApprovalTarget);
         if (!prepared.success) return { refusal: prepared.code };
-        if (prepared.text === input.textFallback) return input;
+        if (prepared.text === input.textFallback) return outbound;
         // Keep every original image/part. Only the native delivery body receives
         // the daemon-issued authorization; logical receipt identity stays original.
         const hasTextPart = input.parts.some(part => part.type === 'text' && part.text.trim());
-        return { ...input, textFallback: prepared.text,
-            parts: [...input.parts, { type: 'text' as const, text: hasTextPart ? prepared.text.slice(input.textFallback.length) : prepared.text }] };
+        return decorate({ ...input, textFallback: prepared.text,
+            parts: [...input.parts, { type: 'text' as const, text: hasTextPart ? prepared.text.slice(input.textFallback.length) : prepared.text }] });
     });
     if (prepared && !prepared.success) return { ...prepared, error: prepared.code, sent: false,
         messageId, ...chatReceipt(service, sessionKey, messageId) };
     // Assistant input attribution (§4.10.2 check 5): the hook keeps only
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
-    reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome, unverified: readUnverifiedDashboardInput(args) });
+    reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome, unverified: readUnverifiedDashboardInput(args),
+        ...(typeof input.textFallback === 'string' && !args?.assistantOwnerAction ? { text: input.textFallback } : {}) });
     return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
         ...chatReceipt(service, sessionKey, messageId),
         ...(prepared && 'expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };

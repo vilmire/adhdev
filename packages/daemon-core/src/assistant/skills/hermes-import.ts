@@ -97,7 +97,7 @@ function readUsage(skillsRoot: string): Map<string, HermesUsage> {
 }
 
 /** Directories under skills/ that contain a SKILL.md (no descent into a skill's own subdirs). */
-function findSkillDirs(root: string, dir: string, depth: number, out: string[]): void {
+export function findSkillDirs(root: string, dir: string, depth: number, out: string[]): void {
     let names: string[];
     try { names = readdirSync(dir).sort(); } catch { return; }
     if (names.includes(SKILL_FILE) && dir !== root) {
@@ -112,7 +112,7 @@ function findSkillDirs(root: string, dir: string, depth: number, out: string[]):
     }
 }
 
-function skillNameOf(dir: string): string {
+export function skillNameOf(dir: string): string {
     try {
         const parsed = parseSkillMd(readFileSync(join(dir, SKILL_FILE), 'utf-8'));
         if (!('problem' in parsed) && typeof parsed.meta.name === 'string') return parsed.meta.name;
@@ -171,7 +171,7 @@ function scanMemory(hermesHome: string): HermesMemoryCandidate[] {
 }
 
 /** The store's refusal code for a description/body that failed the content scan. */
-function blockedCode(f: StoreContentFinding): 'skill_secret_rejected' | 'skill_hidden_chars_rejected' | 'skill_injection_rejected' {
+export function blockedCode(f: StoreContentFinding): 'skill_secret_rejected' | 'skill_hidden_chars_rejected' | 'skill_injection_rejected' {
     return f.kind === 'credential' ? 'skill_secret_rejected' : f.kind === 'hidden_chars' ? 'skill_hidden_chars_rejected' : 'skill_injection_rejected';
 }
 

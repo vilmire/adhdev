@@ -32,6 +32,16 @@ export interface SkillState {
     statusChangedAt: string;
     viewCount: number;
     lastViewedAt: string | null;
+    /**
+     * Times the skill body was attached to a `project_send` (one per message).
+     * This is the USE count; `viewCount` only says the assistant read it
+     * (design 2026-11-01-procedure-skills.md §3). Optional in old files.
+     */
+    attachCount: number;
+    lastAttachedAt: string | null;
+    /** Hint-quality counters: shown in a `project_send` response / then attached to the next send. */
+    hintShownCount: number;
+    hintAcceptCount: number;
     patchCount: number;
     lastPatchedAt: string | null;
     /** Applied agent patches since the owner last cleared the review lock. */
@@ -45,6 +55,8 @@ export interface SkillState {
 export interface SkillStateFile {
     version: 1;
     skills: Record<string, SkillState>;
+    /** Starter skills the owner archived — never re-installed (tombstones). */
+    starterDismissed?: string[];
 }
 
 export function newSkillState(origin: SkillOrigin, nowIso: string): SkillState {
@@ -56,6 +68,10 @@ export function newSkillState(origin: SkillOrigin, nowIso: string): SkillState {
         statusChangedAt: nowIso,
         viewCount: 0,
         lastViewedAt: null,
+        attachCount: 0,
+        lastAttachedAt: null,
+        hintShownCount: 0,
+        hintAcceptCount: 0,
         patchCount: 0,
         lastPatchedAt: null,
         patchesSinceReview: 0,
@@ -84,7 +100,7 @@ export function bumpCounter(map: Record<string, number>, key: string): Record<st
 }
 
 const STATUSES: readonly SkillStatus[] = ['active', 'stale', 'archived'];
-const ORIGINS: readonly SkillOrigin[] = ['agent', 'owner', 'imported'];
+const ORIGINS: readonly SkillOrigin[] = ['agent', 'owner', 'imported', 'starter'];
 
 function sanitize(raw: unknown, fallbackIso: string): SkillState | null {
     if (!raw || typeof raw !== 'object') return null;
@@ -105,6 +121,10 @@ function sanitize(raw: unknown, fallbackIso: string): SkillState | null {
         statusChangedAt: str(r.statusChangedAt) ?? str(r.createdAt) ?? fallbackIso,
         viewCount: num(r.viewCount),
         lastViewedAt: str(r.lastViewedAt),
+        attachCount: num(r.attachCount),
+        lastAttachedAt: str(r.lastAttachedAt),
+        hintShownCount: num(r.hintShownCount),
+        hintAcceptCount: num(r.hintAcceptCount),
         patchCount: num(r.patchCount),
         lastPatchedAt: str(r.lastPatchedAt),
         patchesSinceReview: num(r.patchesSinceReview),
@@ -121,13 +141,14 @@ export function readSkillStateFile(path: string, fallbackIso: string): { file: S
     const empty: SkillStateFile = { version: 1, skills: {} };
     if (!existsSync(path)) return { file: empty };
     try {
-        const raw = JSON.parse(readFileSync(path, 'utf-8')) as { skills?: Record<string, unknown> };
+        const raw = JSON.parse(readFileSync(path, 'utf-8')) as { skills?: Record<string, unknown>; starterDismissed?: unknown };
         const skills: Record<string, SkillState> = {};
         for (const [name, v] of Object.entries(raw?.skills ?? {})) {
             const s = sanitize(v, fallbackIso);
             if (s) skills[name] = s;
         }
-        return { file: { version: 1, skills } };
+        const dismissed = Array.isArray(raw?.starterDismissed) ? raw.starterDismissed.filter((n): n is string => typeof n === 'string') : [];
+        return { file: { version: 1, skills, ...(dismissed.length ? { starterDismissed: dismissed } : {}) } };
     } catch (err) {
         return { file: empty, corrupt: err instanceof Error ? err.message : String(err) };
     }
@@ -135,4 +156,18 @@ export function readSkillStateFile(path: string, fallbackIso: string): { file: S
 
 export function writeSkillStateFile(path: string, file: SkillStateFile): void {
     writeFileAtomic600(path, `${JSON.stringify(file, null, 2)}\n`);
+}
+
+/**
+ * Latest of the timestamps that keep a skill alive: a skill used only through
+ * `project_send` attachments has no view, so view-only recency would archive it
+ * (design 2026-11-01-procedure-skills.md §4.2). Returns NaN when none parses.
+ */
+export function lastUsedMs(s: Pick<SkillState, 'lastViewedAt' | 'lastAttachedAt' | 'createdAt'>): number {
+    let best = NaN;
+    for (const t of [s.lastViewedAt, s.lastAttachedAt, s.createdAt]) {
+        const ms = t ? Date.parse(t) : NaN;
+        if (Number.isFinite(ms) && !(ms <= best)) best = ms;
+    }
+    return best;
 }

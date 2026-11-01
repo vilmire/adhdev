@@ -11,6 +11,7 @@ import { resolveConfigDir } from './config-dir.js';
 import { IDENTITY, TRACK } from '../track-identity.js';
 import { isSecretLikeEnvKey } from './env-overrides.js';
 import type { WorkspaceEntry } from './workspaces.js';
+import { coerceQuotaReserve, type QuotaReserveConfig } from '../quota/quota-reserve.js';
 export type { WorkspaceEntry } from './workspaces.js';
 export type { RecentActivityEntry } from './recent-activity.js';
 export type { SavedProviderSessionEntry } from './saved-sessions.js';
@@ -69,6 +70,14 @@ export interface ADHDevConfig {
      * server API relay (`allowServerApiProxy`).
      */
     allowRemoteProjectAttach?: boolean;
+
+    /**
+     * Experimental features, all OFF unless the owner opts in.
+     * `hostHandoff`: the coordinator host handoff (owner verb + dashboard dialog +
+     * handoff peer verbs; design 2026-11-01). Off = this daemon answers the handoff
+     * capability probe like an older daemon.
+     */
+    experimental?: { hostHandoff?: boolean };
 
     /**
      * Optional target-side allow-list of canonical `daemon_mach_*` host IDs
@@ -257,6 +266,14 @@ export interface ADHDevConfig {
      * apply time, never here — see `isSecretLikeEnvKey`.
      */
     envOverrides?: Record<string, string>;
+
+    /**
+     * Machine-wide quota reserve — how much quota automatic consumers (mesh
+     * routing / auto-launch / direct dispatch, assistant review turns) leave
+     * for the person. Sparse; absent = code defaults. Resolve with
+     * `resolveQuotaReserve` (quota/quota-reserve.ts); never read fields here.
+     */
+    quotaReserve?: QuotaReserveConfig;
 }
 
 const DEFAULT_CONFIG: ADHDevConfig = {
@@ -403,6 +420,8 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
             : DEFAULT_CONFIG.serverUrl,
         allowServerApiProxy: asBoolean(parsed.allowServerApiProxy, DEFAULT_CONFIG.allowServerApiProxy ?? false),
         ...(typeof parsed.allowRemoteProjectAttach === 'boolean' ? { allowRemoteProjectAttach: parsed.allowRemoteProjectAttach } : {}),
+        ...(isPlainObject(parsed.experimental) && typeof (parsed.experimental as Record<string, unknown>).hostHandoff === 'boolean'
+            ? { experimental: { hostHandoff: (parsed.experimental as Record<string, unknown>).hostHandoff as boolean } } : {}),
         ...(Array.isArray(parsed.allowedRemoteProjectHosts) ? { allowedRemoteProjectHosts: asStringArray(parsed.allowedRemoteProjectHosts) } : {}),
         quotaShowAccountEmail: resolveQuotaShowAccountEmail(parsed),
         ...(parsed.quotaShowAccountEmailSetByUser === true ? { quotaShowAccountEmailSetByUser: true } : {}),
@@ -443,6 +462,7 @@ function normalizeConfig(raw: unknown): ADHDevConfig & { activeWorkspaceId?: str
                 : TRACK,
         terminalSizingMode: parsed.terminalSizingMode === 'fit' ? 'fit' : 'measured',
         envOverrides: normalizeEnvOverrides(parsed.envOverrides),
+        ...(coerceQuotaReserve(parsed.quotaReserve) ? { quotaReserve: coerceQuotaReserve(parsed.quotaReserve) } : {}),
     };
 }
 
@@ -572,6 +592,7 @@ function migrateStateToStateFile(raw: Record<string, any>): void {
  */
 let memoizedMachineId: { value: string | undefined } | undefined;
 let memoizedMachineNickname: { value: string | null } | undefined;
+let memoizedQuotaReserve: { value: QuotaReserveConfig | undefined } | undefined;
 
 /**
  * The daemon instance key (`mach_<uuid>`), read without re-parsing config.json.
@@ -594,6 +615,28 @@ export function getMachineId(): string | undefined {
 export function invalidateConfigFieldMemos(): void {
     memoizedMachineId = undefined;
     memoizedMachineNickname = undefined;
+    memoizedQuotaReserve = undefined;
+}
+
+/**
+ * The stored machine quota reserve (sparse; undefined = code defaults).
+ * Memoized because the routing gate reads it once per pass; every config
+ * write invalidates it.
+ */
+export function getQuotaReserveConfig(): QuotaReserveConfig | undefined {
+    if (memoizedQuotaReserve === undefined) {
+        memoizedQuotaReserve = { value: loadConfig().quotaReserve };
+    }
+    return memoizedQuotaReserve.value;
+}
+
+/** Replace the stored reserve wholesale (undefined clears it). Writer paths validate first. */
+export function setQuotaReserveConfig(next: QuotaReserveConfig | undefined): ADHDevConfig {
+    const config = loadConfig();
+    const { quotaReserve: _old, ...rest } = config;
+    const updated: ADHDevConfig = next ? { ...rest, quotaReserve: next } : rest;
+    saveConfig(updated);
+    return updated;
 }
 
 /** The user-assigned machine label, or null when unset. Invalidated by saveConfig. */

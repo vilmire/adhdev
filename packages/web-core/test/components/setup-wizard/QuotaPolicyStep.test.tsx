@@ -2,8 +2,10 @@
  * QuotaPolicyStep — the draft→overrides conversion the step emits to onSave.
  *
  * The contract this pins: the step emits OVERRIDES ONLY (a blank field means
- * "inherit the default", never 0), and the two duration fields are shown in
- * minutes but stored in milliseconds. Both matter at the daemon boundary —
+ * "inherit the default", never 0), and the duration field is shown in
+ * minutes but stored in milliseconds. The reserve floors (session / weekly /
+ * reset grace) are NOT mesh policy any more — they live in the machine quota
+ * reserve card; this step must never emit them. Both matter at the daemon boundary —
  * setMeshQuotaRouting persists exactly what arrives here, and the launch gate
  * reads that object, so a blank field leaking through as 0 would silently
  * become a real threshold nobody configured.
@@ -12,9 +14,6 @@ import { describe, expect, it } from 'vitest'
 import { quotaPolicyDraftToOverrides } from '../../../src/components/setup-wizard/QuotaPolicyStep'
 
 const BLANK = {
-    sessionMinRemainingPercent: '',
-    weeklyMinRemainingPercent: '',
-    sessionResetImminentMinutes: '',
     staleAfterMinutes: '',
     spreadBonusMax: '',
     sessionAxisWeeklyHeadroomPercent: '',
@@ -26,25 +25,23 @@ describe('quotaPolicyDraftToOverrides', () => {
     })
 
     it('omits blank fields rather than zeroing them', () => {
-        const out = quotaPolicyDraftToOverrides({ ...BLANK, sessionMinRemainingPercent: '80' })
-        expect(out).toEqual({ sessionMinRemainingPercent: 80 })
-        expect('weeklyMinRemainingPercent' in out).toBe(false)
+        const out = quotaPolicyDraftToOverrides({ ...BLANK, spreadBonusMax: '80' })
+        expect(out).toEqual({ spreadBonusMax: 80 })
+        expect('sessionAxisWeeklyHeadroomPercent' in out).toBe(false)
         expect('staleAfterMs' in out).toBe(false)
     })
 
-    it('converts the minute-denominated duration fields back to milliseconds', () => {
+    it('converts the minute-denominated duration field back to milliseconds', () => {
         const out = quotaPolicyDraftToOverrides({
             ...BLANK,
-            sessionResetImminentMinutes: '5',
             staleAfterMinutes: '30',
         })
-        expect(out.sessionResetImminentMs).toBe(5 * 60 * 1000)
         expect(out.staleAfterMs).toBe(30 * 60 * 1000)
     })
 
     it('keeps an explicit 0 — a deliberate "never gate on this window" is not the same as blank', () => {
-        const out = quotaPolicyDraftToOverrides({ ...BLANK, sessionMinRemainingPercent: '0' })
-        expect(out.sessionMinRemainingPercent).toBe(0)
+        const out = quotaPolicyDraftToOverrides({ ...BLANK, sessionAxisWeeklyHeadroomPercent: '0' })
+        expect(out.sessionAxisWeeklyHeadroomPercent).toBe(0)
     })
 
     it('drops unparseable input instead of emitting NaN to the daemon writer', () => {
@@ -56,17 +53,11 @@ describe('quotaPolicyDraftToOverrides', () => {
 
     it('round-trips a full override set', () => {
         const out = quotaPolicyDraftToOverrides({
-            sessionMinRemainingPercent: '25',
-            weeklyMinRemainingPercent: '40',
-            sessionResetImminentMinutes: '10',
             staleAfterMinutes: '60',
             spreadBonusMax: '50',
             sessionAxisWeeklyHeadroomPercent: '35',
         })
         expect(out).toEqual({
-            sessionMinRemainingPercent: 25,
-            weeklyMinRemainingPercent: 40,
-            sessionResetImminentMs: 10 * 60 * 1000,
             staleAfterMs: 60 * 60 * 1000,
             spreadBonusMax: 50,
             sessionAxisWeeklyHeadroomPercent: 35,

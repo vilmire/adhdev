@@ -13,7 +13,7 @@ import type { SkillSummary } from './skill-store.js';
 export const SKILL_INDEX_BUDGET_CHARS = 3_000;
 export const SKILL_INDEX_HEADER = '## Skills (read one with skill_view "<name>" before following it)';
 
-type IndexEntry = Pick<SkillSummary, 'name' | 'description' | 'project' | 'status' | 'pinned' | 'lastViewedAt' | 'problem'>;
+type IndexEntry = Pick<SkillSummary, 'name' | 'description' | 'project' | 'status' | 'pinned' | 'lastViewedAt' | 'problem'> & { lastAttachedAt?: string | null };
 
 /** `- <name> [<project>]: <description>`, with ` (stale)` after the name part for stale skills. */
 export function renderSkillIndexLine(s: IndexEntry): string {
@@ -22,13 +22,14 @@ export function renderSkillIndexLine(s: IndexEntry): string {
     return `- ${s.name}${project}${stale}: ${s.description}`;
 }
 
+/** Most recent view or attach — an often-attached skill must not fold out of the prompt budget. */
 function viewedAt(s: IndexEntry): number {
-    const t = s.lastViewedAt ? Date.parse(s.lastViewedAt) : NaN;
-    return Number.isFinite(t) ? t : -Infinity;
+    const ts = [s.lastViewedAt, s.lastAttachedAt].map((x) => (x ? Date.parse(x) : NaN)).filter((t) => Number.isFinite(t));
+    return ts.length ? Math.max(...ts) : -Infinity;
 }
 
 /**
- * Order: pinned → active (most recently viewed first) → stale. Archived skills
+ * Order: pinned → active (most recently viewed or attached first) → stale. Archived skills
  * and skills whose SKILL.md is unusable are left out. Ties break by name so
  * the frozen block is deterministic.
  */

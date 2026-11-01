@@ -47,6 +47,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getQueue } from './mesh-work-queue.js';
 import { resolveWorkerDelegateRouting, recordUnroutableDelegateEvent, isUnroutableDelegateRejection } from './mesh-routing.js';
 import { resolveMeshHostStatus } from './mesh-host-ownership.js';
+import { isCoordinatorDraining } from './coordinator-registry.js';
 import { traceMeshEventStage, traceMeshEventDrop } from '../shared/mesh-event-trace.js';
 import { getLastDisplayMessage } from '../status/snapshot.js';
 import { maybeInjectIdleActiveMissionReminder } from './mesh-idle-reminder.js';
@@ -211,6 +212,8 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
         if (readText(settings.meshCoordinatorFor) !== meshId) continue;
         const sessionId = readText(state?.instanceId);
         if (!sessionId) continue;
+        // Being replaced by a provider switch: new events go to the successor only.
+        if (isCoordinatorDraining(sessionId)) continue;
         const rawStatus = readText(state?.status).toLowerCase();
         const drainStatus = typeof inst.getDrainStatus === 'function' ? readText(inst.getDrainStatus()).toLowerCase() : '';
         // Parse/status overlays can be 'error' while the PTY is still live.

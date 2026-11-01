@@ -79,6 +79,14 @@ export interface RepoMeshHostMetadata {
     originGrantPublicKey?: string;
     /** Redacted pairing state only; raw join tokens must not be persisted here. */
     pairing?: RepoMeshHostPairingMetadata;
+    /**
+     * Host epoch (host handoff, design 2026-11-01 §7.1). Absent = 0. Raised by one
+     * when the host role moves; the daemon with the larger epoch is the host and a
+     * lower-epoch writer is refused.
+     */
+    hostEpoch?: number;
+    /** Set on the OLD host after a committed handoff: host-owned data is read-only until `retainUntil`. */
+    handedOffTo?: { daemonId: string; epoch: number; handoffId: string; at: number; retainUntil: number };
 }
 
 export interface RepoMeshHostStatus extends RepoMeshHostMetadata {

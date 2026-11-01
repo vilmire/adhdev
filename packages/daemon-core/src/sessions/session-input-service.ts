@@ -2,6 +2,7 @@ import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../mainten
 import { isTrustedOwnerIngress } from '../commands/command-args.js';
 import { evaluateNewWorkHold, formatNewWorkHeldMessage, isRunningWorkContinuation, NEW_WORK_HELD_CODE } from '../maintenance/new-work-hold.js';
 import { OutgoingReceiptStore } from './outgoing-receipt-store.js';
+import type { ConsumeView, InputConsumeAck } from './input-consume-ack.js';
 import { outgoingInputDigest, type OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * SessionInputService — the ONE path from any origin into a session's input.
@@ -97,6 +98,8 @@ export interface SessionInputTarget {
         | { ok: false; reason: string; message: string }
     >;
     hasQueuedSend?(messageId: string): boolean;
+    /** The send engine's own record for this exact messageId (`confirmed` = the CLI took it). */
+    submitState?(messageId: string): 'in_flight' | 'confirmed' | 'unconfirmed' | 'unknown';
     claimQueuedSend?(messageId: string): ClaimedSessionInput | null;
     restoreQueuedSend?(claimed: ClaimedSessionInput): void;
     /** SEND-NOW-WRONG-ITEM: hold the driver's autonomous FIFO drain while an interrupt owns the next write. */
@@ -130,6 +133,8 @@ export interface SessionInputPort {
 
 export interface SessionInputServiceDeps {
     receiptStore?: OutgoingReceiptStore;
+    /** Durable consume-ACK journal (docs/design/2026-11-01-durable-consume-ack.md). Absent = no ACK is ever recorded. */
+    consumeAck?: InputConsumeAck;
     resolveSession(sessionId: string): SessionInputTarget | null | undefined | Promise<SessionInputTarget | null | undefined>;
     clock?: () => number;
     /** Never receives bodies — ids, lengths, reasons only (content boundary). */
@@ -146,6 +151,10 @@ export interface SessionInputService {
     /** turn.deliver metadata only; native ACK survives a queued submit return. */
     submitNotice(msg: OutboundMessage, observe: (state: 'started'|'submitted'|'uncertain') => void): Promise<SubmitOutcome>;
     getReceipts(sessionId: string, ids: readonly string[]): OutgoingReceipt[];
+    /** Consume-ACK state per messageId (queued/written/submitted are NOT an ACK; restored open rows read `unknown`). */
+    getConsumeStates(ids: readonly string[]): ConsumeView[];
+    /** Refresh one message's journal row from the send engine's exact per-messageId acceptance, then read it. */
+    settleConsume(sessionId: string, messageId: string): Promise<ConsumeView | undefined>;
     isReceiptUnverified?(messageId: string): boolean;
     submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome>;
     /**
@@ -254,6 +263,7 @@ function hasNonTextParts(input: OutboundMessage['input']): boolean {
 
 export function createSessionInputService(deps: SessionInputServiceDeps): SessionInputService {
     const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
+    const consumeAck = deps.consumeAck;
     const freshOutgoing = new Set<string>();
     const unverifiedReceipts = new Set<string>();
     const outgoingAttempts = new Map<string, OutgoingReceipt>();
@@ -344,6 +354,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         noticeObserver?: (state: 'started'|'submitted'|'uncertain') => void,
     ): Promise<SubmitOutcome> {
         const receipt = outgoingAttempts.get(msg.messageId);
+        consumeAck?.begin(msg.messageId, msg.sessionId);
         // SUBMIT-UNCONFIRMED-RECLAIM, MESH DISPATCHES ONLY (review 9719d681
         // R3-1): registering this observer is what opts the write into the
         // driver's verdict machinery (exact composer reads, one re-paste, a
@@ -360,10 +371,15 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         try { reportable = !!msg.meshAttemptRef && target.canReportSubmitVerdict?.(msg.messageId, msg.meshAttemptRef) === true; } catch { reportable = false; }
         if (reportable) target.observeSubmitUnconfirmed?.(msg.messageId, (verdict, info) => {
             log('warn', `submit(${msg.messageId}) submit verdict '${verdict}' (proven not taken after one re-paste; the composer was cleared) — reporting it (session ${msg.sessionId})`);
+            consumeAck?.recordNotConsumed(msg.messageId, 'driver_unconfirmed_after_repaste');
             try { return target.reportSubmitUnconfirmed?.(msg.messageId, info.firstWrittenAt) === true; }
             catch (e) { log('warn', `submit(${msg.messageId}) submit-unconfirmed report failed: ${(e as Error)?.message ?? e}`); return false; }
-        }, target.confirmSubmitConsumption ? (sinceMs, opts) => target.confirmSubmitConsumption!(sinceMs, opts) : undefined);
-        if (receipt||noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
+        }, target.confirmSubmitConsumption ? (sinceMs, opts) => target.confirmSubmitConsumption!(sinceMs, opts).then((check) => {
+            if (check === 'consumed') consumeAck?.recordConsumed(msg.messageId, 'agent_activity_since_write');
+            return check;
+        }) : undefined);
+        if (receipt||noticeObserver||consumeAck) target.observeSendWrite?.(msg.messageId, state => {
+            consumeAck?.observeWrite(msg.messageId, state);
             if(noticeObserver){try{noticeObserver(state);}catch{/* Persisted intent remains unknown; never retry native input. */}}
             if(!receipt)return;
             try {
@@ -382,6 +398,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         const detail = opts.interrupt ? { interrupt: opts.interrupt } : {};
         if (result && result.status === 'queued') {
             rememberParked(msg);
+            consumeAck?.noteQueued(msg.messageId);
             const position = typeof result.position === 'number' && result.position > 0 ? result.position : 1;
             log('info', `submit(${msg.messageId}) ${msg.origin}/${msg.policy.mode} → queued at ${position} (session ${msg.sessionId}, route=${opts.route})`);
             return { kind: 'queued', position, route: opts.route, ...detail };
@@ -409,7 +426,9 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             body = built;
         }
         const receipt = outgoingAttempts.get(msg.messageId);
-        if (receipt || noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
+        consumeAck?.begin(msg.messageId, msg.sessionId);
+        if (receipt || noticeObserver || consumeAck) target.observeSendWrite?.(msg.messageId, state => {
+            consumeAck?.observeWrite(msg.messageId, state);
             if (noticeObserver) { try { noticeObserver(state); } catch { /* Persisted intent remains unknown; never retry native input. */ } }
             if (!receipt) return;
             try {
@@ -682,6 +701,16 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             // to the original write, and late ACKs retain this exact callback.
             return submitOwned({...msg},undefined,observe);
         },
+        async settleConsume(sessionId, messageId) {
+            if (!consumeAck) return undefined;
+            try {
+                const target = await deps.resolveSession(sessionId);
+                const state = target?.submitState?.(messageId);
+                if (state) consumeAck.noteEngineState(messageId, state);
+            } catch { /* no evidence is not an ACK */ }
+            return consumeAck.read(messageId);
+        },
+        getConsumeStates: ids => ids.map(id => consumeAck?.read(id)).filter((v): v is ConsumeView => !!v),
         isReceiptUnverified: messageId => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
             // A restored write-ahead acceptance has no surviving FIFO/observer

@@ -183,6 +183,8 @@ const launchAssistantOnce = async (
     if (ctx.deps.cliManager.hostedRestoreState !== 'ready') return fail('assistant_restore_pending');
     const svc = getAssistantServices();
     const prompt = buildAssistantSystemPrompt({ projects, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: new Date() });
+    // From here a change to the memory files that no store write caused is a hand edit the session has not seen.
+    svc.memory.markSnapshotTaken();
     if (!prompt.withinLimit) return fail('assistant_prompt_too_long', `assistant prompt is ${prompt.length} chars`, { cliType });
 
     try {

@@ -24,6 +24,8 @@ export interface LaunchDefaultEntry extends LaunchDefaultSelection {
     revision: number;
     setBy: 'owner' | 'assistant';
     setAt: number;
+    /** Ordered quota-failover alternatives (<= 3, distinct providers). Absent = none. */
+    fallback?: LaunchDefaultSelection[];
 }
 export interface LaunchDefaultChange {
     at: number;

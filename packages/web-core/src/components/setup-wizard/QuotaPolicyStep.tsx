@@ -1,9 +1,12 @@
 /**
  * QuotaPolicyStep — the setup wizard's quota-aware routing step.
  *
- * Edits RepoMeshPolicy.quotaRouting: the thresholds the coordinator's launch
- * GATE and fitness SPREAD apply to reported provider quota
- * (mesh/mesh-quota-routing.ts). The daemon persists them per mesh through
+ * Edits RepoMeshPolicy.quotaRouting: the scheduling PREFERENCES the coordinator
+ * applies to reported provider quota (reading expiry, headroom preference,
+ * session-urgency headroom — mesh/mesh-quota-routing.ts). The "how much to
+ * leave for the person" floors are NOT here: they are the MACHINE's quota
+ * reserve (pages/machine/QuotaReserveCard.tsx, quota_reserve_set). The daemon
+ * persists these preferences per mesh through
  * mesh_quota_routing_set; this component only produces the overrides object
  * and hands it to onSave.
  *
@@ -30,9 +33,6 @@ import type { RepoMeshQuotaRoutingPolicy } from '@adhdev/daemon-core'
 
 /** Editable draft — every field a string so a cleared input stays cleared. */
 interface QuotaPolicyDraft {
-    sessionMinRemainingPercent: string
-    weeklyMinRemainingPercent: string
-    sessionResetImminentMinutes: string
     staleAfterMinutes: string
     spreadBonusMax: string
     sessionAxisWeeklyHeadroomPercent: string
@@ -46,9 +46,6 @@ interface QuotaPolicyDraft {
  * be dropped by the writer's persistence economy anyway.
  */
 const DISPLAY_DEFAULTS = {
-    sessionMinRemainingPercent: 10,
-    weeklyMinRemainingPercent: 15,
-    sessionResetImminentMinutes: 5,
     staleAfterMinutes: 30,
     spreadBonusMax: 30,
     sessionAxisWeeklyHeadroomPercent: 40,
@@ -64,9 +61,6 @@ function msToMinutes(ms: number | undefined): string {
 function policyToDraft(policy: RepoMeshQuotaRoutingPolicy | null | undefined): QuotaPolicyDraft {
     const p = policy ?? {}
     return {
-        sessionMinRemainingPercent: p.sessionMinRemainingPercent !== undefined ? String(p.sessionMinRemainingPercent) : '',
-        weeklyMinRemainingPercent: p.weeklyMinRemainingPercent !== undefined ? String(p.weeklyMinRemainingPercent) : '',
-        sessionResetImminentMinutes: msToMinutes(p.sessionResetImminentMs),
         staleAfterMinutes: msToMinutes(p.staleAfterMs),
         spreadBonusMax: p.spreadBonusMax !== undefined ? String(p.spreadBonusMax) : '',
         sessionAxisWeeklyHeadroomPercent: p.sessionAxisWeeklyHeadroomPercent !== undefined ? String(p.sessionAxisWeeklyHeadroomPercent) : '',
@@ -84,7 +78,7 @@ function validateField(key: FieldKey, raw: string): string | null {
     if (!trimmed) return null
     const num = Number(trimmed)
     if (!Number.isFinite(num)) return 'notANumber'
-    const isPercent = key === 'sessionMinRemainingPercent' || key === 'weeklyMinRemainingPercent' || key === 'sessionAxisWeeklyHeadroomPercent'
+    const isPercent = key === 'sessionAxisWeeklyHeadroomPercent'
     if (isPercent && (num < 0 || num > 100)) return 'percentRange'
     if (!isPercent && num < 0) return 'negative'
     return null
@@ -92,7 +86,7 @@ function validateField(key: FieldKey, raw: string): string | null {
 
 /**
  * Draft → the overrides object the daemon persists. Blank fields are omitted
- * (not zeroed), and the two duration fields convert back from the minutes the
+ * (not zeroed), and the duration field converts back from the minutes the
  * form shows to the milliseconds the policy stores.
  */
 export function quotaPolicyDraftToOverrides(draft: QuotaPolicyDraft): RepoMeshQuotaRoutingPolicy {
@@ -103,12 +97,6 @@ export function quotaPolicyDraftToOverrides(draft: QuotaPolicyDraft): RepoMeshQu
         const n = Number(trimmed)
         return Number.isFinite(n) ? n : undefined
     }
-    const sessionMin = num(draft.sessionMinRemainingPercent)
-    if (sessionMin !== undefined) out.sessionMinRemainingPercent = sessionMin
-    const weeklyMin = num(draft.weeklyMinRemainingPercent)
-    if (weeklyMin !== undefined) out.weeklyMinRemainingPercent = weeklyMin
-    const resetImminent = num(draft.sessionResetImminentMinutes)
-    if (resetImminent !== undefined) out.sessionResetImminentMs = resetImminent * MS_PER_MINUTE
     const stale = num(draft.staleAfterMinutes)
     if (stale !== undefined) out.staleAfterMs = stale * MS_PER_MINUTE
     const spread = num(draft.spreadBonusMax)
@@ -129,6 +117,8 @@ export interface QuotaPolicyStepProps {
     onSave: (quotaRouting: RepoMeshQuotaRoutingPolicy) => void
     /** The host renders its own title/description (e.g. a collapsible Section). */
     hideHeader?: boolean
+    /** Opens the machine page where the quota reserve (floors) lives; omit to hide the pointer. */
+    onOpenMachineReserve?: () => void
 }
 
 const inputCls = 'w-full rounded-lg border border-border-subtle bg-bg-secondary text-text-primary px-2.5 py-1.5 text-xs'
@@ -139,7 +129,7 @@ const errorInputCls = 'w-full rounded-lg border border-red-500/60 bg-bg-secondar
  * Save button to forget). An invalid value shows its error inline and is not
  * sent; a blank field means "use the default".
  */
-export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave, hideHeader = false }: QuotaPolicyStepProps) {
+export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave, hideHeader = false, onOpenMachineReserve }: QuotaPolicyStepProps) {
     const { t } = useTranslation('common')
     const [draft, setDraft] = useState<QuotaPolicyDraft>(() => policyToDraft(quotaRouting))
 
@@ -185,27 +175,6 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave, h
 
     const fields: Array<{ key: FieldKey; label: string; hint: string; placeholder: number; unit: string }> = [
         {
-            key: 'sessionMinRemainingPercent',
-            label: t('setupWizard.quotaPolicy.sessionMin'),
-            hint: t('setupWizard.quotaPolicy.sessionMinHint'),
-            placeholder: DISPLAY_DEFAULTS.sessionMinRemainingPercent,
-            unit: '%',
-        },
-        {
-            key: 'weeklyMinRemainingPercent',
-            label: t('setupWizard.quotaPolicy.weeklyMin'),
-            hint: t('setupWizard.quotaPolicy.weeklyMinHint'),
-            placeholder: DISPLAY_DEFAULTS.weeklyMinRemainingPercent,
-            unit: '%',
-        },
-        {
-            key: 'sessionResetImminentMinutes',
-            label: t('setupWizard.quotaPolicy.resetImminent'),
-            hint: t('setupWizard.quotaPolicy.resetImminentHint'),
-            placeholder: DISPLAY_DEFAULTS.sessionResetImminentMinutes,
-            unit: t('setupWizard.quotaPolicy.minutes'),
-        },
-        {
             key: 'staleAfterMinutes',
             label: t('setupWizard.quotaPolicy.staleAfter'),
             hint: t('setupWizard.quotaPolicy.staleAfterHint'),
@@ -236,6 +205,15 @@ export default function QuotaPolicyStep({ quotaRouting, saving, error, onSave, h
                     <InfoTip content={t('setupWizard.quotaPolicy.description')} />
                 </h3>
             )}
+
+            <p className="flex flex-wrap items-center gap-1 text-2xs text-text-muted" data-testid="quota-reserve-moved-note">
+                {t('setupWizard.quotaPolicy.reserveMovedToMachine')}
+                {onOpenMachineReserve ? (
+                    <button type="button" className="underline text-text-secondary hover:text-text-primary" onClick={onOpenMachineReserve}>
+                        {t('setupWizard.quotaPolicy.openMachineReserve')}
+                    </button>
+                ) : null}
+            </p>
 
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {fields.map(f => {

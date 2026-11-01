@@ -9,6 +9,7 @@ import {
     reviewTurnVerbDecision,
     type ReviewTriggerInput,
 } from '../../src/assistant/assistant-review.js';
+import { DEFAULT_QUOTA_RESERVE } from '../../src/quota/quota-reserve.js';
 
 /**
  * Idle review turn (design 2026-10-07-assistant-layer.md §4.10.7): trigger
@@ -54,9 +55,16 @@ describe('evaluateReviewTrigger', () => {
     });
 
     it('the quota floor is inclusive at exactly 20 % remaining (research 2026-10-08 Q7)', () => {
-        expect(REVIEW_TRIGGER_RULES.minQuotaRemainingPct).toBe(20);
+        expect(DEFAULT_QUOTA_RESERVE.assistantReviewMinPercent).toBe(20);
         expect(evaluateReviewTrigger(due({ quotaRemainingPct: 20 }))).toEqual({ due: true });
         expect(evaluateReviewTrigger(due({ quotaRemainingPct: 0 }))).toEqual({ due: false, reason: 'low_quota' });
+    });
+
+    it('the floor comes from the machine reserve: raising it to 40 blocks 35 %, lowering it to 20 admits 25 %; unknown still skips', () => {
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: 35, reserveMinPercent: 40 }))).toEqual({ due: false, reason: 'low_quota' });
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: 25, reserveMinPercent: 20 }))).toEqual({ due: true });
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: 25, reserveMinPercent: 30 }))).toEqual({ due: false, reason: 'low_quota' });
+        expect(evaluateReviewTrigger(due({ quotaRemainingPct: null, reserveMinPercent: 0 }))).toEqual({ due: false, reason: 'low_quota' });
     });
 
     it('boundaries are inclusive at exactly 10 min idle and 2 h since the last review; the day is rolling 24 h', () => {
@@ -80,9 +88,9 @@ describe('review input', () => {
 });
 
 describe('review-turn whitelist', () => {
-    const allowed = [ASSISTANT_VERB.memory, ASSISTANT_VERB.skillView, ASSISTANT_VERB.skillManage, ASSISTANT_VERB.projectNote];
+    const allowed = [ASSISTANT_VERB.memory, ASSISTANT_VERB.memorySearch, ASSISTANT_VERB.skillView, ASSISTANT_VERB.skillManage, ASSISTANT_VERB.projectNote];
 
-    it('allows only the four store verbs while the review turn is open', () => {
+    it('allows only the store verbs (memory, read-only memory_search, skills, notes) while the review turn is open', () => {
         for (const v of Object.values(ASSISTANT_VERB)) {
             const d = reviewTurnVerbDecision(v, true);
             if ((allowed as string[]).includes(v)) expect(d).toEqual({ allowed: true });

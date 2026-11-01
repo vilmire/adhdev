@@ -22,6 +22,7 @@ import {
 } from '../../utils/quota-format'
 import type { MachineData, IdeSessionEntry, CliSessionEntry } from './types'
 import { MachineQuotaChip } from './MachineQuotaChip'
+import QuotaReserveCard from './QuotaReserveCard'
 
 /** Hover-title i18n key per chip kind — page styling; chip CONTENT comes from the shared model. */
 const QUOTA_CHIP_TITLE_KEYS: Record<QuotaChipHint, string> = {
@@ -115,6 +116,9 @@ interface OverviewTabProps {
     renderLogs?: () => ReactNode
     /** Open this diagnostics section on first render (old deep links). */
     initialDiagnostics?: MachineDiagnosticsSection | null
+    /** With sendDaemonCommand, mounts the machine quota-reserve card. */
+    machineId?: string
+    sendDaemonCommand?: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
 /**
@@ -152,7 +156,7 @@ function LazyDisclosure({ title, defaultOpen = false, testId, children }: {
 
 export default function OverviewTab({
     machine, ideSessions, cliSessions, daemonVersion,
-    renderHostedRuntimes, renderLogs, initialDiagnostics = null,
+    renderHostedRuntimes, renderLogs, initialDiagnostics = null, machineId, sendDaemonCommand,
 }: OverviewTabProps) {
     const { t } = useTranslation('common')
     const hasRuntimeStats = typeof machine.uptime === 'number'
@@ -186,6 +190,12 @@ export default function OverviewTab({
 
             {/* Plan quota — self-hiding when this machine has reported none. */}
             <PlanQuotaCard machine={machine} />
+
+            {/* Quota reserve — what automatic work must leave for the person.
+                Self-hiding on a daemon without quota_reserve_get. */}
+            {machineId && sendDaemonCommand && (
+                <QuotaReserveCard machineId={machineId} sendDaemonCommand={sendDaemonCommand} />
+            )}
 
             {/* The host facts the page header used to carry. */}
             <Card padding="lg" className="mb-5">

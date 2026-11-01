@@ -28,6 +28,7 @@ import {
     normalizeOutcomeReason,
     normalizeDecisionInput,
     truncateMissionText,
+    RELEASE_LIMITS,
     type MissionItemRef,
     type NormalizedMissionItem,
 } from '@adhdev/mesh-shared';
@@ -50,6 +51,8 @@ export interface StructuredMissionInput {
     status?: string;
     brief?: unknown;
     summary?: string;
+    /** Release CHANGELOG sentence; `''` clears. */
+    releaseNote?: string;
     outcome?: string;
     outcomeReason?: string;
     carryOverTo?: string;
@@ -149,7 +152,7 @@ export function addNormalizedItem(
     }
     const same = items.findByDedupeKey(missionId, n.dedupeKey);
     if (same) {
-        const reviveFrom = n.kind === 'evidence' ? [] : (n.kind === 'decision' ? ['withdrawn', 'superseded', 'expired'] : ['done', 'dropped', 'moved']);
+        const reviveFrom = n.kind === 'evidence' ? [] : (n.kind === 'decision' ? ['withdrawn', 'superseded', 'expired'] : ['done', 'failed', 'dropped', 'moved']);
         if ((reviveFrom as string[]).includes(same.state)) {
             items.updateItem(meshId, same.id, { state: 'open', text: n.text, ...(n.decision ? { decision: n.decision } : {}), movedTo: null, ...(n.refs.length ? { refs: n.refs } : {}) });
             items.appendEvent(meshId, missionId, 'item_state_changed', actor, { itemId: same.id, from: same.state, to: 'open', revived: true });
@@ -348,6 +351,18 @@ export function upsertStructuredMission(
             if (summary.truncated) warnings.push(`summary truncated to ${MISSION_LIMITS.summary} chars`);
         }
 
+        // release note (design 2026-11-01-release-objects L5): one user-visible sentence for the CHANGELOG draft
+        if (typeof input.releaseNote === 'string') {
+            const note = truncateMissionText(input.releaseNote.replace(/\s+/g, ' ').trim(), RELEASE_LIMITS.releaseNote);
+            const prev = items.getStructured(meshId, missionId)?.releaseNote ?? '';
+            if (note !== prev) {
+                items.setStructured(meshId, missionId, { releaseNote: note || null });
+                items.appendEvent(meshId, missionId, 'release_note_changed', actor, { from: prev, to: note });
+                wrote = true;
+            }
+            if (input.releaseNote.replace(/\s+/g, ' ').trim().length > RELEASE_LIMITS.releaseNote) warnings.push(`release_note truncated to ${RELEASE_LIMITS.releaseNote} chars`);
+        }
+
         // items
         const addList = Array.isArray(input.itemsAdd) ? input.itemsAdd : [];
         const updList = Array.isArray(input.itemsUpdate) ? input.itemsUpdate : [];
@@ -454,13 +469,14 @@ export function itemToWire(i: MissionItemRecord): Record<string, unknown> {
 /** Structured fields for one mission row of mesh_mission_list / mission_upsert (only for `structured: true` callers). */
 export function structuredWireFields(
     meshId: string,
-    record: { id: string; summary?: string; outcome?: string; outcomeReason?: string; version?: number; isCarryOver?: boolean },
+    record: { id: string; summary?: string; releaseNote?: string; outcome?: string; outcomeReason?: string; version?: number; isCarryOver?: boolean },
     opts?: { items?: boolean; history?: boolean; counts?: Map<string, { remaining: number; live_check: number; decision: number; evidence: number }> },
 ): Record<string, unknown> {
     const items = store().missionItems();
     const counts = opts?.counts?.get(record.id) ?? (opts?.counts ? { remaining: 0, live_check: 0, decision: 0, evidence: 0 } : items.openCounts(meshId, record.id));
     return {
         ...(record.summary ? { summary: record.summary } : {}),
+        ...(record.releaseNote ? { releaseNote: record.releaseNote } : {}),
         ...(record.outcome ? { outcome: record.outcome } : {}),
         ...(record.outcomeReason ? { outcomeReason: record.outcomeReason } : {}),
         version: record.version ?? 1,

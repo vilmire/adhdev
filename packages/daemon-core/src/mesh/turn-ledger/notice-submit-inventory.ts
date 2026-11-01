@@ -4,8 +4,9 @@
 import {randomUUID} from 'node:crypto';
 import {MAINTENANCE_BOOT_NONCE} from '../../maintenance/cooperative-gate.js';
 import type {TurnLedger} from './ledger.js';
+import {isApplicationAck,type InputConsumeAck} from '../../sessions/input-consume-ack.js';
 export type NoticeWriteState='started'|'submitted'|'uncertain';
-export function createNoticeSubmitInventory(ledger:Pick<TurnLedger,'store'|'selfDaemonId'>){
+export function createNoticeSubmitInventory(ledger:Pick<TurnLedger,'store'|'selfDaemonId'>,consume?:Pick<InputConsumeAck,'read'>){
  const db=ledger.store.db,active=new Set<string>();
  db.exec(`CREATE TABLE IF NOT EXISTS turn_notice_submit_metadata(
   operation_id TEXT PRIMARY KEY,message_id TEXT NOT NULL,mesh_id TEXT NOT NULL,writer TEXT NOT NULL,seq INTEGER NOT NULL,
@@ -29,10 +30,21 @@ export function createNoticeSubmitInventory(ledger:Pick<TurnLedger,'store'|'self
    // infer a safe resend from process death or an old delivery claim.
    const evidence=rows.map(r=>({operationId:r.operation_id,messageId:r.message_id,sessionId:r.session_id,
     durableIntent:true as const,nativeSubmission:r.state==='submitted'?'confirmed' as const:'unknown' as const,
-    consumed:'unknown' as const,applicationAck:'unknown' as const,
+    ...consumeEvidence(consume,r.message_id),
     restored:r.pid!==process.pid||r.boot_nonce!==MAINTENANCE_BOOT_NONCE,
-    retry:'requires_exact_not_consumed_proof' as const}));
+    retry:retryFor(consume,r.message_id)}));
    return {schema:1,evidence,daemonId:ledger.selfDaemonId,pid:process.pid,bootNonce:MAINTENANCE_BOOT_NONCE,active:[...active].sort(),rows,pending:rows.filter(r=>r.state!=='submitted')};
   }};
 }
 export type NoticeSubmitInventory=ReturnType<typeof createNoticeSubmitInventory>;
+
+/** Only the durable consume-ACK journal can lift `consumed`/`applicationAck` out of `unknown`. */
+function consumeEvidence(consume:Pick<InputConsumeAck,'read'>|undefined,messageId:string){
+ let v;try{v=consume?.read(messageId);}catch{v=undefined;}
+ return {consumed:(v?.state==='consumed'?'confirmed':v?.state==='not_consumed'?'refuted':'unknown') as 'confirmed'|'refuted'|'unknown',
+  applicationAck:(isApplicationAck(v)?'confirmed':'unknown') as 'confirmed'|'unknown'};
+}
+function retryFor(consume:Pick<InputConsumeAck,'read'>|undefined,messageId:string){
+ let v;try{v=consume?.read(messageId);}catch{v=undefined;}
+ return (v?.state==='not_consumed'&&v.retries<1?'allowed_once_proven_not_consumed':'requires_exact_not_consumed_proof') as 'allowed_once_proven_not_consumed'|'requires_exact_not_consumed_proof';
+}

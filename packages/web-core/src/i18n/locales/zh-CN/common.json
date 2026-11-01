@@ -1342,6 +1342,60 @@
             "machineTabsLabel": "此 mesh 中的机器",
             "machineTabCounts": "{{nodes}} 个节点 · {{slots}} 个插槽"
         },
+        "handoff": {
+            "title": "迁移主机",
+            "close": "关闭",
+            "open": "迁移主机…",
+            "disabled": "主机迁移为实验功能,此机器上已关闭 (experimental.hostHandoff)。",
+            "explain": "主机保存队列、任务和决策。迁移会把它们复制到所选机器,验证副本后才切换。运行中的工作不会中断,新工作会暂停到完成为止。",
+            "target": "新的主机机器",
+            "pickTarget": "选择机器…",
+            "preflight": "检查",
+            "start": "迁移主机",
+            "retry": "重试",
+            "abort": "取消",
+            "abortDisabled": "切换开始后无法取消 — 请等待新主机确认。",
+            "awaitingAck": "正在等待新主机确认副本…",
+            "done": "主机已迁移。协调器将在新机器上重启。",
+            "aborted": "已取消 — 未做任何更改。{{reason}}",
+            "uncertain": "切换请求已发出,但尚未确认。新主机响应前两台机器都保持冻结;可连接时会自动解决。",
+            "warning": "协调器将在新机器上重启。",
+            "step": {
+                "freeze": "冻结",
+                "transfer": "复制",
+                "verify": "验证",
+                "ack": "确认",
+                "switch": "切换"
+            },
+            "check": {
+                "is_host": "此机器是主机",
+                "target_not_self": "目标是另一台机器",
+                "target_is_member": "目标是此项目的成员",
+                "no_other_handoff": "没有进行中的迁移",
+                "target_online": "目标在线",
+                "peer_capability": "目标支持主机迁移",
+                "target_launchable": "目标可运行协调器",
+                "disk_space": "磁盘空间充足",
+                "snapshot_readable": "项目数据可读取",
+                "no_open_writer_checkpoint": "没有未完成的工作者停止"
+            },
+            "code": {
+                "not_host": "此机器不是主机",
+                "target_is_self": "请选择另一台机器",
+                "target_not_member": "该机器不属于此项目",
+                "handoff_in_progress": "已有迁移在进行",
+                "target_offline": "该机器离线",
+                "peer_capability_unconfirmed": "该机器的 ADHDev 过旧或未开启主机迁移",
+                "insufficient_disk": "磁盘空间不足",
+                "target_not_launchable": "该机器无法运行协调器",
+                "writer_checkpoint_pending": "仍在停止某个工作者 — 请稍后再试",
+                "host_handoff_disabled": "此机器上已关闭",
+                "abort_requires_target_confirmation": "需要先由新主机确认",
+                "hold_failed": "无法暂停新工作",
+                "ack_timeout": "新主机未在时限内确认",
+                "freeze_timeout": "工作未在时限内平稳"
+            }
+        },
         "host": {
             "setHostConfirmTitle": "将 {{name}} 设为主机？",
             "setupNode": "设置节点",
@@ -1538,6 +1592,51 @@
             "showMore": "另有 {{count}} 项",
             "noActiveMissions": "没有活动任务",
             "missionDataUnavailable": "更新守护进程以查看任务",
+            "releases": {
+                "card": "发布",
+                "empty": "还没有发布。创建一个来归组一起上线的任务并跟踪。",
+                "newRelease": "新建发布",
+                "namePlaceholder": "例如 1.0.82-rc.34",
+                "channelPreview": "预览版",
+                "channelStable": "稳定版",
+                "create": "创建",
+                "missionCount": "{{count}} 个任务",
+                "noMissions": "此发布中还没有任务",
+                "needsNote": "{{count}} 个没有发布说明",
+                "liveChecksOpen": "{{count}} 个实机检查未完成",
+                "freeze": "冻结",
+                "markVerified": "标记为已验证",
+                "verifiedSuggested": "这些任务的实机检查已全部完成，可以将该发布标记为已验证。",
+                "verifyWaiting": "还有 {{count}} 个实机检查未完成",
+                "suggested": "可能属于本次部署",
+                "suggestedHint": "这些任务似乎已进入默认分支，但不属于任何发布。不会自动添加。",
+                "add": "添加",
+                "remove": "移除",
+                "moveTo": "移动到…",
+                "draft": "CHANGELOG 草稿",
+                "generateDraft": "生成草稿",
+                "copyDraft": "复制",
+                "draftEmpty": "没有条目。",
+                "draftWarnings": "尚未在默认分支上确认",
+                "draftNeedsWording": "需要面向用户的措辞",
+                "deployFacts": "已部署 {{commit}}",
+                "notDeployed": "尚未部署",
+                "badgeTitle": "发布 {{name}}",
+                "moveBadge": "移到另一个发布",
+                "noRelease": "无发布",
+                "error": "无法更新发布：{{error}}",
+                "unavailable": "查看发布需要更新守护进程。",
+                "statusLabel": "发布状态",
+                "afterDeploy": "此发布已经部署，变更已被记录。",
+                "status": {
+                    "planned": "计划中",
+                    "frozen": "已冻结",
+                    "deployed": "已部署",
+                    "verified": "已验证",
+                    "superseded": "已被取代",
+                    "cancelled": "已取消"
+                }
+            },
             "completedHistory": "已完成 / 已放弃历史",
             "noQueueActivity": "没有队列活动。",
             "noNodes": "此 mesh 中尚无节点。",
@@ -1761,6 +1860,95 @@
         "noDescription": "提供商未提供请求说明。",
         "requestChanged": "请求已更改或已结束，已从列表中移除。"
     },
+    "assistantSkills": {
+        "title": "助手技能",
+        "hint": "每个技能的内容被附加到项目请求的次数。“已附加”表示内容已交给协调者，是否被遵循并未追踪。",
+        "summary": "最近 {{days}} 天：{{sends}} 个项目请求共附加技能 {{attaches}} 次",
+        "empty": "还没有技能。",
+        "attached": "已附加 {{count}} 次",
+        "viewed": "已查看 {{count}} 次",
+        "lastUsed": "上次使用",
+        "neverUsed": "尚未使用",
+        "attachedTooltip": "技能内容被附加到项目请求的次数，不代表是否被遵循。",
+        "pinned": "已固定",
+        "pin": "固定",
+        "unpin": "取消固定",
+        "archive": "归档",
+        "restore": "恢复",
+        "actionFailed": "未完成：{{code}}",
+        "origin": {
+            "starter": "内置",
+            "owner": "你",
+            "agent": "助手",
+            "imported": "已导入"
+        },
+        "status": {
+            "stale": "已过期",
+            "archived": "已归档"
+        }
+    },
+    "assistantMemoryDigest": {
+        "badge": "已记住 {{count}} 项",
+        "badgeTitle": "助手最近保存到记忆中的内容",
+        "title": "最近记住的内容",
+        "close": "关闭",
+        "undo": "撤销",
+        "undoMove": "撤销移动",
+        "undone": "已撤销",
+        "staged": "等待批准",
+        "promoted": "从你的重复回答中学到",
+        "older": "不显示更早的条目。",
+        "failed": "未能撤销：{{code}}",
+        "suggestions": {
+            "title": "等你来决定",
+            "duplicate": "重复的笔记",
+            "similar": "非常相似的笔记",
+            "unused": "6 个月未使用",
+            "mergeKeepFirst": "保留第一条，删除第二条"
+        },
+        "counts": "新增 {{added}} · 修改 {{replaced}} · 删除 {{removed}} · 学到 {{promoted}}",
+        "action": {
+            "add": "已添加",
+            "replace": "已修改",
+            "remove": "已删除",
+            "archive": "已移入归档"
+        },
+        "tier": {
+            "core": "核心笔记",
+            "archive": "归档",
+            "project": "项目归档"
+        },
+        "target": {
+            "memory": "记忆",
+            "user": "用户"
+        },
+        "origin": {
+            "human": "你说的",
+            "relay": "项目输出",
+            "review": "回顾轮次",
+            "review_tainted": "外部输入后的回顾",
+            "owner": "仪表盘(直接)",
+            "decision_promotion": "你的决定",
+            "curator": "整理任务"
+        }
+    },
+    "assistantControl": {
+        "title": "助手 CLI",
+        "switchLabel": "将助手切换到其他 CLI",
+        "providerPlaceholder": "例如 codex-cli",
+        "switchAction": "切换",
+        "switchQueued": "将在当前回复结束后切换。",
+        "switchDone": "已切换。",
+        "failover": "额度用尽时",
+        "failoverNotify": "询问我",
+        "failoverAuto": "自动切换",
+        "failoverOff": "不处理",
+        "roleAssistant": "助手",
+        "roleCoordinator": "协调器",
+        "autoNote": "自动切换每天最多 2 次,间隔至少 6 小时。",
+        "open": "CLI 与额度",
+        "failed": "未完成:{{code}}"
+    },
     "assistantStaged": {
         "badge": "{{count}} 项待批准",
         "badgeTitle": "等待你批准的助手写入",
@@ -1776,6 +1964,15 @@
         "failed": "未完成：{{code}}",
         "noText": "（无文本）",
         "protectedSkill": "修改你编写的技能",
+        "proposedProcedureTitle": "要把这个流程保存为技能吗？",
+        "proposedProcedureEvidence": "最近 {{days}} 天内有 {{count}} 次类似请求",
+        "proposedProcedureSave": "保存",
+        "proposedProcedureEdit": "编辑后保存",
+        "proposedProcedureSaveEdited": "保存修改",
+        "proposedProcedureCancel": "取消",
+        "proposedProcedureDismiss": "不，不再询问",
+        "proposedProcedureDescription": "技能描述",
+        "proposedProcedureBody": "技能内容",
         "driverActivation": {
             "advisory": "声明的访问权限 · 不在操作系统级别强制执行",
             "name": "名称",
@@ -1798,7 +1995,9 @@
             "note": "笔记",
             "launchDefault": "启动默认值",
             "driver_activation": "驱动程序激活",
-            "driver_action_request": "破坏性驱动操作"
+            "driver_action_request": "破坏性驱动操作",
+            "session_control": "会话控制",
+            "host_handoff": "主机迁移"
         },
         "action": {
             "add": "添加",
@@ -1811,7 +2010,11 @@
             "forget": "移除",
             "set": "设置",
             "clear": "清除",
-            "activate": "激活"
+            "activate": "激活",
+            "stop": "停止",
+            "restart": "重启",
+            "switch_provider": "切换 CLI",
+            "start": "开始"
         },
         "origin": {
             "relay": "来自中继",
@@ -1819,11 +2022,23 @@
             "review_tainted": "来自不可信输入后的回顾",
             "human": "来自你",
             "owner": "来自你",
-            "driver": "已安装的驱动程序"
+            "driver": "已安装的驱动程序",
+            "quota": "额度用尽",
+            "assistant": "助手提议"
         },
         "role": {
             "assistant": "助手",
-            "coordinator": "协调者"
+            "coordinator": "协调者",
+            "worker": "工作者"
+        },
+        "control": {
+            "handoff": "将此项目的主机角色和数据迁移到另一台机器。协调器将在那台机器上重启。",
+            "quota": "{{from}} 额度已用尽(剩余 {{fromPct}}%)。切换到 {{to}}(剩余 {{toPct}}%)。",
+            "switch": "将{{role}}切换到 {{to}}。",
+            "simple": "{{action}}{{role}}。",
+            "busy": "它正在工作或等待审批 — 批准会中断它。",
+            "resets": "额度重置时间:{{at}}。",
+            "expires": "将于 {{at}} 过期。"
         }
     },
     "chatPane": {
@@ -3636,6 +3851,35 @@
             "waitingForStats": "正在等待实时统计…",
             "waitingForStatsWithTotal": "正在等待实时统计… · 共 {{total}}"
         },
+        "quotaReserve": {
+            "title": "配额预留",
+            "subtitle": "此机器上自动任务为你保留的套餐配额。手动聊天和协调器启动不会被拦截，只会在下方显示状态。",
+            "usedBy": "适用于此机器上的 Mesh 路由、自动启动、直接派发和空闲时的助手复盘回合。",
+            "machineDefault": "机器默认值",
+            "perProvider": "按提供方",
+            "minutes": "分钟",
+            "fields": {
+                "routingSessionMinPercent": "会话下限",
+                "routingLongMinPercent": "每周/每月下限",
+                "routingSessionResetImminentMs": "重置宽限",
+                "assistantReviewMinPercent": "助手复盘下限"
+            },
+            "withinReserve": "已进入预留范围：剩余 {{remaining}}% / 预留 {{reserve}}%",
+            "remaining": "剩余 {{remaining}}%",
+            "noReading": "暂无配额读数",
+            "resetRow": "恢复默认",
+            "accountOverrides": "{{provider}}：按账号覆盖",
+            "accountLabel": "账号 …{{suffix}}",
+            "migrated": "已将 {{count}} 个 Mesh 的阈值合并到此机器，并保留最保守的值。",
+            "saving": "保存中…",
+            "blankMeansDefault": "留空则沿用机器默认值（灰色显示）。",
+            "loadFailed": "无法加载配额预留：{{error}}",
+            "errors": {
+                "notANumber": "请输入数字。",
+                "percentRange": "必须在 0 到 100 之间。",
+                "negative": "不能为负数。"
+            }
+        },
         "fleetQuota": {
             "title": "各机器的订阅额度",
             "subtitle": "显示每台机器上各订阅 5 小时和每周额度的剩余量。任务队列会跳过快用完的套餐，并优先用掉重置时会过期的余量。",
@@ -4502,6 +4746,19 @@
         "undo": "撤销",
         "change": "更改",
         "mayBeInProgress": "答复已有一段时间，相关工作可能已在进行。",
+        "liveCheckWorks": "正常",
+        "liveCheckDoesntWork": "不正常",
+        "liveCheckNotePlaceholder": "备注(可选,你看到了什么)",
+        "liveCheckFailedBadge": "失败",
+        "liveCheckToastWorks": "已记录:实机检查通过",
+        "liveCheckToastFailed": "已记录:实机检查失败",
+        "liveCheckResolveFailed": "无法记录结果 ({{code}})",
+        "machineFilter": "设备:{{machine}} ✕",
+        "liveChecksPrompt": "{{machine}} 上有 {{count}} 项实机检查待处理 (当前 v{{version}})",
+        "liveChecksPromptOpen": "打开",
+        "liveChecksPromptDismiss": "关闭",
+        "scopeNotRecorded": "未记录验证范围",
+        "scopeNotRecordedHint": "该任务关闭时没有说明检查了什么、没检查什么(结果原因中没有 \"scope:\")。",
         "delivery": {
             "pending": "等待送达",
             "queued": "已进入协调器队列",
@@ -4538,7 +4795,41 @@
         "decisionsWaiting": "{{count}} 项决定待处理",
         "openItems": "{{count}} 个未完成项",
         "liveChecksOpen": "{{count}} 项实机检查",
-        "decisionBadgeLabel": "等你处理的决定"
+        "decisionBadgeLabel": "等你处理的决定",
+        "gitLanded": "已合入",
+        "gitPartial": "部分合入",
+        "gitNotLanded": "未合入",
+        "gitUnknown": "Git 无法确认",
+        "gitTooltip": "此任务引用的提交是否已在默认分支上",
+        "gitTitle": "Git 依据",
+        "gitBase": "对照 {{base}} @ {{sha}}",
+        "gitEvaluated": "{{time}} 检查",
+        "gitRefresh": "重新检查",
+        "gitRefreshing": "检查中…",
+        "gitLandedNote": "“已合入”仅表示所引用的提交已在默认分支上，并不代表工作已验收或完成——实机检查和剩余项需要另行关闭。",
+        "gitUnknownNote": "“无法确认”表示 git 无法给出答案（缺少提交、浅克隆、机器离线），并不等于“未合入”。",
+        "gitPartialUnknown": "部分引用无法检查",
+        "gitMayBeModified": "合入之后，默认分支可能又修改了这些行。",
+        "gitRefStatus": {
+            "contained_ancestor": "已在默认分支上",
+            "contained_patch_equivalent": "已以其他提交合入（cherry-pick、rebase 或 squash）",
+            "not_contained": "不在默认分支上",
+            "unknown": "无法检查"
+        },
+        "gitReason": {
+            "object_missing": "本机找不到该提交",
+            "shallow": "浅克隆——历史不完整",
+            "undeterminable": "git 无法回答",
+            "base_missing": "此处没有默认分支",
+            "branch_not_found": "找不到分支",
+            "base_branch_ref": "引用就是默认分支本身",
+            "gitlink_undeterminable": "无法比较子模块指针",
+            "merge_tree_failed": "比较失败",
+            "node_offline": "机器离线",
+            "no_repo": "本机没有仓库",
+            "budget": "引用过多，未检查",
+            "not_a_git_ref": "不是 git 引用"
+        }
     },
     "approvals": {
         "pageTitle": "审批",
@@ -4580,13 +4871,9 @@
         "quotaPolicy": {
             "blankMeansDefaultShort": "留空 = 默认值",
             "title": "基于配额的路由",
-            "description": "当节点上报其 AI 提供方的剩余配额时，协调器可以跳过接近耗尽的节点，并优先选择余量更多的节点。下列阈值决定何时生效。缺失或过期的读数始终会被忽略，因此不会因为陈旧数据而排除节点。",
-            "sessionMin": "会话下限",
-            "sessionMinHint": "跳过短滚动窗口剩余量低于此值的提供方。",
-            "weeklyMin": "每周下限",
-            "weeklyMinHint": "跳过每周窗口剩余量低于此值的提供方。",
-            "resetImminent": "重置宽限",
-            "resetImminentHint": "若会话窗口将在此时间内重置，则忽略其余量不足。",
+            "description": "当节点上报其 AI 提供方的剩余配额时，协调器可以优先选择余量更多的节点。以下是此 Mesh 的调度偏好。缺失或过期的读数始终会被忽略，因此不会因为陈旧数据而排除节点。",
+            "reserveMovedToMachine": "自动任务为你保留多少配额的下限，现在是机器级设置。",
+            "openMachineReserve": "打开机器配额预留",
             "staleAfter": "读数有效期",
             "staleAfterHint": "仅作回退：读数在其窗口重置前始终有效；此时限仅适用于没有重置时间的读数。",
             "spreadBonus": "余量偏好",

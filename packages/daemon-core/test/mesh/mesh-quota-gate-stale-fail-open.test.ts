@@ -24,8 +24,10 @@ import { quotaSpreadBonusByProvider } from '../../src/mesh/mesh-quota-ranking-re
 const MINUTE = 60_000
 const NOW = 1_800_000_000_000
 
-/** The owner's mesh policy: steer work away from anything under 80% weekly. */
-const POLICY = { weeklyMinRemainingPercent: 80 }
+/** The owner's machine quota reserve: steer work away from anything under 80% weekly. */
+const RESERVE = { version: 1 as const, defaults: { routingLongMinPercent: 80 } }
+/** Mesh policy carries no reserve any more (quota/quota-reserve.ts is the machine's). */
+const POLICY = null
 
 /**
  * A node carrying the owner's observed readings. `ageMinutes` sets how old
@@ -39,6 +41,7 @@ function nodeWithQuota(ageMinutes: number, resetsInMinutes = 4000) {
         id: 'node_owner',
         nodeFacts: {
             reportedAt: NOW,
+            quotaReserve: RESERVE,
             quota: {
                 // 32% used ⇒ 68% left ⇒ BELOW the 80% floor ⇒ should be gated.
                 'claude-cli': {
@@ -161,6 +164,7 @@ describe('2026-08-25 Claude retained-window incident — validity is per reset b
             id: 'incident_node',
             nodeFacts: {
                 reportedAt: INCIDENT_NOW,
+                quotaReserve: RESERVE,
                 quota: {
                     'claude-cli': {
                         provider: 'claude-cli',
@@ -218,11 +222,12 @@ describe('Codex stale rollout reading — provenance makes exhaustion gateable',
     const CAPTURED_9H_AGO = NOW - 9 * 60 * MINUTE
 
     /** A node holding the aged-out rollout snapshot for a given weekly usage. */
-    function staleCodexNode(weeklyUsedPercent: number) {
+    function staleCodexNode(weeklyUsedPercent: number, reserve: typeof RESERVE | null = RESERVE) {
         return {
             id: 'node_codex_stale',
             nodeFacts: {
                 reportedAt: NOW,
+                ...(reserve ? { quotaReserve: reserve } : {}),
                 quota: {
                     'codex-cli': {
                         provider: 'codex-cli',
@@ -258,10 +263,10 @@ describe('Codex stale rollout reading — provenance makes exhaustion gateable',
     it('does not gate a Codex that still has headroom — the threshold decides, not the mark', () => {
         // The reverse regression: provenance makes the windows READABLE, it
         // must not turn every stale snapshot into a block. 30% used ⇒ 70% left,
-        // judged against the DEFAULT weekly floor (the owner's 80% POLICY above
+        // judged against the DEFAULT weekly floor (the owner's 80% RESERVE above
         // is deliberately not applied here — under it 70% would legitimately
         // gate, which would prove nothing about the mark).
-        const node = staleCodexNode(30)
+        const node = staleCodexNode(30, null)
 
         expect(evaluateProviderQuotaGate(node, 'codex-cli', null, NOW)).toBeNull()
         // …and it still earns a spread bonus proportional to that headroom,
@@ -271,7 +276,7 @@ describe('Codex stale rollout reading — provenance makes exhaustion gateable',
 
     it('still ranks a fresh-headroom Codex ahead of an exhausted one', () => {
         const exhausted = staleCodexNode(100)
-        const roomy = staleCodexNode(30)
+        const roomy = staleCodexNode(30, null)
 
         // `gated` carries the block reason alongside the provider; `clear` is
         // the bare list routing actually picks from.

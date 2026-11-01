@@ -1345,6 +1345,60 @@
             "machineTabsLabel": "Máquinas en este mesh",
             "machineTabCounts": "{{nodes}} nodo(s) · {{slots}} ranura(s)"
         },
+        "handoff": {
+            "title": "Trasladar host",
+            "close": "Cerrar",
+            "open": "Trasladar host…",
+            "disabled": "El traslado de host es experimental y está desactivado en esta máquina (experimental.hostHandoff).",
+            "explain": "El host guarda la cola, las misiones y las decisiones. Trasladarlo las copia a la máquina elegida, verifica la copia y solo entonces cambia. El trabajo en curso no se interrumpe; el trabajo nuevo queda retenido hasta terminar.",
+            "target": "Nueva máquina host",
+            "pickTarget": "Elige una máquina…",
+            "preflight": "Comprobar",
+            "start": "Trasladar host",
+            "retry": "Reintentar",
+            "abort": "Cancelar",
+            "abortDisabled": "No se puede cancelar una vez iniciado el cambio — espera la confirmación del nuevo host.",
+            "awaitingAck": "Esperando que el nuevo host confirme la copia…",
+            "done": "El host se trasladó. El coordinador se reinicia en la nueva máquina.",
+            "aborted": "Cancelado — nada cambió. {{reason}}",
+            "uncertain": "El cambio se envió pero aún no está confirmado. Ambas máquinas siguen congeladas hasta que el nuevo host responda; se resuelve solo cuando haya conexión.",
+            "warning": "El coordinador se reiniciará en la nueva máquina.",
+            "step": {
+                "freeze": "Congelar",
+                "transfer": "Copiar",
+                "verify": "Verificar",
+                "ack": "Confirmar",
+                "switch": "Cambiar"
+            },
+            "check": {
+                "is_host": "Esta máquina es el host",
+                "target_not_self": "El destino es otra máquina",
+                "target_is_member": "El destino es miembro de este proyecto",
+                "no_other_handoff": "Ningún traslado en curso",
+                "target_online": "El destino está en línea",
+                "peer_capability": "El destino admite traslados de host",
+                "target_launchable": "El destino puede ejecutar el coordinador",
+                "disk_space": "Espacio en disco suficiente",
+                "snapshot_readable": "Los datos del proyecto son legibles",
+                "no_open_writer_checkpoint": "Ninguna parada de trabajador sin terminar"
+            },
+            "code": {
+                "not_host": "Esta máquina no es el host",
+                "target_is_self": "Elige otra máquina",
+                "target_not_member": "La máquina no es parte de este proyecto",
+                "handoff_in_progress": "Ya hay un traslado en curso",
+                "target_offline": "La máquina está sin conexión",
+                "peer_capability_unconfirmed": "El ADHDev de la máquina es antiguo o tiene el traslado desactivado",
+                "insufficient_disk": "No hay suficiente espacio en disco",
+                "target_not_launchable": "La máquina no puede ejecutar el coordinador",
+                "writer_checkpoint_pending": "Aún se está deteniendo un trabajador — inténtalo más tarde",
+                "host_handoff_disabled": "Desactivado en esta máquina",
+                "abort_requires_target_confirmation": "Primero debe confirmar el nuevo host",
+                "hold_failed": "No se pudo pausar el trabajo nuevo",
+                "ack_timeout": "El nuevo host no confirmó a tiempo",
+                "freeze_timeout": "El trabajo no se asentó a tiempo"
+            }
+        },
         "host": {
             "setHostConfirmTitle": "¿Definir {{name}} como host?",
             "setupNode": "nodo de configuración",
@@ -1541,6 +1595,51 @@
             "showMore": "+{{count}} más",
             "noActiveMissions": "No hay misiones activas",
             "missionDataUnavailable": "Actualiza el daemon para ver las misiones",
+            "releases": {
+                "card": "Versiones",
+                "empty": "Aún no hay versiones. Crea una para agrupar las misiones que se publican juntas y seguirlas.",
+                "newRelease": "Nueva versión",
+                "namePlaceholder": "p. ej. 1.0.82-rc.34",
+                "channelPreview": "Vista previa",
+                "channelStable": "Estable",
+                "create": "Crear",
+                "missionCount": "{{count}} misiones",
+                "noMissions": "Esta versión aún no tiene misiones",
+                "needsNote": "{{count}} sin nota de versión",
+                "liveChecksOpen": "{{count}} comprobaciones en vivo abiertas",
+                "freeze": "Congelar",
+                "markVerified": "Marcar como verificada",
+                "verifiedSuggested": "Todas las comprobaciones en vivo de estas misiones están cerradas. Puedes marcar la versión como verificada.",
+                "verifyWaiting": "Quedan {{count}} comprobaciones en vivo abiertas",
+                "suggested": "Posiblemente parte de este despliegue",
+                "suggestedHint": "Estas misiones parecen estar en la rama por defecto pero no pertenecen a ninguna versión. No se añade nada automáticamente.",
+                "add": "Añadir",
+                "remove": "Quitar",
+                "moveTo": "Mover a…",
+                "draft": "Borrador del CHANGELOG",
+                "generateDraft": "Generar borrador",
+                "copyDraft": "Copiar",
+                "draftEmpty": "Sin entradas.",
+                "draftWarnings": "Sin confirmar en la rama por defecto",
+                "draftNeedsWording": "Necesita redacción para el usuario",
+                "deployFacts": "{{commit}} desplegado",
+                "notDeployed": "Aún no desplegada",
+                "badgeTitle": "Versión {{name}}",
+                "moveBadge": "Mover a otra versión",
+                "noRelease": "Sin versión",
+                "error": "No se pudo actualizar la versión: {{error}}",
+                "unavailable": "Las versiones requieren un daemon más reciente.",
+                "statusLabel": "Estado de la versión",
+                "afterDeploy": "Esta versión ya estaba desplegada; el cambio queda registrado.",
+                "status": {
+                    "planned": "Planificada",
+                    "frozen": "Congelada",
+                    "deployed": "Desplegada",
+                    "verified": "Verificada",
+                    "superseded": "Sustituida",
+                    "cancelled": "Cancelada"
+                }
+            },
             "completedHistory": "Historial de completadas / abandonadas",
             "noQueueActivity": "No hay actividad en la cola.",
             "noNodes": "Todavía no hay nodos en este mesh.",
@@ -1764,6 +1863,95 @@
         "noDescription": "El proveedor no ha enviado una descripción de la solicitud.",
         "requestChanged": "Esta solicitud ha cambiado o ya ha finalizado. Se ha eliminado de la lista."
     },
+    "assistantSkills": {
+        "title": "Habilidades del asistente",
+        "hint": "Cuántas veces el texto de cada habilidad se adjuntó a una solicitud de proyecto. Adjuntado significa que el texto se entregó al coordinador; no se comprueba si se siguió.",
+        "summary": "Últimos {{days}} días: {{attaches}} adjuntos de habilidades en {{sends}} solicitudes de proyecto",
+        "empty": "Aún no hay habilidades.",
+        "attached": "Adjuntada {{count}}×",
+        "viewed": "Vista {{count}}×",
+        "lastUsed": "Último uso",
+        "neverUsed": "Sin usar todavía",
+        "attachedTooltip": "Veces que el texto de la habilidad se adjuntó a una solicitud de proyecto. No indica si se siguió.",
+        "pinned": "Fijada",
+        "pin": "Fijar",
+        "unpin": "Desfijar",
+        "archive": "Archivar",
+        "restore": "Restaurar",
+        "actionFailed": "No realizado: {{code}}",
+        "origin": {
+            "starter": "Incluida",
+            "owner": "Tú",
+            "agent": "Asistente",
+            "imported": "Importada"
+        },
+        "status": {
+            "stale": "Obsoleta",
+            "archived": "Archivada"
+        }
+    },
+    "assistantMemoryDigest": {
+        "badge": "Recordado: {{count}}",
+        "badgeTitle": "Lo que el asistente guardó recientemente en la memoria",
+        "title": "Recordado recientemente",
+        "close": "Cerrar",
+        "undo": "Deshacer",
+        "undoMove": "Deshacer movimiento",
+        "undone": "deshecho",
+        "staged": "pendiente de aprobación",
+        "promoted": "aprendido de tus respuestas repetidas",
+        "older": "No se muestran las entradas anteriores.",
+        "failed": "No se deshizo: {{code}}",
+        "suggestions": {
+            "title": "Para que decidas",
+            "duplicate": "La misma nota dos veces",
+            "similar": "Notas muy parecidas",
+            "unused": "Sin usar desde hace 6 meses",
+            "mergeKeepFirst": "Conservar la primera y quitar la segunda"
+        },
+        "counts": "{{added}} añadidas · {{replaced}} cambiadas · {{removed}} eliminadas · {{promoted}} aprendidas",
+        "action": {
+            "add": "Añadido",
+            "replace": "Cambiado",
+            "remove": "Eliminado",
+            "archive": "Movido al archivo"
+        },
+        "tier": {
+            "core": "cuaderno",
+            "archive": "archivo",
+            "project": "archivo del proyecto"
+        },
+        "target": {
+            "memory": "memoria",
+            "user": "tú"
+        },
+        "origin": {
+            "human": "lo dijiste tú",
+            "relay": "salida del proyecto",
+            "review": "turno de revisión",
+            "review_tainted": "revisión tras entrada no confiable",
+            "owner": "tú (panel)",
+            "decision_promotion": "tus decisiones",
+            "curator": "mantenimiento"
+        }
+    },
+    "assistantControl": {
+        "title": "CLI del asistente",
+        "switchLabel": "Cambiar el asistente a otra CLI",
+        "providerPlaceholder": "p. ej. codex-cli",
+        "switchAction": "Cambiar",
+        "switchQueued": "Se cambiará al terminar la respuesta actual.",
+        "switchDone": "Cambiado.",
+        "failover": "Cuando se agota la cuota",
+        "failoverNotify": "Preguntarme",
+        "failoverAuto": "Cambiar automáticamente",
+        "failoverOff": "No hacer nada",
+        "roleAssistant": "Asistente",
+        "roleCoordinator": "Coordinadores",
+        "autoNote": "El cambio automático se limita a 2 al día y con 6 horas de separación.",
+        "open": "CLI y cuota",
+        "failed": "No se hizo: {{code}}"
+    },
     "assistantStaged": {
         "badge": "{{count}} pendientes",
         "badgeTitle": "Escrituras del asistente pendientes de tu aprobación",
@@ -1779,6 +1967,15 @@
         "failed": "No hecho: {{code}}",
         "noText": "(sin texto)",
         "protectedSkill": "cambia una habilidad que escribiste",
+        "proposedProcedureTitle": "¿Guardar este procedimiento como habilidad?",
+        "proposedProcedureEvidence": "{{count}} solicitudes similares en los últimos {{days}} días",
+        "proposedProcedureSave": "Guardar",
+        "proposedProcedureEdit": "Editar y guardar",
+        "proposedProcedureSaveEdited": "Guardar cambios",
+        "proposedProcedureCancel": "Cancelar",
+        "proposedProcedureDismiss": "No, no volver a preguntar",
+        "proposedProcedureDescription": "Descripción de la habilidad",
+        "proposedProcedureBody": "Texto de la habilidad",
         "driverActivation": {
             "advisory": "Acceso declarado · no se aplica a nivel del sistema operativo",
             "name": "Nombre",
@@ -1801,7 +1998,9 @@
             "note": "Nota",
             "launchDefault": "Inicio predeterminado",
             "driver_activation": "Activación del controlador",
-            "driver_action_request": "Acción destructiva del controlador"
+            "driver_action_request": "Acción destructiva del controlador",
+            "session_control": "Control de sesión",
+            "host_handoff": "Traslado de host"
         },
         "action": {
             "add": "Añadir",
@@ -1814,7 +2013,11 @@
             "forget": "Olvidar",
             "set": "Establecer",
             "clear": "Borrar",
-            "activate": "Activar"
+            "activate": "Activar",
+            "stop": "Detener",
+            "restart": "Reiniciar",
+            "switch_provider": "Cambiar CLI",
+            "start": "Iniciar"
         },
         "origin": {
             "relay": "De un relevo",
@@ -1822,11 +2025,23 @@
             "review_tainted": "De una revisión tras entrada no fiable",
             "human": "Tuyo",
             "owner": "Tuyo",
-            "driver": "Controlador instalado"
+            "driver": "Controlador instalado",
+            "quota": "Cuota agotada",
+            "assistant": "Propuesto por el asistente"
         },
         "role": {
             "assistant": "Asistente",
-            "coordinator": "Coordinador"
+            "coordinator": "Coordinador",
+            "worker": "Trabajador"
+        },
+        "control": {
+            "handoff": "Traslada el rol de host y los datos de este proyecto a otra máquina. El coordinador se reinicia allí.",
+            "quota": "{{from}} se quedó sin cuota (queda {{fromPct}}%). Cambiar a {{to}} (queda {{toPct}}%).",
+            "switch": "Cambiar {{role}} a {{to}}.",
+            "simple": "{{action}}: {{role}}.",
+            "busy": "Ahora está trabajando o esperando una aprobación — aprobar lo interrumpe.",
+            "resets": "La cuota se restablece {{at}}.",
+            "expires": "Caduca {{at}}."
         }
     },
     "chatPane": {
@@ -3639,6 +3854,35 @@
             "waitingForStats": "Esperando estadísticas en vivo…",
             "waitingForStatsWithTotal": "Esperando estadísticas en vivo… · {{total}} en total"
         },
+        "quotaReserve": {
+            "title": "Reserva de cuota",
+            "subtitle": "Cuánta cuota del plan deja el trabajo automático para ti en esta máquina. El chat manual y el inicio del coordinador nunca se bloquean; solo muestran el estado de abajo.",
+            "usedBy": "Se aplica al enrutamiento del mesh, al inicio automático, al envío directo y a los turnos de revisión del asistente en reposo de esta máquina.",
+            "machineDefault": "Valor predeterminado de la máquina",
+            "perProvider": "Por proveedor",
+            "minutes": "min",
+            "fields": {
+                "routingSessionMinPercent": "Mínimo de sesión",
+                "routingLongMinPercent": "Mínimo semanal / mensual",
+                "routingSessionResetImminentMs": "Margen de reinicio",
+                "assistantReviewMinPercent": "Mínimo para revisión del asistente"
+            },
+            "withinReserve": "Dentro de la reserva: queda {{remaining}}% / reserva {{reserve}}%",
+            "remaining": "Queda {{remaining}}%",
+            "noReading": "Sin lectura de cuota",
+            "resetRow": "Restablecer",
+            "accountOverrides": "{{provider}}: ajustes por cuenta",
+            "accountLabel": "Cuenta …{{suffix}}",
+            "migrated": "Se fusionaron los umbrales de {{count}} mesh(es) en esta máquina; se conservó el valor más conservador.",
+            "saving": "Guardando…",
+            "blankMeansDefault": "Déjalo vacío para heredar el valor predeterminado de la máquina (en gris).",
+            "loadFailed": "No se pudo cargar la reserva de cuota: {{error}}",
+            "errors": {
+                "notANumber": "Introduce un número.",
+                "percentRange": "Debe estar entre 0 y 100.",
+                "negative": "No puede ser negativo."
+            }
+        },
         "fleetQuota": {
             "title": "Cuota de suscripción por máquina",
             "subtitle": "Cuánto queda de la ventana de 5 horas y la semanal de cada suscripción en cada máquina. La cola de tareas salta los planes casi agotados y gasta primero la cuota que caducaría sin usar.",
@@ -4505,6 +4749,19 @@
         "undo": "Deshacer",
         "change": "Cambiar",
         "mayBeInProgress": "Se respondió hace un rato: el trabajo puede estar ya en curso.",
+        "liveCheckWorks": "Funciona",
+        "liveCheckDoesntWork": "No funciona",
+        "liveCheckNotePlaceholder": "Nota opcional (lo que viste)",
+        "liveCheckFailedBadge": "Fallido",
+        "liveCheckToastWorks": "Registrado: la comprobación en vivo pasó",
+        "liveCheckToastFailed": "Registrado: la comprobación en vivo falló",
+        "liveCheckResolveFailed": "No se pudo registrar el resultado ({{code}})",
+        "machineFilter": "Equipo: {{machine}} ✕",
+        "liveChecksPrompt": "{{count}} comprobaciones en vivo esperan en {{machine}} (ahora v{{version}})",
+        "liveChecksPromptOpen": "Abrir",
+        "liveChecksPromptDismiss": "Descartar",
+        "scopeNotRecorded": "alcance sin registrar",
+        "scopeNotRecordedHint": "Esta misión se cerró sin indicar qué se comprobó y qué no (sin \"scope:\" en el motivo del resultado).",
         "delivery": {
             "pending": "Entrega pendiente",
             "queued": "En la cola del coordinador",
@@ -4541,7 +4798,41 @@
         "decisionsWaiting": "{{count}} decisiones en espera",
         "openItems": "{{count}} elementos abiertos",
         "liveChecksOpen": "{{count}} comprobaciones en vivo",
-        "decisionBadgeLabel": "Decisiones que esperan por ti"
+        "decisionBadgeLabel": "Decisiones que esperan por ti",
+        "gitLanded": "Integrado",
+        "gitPartial": "Integrado en parte",
+        "gitNotLanded": "No integrado",
+        "gitUnknown": "Git sin respuesta",
+        "gitTooltip": "¿Están en la rama por defecto los commits que referencia esta misión?",
+        "gitTitle": "Evidencia de git",
+        "gitBase": "Comparado con {{base}} @ {{sha}}",
+        "gitEvaluated": "Comprobado {{time}}",
+        "gitRefresh": "Volver a comprobar",
+        "gitRefreshing": "Comprobando…",
+        "gitLandedNote": "Integrado solo significa que los commits referenciados están en la rama por defecto. No significa que el trabajo esté aceptado o terminado: las comprobaciones en vivo y los elementos restantes se cierran aparte.",
+        "gitUnknownNote": "Sin respuesta significa que git no pudo responder (commit ausente, clon superficial, máquina sin conexión). No significa «no integrado».",
+        "gitPartialUnknown": "algunas referencias no se pudieron comprobar",
+        "gitMayBeModified": "Puede que la rama base haya cambiado estas líneas después de integrarse.",
+        "gitRefStatus": {
+            "contained_ancestor": "En la rama por defecto",
+            "contained_patch_equivalent": "Integrado con otro commit (cherry-pick, rebase o squash)",
+            "not_contained": "No está en la rama por defecto",
+            "unknown": "No se pudo comprobar"
+        },
+        "gitReason": {
+            "object_missing": "Commit no encontrado en esta máquina",
+            "shallow": "Clon superficial: historial incompleto",
+            "undeterminable": "Git no pudo responder",
+            "base_missing": "La rama por defecto no está disponible aquí",
+            "branch_not_found": "Rama no encontrada",
+            "base_branch_ref": "La referencia es la propia rama por defecto",
+            "gitlink_undeterminable": "No se pudo comparar el puntero del submódulo",
+            "merge_tree_failed": "La comparación falló",
+            "node_offline": "Máquina sin conexión",
+            "no_repo": "No hay repositorio en esta máquina",
+            "budget": "Demasiadas referencias: sin comprobar",
+            "not_a_git_ref": "No es una referencia de git"
+        }
     },
     "approvals": {
         "pageTitle": "Aprobaciones",
@@ -4583,13 +4874,9 @@
         "quotaPolicy": {
             "blankMeansDefaultShort": "Vacío = predeterminado",
             "title": "Enrutamiento según la cuota",
-            "description": "Cuando un nodo informa cuánta cuota le queda con su proveedor de IA, el coordinador puede omitir los nodos casi agotados y preferir los que tienen más margen. Estos umbrales deciden cuándo ocurre. Las lecturas ausentes o desactualizadas siempre se ignoran, así que ningún nodo queda excluido por datos obsoletos.",
-            "sessionMin": "Mínimo de sesión",
-            "sessionMinHint": "Omitir un proveedor cuya ventana corta tenga menos de esto disponible.",
-            "weeklyMin": "Mínimo semanal",
-            "weeklyMinHint": "Omitir un proveedor cuya ventana semanal tenga menos de esto disponible.",
-            "resetImminent": "Margen de reinicio",
-            "resetImminentHint": "Ignorar una ventana de sesión baja si se reinicia dentro de este tiempo.",
+            "description": "Cuando un nodo informa cuánta cuota le queda con su proveedor de IA, el coordinador puede preferir los nodos con más margen. Estas son preferencias de planificación de este mesh. Las lecturas ausentes o desactualizadas siempre se ignoran, así que ningún nodo queda excluido por datos obsoletos.",
+            "reserveMovedToMachine": "Los mínimos de cuota que el trabajo automático debe dejarte ahora son un ajuste de la máquina.",
+            "openMachineReserve": "Abrir la reserva de cuota de la máquina",
             "staleAfter": "Caducidad de la lectura",
             "staleAfterHint": "Solo como respaldo: una lectura sigue siendo válida hasta que su ventana se restablezca; este límite de edad solo aplica a lecturas sin hora de restablecimiento.",
             "spreadBonus": "Preferencia por margen",

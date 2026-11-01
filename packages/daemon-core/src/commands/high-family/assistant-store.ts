@@ -37,16 +37,21 @@ import { getAssistantServices, type AssistantServices } from '../../assistant/as
 import { getAssistantProjectPorts, type AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
 import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
 import { reviewTurnVerbDecision } from '../../assistant/assistant-review.js';
-import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
+import { projectSlugs, resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp, type StagedNoteWrite } from '../../assistant/note-staging.js';
 import { detectCredential, isReviewOrigin, mustStage, scanWriteContent, type StoreWriteOrigin } from '../../assistant/store-guards.js';
 import { scanHermesHome, importFromHermes, type HermesImportRequest } from '../../assistant/skills/hermes-import.js';
-import type { MemoryOperation, MemoryTarget } from '../../assistant/memory/memory-store.js';
+import type { MemoryOperation, MemoryScope, MemoryTarget } from '../../assistant/memory/memory-store.js';
+import { ARCHIVE_KINDS, type ArchiveKind } from '../../assistant/memory/memory-archive.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import type { SkillManageOp } from '../../assistant/skills/skill-store.js';
+import {
+    ASSISTANT_SKILLS_LIST_COMMAND, importSkillsFromProjectDir, noteSkillManage, noteSkillView, proposalRefusal, skillAdminExtra, skillsListResponse,
+} from './assistant-skill-verbs.js';
 import { createLaunchDefaultsHandlers } from './launch-defaults.js';
 import { readInstalledDriver } from '../../drivers/installed-driver.js';
 import { getLaunchDefaultsCommandPorts } from '../../launch-defaults/ports.js';
+import { getStagedControlStore } from '../../assistant/staged-control.js';
 
 /** The command sources an assistant tool reaches the daemon over (MCP IPC / standalone HTTP). */
 export const ASSISTANT_TOOL_SOURCES = ['ipc', 'standalone'] as const;
@@ -54,6 +59,9 @@ export const ASSISTANT_TOOL_SOURCES = ['ipc', 'standalone'] as const;
 export const ASSISTANT_OWNER_SOURCES = ['p2p', 'ws', 'standalone'] as const;
 /** Owner-only verb for reading and setting persistent memory character limits. */
 export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as const;
+
+/** Search results are stored memory, not instructions; the prefix labels every hit as data. */
+export const MEMORY_HIT_PREFIX = '[memory-hit] ';
 
 /** Result codes that mean "the verb did its job" (refusal codes → success:false). */
 const OK_RESULTS: ReadonlySet<string> = new Set(['applied', 'staged', 'memory_duplicate', 'ok', 'list', 'discarded']);
@@ -338,16 +346,39 @@ export async function applyNote(
 
 // ── tool verbs ──────────────────────────────────────────────────────────────
 
+const MEMORY_SCOPES = ['core', 'archive', 'project'] as const;
+
 function parseMemoryOp(args: any): MemoryOperation | string {
     const action = str(args?.action);
     const target = str(args?.target) as MemoryTarget;
     if (target !== 'memory' && target !== 'user') return 'target must be memory or user';
     const text = rawStr(args?.text);
     const match = rawStr(args?.match);
-    if (action === 'add') return { action, target, content: text ?? '' };
-    if (action === 'replace') return { action, target, match: match ?? '', content: text ?? '' };
-    if (action === 'remove') return { action, target, match: match ?? '' };
-    return 'action must be add, replace or remove';
+    const scope = (str(args?.scope) || 'core') as MemoryScope;
+    if (!(MEMORY_SCOPES as readonly string[]).includes(scope)) return `scope must be one of ${MEMORY_SCOPES.join(', ')}`;
+    const kindRaw = str(args?.kind);
+    if (kindRaw && !(ARCHIVE_KINDS as readonly string[]).includes(kindRaw)) return `kind must be one of ${ARCHIVE_KINDS.join(', ')}`;
+    const kind = kindRaw ? kindRaw as ArchiveKind : undefined;
+    if (action === 'archive') {
+        if (scope !== 'core') return 'archive moves a core entry down; leave scope unset';
+        return { action, target, match: match ?? '', ...(kind ? { kind } : {}) };
+    }
+    const scoped = { ...(scope !== 'core' ? { scope } : {}), ...(kind ? { kind } : {}) };
+    if (action === 'add') return { action, target, content: text ?? '', ...scoped };
+    if (action === 'replace') return { action, target, match: match ?? '', content: text ?? '', ...scoped };
+    if (action === 'remove') return { action, target, match: match ?? '', ...scoped };
+    return 'action must be add, replace, remove or archive';
+}
+
+/** Attach the resolved project to a `scope: project` memory op; a bad ref answers like every project verb. */
+function resolveMemoryProject(svc: AssistantServices, op: MemoryOperation, ref: unknown): { ok: true; op: MemoryOperation; wrap: Record<string, unknown> } | { ok: false; result: CommandRouterResult } {
+    if (op.action === 'archive' || op.scope !== 'project') return { ok: true, op, wrap: {} };
+    const r = resolveAssistantProject(ref, svc.listMeshes());
+    if (!r.ok) {
+        const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
+        return { ok: false, result: { success: false, code: r.code, error: r.code, ...detail } };
+    }
+    return { ok: true, op: { ...op, projectRef: r.mesh.id }, wrap: { project: r.slug, meshId: r.mesh.id } };
 }
 
 function parseSkillOp(args: any): SkillManageOp | string {
@@ -355,7 +386,12 @@ function parseSkillOp(args: any): SkillManageOp | string {
     const name = str(args?.name);
     if (action === 'create') {
         const project = str(args?.project);
-        return { action, name, description: rawStr(args?.description) ?? '', body: rawStr(args?.body) ?? '', ...(project ? { project } : {}) };
+        const proposalId = rawStr(args?.proposalId);
+        const triggers = Array.isArray(args?.triggers) ? args.triggers : undefined;
+        return {
+            action, name, description: rawStr(args?.description) ?? '', body: rawStr(args?.body) ?? '', ...(project ? { project } : {}),
+            ...(triggers ? { triggers } : {}), ...(proposalId !== undefined ? { proposalId } : {}),
+        };
     }
     if (action === 'patch') {
         const op: Extract<SkillManageOp, { action: 'patch' }> = { action, name };
@@ -374,12 +410,48 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const svc = getAssistantServices();
         const gate = assistantToolGate(ASSISTANT_VERB.memory, args, svc);
         if (gate) return gate;
-        const op = parseMemoryOp(args);
-        if (typeof op === 'string') return invalidArgs(op);
+        const parsed = parseMemoryOp(args);
+        if (typeof parsed === 'string') return invalidArgs(parsed);
+        const resolved = resolveMemoryProject(svc, parsed, args?.project);
+        if (!resolved.ok) return resolved.result;
         const w = svc.inputLog.writeContext(readAssistantSessionId(args));
-        const out = svc.memory.apply(op, w.origin, { reviewTurnId: w.reviewTurnId });
+        const out = svc.memory.apply(resolved.op, w.origin, { reviewTurnId: w.reviewTurnId, selfCall: true });
         creditReview(svc, w.reviewTurnId, out.result, 'applied');
-        return respond(out);
+        return respond(out, resolved.wrap);
+    },
+
+    [ASSISTANT_VERB.memorySearch]: async (_ctx, args) => {
+        const svc = getAssistantServices();
+        const gate = assistantToolGate(ASSISTANT_VERB.memorySearch, args, svc);
+        if (gate) return gate;
+        const archive = svc.memory.archive;
+        if (!archive) return respond({ result: 'memory_archive_unavailable' });
+        const scope = (str(args?.scope) || 'all') as 'global' | 'project' | 'all';
+        if (scope !== 'global' && scope !== 'project' && scope !== 'all') return invalidArgs('scope must be global, project or all');
+        const limit = args?.limit === undefined ? undefined : Number(args.limit);
+        let projectRef: string | undefined;
+        const meshes = svc.listMeshes();
+        if (str(args?.project)) {
+            const r = resolveAssistantProject(args.project, meshes);
+            if (!r.ok) {
+                const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
+                return { success: false, code: r.code, error: r.code, ...detail };
+            }
+            projectRef = r.mesh.id;
+        }
+        const found = archive.search(str(args?.query), { scope, ...(projectRef ? { projectRef } : {}), ...(limit !== undefined ? { limit } : {}) });
+        if ('error' in found) return respond({ result: found.error }, { error: found.error });
+        archive.bump('memory_search_calls');
+        if (!found.hits.length) archive.bump('memory_search_zero_hits');
+        const slugs = projectSlugs(meshes);
+        return respond({ result: 'ok' }, {
+            hits: found.hits.map((h) => ({
+                id: h.id, scope: h.scope, ...(h.projectRef ? { project: slugs.get(h.projectRef) ?? h.projectRef } : {}),
+                kind: h.kind, text: `${MEMORY_HIT_PREFIX}${h.text}`, updatedAt: new Date(h.updatedAt).toISOString(), score: h.score,
+            })),
+            truncated: found.truncated,
+            tokensApprox: found.tokensApprox,
+        });
     },
 
     [ASSISTANT_VERB.skillView]: async (_ctx, args) => {
@@ -389,7 +461,10 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const name = str(args?.name);
         if (!name) return invalidArgs('name required');
         const file = rawStr(args?.file);
-        return respond(svc.skills.view(name, file !== undefined ? { file } : {}));
+        const query = rawStr(args?.query);
+        const out = svc.skills.view(name, { ...(file !== undefined ? { file } : {}), ...(query !== undefined ? { query } : {}) });
+        noteSkillView(svc, name, out);
+        return respond(out);
     },
 
     [ASSISTANT_VERB.skillManage]: async (_ctx, args) => {
@@ -398,8 +473,11 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         if (gate) return gate;
         const op = parseSkillOp(args);
         if (typeof op === 'string') return invalidArgs(op);
+        const badProposal = proposalRefusal(svc, op);
+        if (badProposal) return badProposal;
         const w = svc.inputLog.writeContext(readAssistantSessionId(args));
         const out = svc.skills.manage(op, w.origin, { sessionId: w.sessionId, turnId: w.turnId, ...(w.reviewTurnId ? { reviewTurnId: w.reviewTurnId } : {}) });
+        noteSkillManage(svc, op, out);
         creditReview(svc, w.reviewTurnId, out.result, 'applied');
         return respond(out);
     },
@@ -445,8 +523,10 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
                 await drivers.list().catch(() => {});
                 driverActions = drivers.stagedActions();
             }
-            return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
-                launchDefaults: svc.launchDefaults?.list() ?? [], driverActivations: svc.driverStaging?.list() ?? [],
+            const stagedSkills = svc.skills.listStaged();
+            return { success: true, memory: svc.memory.listStaged(), skills: stagedSkills, notes: svc.notes.list(),
+                skillProposals: svc.procedureSignals?.evidenceFor(stagedSkills.filter((r) => r.proposalId).map((r) => r.id)) ?? [],
+                launchDefaults: svc.launchDefaults?.list() ?? [], control: getStagedControlStore().list(), driverActivations: svc.driverStaging?.list() ?? [],
                 driverActions, memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
@@ -455,6 +535,16 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const decision = str(args?.decision);
         if (!id && !reviewTurnId) return invalidArgs('id or reviewTurnId required');
         if (id && reviewTurnId) return invalidArgs('pass id or reviewTurnId, not both');
+        if (id.startsWith('ctl-')) {
+            // Session-control / host-handoff cards: the owner approves this exact card, nothing else.
+            if (Object.keys(args ?? {}).some(key => !['action', 'id', 'decision', '_interactionId', '_meshSenderDaemonId', '_commandSource'].includes(key))) {
+                return invalidArgs('Control-card resolution accepts only id and decision.');
+            }
+            if (decision !== 'apply' && decision !== 'discard' && decision !== 'reject') return invalidArgs('decision must be apply, discard or reject');
+            // Lazy: assistant-session-control imports this module (ASSISTANT_TOOL_SOURCES).
+            const { resolveStagedControl } = await import('./assistant-session-control.js');
+            return resolveStagedControl(ctx, id, decision === 'reject' ? 'discard' : decision);
+        }
         if (id.startsWith('ldf-')) {
             // Defaults consent is only the owner resolving this exact Inbox id.
             // Reject supplied scope/modal/generation/authorization instead of
@@ -475,6 +565,26 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         return resolveStagedOne(ctx, svc, id, decision);
     },
 
+    // Memory digest + undo (design 2026-11-01 §3.2). Owner only: the assistant cannot undo what a person added.
+    [ASSISTANT_VERB.memoryDigest]: async (_ctx, args) => {
+        const svc = getAssistantServices();
+        const sinceMs = args?.sinceMs === undefined ? undefined : Number(args.sinceMs);
+        const limit = args?.limit === undefined ? undefined : Number(args.limit);
+        if ((sinceMs !== undefined && !Number.isFinite(sinceMs)) || (limit !== undefined && !Number.isFinite(limit))) return invalidArgs('sinceMs and limit must be numbers');
+        const digest = svc.memory.digest({ ...(sinceMs !== undefined ? { sinceMs } : {}), ...(limit !== undefined ? { limit } : {}) });
+        return { success: true, result: 'ok', ...digest, suggestions: svc.memory.consolidationSuggestions(), stats: svc.memory.undoStats() };
+    },
+
+    [ASSISTANT_VERB.memoryUndo]: async (_ctx, args) => {
+        const svc = getAssistantServices();
+        const id = str(args?.id);
+        const ts = str(args?.ts);
+        const batchId = str(args?.batchId);
+        if ([id, ts, batchId].filter(Boolean).length !== 1) return invalidArgs('pass exactly one of id, ts or batchId');
+        const out = svc.memory.undo(id ? { id } : ts ? { ts } : { batchId });
+        return respond(out as { result: string } & Record<string, unknown>);
+    },
+
     [ASSISTANT_VERB.storeAdmin]: async (_ctx, args) => {
         const svc = getAssistantServices();
         const target = str(args?.target);
@@ -486,7 +596,9 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
             if (action === 'unpin') return respond(svc.skills.unpin(name));
             if (action === 'clear_review') return respond(svc.skills.clearReviewLock(name));
             if (action === 'restore') return respond(svc.skills.restore(name));
-            return invalidArgs('skill action must be pin, unpin, clear_review or restore');
+            const extra = skillAdminExtra(svc, action, args);
+            if (extra) return extra;
+            return invalidArgs('skill action must be pin, unpin, clear_review, restore, archive or create');
         }
         if (target === 'memory') {
             if (action === 'get_limits') {
@@ -495,13 +607,31 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
             if (action === 'set_limits') {
                 return applyMemoryLimitsUpdate(svc, args);
             }
-            if (action !== 'remove') return invalidArgs('memory action must be remove, get_limits or set_limits');
+            if (action === 'merge') {
+                // A suggested pair: drop one entry (and optionally rewrite the other), as one undoable batch.
+                const file = str(args?.file) as MemoryTarget;
+                if (file !== 'memory' && file !== 'user') return invalidArgs('file must be memory or user');
+                const scope = (str(args?.scope) || 'core') as MemoryScope;
+                if (!(MEMORY_SCOPES as readonly string[]).includes(scope)) return invalidArgs(`scope must be one of ${MEMORY_SCOPES.join(', ')}`);
+                const keep = rawStr(args?.keep);
+                const drop = rawStr(args?.drop);
+                if (!keep?.trim() || !drop?.trim()) return invalidArgs('keep and drop required');
+                const content = rawStr(args?.content);
+                return respond(svc.memory.merge({
+                    target: file, keep, drop, scope,
+                    ...(content !== undefined ? { content } : {}),
+                    ...(str(args?.projectRef) ? { projectRef: str(args?.projectRef) } : {}),
+                }));
+            }
+            if (action !== 'remove') return invalidArgs('memory action must be remove, merge, get_limits or set_limits');
             const file = str(args?.file) as MemoryTarget;
             if (file !== 'memory' && file !== 'user') return invalidArgs('file must be memory or user');
             return respond(svc.memory.apply({ action: 'remove', target: file, match: rawStr(args?.match) ?? '' }, 'owner'));
         }
         return invalidArgs('target must be skill or memory');
     },
+
+    [ASSISTANT_SKILLS_LIST_COMMAND]: async () => skillsListResponse(getAssistantServices()),
 
     [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
         const svc = getAssistantServices();
@@ -519,6 +649,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
 
     [ASSISTANT_VERB.importSkills]: async (ctx, args) => {
         const svc = getAssistantServices();
+        if (str(args?.source) === 'dir') return importSkillsFromProjectDir(svc, args);
         if (str(args?.action) === 'scan') return { success: true, result: 'scan', scan: scanHermesHome(svc.hermesHome) };
         // hermesHome comes from the daemon, never from the request.
         const req: HermesImportRequest = {
@@ -687,11 +818,15 @@ function applyMemoryLimitsUpdate(svc: AssistantServices, args: any): CommandRout
 
 export const assistantStoreSpecs = defineCommandSpecs('high', assistantStoreHandlers, {
     [ASSISTANT_VERB.memory]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+    [ASSISTANT_VERB.memorySearch]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.skillView]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.skillManage]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.projectNote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.stagedResolve]: { sources: [...ASSISTANT_OWNER_SOURCES] },
     [ASSISTANT_VERB.storeAdmin]: { sources: [...ASSISTANT_OWNER_SOURCES] },
     [ASSISTANT_MEMORY_LIMITS_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+    [ASSISTANT_SKILLS_LIST_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
     [ASSISTANT_VERB.importSkills]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+    [ASSISTANT_VERB.memoryDigest]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+    [ASSISTANT_VERB.memoryUndo]: { sources: [...ASSISTANT_OWNER_SOURCES] },
 });

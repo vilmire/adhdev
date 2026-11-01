@@ -119,6 +119,7 @@ import { isWorkerMcpEnabled, mintWorkerTaskToken } from '../../mesh/worker-mcp-i
 import { formatSessionBusyWithTaskToken, SESSION_BUSY_WITH_TASK_CODE } from '../../mesh/mesh-session-busy-dispatch.js';
 import { meshStoreIpcHandlers } from './mesh-store-ipc.js';
 import { meshStatsIpcHandlers } from './mesh-stats-ipc.js';
+import { meshDirectCancel } from './mesh-direct-cancel.js';
 
 // ─── late-binding slot (see file header) ────────────────────────────────────
 
@@ -559,6 +560,7 @@ const missionUpsert: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any
             // upsertMeshMission's own normalizeMissionBrief call does the real work.
             ...(req.brief !== undefined ? { brief: req.brief } : {}),
             ...(req.summary !== undefined ? { summary: req.summary } : {}),
+            ...(req.releaseNote !== undefined ? { releaseNote: req.releaseNote } : {}),
             ...(req.outcome !== undefined ? { outcome: req.outcome } : {}),
             ...(req.outcomeReason !== undefined ? { outcomeReason: req.outcomeReason } : {}),
             ...(req.carryOverTo !== undefined ? { carryOverTo: req.carryOverTo } : {}),
@@ -639,6 +641,8 @@ export const turnLedgerIpcHandlers: Record<string, LowFamilyHandler> = {
     turn_observe: turnObserve,
     mesh_record: meshRecordHandler,
     turn_cancel: turnCancel,
+    // Direct-attempt cancel (MCP mesh_direct_cancel): owner-only, mesh_direct scope, terminal = no-op.
+    mesh_direct_cancel: meshDirectCancel,
     operator_status: operatorStatus,
     turn_query: turnQuery,
     mesh_index_query: meshIndexQuery,
@@ -675,6 +679,7 @@ export const turnLedgerIpcSpecs = defineCommandSpecs('low', withWireArgs(turnLed
     turn_observe: { sources: TURN_IPC_SOURCES },
     mesh_record: { sources: TURN_IPC_SOURCES },
     turn_cancel: { sources: TURN_IPC_SOURCES },
+    mesh_direct_cancel: { sources: TURN_IPC_SOURCES },
     operator_status: { sources: TURN_IPC_SOURCES },
     turn_query: { sources: TURN_IPC_SOURCES },
     mesh_index_query: { sources: TURN_IPC_SOURCES },

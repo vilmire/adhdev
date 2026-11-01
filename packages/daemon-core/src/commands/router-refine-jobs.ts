@@ -321,6 +321,10 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
             if (kind === 'task_completed' && result?.merged === true) {
                 const { attachRefineMergeEvidence } = await import('../mesh/mesh-mission-structured.js');
                 attachRefineMergeEvidence(handle.meshId, handle.targetNodeId, result);
+                // Mission git refs (design 2026-11-01-mission-git-refs §5 ①): the one automatic fetch + re-evaluation
+                // of the mesh's active missions. Read-only projection; never throws, never changes a mission.
+                const { scheduleMissionGitEvalAfterRefine } = await import('../mesh/mission-git-triggers.js');
+                scheduleMissionGitEvalAfterRefine(handle.meshId, { selfDaemonId: self.deps.statusInstanceId, dispatch: self.deps.dispatchMeshCommand });
             }
         } catch (e: any) {
             LOG.warn('Mesh', `[Refinery] Failed to append async refine ledger entry: ${e?.message || e}`);

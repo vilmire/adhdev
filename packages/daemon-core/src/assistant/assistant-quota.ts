@@ -15,6 +15,9 @@
 import type { MeshNodeFactsProviderQuota, MeshNodeFactsQuotaWindow } from '@adhdev/mesh-shared';
 import { antigravityPoolFromLeadingLabel, quotaWindowsForGateTarget } from '../mesh/mesh-quota-routing.js';
 import { QUOTA_ROUTABLE_MAX_AGE_MS, readQuotaCache } from '../quota/refresh.js';
+import { getQuotaReserveConfig } from '../config/config.js';
+import { quotaAccountLineage } from '../quota/account-lineage.js';
+import { resolveQuotaReserve } from '../quota/quota-reserve.js';
 
 export interface AssistantQuotaPort {
     /** Remaining % (0–100) of the CLI's tightest current window, or null when unknown. */
@@ -69,6 +72,22 @@ export const liveAssistantQuotaPort: AssistantQuotaPort = {
         return quotaRemainingPct(readQuotaCache()?.[cliType], now, undefined, model);
     },
 };
+
+/**
+ * The machine reserve's assistant-review floor for the bound assistant CLI:
+ * the % of its tightest window that must remain before an idle review turn
+ * may spend quota. Pool- and account-aware like the routing gate (same
+ * resolver); the cache read is in-memory and the config read is memoized.
+ */
+export function assistantReviewReserveMinPercent(cliType: string, model?: string | null): number {
+    const pool = antigravityPoolFromLeadingLabel(model ?? undefined) ?? null;
+    const lineage = quotaAccountLineage(readQuotaCache()?.[cliType]?.metadata?.accountLineage);
+    return resolveQuotaReserve(getQuotaReserveConfig(), {
+        provider: cliType,
+        pool: cliType === 'antigravity-cli' ? pool : null,
+        accountKey: lineage.kind === 'account' ? lineage.key : null,
+    }).assistantReviewMinPercent;
+}
 
 /**
  * The model name(s) a live assistant session may be running, most specific

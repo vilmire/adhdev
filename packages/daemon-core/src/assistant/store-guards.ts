@@ -181,8 +181,14 @@ export function scanStoredContent(text: string): StoreContentFinding | null {
  *               review (research 2026-10-08 F1).
  *  - `owner`  — a direct owner action (dashboard, import, staged resolve).
  *               Applied without staging; format/budget/secret checks still run.
+ *  - `decision_promotion` — the daemon promoting a repeated owner decision to a
+ *               preference (memory design 2026-11-01 §3.8). Applied, journaled,
+ *               undoable. May write ONLY a `preference` (USER target or archive
+ *               kind `preference`); the memory store refuses anything else.
+ *  - `curator` — the 24 h housekeeping pass (§3.9). Not a person: never touches
+ *               USER.md, never stages, may only remove duplicates / archive.
  */
-export type StoreWriteOrigin = 'human' | 'relay' | 'review' | 'review_tainted' | 'owner';
+export type StoreWriteOrigin = 'human' | 'relay' | 'review' | 'review_tainted' | 'owner' | 'decision_promotion' | 'curator';
 
 /** Kinds of input the daemon delivers into the assistant session. */
 export type AssistantInputSource =
@@ -202,7 +208,15 @@ export type AssistantInputSource =
     | 'first_run'
     | 'previous_session'
     | 'digest'
-    | 'review';
+    | 'review'
+    /**
+     * `[ADHDev memory]` line the daemon writes when the memory changed through a
+     * path other than the assistant's own tool call (memory design §3.6). The
+     * text is the saved memory itself, so it is neutral for write
+     * classification: it never counts as human, and it does not taint a
+     * following human-origin write the way a relay does.
+     */
+    | 'memory_notice';
 
 /**
  * Classify a write from the ordered list of inputs the daemon delivered into
@@ -214,10 +228,14 @@ export type AssistantInputSource =
  * window would reach back past that point cannot prove the window was
  * human-only, so it is `review_tainted` (fail-closed).
  */
-export function classifyWriteOrigin(delivered: readonly AssistantInputSource[], opts: { truncated?: boolean } = {}): StoreWriteOrigin {
+export function classifyWriteOrigin(all: readonly AssistantInputSource[], opts: { truncated?: boolean } = {}): StoreWriteOrigin {
+    // `memory_notice` is the daemon echoing already-validated memory back into
+    // the session; it is neutral (neither human authority nor a taint).
+    const delivered = all.includes('memory_notice') ? all.filter((s) => s !== 'memory_notice') : all;
     const last = delivered[delivered.length - 1];
     if (last === 'review') {
-        const prevReview = delivered.lastIndexOf('review', delivered.length - 2);
+        // (a negative fromIndex counts from the end, so a one-element list would find itself)
+        const prevReview = delivered.length >= 2 ? delivered.lastIndexOf('review', delivered.length - 2) : -1;
         if (prevReview < 0 && opts.truncated) return 'review_tainted';
         const window = delivered.slice(prevReview + 1, delivered.length - 1);
         return window.every((s) => s === 'human') ? 'review' : 'review_tainted';
@@ -244,7 +262,9 @@ export function isReviewOrigin(origin: StoreWriteOrigin): boolean {
  * (research 2026-10-08 "추가 1").
  */
 export function userTargetAllowed(origin: StoreWriteOrigin): boolean {
-    return origin === 'human' || origin === 'review' || origin === 'owner';
+    // `decision_promotion` is allowed here only because the memory store limits
+    // it to preference writes (memory_origin_scope_denied otherwise).
+    return origin === 'human' || origin === 'review' || origin === 'owner' || origin === 'decision_promotion';
 }
 
 // ── File helpers (0600, atomic) ─────────────────────────────────────────────

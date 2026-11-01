@@ -22,7 +22,14 @@ import { migrateMeshTaskOutputs } from './mesh-task-outputs.js';
 import { ensureTurnLedgerSchema } from './turn-ledger/schema.js';
 import { LocalRecordStore } from './mesh-local-record-store.js';
 import { ensureMeshNodeGitStateSchema } from './mesh-node-git-state.js';
+import { ensureProcedureSignalSchema } from './procedure-signal-schema.js';
 import { ensureWorkerSessionBindSchema } from './worker-session-bind-store.js';
+import { ensureInputConsumeAckSchema } from '../sessions/input-consume-ack-schema.js';
+import { ensureMissionRefEvalsSchema } from './mission-ref-evals-schema.js';
+import { ensureAssistantMemorySchema } from './assistant-memory-schema.js';
+import { ensureHostHandoffSchema } from './host-handoff/schema.js';
+import { ensureSessionControlSchema } from '../assistant/session-control-schema.js';
+import { ensureMeshReleaseSchema } from './mesh-release-schema.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 let loggedMigrationFailureFlag = false;
@@ -232,11 +239,23 @@ export function migrate(self: MeshRuntimeStore): void {
     ensureMeshNodeGitStateSchema(self.db);
     // Assistant layer relay threads / rows / daily metrics (additive, idempotent).
     ensureAssistantRelaySchema(self.db);
+    ensureProcedureSignalSchema(self.db);
+    // Assistant memory archive tier + FTS5 index + decision-answer log (additive, idempotent).
+    ensureAssistantMemorySchema(self.db);
     // Worker session binds, hash-keyed, so a session-host-restored worker can
     // still report after a daemon restart (additive, idempotent).
     ensureWorkerSessionBindSchema(self.db);
+    // Durable consume-ACK journal for session input (additive, idempotent).
+    ensureInputConsumeAckSchema(self.db);
+    // Per-ref git containment verdicts of mission item refs (additive, idempotent).
+    ensureMissionRefEvalsSchema(self.db);
+    // Release objects: releases, mission membership, release events, mesh_missions.release_note (additive, idempotent).
+    ensureMeshReleaseSchema(self.db);
     // Session artifacts metadata table (local/P2P only; never projected to cloud status).
     ensureSessionArtifactsSchema(self.db);
+    // Session control + host handoff tables (additive, idempotent; design 2026-11-01).
+    ensureSessionControlSchema(self.db);
+    ensureHostHandoffSchema(self.db);
 }
 
 /**
@@ -382,6 +401,13 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             review_writes_applied INTEGER NOT NULL DEFAULT 0,
             review_writes_approved INTEGER NOT NULL DEFAULT 0,
             relay_gaps INTEGER NOT NULL DEFAULT 0,
+            -- Procedure skills (design 2026-11-01): hints returned / accepted,
+            -- save proposals made / saved / dismissed.
+            skill_hints INTEGER NOT NULL DEFAULT 0,
+            skill_hint_accepts INTEGER NOT NULL DEFAULT 0,
+            skill_proposals INTEGER NOT NULL DEFAULT 0,
+            skill_proposal_saves INTEGER NOT NULL DEFAULT 0,
+            skill_proposal_dismisses INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (day, mesh_id)
         );
 
@@ -402,7 +428,7 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     if (!bodyCols.has('completeness')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN completeness TEXT');
     // Additive columns for tables created before 2026-10-08 (research Q7 / M7).
     const cols = new Set((db.prepare('PRAGMA table_info(assistant_metric_daily)').all() as Array<{ name: string }>).map((r) => r.name));
-    for (const c of ['review_writes_applied', 'review_writes_approved', 'relay_gaps']) {
+    for (const c of ['review_writes_applied', 'review_writes_approved', 'relay_gaps', 'skill_hints', 'skill_hint_accepts', 'skill_proposals', 'skill_proposal_saves', 'skill_proposal_dismisses']) {
         if (!cols.has(c)) db.exec(`ALTER TABLE assistant_metric_daily ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
     }
     // Additive column for relay tables created before 2026-10-10. Existing rows

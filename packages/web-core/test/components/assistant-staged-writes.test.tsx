@@ -67,6 +67,20 @@ function driverActivationAnswer() {
     }] }
 }
 
+describe('assistant-staged model — archive-tier memory writes', () => {
+    it('shows an archive move by the entry it moves and a scoped write by its scope', () => {
+        const items = parseStagedList({
+            success: true,
+            memory: [
+                { kind: 'memory', id: 'mem-a', createdAt: '2026-11-01T01:00:00.000Z', origin: 'relay', op: { action: 'archive', target: 'memory', match: 'legacy cluster' } },
+                { kind: 'memory', id: 'mem-p', createdAt: '2026-11-01T02:00:00.000Z', origin: 'relay', op: { action: 'add', target: 'memory', content: 'small PRs', scope: 'project', projectRef: 'm1' } },
+            ],
+        })!
+        expect(items[0]).toMatchObject({ id: 'mem-a', action: 'archive', text: 'legacy cluster' })
+        expect(items[1]).toMatchObject({ id: 'mem-p', action: 'add', text: 'small PRs', detail: 'project' })
+    })
+})
+
 describe('assistant-staged model', () => {
     it('parses driver activation consent separately and drops malformed access declarations', () => {
         const answer = driverActivationAnswer()

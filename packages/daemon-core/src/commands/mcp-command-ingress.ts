@@ -23,7 +23,17 @@ const ARTIFACT_COMMANDS = new Set([
  * so a handler can refuse MCP-origin callers (owner-decision answers: a
  * coordinator or worker must never answer its own question).
  */
-export const MCP_ATTRIBUTED_COMMANDS: ReadonlySet<string> = new Set(['mission_decision_answer']);
+export const MCP_ATTRIBUTED_COMMANDS: ReadonlySet<string> = new Set(['mission_decision_answer', 'mission_live_check_resolve']);
+
+/**
+ * Release-object commands (design 2026-11-01-release-objects §4): the coordinator, owner and
+ * assistant may call them, a worker may not. Unlike {@link MCP_ATTRIBUTED_COMMANDS} the
+ * coordinator keeps its coordinator scope (the handler reads `isCoordinator` / `meshId`); any
+ * worker credential is recorded as a DENIED capability.
+ */
+export const MCP_ROLE_CLASSIFIED_COMMANDS: ReadonlySet<string> = new Set([
+    'release_upsert', 'release_scope', 'release_list', 'release_record_deploy', 'release_changelog_draft',
+]);
 
 export interface AuthenticatedMcpScope {
     readonly sessionId?: string;
@@ -211,6 +221,19 @@ function resolveBoundMcpScope(
         return { validScope: false };
     }
 
+    if (MCP_ROLE_CLASSIFIED_COMMANDS.has(command)) {
+        // Session-bound principals only (coordinator / assistant); the handler classifies the role.
+        if (!boundSessionId || hasWorkerCredentialFields(args)) return { validScope: false };
+        const roleCoord = getCoordinatorForSession(boundSessionId);
+        const isCoordinator = scopeObj.isCoordinator !== false && Boolean(roleCoord);
+        return {
+            validScope: true,
+            boundSessionId,
+            boundMeshId: (isCoordinator ? roleCoord?.meshId : undefined) || trimString(scopeObj.meshId) || undefined,
+            isCoordinator,
+        };
+    }
+
     const isAssistantCmd = command === 'assistant_artifact_list' || command === 'assistant_artifact_read'
         // attribution-only verb: resolve the session-bound principal; the handler decides who may pass
         || MCP_ATTRIBUTED_COMMANDS.has(command);
@@ -282,7 +305,7 @@ export function attachAuthenticatedMcpCommand<T extends Record<string, unknown>>
     verifyCurrent: () => boolean,
     scope: AuthenticatedMcpScope | string | null,
 ): T {
-    if (!(ARTIFACT_COMMANDS.has(command) || MCP_ATTRIBUTED_COMMANDS.has(command)) || typeof verifyCurrent !== 'function') return args;
+    if (!(ARTIFACT_COMMANDS.has(command) || MCP_ATTRIBUTED_COMMANDS.has(command) || MCP_ROLE_CLASSIFIED_COMMANDS.has(command)) || typeof verifyCurrent !== 'function') return args;
     let live = false;
     try { live = verifyCurrent() === true; } catch { /* fail closed */ }
     const bound = resolveBoundMcpScope(args, command, scope);

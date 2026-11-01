@@ -35,7 +35,7 @@ function makeState(snap: Partial<NeedsYouSnapshot>, answer = vi.fn(async () => (
     const entries = buildNeedsYouEntries(snapshot, [])
     return {
         snapshot, approvals: [], entries, count: needsYouCount(entries), loaded: true, outcomes: {}, busyIds: new Set(),
-        refresh: async () => {}, answer,
+        refresh: async () => {}, answer, resolveLiveCheck: async () => ({ ok: true }),
     }
 }
 

@@ -94,6 +94,8 @@ export interface MissionUpsertRequest {
      */
     structured?: boolean
     summary?: string
+    /** One user/operator-visible sentence for the release CHANGELOG draft (design 2026-11-01-release-objects L5). `''` clears. */
+    releaseNote?: string
     outcome?: string
     outcomeReason?: string
     /** Mission id open items move to when this call closes the mission (default: the carry-over mission). */
@@ -114,6 +116,7 @@ export interface MeshMissionOpenItemCountsWire {
 /** Structured-missions fields (only with `structured: true` on the request). */
 export interface MeshMissionStructuredWire {
     summary?: string
+    releaseNote?: string
     outcome?: string
     outcomeReason?: string
     version?: number
@@ -137,7 +140,7 @@ export interface MissionUpsertResponse {
     result?: Record<string, unknown>
 }
 
-const STRUCTURED_MISSION_KEYS = ['summary', 'outcome', 'outcomeReason', 'version', 'carryOver', 'openItems'] as const
+const STRUCTURED_MISSION_KEYS = ['summary', 'releaseNote', 'outcome', 'outcomeReason', 'version', 'carryOver', 'openItems'] as const
 
 function isOpenItemCountsWire(value: unknown): value is MeshMissionOpenItemCountsWire {
     if (!isRecord(value) || !hasOnlyKeys(value, ['remaining', 'live_check', 'decision', 'evidence'])) return false
@@ -145,7 +148,7 @@ function isOpenItemCountsWire(value: unknown): value is MeshMissionOpenItemCount
 }
 
 function isStructuredMissionFields(value: Record<string, unknown>): boolean {
-    for (const k of ['summary', 'outcome', 'outcomeReason'] as const) {
+    for (const k of ['summary', 'releaseNote', 'outcome', 'outcomeReason'] as const) {
         if (value[k] !== undefined && typeof value[k] !== 'string') return false
     }
     if (value.version !== undefined && !isNonNegativeInt(value.version)) return false
@@ -165,7 +168,7 @@ function isMeshMissionRecordWire(value: unknown): value is MeshMissionRecordWire
 }
 
 function isMissionUpsertRequest(value: unknown): value is MissionUpsertRequest {
-    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'brief', 'structured', 'summary', 'outcome', 'outcomeReason', 'carryOverTo', 'toCarryOver', 'itemsAdd', 'itemsUpdate'])) return false
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'id', 'title', 'goal', 'status', 'brief', 'structured', 'summary', 'releaseNote', 'outcome', 'outcomeReason', 'carryOverTo', 'toCarryOver', 'itemsAdd', 'itemsUpdate'])) return false
     if (value.v !== TURN_IPC_PROTOCOL_VERSION) return false
     if (!isEvidenceIdentifier(value.meshId)) return false
     if (value.id !== undefined && !isEvidenceIdentifier(value.id)) return false
@@ -174,7 +177,7 @@ function isMissionUpsertRequest(value: unknown): value is MissionUpsertRequest {
     if (value.title.trim().length === 0 && value.toCarryOver !== true && value.id === undefined) return false
     if (value.structured !== undefined && typeof value.structured !== 'boolean') return false
     if (value.toCarryOver !== undefined && typeof value.toCarryOver !== 'boolean') return false
-    for (const k of ['summary', 'outcome', 'outcomeReason'] as const) {
+    for (const k of ['summary', 'releaseNote', 'outcome', 'outcomeReason'] as const) {
         if (value[k] !== undefined && typeof value[k] !== 'string') return false
     }
     if (value.carryOverTo !== undefined && !isEvidenceIdentifier(value.carryOverTo)) return false
@@ -324,6 +327,7 @@ export interface MissionListSummaryVerboseWire {
     closeCandidateEmittedAt?: string | null
     /** Structured lists only. */
     summary?: string
+    releaseNote?: string
     outcome?: string
     outcomeReason?: string
     version?: number
@@ -351,6 +355,7 @@ export interface MissionListSummarySlimWire {
     closeCandidateEmittedAt?: string | null
     /** Structured lists only. */
     summary?: string
+    releaseNote?: string
     outcome?: string
     outcomeReason?: string
     version?: number

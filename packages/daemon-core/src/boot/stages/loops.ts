@@ -36,6 +36,7 @@ import { appendMeshHandoff } from '../../seqscribe/mesh-publisher.js';
 import { getMeshWithCache } from '../../mesh/mesh-queue-assignment.js';
 import { startContinuousAutoFastForwardScheduler } from '../../mesh/mesh-auto-fast-forward.js';
 import { claimPendingQueues, startMeshHousekeeping } from '../../mesh/mesh-housekeeping-tick.js';
+import { startHostHandoffTicker } from '../../commands/high-family/mesh-host-handoff.js';
 import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
 import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
@@ -308,6 +309,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // before hosted-session restore: a restored session's `registered` edge and
     // any hold that expired while the daemon was down are both just a tick.
     const stopNewWorkHold = startNewWorkHoldLifecycle(components);
+    const stopHostHandoff = startHostHandoffTicker(components);
     startTurnLoops(components as TurnWiredComponents);
 
     let disposed = false;
@@ -364,6 +366,7 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
         try { s7.instanceManager.stopTicking(); } catch { /* noop */ }
         s7.cdpInitializer.stop();
         stopNewWorkHold();
+        stopHostHandoff();
         stopTurnLoops(components as TurnWiredComponents);
         try { s7.router.meshNodeStatePusher.stop(); } catch { /* noop */ }
         try { s7.router.localMeshNodeGitWatch.stop(); } catch { /* noop */ }

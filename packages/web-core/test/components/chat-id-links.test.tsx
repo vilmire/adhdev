@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { splitTextByChatIds, type ChatIdResolver, type ChatIdTarget } from '../../src/components/ChatMessageList/chat-id-links'
 import { ChatIdLinkContext, type ChatIdLinkApi } from '../../src/components/ChatMessageList/chat-id-link-context'
 import { ChatMarkdownBody, RowBodyView } from '../../src/components/ChatMessageList/chat-row-content'
-import { ChatIdLinkProvider, chatIdTargetHref } from '../../src/components/ChatMessageList/ChatIdLinkProvider'
+import { ChatIdLinkProvider, chatIdTargetHref, clearKnownArtifactsForTest } from '../../src/components/ChatMessageList/ChatIdLinkProvider'
 import { TransportProvider } from '../../src/context/TransportContext'
 import { NeedsYouStateProvider, type NeedsYouState } from '../../src/context/NeedsYouContext'
 import { EMPTY_NEEDS_YOU_SNAPSHOT } from '../../src/components/needs-you/needs-you-model'
@@ -33,7 +33,7 @@ const resolve: ChatIdResolver = id => known[id] ?? null
 
 let container: HTMLDivElement
 let root: Root
-beforeEach(() => { container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container) })
+beforeEach(() => { clearKnownArtifactsForTest(); container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container) })
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks() })
 const render = (n: React.ReactNode) => act(async () => { root.render(n) })
 
@@ -131,7 +131,7 @@ describe('ChatIdLinkProvider (real sources)', () => {
 
     it('resolves decisions / mesh missions / tasks / artifacts, rejects the rest, navigates on click', async () => {
         primeCoordinatorMeshStatus('meshY', { meshId: 'meshY', meshName: 'Y', nodes: [], missions: [{ id: MISSION }], queue: { tasks: [{ id: TASK }] } } as any, 'daemonY')
-        const sendCommand = vi.fn(async () => ({ success: true, attachments: [], hasMore: false }))
+        const sendCommand = vi.fn(async () => ({ success: true, attachments: [{ artifactId: ART, sha256: 'a', kind: 'markdown', mime: 'text/markdown', filename: 'n.md', title: 'N', sizeBytes: 1 }], hasMore: false }))
         await render(
             <MemoryRouter initialEntries={['/dashboard']}>
                 <TransportProvider value={{ sendCommand }}>
@@ -151,7 +151,7 @@ describe('ChatIdLinkProvider (real sources)', () => {
         expect(container.querySelector('[data-testid="where"]')?.textContent).toBe(`/mesh?mesh=meshY&tab=tasks&task=${TASK}`)
     })
 
-    it('artifact click that finds nothing says so instead of opening a viewer', async () => {
+    it('an invented art_ id the host does not list stays plain text (no link, no button)', async () => {
         const sendCommand = vi.fn(async () => ({ success: true, attachments: [], hasMore: false }))
         await render(
             <MemoryRouter>
@@ -160,10 +160,35 @@ describe('ChatIdLinkProvider (real sources)', () => {
                 </TransportProvider>
             </MemoryRouter>,
         )
-        await act(async () => { container.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
         expect(sendCommand.mock.calls.some(c => (c as any[])[1] === 'artifact_list')).toBe(true)
-        expect(document.querySelector('[data-testid="artifact-fullscreen-viewer"]')).toBeNull()
-        expect(container.querySelector('[role="alert"]')?.textContent).toContain('was not found')
+        expect(container.querySelector('[data-chat-id-link]')).toBeNull()
+        expect(container.querySelector('button')).toBeNull()
+        expect(container.textContent).toContain(ART)
+    })
+
+    it('a chat that names no art_ id sends no artifact_list (the sweep is demand-driven)', async () => {
+        const sendCommand = vi.fn(async () => ({ success: true, attachments: [], hasMore: false }))
+        await render(
+            <MemoryRouter>
+                <TransportProvider value={{ sendCommand }}>
+                    <ChatIdLinkProvider daemonId="daemonN" sessionId="s0">{md('plain text, no ids here')}</ChatIdLinkProvider>
+                </TransportProvider>
+            </MemoryRouter>,
+        )
+        expect(sendCommand.mock.calls.some(c => (c as any[])[1] === 'artifact_list')).toBe(false)
+    })
+
+    it('an art_ id becomes a link once the background sweep lists it', async () => {
+        const attachment = { artifactId: ART, sha256: 'abc', kind: 'markdown', mime: 'text/markdown', filename: 'n.md', title: 'N', sizeBytes: 5 }
+        const sendCommand = vi.fn(async () => ({ success: true, attachments: [attachment], hasMore: false }))
+        await render(
+            <MemoryRouter>
+                <TransportProvider value={{ sendCommand }}>
+                    <ChatIdLinkProvider daemonId="daemonS" sessionId="s3">{md(`x ${ART}`)}</ChatIdLinkProvider>
+                </TransportProvider>
+            </MemoryRouter>,
+        )
+        expect(container.querySelector('[data-chat-id-link="artifact"]')).not.toBeNull()
     })
 
     it('artifact click fetches and opens the fullscreen viewer', async () => {

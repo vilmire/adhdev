@@ -36,9 +36,11 @@ function writeCurrentAccount(accountUuid = 'fixture-account-a', organizationUuid
 }
 
 function quotaGate(quota: Awaited<ReturnType<typeof fetch>>) {
+    // The 80% long-window floor is the node's machine quota reserve (not mesh policy).
     return evaluateProviderQuotaGate({ id: 'fixture-node', nodeFacts: {
         reportedAt: NOW, quota: { 'claude-cli': quota },
-    } }, 'claude-cli', { weeklyMinRemainingPercent: 80 }, NOW);
+        quotaReserve: { version: 1, defaults: { routingLongMinPercent: 80 } },
+    } }, 'claude-cli', null, NOW);
 }
 
 function writeSnapshot(overrides: Record<string, unknown> = {}): void {

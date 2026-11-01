@@ -28,6 +28,7 @@
     "mesh_enqueue_batch",
     "mesh_view_queue",
     "mesh_queue_cancel",
+    "mesh_direct_cancel",
     "mesh_queue_requeue",
     "mesh_queue_revise",
     "mesh_send_task",
@@ -50,6 +51,7 @@
     "mesh_attach_remote",
     "mesh_clone_node",
     "mesh_remove_node",
+    "mesh_retry_node_bootstrap",
     "mesh_cleanup_worktree_nodes",
     "mesh_refine_node",
     "mesh_refine_batch",
@@ -62,6 +64,12 @@
     "mesh_reconcile_ledger",
     "mesh_mission_upsert",
     "mesh_mission_list",
+    "mesh_mission_git_eval",
+    "mesh_release_upsert",
+    "mesh_release_scope",
+    "mesh_release_list",
+    "mesh_release_record_deploy",
+    "mesh_release_changelog_draft",
     "mesh_review_inbox",
     "mesh_node_slots",
     "driver_list",
@@ -83,6 +91,7 @@
     "project_attach_remote",
     "discover_repos",
     "memory",
+    "memory_search",
     "skill_view",
     "skill_manage",
     "project_note",
@@ -93,6 +102,7 @@
     "artifact_list",
     "artifact_read",
     "decision_answer",
-    "decision_request"
+    "decision_request",
+    "session_control"
   ]
 }

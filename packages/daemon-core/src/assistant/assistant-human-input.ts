@@ -58,6 +58,8 @@ export interface SessionChatInputReport {
     outcome: SubmitOutcome;
     /** Router-stamped `_unverifiedDashboardInput` (no-auth standalone dashboard, source `ipc`). */
     unverified?: boolean;
+    /** The submitted text, for the local recurring-procedure detector only (never logged or sent anywhere). */
+    text?: string;
 }
 
 export interface SessionTerminalInputReport {

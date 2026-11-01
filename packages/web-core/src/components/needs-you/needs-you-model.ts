@@ -40,6 +40,8 @@ export interface NeedsYouLiveCheck {
     itemId: string
     text: string
     machine?: string
+    /** `failed` = the owner reported "doesn't work" (older daemons omit it: open). */
+    state?: 'open' | 'failed'
     createdAt: string
     carryOver?: boolean
 }
@@ -64,6 +66,9 @@ export interface NeedsYouMissionStructure {
     meshId: string
     missionId: string
     summary?: string
+    /** Closed mission: the recorded outcome and its reason. */
+    outcome?: string
+    outcomeReason?: string
     openItems: { remaining: number; live_check: number; decision: number; evidence: number }
     carryOver?: boolean
 }
@@ -82,6 +87,7 @@ export const EMPTY_NEEDS_YOU_SNAPSHOT: NeedsYouSnapshot = { decisions: [], liveC
 
 export const NEEDS_YOU_LIST_COMMAND = 'mission_decisions_list'
 export const NEEDS_YOU_ANSWER_COMMAND = 'mission_decision_answer'
+export const NEEDS_YOU_LIVE_CHECK_COMMAND = 'mission_live_check_resolve'
 
 // ─── parsing ──────────────────────────────────────────────────────────────
 
@@ -139,6 +145,7 @@ export function parseNeedsYouList(raw: unknown, daemonId: string): NeedsYouSnaps
             daemonId, meshId: s(c.meshId), missionId: s(c.missionId), missionTitle: s(c.missionTitle),
             itemId: s(c.itemId), text: s(c.text),
             ...(s(c.machine) ? { machine: s(c.machine) } : {}),
+            ...(c.state === 'failed' ? { state: 'failed' as const } : {}),
             createdAt: s(c.createdAt),
             ...(c.carryOver === true ? { carryOver: true } : {}),
         })
@@ -172,6 +179,8 @@ export function parseNeedsYouList(raw: unknown, daemonId: string): NeedsYouSnaps
         missions.push({
             daemonId, meshId: s(m.meshId), missionId: s(m.missionId),
             ...(s(m.summary) ? { summary: s(m.summary) } : {}),
+            ...(s(m.outcome) ? { outcome: s(m.outcome) } : {}),
+            ...(s(m.outcomeReason) ? { outcomeReason: s(m.outcomeReason) } : {}),
             openItems: { remaining: n('remaining'), live_check: n('live_check'), decision: n('decision'), evidence: n('evidence') },
             ...(m.carryOver === true ? { carryOver: true } : {}),
         })
@@ -307,6 +316,8 @@ export interface NeedsYouFilter {
     kind: NeedsYouKind | 'all'
     /** Project (mesh) id, or 'all'. Approvals carry no project and are hidden while one is chosen. */
     meshId: string | 'all'
+    /** Live checks tagged with this machine only (case-insensitive); other kinds are hidden while set. */
+    machine?: string
 }
 
 export function entryMeshId(e: NeedsYouEntry): string | null {
@@ -314,7 +325,32 @@ export function entryMeshId(e: NeedsYouEntry): string | null {
 }
 
 export function filterNeedsYou(entries: readonly NeedsYouEntry[], f: NeedsYouFilter): NeedsYouEntry[] {
-    return entries.filter(e => (f.kind === 'all' || entryFilterKind(e) === f.kind) && (f.meshId === 'all' || entryMeshId(e) === f.meshId))
+    const machine = f.machine?.trim().toLowerCase()
+    return entries.filter(e => (f.kind === 'all' || entryFilterKind(e) === f.kind) && (f.meshId === 'all' || entryMeshId(e) === f.meshId)
+        && (!machine || (e.kind === 'live_check' && (e.check.machine ?? '').trim().toLowerCase() === machine)))
+}
+
+/** Marker a coordinator puts at the start of `outcome_reason` to state what a closed mission did / did not verify. */
+export const MISSION_SCOPE_MARKER = 'scope:'
+
+/** True when the outcome reason carries an explicit `scope:` statement (what was checked / not checked). */
+export function hasMissionScopeStatement(reason: string | undefined): boolean {
+    return !!reason && /(^|[\s;.(])scope\s*:/i.test(reason)
+}
+
+/** Closed mission (has an outcome) whose reason lacks a `scope:` statement → the muted "scope not recorded" chip. */
+export function missionScopeNotRecorded(m: { outcome?: string; outcomeReason?: string } | undefined): boolean {
+    return !!m?.outcome && !hasMissionScopeStatement(m.outcomeReason)
+}
+
+/** Open live checks per machine name (case-insensitive key) — drives the post-deploy prompt. */
+export function countLiveChecksByMachine(checks: readonly Pick<NeedsYouLiveCheck, 'machine'>[]): Map<string, number> {
+    const out = new Map<string, number>()
+    for (const c of checks) {
+        const key = (c.machine ?? '').trim().toLowerCase()
+        if (key) out.set(key, (out.get(key) ?? 0) + 1)
+    }
+    return out
 }
 
 /** What the nav badge counts: open decisions (incl. close confirmations) + approvals. */
@@ -343,7 +379,7 @@ export function planRecommendedAnswers(entries: readonly NeedsYouEntry[]): Recom
 
 // ─── deep link ──────────────────────────────────────────────────────────────
 
-export interface NeedsYouDeepLink { meshId?: string; decisionId?: string; choose?: string }
+export interface NeedsYouDeepLink { meshId?: string; decisionId?: string; choose?: string; /** Live checks of this machine only. */ machine?: string }
 
 /** Query param that keeps the To-do drawer open on any route. */
 export const TODO_DRAWER_PARAM = 'todo'
@@ -365,7 +401,7 @@ export function withTodoDrawer(search: string): string {
 /** Search string with the drawer and its deep-link params (`todo`, `decision`, `choose`, `mesh`) removed. */
 export function withoutTodoDrawer(search: string): string {
     const p = new URLSearchParams(search)
-    for (const k of [TODO_DRAWER_PARAM, 'decision', 'choose', 'mesh']) p.delete(k)
+    for (const k of [TODO_DRAWER_PARAM, 'decision', 'choose', 'mesh', 'machine']) p.delete(k)
     const out = p.toString()
     return out ? `?${out}` : ''
 }
@@ -377,7 +413,8 @@ export function parseNeedsYouQuery(search: string): NeedsYouDeepLink {
     const meshId = get('mesh')
     const decisionId = get('decision')
     const choose = get('choose')
-    return { ...(meshId ? { meshId } : {}), ...(decisionId ? { decisionId } : {}), ...(choose && decisionId ? { choose } : {}) }
+    const machine = get('machine')
+    return { ...(meshId ? { meshId } : {}), ...(decisionId ? { decisionId } : {}), ...(choose && decisionId ? { choose } : {}), ...(machine ? { machine } : {}) }
 }
 
 // ─── labels ─────────────────────────────────────────────────────────────────

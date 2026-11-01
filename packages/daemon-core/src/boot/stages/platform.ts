@@ -101,6 +101,16 @@ export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage
         }
     } catch { /* best-effort — the resolver's fallback chain still applies */ }
 
+    // One-shot, idempotent: per-mesh quota thresholds → the machine quota reserve
+    // (conflicts take the most conservative value). Runs before anything reads
+    // meshes.json for routing so the gate never sees both sources.
+    try {
+        const { migrateMeshQuotaThresholdsToMachineReserve } = await import('../../config/mesh-quota-reserve-migration.js');
+        migrateMeshQuotaThresholdsToMachineReserve();
+    } catch (e: any) {
+        LOG.warn('QuotaReserve', `Mesh quota threshold migration failed (will retry next boot): ${e?.message || e}`);
+    }
+
     // Re-read AFTER the migration (and after the env-override read above,
     // which ran too early to see it).
     const appConfig = loadConfig();

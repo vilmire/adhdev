@@ -6,6 +6,7 @@
  */
 import { meshNodeIdMatches, type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { readQuotaCache } from '../quota/refresh.js';
+import { getQuotaReserveConfig } from '../config/config.js';
 import { resolveQuotaRoutingPolicy, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 
@@ -18,6 +19,11 @@ interface LiveLocalQuotaSource {
      *  isLocalAutoLaunchNode), memoized per node object by
      *  liveLocalQuotaForRouting so a ranking pass pays one verdict per node. */
     isLocalNode(node: any): boolean;
+    /** THIS machine's stored quota reserve (config, memoized), captured when
+     *  the routing context was built — a local node is judged by the live
+     *  config, never by its possibly-stale nodeFacts copy. Undefined = code
+     *  defaults. */
+    reserve?: unknown;
 }
 
 /** Caller-supplied local-machine provider-enablement oracle, injected the same
@@ -66,8 +72,11 @@ export function liveLocalQuotaForRouting(
     const entries = readQuotaCache();
     if (!entries) return null;
     const verdicts = new Map<any, boolean>();
+    let reserve: unknown;
+    try { reserve = getQuotaReserveConfig(); } catch { reserve = undefined; }
     return {
         entries,
+        reserve,
         isLocalNode(node: any): boolean {
             let verdict = verdicts.get(node);
             if (verdict === undefined) {
@@ -184,6 +193,25 @@ export function quotaEntryFor(
     if (direct) return direct;
     const sourceNode = cloneSourceNodeFor(node, context);
     return sourceNode ? directQuotaEntryFor(sourceNode, providerType) : null;
+}
+
+/**
+ * The RAW quota reserve the gate must apply to `node`'s snapshots: the live
+ * local config when the node is this daemon's, otherwise the reserve the node
+ * reported in its facts bundle (or its worktree-clone source's). Absent →
+ * undefined → code defaults, i.e. an older node behaves exactly as before the
+ * reserve existed.
+ */
+export function reserveRawForNode(node: any, context?: QuotaFactsContext | null): unknown {
+    const live = context?.liveLocalQuota;
+    const sourceNode = cloneSourceNodeFor(node, context);
+    if (live && (live.isLocalNode(node) || (sourceNode !== undefined && live.isLocalNode(sourceNode)))) {
+        return live.reserve;
+    }
+    const direct = node?.nodeFacts?.quotaReserve;
+    if (direct && typeof direct === 'object') return direct;
+    const fromSource = sourceNode?.nodeFacts?.quotaReserve;
+    return fromSource && typeof fromSource === 'object' ? fromSource : undefined;
 }
 
 export function cloneSourceNodeFor(node: any, context?: QuotaFactsContext | null): any | undefined {

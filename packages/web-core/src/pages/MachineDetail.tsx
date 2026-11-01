@@ -622,6 +622,8 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
                                 ideSessions={ideSessions}
                                 cliSessions={cliSessions}
                                 daemonVersion={machineEntry?.version}
+                                machineId={machineId}
+                                sendDaemonCommand={sendDaemonCommand}
                                 initialDiagnostics={initialDiagnostics}
                                 renderHostedRuntimes={() => (
                                     <SessionHostPanel

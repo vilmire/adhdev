@@ -299,7 +299,7 @@ export interface RepoMeshPolicy {
 }
 
 /**
- * Quota-aware routing thresholds (RepoMeshPolicy.quotaRouting). Every field is
+ * Quota-aware routing PREFERENCES (RepoMeshPolicy.quotaRouting). Every field is
  * optional; a missing field resolves to DEFAULT_QUOTA_ROUTING_POLICY.
  */
 export interface RepoMeshQuotaRoutingPolicy {
@@ -319,27 +319,10 @@ export interface RepoMeshQuotaRoutingPolicy {
      * Generous enough to absorb reporter↔coordinator clock skew, as before.
      */
     staleAfterMs?: number;
-    /**
-     * Skip a (node, provider) whose SESSION window (the short ~5h rolling
-     * window) has less than this percent remaining. Defaults to 10 — the short
-     * window recovers quickly, so the bar is low.
-     */
-    sessionMinRemainingPercent?: number;
-    /**
-     * RESET-IMMINENT relaxation for the session gate: when the session
-     * window's reset is less than this far away, a session-low block is waived
-     * — the quota the task needs is about to reappear, so holding the claim
-     * would just idle the mesh. Defaults to 5 min. Applies ONLY to the session
-     * window: a weekly reset is days away by construction, so the weekly gate
-     * never relaxes.
-     */
-    sessionResetImminentMs?: number;
-    /**
-     * Skip a (node, provider) whose supported long window (7d or 30d) has
-     * less than this percent remaining. Defaults to 15. The weekly wire key
-     * is retained for compatibility; monthly readings keep their own axis.
-     */
-    weeklyMinRemainingPercent?: number;
+    // ★The "how much to leave" thresholds (session / long-window floors and the
+    // reset-imminent waiver) are NOT mesh policy: they are the MACHINE's quota
+    // reserve (quota/quota-reserve.ts, config.quotaReserve). Only scheduling
+    // preferences remain here.
     /**
      * Upper bound of the quota-headroom bonus added to a slot's task-fitness
      * score, proportional to remaining quota. Defaults to 30 — deliberately
@@ -359,7 +342,7 @@ export interface RepoMeshQuotaRoutingPolicy {
      * weekly axis governs unchanged — when the weekly budget is the binding
      * constraint, chasing session expiry would drain the weekly remainder
      * early. Defaults to 40: it must sit clearly above the weekly GATE floor
-     * (weeklyMinRemainingPercent, 15) for "headroom" to mean anything — a
+     * (the machine reserve's routingLongMinPercent, 15) for "headroom" to mean anything — a
      * candidate only just above the gate is protected, not harvested.
      */
     sessionAxisWeeklyHeadroomPercent?: number;
@@ -639,9 +622,6 @@ export const DEFAULT_QUOTA_ROUTING_POLICY: Required<RepoMeshQuotaRoutingPolicy> 
     // ★Must stay equal to quota/refresh.ts QUOTA_ROUTABLE_MAX_AGE_MS —
     // quota-routing-staleness-agreement.test.ts fails on drift.
     staleAfterMs: 60 * 60 * 1000,
-    sessionMinRemainingPercent: 10,
-    sessionResetImminentMs: 5 * 60 * 1000,
-    weeklyMinRemainingPercent: 15,
     spreadBonusMax: 30,
     sessionAxisWeeklyHeadroomPercent: 40,
     // ON by default (owner decision): the failure it prevents — an idle sibling
@@ -660,9 +640,6 @@ export function resolveQuotaRoutingPolicy(
     value?: RepoMeshQuotaRoutingPolicy | null,
 ): Required<RepoMeshQuotaRoutingPolicy> {
     const staleAfterMs = Number(value?.staleAfterMs);
-    const sessionMin = Number(value?.sessionMinRemainingPercent);
-    const sessionResetImminentMs = Number(value?.sessionResetImminentMs);
-    const weeklyMin = Number(value?.weeklyMinRemainingPercent);
     const spreadMax = Number(value?.spreadBonusMax);
     const sessionAxisHeadroom = Number(value?.sessionAxisWeeklyHeadroomPercent);
     const clampPercentField = (n: number, fallback: number) =>
@@ -671,11 +648,6 @@ export function resolveQuotaRoutingPolicy(
         staleAfterMs: Number.isFinite(staleAfterMs) && staleAfterMs >= 0
             ? Math.floor(staleAfterMs)
             : DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs,
-        sessionMinRemainingPercent: clampPercentField(sessionMin, DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent),
-        sessionResetImminentMs: Number.isFinite(sessionResetImminentMs) && sessionResetImminentMs >= 0
-            ? Math.floor(sessionResetImminentMs)
-            : DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs,
-        weeklyMinRemainingPercent: clampPercentField(weeklyMin, DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent),
         spreadBonusMax: Number.isFinite(spreadMax) && spreadMax >= 0
             ? spreadMax
             : DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax,
@@ -703,15 +675,6 @@ export function normalizeQuotaRoutingPolicy(value: unknown): RepoMeshQuotaRoutin
     const out: RepoMeshQuotaRoutingPolicy = {};
     if (record.staleAfterMs !== undefined && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs) {
         out.staleAfterMs = resolved.staleAfterMs;
-    }
-    if (record.sessionMinRemainingPercent !== undefined && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent) {
-        out.sessionMinRemainingPercent = resolved.sessionMinRemainingPercent;
-    }
-    if (record.sessionResetImminentMs !== undefined && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs) {
-        out.sessionResetImminentMs = resolved.sessionResetImminentMs;
-    }
-    if (record.weeklyMinRemainingPercent !== undefined && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent) {
-        out.weeklyMinRemainingPercent = resolved.weeklyMinRemainingPercent;
     }
     if (record.spreadBonusMax !== undefined && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax) {
         out.spreadBonusMax = resolved.spreadBonusMax;

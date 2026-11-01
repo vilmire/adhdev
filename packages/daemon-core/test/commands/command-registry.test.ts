@@ -136,6 +136,8 @@ const LEGACY_DAEMON_METADATA_COMMANDS: ReadonlySet<string> = new Set([
     'invoke_provider_script',
     'set_user_name',
     'set_machine_nickname',
+    // Machine quota reserve edits change the node-facts reserve the dashboard shows.
+    'quota_reserve_set',
     // Explicit launch-default writes change the daemon metadata capability.
     'launch_defaults_set',
     'assistant_launch_defaults_set',
@@ -199,7 +201,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     'get_session_info', 'coordinator_prompt_preview',
     'mark_session_seen', 'delete_notification', 'mark_notification_unread', 'daemon_upgrade', 'daemon_restart',
     'set_machine_nickname', 'get_quota_account_label', 'set_quota_account_label', 'get_quota_provider_enabled',
-    'set_quota_provider_enabled', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
+    'set_quota_provider_enabled', 'quota_reserve_get', 'quota_reserve_set', 'get_mesh_ledger', 'get_mesh_ledger_slice', 'list_mesh_notes',
     'record_mesh_note', 'forget_mesh_note', 'get_mesh_node_logs',
     'worker_bridge_prepare', 'worker_bridge_capabilities', 'worker_bridge_delivery', 'worker_bridge_control', 'worker_bridge_status', 'worker_bridge_verify',
     'worker_resolve_task', 'worker_report_completion',
@@ -232,7 +234,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
     // the MCP server's only path to the turn ledger, mesh records, the topic
     // index and missions now that it may not open mesh-runtime.db itself
     // (check:boundaries C8). IPC-only: pinned by the `sources` test below.
-    'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
+    'turn_observe', 'mesh_record', 'turn_cancel', 'mesh_direct_cancel', 'operator_status', 'turn_query',
     'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
@@ -281,7 +283,7 @@ const LEGACY_LOW_FAMILY_COMMANDS = [
 
 /** The turn-ledger IPC commands: reachable ONLY over the local IPC source. */
 const TURN_LEDGER_IPC_COMMANDS = [
-    'turn_observe', 'mesh_record', 'turn_cancel', 'operator_status', 'turn_query',
+    'turn_observe', 'mesh_record', 'turn_cancel', 'mesh_direct_cancel', 'operator_status', 'turn_query',
     'mesh_index_query', 'mission_upsert', 'mission_query', 'note_upsert', 'note_forget',
     // C-W9b / C-W9a: the store commands (mesh-store-ipc.ts) — records, queue
     // composites, missions list, active work, recovery hints. IPC-only too.
@@ -315,6 +317,8 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     // Artifact viewer additions use med-family contexts; not part of the legacy migration.
     'artifact_fetch', 'artifact_fetch_origin', 'artifact_index_forwarded', 'artifact_list', 'artifact_read', 'artifact_register',
     'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
+    // Mission git refs (design 2026-11-01-mission-git-refs): read-only containment projection + member-node probe.
+    'mesh_mission_git_eval', 'mesh_ref_containment_probe',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */
@@ -333,8 +337,8 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // Assistant store verbs (high-family/assistant-store.ts, design
     // 2026-10-07-assistant-layer.md §4.4). Fresh additions; sources pinned by
     // assistant-store-sources.test.ts.
-    'assistant_memory', 'assistant_skill_view', 'assistant_skill_manage', 'assistant_project_note',
-    'assistant_staged_resolve', 'assistant_store_admin', 'assistant_memory_limits', 'assistant_import_skills', 'assistant_threads', 'assistant_thread_close',
+    'assistant_memory', 'assistant_memory_search', 'assistant_skill_view', 'assistant_skill_manage', 'assistant_project_note',
+    'assistant_staged_resolve', 'assistant_store_admin', 'assistant_memory_limits', 'assistant_memory_digest', 'assistant_memory_undo', 'assistant_skills_list', 'assistant_import_skills', 'assistant_threads', 'assistant_thread_close',
     // Explicit daemon-owned launch defaults; fresh additions, not legacy migration.
     'launch_defaults_get', 'launch_defaults_set', 'assistant_launch_defaults', 'assistant_launch_defaults_set',
     // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).
@@ -342,7 +346,9 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
     'assistant_artifact_list', 'assistant_artifact_read',
     // Owner-decision inbox verbs (high-family/assistant-decisions.ts, structured missions §6.3).
-    'assistant_decision_answer', 'assistant_decision_request',
+    'assistant_decision_answer', 'assistant_decision_request', 'assistant_session_control', 'assistant_quota_failover', 'assistant_switch_provider',
+    'mesh_host_handoff', 'mesh_host_handoff_ack', 'mesh_host_handoff_activate', 'mesh_host_handoff_capability', 'mesh_host_handoff_certificate',
+    'mesh_host_handoff_chunk', 'mesh_host_handoff_discard', 'mesh_host_handoff_status',
     // Authenticated remote project attach (high-family/remote-project-attach.ts): the
     // owner entry (assistant verb + mesh tool command), the owner settings verb, and the four server-api steps.
     'assistant_project_attach_remote', 'attach_remote_project', 'remote_project_attach_settings',
@@ -357,7 +363,9 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     'assistant_action', 'assistant_environment', 'assistant_execution_settings',
     'assistant_execution_state', 'assistant_project_watch',
     // Owner-decision inbox (high-family/mission-decisions.ts, structured-missions design §6).
-    'mission_decision_answer', 'mission_decision_push_relay_answer', 'mission_decisions_list',
+    'mission_decision_answer', 'mission_decision_push_relay_answer', 'mission_decisions_list', 'mission_live_check_resolve',
+    // Release objects (design 2026-11-01-release-objects): coordinator/owner/assistant only, never a worker.
+    'release_upsert', 'release_scope', 'release_list', 'release_record_deploy', 'release_changelog_draft',
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

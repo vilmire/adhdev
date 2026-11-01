@@ -43,6 +43,7 @@ import { projectTransferSpecs } from './low-family/project-transfer.js';
 import { coordinatorPromptSpecs } from './low-family/coordinator-prompt.js';
 import { notificationSpecs } from './low-family/notification.js';
 import { daemonLifecycleSpecs } from './low-family/daemon-lifecycle.js';
+import { quotaReserveSpecs } from './low-family/quota-reserve-commands.js';
 import { meshLedgerSpecs } from './low-family/mesh-ledger.js';
 import { turnLedgerIpcSpecs } from './low-family/turn-ledger-ipc.js';
 import { meshNodeLogsSpecs } from './low-family/mesh-node-logs.js';
@@ -63,6 +64,7 @@ import { meshRestartSpecs } from './med-family/mesh-restart.js';
 import { meshOnboardingSpecs } from './med-family/mesh-onboarding.js';
 import { meshWorktreeRetentionSpecs } from './med-family/mesh-worktree-retention.js';
 import { meshTaskViewCommandSpecs } from './med-family/mesh-task-view-commands.js';
+import { meshMissionGitCommandSpecs } from './med-family/mesh-mission-git-commands.js';
 import { meshEventsSpecs } from './high-family/mesh-events.js';
 import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launch.js';
 import { meshStatusSpecs } from './high-family/mesh-status.js';
@@ -74,11 +76,15 @@ import { artifactSpecs, rejectUntrustedArtifactIngress } from './med-family/arti
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
 import { missionDecisionSpecs } from './high-family/mission-decisions.js';
+import { missionLiveCheckSpecs } from './high-family/mission-live-check.js';
+import { meshReleaseSpecs } from './high-family/mesh-release-commands.js';
 import { missionDecisionPushRelaySpecs } from './high-family/mission-decision-push-relay.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
 import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
 import { assistantDecisionSpecs } from './high-family/assistant-decisions.js';
+import { assistantSessionControlSpecs } from './high-family/assistant-session-control.js';
+import { meshHostHandoffSpecs } from './high-family/mesh-host-handoff.js';
 import { assistantRemoteSpecs } from './high-family/assistant-remote.js';
 import { assistantLaunchSpecs } from './high-family/assistant-launch.js';
 import { launchDefaultsSpecs } from './high-family/launch-defaults.js';
@@ -310,6 +316,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...coordinatorPromptSpecs,
             ...notificationSpecs,
             ...daemonLifecycleSpecs,
+            ...quotaReserveSpecs,
             ...meshLedgerSpecs,
             ...turnLedgerIpcSpecs,
             ...operatorRecoverySpecs,
@@ -332,6 +339,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshOnboardingSpecs,
             ...meshWorktreeRetentionSpecs,
             ...meshTaskViewCommandSpecs,
+            ...meshMissionGitCommandSpecs,
             ...meshEventsSpecs,
             ...meshCoordinatorLaunchSpecs,
             ...meshStatusSpecs,
@@ -343,10 +351,14 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...artifactSpecs,
             ...assistantProjectSpecs,
             ...assistantDecisionSpecs,
+            ...assistantSessionControlSpecs,
+            ...meshHostHandoffSpecs,
             ...assistantActionSpecs,
             ...assistantThreadSpecs,
             ...assistantWatchSpecs,
             ...missionDecisionSpecs,
+            ...missionLiveCheckSpecs,
+            ...meshReleaseSpecs,
             ...missionDecisionPushRelaySpecs,
             ...assistantRemoteSpecs,
             ...assistantLaunchSpecs,

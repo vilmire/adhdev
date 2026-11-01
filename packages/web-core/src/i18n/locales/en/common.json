@@ -1342,6 +1342,60 @@
             "machineTabsLabel": "Machines in this mesh",
             "machineTabCounts": "{{nodes}} node(s) · {{slots}} slot(s)"
         },
+        "handoff": {
+            "title": "Move host",
+            "close": "Close",
+            "open": "Move host…",
+            "disabled": "Host handoff is experimental and off on this machine (experimental.hostHandoff).",
+            "explain": "The host keeps the queue, missions and decisions. Moving it copies them to the chosen machine, checks the copy, and only then switches. Running work is not interrupted; new work is held until it finishes.",
+            "target": "New host machine",
+            "pickTarget": "Choose a machine…",
+            "preflight": "Check",
+            "start": "Move host",
+            "retry": "Retry",
+            "abort": "Cancel",
+            "abortDisabled": "Cannot cancel once the switch has started — wait for the new host to confirm.",
+            "awaitingAck": "Waiting for the new host to confirm the copy…",
+            "done": "The host moved. The coordinator restarts on the new machine.",
+            "aborted": "Cancelled — nothing changed. {{reason}}",
+            "uncertain": "The switch was sent but not confirmed yet. Both machines stay frozen until the new host answers; this resolves by itself when it is reachable.",
+            "warning": "The coordinator will restart on the new machine.",
+            "step": {
+                "freeze": "Freeze",
+                "transfer": "Copy",
+                "verify": "Verify",
+                "ack": "Confirm",
+                "switch": "Switch"
+            },
+            "check": {
+                "is_host": "This machine is the host",
+                "target_not_self": "Target is another machine",
+                "target_is_member": "Target is a member of this project",
+                "no_other_handoff": "No other move in progress",
+                "target_online": "Target is online",
+                "peer_capability": "Target supports host moves",
+                "target_launchable": "Target can run the coordinator",
+                "disk_space": "Enough disk space",
+                "snapshot_readable": "Project data is readable",
+                "no_open_writer_checkpoint": "No unfinished worker stop"
+            },
+            "code": {
+                "not_host": "This machine is not the host",
+                "target_is_self": "Choose another machine",
+                "target_not_member": "The machine is not part of this project",
+                "handoff_in_progress": "A move is already in progress",
+                "target_offline": "The machine is offline",
+                "peer_capability_unconfirmed": "The machine's ADHDev is too old or has host moves off",
+                "insufficient_disk": "Not enough disk space",
+                "target_not_launchable": "The machine cannot run the coordinator",
+                "writer_checkpoint_pending": "A worker is still being stopped — try again later",
+                "host_handoff_disabled": "Turned off on this machine",
+                "abort_requires_target_confirmation": "The new host must confirm first",
+                "hold_failed": "Could not pause new work",
+                "ack_timeout": "The new host did not confirm in time",
+                "freeze_timeout": "Work did not settle in time"
+            }
+        },
         "host": {
             "setHostConfirmTitle": "Set {{name}} as the host?",
             "setupNode": "setup node",
@@ -1538,6 +1592,51 @@
             "showMore": "+{{count}} more",
             "noActiveMissions": "No active missions",
             "missionDataUnavailable": "Update the daemon to see missions",
+            "releases": {
+                "card": "Releases",
+                "empty": "No releases yet. Create one to group missions and keep track of what ships together.",
+                "newRelease": "New release",
+                "namePlaceholder": "e.g. 1.0.82-rc.34",
+                "channelPreview": "Preview",
+                "channelStable": "Stable",
+                "create": "Create",
+                "missionCount": "{{count}} missions",
+                "noMissions": "No missions in this release yet",
+                "needsNote": "{{count}} without a release note",
+                "liveChecksOpen": "{{count}} live checks open",
+                "freeze": "Freeze",
+                "markVerified": "Mark verified",
+                "verifiedSuggested": "Every live check of these missions is closed. You can mark the release verified.",
+                "verifyWaiting": "{{count}} live check(s) still open",
+                "suggested": "Possibly part of this deploy",
+                "suggestedHint": "These missions look included in the default branch but belong to no release. Nothing is added automatically.",
+                "add": "Add",
+                "remove": "Remove",
+                "moveTo": "Move to…",
+                "draft": "CHANGELOG draft",
+                "generateDraft": "Generate draft",
+                "copyDraft": "Copy",
+                "draftEmpty": "No entries.",
+                "draftWarnings": "Not confirmed on the default branch",
+                "draftNeedsWording": "Needs user-facing wording",
+                "deployFacts": "Deployed {{commit}}",
+                "notDeployed": "Not deployed yet",
+                "badgeTitle": "Release {{name}}",
+                "moveBadge": "Move to another release",
+                "noRelease": "No release",
+                "error": "Could not update the release: {{error}}",
+                "unavailable": "Releases need a newer daemon.",
+                "statusLabel": "Release status",
+                "afterDeploy": "This release was already deployed — the change is recorded.",
+                "status": {
+                    "planned": "Planned",
+                    "frozen": "Frozen",
+                    "deployed": "Deployed",
+                    "verified": "Verified",
+                    "superseded": "Superseded",
+                    "cancelled": "Cancelled"
+                }
+            },
             "completedHistory": "Completed / abandoned history",
             "noQueueActivity": "No queue activity.",
             "noNodes": "No nodes in this mesh yet.",
@@ -1761,6 +1860,95 @@
         "noDescription": "The provider supplied no request description.",
         "requestChanged": "This request has changed or already ended. It has been removed from this list."
     },
+    "assistantSkills": {
+        "title": "Assistant skills",
+        "hint": "How often each skill's text was attached to a project request. Attached means the text was handed to the coordinator; whether it was followed is not tracked.",
+        "summary": "Last {{days}} days: {{attaches}} skill attachments across {{sends}} project requests",
+        "empty": "No skills yet.",
+        "attached": "Attached {{count}}×",
+        "viewed": "Viewed {{count}}×",
+        "lastUsed": "Last used",
+        "neverUsed": "Not used yet",
+        "attachedTooltip": "Times the skill's text was attached to a project request. Not a measure of whether it was followed.",
+        "pinned": "Pinned",
+        "pin": "Pin",
+        "unpin": "Unpin",
+        "archive": "Archive",
+        "restore": "Restore",
+        "actionFailed": "Not done: {{code}}",
+        "origin": {
+            "starter": "Built in",
+            "owner": "You",
+            "agent": "Assistant",
+            "imported": "Imported"
+        },
+        "status": {
+            "stale": "Stale",
+            "archived": "Archived"
+        }
+    },
+    "assistantMemoryDigest": {
+        "badge": "Remembered {{count}}",
+        "badgeTitle": "What the assistant saved to memory recently",
+        "title": "Remembered recently",
+        "close": "Close",
+        "undo": "Undo",
+        "undoMove": "Undo move",
+        "undone": "undone",
+        "staged": "waiting for approval",
+        "promoted": "learned from your repeated answers",
+        "older": "Older entries are not shown.",
+        "failed": "Not undone: {{code}}",
+        "suggestions": {
+            "title": "For you to decide",
+            "duplicate": "Same note twice",
+            "similar": "Very similar notes",
+            "unused": "Not used for 6 months",
+            "mergeKeepFirst": "Keep the first, drop the second"
+        },
+        "counts": "{{added}} added · {{replaced}} changed · {{removed}} removed · {{promoted}} learned",
+        "action": {
+            "add": "Added",
+            "replace": "Changed",
+            "remove": "Removed",
+            "archive": "Moved to archive"
+        },
+        "tier": {
+            "core": "notebook",
+            "archive": "archive",
+            "project": "project archive"
+        },
+        "target": {
+            "memory": "memory",
+            "user": "you"
+        },
+        "origin": {
+            "human": "you said it",
+            "relay": "project output",
+            "review": "review turn",
+            "review_tainted": "review after untrusted input",
+            "owner": "you (dashboard)",
+            "decision_promotion": "your decisions",
+            "curator": "housekeeping"
+        }
+    },
+    "assistantControl": {
+        "title": "Assistant CLI",
+        "switchLabel": "Switch the assistant to another CLI",
+        "providerPlaceholder": "e.g. codex-cli",
+        "switchAction": "Switch",
+        "switchQueued": "Switching after the current reply.",
+        "switchDone": "Switched.",
+        "failover": "When quota runs out",
+        "failoverNotify": "Ask me",
+        "failoverAuto": "Switch automatically",
+        "failoverOff": "Do nothing",
+        "roleAssistant": "Assistant",
+        "roleCoordinator": "Coordinators",
+        "autoNote": "Automatic switching is limited to 2 per day and 6 hours apart.",
+        "open": "CLI & quota",
+        "failed": "Not done: {{code}}"
+    },
     "assistantStaged": {
         "badge": "{{count}} pending",
         "badgeTitle": "Assistant writes held for your approval",
@@ -1776,6 +1964,15 @@
         "failed": "Not done: {{code}}",
         "noText": "(no text)",
         "protectedSkill": "changes a skill you wrote",
+        "proposedProcedureTitle": "Save this as a skill?",
+        "proposedProcedureEvidence": "{{count}} similar requests in the last {{days}} days",
+        "proposedProcedureSave": "Save",
+        "proposedProcedureEdit": "Edit, then save",
+        "proposedProcedureSaveEdited": "Save changes",
+        "proposedProcedureCancel": "Cancel",
+        "proposedProcedureDismiss": "No, don't ask again",
+        "proposedProcedureDescription": "Skill description",
+        "proposedProcedureBody": "Skill text",
         "driverActivation": {
             "advisory": "Declared access · not enforced at OS level",
             "name": "Name",
@@ -1798,7 +1995,9 @@
             "note": "Note",
             "launchDefault": "Launch default",
             "driver_activation": "Driver activation",
-            "driver_action_request": "Destructive driver action"
+            "driver_action_request": "Destructive driver action",
+            "session_control": "Session control",
+            "host_handoff": "Host handoff"
         },
         "action": {
             "add": "Add",
@@ -1811,7 +2010,11 @@
             "forget": "Forget",
             "set": "Set",
             "clear": "Clear",
-            "activate": "Activate"
+            "activate": "Activate",
+            "stop": "Stop",
+            "restart": "Restart",
+            "switch_provider": "Switch CLI",
+            "start": "Start"
         },
         "origin": {
             "relay": "From a relay",
@@ -1819,11 +2022,23 @@
             "review_tainted": "From a review after untrusted input",
             "human": "From you",
             "owner": "From you",
-            "driver": "Installed driver"
+            "driver": "Installed driver",
+            "quota": "Quota ran out",
+            "assistant": "From the assistant"
         },
         "role": {
             "assistant": "Assistant",
-            "coordinator": "Coordinator"
+            "coordinator": "Coordinator",
+            "worker": "Worker"
+        },
+        "control": {
+            "handoff": "Move this project's host role and data to another machine. The coordinator restarts there.",
+            "quota": "{{from}} is out of quota ({{fromPct}}% left). Switch to {{to}} ({{toPct}}% left).",
+            "switch": "Switch the {{role}} to {{to}}.",
+            "simple": "{{action}} the {{role}}.",
+            "busy": "It is working or waiting on an approval right now — approving interrupts it.",
+            "resets": "Quota resets {{at}}.",
+            "expires": "Expires {{at}}."
         }
     },
     "chatPane": {
@@ -3636,6 +3851,35 @@
             "waitingForStats": "Waiting for live stats…",
             "waitingForStatsWithTotal": "Waiting for live stats… · {{total}} total"
         },
+        "quotaReserve": {
+            "title": "Quota reserve",
+            "subtitle": "How much plan quota automatic work leaves for you on this machine. Manual chat and coordinator launches are never blocked; they only show the status below.",
+            "usedBy": "Applies to mesh routing, auto-launch, direct dispatch and idle assistant review turns on this machine.",
+            "machineDefault": "Machine default",
+            "perProvider": "Per provider",
+            "minutes": "min",
+            "fields": {
+                "routingSessionMinPercent": "Session floor",
+                "routingLongMinPercent": "Weekly / monthly floor",
+                "routingSessionResetImminentMs": "Reset grace",
+                "assistantReviewMinPercent": "Assistant review floor"
+            },
+            "withinReserve": "Within reserve: {{remaining}}% left / reserve {{reserve}}%",
+            "remaining": "{{remaining}}% left",
+            "noReading": "No quota reading",
+            "resetRow": "Reset to default",
+            "accountOverrides": "{{provider}}: per-account overrides",
+            "accountLabel": "Account …{{suffix}}",
+            "migrated": "Per-mesh thresholds from {{count}} mesh(es) were merged into this machine; the most conservative value was kept.",
+            "saving": "Saving…",
+            "blankMeansDefault": "Leave a field blank to inherit the machine default (greyed-out value).",
+            "loadFailed": "Could not load the quota reserve: {{error}}",
+            "errors": {
+                "notANumber": "Enter a number.",
+                "percentRange": "Must be between 0 and 100.",
+                "negative": "Cannot be negative."
+            }
+        },
         "fleetQuota": {
             "title": "Plan quota across machines",
             "subtitle": "How much of each subscription's 5-hour and weekly window is left on every machine. The task queue skips plans that are nearly out and spends quota that would expire unused first.",
@@ -4502,6 +4746,19 @@
         "undo": "Undo",
         "change": "Change",
         "mayBeInProgress": "Answered a while ago — the work may already be in progress.",
+        "liveCheckWorks": "Works",
+        "liveCheckDoesntWork": "Doesn't work",
+        "liveCheckNotePlaceholder": "Optional note (what you saw)",
+        "liveCheckFailedBadge": "Failed",
+        "liveCheckToastWorks": "Recorded: live check passed",
+        "liveCheckToastFailed": "Recorded: live check failed",
+        "liveCheckResolveFailed": "Could not record the result ({{code}})",
+        "machineFilter": "Machine: {{machine}} ✕",
+        "liveChecksPrompt": "{{count}} live checks waiting on {{machine}} (now on v{{version}})",
+        "liveChecksPromptOpen": "Open",
+        "liveChecksPromptDismiss": "Dismiss",
+        "scopeNotRecorded": "scope not recorded",
+        "scopeNotRecordedHint": "This mission was closed without saying what was checked and what was not (no \"scope:\" in the outcome reason).",
         "delivery": {
             "pending": "Delivery pending",
             "queued": "Queued for the coordinator",
@@ -4538,7 +4795,41 @@
         "decisionsWaiting": "{{count}} decisions waiting",
         "openItems": "{{count}} open items",
         "liveChecksOpen": "{{count}} live checks",
-        "decisionBadgeLabel": "Decisions waiting for you"
+        "decisionBadgeLabel": "Decisions waiting for you",
+        "gitLanded": "Landed",
+        "gitPartial": "Partly landed",
+        "gitNotLanded": "Not landed",
+        "gitUnknown": "Git unknown",
+        "gitTooltip": "Do the commits this mission references exist on the default branch?",
+        "gitTitle": "Git evidence",
+        "gitBase": "Compared with {{base}} @ {{sha}}",
+        "gitEvaluated": "Checked {{time}}",
+        "gitRefresh": "Re-check",
+        "gitRefreshing": "Checking…",
+        "gitLandedNote": "Landed means the referenced commits are on the default branch. It does not mean the work is accepted or done — live checks and remaining items are separate.",
+        "gitUnknownNote": "Unknown means git could not answer (missing commit, shallow clone, machine offline). It does not mean \"not landed\".",
+        "gitPartialUnknown": "some refs could not be checked",
+        "gitMayBeModified": "The base branch may have changed these lines since they landed.",
+        "gitRefStatus": {
+            "contained_ancestor": "On the default branch",
+            "contained_patch_equivalent": "Landed under another commit (cherry-pick, rebase or squash)",
+            "not_contained": "Not on the default branch",
+            "unknown": "Could not be checked"
+        },
+        "gitReason": {
+            "object_missing": "Commit not found on this machine",
+            "shallow": "Shallow clone — history incomplete",
+            "undeterminable": "Git could not answer",
+            "base_missing": "Default branch not available here",
+            "branch_not_found": "Branch not found",
+            "base_branch_ref": "Ref is the default branch itself",
+            "gitlink_undeterminable": "Submodule pointer could not be compared",
+            "merge_tree_failed": "Comparison failed",
+            "node_offline": "Machine offline",
+            "no_repo": "No repository on this machine",
+            "budget": "Too many refs — not checked",
+            "not_a_git_ref": "Not a git ref"
+        }
     },
     "approvals": {
         "pageTitle": "Approvals",
@@ -4580,13 +4871,9 @@
         "quotaPolicy": {
             "blankMeansDefaultShort": "Blank = default",
             "title": "Quota-aware routing",
-            "description": "When a node reports how much of its AI provider quota is left, the coordinator can skip nodes that are nearly exhausted and prefer nodes with more headroom. These thresholds decide when that happens. Missing or outdated readings are always ignored, so a node is never excluded on stale data.",
-            "sessionMin": "Session floor",
-            "sessionMinHint": "Skip a provider whose short rolling window has less than this left.",
-            "weeklyMin": "Weekly floor",
-            "weeklyMinHint": "Skip a provider whose weekly window has less than this left.",
-            "resetImminent": "Reset grace",
-            "resetImminentHint": "Ignore a low session window when it resets within this long.",
+            "description": "When a node reports how much of its AI provider quota is left, the coordinator can prefer nodes with more headroom. These are scheduling preferences for this mesh. Missing or outdated readings are always ignored, so a node is never excluded on stale data.",
+            "reserveMovedToMachine": "The floors for how much quota automatic work must leave for you are now a machine setting.",
+            "openMachineReserve": "Open machine quota reserve",
             "staleAfter": "Reading expiry",
             "staleAfterHint": "Fallback only: a measured window stays valid until its own reset; this age limit applies just to readings without a reset time.",
             "spreadBonus": "Headroom preference",

@@ -105,12 +105,16 @@
  * daemon, and no network call is made to get one.
  */
 import { type MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
+import { resolveQuotaReserve } from '../quota/quota-reserve.js';
+import { recordQuotaReserveBlock } from '../quota/quota-reserve-metrics.js';
+import { quotaAccountLineage } from '../quota/account-lineage.js';
 import {
     resolveQuotaRoutingPolicy,
     type RepoMeshQuotaRoutingPolicy,
 } from '../repo-mesh-types.js';
 import {
     quotaEntryFor,
+    reserveRawForNode,
     quotaSnapshotAgeMs,
     isQuotaSnapshotFresh,
     remainingPercent,
@@ -389,7 +393,7 @@ function isWindowExpired(
  * window the provider does not report (null) is simply not gated on.
  *
  * One relaxation: a session-low block is WAIVED when the session window's
- * reset is imminent (within sessionResetImminentMs, default 5 min) — the
+ * reset is imminent (within the machine reserve's routingSessionResetImminentMs, default 5 min) — the
  * quota reappears on its own momentarily, so holding the claim would just
  * idle the mesh (isSessionResetImminent). The weekly gate never relaxes.
  */
@@ -463,7 +467,16 @@ export function evaluateProviderQuotaGate(
         }
         return null; // no window survives its own boundary → fail open
     }
-    const resolved = resolveQuotaRoutingPolicy(policy);
+    // The reserve is the MACHINE's (the node that owns the snapshot's account),
+    // not the mesh's — see quota/quota-reserve.ts. Antigravity targets judge
+    // their own pool; an unidentifiable account falls back to provider/pool.
+    const lineage = quotaAccountLineage((quota as any).metadata?.accountLineage);
+    const reserve = resolveQuotaReserve(reserveRawForNode(node, context), {
+        provider: providerType,
+        pool: targetWindows?.group ?? null,
+        accountKey: lineage.kind === 'account' ? lineage.key : null,
+    });
+    const reservePool = targetWindows?.group ?? null;
     const session = remainingPercent(sessionWindow);
     const weeklyLeft = remainingPercent(weeklyWindow);
     // Model-group exhaustion: the slot's OWN group has nothing left in a
@@ -486,33 +499,36 @@ export function evaluateProviderQuotaGate(
             }
         }
     }
-    if (sessionTrustworthy && session !== undefined && session < resolved.sessionMinRemainingPercent
-        && !isSessionResetImminent(sessionWindow, facts, quota, resolved.sessionResetImminentMs, now)) {
+    if (sessionTrustworthy && session !== undefined && session < reserve.routingSessionMinPercent
+        && !isSessionResetImminent(sessionWindow, facts, quota, reserve.routingSessionResetImminentMs, now)) {
+        recordQuotaReserveBlock('routing', providerType, reservePool);
         return {
             reason: PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
             window: 'session',
             remainingPercent: session,
-            thresholdPercent: resolved.sessionMinRemainingPercent,
+            thresholdPercent: reserve.routingSessionMinPercent,
         };
     }
     const weekly = remainingPercent(weeklyWindow);
-    if (weeklyTrustworthy && weekly !== undefined && weekly < resolved.weeklyMinRemainingPercent) {
+    if (weeklyTrustworthy && weekly !== undefined && weekly < reserve.routingLongMinPercent) {
+        recordQuotaReserveBlock('routing', providerType, reservePool);
         return {
             reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
             window: 'weekly',
             remainingPercent: weekly,
-            thresholdPercent: resolved.weeklyMinRemainingPercent,
+            thresholdPercent: reserve.routingLongMinPercent,
         };
     }
     const monthly = remainingPercent(monthlyWindow);
     // Apply the existing long-window reserve to monthly plans too. Keep the
     // measured window identity and reset; a billing month is never a 7d window.
-    if (monthlyTrustworthy && monthly !== undefined && monthly < resolved.weeklyMinRemainingPercent) {
+    if (monthlyTrustworthy && monthly !== undefined && monthly < reserve.routingLongMinPercent) {
+        recordQuotaReserveBlock('routing', providerType, reservePool);
         return {
             reason: PROVIDER_QUOTA_MONTHLY_LOW_SKIP_REASON,
             window: 'monthly',
             remainingPercent: monthly,
-            thresholdPercent: resolved.weeklyMinRemainingPercent,
+            thresholdPercent: reserve.routingLongMinPercent,
         };
     }
     return null;

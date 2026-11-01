@@ -359,3 +359,48 @@ it('actual runtime exact-reader port validates terminal/generation before durabl
         expect(await port.rehydrateAttemptReport!('mesh_a', 'coord', attempt.attemptId)).toMatchObject({ body: null, reason: 'remote_provenance_unverified' });
     } finally { setAssistantProjectPortsForTests(null); spy.mockRestore(); db.close(); }
 });
+
+describe('procedure skills wiring (design 2026-11-01-procedure-skills.md)', () => {
+    it('activation installs the starter skills once; dispose clears the skill sinks', () => {
+        registry.bindSession({ sessionId: 'asst', cliType: 'claude-cli', workspace: dir, at: 1 });
+        const svc = getAssistantServices();
+        runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, tickMs: 3_600_000 });
+        expect(svc.skills.list().map((x) => x.name).sort()).toEqual(['branch-convergence-report', 'deploy-verify-checklist', 'mesh-dispatch-hygiene']);
+        expect(svc.skills.list().every((x) => x.origin === 'starter')).toBe(true);
+        expect(svc.skills.onStagedSettled).toBeTypeOf('function');
+        runtime.dispose();
+        runtime = null;
+        expect(svc.skills.onStagedSettled).toBeNull();
+        expect(svc.skillMetrics).toBeNull();
+        expect(svc.procedureSignals).toBeNull();
+    });
+
+    it('a dashboard chat to the assistant is recorded as an owner_input signal; other sessions, relays and unverified input are not', async () => {
+        const { reportSessionChatInput } = await import('../../src/assistant/assistant-human-input.js');
+        const { ProcedureSignalStore } = await import('../../src/assistant/procedure-signal-store.js');
+        const { ensureProcedureSignalSchema } = await import('../../src/mesh/procedure-signal-schema.js');
+        const db = new Database(':memory:');
+        ensureAssistantRelaySchema(db);
+        ensureProcedureSignalSchema(db);
+        const signals = new ProcedureSignalStore(db);
+        registry.bindSession({ sessionId: 'asst', cliType: 'claude-cli', workspace: dir, at: 1 });
+        instances.asst = { getState: () => ({ status: 'idle' }) };
+        runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, signals, tickMs: 3_600_000 });
+        const text = 'Deploy the preview build, verify it on the dashboard, then update the changelog entry';
+        const send = (over: Record<string, unknown>) => reportSessionChatInput({
+            sessionIds: ['asst'], messageId: `m${Math.random()}`, source: 'p2p', outcome: { kind: 'delivered' } as any, text, ...over,
+        } as any);
+        const count = () => (db.prepare('SELECT COUNT(*) AS n FROM assistant_procedure_signals').get() as { n: number }).n;
+        send({});
+        expect(count()).toBe(1);
+        send({ sessionIds: ['other-session'] });
+        send({ source: 'api' });
+        send({ outcome: { kind: 'refused' } });
+        send({ text: 'ok go' });
+        expect(count()).toBe(1);
+        const row = db.prepare('SELECT source, mesh_id, excerpt FROM assistant_procedure_signals').get() as Record<string, string>;
+        expect(row).toMatchObject({ source: 'owner_input', mesh_id: '' });
+        db.close();
+    });
+});
+

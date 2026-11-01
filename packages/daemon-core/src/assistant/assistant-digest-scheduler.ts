@@ -29,6 +29,8 @@ export interface AssistantDigestPorts {
     enqueue(input: { source: 'digest'; text: string; messageId: string; forSessionId: string }): void;
     /** Owner-decision block for the "needs you" part (decision-nudge.ts); empty/absent → none. */
     decisionSection?(now: number): string;
+    /** Missions whose git evidence says "landed but still open" / "finished but not landed" (mission-git-digest.ts); empty/absent → none. */
+    missionGitSection?(now: number): string;
     recordDigest(at: number): void;
 }
 
@@ -61,6 +63,9 @@ export class AssistantDigestScheduler {
         this.ports.recordDigest(now);
         let section = '';
         try { section = this.ports.decisionSection?.(now) ?? ''; } catch { /* the digest is still worth sending */ }
+        let gitSection = '';
+        try { gitSection = this.ports.missionGitSection?.(now) ?? ''; } catch { /* the digest is still worth sending */ }
+        section = [section, gitSection].filter(Boolean).join('\n\n');
         this.ports.enqueue({ source: 'digest', text: section ? `${DIGEST_INPUT_TEXT}\n\n${section}` : DIGEST_INPUT_TEXT, messageId, forSessionId: sid });
         return { fired: true, messageId };
     }

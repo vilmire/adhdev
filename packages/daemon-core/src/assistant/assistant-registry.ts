@@ -5,7 +5,7 @@ import { readHostedBindingOwner, resolveHostedBindingOwner, sameHostedBindingOwn
  *
  * Shape follows the design's field list. Unlike `mesh-coordinators.json` the
  * entry is never deleted when the session goes away: aliases, `busyInputMode`,
- * `reviewTurn`, `memoryBudget`, `firstRelayAt` and `lastTurnState` are
+ * `reviewTurn`, `memoryBudget`, `memoryLessonTtlDays`, `firstRelayAt` and `lastTurnState` are
  * settings/history that outlive any one assistant session. "Unregister" here
  * means clearing the session binding (`sessionId`, `mcpConfigPath`) only.
  *
@@ -90,6 +90,8 @@ export interface AssistantRegistryEntry {
     executionRevision?: number;
     lastTurnState: AssistantTurnState | null;
     memoryBudget?: Partial<MemoryBudgets>;
+    /** Days a review-written `lesson` stays in the memory archive without a search hit (default 90; 1–3650). */
+    memoryLessonTtlDays?: number;
     /**
      * Epoch ms of idle review inputs delivered in the last 24 h (§4.10.7 "2 h
      * since the last review", "4 per day"). History, not a setting: kept here
@@ -120,6 +122,23 @@ export interface AssistantRegistryEntry {
      * host records.
      */
     followedRemoteProjects?: Record<string, FollowedRemoteProjectEntry>;
+    /**
+     * Quota failover policy per role (design 2026-11-01 §6.3, owner decision H3):
+     * `notify` (default: a staged card + notice), `auto` (opt-in, capped) or `off`.
+     */
+    quotaFailover?: { assistant?: QuotaFailoverMode; coordinator?: QuotaFailoverMode };
+}
+
+export type QuotaFailoverMode = 'notify' | 'auto' | 'off';
+const QUOTA_FAILOVER_MODES: readonly string[] = ['notify', 'auto', 'off'];
+
+function normalizeQuotaFailover(v: unknown): AssistantRegistryEntry['quotaFailover'] | undefined {
+    const o = v as Record<string, unknown> | null;
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+    const out: NonNullable<AssistantRegistryEntry['quotaFailover']> = {};
+    if (typeof o.assistant === 'string' && QUOTA_FAILOVER_MODES.includes(o.assistant)) out.assistant = o.assistant as QuotaFailoverMode;
+    if (typeof o.coordinator === 'string' && QUOTA_FAILOVER_MODES.includes(o.coordinator)) out.coordinator = o.coordinator as QuotaFailoverMode;
+    return Object.keys(out).length ? out : undefined;
 }
 
 export interface BindAssistantSessionInput {
@@ -131,7 +150,7 @@ export interface BindAssistantSessionInput {
     at: number;
 }
 
-export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget' | 'executionEnabled' | 'digestHour'>>;
+export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget' | 'memoryLessonTtlDays' | 'executionEnabled' | 'digestHour' | 'quotaFailover'>>;
 
 const isDigestHour = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 23;
 
@@ -271,6 +290,10 @@ function normalizeFollowedRemoteProjects(raw: unknown): Record<string, FollowedR
     return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function isLessonTtlDays(v: unknown): v is number {
+    return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 3650;
+}
+
 /** Validate a parsed file. Returns null when the minimum fields are missing. */
 export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistryEntry | null {
     const r = raw as Record<string, unknown> | null;
@@ -296,12 +319,14 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
         executionRevision: typeof r.executionRevision === 'number' && Number.isSafeInteger(r.executionRevision) ? r.executionRevision : 0,
         lastTurnState: normalizeTurnState(r.lastTurnState),
         ...(budget ? { memoryBudget: budget } : {}),
+        ...(isLessonTtlDays(r.memoryLessonTtlDays) ? { memoryLessonTtlDays: r.memoryLessonTtlDays } : {}),
         ...(reviewAts.length ? { reviewAts } : {}),
         ...(r.digestHour === null ? { digestHour: null } : isDigestHour(r.digestHour) ? { digestHour: r.digestHour } : {}),
         ...(isNum(r.lastDigestAt) ? { lastDigestAt: r.lastDigestAt } : {}),
         ...(normalizeContext(r.lastContext) ? { lastContext: normalizeContext(r.lastContext)! } : {}),
         ...(ownerBinding ? { ownerBinding } : {}),
         ...(followedRemoteProjects ? { followedRemoteProjects } : {}),
+        ...(normalizeQuotaFailover(r.quotaFailover) ? { quotaFailover: normalizeQuotaFailover(r.quotaFailover)! } : {}),
     };
 }
 
@@ -465,6 +490,15 @@ export class AssistantRegistry {
         if (patch.digestHour !== undefined) {
             if (patch.digestHour !== null && !isDigestHour(patch.digestHour)) throw new Error(`invalid digestHour: ${String(patch.digestHour)}`);
             next.digestHour = patch.digestHour;
+        }
+        if (patch.memoryLessonTtlDays !== undefined) {
+            if (!isLessonTtlDays(patch.memoryLessonTtlDays)) throw new Error(`invalid memoryLessonTtlDays: ${String(patch.memoryLessonTtlDays)}`);
+            next.memoryLessonTtlDays = patch.memoryLessonTtlDays;
+        }
+        if (patch.quotaFailover !== undefined) {
+            const merged = normalizeQuotaFailover({ ...(prev.quotaFailover ?? {}), ...(patch.quotaFailover ?? {}) });
+            if (merged) next.quotaFailover = merged;
+            else delete next.quotaFailover;
         }
         if (patch.memoryBudget !== undefined) {
             const b = normalizeBudget(patch.memoryBudget);

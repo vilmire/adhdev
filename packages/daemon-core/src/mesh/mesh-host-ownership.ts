@@ -114,6 +114,17 @@ export function resolveMeshHostStatus(mesh: unknown, opts?: ResolveMeshHostOptio
     // state instead of a confident (possibly wrong) host badge.
     if (hostSynthesized) normalized.hostSynthesized = true;
     if (hostAddress) normalized.hostAddress = hostAddress;
+    const rawEpoch = raw?.hostEpoch;
+    if (typeof rawEpoch === 'number' && Number.isSafeInteger(rawEpoch) && rawEpoch > 0) normalized.hostEpoch = rawEpoch;
+    const handedOff = readObject(raw?.handedOffTo);
+    if (handedOff && typeof handedOff.daemonId === 'string' && typeof handedOff.epoch === 'number') {
+        normalized.handedOffTo = {
+            daemonId: handedOff.daemonId, epoch: handedOff.epoch,
+            handoffId: typeof handedOff.handoffId === 'string' ? handedOff.handoffId : '',
+            at: typeof handedOff.at === 'number' ? handedOff.at : 0,
+            retainUntil: typeof handedOff.retainUntil === 'number' ? handedOff.retainUntil : 0,
+        };
+    }
     if (pairing) {
         const status = pairing.status === 'pairing' || pairing.status === 'paired' || pairing.status === 'rejected' || pairing.status === 'revoked'
             ? pairing.status
@@ -140,7 +151,10 @@ export function buildMeshHostRequiredFailure(mesh: unknown, operation: string): 
     };
 }
 
-export function requireMeshHostQueueOwner(opts?: { ownerRole?: RepoMeshDaemonRole }): void {
+export function requireMeshHostQueueOwner(opts?: { ownerRole?: RepoMeshDaemonRole; handedOff?: boolean }): void {
+    if (opts?.handedOff) {
+        throw Object.assign(new Error('mesh_host_handed_off: this daemon handed the mesh host role to another daemon; its host-owned data is read-only.'), { code: 'mesh_host_handed_off' });
+    }
     if (opts?.ownerRole === 'member') {
         throw new Error('Mesh Host daemon required to mutate mesh queue; member daemons must use the host-owned queue.');
     }

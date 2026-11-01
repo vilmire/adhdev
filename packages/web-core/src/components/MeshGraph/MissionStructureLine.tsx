@@ -8,7 +8,10 @@
 import { useInRouterContext, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useNeedsYou } from '../../context/NeedsYouContext'
-import { missionDisplayTitle, withTodoDrawer, type NeedsYouMissionStructure } from '../needs-you/needs-you-model'
+import { missionDisplayTitle, missionScopeNotRecorded, withTodoDrawer, type NeedsYouMissionStructure } from '../needs-you/needs-you-model'
+import MissionGitBadge, { hasMissionGit, useMissionGit } from './MissionGitBadge'
+import ReleaseBadge from './ReleaseBadge'
+import { useReleasesContext } from './useReleases'
 import type { MeshGraphTheme } from './meshGraphTheme'
 
 export function useMissionStructure(meshId: string | undefined, missionId: string): { structure?: NeedsYouMissionStructure; decisions: number } {
@@ -49,18 +52,34 @@ function DecisionBadge({ meshId, count }: { meshId?: string; count: number }) {
 
 export default function MissionStructureLine({ meshTheme, mission }: {
     meshTheme: MeshGraphTheme
-    mission: { id: string; meshId?: string }
+    mission: { id: string; meshId?: string; status?: string }
 }) {
     const { t } = useTranslation('common')
     const inRouter = useInRouterContext()
     const { structure, decisions } = useMissionStructure(mission.meshId, mission.id)
     const open = structure ? structure.openItems.remaining + structure.openItems.live_check + structure.openItems.evidence : 0
-    if (!structure?.summary && open === 0 && decisions === 0) return null
+    // Git evidence (design 2026-11-01-mission-git-refs): the hosting daemon is the one that knows the structure.
+    const gitTarget = {
+        daemonId: structure?.daemonId, meshId: mission.meshId ?? structure?.meshId, missionId: mission.id,
+        open: mission.status !== 'completed' && mission.status !== 'abandoned',
+    }
+    const { git, loading, refresh } = useMissionGit(gitTarget)
+    const gitBadge = hasMissionGit(git) ? <MissionGitBadge meshTheme={meshTheme} missionId={mission.id} git={git} loading={loading} refresh={refresh} /> : null
+    const scopeMissing = missionScopeNotRecorded(structure)
+    const inRelease = !!useReleasesContext()?.list?.membership[mission.id]
+    if (!structure?.summary && open === 0 && decisions === 0 && !gitBadge && !scopeMissing && !inRelease) return null
     return (
         <div className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 px-1.5 pb-1 text-3xs ${meshTheme.textMuted}`} data-testid="mission-structure-line">
             {structure?.summary && <span className="min-w-0 flex-1 truncate" title={structure.summary}>{structure.summary}</span>}
             {open > 0 && <span className="tabular-nums">{t('needsYou.openItems', { count: open })}</span>}
             {structure && structure.openItems.live_check > 0 && <span className="tabular-nums">{t('needsYou.liveChecksOpen', { count: structure.openItems.live_check })}</span>}
+            {gitBadge}
+            <ReleaseBadge missionId={mission.id} />
+            {scopeMissing && (
+                <span data-testid="mission-scope-not-recorded" className="rounded px-1.5 py-0.5 opacity-80" style={{ background: 'color-mix(in srgb, currentColor 10%, transparent)' }} title={t('needsYou.scopeNotRecordedHint')}>
+                    {t('needsYou.scopeNotRecorded')}
+                </span>
+            )}
             {decisions > 0 && (inRouter
                 ? <DecisionBadge meshId={mission.meshId} count={decisions} />
                 : <span className="font-bold">{t('needsYou.decisionsWaiting', { count: decisions })}</span>)}

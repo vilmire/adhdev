@@ -11,6 +11,25 @@ export interface LaunchDefaultEntry extends LaunchSelection {
     revision: number;
     setBy: 'owner' | 'assistant';
     setAt: number;
+    /**
+     * Ordered quota-failover alternatives (design 2026-11-01 §6.1): at most
+     * {@link MAX_LAUNCH_FALLBACKS}, distinct providers, none equal to the entry's
+     * own provider. Additive — an older daemon ignores the key; absent = none.
+     */
+    fallback?: LaunchSelection[];
+}
+export const MAX_LAUNCH_FALLBACKS = 3;
+/** Shape check for a fallback list (provider uniqueness + schema); eligibility is checked at write time. */
+export function fallbackListIssue(list: unknown, ownProvider?: string): string | undefined {
+    if (!Array.isArray(list) || list.length > MAX_LAUNCH_FALLBACKS) return 'invalid_fallback';
+    const seen = new Set<string>(ownProvider ? [ownProvider] : []);
+    for (const item of list) {
+        if (selectionSchemaIssue(item)) return 'invalid_fallback';
+        const provider = (item as LaunchSelection).provider;
+        if (seen.has(provider)) return 'duplicate_fallback_provider';
+        seen.add(provider);
+    }
+    return undefined;
 }
 export interface LaunchDefaultChange {
     at: number;
@@ -31,12 +50,13 @@ export interface LaunchDefaultsDocument {
 export type LaunchDefaultsRead =
     | { status: 'ok'; document: LaunchDefaultsDocument }
     | { status: 'missing' | 'unreadable' | 'invalid'; reason: string };
-const entryKeys = ['provider', 'model', 'thinkingLevel', 'revision', 'setBy', 'setAt'];
+const entryKeys = ['provider', 'model', 'thinkingLevel', 'revision', 'setBy', 'setAt', 'fallback'];
 const origins: readonly StoreWriteOrigin[] = ['human', 'relay', 'review', 'review_tainted', 'owner'];
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 function isEntry(value: unknown): value is LaunchDefaultEntry {
     if (!isRecord(value) || !hasOnlyKeys(value, entryKeys)) return false;
-    const { revision, setBy, setAt, ...selection } = value;
+    const { revision, setBy, setAt, fallback, ...selection } = value;
+    if (fallback !== undefined && fallbackListIssue(fallback, typeof selection.provider === 'string' ? selection.provider : undefined)) return false;
     return !selectionSchemaIssue(selection) && integer(revision) && revision > 0
         && (setBy === 'owner' || setBy === 'assistant') && integer(setAt);
 }
@@ -61,6 +81,8 @@ export interface LaunchDefaultsWrite {
     role: LaunchRole;
     /** null explicitly clears the role. A set replaces the whole triple. */
     selection: LaunchSelection | null;
+    /** Ordered failover list. Omitted keeps the role's current list; `[]` clears it. Ignored when `selection` is null. */
+    fallback?: LaunchSelection[];
     /** 0 explicitly bootstraps an absent document. Required on every write. */
     expectedRevision: number;
     by: 'owner' | 'assistant';
@@ -117,7 +139,7 @@ export class LaunchDefaultsStore {
     write(request: LaunchDefaultsWrite): LaunchDefaultsWriteResult {
         const fail = (code: Extract<LaunchDefaultsWriteResult, { ok: false }>['code'], reason: string): LaunchDefaultsWriteResult =>
             ({ ok: false, code, reason, committed: false });
-        if (!isRecord(request) || !hasOnlyKeys(request, ['role', 'selection', 'expectedRevision', 'by', 'origin', 'previousToolRestriction'])
+        if (!isRecord(request) || !hasOnlyKeys(request, ['role', 'selection', 'fallback', 'expectedRevision', 'by', 'origin', 'previousToolRestriction'])
             || !isLaunchRole(request.role) || !integer(request.expectedRevision)
             || !['owner', 'assistant'].includes(request.by) || !origins.includes(request.origin)
             || (request.previousToolRestriction !== undefined && !['enforced', 'prompt_only'].includes(request.previousToolRestriction))) {
@@ -148,7 +170,20 @@ export class LaunchDefaultsStore {
             const document: LaunchDefaultsDocument = current.status === 'ok' ? current.document : { version: 1, revision: 0, history: [] };
             const previous = document[request.role] ?? null;
             const at = Date.now();
-            const entry = selection ? { ...selection, revision: revision + 1, setBy: request.by, setAt: at } : null;
+            let fallback: LaunchSelection[] | undefined = previous?.fallback;
+            if (selection && request.fallback !== undefined) {
+                const issue = fallbackListIssue(request.fallback, selection.provider);
+                if (issue) return { ok: false, code: 'invalid_args', reason: issue, committed: false };
+                const checked: LaunchSelection[] = [];
+                for (const candidate of request.fallback) {
+                    const validated = validateLaunchDefault(request.role, candidate, this.ports);
+                    if (!validated.ok) return { ok: false, code: 'launch_default_invalid', reason: validated.issue.reason, validation: validated, committed: false };
+                    checked.push(validated.selection);
+                }
+                fallback = checked.length ? checked : undefined;
+            }
+            if (fallback && selection && fallback.some(f => f.provider === selection!.provider)) fallback = fallback.filter(f => f.provider !== selection!.provider);
+            const entry = selection ? { ...selection, revision: revision + 1, setBy: request.by, setAt: at, ...(fallback?.length ? { fallback } : {}) } : null;
             document.revision = revision + 1;
             if (entry) document[request.role] = entry;
             else delete document[request.role];

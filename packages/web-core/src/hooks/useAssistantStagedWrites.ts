@@ -16,9 +16,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
     ASSISTANT_STAGED_COMMAND,
     parseResolveOutcomes,
+    unwrapStagedAnswer,
     parseStagedList,
     parseStagedMemoryStatus,
     type AssistantMemoryStatus,
+    type AssistantSkillDraft,
     type AssistantStagedDecision,
     type AssistantStagedItem,
     type AssistantStagedOutcome,
@@ -42,6 +44,12 @@ export interface AssistantStagedWritesState {
     busyIds: ReadonlySet<string>
     refresh: () => Promise<void>
     resolve: (target: AssistantStagedTarget, decision: AssistantStagedDecision) => Promise<void>
+    /**
+     * A skill save proposal: "edit, then save". Saves the owner's edited text as
+     * the skill and retires the proposal (`assistant_store_admin` skill create).
+     * Absent in hosts that cannot send owner admin commands.
+     */
+    saveEditedSkill?: (id: string, draft: AssistantSkillDraft) => Promise<void>
 }
 
 export function useAssistantStagedWrites(options: {
@@ -119,5 +127,27 @@ export function useAssistantStagedWrites(options: {
         await refresh()
     }, [daemonId, refresh])
 
-    return { items, memoryStatus, outcomes, busyIds, refresh, resolve }
+    const saveEditedSkill = useCallback(async (id: string, draft: AssistantSkillDraft) => {
+        if (!daemonId) return
+        setBusyIds(prev => new Set([...prev, id]))
+        let outcome: AssistantStagedOutcome
+        try {
+            const out = unwrapStagedAnswer(await sendRef.current(daemonId, 'assistant_store_admin', {
+                target: 'skill', action: 'create', stagedId: id,
+                name: draft.name, description: draft.description, body: draft.body, ...(draft.project ? { project: draft.project } : {}),
+            }))
+            outcome = out && out.success !== false ? { ok: true } : { ok: false, code: String(out?.code || out?.result || 'failed') }
+        } catch (e) {
+            outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
+        }
+        setOutcomes(prev => ({ ...prev, [id]: outcome }))
+        setBusyIds(prev => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+        })
+        await refresh()
+    }, [daemonId, refresh])
+
+    return { items, memoryStatus, outcomes, busyIds, refresh, resolve, saveEditedSkill }
 }

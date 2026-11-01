@@ -11,7 +11,7 @@ import { DAEMON_UPGRADE_POLICY_UNAVAILABLE_MESSAGE } from '../../src/utils/daemo
 // cause (no update policy on the entry) was invisible. It now goes through the shared
 // helper and surfaces the reason, still sending nothing when the policy is missing.
 let root: Root | null = null
-afterEach(() => { act(() => root?.unmount()); root = null })
+afterEach(() => { act(() => root?.unmount()); root = null; vi.unstubAllGlobals() })
 
 function mount(ides: any[], send: any) {
     const out: { current: ReturnType<typeof useDashboardVersionBanner> | null } = { current: null }
@@ -49,5 +49,35 @@ describe('dashboard version banner upgrade', () => {
         await act(async () => { await h.current!.handleBannerUpgrade('daemon_mach_1') })
         expect(h.current!.upgradingDaemons['daemon_mach_1']).toBe('error')
         expect(h.current!.upgradeMessages['daemon_mach_1']).toBe('npm registry unreachable')
+    })
+
+    it.each([
+        // [daemon, API target, web appVersion, expected banner target / listed]
+        [27, 27, 29, 29, true],
+        [29, 27, 30, 30, true],
+        [29, 27, 28, 28, false], // daemon already ahead of web: no suggestion
+        [27, 27, 27, 27, false],
+    ])('manual suggestion daemon %i / api %i / web %i', (d, a, w, target, listed) => {
+        vi.stubGlobal('__APP_VERSION__', `1.0.82-rc.${w}`)
+        const daemon = { ...base, version: `1.0.82-rc.${d}`, serverVersion: `1.0.82-rc.${a}`, updatePolicy: { channel: 'preview', targetVersion: `1.0.82-rc.${a}` } }
+        const h = mount([daemon], vi.fn())
+        expect(h.current!.versionMismatchDaemons.length).toBe(listed ? 1 : 0)
+        if (listed) expect(h.current!.targetVersion).toBe(`1.0.82-rc.${target}`)
+    })
+
+    it('cross-track web (stable) never creates a suggestion for a preview daemon', () => {
+        vi.stubGlobal('__APP_VERSION__', '1.0.90')
+        const h = mount([{ ...base, version: '1.0.82-rc.27', serverVersion: '1.0.82-rc.27', updatePolicy: { channel: 'preview', targetVersion: '1.0.82-rc.27' } }], vi.fn())
+        expect(h.current!.versionMismatchDaemons).toHaveLength(0)
+    })
+
+    it('failure message is retained after a failed manual update', async () => {
+        vi.stubGlobal('__APP_VERSION__', '1.0.82-rc.29')
+        const send = vi.fn().mockResolvedValue({ result: { success: false, error: 'EACCES' } })
+        const h = mount([{ ...base, version: '1.0.82-rc.27', updatePolicy: { channel: 'preview', targetVersion: '1.0.82-rc.27' } }], send)
+        await act(async () => { await h.current!.handleBannerUpgrade('daemon_mach_1') })
+        expect(send).toHaveBeenCalledWith('daemon_mach_1', 'daemon_upgrade', {})
+        expect(h.current!.upgradeMessages['daemon_mach_1']).toBe('EACCES')
+        expect(h.current!.versionMismatchDaemons).toHaveLength(1)
     })
 })

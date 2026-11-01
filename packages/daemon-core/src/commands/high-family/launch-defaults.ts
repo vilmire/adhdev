@@ -4,7 +4,7 @@ import { COMMAND_SOURCES, defineCommandSpecs } from '../command-registry.js';
 import type { HighFamilyHandler } from './types.js';
 import { MeshConfigStrictLockError } from '../../config/mesh-config-store.js';
 import { getLaunchDefaultsCommandPorts, LaunchDefaultsCatalogError } from '../../launch-defaults/ports.js';
-import { hasOnlyKeys, isLaunchDefaultsDocument, isLaunchRole, isRecord, resolveLaunchSelection,
+import { fallbackListIssue, hasOnlyKeys, isLaunchDefaultsDocument, isLaunchRole, isRecord, resolveLaunchSelection,
     selectionSchemaIssue, validateLaunchDefault, type LaunchDefaultEntry, type LaunchDefaultsRead,
     type LaunchDefaultsStore, type LaunchDefaultsWriteResult, type LaunchRole, type LaunchSelection,
     type LaunchValidationPorts, type LaunchValidationWarning, type ResolveLaunchResult,
@@ -64,6 +64,7 @@ interface Parsed {
     role?: LaunchRole;
     project?: string;
     selection?: LaunchSelection;
+    fallback?: LaunchSelection[];
     expectedRevision?: number;
     sessionId?: string;
 }
@@ -71,7 +72,7 @@ function parse(args: unknown, write: boolean, assistant: boolean): Parsed | null
     const raw = args === undefined ? {} : args;
     if (!isRecord(raw) || !hasOnlyKeys(raw, [
         'action', 'role', 'project', 'provider', 'model', 'thinkingLevel',
-        ...(write ? ['expectedRevision'] : []), ...(assistant ? ['assistantSessionId'] : []),
+        ...(write ? ['expectedRevision'] : []), ...(write && !assistant ? ['fallback'] : []), ...(assistant ? ['assistantSessionId'] : []),
     ])) return null;
     const action = raw.action === undefined && !write ? 'get' : raw.action;
     if (write ? action !== 'set' && action !== 'clear' : action !== 'get' && action !== 'check') return null;
@@ -85,7 +86,10 @@ function parse(args: unknown, write: boolean, assistant: boolean): Parsed | null
         if (selectionSchemaIssue(selection)) return null;
     } else if (Object.keys(selection).length) return null;
     if (write && (!Number.isSafeInteger(raw.expectedRevision) || (raw.expectedRevision as number) < 0)) return null;
+    // Failover alternatives (design 2026-11-01 §6.1): owner-only, global scope, on a `set`.
+    if (Object.hasOwn(raw, 'fallback') && (action !== 'set' || Object.hasOwn(raw, 'project') || fallbackListIssue(raw.fallback))) return null;
     return { action: action as Parsed['action'], ...(isLaunchRole(raw.role) ? { role: raw.role } : {}),
+        ...(Object.hasOwn(raw, 'fallback') ? { fallback: raw.fallback as LaunchSelection[] } : {}),
         ...(typeof raw.project === 'string' ? { project: raw.project } : {}),
         ...(action === 'set' || action === 'check' ? { selection: selection as unknown as LaunchSelection } : {}),
         ...(write ? { expectedRevision: raw.expectedRevision as number } : {}),
@@ -224,7 +228,7 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
                     durable: true as const, note: NEXT_LAUNCH };
             });
         }
-        const result = ports.store.write({ role, selection, expectedRevision: input.expectedRevision!,
+        const result = ports.store.write({ role, selection, ...(input.fallback !== undefined ? { fallback: input.fallback } : {}), expectedRevision: input.expectedRevision!,
             by: assistant ? 'assistant' : 'owner', origin, previousToolRestriction: restriction });
         if (!result.ok) return persistenceFailure(result);
         return { success: true as const, result: 'applied' as const, role, scope: 'global' as const,

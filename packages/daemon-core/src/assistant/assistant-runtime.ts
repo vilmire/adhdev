@@ -34,6 +34,7 @@ import { LOG } from '../logging/logger.js';
 import { collectCoordinatorReplies } from './assistant-relay-audit.js';
 import { isAdapterEvidenceRef, verifiedNativeReportParts } from './attempt-report-recovery.js';
 import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
+import { createSessionControlRuntime, disposeSessionControlRuntime } from './session-control-runtime.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { getMeshMissions } from '../mesh/mesh-missions.js';
@@ -41,17 +42,26 @@ import { buildMeshStatusLineForNotification } from '../mesh/mesh-notification-st
 import { getAssistantRegistry, subscribeAssistantRegistry, type AssistantRegistry } from './assistant-registry.js';
 import { InMemoryAssistantRelayStore, type AssistantRelayStore } from './assistant-relay-store.js';
 import { AssistantMetricsStore, SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
+import { MemoryArchive } from './memory/memory-archive.js';
+import { MemoryNoticeCollector } from './memory/memory-notice.js';
+import { DecisionPromoter, type DecisionPromotionPorts } from './memory/decision-promotion.js';
+import { subscribeDecisionAnswered } from '../mesh/mesh-mission-decision-answer-notifier.js';
 import { ASSISTANT_RELAY_BUS_KINDS, AssistantRelay, type AssistantPulledEvent, type AssistantRelayPorts, type MeshWorkCounts } from './assistant-relay.js';
 import { getAssistantServices } from './assistant-services.js';
 import { projectSlugs } from './assistant-projects.js';
 import { setAssistantMemberMeshSource } from './member-meshes.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
-import { liveAssistantQuotaPort, resolveQuotaPoolModel, type AssistantQuotaPort } from './assistant-quota.js';
+import { liveAssistantQuotaPort, resolveQuotaPoolModel, assistantReviewReserveMinPercent, type AssistantQuotaPort } from './assistant-quota.js';
+import { DEFAULT_QUOTA_RESERVE } from '../quota/quota-reserve.js';
 import { buildPreviousSessionNote, type PreviousSessionMessage } from './assistant-relay-format.js';
 import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
+import { collectMissionGitDigest, formatMissionGitDigestSection } from './mission-git-digest.js';
 import { DecisionNudge, DecisionWatch, decisionSourcesFromPorts, formatDecisionDigestSection } from './decision-nudge.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
+import { ProcedureSignalStore } from './procedure-signal-store.js';
+import { ensureStarterSkills } from './skills/starter-skills.js';
+import { settleProposal } from '../commands/high-family/assistant-skill-verbs.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
 import { AssistantRemoteRelayPoller, REMOTE_POLL_MS, isSelfHealableRevocationReason } from './assistant-remote-relay.js';
@@ -111,11 +121,21 @@ export interface AssistantRuntimeOptions {
     registry?: AssistantRegistry;
     store?: AssistantRelayStore;
     metrics?: AssistantMetricsStore | null;
+    /** Recurring-procedure signals (defaults to the mesh runtime DB's tables when `store` is not injected). */
+    signals?: ProcedureSignalStore | null;
     tickMs?: number;
     /** Quota reading for the review-turn gate; defaults to the daemon's live quota cache. */
     quota?: AssistantQuotaPort;
     /** Remote-hosted project poll cadence (default `REMOTE_POLL_MS`). */
     remotePollMs?: number;
+    /**
+     * Memory archive tier. Unset: opened over `mesh-runtime.db` when the runtime
+     * opens its own stores (production); tests that inject a relay `store` get
+     * none unless they pass one. `null` = none.
+     */
+    memoryArchive?: MemoryArchive | null;
+    /** Reads a decision item for preference promotion; defaults to the mission item store. */
+    decisionItems?: DecisionPromotionPorts['readItem'];
 }
 
 type RuntimeComponents = Pick<DaemonComponents, 'instanceManager' | 'router' | 'cliManager' | 'bus'>
@@ -128,13 +148,13 @@ export function getAssistantRuntime(): AssistantRuntime | null {
     return current;
 }
 
-function openStores(): { store: AssistantRelayStore; metrics: AssistantMetricsStore | null } {
+function openStores(): { store: AssistantRelayStore; metrics: AssistantMetricsStore | null; signals: ProcedureSignalStore | null } {
     try {
         const db = MeshRuntimeStore.getInstance().db;
-        return { store: new SqliteAssistantRelayStore(db), metrics: new AssistantMetricsStore(db) };
+        return { store: new SqliteAssistantRelayStore(db), metrics: new AssistantMetricsStore(db), signals: new ProcedureSignalStore(db) };
     } catch (e) {
         LOG.warn('Assistant', `relay store unavailable, using in-memory rows (no restart backlog): ${(e as Error)?.message ?? e}`);
-        return { store: new InMemoryAssistantRelayStore(), metrics: null };
+        return { store: new InMemoryAssistantRelayStore(), metrics: null, signals: null };
     }
 }
 
@@ -301,8 +321,8 @@ export function wireAssistantRuntime(
     opts: AssistantRuntimeOptions = {},
 ): AssistantRuntime {
     const registry = opts.registry ?? getAssistantRegistry();
-    const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
-    const { store, metrics } = opened;
+    const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null, signals: opts.signals ?? null } : openStores();
+    const { store, metrics, signals } = opened;
     rebuildFollowerWakeRateLimitFromStore();
     let sawCaller = false;
     let mcpRecipient: string | null = null;
@@ -335,6 +355,14 @@ export function wireAssistantRuntime(
         try { model = sid ? resolveQuotaPoolModel(instanceOf(components, sid)?.getState?.()) : undefined; } catch { /* unknown */ }
         return quota.remainingPct(cliType, now, model);
     };
+    const reviewReserveMinPercent = (): number => {
+        const cliType = registry.read()?.cliType;
+        if (!cliType) return DEFAULT_QUOTA_RESERVE.assistantReviewMinPercent;
+        const sid = registry.read()?.sessionId;
+        let model: string | undefined;
+        try { model = sid ? resolveQuotaPoolModel(instanceOf(components, sid)?.getState?.()) : undefined; } catch { /* unknown */ }
+        return assistantReviewReserveMinPercent(cliType, model);
+    };
     review = new AssistantReviewScheduler({
         liveSessionId,
         isReady: (sid) => instanceReady(instanceOf(components, sid)),
@@ -346,6 +374,7 @@ export function wireAssistantRuntime(
         reviewTurnSetting: () => registry.read()?.reviewTurn ?? null,
         reviewAts: () => registry.read()?.reviewAts ?? [],
         quotaRemainingPct: reviewQuotaRemainingPct,
+        reserveMinPercent: () => reviewReserveMinPercent(),
         inputLog: getAssistantServices().inputLog,
         relayBusy: () => relay.hasPendingInput(),
         isQueued: (messageId) => relay.isQueued(messageId),
@@ -354,6 +383,8 @@ export function wireAssistantRuntime(
             registry.recordReview(at);
             metrics?.bump('review_turns', '', at);
         },
+        reviewCandidates: (now) => (signals?.reviewCandidates(now, getAssistantServices().skills.list()) ?? [])
+            .map((c) => ({ id: c.clusterId, signalCount: c.signalCount, distinctDays: c.distinctDays, excerpt: c.excerpt })),
     });
     const reviewScheduler = review;
     const digestScheduler = new AssistantDigestScheduler({
@@ -366,6 +397,8 @@ export function wireAssistantRuntime(
         relayBusy: () => relay.hasPendingInput(),
         enqueue: (input) => relay.enqueueInput(input),
         decisionSection: (now) => formatDecisionDigestSection(decisionWatch.snapshot(), now),
+        // Only meshes whose missions live in THIS daemon's store yield entries (a member holds none).
+        missionGitSection: () => formatMissionGitDigestSection(getAssistantServices().listMeshes().map(m => ({ project: m.name, digest: collectMissionGitDigest(m.id) }))),
         recordDigest: (at) => registry.recordDigest(at),
     });
 
@@ -528,9 +561,17 @@ export function wireAssistantRuntime(
             .catch((e) => LOG.warn('Assistant', `remote relay poll failed: ${(e as Error)?.message ?? e}`));
     };
 
+    // Memory changes the assistant did not make itself (owner approval/undo/edit, promotion, hand edit)
+    // reach the live session as one `[ADHDev memory]` input per tick (memory design §3.6).
+    const memoryNotice = new MemoryNoticeCollector(getAssistantServices().memory, {
+        liveSessionId,
+        enqueue: (input) => relay.enqueueInput(input),
+    });
+    const stopMemoryNotice = memoryNotice.start();
+
     let active = false;
     let disposed = false;
-    const offs: Array<() => void> = [];
+    const offs: Array<() => void> = [stopMemoryNotice];
     let tickTimer: ReturnType<typeof setInterval> | null = null;
     let ticking = false;
     let lastMetricsPrune = 0;
@@ -541,6 +582,7 @@ export function wireAssistantRuntime(
         try {
             const now = Date.now();
             relay.tick(now);
+            void sessionControl.tick();
             void terminalDelivery?.tick().catch(e => LOG.warn('Assistant', `terminal watch delivery failed: ${(e as Error).message}`));
             const r = reviewScheduler.evaluate(now);
             if (r.fired) LOG.info('Assistant', `idle review turn queued (${r.messageId})`);
@@ -555,9 +597,12 @@ export function wireAssistantRuntime(
             }
             const dn = decisionNudge.evaluate(now);
             if (dn.fired) LOG.info('Assistant', `decision nudge queued (${dn.messageId})`);
+            const mn = memoryNotice.evaluate();
+            if (mn.fired) LOG.info('Assistant', `memory notice queued (${mn.messageId}, ${mn.changes} change${mn.changes === 1 ? '' : 's'})`);
             if (metrics && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {
                 lastMetricsPrune = now;
-                metrics.prune(now);
+                metrics?.prune(now);
+                signals?.prune(now);
             }
         } catch (e) {
             LOG.warn('Assistant', `relay tick failed: ${(e as Error)?.message ?? e}`);
@@ -565,6 +610,14 @@ export function wireAssistantRuntime(
             ticking = false;
         }
     };
+
+    // Session control: deferred self-switch, quota-failover tick, daily counters (design 2026-11-01).
+    const sessionControl = createSessionControlRuntime({
+        components, registry, metrics,
+        enqueueNotice: (sessionId, text, messageId) => relay.enqueueInput({ source: 'relay', text, messageId, forSessionId: sessionId }),
+        openThreadMeshIds: () => store.openThreads().map(t => t.meshId),
+    });
+    offs.push(() => disposeSessionControlRuntime());
 
     const activate = (reason: AssistantActivationReason): void => {
         if (reason === 'project_send' || reason === 'pull') sawCaller = true;
@@ -576,6 +629,7 @@ export function wireAssistantRuntime(
         // dead session's history is not readable for every CLI).
         let contextInFlight = false;
         offs.push(components.bus.on(['turn'], (event) => {
+            if (event.kind === 'turn' && event.phase === 'committed' && registry.read()?.sessionId === event.sessionId) sessionControl.onTurnCommitted(event.sessionId);
             if (event.kind !== 'turn' || event.phase !== 'committed' || contextInFlight) return;
             if (registry.read()?.sessionId !== event.sessionId) return;
             contextInFlight = true;
@@ -594,6 +648,7 @@ export function wireAssistantRuntime(
             })();
         }, { name: 'assistant.context' }));
         relay.start();
+        sessionControl.restorePending();
         offs.push(() => relay.stop());
         tickTimer = setInterval(tick, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);
         (tickTimer as { unref?: () => void }).unref?.();
@@ -604,7 +659,18 @@ export function wireAssistantRuntime(
             offs.push(() => clearInterval(remoteTimer));
         }
         const svc = getAssistantServices();
-        const curator = startAssistantCuratorTimer(new AssistantCurator(svc.skills, svc.memory), {
+        try {
+            const starter = ensureStarterSkills(svc.skills);
+            if (starter.installed.length) LOG.info('Assistant', `starter skills installed: ${starter.installed.join(', ')}`);
+        } catch (e) {
+            LOG.warn('Assistant', `starter skills not installed: ${(e as Error)?.message ?? e}`);
+        }
+        const curator = startAssistantCuratorTimer(new AssistantCurator(svc.skills, svc.memory, undefined, () => {
+            // Projects that still exist: meshes (hosted here or members) and followed remote projects.
+            const refs = new Set<string>(svc.listMeshes().map((m) => m.id));
+            for (const f of registry.listFollowedRemoteProjects()) refs.add(f.meshId);
+            return refs;
+        }), {
             onError: (e) => LOG.warn('Assistant', `curator pass failed: ${(e as Error)?.message ?? e}`),
         });
         offs.push(() => curator.stop());
@@ -613,12 +679,44 @@ export function wireAssistantRuntime(
 
     // M7 sink for the store verbs (applied / owner-approved review writes).
     const services = getAssistantServices();
+    // Memory archive tier (SQLite + FTS5) over the same mesh-runtime.db.
+    let ownedArchive: MemoryArchive | null = null;
+    if (opts.memoryArchive !== undefined) ownedArchive = opts.memoryArchive;
+    else if (!opts.store) {
+        try { ownedArchive = new MemoryArchive(MeshRuntimeStore.getInstance().db, Date.now, () => services.memory.lessonTtlMs()); }
+        catch (e) { LOG.warn('Assistant', `memory archive unavailable: ${(e as Error)?.message ?? e}`); }
+    }
+    if (ownedArchive) services.memory.attachArchive(ownedArchive);
+    // Owner decisions answered the same way three times become a preference (memory design §3.8).
+    const stopPromotion: Array<() => void> = [];
+    if (ownedArchive) {
+        const promoter = new DecisionPromoter(ownedArchive.db, services.memory, {
+            readItem: opts.decisionItems ?? ((meshId, itemId) => MeshRuntimeStore.getInstance().missionItems().getItem(meshId, itemId)),
+        });
+        stopPromotion.push(promoter.start());
+        stopPromotion.push(subscribeDecisionAnswered((ev) => {
+            try { promoter.onAnswer(ev); } catch (e) { LOG.warn('Assistant', `decision promotion failed: ${(e as Error)?.message ?? e}`); }
+        }));
+    }
     services.reviewMetrics = metrics ? { creditReviewWrite: (id, kind, at) => metrics.creditReviewWrite(id, kind, at) } : null;
+    // Procedure skills (design 2026-11-01): skill counters, recurring-request signals, proposal bookkeeping.
+    services.skillMetrics = metrics ? { bump: (col, meshId, at, n) => metrics.bump(col, meshId, at, n), rows: (since) => metrics.rows(since) } : null;
+    services.procedureSignals = signals;
+    services.skills.onStagedSettled = (rec, how) => settleProposal(services, rec.id, how);
+    const recordOwnerInput = (r: { sessionIds: readonly string[]; messageId: string; outcome: { kind: string }; unverified?: boolean; text?: string }): void => {
+        const sid = liveSessionId() ?? registry.read()?.sessionId ?? null;
+        if (!signals || !sid || !r.text || r.unverified || !r.sessionIds.includes(sid)) return;
+        if (r.outcome.kind !== 'delivered' && r.outcome.kind !== 'queued') return;
+        signals.record({ text: r.text, source: 'owner_input', meshId: '', turnKey: r.messageId });
+    };
 
     // Dashboard chat (at delivery) and dashboard terminal submit keys (at the
     // PTY write) into the assistant session → input log (human).
     setAssistantHumanInputSink({
-        chat: (r) => relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome, r.unverified === true && r.source === 'ipc'),
+        chat: (r) => {
+            relay.recordHumanSubmit(r.sessionIds, r.messageId, r.outcome, r.unverified === true && r.source === 'ipc');
+            try { recordOwnerInput(r); } catch { /* instrumentation only */ }
+        },
         terminal: (r) => relay.recordHumanTerminalInput(r.sessionIds, r.data, r.unverified === true && r.source === 'ipc'),
     });
 
@@ -679,6 +777,13 @@ export function wireAssistantRuntime(
             setAssistantHumanInputSink(null);
             setAssistantMemberMeshSource(null);
             if (services.reviewMetrics && getAssistantServices() === services) services.reviewMetrics = null;
+            if (getAssistantServices() === services) {
+                services.skillMetrics = null;
+                services.procedureSignals = null;
+                services.skills.onStagedSettled = null;
+            }
+            for (const off of stopPromotion) off();
+            if (ownedArchive && services.memory.archive === ownedArchive) services.memory.attachArchive(null);
             for (const off of offs.reverse()) {
                 try { off(); } catch { /* noop */ }
             }

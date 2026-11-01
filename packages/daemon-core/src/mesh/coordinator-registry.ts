@@ -61,6 +61,8 @@ export interface CoordinatorRegistryEntry {
     };
     /** Path of the MCP config file the daemon wrote for this session. */
     mcpConfigPath?: string;
+    /** Provider switch: the coordinator session this one replaces (session-control handoff, design 2026-11-01 §5.1). */
+    successorOf?: string;
 }
 
 const COORD_REGISTRY_KEY = Symbol.for('adhdev.daemon-core.meshCoordinatorRegistry');
@@ -85,6 +87,30 @@ if (!sharedCoordRegistry[COORD_REGISTRY_KEY]) {
 const _registry = sharedCoordRegistry[COORD_REGISTRY_KEY]!.registry;
 const _pendingFailedCleanupBySessionId =
     sharedCoordRegistry[COORD_REGISTRY_KEY]!.pendingFailedCleanupBySessionId;
+
+/**
+ * Coordinators being replaced (provider switch, design 2026-11-01 §5.1): the
+ * routing snapshot (`listLocalCoordinatorSessions`) and `pickCoordinator` skip
+ * them, so new events reach only the successor. In-memory on purpose — a daemon
+ * restart mid-switch clears it and the old coordinator is routable again
+ * (fail-safe: never a mesh with no receiver).
+ */
+const _draining = new Set<string>();
+export function setCoordinatorDraining(sessionId: string, draining: boolean): void {
+    if (draining) _draining.add(sessionId);
+    else _draining.delete(sessionId);
+}
+export function isCoordinatorDraining(sessionId: string): boolean {
+    return _draining.has(sessionId);
+}
+
+/** Record that `newSessionId` replaces `oldSessionId` (persisted; informational). */
+export function markCoordinatorSuccessor(newSessionId: string, oldSessionId: string): void {
+    const entry = _registry.get(newSessionId);
+    if (!entry || entry.successorOf === oldSessionId) return;
+    entry.successorOf = oldSessionId;
+    saveRegistry();
+}
 
 function getRegistryPath(): string {
     return join(getDaemonDataDir(), 'mesh-coordinators.json');

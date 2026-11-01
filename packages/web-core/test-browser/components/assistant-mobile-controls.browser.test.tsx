@@ -258,7 +258,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
                 await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-terminal-${width}.png` }) })
             }
             expect(commands.handleSendChat).not.toHaveBeenCalled()
-            expect(sendCommand.mock.calls.every(([, command]) => ['assistant_execution_state', 'assistant_staged_resolve', 'assistant_threads'].includes(command))).toBe(true)
+            expect(sendCommand.mock.calls.every(([, command]) => ['assistant_execution_state', 'assistant_staged_resolve', 'assistant_threads', 'assistant_memory_digest', 'assistant_quota_failover'].includes(command))).toBe(true)
         }
     } finally {
         await act(async () => root.unmount())
@@ -499,17 +499,21 @@ it('expands mobile touch hit targets to 44px via pseudo-elements while preservin
 
         // 1. Mobile room header buttons (visual 36x36; 4px gap-1 between action buttons split to 2px each)
         const backBtn = host.querySelector('button.mobile-room-back')!
+        const todoBtn = host.querySelector('.mobile-room-header-actions button[data-testid="todo-button"]')!
         const viewModeBtn = host.querySelector('.mobile-room-header-actions button[title="Switch to Terminal view"]')!
         const stopCliBtn = host.querySelector('.mobile-room-header-actions button[title="Stop CLI process"]')!
         const meshGraphBtn = host.querySelector('.mobile-room-header-actions button[data-testid="conversation-mesh-graph-button"]')!
         const actionsMenuBtn = host.querySelector('.mobile-room-header-actions button[data-testid="conversation-actions-menu"]')!
 
         assertHitExpansion(backBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 4, right: 4 })
-        assertHitExpansion(viewModeBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 4, right: 2 }, { width: 42, height: 44 })
+        // The To do button leads the action group (structured missions), so view mode sits in the middle.
+        assertHitExpansion(todoBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 4, right: 2 }, { width: 42, height: 44 })
+        assertHitExpansion(viewModeBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 }, { width: 40, height: 44 })
         assertHitExpansion(stopCliBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 }, { width: 40, height: 44 })
         assertHitExpansion(meshGraphBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 }, { width: 40, height: 44 })
         assertHitExpansion(actionsMenuBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 4 }, { width: 42, height: 44 })
 
+        assertAdjacentPairNoOverlap(todoBtn, viewModeBtn)
         assertAdjacentPairNoOverlap(viewModeBtn, stopCliBtn)
         assertAdjacentPairNoOverlap(stopCliBtn, meshGraphBtn)
         assertAdjacentPairNoOverlap(meshGraphBtn, actionsMenuBtn)

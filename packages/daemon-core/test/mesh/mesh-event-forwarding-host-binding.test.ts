@@ -30,6 +30,7 @@ function fixture() {
     const host: any = { adapters: new Map(), deps: {
         getInstanceManager: () => ({ getInstance: () => undefined }),
         getHostedBindingOwner: () => owner,
+        idleSessionLifetimeControl: { resolveHostBootId: () => 'host-boot-1' },
         listHostedCliRuntimes: inventory,
     } };
     // Exercise the actual strict-stop envelope check and handler, not a canned receipt.
@@ -50,7 +51,7 @@ describe('strict writer stop routing by persisted worker host', () => {
         const f = fixture(); persist(f.sessionId);
         const result = await f.stop();
         expect(result).toMatchObject({ ...f.request, success: true, quiescent: true,
-            evidence: { kind: 'host_session_absent', sessionId: f.sessionId }, incarnation: expect.any(String) });
+            evidence: { kind: 'host_session_absent', sessionId: f.sessionId, hostBootId: 'host-boot-1' }, incarnation: expect.any(String) });
         expect(f.host.stopCli).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: f.sessionId,
             cliType: 'codex-cli', mode: 'hard', meshWriterStop: f.request }));
         expect(f.inventory).toHaveBeenCalledOnce();

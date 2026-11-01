@@ -1,5 +1,5 @@
 import type { DaemonData } from '../types'
-import { buildDaemonUpgradeLabel, getDaemonUpdateChannel, getDaemonUpdateTargetVersion } from './daemon-update-policy'
+import { buildDaemonUpgradeLabel, getDaemonUpdateChannel, getManualUpdateSuggestionVersion } from './daemon-update-policy'
 import { isVersionMismatch, isVersionUpdateRequired } from './version-update'
 
 export interface DaemonUpdateStatusView {
@@ -20,7 +20,7 @@ export interface DaemonUpdateStatusView {
 
 export function buildDaemonUpdateStatusView(daemon: DaemonData, fallbackVersion: string | null): DaemonUpdateStatusView {
     const channel = getDaemonUpdateChannel(daemon)
-    const targetVersion = getDaemonUpdateTargetVersion(daemon, fallbackVersion)
+    const targetVersion = getManualUpdateSuggestionVersion(daemon, fallbackVersion)
     const mismatch = isVersionMismatch(daemon, targetVersion)
     const required = isVersionUpdateRequired(daemon, targetVersion)
     const buttonLabel = buildDaemonUpgradeLabel(daemon, { targetVersion, required, fallback: 'Update daemon' })

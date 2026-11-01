@@ -1060,6 +1060,7 @@ const { emit } = components
           nodeFacts: {
             schemaVersion: 1,
             reportedAt: Date.now(),
+            quotaReserve: { version: 1, defaults: { routingLongMinPercent: 80 } },
             quota: {
               kimi: { ...quota('kimi', 100), status: 'error', session: null, weekly: null, error: 'token expired', metadata: { source: 'oauth', failureKind: 'expired-token' } },
               'claude-cli': quota('claude-cli', 32),
@@ -1069,7 +1070,6 @@ const { emit } = components
         }],
         policy: {
           maxParallelTasks: 2,
-          quotaRouting: { weeklyMinRemainingPercent: 80 },
         },
       })
       detectCliMocks.detectCLI.mockImplementation(async (provider: string) => provider === 'kimi' ? null : { path: `/bin/${provider}` })

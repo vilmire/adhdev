@@ -20,6 +20,7 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import type { ConsumeView } from '../sessions/input-consume-ack.js';
 
 /** The ledger's redeliver effect, as `TurnLedgerPorts.redeliver` receives it. */
 export interface RedeliverRequest {
@@ -33,10 +34,30 @@ export interface RedeliverRequest {
 export interface RedeliverDeps {
     /** Ask the turn scheduler to probe this attempt on its next wake (late-bound probe port). */
     probe?: (attemptId: string) => void;
+    /** Durable consume-ACK journal (design 2026-11-01). Absent = never resend. */
+    consume?: { read(messageId: string): ConsumeView | undefined; claimRetry(messageId: string): boolean };
 }
 
-/** `TurnLedgerPorts.redeliver`: request a probe, never re-send (see the file header). */
-export function redeliverDispatch(request: RedeliverRequest, deps: RedeliverDeps = {}): 'probe_requested' | 'not_resent' {
+export type RedeliverResult = 'probe_requested' | 'not_resent' | 'retry_claimed' | 'already_consumed';
+
+/**
+ * `TurnLedgerPorts.redeliver`. This port NEVER re-sends: the one sanctioned
+ * resend path is the ledger's H2r reclaim (exact writer stop confirmed, then a
+ * requeue under a NEW nonce = a new messageId, bounded by RECLAIM_BUDGET).
+ * What the consume-ACK journal adds here: an application-ACKed/consumed input is
+ * reported (the probe then moves the attempt on to consumed instead of H2r
+ * reclaiming it), and a PROVEN not_consumed input spends its single retry
+ * (`claimRetry`, atomic, once per messageId) so the journal, the notice
+ * inventory and later callers all see the one resend as taken.
+ */
+export function redeliverDispatch(request: RedeliverRequest, deps: RedeliverDeps = {}): RedeliverResult {
+    const view = request.messageId && deps.consume ? safeRead(deps, request.messageId) : undefined;
+    let result: RedeliverResult | undefined;
+    if (view?.state === 'consumed') {
+        result = 'already_consumed';
+    } else if (view?.state === 'not_consumed' && request.messageId && deps.consume) {
+        try { if (deps.consume.claimRetry(request.messageId)) result = 'retry_claimed'; } catch { /* fail closed */ }
+    }
     let probed = false;
     if (deps.probe) {
         try { deps.probe(request.attemptId); probed = true; } catch (error) {
@@ -46,8 +67,12 @@ export function redeliverDispatch(request: RedeliverRequest, deps: RedeliverDeps
     LOG.info(
         'TurnLedger',
         `redeliver for attempt ${request.attemptId} g${request.generation}${request.taskId ? ` task ${request.taskId}` : ''} on ${request.sessionId}`
-        + ` (messageId ${request.messageId ?? 'none'}): delivered but not consumed within the consume grace — not re-sending; `
+        + ` (messageId ${request.messageId ?? 'none'}${result ? `, ${result}` : ''}${view ? `, consume=${view.state}${view.restored ? ' restored' : ''}` : ''}): delivered but not consumed within the consume grace — not re-sending; `
         + (probed ? 'probing its transcript now (H2r reclaims if it stays unconsumed)' : 'no probe port; H2r reclaims if it stays unconsumed'),
     );
-    return probed ? 'probe_requested' : 'not_resent';
+    return result ?? (probed ? 'probe_requested' : 'not_resent');
+}
+
+function safeRead(deps: RedeliverDeps, messageId: string): ConsumeView | undefined {
+    try { return deps.consume!.read(messageId); } catch { return undefined; }
 }

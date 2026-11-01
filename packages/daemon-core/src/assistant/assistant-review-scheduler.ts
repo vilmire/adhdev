@@ -20,7 +20,8 @@
  * within 2 h nor counts pre-restart human inputs toward the next review.
  */
 
-import { buildReviewInput, evaluateReviewTrigger, type ReviewSkipReason, REVIEW_TRIGGER_RULES } from './assistant-review.js';
+import { recordQuotaReserveBlock } from '../quota/quota-reserve-metrics.js';
+import { buildReviewInput, evaluateReviewTrigger, type ReviewProcedureCandidate, type ReviewSkipReason, REVIEW_TRIGGER_RULES } from './assistant-review.js';
 import type { AssistantInputLog } from './assistant-input-log.js';
 
 export interface AssistantReviewPorts {
@@ -38,6 +39,8 @@ export interface AssistantReviewPorts {
     reviewAts(): readonly number[];
     /** `AssistantQuotaPort` reading for the assistant CLI; null = unknown. */
     quotaRemainingPct(now: number): number | null;
+    /** Machine quota reserve floor for review turns (optional: absent → code default 20). */
+    reserveMinPercent?(now: number): number;
     inputLog: AssistantInputLog;
     /** The relay already has something on its way to the assistant. */
     relayBusy(): boolean;
@@ -46,6 +49,8 @@ export interface AssistantReviewPorts {
     enqueue(input: { source: 'review'; text: string; messageId: string; forSessionId: string }): void;
     /** The review reached the assistant: persist its time and bump `review_turns`. */
     recordDelivered(at: number): void;
+    /** Recurring-request evidence for this review input (none → the input is the fixed text). */
+    reviewCandidates?(now: number): readonly ReviewProcedureCandidate[];
 }
 
 export type ReviewSchedulerOutcome =
@@ -82,10 +87,16 @@ export class AssistantReviewScheduler {
             modalOpen: this.ports.modalOpen(sid),
             reviewTurnSetting: this.ports.reviewTurnSetting(),
             quotaRemainingPct: this.ports.quotaRemainingPct(now),
+            ...(this.ports.reserveMinPercent ? { reserveMinPercent: this.ports.reserveMinPercent(now) } : {}),
         }, this.rules);
-        if (!decision.due) return { fired: false, reason: decision.reason };
+        if (!decision.due) {
+            if (decision.reason === 'low_quota') recordQuotaReserveBlock('assistantReview', 'assistant');
+            return { fired: false, reason: decision.reason };
+        }
         if (this.ports.relayBusy()) return { fired: false, reason: 'busy' };
-        const input = buildReviewInput(now);
+        let candidates: readonly ReviewProcedureCandidate[] = [];
+        try { candidates = this.ports.reviewCandidates?.(now) ?? []; } catch { /* detection never blocks a review */ }
+        const input = buildReviewInput(now, candidates);
         this.inFlight = { sessionId: sid, messageId: input.messageId, delivered: false };
         this.ports.enqueue({ source: 'review', text: input.text, messageId: input.messageId, forSessionId: sid });
         return { fired: true, messageId: input.messageId };

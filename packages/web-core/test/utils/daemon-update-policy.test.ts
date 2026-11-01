@@ -5,6 +5,7 @@ import {
   buildDaemonUpgradePayload,
   getDaemonUpdateChannel,
   getDaemonUpdateTargetVersion,
+  getManualUpdateSuggestionVersion,
 } from '../../src/utils/daemon-update-policy'
 import { buildDaemonUpdateStatusView } from '../../src/utils/daemon-update-status'
 
@@ -200,5 +201,38 @@ describe('buildDaemonUpgradeLabel', () => {
     expect(buildDaemonUpgradeLabel(daemon, { targetVersion: '1.0.28-rc.20' })).toBe('Update to v1.0.28-rc.20')
     expect(buildDaemonUpgradeLabel(daemon, { required: true })).toBe('Update now')
     expect(buildDaemonUpgradeLabel(daemon)).toBe('Upgrade')
+  })
+})
+
+describe('getManualUpdateSuggestionVersion (daemon / API target / web)', () => {
+  const rc = (n: number) => `1.0.82-rc.${n}`
+  const mk = (daemon: string, api: string | undefined): DaemonData => ({
+    id: 'm', type: 'adhdev-daemon', status: 'online', version: daemon,
+    releaseChannel: 'preview', ...(api ? { serverVersion: api } : {}),
+  })
+  it.each([
+    [27, 27, 29, 29],
+    [29, 27, 30, 30],
+    [27, 27, 27, 27],
+    [29, 27, 28, 28], // newer than API target (daemon is ahead, so no mismatch results — see status view)
+    [27, 29, 28, 29], // web older than API target
+  ])('daemon %i / api %i / web %i -> %i', (d, a, w, expected) => {
+    expect(getManualUpdateSuggestionVersion(mk(rc(d), rc(a)), rc(w))).toBe(rc(expected))
+  })
+  it('suggests nothing newer across tracks (stable web vs preview daemon/API)', () => {
+    expect(getManualUpdateSuggestionVersion(mk(rc(27), rc(27)), '1.0.83')).toBe(rc(27))
+    expect(getManualUpdateSuggestionVersion(mk('1.0.80', '1.0.80'), '1.0.82-rc.9')).toBe('1.0.80')
+  })
+  it('falls back to the web version without an API target and keeps the API target without web', () => {
+    expect(getManualUpdateSuggestionVersion(mk(rc(1), undefined), rc(5))).toBe(rc(5))
+    expect(getManualUpdateSuggestionVersion(mk(rc(1), rc(3)), null)).toBe(rc(3))
+  })
+  it('status view: 27/27/29 and 29/27/30 show the update, downgrade does not', () => {
+    expect(buildDaemonUpdateStatusView(mk(rc(27), rc(27)), rc(29))).toMatchObject({ showButton: true, targetVersion: rc(29) })
+    expect(buildDaemonUpdateStatusView(mk(rc(29), rc(27)), rc(30))).toMatchObject({ showButton: true, targetVersion: rc(30) })
+    expect(buildDaemonUpdateStatusView(mk(rc(29), rc(27)), rc(28)).showButton).toBe(false)
+  })
+  it('upgrade payload stays empty', () => {
+    expect(buildDaemonUpgradePayload(mk(rc(27), rc(27)))).toEqual({})
   })
 })

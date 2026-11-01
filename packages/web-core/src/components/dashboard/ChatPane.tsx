@@ -12,6 +12,8 @@ import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSec
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
 import AssistantStagedWrites from './AssistantStagedWrites';
+import AssistantMemoryDigest from './AssistantMemoryDigest';
+import AssistantControlSettings from './AssistantControlSettings';
 import AssistantWatchedProjects from './AssistantWatchedProjects';
 import ChatMachineReconnectButton from './ChatMachineReconnectButton';
 import { getVisibleBarControls } from './ControlsBar';
@@ -762,7 +764,13 @@ export default function ChatPane({
                         <AssistantWatchedProjects daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
                     )}
                     {isAssistantPane && showAssistantStagedWrites && (
+                        <AssistantMemoryDigest daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
+                    )}
+                    {isAssistantPane && showAssistantStagedWrites && (
                         <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
+                    )}
+                    {isAssistantPane && showAssistantStagedWrites && (
+                        <AssistantControlSettings daemonId={daemonId} sendCommand={sendCommand} />
                     )}
                     <ChatMachineReconnectButton
                         machineId={chatMachineId}

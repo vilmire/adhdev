@@ -16,10 +16,10 @@
 export const MISSION_ITEM_KINDS = ['remaining', 'live_check', 'decision', 'evidence'] as const
 export type MissionItemKind = typeof MISSION_ITEM_KINDS[number]
 
-export const MISSION_ITEM_STATES = ['open', 'done', 'dropped', 'moved', 'answered', 'expired', 'withdrawn', 'superseded'] as const
+export const MISSION_ITEM_STATES = ['open', 'done', 'failed', 'dropped', 'moved', 'answered', 'expired', 'withdrawn', 'superseded'] as const
 export type MissionItemState = typeof MISSION_ITEM_STATES[number]
 
-/** States a coordinator/worker may SET through items_update, per kind. `answered`/`expired` are daemon-owned. */
+/** States a coordinator/worker may SET through items_update, per kind. `answered`/`expired`/`failed` (owner live-check verdict) are daemon-owned. */
 export const COORDINATOR_SETTABLE_ITEM_STATES: Readonly<Record<MissionItemKind, readonly MissionItemState[]>> = {
     remaining: ['open', 'done', 'dropped'],
     live_check: ['open', 'done', 'dropped'],

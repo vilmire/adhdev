@@ -5,7 +5,7 @@ import { detectCLI } from '../detection/cli-detector.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
-import { maintenanceHeld, withMaintenanceAdmission, assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
+import { maintenanceHeld, MAINTENANCE_BOOT_NONCE, withMaintenanceAdmission, assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { buildNewWorkHeldRefusal, evaluateNewWorkHold, resolveNewWorkHoldSessionMeshId, NewWorkHeldError } from '../maintenance/new-work-hold.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
@@ -36,6 +36,8 @@ import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { SessionRegistry } from '../sessions/registry.js';
 import { LOG } from '../logging/logger.js';
 import { type AgentCommandArgs } from './command-args.js';
+import { createInputConsumeAck, type InputConsumeAck } from '../sessions/input-consume-ack.js';
+import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { createSessionInputService, type SessionInputService, type SessionInputTarget } from '../sessions/session-input-service.js';
 import { buildSessionInputTarget, type SessionInputAdapterLike, type SessionInputInstanceLike } from '../sessions/session-input-target.js';
 import {
@@ -198,11 +200,19 @@ export class DaemonCliManager {
      * sharing one `messageId` dedupe.
      */
     readonly input: SessionInputService;
+    /** Durable consume-ACK journal shared by the input funnel, the notice inventory and mesh redelivery. */
+    readonly consumeAck: InputConsumeAck;
 
     constructor(deps: CliManagerDeps, providerLoader: ProviderLoader = new ProviderLoader()) {
         this.deps = deps;
         this.providerLoader = providerLoader;
+        this.consumeAck = createInputConsumeAck({
+            getDb: () => MeshRuntimeStore.getInstance().db,
+            bootNonce: MAINTENANCE_BOOT_NONCE,
+            warn: (m) => LOG.warn('SessionInput', m),
+        });
         this.input = createSessionInputService({
+            consumeAck: this.consumeAck,
             receiptStore: new OutgoingReceiptStore(`${resolveConfigDir()}/outgoing-receipts`),
             resolveSession: (sessionId) => this.resolveSessionInputTarget(sessionId),
             log: (level, msg) => {

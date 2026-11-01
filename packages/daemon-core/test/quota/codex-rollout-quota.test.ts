@@ -311,6 +311,11 @@ describe('stale rollout reading -> mesh routing gate (end to end)', () => {
         };
     }
 
+    /** The owner's 80% long-window floor is the MACHINE quota reserve the node reports. */
+    function withReserve80(node: ReturnType<typeof nodeWith>) {
+        return { ...node, nodeFacts: { ...node.nodeFacts, quotaReserve: { version: 1, defaults: { routingLongMinPercent: 80 } } } };
+    }
+
     /** An aged-out reading at a given weekly usage, its reset still ahead. */
     function staleReadingAt(usedPercent: number) {
         const captured = NOW - CODEX_ROLLOUT_STALE_AFTER_MS - 60 * 60 * 1000;
@@ -333,7 +338,7 @@ describe('stale rollout reading -> mesh routing gate (end to end)', () => {
 
         // Usage within a window only grows, so a 9h-old "100% used" is a lower
         // bound on now - the safe direction for a gate to act on.
-        expect(evaluateProviderQuotaGate(nodeWith(quota), 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW))
+        expect(evaluateProviderQuotaGate(withReserve80(nodeWith(quota)), 'codex-cli', null, NOW))
             .toMatchObject({ reason: 'provider_quota_weekly_low', window: 'weekly', remainingPercent: 0 });
     });
 

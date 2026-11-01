@@ -52,3 +52,15 @@ describe('AssistantDigestScheduler', () => {
         expect(normalizeAssistantRegistryEntry({ ...base, digestHour: 24 })).not.toHaveProperty('digestHour');
     });
 });
+
+describe('AssistantDigestScheduler — mission git section', () => {
+    it('appends the git-evidence block after the decision block, and a failing section never blocks the digest', () => {
+        const { p, enqueued } = ports({ decisionSection: () => 'DECISIONS', missionGitSection: () => 'GIT MISSIONS' });
+        new AssistantDigestScheduler(p).evaluate(at(DEFAULT_DIGEST_HOUR));
+        expect((enqueued[0] as any).text).toBe(`${DIGEST_INPUT_TEXT}\n\nDECISIONS\n\nGIT MISSIONS`);
+
+        const broken = ports({ missionGitSection: () => { throw new Error('boom'); } });
+        expect(new AssistantDigestScheduler(broken.p).evaluate(at(DEFAULT_DIGEST_HOUR)).fired).toBe(true);
+        expect((broken.enqueued[0] as any).text).toBe(DIGEST_INPUT_TEXT);
+    });
+});

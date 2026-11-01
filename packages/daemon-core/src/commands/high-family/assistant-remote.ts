@@ -74,6 +74,7 @@ import {
 import { compactTranscriptTail, coordinatorState, followerStatusView } from '../../assistant/project-views.js';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantRemoteOp } from '../../assistant/assistant-remote-host.js';
 import type { AssistantProjectPorts, CoordinatorLiveness } from '../../assistant/assistant-project-ports.js';
+import { applyHostAttachments } from './assistant-attachments.js';
 import { coordinatorPorts, localArtifactList, localArtifactRead, localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
 import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assistant-store.js';
 import { normalizeAssistantRemoteAccessBinding } from '../../config/mesh-config.js';
@@ -796,8 +797,15 @@ async function run(
             return { success: true, result: isFollower ? followerStatusView(status, mesh) : status };
         }
         case 'send': {
+            // Owner-uploaded images arrive over this authenticated mesh RPC; the host commits its own copy.
+            const hosted = applyHostAttachments(args, meshId, ports.selfDaemonId());
+            if (!hosted.ok) return fail(hosted.code, hosted.error, hosted.detail ?? {});
+            args = hosted.args;
+            const imported = typeof args.attachmentsImported === 'number' ? args.attachmentsImported : 0;
+            const reportImported = (r: CommandRouterResult): CommandRouterResult =>
+                imported > 0 && r.success && r.result && typeof r.result === 'object' ? { ...r, result: { ...(r.result as object), attachmentsImported: imported } } : r;
             if (isFollower) {
-                return followerProjectSend(ports, meshId, sender, args);
+                return reportImported(await followerProjectSend(ports, meshId, sender, args));
             }
             const text = typeof args.text === 'string' ? args.text : '';
             if (!text.trim()) return fail('invalid_args', 'text required');
@@ -807,7 +815,7 @@ async function run(
             const sent = await localProjectSend(ports, mesh, text, clientId);
             if (!sent.ok) return fail(sent.code, sent.error, sent.detail);
             const { ok: _ok, ...result } = sent;
-            return { success: true, result };
+            return reportImported({ success: true, result });
         }
         case 'read': {
             const continuation = parseReportContinuation(args);

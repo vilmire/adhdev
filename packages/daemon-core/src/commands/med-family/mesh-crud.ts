@@ -28,6 +28,7 @@ function withEffectivePolicy<T extends { policy?: unknown } | null | undefined>(
     }
 }
 import { resolveMeshHostStatus } from '../../mesh/mesh-host-ownership.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { hydrateInlineMeshDirectTruth } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
@@ -213,6 +214,25 @@ const meshRecordHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { getMesh } = await import('../../config/mesh-config.js');
             const { setMeshHostPin } = await import('../../config/mesh-config-host-pairing.js');
+            // A force re-pin only moves the POINTER. Host-owned data (queue, missions, decisions) stays on the old
+            // host, orphaned. When the mesh holds any, the only legitimate way to move the host is a verified handoff.
+            if (args?.force === true) {
+                const pinned = resolveMeshHostStatus(getMesh(meshId));
+                const moves = !!pinned.hostDaemonId && !!hostDaemonId && !daemonIdsEquivalent(pinned.hostDaemonId, hostDaemonId);
+                if (moves) {
+                    const { MeshRuntimeStore } = await import('../../mesh/mesh-runtime-store.js');
+                    const { meshHasHostData } = await import('../../mesh/host-handoff/snapshot-import.js');
+                    if (meshHasHostData(MeshRuntimeStore.getInstance().db as never, meshId)) {
+                        return {
+                            success: false,
+                            code: 'host_has_data_use_handoff',
+                            error: `Mesh ${meshId} has host-owned data (queue / missions / decisions) on ${pinned.hostDaemonId}. Moving the host pointer with force would orphan it; use a host handoff, which moves the data with the role.`,
+                            meshId,
+                            meshHost: pinned,
+                        };
+                    }
+                }
+            }
             const result = setMeshHostPin(meshId, {
                 ...(hostDaemonId ? { hostDaemonId } : {}),
                 ...(hostNodeId ? { hostNodeId } : {}),

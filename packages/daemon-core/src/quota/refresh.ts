@@ -1068,7 +1068,7 @@ export const QUOTA_ROUTABLE_MAX_AGE_MS = 60 * 60 * 1000;
  *
  * So the provider currently doing the work stayed fresh, while every ALTERNATIVE
  * provider — precisely the ones the gate is supposed to divert work TO — aged
- * out and became ungateable. With `weeklyMinRemainingPercent: 80` set to steer
+ * out and became ungateable. With a machine reserve `routingLongMinPercent: 80` set to steer
  * work off claude-cli (68% left) onto codex-cli (91% left), BOTH readings were
  * ~3h old, so both failed open, the threshold applied to nobody, and selection
  * fell back to slot order — which put claude-cli first. The setting the owner

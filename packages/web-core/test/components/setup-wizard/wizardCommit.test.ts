@@ -51,7 +51,7 @@ describe('runWizardPolicyCommit', () => {
             slotsByNodeId: { 'node-a': [{ provider: 'claude-cli' } as any] },
             distribution: 'smart',
             approvalPatch: { requireApprovalForPush: false },
-            quotaRouting: { sessionMinRemainingPercent: 25 },
+            quotaRouting: { spreadBonusMax: 25 },
         }))
         expect(calls.map(c => c.type)).toEqual(['update_mesh_node', 'update_mesh', 'mesh_quota_routing_set'])
         expect(result.ok).toBe(true)
@@ -90,7 +90,7 @@ describe('runWizardPolicyCommit', () => {
         const result = await runWizardPolicyCommit(base({
             sendCommand,
             distribution: 'in_order',
-            quotaRouting: { weeklyMinRemainingPercent: 40 },
+            quotaRouting: { sessionAxisWeeklyHeadroomPercent: 40 },
         }))
         expect(calls.map(c => c.type)).toEqual(['update_mesh', 'mesh_quota_routing_set'])
         expect(result.ok).toBe(false)

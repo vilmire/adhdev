@@ -1,4 +1,6 @@
 import { sanitizeDecisionFields } from './decision-views.js';
+import { sanitizeMissionGitFields } from './mission-git-digest.js';
+import { sanitizeReleaseFields } from './release-digest.js';
 import { sessionProvider, sessionStatus, sessionEvidence, sessionCoverage, nodeProviderQuota, type ProjectSessionEvidence } from './project-session-view.js';
 import { createHash } from 'crypto';
 /**
@@ -805,6 +807,8 @@ export function followerStatusView(
         ...(staleMissions.length > 0 ? { staleMissions } : {}),
         ...(routing ? { routing } : {}),
         ...sanitizeDecisionFields(raw),
+        ...sanitizeMissionGitFields(raw),
+        ...sanitizeReleaseFields(raw),
         sessions,
         sessionCoverage: sessionCoverage(raw.sessionCoverage),
         nodeProviderQuota: nodeProviderQuota(raw.nodeProviderQuota),

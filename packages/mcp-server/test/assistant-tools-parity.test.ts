@@ -24,6 +24,7 @@ import {
 
 import {
   ALL_ASSISTANT_TOOL_SCHEMAS,
+  callAssistantTool,
   readAssistantSessionIdFromEnv,
   resolveAssistantModeTools,
 } from '../src/tools/assistant-tools.js';
@@ -48,6 +49,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   project_attach_remote: { project: 'adhdev', targetDaemonId: 'daemon_mach_target1' },
   discover_repos: {},
   memory: { action: 'add', target: 'user', text: 'reports in one line' },
+  memory_search: { query: 'pull request size' },
   skill_view: { name: 'list' },
   skill_manage: { action: 'archive', name: 'old-skill' },
   project_note: { project: 'adhdev', action: 'record', text: 'oss commits in English' },
@@ -57,6 +59,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   artifact_read: { project: 'adhdev', artifact_id: 'art_0123456789abcdef' },
   decision_answer: { project: 'adhdev', itemId: 'dec_1', optionId: 'a', interpretedFrom: 'budget temp' },
   decision_request: { project: 'adhdev', question: 'Which database?', options: ['postgres', 'sqlite'] },
+  session_control: { project: 'adhdev', role: 'coordinator', action: 'restart', interpretedFrom: 'restart the blog coordinator' },
 };
 
 function fakeTransport(reply: (type: string, args: Record<string, unknown>) => any = () => ({ success: true })) {
@@ -300,4 +303,54 @@ test('decision_answer: batch answers pass through whole, the assistant session c
     if (previous === undefined) delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
     else process.env.ADHDEV_MCP_SESSION_CREDENTIAL = previous;
   }
+});
+
+test('project_send declares owner-upload attachments and sends the session credential only when they are used', async () => {
+  const tools = resolveAssistantModeTools();
+  const send = tools.find(t => t.name === 'project_send')!;
+  const att = send.inputSchema.properties.attachments as { type?: string; maxItems?: number; items?: { type?: string } };
+  assert.equal(att?.type, 'array');
+  assert.equal(att?.items?.type, 'string');
+  assert.equal(att?.maxItems, 5);
+  assert.deepEqual(send.inputSchema.required, ['project', 'message'], 'attachments stay optional');
+  const prev = process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
+  process.env.ADHDEV_MCP_SESSION_CREDENTIAL = 'cred-xyz';
+  try {
+    const plain = fakeTransport();
+    await handleAssistantToolCall(plain, tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi' });
+    assert.equal(plain.calls[0].args.mcpSessionCredential, undefined, 'a text-only send carries no credential');
+    const withImages = fakeTransport();
+    const res = await handleAssistantToolCall(withImages, tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi', messageId: 'm1', attachments: ['art_a'] });
+    assert.equal(res.isError, undefined, res.content[0]?.text);
+    assert.equal(withImages.calls[0].args.mcpSessionCredential, 'cred-xyz');
+    assert.deepEqual(withImages.calls[0].args.attachments, ['art_a']);
+    const bad = await handleAssistantToolCall(fakeTransport(), tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi', attachments: ['a'], extra: 1 });
+    assert.equal(bad.isError, true, 'unknown keys are still refused');
+  } finally {
+    if (prev === undefined) delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL; else process.env.ADHDEV_MCP_SESSION_CREDENTIAL = prev;
+  }
+});
+
+test('session_control: assistant-only write tool; the session credential rides along; schema pins role/action', async () => {
+  const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS]);
+  assert.equal(others.has('session_control'), false);
+  assert.equal(ASSISTANT_TOOL_VERBS.session_control, 'assistant_session_control');
+  assert.ok(new Set<string>(ASSISTANT_WRITE_TOOLS).has('session_control'));
+  const tool = resolveAssistantModeTools().find(t => t.name === 'session_control')!;
+  assert.deepEqual((tool.inputSchema as any).required, ['project', 'role', 'action']);
+  assert.deepEqual((tool.inputSchema as any).properties.role.enum, ['coordinator', 'worker', 'assistant']);
+  assert.deepEqual((tool.inputSchema as any).properties.action.enum, ['status', 'stop', 'restart', 'switch_provider']);
+  assert.equal(tool.annotations.readOnlyHint, false);
+  const calls: Array<{ verb: string; args: any }> = [];
+  const prev = process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
+  process.env.ADHDEV_MCP_SESSION_CREDENTIAL = 'cred-1';
+  try {
+    await callAssistantTool({ command: async (verb: string, args: any) => { calls.push({ verb, args }); return { success: true }; } } as any,
+      'session_control', { project: 'adhdev', role: 'worker', action: 'stop', sessionId: 'w1', interpretedFrom: 'stop w1' }, 'asst-1');
+  } finally {
+    if (prev === undefined) delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL; else process.env.ADHDEV_MCP_SESSION_CREDENTIAL = prev;
+  }
+  assert.equal(calls[0]!.verb, 'assistant_session_control');
+  assert.equal(calls[0]!.args.assistantSessionId, 'asst-1');
+  assert.equal(calls[0]!.args.mcpSessionCredential, 'cred-1');
 });

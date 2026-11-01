@@ -40,7 +40,7 @@ import { deriveProviderApprovalInbox } from '../MeshGraph/providerApprovalInbox'
 import { DialogShell } from '../ui/Dialog'
 import { IconX } from '../Icons'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
-import { getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
+import { getManualUpdateSuggestionVersion } from '../../utils/daemon-update-policy'
 import { isVersionMismatch } from '../../utils/version-update'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
 
@@ -368,7 +368,7 @@ export default function DashboardMobileChatMode({
     // !== would show "Update" to a machine already on a NEWER build than the
     // web app (e.g. daemon rc.19 vs app rc.18).
     const selectedMachineNeedsUpgrade = !!selectedMachineEntry
-        && isVersionMismatch(selectedMachineEntry, getDaemonUpdateTargetVersion(selectedMachineEntry, appVersion))
+        && isVersionMismatch(selectedMachineEntry, getManualUpdateSuggestionVersion(selectedMachineEntry, appVersion))
     const selectedMachineProviders = useMemo(
         () => selectedMachineEntry?.availableProviders || [],
         [selectedMachineEntry],

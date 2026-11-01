@@ -15,6 +15,7 @@
 import { randomUUID } from 'crypto';
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { readMissionGitState } from './mesh-mission-git-eval.js';
 import type { MeshQueueFacts } from './mesh-runtime-store-queue-reads.js';
 import { deriveDependencyFailures } from './mesh-dependency-failure.js';
 import { computeMeshMissionStatsBatch, type MeshMissionStats } from './mesh-task-stats.js';
@@ -64,6 +65,8 @@ export interface MeshMissionRecord {
     updatedAt: string;
     /** Structured missions (design 2026-10-28 §4.1): one-line current state, ≤300 chars. */
     summary?: string;
+    /** One user/operator-visible sentence for the release CHANGELOG draft (design 2026-11-01-release-objects). */
+    releaseNote?: string;
     /** Why/how it closed (merged | verified_live | superseded | not_needed | owner_abandoned | unspecified). */
     outcome?: string;
     outcomeReason?: string;
@@ -498,6 +501,22 @@ export function maybeEmitMissionCloseCandidate(meshId: string, missionId: string
 }
 
 /**
+ * Design 2026-11-01-mission-git-refs §6: when the CACHED git verdict says every referenced
+ * commit/branch is on the default branch, the close hint says so. Wording only — it reads the
+ * cache (no git, no network), changes nothing, and `landed` is not a completion criterion.
+ */
+function missionGitEvidenceSentence(meshId: string, missionId: string): string {
+    try {
+        return readMissionGitState(meshId, missionId).state === 'landed'
+            ? ' Git evidence: the commits/branches this mission references are already contained in the default branch — '
+                + 'before closing, still confirm live acceptance and that no remaining item is open (landed is not "done").'
+            : '';
+    } catch {
+        return '';
+    }
+}
+
+/**
  * Build and queue the mission_close_candidate pending coordinator event. Broadcast
  * scope (defaultScopeForEvent → 'broadcast' since it is neither a terminal-task nor a
  * system event), so it reaches any coordinator on the mesh without needing an
@@ -514,7 +533,8 @@ function emitMissionCloseCandidateEvent(
         + `task(s) are terminal (${aggregate.completed} completed, ${aggregate.failed} failed, ${aggregate.cancelled} cancelled). `
         + `It is a candidate to close. Review its outcome and, if done, set its status with `
         + `mesh_mission_upsert(mission_id: "${mission.id}", status: "completed" | "abandoned"). `
-        + `This is only a hint — the mission stays 'active' until you decide.`;
+        + `This is only a hint — the mission stays 'active' until you decide.`
+        + missionGitEvidenceSentence(meshId, mission.id);
     notifyMeshCoordinator({
         event: 'mission_close_candidate',
         meshId,

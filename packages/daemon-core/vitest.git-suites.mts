@@ -77,6 +77,10 @@ export const GIT_HEAVY_SUITES: string[] = [
   // linked worktree, replace objects and smudge filters against the sanitized reader.
   'test/mesh/contract/contract-git-source.test.ts',
   'test/mesh/mesh-onboarding-plan.test.ts',
+  // Mission git refs (design 2026-11-01-mission-git-refs): real bare-origin + clone topologies (merge, cherry-pick,
+  // squash, rebase, shallow clone) judged by ancestry / git cherry / merge-tree residual patch.
+  'test/mesh/mission-ref-containment.test.ts',
+  'test/mesh/mission-git-eval.test.ts',
   'test/mesh/preview-freshness.test.ts',
   // BASE-REF-CONFIG-FALLBACK: real repo + worktree cut before .adhdev/refine.json landed on main.
   'test/mesh/refine-config-base-ref-fallback.test.ts',

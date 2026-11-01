@@ -4,6 +4,7 @@
  */
 import { normalizeDifficultyBrainMap, DEFAULT_DIFFICULTY_BRAINS, type DifficultyBrainMap } from '@adhdev/mesh-shared';
 import { loadMeshConfig, withMeshConfigWriteLock, saveMeshConfig } from './mesh-config-store.js';
+import { LEGACY_MESH_RESERVE_FIELDS } from '../quota/quota-reserve.js';
 import { normalizeQuotaRoutingPolicy, mergePolicyOverrides, type LocalMeshConfig, type LocalMeshEntry, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 
 /**
@@ -94,10 +95,10 @@ function setDifficultyBrainsUnlocked(map: unknown, meshId?: string): DifficultyB
     return normalized;
 }
 
-// ─── Quota-aware routing thresholds (PER MESH, machine-local) ───
+// ─── Quota-aware routing PREFERENCES (PER MESH, machine-local) ───
 //
-// The write path for RepoMeshPolicy.quotaRouting (the launch GATE / SPREAD
-// thresholds — see mesh/mesh-quota-routing.ts). Scoped exactly like the
+// The write path for RepoMeshPolicy.quotaRouting (SPREAD / staleness / headroom /
+// busy-fallback preferences; the reserve thresholds are machine-wide now) — see mesh/mesh-quota-routing.ts). Scoped exactly like the
 // difficulty-brain presets above: the overrides live on the mesh entry's
 // policy in meshes.json, `meshId` is optional and resolves to the sole mesh,
 // and an ambiguous write fails loud rather than silently re-tuning another
@@ -112,9 +113,9 @@ function setDifficultyBrainsUnlocked(map: unknown, meshId?: string): DifficultyB
 // clamped percent is bounded 0..100 and stale/missing data still fails open).
 
 /** quotaRouting fields expressed as percentages (0..100). */
-const QUOTA_ROUTING_PERCENT_FIELDS = new Set(['sessionMinRemainingPercent', 'weeklyMinRemainingPercent', 'sessionAxisWeeklyHeadroomPercent']);
+const QUOTA_ROUTING_PERCENT_FIELDS = new Set(['sessionAxisWeeklyHeadroomPercent']);
 /** quotaRouting fields that just need to be finite, non-negative numbers. */
-const QUOTA_ROUTING_NONNEGATIVE_FIELDS = new Set(['staleAfterMs', 'sessionResetImminentMs', 'spreadBonusMax']);
+const QUOTA_ROUTING_NONNEGATIVE_FIELDS = new Set(['staleAfterMs', 'spreadBonusMax']);
 /** quotaRouting fields that are booleans, not numbers. */
 const QUOTA_ROUTING_BOOLEAN_FIELDS = new Set(['quotaBusyFallback']);
 
@@ -132,6 +133,16 @@ function validateQuotaRoutingOverrides(input: unknown): RepoMeshQuotaRoutingPoli
     }
     const out: RepoMeshQuotaRoutingPolicy = {};
     for (const [key, raw] of Object.entries(input as Record<string, unknown>)) {
+        // The reserve thresholds moved to the MACHINE (owner decision Q5): refuse
+        // loudly so an old dashboard/wizard/tool surfaces the regression instead
+        // of silently losing the write.
+        if (Object.prototype.hasOwnProperty.call(LEGACY_MESH_RESERVE_FIELDS, key)) {
+            const target = LEGACY_MESH_RESERVE_FIELDS[key as keyof typeof LEGACY_MESH_RESERVE_FIELDS];
+            throw new Error(
+                `invalid_quota_routing: moved_to_machine_reserve — '${key}' is no longer a per-mesh setting; `
+                + `it is now the machine-wide quota reserve field '${target}' (use quota_reserve_set on the machine).`,
+            );
+        }
         const isPercent = QUOTA_ROUTING_PERCENT_FIELDS.has(key);
         const isBoolean = QUOTA_ROUTING_BOOLEAN_FIELDS.has(key);
         if (!isPercent && !isBoolean && !QUOTA_ROUTING_NONNEGATIVE_FIELDS.has(key)) {

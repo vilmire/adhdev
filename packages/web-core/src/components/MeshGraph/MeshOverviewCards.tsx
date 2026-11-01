@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { queueTaskDisplayText } from '../../utils/queue-task-label';
 import { Tooltip } from '../ui/InfoTip'
 import MissionStructureLine, { useMissionTitle } from './MissionStructureLine'
+import ReleasesPanel from './ReleasesPanel'
+import { ReleasesProvider, useReleases } from './useReleases'
 import { useMissionFocus } from './useMissionFocus'
 import { filterLedgerEntriesForDisplay, ledgerEntryNodeLabel } from './meshLedgerEvents';
 import type {
@@ -124,6 +126,8 @@ export default function MeshOverviewCards({
     const asyncRefineJobs = ((canonicalStatus as any).asyncRefineJobs as AsyncRefineJob[] | undefined) ?? []
 
     const { detail, canGoBack, open: setDetail, back: backDetail, close: closeDetail } = useDetailStack()
+    // Release objects (design 2026-11-01-release-objects): one list per Overview, shared with the mission rows' badges.
+    const releases = useReleases({ daemonId, meshId: meshId ?? canonicalStatus.meshId ?? null, send: sendDaemonCommand })
 
     // Resolve a mesh-wide pending approval through the daemon command seam. The daemon has
     // no `mesh_approve` command (that name is the coordinator MCP tool, which itself sends
@@ -185,6 +189,7 @@ export default function MeshOverviewCards({
         // MeshObservabilitySurface (the Overview tab wrapper). Keeping this a
         // non-scrolling, non-flex-1 column lets the wrapper's overflow-y-auto own
         // scrolling so all cards remain reachable in the dashboard full view.
+        <ReleasesProvider value={releases}>
         <div className="flex flex-col gap-3 pb-2">
             <PendingApprovalsInbox nodes={canonicalStatus.nodes} onResolve={resolveApproval} />
 
@@ -196,6 +201,8 @@ export default function MeshOverviewCards({
                 focusMissionId={focusMissionId}
                 onSelect={mission => setDetail({ kind: 'mission', mission })}
             />
+
+            <ReleasesPanel meshTheme={meshTheme} />
 
             <div className="grid gap-3 sm:grid-cols-2">
                 <LedgerCard
@@ -254,6 +261,7 @@ export default function MeshOverviewCards({
                 />
             )}
         </div>
+        </ReleasesProvider>
     )
 }
 

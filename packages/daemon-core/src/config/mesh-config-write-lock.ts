@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
+import { loadBetterSqlite3 } from '../system/load-better-sqlite3.js';
 import { constants, openSync, closeSync, fstatSync, lstatSync, mkdirSync, type BigIntStats } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -100,7 +101,10 @@ export function acquireMeshConfigMutex(configPath: string, timeout: number): Mes
             warnOnce('repin', `meshes.json write-lock file ${path} was replaced or recreated; re-pinning to the new file`);
         }
         incarnations.set(path, pinned);
-        db = new Database(path, { timeout: Math.max(0, deadline - Date.now()), fileMustExist: true });
+        // Loaded on first lock, not at import: the mcp-server bundle reaches this module
+        // through daemon-core's entry and ships without the native addon.
+        const Ctor = loadBetterSqlite3() as typeof Database;
+        db = new Ctor(path, { timeout: Math.max(0, deadline - Date.now()), fileMustExist: true });
         // No schema or payload writes: an empty SQLite file supports locking.
         // DELETE journal mode is required; a substituted WAL DB is refused.
         if (db.pragma('journal_mode', { simple: true }) !== 'delete') throw new Error('mutex_journal_mode_changed');

@@ -70,21 +70,21 @@ afterEach(() => {
     if (existsSync(testTmpDir)) rmSync(testTmpDir, { recursive: true, force: true });
 });
 
-describe('setMeshQuotaRouting — dedicated writer for RepoMeshPolicy.quotaRouting', () => {
+describe('setMeshQuotaRouting — dedicated writer for RepoMeshPolicy.quotaRouting (preferences only)', () => {
     it('persists the overrides onto the mesh policy in meshes.json', () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
-        const persisted = setMeshQuotaRouting({ sessionMinRemainingPercent: 80, weeklyMinRemainingPercent: 60 }, mesh.id);
-        expect(persisted).toEqual({ sessionMinRemainingPercent: 80, weeklyMinRemainingPercent: 60 });
-        expect(readPersistedQuotaRouting(mesh.id)).toEqual({ sessionMinRemainingPercent: 80, weeklyMinRemainingPercent: 60 });
-        expect(getMeshQuotaRouting(mesh.id)).toEqual({ sessionMinRemainingPercent: 80, weeklyMinRemainingPercent: 60 });
+        const persisted = setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: 80, spreadBonusMax: 12 }, mesh.id);
+        expect(persisted).toEqual({ sessionAxisWeeklyHeadroomPercent: 80, spreadBonusMax: 12 });
+        expect(readPersistedQuotaRouting(mesh.id)).toEqual({ sessionAxisWeeklyHeadroomPercent: 80, spreadBonusMax: 12 });
+        expect(getMeshQuotaRouting(mesh.id)).toEqual({ sessionAxisWeeklyHeadroomPercent: 80, spreadBonusMax: 12 });
     });
 
     it('drops overrides that equal the defaults, and an empty object clears the key entirely', () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
-        setMeshQuotaRouting({ sessionMinRemainingPercent: DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent }, mesh.id);
+        setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent }, mesh.id);
         expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
-        setMeshQuotaRouting({ sessionMinRemainingPercent: 80 }, mesh.id);
-        expect(readPersistedQuotaRouting(mesh.id)).toEqual({ sessionMinRemainingPercent: 80 });
+        setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: 80 }, mesh.id);
+        expect(readPersistedQuotaRouting(mesh.id)).toEqual({ sessionAxisWeeklyHeadroomPercent: 80 });
         const cleared = setMeshQuotaRouting({}, mesh.id);
         expect(cleared).toEqual({});
         expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
@@ -93,38 +93,40 @@ describe('setMeshQuotaRouting — dedicated writer for RepoMeshPolicy.quotaRouti
     it('rejects unknown fields, non-numbers, out-of-range percents, and negative durations', () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
         expect(() => setMeshQuotaRouting({ sessionMinRemaining: 50 }, mesh.id)).toThrow(/invalid_quota_routing: unknown field/);
-        expect(() => setMeshQuotaRouting({ sessionMinRemainingPercent: '50' }, mesh.id)).toThrow(/invalid_quota_routing: sessionMinRemainingPercent must be a finite number/);
-        expect(() => setMeshQuotaRouting({ sessionMinRemainingPercent: 101 }, mesh.id)).toThrow(/between 0 and 100/);
-        expect(() => setMeshQuotaRouting({ weeklyMinRemainingPercent: -1 }, mesh.id)).toThrow(/between 0 and 100/);
+        expect(() => setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: '50' }, mesh.id)).toThrow(/invalid_quota_routing: sessionAxisWeeklyHeadroomPercent must be a finite number/);
+        expect(() => setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: 101 }, mesh.id)).toThrow(/between 0 and 100/);
+        expect(() => setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: -1 }, mesh.id)).toThrow(/between 0 and 100/);
         expect(() => setMeshQuotaRouting({ staleAfterMs: -1000 }, mesh.id)).toThrow(/must be >= 0/);
-        expect(() => setMeshQuotaRouting({ sessionResetImminentMs: -1 }, mesh.id)).toThrow(/must be >= 0/);
-        // A rejected write must leave the mesh untouched — no pathological threshold
-        // can reach the gate through this path.
+        // A rejected write must leave the mesh untouched.
+        expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
+    });
+
+    it('REJECTS the three reserve fields that moved to the machine (never silently ignores them)', () => {
+        const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
+        for (const legacy of ['sessionMinRemainingPercent', 'weeklyMinRemainingPercent', 'sessionResetImminentMs']) {
+            expect(() => setMeshQuotaRouting({ [legacy]: 20 }, mesh.id)).toThrow(/moved_to_machine_reserve/);
+        }
         expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
     });
 
     it('refuses an ambiguous write when several meshes are configured and no meshId is given', () => {
         createMesh({ name: 'a', repoIdentity: 'github.com/acme/a' });
         createMesh({ name: 'b', repoIdentity: 'github.com/acme/b' });
-        expect(() => setMeshQuotaRouting({ sessionMinRemainingPercent: 80 })).toThrow(/quota_routing_mesh_ambiguous/);
+        expect(() => setMeshQuotaRouting({ sessionAxisWeeklyHeadroomPercent: 80 })).toThrow(/quota_routing_mesh_ambiguous/);
     });
 });
 
 describe('quota gate reads the CONFIGURED thresholds (not the constants)', () => {
-    it('a session reading above the default floor still blocks once the mesh raises the threshold', () => {
+    it('a session reading above the default floor blocks once the MACHINE reserve is raised — mesh policy cannot', () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
         // 50% session remaining: comfortably above the 10% default floor…
         const node = nodeWithSessionQuota(50);
         expect(evaluateProviderQuotaGate(node, 'claude-cli', getMesh(mesh.id)?.policy?.quotaRouting ?? null, NOW)).toBeNull();
-        // …but below the configured 80% floor → the SAME reading now blocks.
-        setMeshQuotaRouting({ sessionMinRemainingPercent: 80 }, mesh.id);
-        const stored = getMesh(mesh.id)?.policy?.quotaRouting ?? null;
-        const block = evaluateProviderQuotaGate(node, 'claude-cli', stored, NOW);
+        // …but below the machine's reported 80% reserve → the SAME reading now blocks.
+        const reserved = { ...node, nodeFacts: { ...node.nodeFacts, quotaReserve: { version: 1, defaults: { routingSessionMinPercent: 80 } } } };
+        const block = evaluateProviderQuotaGate(reserved, 'claude-cli', getMesh(mesh.id)?.policy?.quotaRouting ?? null, NOW);
         expect(block?.reason).toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
         expect(block?.thresholdPercent).toBe(80);
-        // Clearing the override restores the default judgement.
-        setMeshQuotaRouting({}, mesh.id);
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', getMesh(mesh.id)?.policy?.quotaRouting ?? null, NOW)).toBeNull();
     });
 
     it('a configured staleAfterMs decides which snapshots the gate still trusts', () => {
@@ -139,21 +141,15 @@ describe('quota gate reads the CONFIGURED thresholds (not the constants)', () =>
     });
 });
 
-describe('the CLAIM PATH reads the written thresholds (write → getMeshWithCache → gate)', () => {
-    // The tests above hand the gate a policy read straight from getMesh. This one
+describe('the CLAIM PATH reads the written preferences (write → getMeshWithCache → gate)', () => {
     // closes the last link: tryAssignQueueTask resolves the mesh through
-    // getMeshWithCache and passes `mesh?.policy?.quotaRouting` to
-    // evaluateProviderQuotaGate (mesh-queue-assignment.ts:808). If that resolver
-    // ever served a memoized or inline-cached policy, a saved threshold would be
-    // silently ignored on the very path the setup wizard exists to configure — so
-    // assert the composition itself, not just the writer and the gate separately.
-    it('picks up a freshly written threshold with no daemon restart or cache invalidation', async () => {
+    // getMeshWithCache and passes `mesh?.policy?.quotaRouting` to the gate. A
+    // saved staleAfterMs must be visible there with no daemon restart.
+    it('picks up a freshly written staleAfterMs with no daemon restart or cache invalidation', async () => {
         const { getMeshWithCache } = await import('../../src/mesh/mesh-queue-assignment.js');
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
-        const node = nodeWithSessionQuota(50); // 50% session remaining
+        const node = nodeWithSessionQuota(95, NOW - 2 * 60 * MIN, NOW - 2 * 60 * MIN); // stale under the default
 
-        // An inline mesh cache holding the PRE-write policy: the claim path must not
-        // serve this stale copy for the policy (it only contributes cache-only nodes).
         const components: any = {
             router: { getCachedInlineMesh: () => ({ ...getMesh(mesh.id), nodes: [] }) },
         };
@@ -161,50 +157,53 @@ describe('the CLAIM PATH reads the written thresholds (write → getMeshWithCach
         const before = getMeshWithCache(components, mesh.id);
         expect(evaluateProviderQuotaGate(node, 'claude-cli', before?.policy?.quotaRouting ?? null, NOW)).toBeNull();
 
-        setMeshQuotaRouting({ sessionMinRemainingPercent: 80 }, mesh.id);
+        setMeshQuotaRouting({ staleAfterMs: 24 * 60 * MIN }, mesh.id);
 
         const after = getMeshWithCache(components, mesh.id);
-        expect(after?.policy?.quotaRouting).toEqual({ sessionMinRemainingPercent: 80 });
+        expect(after?.policy?.quotaRouting).toEqual({ staleAfterMs: 24 * 60 * MIN });
         const block = evaluateProviderQuotaGate(node, 'claude-cli', after?.policy?.quotaRouting ?? null, NOW);
         expect(block?.reason).toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
-        expect(block?.thresholdPercent).toBe(80);
     });
 });
 
 describe('mesh_quota_routing_get / mesh_quota_routing_set commands', () => {
-    it('round-trips overrides and reports the resolved thresholds the gate will apply', async () => {
+    it('round-trips preference overrides and reports the resolved preferences', async () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
         const setResult: any = await meshCrudHandlers.mesh_quota_routing_set(HANDLER_CTX, {
             meshId: mesh.id,
-            quotaRouting: { weeklyMinRemainingPercent: 42 },
+            quotaRouting: { sessionAxisWeeklyHeadroomPercent: 42 },
         });
         expect(setResult.success).toBe(true);
-        expect(setResult.quotaRouting).toEqual({ weeklyMinRemainingPercent: 42 });
-        expect(setResult.resolved.weeklyMinRemainingPercent).toBe(42);
-        expect(setResult.resolved.sessionMinRemainingPercent).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent);
+        expect(setResult.quotaRouting).toEqual({ sessionAxisWeeklyHeadroomPercent: 42 });
+        expect(setResult.resolved.sessionAxisWeeklyHeadroomPercent).toBe(42);
+        expect(setResult.resolved.spreadBonusMax).toBe(DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax);
 
         const getResult: any = await meshCrudHandlers.mesh_quota_routing_get(HANDLER_CTX, { meshId: mesh.id });
         expect(getResult.success).toBe(true);
-        expect(getResult.quotaRouting).toEqual({ weeklyMinRemainingPercent: 42 });
+        expect(getResult.quotaRouting).toEqual({ sessionAxisWeeklyHeadroomPercent: 42 });
         expect(getResult.defaults).toEqual(DEFAULT_QUOTA_ROUTING_POLICY);
         expect(getResult.scope).toMatchObject({ kind: 'mesh', storage: 'machine_local', meshId: mesh.id });
-        // And the gate judges by the value written THROUGH the command.
-        const node = nodeWithSessionQuota(0);
-        (node.nodeFacts.quota as any)['claude-cli'].session.usedPercent = 0;
-        (node.nodeFacts.quota as any)['claude-cli'].weekly.usedPercent = 70; // 30% remaining < 42%
-        const block = evaluateProviderQuotaGate(node, 'claude-cli', getMesh(mesh.id)?.policy?.quotaRouting ?? null, NOW);
-        expect(block?.window).toBe('weekly');
-        expect(block?.thresholdPercent).toBe(42);
     });
 
     it('surfaces validation failures as structured errors without writing', async () => {
         const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
         const result: any = await meshCrudHandlers.mesh_quota_routing_set(HANDLER_CTX, {
             meshId: mesh.id,
-            quotaRouting: { sessionMinRemainingPercent: 500 },
+            quotaRouting: { sessionAxisWeeklyHeadroomPercent: 500 },
         });
         expect(result.success).toBe(false);
         expect(result.error).toMatch(/invalid_quota_routing/);
+        expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
+    });
+
+    it('answers a legacy client that still sends a reserve threshold with moved_to_machine_reserve', async () => {
+        const mesh = createMesh({ name: 'm', repoIdentity: 'github.com/acme/m' });
+        const result: any = await meshCrudHandlers.mesh_quota_routing_set(HANDLER_CTX, {
+            meshId: mesh.id,
+            quotaRouting: { sessionMinRemainingPercent: 30 },
+        });
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/moved_to_machine_reserve/);
         expect(readPersistedQuotaRouting(mesh.id)).toBeUndefined();
     });
 });

@@ -300,7 +300,13 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         probe: (e) => lateProbe.port(e),
         // SUBMIT-UNCONFIRMED-RECLAIM ②: H2 lands here — probe now, never
         // re-send (mesh-dispatch-redelivery.ts explains why).
-        redeliver: (e) => { redeliverDispatch(e, { probe: (attemptId) => lateProbe.port({ attemptId }) }); },
+        redeliver: (e) => {
+            // Decide now on what the journal already holds (no proof → probe, the safe default),
+            // and pull the engine's exact per-messageId acceptance into the journal in the
+            // background so the next H2/H2r decision sees it. Never delay the probe request.
+            redeliverDispatch(e, { probe: (attemptId) => lateProbe.port({ attemptId }), consume: components.cliManager.consumeAck });
+            if (e.messageId) void components.cliManager.input.settleConsume(e.sessionId, e.messageId).catch(() => undefined);
+        },
     };
     const backgroundWork = createRuntimeBackgroundWorkMonitor(components);
     const ledger = createMeshRuntimeTurnLedger({
@@ -344,7 +350,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     // `queue` mode (deliver.ts builds them), so a busy coordinator parks them.
     const inputPort = components.cliManager.input;
     const deliverLog = { info: (m: string) => LOG.info('MeshNotice', m), warn: (m: string) => LOG.warn('MeshNotice', m) };
-    const noticeSubmitMetadata=createNoticeSubmitInventory(ledger);
+    const noticeSubmitMetadata=createNoticeSubmitInventory(ledger, components.cliManager.consumeAck);
     const deliverDeps: TurnDeliverDeps = {
         submitInventory:noticeSubmitMetadata,
         ledger,

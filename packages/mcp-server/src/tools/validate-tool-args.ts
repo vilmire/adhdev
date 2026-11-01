@@ -347,6 +347,7 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             missionId: 'mission_id',
             missionIds: 'mission_ids',
             outcomeReason: 'outcome_reason',
+            releaseNote: 'release_note',
             carryOverTo: 'carry_over_to',
             itemsAdd: 'items_add',
             itemsUpdate: 'items_update',
@@ -369,6 +370,19 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             includeStats: 'include_stats',
         },
     },
+    mesh_mission_git_eval: {
+        [TOP_LEVEL_SCOPE]: {
+            missionId: 'mission_id',
+        },
+    },
+    mesh_release_upsert: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id' } },
+    mesh_release_scope: {
+        [TOP_LEVEL_SCOPE]: { releaseId: 'release_id' },
+        move: { missionId: 'mission_id', toReleaseId: 'to_release_id' },
+    },
+    mesh_release_list: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id' } },
+    mesh_release_record_deploy: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id', baseCommit: 'base_commit' } },
+    mesh_release_changelog_draft: { [TOP_LEVEL_SCOPE]: { releaseId: 'release_id', markApplied: 'mark_applied' } },
     mesh_note: {
         [TOP_LEVEL_SCOPE]: {
             expires_at: 'expiresAt',

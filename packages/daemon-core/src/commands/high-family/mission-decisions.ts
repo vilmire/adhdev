@@ -75,15 +75,15 @@ function refuse(error: string): DecisionCaller {
  * Who is calling, from the ROUTER-stamped source and the router-recorded MCP
  * capability — never from payload fields. Exported for tests.
  */
-export function classifyDecisionCaller(rawArgs: Record<string, unknown>): DecisionCaller {
+export function classifyDecisionCaller(rawArgs: Record<string, unknown>, command: string = MISSION_DECISION_ANSWER): DecisionCaller {
     const source = str(rawArgs[COMMAND_SOURCE_ARG]);
     const requestedVia = str(rawArgs.via);
     if (rawArgs.bind !== undefined || rawArgs.token !== undefined || rawArgs.mcpSessionCredential !== undefined) {
         return refuse('worker/session credentials cannot answer owner decisions');
     }
-    const mcp = readAuthenticatedMcpCommand(rawArgs, MISSION_DECISION_ANSWER);
+    const mcp = readAuthenticatedMcpCommand(rawArgs, command);
     if (mcp.present) {
-        const scope = mcp.valid ? readAuthenticatedMcpScope(rawArgs, MISSION_DECISION_ANSWER) : null;
+        const scope = mcp.valid ? readAuthenticatedMcpScope(rawArgs, command) : null;
         const assistantSid = str(getAssistantRegistry().read()?.sessionId);
         if (scope && !scope.isCoordinator && scope.sessionId && assistantSid && scope.sessionId === assistantSid) {
             if (requestedVia && requestedVia !== 'assistant') return refuse(`assistant callers must use via 'assistant'`);

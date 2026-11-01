@@ -11,7 +11,7 @@ import { join } from 'path';
 import { charCount } from '../memory/memory-store.js';
 import {
     checkSkillLimits, composeSkillMd, newSkillFrontmatter, normalizeSkillFilePath, validateDescription, withDescription,
-    SKILL_FILE, type SkillDirRead,
+    SKILL_FILE, SKILL_TRIGGER_LIMITS, type SkillDirRead,
 } from './skill-format.js';
 import type { SkillJournalRecord } from './skill-journal.js';
 import type { SkillManageOp, SkillRefusal } from './skill-store.js';
@@ -28,6 +28,10 @@ export function prepareCreate(op: Extract<SkillManageOp, { action: 'create' }>):
     if (op.project !== undefined && (typeof op.project !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(op.project))) {
         return { result: 'skill_invalid_format', reason: 'bad_patch' };
     }
+    if (op.triggers !== undefined && !(Array.isArray(op.triggers) && op.triggers.length <= SKILL_TRIGGER_LIMITS.count
+        && op.triggers.every((t) => typeof t === 'string' && t.trim() && t.length <= SKILL_TRIGGER_LIMITS.chars))) {
+        return { result: 'skill_invalid_format', reason: 'bad_patch' };
+    }
     const files: PreparedWrite['files'] = [];
     for (const [p, content] of Object.entries(op.files ?? {})) {
         const np = normalizeSkillFilePath(p);
@@ -36,11 +40,11 @@ export function prepareCreate(op: Extract<SkillManageOp, { action: 'create' }>):
     }
     const over = checkSkillLimits(charCount(op.body), files.map((f) => ({ path: f.path, chars: charCount(f.content) })));
     if (over[0]) return { result: 'skill_too_large', ...over[0] };
-    const fm = newSkillFrontmatter(op.name, op.description, op.project);
+    const fm = newSkillFrontmatter(op.name, op.description, op.project, op.triggers?.map((t) => t.trim()));
     return {
         files: [{ path: SKILL_FILE, content: composeSkillMd(fm, op.body) }, ...files],
         journal: { field: 'create', before: null, after: op.description.trim() },
-        scan: [op.description, op.body, ...files.map((f) => f.content)],
+        scan: [op.description, op.body, ...(op.triggers ?? []), ...files.map((f) => f.content)],
     };
 }
 

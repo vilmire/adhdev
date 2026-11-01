@@ -287,19 +287,24 @@ const recordLocal: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
  * stamp, such a client enqueued into a member's local queue that no host ever
  * schedules.
  */
-async function ownQueueRole(ctx: LowFamilyContext, meshId: string): Promise<RepoMeshDaemonRole | undefined> {
+type OwnQueueRole = { role: RepoMeshDaemonRole; handedOff?: true } | undefined;
+
+async function ownQueueRole(ctx: LowFamilyContext, meshId: string): Promise<OwnQueueRole> {
     try {
         const record = await ctx?.getMeshForCommand?.(meshId, undefined, { preferInline: true });
-        return record?.mesh ? resolveMeshHostStatus(record.mesh).role : undefined;
+        if (!record?.mesh) return undefined;
+        const status = resolveMeshHostStatus(record.mesh);
+        // A host that handed the role away (design 2026-11-01 §7.4) answers mesh_host_handed_off, not the generic member refusal.
+        return { role: status.role, ...(status.handedOffTo ? { handedOff: true as const } : {}) };
     } catch {
         return undefined;
     }
 }
 
 /** The caller's options with `ownerRole` replaced by this daemon's own (never the caller's). */
-function withOwnRole<T extends Record<string, unknown>>(opts: T | undefined, role: RepoMeshDaemonRole | undefined): T & { ownerRole?: RepoMeshDaemonRole } {
-    const { ownerRole: _callerClaim, ...rest } = (opts ?? {}) as T & { ownerRole?: unknown };
-    return (role ? { ...rest, ownerRole: role } : rest) as T & { ownerRole?: RepoMeshDaemonRole };
+function withOwnRole<T extends Record<string, unknown>>(opts: T | undefined, own: OwnQueueRole): T & { ownerRole?: RepoMeshDaemonRole } {
+    const { ownerRole: _callerClaim, handedOff: _callerHandedOff, ...rest } = (opts ?? {}) as T & { ownerRole?: unknown; handedOff?: unknown };
+    return (own ? { ...rest, ownerRole: own.role, ...(own.handedOff ? { handedOff: true } : {}) } : rest) as T & { ownerRole?: RepoMeshDaemonRole };
 }
 
 const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
@@ -399,7 +404,7 @@ const queueCancel: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) 
         // MESH-DISPATCH-MISROUTE: the PRE-cancel row carries the assignment a caller must stop.
         const before = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
         const role = await ownQueueRole(_ctx, req.meshId);
-        if (role === 'host') await settleQueueWriter(req.meshId, req.taskId, 'operator_cancel');
+        if (role?.role === 'host') await settleQueueWriter(req.meshId, req.taskId, 'operator_cancel');
         const task = cancelTask(req.meshId, req.taskId, withOwnRole({ ...(req.reason !== undefined ? { reason: req.reason } : {}) }, role));
         if (task && task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending', error: WRITER_UNKNOWN_ERROR, task: queueWire(task) };
         const response: QueueCancelResponse = { task: queueWire(task), before: queueWire(before) };
@@ -414,7 +419,7 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     if (!req) return badRequest('queue_requeue');
     try {
         const role = await ownQueueRole(_ctx, req.meshId);
-        if (role === 'host' && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, 'superseded');
+        if (role?.role === 'host' && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, 'superseded');
         const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTaskWithOutcome>[2]);
         // The turn ledger refused (attempt still running, foreign owner, no ledger):
         // the row is untouched — answer a refusal, never `success: true` with that row.

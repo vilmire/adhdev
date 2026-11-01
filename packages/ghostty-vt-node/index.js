@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ADDON_FILE = 'ghostty_vt_node.node';
+const { orderPrebuiltTriplets } = require('./binding-candidates.js');
 const PREBUILT_ROOT = path.join(__dirname, 'prebuilt');
 
 function getTriplet() {
@@ -19,9 +20,10 @@ function getTriplet() {
 // Consequently the loader resolves in three tiers:
 //   1. an explicit override dir (ADHDEV_GHOSTTY_VT_PREBUILT_DIR),
 //   2. a locally compiled build/ output,
-//   3. an exact `platform-arch-nodeABI` prebuilt, and finally
-//   4. ANY prebuilt for the same `platform-arch` (N-API portability fallback).
-// Tier 4 is what makes a brand-new Node ABI (e.g. a future node26) work without
+//   3. same-`platform-arch` prebuilts ranked by manifest apiLevel (highest
+//      first), exact ABI as tie-breaker (see binding-candidates.js).
+// Not preferring the exact ABI is deliberate: stale API-level-1 binaries for
+// ABI 115/127 once shadowed the current API-level-2 build. This is what makes a brand-new Node ABI (e.g. a future node26) work without
 // shipping a new directory — the previous failure mode where node137 runtimes
 // hit "binding unavailable" purely because no `node137` directory existed.
 
@@ -38,66 +40,69 @@ function listAvailablePrebuiltTriplets() {
     }
 }
 
-function samePlatformArchTriplets(triplet) {
-    // triplet === `${platform}-${arch}-node${abi}` → prefix is `${platform}-${arch}-`
-    const prefix = `${process.platform}-${process.arch}-`;
-    return listAvailablePrebuiltTriplets().filter(
-        (name) => name.startsWith(prefix) && name !== triplet,
-    );
+function readManifestApiLevel(name) {
+    try {
+        const manifest = JSON.parse(fs.readFileSync(path.join(PREBUILT_ROOT, name, 'manifest.json'), 'utf8'));
+        return Number.isFinite(manifest.apiLevel) ? manifest.apiLevel : 0;
+    } catch {
+        return 0;
+    }
 }
 
-// Last-resort: every other installed prebuilt, regardless of platform/arch.
-// Requiring a foreign-OS `.node` throws a load error (ELF/PE mismatch,
-// "invalid ELF header", "not a valid Win32 application"), which loadBinding()
-// simply skips — so this tier is inert on a correctly-addressed runtime. Its
-// sole purpose is test isolation: suites that mock `process.platform` (e.g.
-// win32 PTY-write / submit driver coverage) corrupt getTriplet() into an
-// address for which no loadable binary exists on the CI runner; walking the
-// remaining triplets lets the real host binary (the one that actually loads)
-// still resolve, instead of the whole ProviderCliAdapter construction throwing.
-function otherInstalledTriplets(triplet, alreadyTried) {
-    return listAvailablePrebuiltTriplets().filter(
-        (name) => name !== triplet && !alreadyTried.has(name),
-    );
-}
-
+// Selection rule (see binding-candidates.js): among same platform-arch
+// prebuilts the highest manifest apiLevel wins, then the exact running ABI.
+// Foreign-platform dirs are a last-resort test-isolation fallback (requiring a
+// foreign-OS `.node` throws and is skipped; it matters only for suites that
+// mock process.platform).
+//
+// A locally compiled build/ output is tried before the prebuilts, but only
+// accepted if it reports apiLevel >= the best prebuilt manifest level — a stale
+// build/ directory must not shadow a newer prebuilt. A rejected build is kept
+// as the very last resort.
 function loadBinding() {
-    const triplet = getTriplet();
+    const abi = process.versions.modules;
     const explicitPrebuiltDir = process.env.ADHDEV_GHOSTTY_VT_PREBUILT_DIR
         ? path.resolve(process.env.ADHDEV_GHOSTTY_VT_PREBUILT_DIR)
         : null;
+    const triplet = getTriplet();
+    const ordered = orderPrebuiltTriplets({
+        names: listAvailablePrebuiltTriplets(),
+        platform: process.platform,
+        arch: process.arch,
+        abi,
+        readApiLevel: readManifestApiLevel,
+    });
+    const prebuiltFile = (name) => path.join(PREBUILT_ROOT, name, ADDON_FILE);
 
+    // { file, minApiLevel } — minApiLevel > 0 means "verify after load".
     const candidates = [
-        // 1. explicit override
-        explicitPrebuiltDir ? path.join(explicitPrebuiltDir, triplet, ADDON_FILE) : null,
-        explicitPrebuiltDir ? path.join(explicitPrebuiltDir, ADDON_FILE) : null,
-        // 2. locally compiled output
-        path.join(__dirname, 'build', 'Release', ADDON_FILE),
-        path.join(__dirname, 'build', 'Debug', ADDON_FILE),
-        // 3. exact-ABI prebuilt
-        path.join(PREBUILT_ROOT, triplet, ADDON_FILE),
-        // 4. N-API portability fallback: any same platform-arch prebuilt
-        ...samePlatformArchTriplets(triplet).map((name) =>
-            path.join(PREBUILT_ROOT, name, ADDON_FILE),
-        ),
-        // 5. test-isolation fallback: any remaining installed triplet (see
-        //    otherInstalledTriplets). Foreign-OS binaries throw on require and
-        //    are skipped; the real host binary still resolves under a mocked
-        //    process.platform.
-        ...otherInstalledTriplets(
-            triplet,
-            new Set([triplet, ...samePlatformArchTriplets(triplet)]),
-        ).map((name) => path.join(PREBUILT_ROOT, name, ADDON_FILE)),
+        explicitPrebuiltDir ? { file: path.join(explicitPrebuiltDir, triplet, ADDON_FILE) } : null,
+        explicitPrebuiltDir ? { file: path.join(explicitPrebuiltDir, ADDON_FILE) } : null,
+        { file: path.join(__dirname, 'build', 'Release', ADDON_FILE), minApiLevel: ordered.bestApiLevel },
+        { file: path.join(__dirname, 'build', 'Debug', ADDON_FILE), minApiLevel: ordered.bestApiLevel },
+        ...ordered.samePlatform.map((name) => ({ file: prebuiltFile(name) })),
+        ...ordered.otherPlatform.map((name) => ({ file: prebuiltFile(name) })),
     ].filter(Boolean);
 
     const errors = [];
+    const rejected = [];
     for (const candidate of candidates) {
         try {
-            return require(candidate);
+            const loaded = require(candidate.file);
+            if (candidate.minApiLevel) {
+                const level = describeBinding(loaded).apiLevel;
+                if (level < candidate.minApiLevel) {
+                    errors.push(`${candidate.file}: apiLevel ${level} < best prebuilt ${candidate.minApiLevel}`);
+                    rejected.push(loaded);
+                    continue;
+                }
+            }
+            return loaded;
         } catch (error) {
-            errors.push(`${candidate}: ${error && error.message ? error.message : String(error)}`);
+            errors.push(`${candidate.file}: ${error && error.message ? error.message : String(error)}`);
         }
     }
+    if (rejected.length) return rejected[0];
 
     const available = listAvailablePrebuiltTriplets();
     throw new Error(

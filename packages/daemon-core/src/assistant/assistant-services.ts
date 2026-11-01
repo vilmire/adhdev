@@ -19,6 +19,8 @@ import { AssistantInputLog } from './assistant-input-log.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { withMemberMeshes } from './member-meshes.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
+import type { AssistantMetricColumn, AssistantMetricRow } from './assistant-relay-sqlite-store.js';
+import type { ProcedureSignalPort } from './procedure-signal-store.js';
 import type { RecordOperatingNoteInput, OperatingNoteEntry } from '../mesh/mesh-operating-notes.js';
 
 /** The operating-note entry points `project_note` calls (§4.10.3). */
@@ -38,6 +40,13 @@ export interface AssistantOperatingNotesPort {
  */
 export interface AssistantReviewMetricsPort {
     creditReviewWrite(reviewTurnId: string, kind: 'applied' | 'approved', at: number): void;
+}
+
+/** Daily skill counters (`skill_views`, `skill_writes`, hints, proposals); the runtime installs it next to `reviewMetrics`. */
+export interface AssistantSkillMetricsPort {
+    bump(column: AssistantMetricColumn, meshId: string, at: number, n?: number): void;
+    /** Daily rows since a local day (`YYYY-MM-DD`) — the owner skills list summarises them. */
+    rows?(sinceDay?: string): AssistantMetricRow[];
 }
 
 export interface AssistantServices {
@@ -63,6 +72,10 @@ export interface AssistantServices {
     isMeshHostedHere?: (mesh: LocalMeshEntry) => boolean;
     /** M7 sink, installed by the assistant runtime (`wireAssistantRuntime`). */
     reviewMetrics?: AssistantReviewMetricsPort | null;
+    /** Skill counters sink, installed by the assistant runtime (`wireAssistantRuntime`). */
+    skillMetrics?: AssistantSkillMetricsPort | null;
+    /** Recurring-procedure signals (local DB), installed by the assistant runtime. */
+    procedureSignals?: ProcedureSignalPort | null;
 }
 
 const defaultOperatingNotes: AssistantOperatingNotesPort = {

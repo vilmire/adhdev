@@ -33,6 +33,14 @@ export type { CanonicalMeshToolName } from '@adhdev/mesh-shared';
 export { buildCoordinatorSystemPrompt } from './mesh/coordinator-prompt.js';
 export { buildMissionPromptSection, acknowledgeAnsweredDecisions } from './mesh/mesh-mission-prompt.js';
 export { upsertMeshMission, getMeshMissions, getMeshMission, summarizeMissionTasks, summarizeMeshMission, getActiveMeshMissionSummaries, getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionSummaries, listMeshMissionsForTool, GOAL_PREVIEW_MAX, COMPACT_STATUS_GOAL_PREVIEW_MAX, MESH_MISSION_LIST_HISTORY_ID_LIMIT, MESH_MISSION_LIST_STATUS_LIMIT, MESH_MISSION_STATUSES } from './mesh/mesh-missions.js';
+// Mission git refs (design 2026-11-01-mission-git-refs): the containment projection other features (release objects) consume.
+export { readMissionGitState, readMissionGitStates, evaluateMissionGitState, MISSION_GIT_EVAL_TTL_MS, type MissionGitState, type MissionGitStateValue, type MissionRefGitEval, type MissionRefGitStatus } from './mesh/mesh-mission-git-eval.js';
+export { evaluateMissionRefs, collectMissionRefTargets, probeRefsLocally, type MissionRefEvalEnv, type RemoteRefProber } from './mesh/mission-ref-evaluator.js';
+export { buildMissionRefEvalEnv, localRepoDirsOfMesh } from './mesh/mission-git-env.js';
+// Release objects (design 2026-11-01-release-objects): releases, explicit mission membership, deploy recording, CHANGELOG drafts.
+export { upsertRelease, scopeRelease, recordReleaseDeploy, suggestMissionsForRelease, describeReleaseMissions, verifiedSuggestion, type SuggestedMission, type ReleaseScopeResult, type ReleaseMissionView } from './mesh/mesh-releases.js';
+export { meshReleases, type MeshReleaseRecord, type ReleaseMemberRow } from './mesh/mesh-release-store.js';
+export { buildChangelogDraft, draftReleaseChangelog } from './mesh/mesh-release-changelog.js';
 export type { MeshMissionRecord, MeshMissionStatus, MeshMissionSummary, MeshMissionSlimSummary, MeshMissionTaskAggregate, MeshStatusMissionsCompact, MeshStatusMissionsHistoryFold, MeshMissionListResult } from './mesh/mesh-missions.js';
 export { computeMeshTaskStats, computeMeshMissionStats } from './mesh/mesh-task-stats.js';
 export type { MeshTaskStats, MeshMissionStats } from './mesh/mesh-task-stats.js';

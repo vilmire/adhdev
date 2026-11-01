@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { DaemonData } from '../types'
-import { getDaemonUpdateTargetVersion } from '../utils/daemon-update-policy'
+import { getManualUpdateSuggestionVersion } from '../utils/daemon-update-policy'
 import { runDaemonUpgradeCommand } from '../utils/daemon-upgrade-command'
 import { isVersionMismatch, isVersionUpdateRequired } from '../utils/version-update'
 
@@ -20,18 +20,18 @@ export function useDashboardVersionBanner({
         () => ides
             .filter((daemon: any) => {
             if (daemon.type !== 'adhdev-daemon') return false
-            return isVersionMismatch(daemon, getDaemonUpdateTargetVersion(daemon, appVersion))
+            return isVersionMismatch(daemon, getManualUpdateSuggestionVersion(daemon, appVersion))
         })
-            .sort((a, b) => Number(isVersionUpdateRequired(b, getDaemonUpdateTargetVersion(b, appVersion))) - Number(isVersionUpdateRequired(a, getDaemonUpdateTargetVersion(a, appVersion)))),
+            .sort((a, b) => Number(isVersionUpdateRequired(b, getManualUpdateSuggestionVersion(b, appVersion))) - Number(isVersionUpdateRequired(a, getManualUpdateSuggestionVersion(a, appVersion)))),
         [appVersion, ides],
     )
     const hasRequiredVersionDaemons = useMemo(
-        () => versionMismatchDaemons.some((daemon) => isVersionUpdateRequired(daemon, getDaemonUpdateTargetVersion(daemon, appVersion))),
+        () => versionMismatchDaemons.some((daemon) => isVersionUpdateRequired(daemon, getManualUpdateSuggestionVersion(daemon, appVersion))),
         [appVersion, versionMismatchDaemons],
     )
     const targetVersion = useMemo(
         () => versionMismatchDaemons
-            .map((daemon) => getDaemonUpdateTargetVersion(daemon, appVersion))
+            .map((daemon) => getManualUpdateSuggestionVersion(daemon, appVersion))
             .find((version): version is string => typeof version === 'string' && version.trim().length > 0) || appVersion,
         [appVersion, versionMismatchDaemons],
     )

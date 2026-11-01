@@ -596,6 +596,8 @@ function missionIpcErrorResult(e: unknown): { success: false; code?: string; err
 /** Structured-missions inputs a coordinator may send on `mesh_mission_upsert` (design 2026-10-28 §5.1). All optional. */
 interface StructuredUpsertArgs {
     summary?: unknown;
+    release_note?: unknown;
+    releaseNote?: unknown;
     outcome?: unknown;
     outcome_reason?: unknown;
     outcomeReason?: unknown;
@@ -614,10 +616,12 @@ function readObjectList(value: unknown): Record<string, unknown>[] | undefined {
 
 /** The structured request keys present in `args` (only what the caller used — a legacy call adds nothing but the capability flag). */
 function readStructuredUpsert(args: StructuredUpsertArgs): {
-    wire: { summary?: string; outcome?: string; outcomeReason?: string; carryOverTo?: string; itemsAdd?: Record<string, unknown>[]; itemsUpdate?: Record<string, unknown>[] };
+    wire: { summary?: string; releaseNote?: string; outcome?: string; outcomeReason?: string; carryOverTo?: string; itemsAdd?: Record<string, unknown>[]; itemsUpdate?: Record<string, unknown>[] };
     used: boolean;
 } {
     const summary = typeof args.summary === 'string' ? args.summary : undefined;
+    const releaseNoteRaw = args.release_note ?? args.releaseNote;
+    const releaseNote = typeof releaseNoteRaw === 'string' ? releaseNoteRaw : undefined;
     const outcome = readString(args.outcome) || undefined;
     const outcomeReasonRaw = args.outcome_reason ?? args.outcomeReason;
     const outcomeReason = typeof outcomeReasonRaw === 'string' ? outcomeReasonRaw : undefined;
@@ -626,6 +630,7 @@ function readStructuredUpsert(args: StructuredUpsertArgs): {
     const itemsUpdate = readObjectList(args.items_update ?? args.itemsUpdate);
     const wire = {
         ...(summary !== undefined ? { summary } : {}),
+        ...(releaseNote !== undefined ? { releaseNote } : {}),
         ...(outcome ? { outcome } : {}),
         ...(outcomeReason !== undefined ? { outcomeReason } : {}),
         ...(carryOverTo ? { carryOverTo } : {}),
@@ -832,6 +837,8 @@ export async function meshMissionList(
         items?: boolean;
         /** Attach each mission's change history (bounded tail). */
         history?: boolean;
+        /** Attach each mission's git containment state (design 2026-11-01-mission-git-refs §6). */
+        git?: boolean;
     } = {},
 ): Promise<string> {
     try {
@@ -871,6 +878,25 @@ export async function meshMissionList(
             ...(args.items === true ? { items: true } : {}),
             ...(args.history === true ? { history: true } : {}),
         });
+        // Git containment of each listed mission's refs: cached verdicts now, stale ones refresh in the
+        // daemon in the background (no fetch). Additive and best-effort — a failure never fails the list.
+        let missions: readonly unknown[] = result.missions;
+        if (args.git === true && result.missions.length > 0) {
+            try {
+                const gitRes = unwrapCommandPayload(await ctx.transport.command('mesh_mission_git_eval', {
+                    meshId: ctx.mesh.id,
+                    missionIds: result.missions.map((m: any) => m.id),
+                    verbose,
+                    inlineMesh: ctx.mesh,
+                })) as { success?: boolean; gitStates?: Record<string, { state: string; partialUnknown?: boolean; refs?: unknown[]; counts?: unknown; baseSha?: string; evaluatedAt?: string; stale?: boolean }> };
+                if (gitRes?.success === true && gitRes.gitStates) {
+                    missions = result.missions.map((m: any) => {
+                        const g = gitRes.gitStates![m.id];
+                        return g ? { ...m, gitState: g.state, ...(g.partialUnknown ? { gitPartialUnknown: true } : {}), gitRefs: g.refs ?? [], ...(g.stale ? { gitStale: true } : {}) } : m;
+                    });
+                }
+            } catch { /* an older daemon without the command: the list simply has no git fields */ }
+        }
         return JSON.stringify({
             success: true,
             count: result.missions.length,
@@ -878,11 +904,49 @@ export async function meshMissionList(
             ...(result.truncated ? { truncated: true, overflowIds: result.overflowIds } : {}),
             ...(statuses ? { statusFilter: statuses } : {}),
             ...(withStats ? {} : { statsHidden: true }),
-            missions: result.missions,
+            missions,
             ...(result.historyFold ? { historyFold: result.historyFold } : {}),
         }, null, 2);
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e?.message || String(e), ...(e instanceof TurnIpcCommandError ? { code: e.code } : {}) });
+    }
+}
+
+/**
+ * Single-mission git containment evaluation (design 2026-11-01-mission-git-refs §6). Read-only for
+ * missions: the daemon projects whether the refs on the mission's items are on the default branch
+ * and never changes a status, outcome or item. `refresh` fetches first.
+ */
+export async function meshMissionGitEval(
+    ctx: MeshContext,
+    args: { mission_id?: string; missionId?: string; refresh?: boolean; verbose?: boolean } = {},
+): Promise<string> {
+    const missionId = (args.mission_id ?? args.missionId ?? '').trim();
+    if (!missionId) return JSON.stringify({ success: false, error: 'mission_id is required (full id from mesh_mission_list)' });
+    try {
+        const res = unwrapCommandPayload(await ctx.transport.command('mesh_mission_git_eval', {
+            meshId: ctx.mesh.id,
+            missionId,
+            ...(args.refresh === true ? { refresh: true } : {}),
+            ...(args.verbose === true ? { verbose: true } : {}),
+            inlineMesh: ctx.mesh,
+        })) as Record<string, unknown>;
+        if (!res || res.success !== true) {
+            return JSON.stringify({ success: false, error: (res as any)?.error ?? 'mesh_mission_git_eval failed', ...((res as any)?.code ? { code: (res as any).code } : {}) });
+        }
+        const gitState = res.gitState as { state?: string } | undefined;
+        return JSON.stringify({
+            success: true,
+            missionId,
+            gitState,
+            note: gitState?.state === 'landed'
+                ? 'landed = the referenced changes are on the default branch. It is not completion: live checks and remaining items are separate, and nothing was changed.'
+                : gitState?.state === 'unknown'
+                    ? 'unknown = git could not answer (missing object, shallow clone, node offline); it does not mean "not landed".'
+                    : undefined,
+        }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) });
     }
 }
 

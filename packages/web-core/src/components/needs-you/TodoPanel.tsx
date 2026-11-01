@@ -27,7 +27,8 @@ import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import Button from '../ui/Button'
 import { AssistantStagedWritesList } from '../dashboard/AssistantStagedWrites'
 import { getMeshName } from '../../utils/mesh-name-registry'
-import DecisionCard, { AnsweredCard, ProjectMissionLine, localizeConfirmation } from './DecisionCard'
+import LiveCheckCard from './LiveCheckCard'
+import DecisionCard, { AnsweredCard, localizeConfirmation } from './DecisionCard'
 import {
     NEEDS_YOU_KINDS,
     clearDecisionFromQuery,
@@ -63,7 +64,11 @@ export default function TodoPanel() {
     const state = useNeedsYou()
     const link = useMemo(() => parseNeedsYouQuery(location.search), [location.search])
 
-    const [filter, setFilter] = useState<NeedsYouFilter>(() => ({ kind: 'all', meshId: link.meshId && !link.decisionId ? link.meshId : 'all' }))
+    const [filter, setFilter] = useState<NeedsYouFilter>(() => ({
+        kind: link.machine ? 'live_check' : 'all',
+        meshId: link.meshId && !link.decisionId ? link.meshId : 'all',
+        ...(link.machine ? { machine: link.machine } : {}),
+    }))
     const [later, setLater] = useState<ReadonlySet<string>>(() => new Set())
     const [answerAll, setAnswerAll] = useState<AnswerAllState>({ phase: 'idle' })
     const [toast, setToast] = useState<Toast | null>(null)
@@ -81,6 +86,10 @@ export default function TodoPanel() {
     useEffect(() => {
         if (link.meshId && !link.decisionId) setFilter(f => ({ ...f, meshId: link.meshId! }))
     }, [link.meshId, link.decisionId])
+    // A post-deploy prompt links here with ?machine=<name>: show that machine's live checks only.
+    useEffect(() => {
+        if (link.machine) setFilter(f => ({ ...f, kind: 'live_check', machine: link.machine }))
+    }, [link.machine])
 
     const sorted = useMemo(() => sortNeedsYou(state.entries), [state.entries])
     const filtered = useMemo(() => filterNeedsYou(sorted, filter), [sorted, filter])
@@ -163,14 +172,19 @@ export default function TodoPanel() {
         if (e.kind === 'live_check') {
             const c = e.check
             return (
-                <div key={e.key} data-testid="needs-you-live-check" className="rounded-lg border border-border-subtle p-3 flex flex-col gap-1.5 bg-bg-panel">
-                    <div className="flex items-center gap-1.5">
-                        <span className="rounded px-1.5 py-0.5 text-3xs font-semibold bg-bg-secondary text-text-muted">{t('needsYou.kinds.live_check')}</span>
-                        {c.machine && <span className="text-3xs text-text-muted">{c.machine}</span>}
-                    </div>
-                    <ProjectMissionLine meshId={c.meshId} missionTitle={c.missionTitle} carryOver={c.carryOver} projectName={nameOf(c.meshId)} onOpenMission={() => navigate('/mesh')} />
-                    <div className="text-sm text-text-primary">{c.text}</div>
-                </div>
+                <LiveCheckCard
+                    key={e.key}
+                    check={c}
+                    projectName={nameOf(c.meshId)}
+                    busy={state.busyIds.has(c.itemId)}
+                    outcome={state.outcomes[c.itemId]}
+                    onResolve={(verdict, note) => {
+                        void state.resolveLiveCheck({ daemonId: c.daemonId, meshId: c.meshId, itemId: c.itemId, verdict, ...(note ? { note } : {}) }).then(o => {
+                            if (o.ok) setToast({ message: t(verdict === 'works' ? 'needsYou.liveCheckToastWorks' : 'needsYou.liveCheckToastFailed') })
+                        })
+                    }}
+                    onOpenMission={() => navigate('/mesh')}
+                />
             )
         }
         const d = e.decision
@@ -202,11 +216,16 @@ export default function TodoPanel() {
             <div className="flex flex-wrap items-center gap-2" data-testid="needs-you-filters">
                 <div className="flex flex-nowrap gap-1 overflow-x-auto max-w-full -mx-1 px-1 md:flex-wrap md:overflow-visible" role="group" aria-label={t('needsYou.filterKind')}>
                     {(['all', ...NEEDS_YOU_KINDS] as const).map(k => (
-                        <Button key={k} size="sm" className="min-h-[44px] md:min-h-0 shrink-0 whitespace-nowrap" variant={filter.kind === k ? 'primary' : 'ghost'} aria-pressed={filter.kind === k} onClick={() => setFilter(f => ({ ...f, kind: k }))}>
+                        <Button key={k} size="sm" className="min-h-[44px] md:min-h-0 shrink-0 whitespace-nowrap" variant={filter.kind === k ? 'primary' : 'ghost'} aria-pressed={filter.kind === k} onClick={() => setFilter(f => ({ kind: k, meshId: f.meshId }))}>
                             {k === 'all' ? t('needsYou.kinds.all') : `${t(`needsYou.kinds.${k}`)} ${kindCounts[k]}`}
                         </Button>
                     ))}
                 </div>
+                {filter.machine && (
+                    <Button size="sm" className="min-h-[44px] md:min-h-0 shrink-0" variant="secondary" data-testid="needs-you-machine-filter" onClick={() => setFilter(f => ({ kind: f.kind, meshId: f.meshId }))}>
+                        {t('needsYou.machineFilter', { machine: filter.machine })}
+                    </Button>
+                )}
                 {projectOptions.length > 0 && (
                     <select
                         className="input text-xs min-h-[44px] md:min-h-0"

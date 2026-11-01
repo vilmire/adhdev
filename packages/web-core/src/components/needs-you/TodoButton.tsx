@@ -23,12 +23,12 @@ export function useTodoButtonMountedCount(): number {
     )
 }
 
-export default function TodoButton(props: { className?: string; size?: number; floating?: boolean }) {
+export default function TodoButton(props: { className?: string; size?: number; floating?: boolean; compact?: boolean }) {
     // The drawer is URL-driven, so without a router (isolated renders of a header) there is nothing to open.
     return useInRouterContext() ? <TodoButtonInner {...props} /> : null
 }
 
-function TodoButtonInner({ className, size = 16, floating }: { className?: string; size?: number; floating?: boolean }) {
+function TodoButtonInner({ className, size = 16, floating, compact }: { className?: string; size?: number; floating?: boolean; compact?: boolean }) {
     const { t } = useTranslation('common')
     const count = useNeedsYouCount()
     const { open, toggleDrawer } = useTodoDrawer()
@@ -42,7 +42,8 @@ function TodoButtonInner({ className, size = 16, floating }: { className?: strin
         <button
             type="button"
             onClick={toggleDrawer}
-            className={cn('btn btn-icon relative min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0', className)}
+            // `compact`: a toolbar that already widens its buttons' touch area (mobile room header) sizes it itself.
+            className={cn('btn btn-icon relative', !compact && 'min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0', className)}
             title={title}
             aria-label={title}
             aria-haspopup="dialog"

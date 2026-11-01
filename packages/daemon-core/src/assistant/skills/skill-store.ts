@@ -32,14 +32,21 @@ import {
     type SkillOrigin, type SkillStatus,
 } from './skill-format.js';
 import {
-    bumpCounter, needsReview, newSkillState, readSkillStateFile, turnKey, writeSkillStateFile, SKILL_PATCH_CAPS,
+    bumpCounter, lastUsedMs, needsReview, newSkillState, readSkillStateFile, turnKey, writeSkillStateFile, SKILL_PATCH_CAPS,
     type SkillState, type SkillStateFile,
 } from './skill-state.js';
 import { prepareCreate, preparePatch, type PreparedWrite } from './skill-write-prep.js';
 import { SkillJournal, SkillStaging, type SkillJournalRecord, type StagedSkillWrite } from './skill-journal.js';
+import { matchSkills } from './skill-match.js';
 
 export type SkillManageOp =
-    | { action: 'create'; name: string; description: string; body: string; project?: string; files?: Record<string, string> }
+    | {
+          action: 'create'; name: string; description: string; body: string; project?: string; files?: Record<string, string>;
+          /** `metadata.adhdev.triggers` — request phrases the skill answers (matcher input). */
+          triggers?: string[];
+          /** A recurring-procedure candidate id (review turn): forces the write to be staged as a save proposal. */
+          proposalId?: string;
+      }
     /** Exactly one form: `old`+`new` (body, or `file`), `file`+`new` (add file), or `description`. */
     | { action: 'patch'; name: string; old?: string; new?: string; file?: string; description?: string }
     | { action: 'archive'; name: string };
@@ -53,7 +60,7 @@ export interface SkillCallContext {
 }
 
 export type SkillInvalidReason =
-    | 'bad_description' | 'empty_body' | 'bad_file_path' | 'bad_patch' | 'missing_context' | 'unparseable_skill_md'
+    | 'bad_description' | 'bad_proposal' | 'empty_body' | 'bad_file_path' | 'bad_patch' | 'missing_context' | 'unparseable_skill_md'
     /** The stored description, body or file failed the read-time content re-scan; fix the file by hand. */
     | 'blocked_content';
 
@@ -78,7 +85,7 @@ export type SkillRefusal =
 
 export type SkillManageResult =
     | { result: 'applied' }
-    | { result: 'staged'; stagedId: string; reason: 'origin' | 'protected_skill' }
+    | { result: 'staged'; stagedId: string; reason: 'origin' | 'protected_skill' | 'proposed_procedure' }
     | SkillRefusal;
 
 export interface SkillSummary {
@@ -91,6 +98,15 @@ export interface SkillSummary {
     createdAt: string;
     viewCount: number;
     lastViewedAt: string | null;
+    /** Times attached to a `project_send` — the use count (viewCount = assistant read it). */
+    attachCount: number;
+    lastAttachedAt: string | null;
+    hintShownCount: number;
+    hintAcceptCount: number;
+    /** `metadata.adhdev.triggers`. */
+    triggers: string[];
+    /** Match score for `skill_view list` with a `query` (0..1). */
+    score?: number;
     patchesSinceReview: number;
     needsReview: boolean;
     /**
@@ -189,6 +205,8 @@ export class AssistantSkillStore {
             out.push({
                 name, description: d.description, project: d.project, status: s.status, pinned: s.pinned, origin: s.origin,
                 createdAt: s.createdAt, viewCount: s.viewCount, lastViewedAt: s.lastViewedAt,
+                attachCount: s.attachCount, lastAttachedAt: s.lastAttachedAt,
+                hintShownCount: s.hintShownCount, hintAcceptCount: s.hintAcceptCount, triggers: d.triggers,
                 patchesSinceReview: s.patchesSinceReview, needsReview: needsReview(s),
                 problem: legacyName ? 'invalid_name' : d.problem,
             });
@@ -196,13 +214,23 @@ export class AssistantSkillStore {
         return out;
     }
 
+    /** `list()`, scored and ordered by match when a query is given (never counts a view). */
+    rankedList(query?: string, project?: string): SkillSummary[] {
+        const all = this.list();
+        if (!query || !query.trim()) return all;
+        const scores = new Map(matchSkills(query, all, { project }).map((m) => [m.name, m.score]));
+        return all
+            .map((s) => ({ ...s, score: scores.get(s.name) ?? 0 }))
+            .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    }
+
     liveCount(): number {
         return this.list().filter((s) => s.status !== 'archived').length;
     }
 
     /** `skill_view`. Counts the view and revives a stale/archived skill to active. */
-    view(name: string, opts: { file?: string } = {}): SkillViewResult {
-        if (name === 'list') return { result: 'list', skills: this.list() };
+    view(name: string, opts: { file?: string; query?: string; project?: string } = {}): SkillViewResult {
+        if (name === 'list') return { result: 'list', skills: this.rankedList(opts.query, opts.project) };
         if (!isValidSkillName(name)) return { result: 'skill_invalid_name' };
         const d = this.readDir(name);
         if (!d) return { result: 'skill_not_found' };
@@ -236,6 +264,47 @@ export class AssistantSkillStore {
         return { name, origin: this.stateFor(this.loadState().file, name).origin, body: d.body };
     }
 
+    private readonly attachSeen = new Set<string>();
+
+    /**
+     * `project_send` attached these skills' bodies to message `messageId`: the
+     * USE count. Once per (message, skill) — a retried send does not double
+     * count. Revives stale / archived skills like `view()`. Returns the names
+     * counted. Never touches `viewCount`.
+     */
+    recordAttach(names: readonly string[], messageId: string): string[] {
+        const { file, corrupt } = this.loadState();
+        if (corrupt) return [];
+        const counted: string[] = [];
+        const nowIso = this.now().toISOString();
+        for (const name of new Set(names)) {
+            if (!this.readDir(name)) continue;
+            const key = `${messageId}\u0000${name}`;
+            if (messageId && this.attachSeen.has(key)) continue;
+            const s = this.stateFor(file, name);
+            file.skills[name] = {
+                ...s, attachCount: s.attachCount + 1, lastAttachedAt: nowIso,
+                ...(s.status !== 'active' ? { status: 'active' as const, statusChangedAt: nowIso } : {}),
+            };
+            counted.push(name);
+            if (messageId) {
+                this.attachSeen.add(key);
+                if (this.attachSeen.size > 500) this.attachSeen.delete(this.attachSeen.values().next().value as string);
+            }
+        }
+        if (counted.length) writeSkillStateFile(this.statePath, file);
+        return counted;
+    }
+
+    /** Hint counters (matcher quality): `shown` when a hint was returned, `accepted` when the hinted skill was then attached. */
+    recordHint(name: string, kind: 'shown' | 'accepted'): void {
+        const { file, corrupt } = this.loadState();
+        if (corrupt || !this.readDir(name)) return;
+        const s = this.stateFor(file, name);
+        file.skills[name] = kind === 'shown' ? { ...s, hintShownCount: s.hintShownCount + 1 } : { ...s, hintAcceptCount: s.hintAcceptCount + 1 };
+        writeSkillStateFile(this.statePath, file);
+    }
+
     // ── skill_manage ────────────────────────────────────────────────────────
 
     manage(op: SkillManageOp, origin: StoreWriteOrigin, ctx: SkillCallContext | null): SkillManageResult {
@@ -261,6 +330,7 @@ export class AssistantSkillStore {
             if (prep.scan.some((t) => detectCredential(t))) return { result: 'skill_secret_rejected' };
             const contentRefusal = contentRefusalOf(prep.scan);
             if (contentRefusal) return contentRefusal;
+            if (agent && op.proposalId) return this.stage(op, origin, ctx, 'proposed_procedure', prep);
             if (agent && mustStage(origin)) return this.stage(op, origin, ctx, 'origin', prep);
             this.writeFiles(name, prep.files);
             stateFile.skills[name] = newSkillState(origin === 'owner' && !resolving ? 'owner' : 'agent', this.now().toISOString());
@@ -277,6 +347,10 @@ export class AssistantSkillStore {
         if (op.action === 'archive') {
             if (agent && mustStage(origin)) return this.stage(op, origin, ctx, 'origin', null);
             if (s.status !== 'archived') stateFile.skills[name] = { ...s, status: 'archived', statusChangedAt: this.now().toISOString() };
+            // The owner archiving a starter skill is a "no thanks": never re-install it.
+            if (s.origin === 'starter' && (origin === 'owner' || resolving) && !(stateFile.starterDismissed ?? []).includes(name)) {
+                stateFile.starterDismissed = [...(stateFile.starterDismissed ?? []), name];
+            }
             writeSkillStateFile(this.statePath, stateFile);
             this.journal.append({ action: 'archive', name, origin, result: 'applied', stagedId: resolving ?? undefined });
             return { result: 'applied' };
@@ -326,10 +400,11 @@ export class AssistantSkillStore {
 
     private stage(
         op: SkillManageOp, origin: StoreWriteOrigin, ctx: SkillCallContext | null,
-        reason: 'origin' | 'protected_skill', prep: PreparedWrite | null,
+        reason: 'origin' | 'protected_skill' | 'proposed_procedure', prep: PreparedWrite | null,
     ): SkillManageResult {
         const reviewTurnId = ctx?.reviewTurnId;
-        const stagedId = this.staging.write({ op, origin, reason, ctx, ...(reviewTurnId ? { reviewTurnId } : {}) });
+        const proposalId = op.action === 'create' ? op.proposalId : undefined;
+        const stagedId = this.staging.write({ op, origin, reason, ctx, ...(reviewTurnId ? { reviewTurnId } : {}), ...(proposalId ? { proposalId } : {}) });
         this.journal.append({ action: op.action, name: op.name, origin, result: 'staged', stagedId, ...(reviewTurnId ? { reviewTurnId } : {}), ...(prep?.journal ?? {}) });
         return { result: 'staged', stagedId, reason };
     }
@@ -341,16 +416,19 @@ export class AssistantSkillStore {
     }
 
     /** Apply re-runs every check except caps/staging against the current files; a failure keeps the staged write. */
-    resolveStaged(id: string, decision: 'apply' | 'discard'): SkillManageResult | { result: 'discarded' } | { result: 'staged_not_found' } {
+    resolveStaged(id: string, decision: 'apply' | 'discard', settleAs?: 'applied'): SkillManageResult | { result: 'discarded' } | { result: 'staged_not_found' } {
         const rec = this.staging.read(id);
         if (!rec) return { result: 'staged_not_found' };
         if (decision === 'discard') {
-            this.dropStaged(rec, 'owner');
+            // `settleAs: 'applied'`: the owner saved an edited version instead (a proposal card's "edit, then save").
+            this.dropStaged(rec, 'owner', settleAs);
             return { result: 'discarded' };
         }
         const out = this.manageInner(rec.op, rec.origin, rec.ctx, rec.id);
-        if (out.result === 'applied') this.staging.remove(rec.id);
-        else this.journal.append({ action: rec.op.action, name: rec.op.name, origin: rec.origin, result: out.result, stagedId: rec.id, resolvedBy: 'owner' });
+        if (out.result === 'applied') {
+            this.staging.remove(rec.id);
+            this.settled(rec, 'applied');
+        } else this.journal.append({ action: rec.op.action, name: rec.op.name, origin: rec.origin, result: out.result, stagedId: rec.id, resolvedBy: 'owner' });
         return out;
     }
 
@@ -366,9 +444,17 @@ export class AssistantSkillStore {
         return dropped;
     }
 
-    private dropStaged(rec: StagedSkillWrite, by: 'owner' | 'expiry'): void {
+    private dropStaged(rec: StagedSkillWrite, by: 'owner' | 'expiry', settleAs?: 'applied'): void {
         this.journal.append({ action: rec.op.action, name: rec.op.name, origin: rec.origin, result: 'discarded', stagedId: rec.id, resolvedBy: by });
         this.staging.remove(rec.id);
+        this.settled(rec, settleAs ?? (by === 'expiry' ? 'expired' : 'discarded'));
+    }
+
+    /** Set by the assistant runtime: a staged write left the staging directory (save-proposal bookkeeping). */
+    onStagedSettled: ((rec: StagedSkillWrite, how: 'applied' | 'discarded' | 'expired') => void) | null = null;
+
+    private settled(rec: StagedSkillWrite, how: 'applied' | 'discarded' | 'expired'): void {
+        try { this.onStagedSettled?.(rec, how); } catch { /* bookkeeping never fails the owner's decision */ }
     }
 
     // ── owner admin ─────────────────────────────────────────────────────────
@@ -394,7 +480,7 @@ export class AssistantSkillStore {
     // ── curator / import hooks ──────────────────────────────────────────────
 
     /**
-     * Status transitions only (§4.10.6): last view (or creation) ≥ 90 days →
+     * Status transitions only (§4.10.6): last view / attach (or creation) ≥ 90 days →
      * archived, ≥ 30 days → stale. Pinned skills are skipped. Never deletes files.
      */
     curateStatuses(staleAfterMs: number, archiveAfterMs: number): { staled: string[]; archived: string[] } {
@@ -406,7 +492,9 @@ export class AssistantSkillStore {
         for (const name of this.skillNames()) {
             const s = this.stateFor(file, name);
             if (s.pinned || s.status === 'archived') continue;
-            const ref = Date.parse(s.lastViewedAt ?? s.createdAt);
+            // A skill used only through project_send attachments has no view: the
+            // last view, attach or creation keeps it alive (design 2026-11-01 §4.2).
+            const ref = lastUsedMs(s);
             if (!Number.isFinite(ref)) continue;
             const age = now - ref;
             const to: SkillStatus | null = age >= archiveAfterMs ? 'archived' : age >= staleAfterMs && s.status === 'active' ? 'stale' : null;
@@ -416,6 +504,37 @@ export class AssistantSkillStore {
             this.journal.append({ action: 'curate', name, origin: 'curator', result: 'applied', before: s.status, after: to });
         }
         if (out.staled.length || out.archived.length) writeSkillStateFile(this.statePath, file);
+        return out;
+    }
+
+    /**
+     * Install built-in starter skills that are missing (design 2026-11-01 §8).
+     * Skips a name that already has a directory (owner / agent skill, or an
+     * earlier install), one the owner archived (`starterDismissed` tombstone),
+     * and anything past the live-skill cap. Origin `starter`: an agent patch is
+     * staged (`protected_skill`). Idempotent.
+     */
+    installStarterSkills(defs: ReadonlyArray<{ name: string; description: string; body: string; triggers?: string[] }>): { installed: string[]; skipped: string[] } {
+        const out = { installed: [] as string[], skipped: [] as string[] };
+        const { file, corrupt } = this.loadState();
+        if (corrupt) return { installed: [], skipped: defs.map((d) => d.name) };
+        for (const def of defs) {
+            if ((file.starterDismissed ?? []).includes(def.name) || existsSync(this.skillDir(def.name))
+                || this.liveCount() >= SKILL_LIMITS.liveSkills) {
+                out.skipped.push(def.name);
+                continue;
+            }
+            const prep = prepareCreate({ action: 'create', ...def });
+            if ('result' in prep || prep.scan.some((t) => detectCredential(t)) || contentRefusalOf(prep.scan)) {
+                out.skipped.push(def.name);
+                continue;
+            }
+            this.writeFiles(def.name, prep.files);
+            file.skills[def.name] = newSkillState('starter', this.now().toISOString());
+            out.installed.push(def.name);
+            this.journal.append({ action: 'starter_install', name: def.name, origin: 'owner', result: 'applied', ...prep.journal });
+        }
+        if (out.installed.length) writeSkillStateFile(this.statePath, file);
         return out;
     }
 

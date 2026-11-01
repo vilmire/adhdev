@@ -27,6 +27,7 @@ export const ASSISTANT_TOOLS = [
     'project_attach_remote',
     'discover_repos',
     'memory',
+    'memory_search',
     'skill_view',
     'skill_manage',
     'project_note',
@@ -38,6 +39,7 @@ export const ASSISTANT_TOOLS = [
     'artifact_read',
     'decision_answer',
     'decision_request',
+    'session_control',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -66,6 +68,8 @@ export const ASSISTANT_VERB = {
     projectAttachRemote: 'assistant_project_attach_remote',
     discoverRepos: 'assistant_discover_repos',
     memory: 'assistant_memory',
+    /** Pull-only FTS search over the archive tier (memory design 2026-11-01 §3.4). */
+    memorySearch: 'assistant_memory_search',
     skillView: 'assistant_skill_view',
     skillManage: 'assistant_skill_manage',
     projectNote: 'assistant_project_note',
@@ -77,6 +81,8 @@ export const ASSISTANT_VERB = {
     decisionAnswer: 'assistant_decision_answer',
     /** Register a plain-text question a coordinator put to the owner as a decision item (§5.2). */
     decisionRequest: 'assistant_decision_request',
+    /** Stop / restart / switch the provider of a coordinator, worker or the assistant session (handoff design 2026-11-01 §4). */
+    sessionControl: 'assistant_session_control',
     // assistant-side daemon verbs without a tool of the same name
     launch: 'launch_assistant',
     pendingRelays: 'assistant_pending_relays',
@@ -84,6 +90,12 @@ export const ASSISTANT_VERB = {
     stagedResolve: 'assistant_staged_resolve',
     storeAdmin: 'assistant_store_admin',
     importSkills: 'assistant_import_skills',
+    /** Owner skill list (attach/view counts, save proposals, recent skill metrics); reads move no counter. */
+    skillsList: 'assistant_skills_list',
+    /** Owner: what the assistant remembered recently, with undo handles (memory design §3.2). */
+    memoryDigest: 'assistant_memory_digest',
+    /** Owner: reverse one remembered write or one batch (memory design §3.2). Never an assistant tool. */
+    memoryUndo: 'assistant_memory_undo',
     /** Projects the assistant is following (open relay threads) — list / stop following. */
     threads: 'assistant_threads',
     threadClose: 'assistant_thread_close',
@@ -106,6 +118,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     project_attach_remote: ASSISTANT_VERB.projectAttachRemote,
     discover_repos: ASSISTANT_VERB.discoverRepos,
     memory: ASSISTANT_VERB.memory,
+    memory_search: ASSISTANT_VERB.memorySearch,
     skill_view: ASSISTANT_VERB.skillView,
     skill_manage: ASSISTANT_VERB.skillManage,
     project_note: ASSISTANT_VERB.projectNote,
@@ -115,6 +128,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     artifact_read: ASSISTANT_VERB.artifactRead,
     decision_answer: ASSISTANT_VERB.decisionAnswer,
     decision_request: ASSISTANT_VERB.decisionRequest,
+    session_control: ASSISTANT_VERB.sessionControl,
 }
 
 /**
@@ -123,7 +137,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set', 'decision_answer', 'decision_request']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set', 'decision_answer', 'decision_request', 'session_control']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [
@@ -131,12 +145,16 @@ export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [
     ASSISTANT_VERB.stagedResolve,
     ASSISTANT_VERB.storeAdmin,
     ASSISTANT_VERB.importSkills,
+    ASSISTANT_VERB.skillsList,
+    ASSISTANT_VERB.memoryDigest,
+    ASSISTANT_VERB.memoryUndo,
     ASSISTANT_VERB.threadClose,
 ]
 
 /** The only assistant verbs accepted while an idle review turn is open (§4.10.7). */
 export const ASSISTANT_REVIEW_TURN_VERBS: readonly AssistantVerb[] = [
     ASSISTANT_VERB.memory,
+    ASSISTANT_VERB.memorySearch,
     ASSISTANT_VERB.skillView,
     ASSISTANT_VERB.skillManage,
     ASSISTANT_VERB.projectNote,

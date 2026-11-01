@@ -39,6 +39,18 @@ import {
     type InjectionPatternId,
     type StoreWriteOrigin,
 } from '../store-guards.js';
+import {
+    CONTROL_CHARS, MAX_MEMORY_ENTRY_CHARS, charCount, coreEntryId, firstChars, validateContent,
+    type MemoryInvalidFormatReason,
+} from './memory-content.js';
+import { DEFAULT_LESSON_TTL_DAYS, type ArchiveKind, type MemoryArchive } from './memory-archive.js';
+import { applyArchiveTier, type ArchiveOpHost } from './memory-archive-ops.js';
+import { MemorySeenTracker } from './memory-notice.js';
+import { consolidateMemory, consolidationSuggestions, mergeMemoryEntries, type ConsolidationReport, type MemorySuggestion } from './memory-consolidate.js';
+import { buildMemoryDigest, undoMemoryWrite, undoRate, type MemoryDigest, type MemoryUndoOutcome, type MemoryUndoRequest } from './memory-undo.js';
+
+export { charCount, MAX_MEMORY_ENTRY_CHARS };
+export type { MemoryInvalidFormatReason };
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -58,7 +70,6 @@ export const MIN_MEMORY_BUDGETS: Readonly<MemoryBudgets> = DEFAULT_MEMORY_BUDGET
 export const MAX_MEMORY_BUDGETS: Readonly<MemoryBudgets> = { memory: 8800, user: 5500 };
 /** Usage percentage at or above which the dashboard warns the owner. */
 export const MEMORY_WARNING_THRESHOLD_PCT = 90;
-export const MAX_MEMORY_ENTRY_CHARS = 500;
 export const MEMORY_ENTRY_SEPARATOR = '\n§\n';
 export const STAGED_WRITE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const CANDIDATE_PREVIEW_CHARS = 60;
@@ -171,14 +182,6 @@ export function validateMemoryBudgets(
 
 // ── Parsing ─────────────────────────────────────────────────────────────────
 
-export function charCount(s: string): number {
-    return Array.from(s).length;
-}
-
-function firstChars(s: string, n: number): string {
-    return Array.from(s).slice(0, n).join('');
-}
-
 export type MemoryEntryProblem = 'too_long' | 'control_chars' | 'hidden_chars' | 'injection' | 'credential';
 
 export interface MemoryFileState {
@@ -193,9 +196,6 @@ export interface MemoryFileState {
     /** Set when the file exists but could not be read/decoded. Writes are refused. */
     unreadable?: string;
 }
-
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 function entryProblem(entry: string): MemoryEntryProblem | null {
     if (charCount(entry) > MAX_MEMORY_ENTRY_CHARS) return 'too_long';
@@ -242,12 +242,29 @@ export function isMemoryNearLimit(used: number, budget: number): boolean {
 
 // ── Operations & results ────────────────────────────────────────────────────
 
-export type MemoryOperation =
-    | { action: 'add'; target: MemoryTarget; content: string }
-    | { action: 'replace'; target: MemoryTarget; match: string; content: string }
-    | { action: 'remove'; target: MemoryTarget; match: string };
+/**
+ * Where a write lands. `core` (default) = MEMORY.md / USER.md, the always-injected
+ * snapshot. `archive` = the global archive tier and `project` = the project-scoped
+ * archive tier (both SQLite, searchable via `memory_search`, never injected).
+ */
+export type MemoryScope = 'core' | 'archive' | 'project';
 
-export type MemoryInvalidFormatReason = 'empty' | 'too_long' | 'separator_line' | 'control_chars' | 'empty_match';
+interface ScopeFields {
+    scope?: MemoryScope;
+    /** `scope: 'project'`: the local mesh id the verb resolved the project slug to. */
+    projectRef?: string;
+    /** Archive-tier kind; `target: 'user'` is always `preference`. Default `rule`. */
+    kind?: ArchiveKind;
+    /** Archive tier: the promotion/decision that justified the entry. */
+    sourceRef?: string;
+}
+
+export type MemoryOperation =
+    | ({ action: 'add'; target: MemoryTarget; content: string } & ScopeFields)
+    | ({ action: 'replace'; target: MemoryTarget; match: string; content: string } & ScopeFields)
+    | ({ action: 'remove'; target: MemoryTarget; match: string } & ScopeFields)
+    /** Move a core entry down into the archive tier (frees prompt budget; entry stays searchable). */
+    | { action: 'archive'; target: MemoryTarget; match: string; kind?: ArchiveKind };
 
 export type MemoryWriteOutcome =
     | { result: 'applied' }
@@ -262,9 +279,19 @@ export type MemoryWriteOutcome =
     | { result: 'memory_injection_rejected'; pattern: InjectionPatternId }
     /** USER.md takes only the person's own word (human, clean review, owner); never staged. */
     | { result: 'memory_user_requires_human' }
+    /** `decision_promotion` / `curator` tried something outside their narrow remit. */
+    | { result: 'memory_origin_scope_denied' }
+    /** The archive tier needs `mesh-runtime.db`; this store has none attached. */
+    | { result: 'memory_archive_unavailable' }
     | { result: 'memory_store_unreadable' };
 
-export type MemoryWriteResult = MemoryWriteOutcome & { usage: { memory: string; user: string } };
+export type MemoryWriteResult = MemoryWriteOutcome & {
+    usage: { memory: string; user: string };
+    /** Core add at/over the warning threshold: move rarely-used entries down with the `archive` action. */
+    suggest?: 'archive';
+    /** Up to 3 previews (first 60 chars) of the least recently written entries of that file. */
+    candidates?: string[];
+};
 
 export type MemoryJournalResult = 'applied' | 'staged' | 'discarded' | 'reverted' | MemoryWriteOutcome['result'];
 
@@ -285,6 +312,21 @@ export interface MemoryJournalRecord {
     redacted?: Array<'before' | 'after'>;
     /** Review turn the write came from (review / review_tainted origins). */
     reviewTurnId?: string;
+    /** Unique handle for undo/digest (`ts` alone can repeat within a millisecond). Absent on legacy lines. */
+    jid?: string;
+    /** `core` (default when absent) = the files; `archive` = the SQLite tier. */
+    tier?: 'core' | 'archive';
+    /** Archive-tier row id, or the derived core entry id. */
+    entryId?: string;
+    scope?: MemoryScope;
+    projectRef?: string;
+    kind?: ArchiveKind;
+    /** Records written by one multi-step operation (archive move, consolidation) share it; undo works per batch. */
+    batchId?: string;
+    /** Set on the record an undo wrote: the `jid` (or `ts`) of the record it reversed. */
+    restoredFrom?: string;
+    /** What justified the write (a promoted decision: `decision:<meshId>:<itemId>`). */
+    sourceRef?: string;
 }
 
 export interface StagedMemoryWrite {
@@ -300,6 +342,16 @@ export interface StagedMemoryWrite {
 /** Caller facts about a write beyond its origin. */
 export interface MemoryWriteMeta {
     reviewTurnId?: string;
+    /** Set by the `memory` tool verb: the change is the assistant's own and needs no in-session notice. */
+    selfCall?: boolean;
+}
+
+/** Internal facts a multi-step caller (undo, archive move, consolidation) attaches to journal lines. */
+export interface MemoryApplyExtra {
+    batchId?: string;
+    restoredFrom?: string;
+    /** `replace`/`remove` match an entry equal to `match` instead of containing it (undo). */
+    exactMatch?: boolean;
 }
 
 export type StagedResolveResult =
@@ -312,13 +364,30 @@ const REDACT_AFTER_RESULTS: ReadonlySet<MemoryJournalResult> = new Set([
     'memory_secret_rejected', 'memory_hidden_chars_rejected', 'memory_injection_rejected',
 ]);
 
-function validateContent(content: unknown): MemoryInvalidFormatReason | null {
-    if (typeof content !== 'string' || !content.trim()) return 'empty';
-    const c = content.trim();
-    if (charCount(c) > MAX_MEMORY_ENTRY_CHARS) return 'too_long';
-    if (c.replace(/\r\n?/g, '\n').split('\n').some((l) => l.trim() === '§')) return 'separator_line';
-    if (CONTROL_CHARS.test(c)) return 'control_chars';
-    return null;
+/** An applied change, any tier. `reverted` = an undo wrote it. */
+export interface MemoryChangeEvent {
+    tier: 'core' | 'archive';
+    target: MemoryTarget;
+    action: 'add' | 'replace' | 'remove';
+    origin: StoreWriteOrigin;
+    /** The entry text after the change (before it, for a remove). */
+    text: string;
+    reverted: boolean;
+    scope?: MemoryScope;
+    kind?: ArchiveKind;
+    /** The assistant's own `memory` tool call (it already has this in its context). */
+    self?: boolean;
+}
+
+/**
+ * Narrow origins may only do their one job (memory design §3.8, §3.9):
+ * a decision promotion writes a preference (USER target) and nothing else; the
+ * curator only removes duplicates from the non-USER target.
+ */
+export function originScopeDenied(op: MemoryOperation, origin: StoreWriteOrigin): boolean {
+    if (origin === 'decision_promotion') return !(op.action === 'add' && op.target === 'user');
+    if (origin === 'curator') return !(op.action === 'remove' && op.target === 'memory');
+    return false;
 }
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -328,6 +397,8 @@ export interface AssistantMemoryStoreOptions {
     configDir?: string;
     budgets?: Partial<MemoryBudgets> | null;
     now?: () => Date;
+    /** Archive tier (SQLite). Optional: without it, archive-tier ops answer `memory_archive_unavailable`. */
+    archive?: MemoryArchive | null;
 }
 
 export class AssistantMemoryStore {
@@ -337,6 +408,10 @@ export class AssistantMemoryStore {
     readonly stagedDir: string;
     private budgetOverride: Partial<MemoryBudgets> | null | undefined;
     private readonly now: () => Date;
+    private archiveTier: MemoryArchive | null;
+    private readonly changeListeners = new Set<(e: MemoryChangeEvent) => void>();
+    private readonly seen = new MemorySeenTracker();
+    private selfCall = false;
 
     constructor(opts: AssistantMemoryStoreOptions = {}) {
         this.configDir = opts.configDir ?? getConfigDir();
@@ -346,6 +421,26 @@ export class AssistantMemoryStore {
         this.stagedDir = join(assistantDir, 'staged');
         this.budgetOverride = opts.budgets;
         this.now = opts.now ?? (() => new Date());
+        this.archiveTier = opts.archive ?? null;
+    }
+
+    /** The archive tier, or null when this store has no database attached. */
+    get archive(): MemoryArchive | null {
+        return this.archiveTier;
+    }
+
+    /** The assistant runtime attaches the `mesh-runtime.db` archive once the store is open. */
+    attachArchive(archive: MemoryArchive | null): void {
+        this.archiveTier = archive;
+    }
+
+    /**
+     * Subscribe to every APPLIED change (any tier, any origin). Used by the
+     * runtime to tell the live session about changes it did not make itself.
+     */
+    onChange(fn: (e: MemoryChangeEvent) => void): () => void {
+        this.changeListeners.add(fn);
+        return () => { this.changeListeners.delete(fn); };
     }
 
     get budgets(): MemoryBudgets {
@@ -479,9 +574,96 @@ export class AssistantMemoryStore {
     }
 
     /** The `memory` tool. `origin` comes from the caller (classifyWriteOrigin). */
-    apply(op: MemoryOperation, origin: StoreWriteOrigin, meta: MemoryWriteMeta = {}): MemoryWriteResult {
-        const outcome = this.applyInner(op, origin, undefined, meta.reviewTurnId);
-        return { ...outcome, usage: this.usage() };
+    apply(op: MemoryOperation, origin: StoreWriteOrigin, meta: MemoryWriteMeta = {}, extra: MemoryApplyExtra = {}): MemoryWriteResult {
+        this.selfCall = meta.selfCall === true;
+        let outcome: MemoryWriteOutcome;
+        try {
+            outcome = this.applyInner(op, origin, undefined, meta.reviewTurnId, extra);
+        } finally {
+            this.selfCall = false;
+        }
+        const result: MemoryWriteResult = { ...outcome, usage: this.usage() };
+        // A core add that lands in (or is refused by) a nearly-full file tells the
+        // assistant how to make room instead of leaving it to guess.
+        if (op.action === 'add' && (op.scope ?? 'core') === 'core' && (outcome.result === 'applied' || outcome.result === 'memory_budget_exceeded')) {
+            const st = this.readFile(op.target);
+            if (outcome.result === 'memory_budget_exceeded' || isMemoryNearLimit(st.used, st.budget)) {
+                result.suggest = 'archive';
+                result.candidates = this.archiveCandidates(op.target);
+            }
+        }
+        return result;
+    }
+
+    /** "What was remembered since": journal-derived, newest first, with undo handles (design §3.2). */
+    digest(opts: { sinceMs?: number; limit?: number } = {}): MemoryDigest {
+        return buildMemoryDigest(this.readJournal(), { ...opts, now: this.now().getTime() });
+    }
+
+    /** The curator's pass: exact duplicates, lesson expiry, orphaned project memory (design §3.9, §3.10). */
+    runMaintenance(opts: { liveProjectRefs?: () => ReadonlySet<string> | null } = {}): ConsolidationReport {
+        return consolidateMemory(this, this.now().getTime(), opts);
+    }
+
+    /** Things only the owner should act on: USER duplicates, similar pairs, long-unused entries. */
+    consolidationSuggestions(): MemorySuggestion[] {
+        return consolidationSuggestions(this, this.now().getTime());
+    }
+
+    /** Owner-approved merge of a suggested pair (one undoable batch). */
+    merge(req: Parameters<typeof mergeMemoryEntries>[1]): ReturnType<typeof mergeMemoryEntries> {
+        return mergeMemoryEntries(this, req);
+    }
+
+    /** M-mem-2 (local counters only): undone / automatically applied writes. Zeros without a database. */
+    undoStats(): { autoApplied: number; undone: number; rate: number } {
+        try { return undoRate(this.archiveTier?.metrics() ?? []); } catch { return { autoApplied: 0, undone: 0, rate: 0 }; }
+    }
+
+    /** Reverse one applied write (or a whole batch) as the owner. Same checks as any write; conflicts are refused. */
+    undo(req: MemoryUndoRequest): MemoryUndoOutcome {
+        return undoMemoryWrite({
+            readJournal: () => this.readJournal(),
+            apply: (op, origin, meta, extra) => this.apply(op, origin, meta, extra),
+            coreEntries: (t) => { const st = this.readFile(t); return st.unreadable ? null : st.entries; },
+            archiveRow: (id) => this.archiveTier?.get(id) ?? null,
+            restoreArchiveRow: (id) => {
+                const row = this.archiveTier?.get(id) ?? null;
+                const ok = this.archiveTier?.restore(id) ?? false;
+                if (ok && row) {
+                    this.emitChange({ tier: 'archive', target: row.kind === 'preference' ? 'user' : 'memory', action: 'add', origin: 'owner', text: row.text, reverted: true, scope: row.scope === 'project' ? 'project' : 'archive', kind: row.kind });
+                }
+                return ok;
+            },
+            recordJournal: (rec) => this.journal(rec),
+        }, req);
+    }
+
+    /** The three entries of a file that were written longest ago (journal order; never-journaled = oldest). */
+    archiveCandidates(target: MemoryTarget, n: number = 3): string[] {
+        const lastWrite = new Map<string, number>();
+        for (const r of this.readJournal()) {
+            if ((r.tier ?? 'core') !== 'core' || r.target !== target || r.result !== 'applied' || !r.after) continue;
+            lastWrite.set(r.after, Date.parse(r.ts) || 0);
+        }
+        return this.readFile(target).entries
+            .map((e, i) => ({ e, i, t: lastWrite.get(e) ?? 0 }))
+            .sort((a, b) => a.t - b.t || a.i - b.i)
+            .slice(0, n)
+            .map((x) => firstChars(x.e, CANDIDATE_PREVIEW_CHARS));
+    }
+
+    /** All journal lines, oldest first. Unparseable lines are skipped. */
+    readJournal(): MemoryJournalRecord[] {
+        if (!existsSync(this.journalPath)) return [];
+        const out: MemoryJournalRecord[] = [];
+        try {
+            for (const line of readFileSync(this.journalPath, 'utf-8').split('\n')) {
+                if (!line.trim()) continue;
+                try { out.push(JSON.parse(line) as MemoryJournalRecord); } catch { /* skip */ }
+            }
+        } catch { /* unreadable journal = empty history */ }
+        return out;
     }
 
     listStaged(): StagedMemoryWrite[] {
@@ -534,22 +716,33 @@ export class AssistantMemoryStore {
         origin: StoreWriteOrigin,
         resolving: { stagedId: string; resolvedBy: 'owner' } | undefined,
         reviewTurnId: string | undefined,
+        extra: MemoryApplyExtra = {},
     ): MemoryWriteOutcome {
+        // Archive-tier / project-scope / archive-move ops have their own module
+        // (same check order, same journal, same staging).
+        if (op.action === 'archive' || (op.scope && op.scope !== 'core')) {
+            return applyArchiveTier(this.archiveHost(), op, origin, resolving, reviewTurnId, extra);
+        }
         const state = this.readFile(op.target);
         const content = op.action === 'remove' ? null : typeof op.content === 'string' ? op.content.trim() : '';
         let before: string | null = null;
 
-        const journal = (result: MemoryJournalResult, extra?: { stagedId?: string }) =>
+        const journal = (result: MemoryJournalResult, jx?: { stagedId?: string }) =>
             this.journal({
                 action: op.action,
                 target: op.target,
                 before,
                 after: content,
                 origin,
-                result,
-                stagedId: extra?.stagedId ?? resolving?.stagedId,
+                result: extra.restoredFrom && result === 'applied' ? 'reverted' : result,
+                stagedId: jx?.stagedId ?? resolving?.stagedId,
                 resolvedBy: resolving?.resolvedBy,
                 reviewTurnId,
+                tier: 'core',
+                entryId: coreEntryId(content ?? before ?? ''),
+                ...(op.sourceRef ? { sourceRef: op.sourceRef } : {}),
+                ...(extra.batchId ? { batchId: extra.batchId } : {}),
+                ...(extra.restoredFrom ? { restoredFrom: extra.restoredFrom } : {}),
             });
         const fail = (outcome: Exclude<MemoryWriteOutcome, { result: 'applied' | 'staged' }>) => (journal(outcome.result), outcome);
 
@@ -558,6 +751,8 @@ export class AssistantMemoryStore {
         // 0. USER.md is about the person: a non-human origin is refused outright,
         // not staged (resolving an already-staged write is the owner's approval).
         if (!resolving && op.target === 'user' && !userTargetAllowed(origin)) return fail({ result: 'memory_user_requires_human' });
+        // 0b. Narrow origins (decision promotion, curator) may only do their one job.
+        if (originScopeDenied(op, origin)) return fail({ result: 'memory_origin_scope_denied' });
 
         // 1. format + unique match
         if (content !== null) {
@@ -568,7 +763,7 @@ export class AssistantMemoryStore {
         if (op.action !== 'add') {
             const match = typeof op.match === 'string' ? op.match : '';
             if (!match.trim()) return fail({ result: 'memory_invalid_format', reason: 'empty_match' });
-            const hits = state.entries.map((e, i) => (e.includes(match) ? i : -1)).filter((i) => i >= 0);
+            const hits = state.entries.map((e, i) => ((extra.exactMatch ? e === match : e.includes(match)) ? i : -1)).filter((i) => i >= 0);
             if (hits.length === 0) return fail({ result: 'memory_no_match' });
             if (hits.length > 1) {
                 return fail({
@@ -617,10 +812,54 @@ export class AssistantMemoryStore {
 
         writeFileAtomic600(this.filePath(op.target), serialize(next));
         journal('applied');
+        this.seen.applyDelta(op.target, before, content);
+        this.emitChange({ tier: 'core', target: op.target, action: op.action, origin, text: content ?? before ?? '', reverted: !!extra.restoredFrom });
         return { result: 'applied' };
     }
 
-    private journal(rec: Omit<MemoryJournalRecord, 'ts' | 'redacted'>): void {
+    /** The launch snapshot was just rendered: from here on, a file difference nobody in the store caused is a hand edit. */
+    markSnapshotTaken(): void {
+        const st = this.read();
+        this.seen.reset({ memory: st.memory.unreadable ? [] : st.memory.entries, user: st.user.unreadable ? [] : st.user.entries });
+    }
+
+    /**
+     * Hand edits (or any change the store did not make) since the session last
+     * knew the files. The first call without a snapshot only sets the baseline.
+     * An undecodable file is skipped, never treated as "everything was removed".
+     */
+    detectExternalEdit(): Array<{ target: MemoryTarget; added: string[]; removed: string[] }> {
+        if (!this.seen.baselined) { this.markSnapshotTaken(); return []; }
+        const out: Array<{ target: MemoryTarget; added: string[]; removed: string[] }> = [];
+        for (const target of ['memory', 'user'] as const) {
+            const st = this.readFile(target);
+            if (st.unreadable) continue;
+            const d = this.seen.diff(target, st.entries);
+            if (d) out.push({ target, ...d });
+        }
+        return out;
+    }
+
+    /** What the archive-tier module needs from the store (kept narrow on purpose). */
+    private archiveHost(): ArchiveOpHost {
+        return {
+            archive: this.archiveTier,
+            readCore: (t) => this.readFile(t),
+            journal: (rec) => this.journal(rec),
+            stage: (op, origin, reviewTurnId) => this.stage(op, origin, reviewTurnId),
+            applyCore: (op, origin, extra) => this.applyInner(op, origin, undefined, undefined, extra),
+            emit: (e) => this.emitChange(e),
+        };
+    }
+
+    private emitChange(e: MemoryChangeEvent): void {
+        e = { ...e, self: this.selfCall };
+        for (const fn of this.changeListeners) {
+            try { fn(e); } catch { /* a listener must never fail a write */ }
+        }
+    }
+
+    private journal(rec: Omit<MemoryJournalRecord, 'ts' | 'redacted' | 'jid'>): void {
         const redacted: Array<'before' | 'after'> = [];
         const scrub = (field: 'before' | 'after', v: string | null): string | null => {
             if (v !== null && detectCredential(v)) {
@@ -629,8 +868,10 @@ export class AssistantMemoryStore {
             }
             return v;
         };
+        const ts = this.now().toISOString();
         const full: MemoryJournalRecord = {
-            ts: this.now().toISOString(),
+            ts,
+            jid: `${this.now().getTime().toString(36)}${randomBytes(3).toString('hex')}`,
             ...rec,
             before: scrub('before', rec.before),
             after: scrub('after', rec.after),
@@ -646,6 +887,10 @@ export class AssistantMemoryStore {
             // a failed append must not fail the write.
             appendJsonLine600(this.journalPath, full);
         } catch { /* ignore */ }
+        try {
+            // Local counter M-mem-1: writes by origin and result.
+            this.archiveTier?.bump(`memory_write_${rec.origin}_${rec.result}`);
+        } catch { /* metrics never fail a write */ }
     }
 
     private stagedPath(id: string): string {
@@ -680,7 +925,7 @@ export class AssistantMemoryStore {
             action: op.action,
             target: op.target,
             before: op.action === 'add' ? null : op.match,
-            after: op.action === 'remove' ? null : op.content,
+            after: op.action === 'add' || op.action === 'replace' ? op.content : null,
             origin: rec.origin,
             result: 'discarded',
             stagedId: rec.id,
@@ -688,6 +933,25 @@ export class AssistantMemoryStore {
             reviewTurnId: rec.reviewTurnId,
         });
         this.unlinkStaged(rec.id);
+    }
+
+    /**
+     * Review-origin lesson TTL in days (`assistant.json` `memoryLessonTtlDays`,
+     * default 90). Out-of-range or non-numeric values fall back to the default.
+     */
+    lessonTtlDays(): number {
+        try {
+            if (existsSync(this.configPath)) {
+                const parsed = JSON.parse(readFileSync(this.configPath, 'utf-8')) as Record<string, unknown> | null;
+                const v = parsed && typeof parsed === 'object' ? parsed.memoryLessonTtlDays : undefined;
+                if (typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= 3650) return Math.floor(v);
+            }
+        } catch { /* unreadable config: default */ }
+        return DEFAULT_LESSON_TTL_DAYS;
+    }
+
+    lessonTtlMs(): number {
+        return this.lessonTtlDays() * 24 * 60 * 60 * 1000;
     }
 
     private readConfiguredBudgets(): Partial<MemoryBudgets> | undefined {

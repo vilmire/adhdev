@@ -5,8 +5,10 @@ import { ChatThemeSection } from './ChatThemeSection'
 import { ChatActivitySection } from './ChatActivitySection'
 import { MobileDashboardModeSection } from './MobileDashboardModeSection'
 import { AssistantMemoryLimitsSection } from './AssistantMemoryLimitsSection'
+import { AssistantSkillsPanel } from './AssistantSkillsPanel'
 
 export { AssistantMemoryLimitsSection, type AssistantMemoryLimitsSectionProps } from './AssistantMemoryLimitsSection'
+export { AssistantSkillsPanel, type AssistantSkillsPanelProps } from './AssistantSkillsPanel'
 
 export interface AppearanceSettingsSectionProps {
     /**
@@ -63,6 +65,9 @@ export function AppearanceSettingsSection({
                 <div className="text-xs text-text-muted mb-1 font-medium">{t('assistantMemoryLimits.title')}</div>
                 <AssistantMemoryLimitsSection />
             </div>
+
+            {/* Assistant skills: attach / view counts, last use */}
+            <AssistantSkillsPanel />
         </div>
     )
 }

@@ -195,6 +195,15 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_task_history: READ_LOCAL,
   mesh_ledger_query: READ_LOCAL,
   mesh_mission_list: READ_LOCAL,
+  // Read-only for missions; reaches member nodes and (refresh=true) a git remote to judge containment.
+  mesh_mission_git_eval: READ_REMOTE,
+  // Release objects (design 2026-11-01-release-objects): local daemon state only; nothing destroys a mission.
+  mesh_release_list: READ_LOCAL,
+  mesh_release_upsert: WRITE_LOCAL_SAFE,
+  mesh_release_scope: WRITE_LOCAL_SAFE,
+  mesh_release_record_deploy: WRITE_LOCAL_SAFE,
+  // Overwrites the stored draft of the release (regenerated from missions each time).
+  mesh_release_changelog_draft: WRITE_LOCAL_SAFE,
   mesh_review_inbox: READ_LOCAL,
   // Reads that cross to a (possibly remote) node.
   mesh_read_chat: READ_REMOTE,
@@ -227,6 +236,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // ── Mesh: queue mutation ─────────────────────────────────────────────
   // Cancels queued/assigned work — the pending task is discarded.
   mesh_queue_cancel: DESTRUCTIVE_LOCAL,
+  // Cancels a direct attempt and starts the exact writer stop (no forced claim release).
+  mesh_direct_cancel: DESTRUCTIVE_LOCAL,
   // Returns a task to pending, optionally REWRITING its instruction (the
   // previous instruction is overwritten).
   mesh_queue_revise: DESTRUCTIVE_LOCAL,
@@ -249,6 +260,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_clone_node: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Deregisters a node.
   mesh_remove_node: DESTRUCTIVE_LOCAL,
+  // Re-runs the worktree's required bootstrap scripts on the node's machine.
+  mesh_retry_node_bootstrap: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   // Removes worktree nodes — deletes on-disk worktrees on the target machine.
   mesh_cleanup_worktree_nodes: DESTRUCTIVE_REMOTE,
   // Deletes delegated session records (reviewable history is discarded), and
@@ -337,6 +350,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   skill_view: READ_LOCAL,
   // replace/remove overwrite or drop an existing entry (journaled); add accumulates.
   memory: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // FTS5 search over the archive tier; bumps hit counters only, returns stored notes.
+  memory_search: READ_LOCAL,
   // patch overwrites a substring; each call counts against the patch caps.
   skill_manage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   // Same shape as mesh_note: record appends, forget retracts.
@@ -348,6 +363,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // Owner-decision inbox: an answer overwrites an earlier one (undoable); a request is deduped by its question.
   decision_answer: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   decision_request: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  // Stops / restarts / switches a coordinator, worker or assistant session (status is read-only); stages a card when the target is busy.
+  session_control: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 
 /**

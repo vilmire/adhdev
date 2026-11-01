@@ -44,9 +44,8 @@ const { clearQuotaCache, refreshQuotaCacheOnce } = await import('../../src/quota
 const MINUTE = 60_000
 const NOW = 1_800_000_000_000
 
-/** The production thresholds, made explicit so a default change cannot
- *  silently rewrite what this suite pins. */
-const POLICY = { sessionMinRemainingPercent: 10, weeklyMinRemainingPercent: 15 }
+/** The production thresholds are the machine reserve's code defaults. */
+const POLICY = null // reserve thresholds live in the machine reserve (defaults 10 / 15)
 
 const okEntry = (provider: string, weeklyUsedPercent: number, updatedAt: number) => ({
     provider,

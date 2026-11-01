@@ -17,6 +17,7 @@ import { existsSync, readFileSync } from 'fs';
 import { writeFileAtomic600 } from '../store-guards.js';
 import { STAGED_WRITE_MAX_AGE_MS, type AssistantMemoryStore } from '../memory/memory-store.js';
 import type { AssistantSkillStore } from './skill-store.js';
+import type { ConsolidationReport } from '../memory/memory-consolidate.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -33,6 +34,8 @@ export interface CuratorReport {
     archived: string[];
     journalLinesPruned: { skills: number; memory: number };
     stagedExpired: { skills: string[]; memory: string[] };
+    /** Memory housekeeping (duplicates, lesson expiry, orphaned project memory); absent without a memory store. */
+    memory?: ConsolidationReport;
 }
 
 /**
@@ -61,6 +64,8 @@ export class AssistantCurator {
         private readonly skills: AssistantSkillStore,
         private readonly memory: AssistantMemoryStore | null,
         private readonly rules: typeof CURATOR_RULES = CURATOR_RULES,
+        /** Project ids that still exist (meshes + followed remotes); orphan project memory is archived. Null/empty = skip. */
+        private readonly liveProjectRefs?: () => ReadonlySet<string> | null,
     ) {}
 
     /**
@@ -79,7 +84,14 @@ export class AssistantCurator {
             skills: pruneJsonlByTs(this.skills.journal.path, cutoff),
             memory: this.memory ? pruneJsonlByTs(this.memory.journalPath, cutoff) : 0,
         };
-        return { staled, archived, journalLinesPruned, stagedExpired };
+        // Memory housekeeping (its journal lines are fresh, so the prune above never drops them).
+        let memory: ConsolidationReport | undefined;
+        if (this.memory) {
+            try {
+                memory = this.memory.runMaintenance(this.liveProjectRefs ? { liveProjectRefs: this.liveProjectRefs } : {});
+            } catch { /* housekeeping must never stop the skill pass */ }
+        }
+        return { staled, archived, journalLinesPruned, stagedExpired, ...(memory ? { memory } : {}) };
     }
 }
 

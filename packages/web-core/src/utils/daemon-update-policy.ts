@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next'
 import type { DaemonData } from '../types'
+import { isSameVersionTrack, isVersionNewer } from './version-update'
 
 export type WebReleaseChannel = 'stable' | 'preview'
 export type WebNpmTag = 'latest' | 'next'
@@ -65,6 +66,25 @@ export function getDaemonUpdatePolicy(daemon: DaemonData): WebVersionUpdatePolic
 
 export function getDaemonUpdateTargetVersion(daemon: DaemonData, fallbackVersion: string | null = null): string | null {
     return getDaemonUpdatePolicy(daemon).targetVersion || fallbackVersion
+}
+
+/**
+ * Version a MANUAL update suggestion should point at: the newer of the API-reported target and the
+ * running web app's version, but only on the same release track as the daemon and the API target.
+ * Never lower than the API target, never a cross-track (release vs rc) jump. The API target still
+ * pins `getDaemonUpdateTargetVersion` (auto/required paths); the upgrade payload stays `{}` because
+ * the daemon upgrades along its own npm tag.
+ */
+export function getManualUpdateSuggestionVersion(daemon: DaemonData, appVersion: string | null = null): string | null {
+    const apiTarget = getDaemonUpdatePolicy(daemon).targetVersion || null
+    const web = normalizeVersion(appVersion)
+    if (!web) return apiTarget
+    if (!apiTarget) return web
+    if (!isVersionNewer(web, apiTarget)) return apiTarget
+    if (!isSameVersionTrack(apiTarget, web)) return apiTarget
+    const own = normalizeVersion(daemon.version)
+    if (own && !isSameVersionTrack(own, web)) return apiTarget
+    return web
 }
 
 export function getDaemonUpdateChannel(daemon: DaemonData): WebReleaseChannel | null {

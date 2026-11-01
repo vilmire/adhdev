@@ -263,6 +263,12 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
                 [r.stopRequestId, r.attemptId, r.generation, r.sessionId, r.meshId, r.taskId, r.nodeId, r.dispatchNonce, r.providerType, r.ownerDaemonId],
                 [request.stopRequestId, request.attemptId, request.generation, request.sessionId, request.meshId, request.taskId, request.nodeId, request.dispatchNonce, request.providerType, request.ownerDaemonId],
             )) return;
+        // Absence evidence is a point-in-time census of ONE session-host incarnation:
+        // it must name that host's boot id. A receipt without it (older host/daemon)
+        // stays pending — fail-closed; a mixed fleet settles only after both sides update.
+        const evidence = r.evidence as Record<string, unknown> | undefined;
+        if (evidence?.kind === 'host_session_absent'
+            && (typeof evidence.hostBootId !== 'string' || !evidence.hostBootId.trim())) return;
         const eventId = `writer_settled:${request.stopRequestId}:${randomUUID()}`;
         confirmedStops.add(eventId);
         try {

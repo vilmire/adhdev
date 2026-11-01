@@ -18,9 +18,9 @@
 export { triggerMeshQueueAndReport } from './mesh-tools-internal.js';
 export { ALL_MESH_TOOLS, MESH_LIST_NODES_TOOL, MESH_STATUS_TOOL, MESH_ROUTE_PREVIEW_TOOL, ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL, ARTIFACT_REGISTER_TOOL } from './mesh-tool-schemas.js';
 export { MESH_INIT_TOOL, MESH_CONFIG_TOOL, MESH_NODE_SLOTS_TOOL, MESH_REFINE_BATCH_TOOL, MESH_REFINE_NODE_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NOTIFY_WORKER_TOOL } from './mesh-tool-schemas-refine-config.js';
-export { MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_RECONCILE_LEDGER_TOOL, MESH_NOTE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_TASK_HISTORY_TOOL } from './mesh-tool-schemas-admin.js';
+export { MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_RETRY_NODE_BOOTSTRAP_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_MISSION_LIST_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_RECONCILE_LEDGER_TOOL, MESH_NOTE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_TASK_HISTORY_TOOL, MESH_MISSION_GIT_EVAL_TOOL } from './mesh-tool-schemas-admin.js';
 export { MESH_CHECKPOINT_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_GIT_STATUS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_READ_NODE_LOGS_TOOL, MESH_RESTART_DAEMON_TOOL, MESH_SEND_TASK_TOOL } from './mesh-tool-schemas-session.js';
-export { MESH_ENQUEUE_TASK_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL, MESH_VIEW_QUEUE_TOOL } from './mesh-tool-schemas-queue.js';
+export { MESH_ENQUEUE_TASK_TOOL, MESH_QUEUE_CANCEL_TOOL, MESH_DIRECT_CANCEL_TOOL, MESH_QUEUE_REQUEUE_TOOL, MESH_VIEW_QUEUE_TOOL } from './mesh-tool-schemas-queue.js';
 export { chooseDispatchableSession, classifyRemoteDelegateRelaySafety, isMeshOwnedDelegateSession } from './mesh-tools-internal-core.js';
 export { resolveCoordinatorDaemonId } from './mesh-node-identity.js';
 export type {
@@ -39,8 +39,12 @@ export {
 export { meshEnqueueTask, meshEnqueueBatch } from './mesh-tools-queue.js';
 export { meshQueueCancel, meshQueueRequeue, meshQueueRevise, meshViewQueue } from './mesh-tools-queue-manage.js';
 
+export { meshReleaseUpsert, meshReleaseScope, meshReleaseList, meshReleaseRecordDeploy, meshReleaseChangelogDraft } from './mesh-tools-release.js';
+export { MESH_RELEASE_UPSERT_TOOL, MESH_RELEASE_SCOPE_TOOL, MESH_RELEASE_LIST_TOOL, MESH_RELEASE_RECORD_DEPLOY_TOOL, MESH_RELEASE_CHANGELOG_DRAFT_TOOL } from './mesh-tool-schemas-release.js';
+
 export {
     meshMissionList,
+    meshMissionGitEval,
     meshMissionUpsert,
     meshReconcileLedger,
     meshRecordNote,
@@ -88,6 +92,7 @@ export {
     meshRemoveNode,
     meshRestartDaemon,
 } from './mesh-tools-git.js';
+export { meshRetryNodeBootstrap, meshDirectCancel } from './mesh-tools-node-recovery.js';
 
 export {
     meshPlanOnboarding,

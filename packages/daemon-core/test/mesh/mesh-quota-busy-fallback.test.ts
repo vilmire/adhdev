@@ -231,11 +231,10 @@ describe('quotaBusyFallback policy field', () => {
             .toEqual({ quotaBusyFallback: false });
     });
 
-    it('leaves the other thresholds untouched', () => {
+    it('leaves the other preferences untouched', () => {
         // Guards against the new field disturbing the existing resolution.
         const resolved = resolveQuotaRoutingPolicy({ quotaBusyFallback: false });
-        expect(resolved.sessionMinRemainingPercent).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionMinRemainingPercent);
-        expect(resolved.weeklyMinRemainingPercent).toBe(DEFAULT_QUOTA_ROUTING_POLICY.weeklyMinRemainingPercent);
+        expect(resolved.sessionAxisWeeklyHeadroomPercent).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionAxisWeeklyHeadroomPercent);
         expect(resolved.staleAfterMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs);
         expect(resolved.spreadBonusMax).toBe(DEFAULT_QUOTA_ROUTING_POLICY.spreadBonusMax);
     });

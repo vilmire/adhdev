@@ -18,6 +18,7 @@ function fixture(mode: 'absent' | 'live' | 'unreachable', scope: 'mesh_queue' | 
     store.insertQueueEntry({ id: taskId, meshId, message: 'work', status: 'assigned', assignedNodeId: 'node', assignedSessionId: sessionId, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } as any);
     const attempt = seedMeshAttempt({ meshId, taskId, sessionId, nodeId: 'node', providerType: 'codex-cli', stage: 'generating', scope });
     const host: any = { adapters: new Map(), deps: { getInstanceManager: () => ({ getInstance: () => undefined }),
+        idleSessionLifetimeControl: { resolveHostBootId: () => 'host-boot-1' },
         listHostedCliRuntimes: async () => { if (mode === 'unreachable') throw new Error('offline'); return mode === 'live' ? [{ runtimeId: sessionId }] : []; } } };
     const ledger = createMeshRuntimeTurnLedger({ selfDaemonId: 'test-daemon', publisher: null, autoFlush: false,
         ports: { cancelDispatch: r => stopExactMeshWriter(host, r) } });
@@ -38,7 +39,7 @@ describe('rc32 verified dead writer retirement', () => {
         expect(requeueTaskWithOutcome(f.meshId, f.taskId, { force: true })?.entry.status).toBe('pending');
         expect(f.store.hasActiveAssignment(f.meshId, f.sessionId, 'node')).toBe(false);
         const events = f.store.db.prepare("SELECT payload_json FROM turn_events WHERE attempt_id = ? AND event_id LIKE 'writer_settled:%'").all(f.attempt.attemptId) as any[];
-        expect(events.some(e => JSON.parse(e.payload_json).writerStopReceipt?.evidence?.kind === 'host_session_absent')).toBe(true);
+        expect(events.some(e => JSON.parse(e.payload_json).writerStopReceipt?.evidence?.kind === 'host_session_absent' && JSON.parse(e.payload_json).writerStopReceipt.evidence.hostBootId === 'host-boot-1')).toBe(true);
     });
     it.each(['mesh_queue', 'mesh_direct'] as const)('cancel converges an absent %s session to terminal', async scope => {
         const f = fixture('absent', scope);

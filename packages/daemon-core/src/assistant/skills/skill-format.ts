@@ -59,7 +59,7 @@ const MAX_FILE_DEPTH = 3;
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export type SkillStatus = 'active' | 'stale' | 'archived';
-export type SkillOrigin = 'agent' | 'owner' | 'imported';
+export type SkillOrigin = 'agent' | 'owner' | 'imported' | 'starter';
 
 export function isValidSkillName(name: unknown): name is string {
     return typeof name === 'string' && SKILL_NAME_RE.test(name) && !RESERVED_SKILL_NAMES.has(name);
@@ -132,6 +132,18 @@ export function validateDescription(d: unknown): d is string {
     return t.length > 0 && !/[\r\n]/.test(t) && charCount(t) <= SKILL_LIMITS.descriptionChars;
 }
 
+/** `metadata.adhdev.triggers`: up to 8 phrases of up to 60 chars that describe requests the skill answers. */
+export const SKILL_TRIGGER_LIMITS = { count: 8, chars: 60 } as const;
+
+export function triggersOf(meta: Record<string, unknown>): string[] {
+    const md = meta.metadata as Record<string, unknown> | undefined;
+    const ad = md && typeof md === 'object' ? (md.adhdev as Record<string, unknown> | undefined) : undefined;
+    const t = ad && typeof ad === 'object' ? ad.triggers : undefined;
+    if (!Array.isArray(t)) return [];
+    return t.filter((x): x is string => typeof x === 'string' && x.trim().length > 0 && x.length <= SKILL_TRIGGER_LIMITS.chars)
+        .map((x) => x.trim()).slice(0, SKILL_TRIGGER_LIMITS.count);
+}
+
 export function projectHint(meta: Record<string, unknown>): string | undefined {
     const md = meta.metadata as Record<string, unknown> | undefined;
     const ad = md && typeof md === 'object' ? (md.adhdev as Record<string, unknown> | undefined) : undefined;
@@ -148,9 +160,12 @@ export function composeSkillMd(frontmatterRaw: string, body: string): string {
 }
 
 /** Frontmatter for a newly created skill. */
-export function newSkillFrontmatter(name: string, description: string, project?: string): string {
+export function newSkillFrontmatter(name: string, description: string, project?: string, triggers?: readonly string[]): string {
     const meta: Record<string, unknown> = { name, description: description.trim() };
-    if (project) meta.metadata = { adhdev: { project } };
+    const adhdev: Record<string, unknown> = {};
+    if (project) adhdev.project = project;
+    if (triggers?.length) adhdev.triggers = [...triggers];
+    if (Object.keys(adhdev).length) meta.metadata = { adhdev };
     return dumpFrontmatter(meta);
 }
 
@@ -180,6 +195,8 @@ export interface SkillDirRead {
     meta: Record<string, unknown>;
     description: string;
     project?: string;
+    /** `metadata.adhdev.triggers` (matcher input). */
+    triggers: string[];
     body: string;
     bodyChars: number;
     files: SkillDirFile[];
@@ -245,7 +262,7 @@ export function readSkillDir(dir: string, expectedName: string): SkillDirRead | 
     let out: SkillDirRead;
     if ('problem' in parsed) {
         const body = splitSkillMd(text)?.body ?? text;
-        out = { ...base, problem: parsed.problem, frontmatterRaw: '', meta: {}, description: '', body, bodyChars: charCount(body), overLimit: [] };
+        out = { ...base, problem: parsed.problem, frontmatterRaw: '', meta: {}, description: '', triggers: [], body, bodyChars: charCount(body), overLimit: [] };
     } else {
         let problem: SkillFormatProblem | undefined =
             parsed.meta.name !== expectedName ? 'name_mismatch' : !validateDescription(parsed.meta.description) ? 'bad_description' : undefined;
@@ -258,6 +275,7 @@ export function readSkillDir(dir: string, expectedName: string): SkillDirRead | 
             meta: parsed.meta,
             description: typeof parsed.meta.description === 'string' ? parsed.meta.description.trim() : '',
             project: projectHint(parsed.meta),
+            triggers: triggersOf(parsed.meta),
             body: parsed.body,
             bodyChars: charCount(parsed.body),
             overLimit: [],

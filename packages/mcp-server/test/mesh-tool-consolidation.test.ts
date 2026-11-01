@@ -44,10 +44,13 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 45 with mesh_queue_revise for pending expected-revision updates.
 // 47 with artifact_register and artifact_read for coordinators (artifact sharing, 2026-10-23).
 // 48 with mesh_reattach_source_parent for owner-authorized source-parent repair.
+// 50 with mesh_direct_cancel and mesh_retry_node_bootstrap (rc.37: wrappers over existing daemon commands).
+// 51 with mesh_mission_git_eval (rc.37: mission ref containment, read-only projection).
+// 56 with the release-object tools (rc.37: mesh_release_upsert/scope/list/record_deploy/changelog_draft).
 // 47 once the deprecated mesh_ledger_query alias is dropped next release.
-test('the published surface is 48 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 48);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 48);
+test('the published surface is 56 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 56);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 56);
     assert.equal(published.has('mesh_queue_revise'), true);
     assert.equal(typeof resolveMeshToolHandler('mesh_queue_revise'), 'function');
     assert.equal(published.has('mesh_reattach_source_parent'), true);

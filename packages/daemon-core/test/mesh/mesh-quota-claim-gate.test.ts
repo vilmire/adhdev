@@ -10,7 +10,7 @@ import { tmpdir } from 'os'
 // evaluateProviderQuotaGate now gates the claim funnel: a fresh 'ok' snapshot showing the
 // session/weekly window below threshold leaves the task pending (WAIT semantics — the window
 // resets), and the drain moves on to the next candidate. Missing/stale/non-'ok' snapshots
-// fail OPEN, and a session reset within sessionResetImminentMs waives the session block.
+// fail OPEN, and a session reset within routingSessionResetImminentMs waives the session block.
 //
 // These tests drive the LOCAL idle drain path (triggerMeshQueue), the very path that pulled
 // tasks onto exhausted nodes in production — mirroring mesh-worktree-claim-gate-bypass.test.ts,
@@ -96,8 +96,13 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
   } as any)
 }
 
-function setMesh(meshId: string, nodes: any[], quotaRouting?: Record<string, unknown>) {
-  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM Mesh', policy: quotaRouting ? { quotaRouting } : {}, nodes })
+// `reserve` = the MACHINE quota reserve (defaults layer) the nodes report in their facts
+// bundle — thresholds are no longer mesh policy (quota/quota-reserve.ts).
+function setMesh(meshId: string, nodes: any[], reserve?: Record<string, number>) {
+  const withReserve = reserve
+    ? nodes.map(n => ({ ...n, nodeFacts: { ...n.nodeFacts, quotaReserve: { version: 1, defaults: reserve } } }))
+    : nodes
+  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM Mesh', policy: {}, nodes: withReserve })
 }
 
 // Fresh quota bundle stamped on the local clock (the claim path evaluates with Date.now()).
@@ -216,7 +221,7 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
             { provider: 'codex-cli', difficulty: ['difficult'], maxParallel: 1 },
           ],
         },
-      })], { weeklyMinRemainingPercent: 80 })
+      })], { routingLongMinPercent: 80 })
       const components = createComponents(meshId, [
         { sessionId: 'sess-claude', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'claude-cli' },
         { sessionId: 'sess-codex', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
@@ -256,7 +261,7 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
       setMesh(meshId, [quotaNode({
         'claude-cli': claudeQuota({ weekly: { usedPercent: 32, windowMinutes: 10080, resetsAt: null } }),
         'codex-cli': claudeQuota({ provider: 'codex-cli', weekly: { usedPercent: 19, windowMinutes: 10080, resetsAt: null } }),
-      })], { weeklyMinRemainingPercent: 82 })
+      })], { routingLongMinPercent: 82 })
       const components = createComponents(meshId, [
         { sessionId: 'sess-claude-gated', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'claude-cli' },
         { sessionId: 'sess-codex-gated', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
@@ -277,7 +282,7 @@ describe('QUOTA GATE (claim path) — idle session on an exhausted node cannot c
     }
   })
 
-  it('ALLOWS the claim when the session reset is imminent (< sessionResetImminentMs)', async () => {
+  it('ALLOWS the claim when the session reset is imminent (< routingSessionResetImminentMs)', async () => {
     const meshId = `mesh_quota_claim_reset_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId, [quotaNode({

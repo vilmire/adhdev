@@ -21,6 +21,7 @@ import type { MissionItemRecord } from './mesh-mission-items-store.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { getActiveMeshMissionSummaries, type MeshMissionSummary } from './mesh-missions.js';
+import { readMissionGitStates } from './mesh-mission-git-eval.js';
 import { isCarryOverMissionRecord, truncateMissionText, type MissionDecision } from '@adhdev/mesh-shared';
 
 /** Hard cap on one mission's rendered block (header, summary, counts, tasks, decisions, hints). */
@@ -86,6 +87,8 @@ export interface MissionBlockInput {
     answered: MissionItemRecord[];
     /** No summary and no items of any state → show the one-time migration hint. */
     needsMigration: boolean;
+    /** Cached git verdict of the mission's refs (design 2026-11-01-mission-git-refs); absent / `no_refs` → no line. */
+    git?: { state: string; partialUnknown?: boolean };
 }
 
 function countsLine(input: MissionBlockInput): string {
@@ -112,6 +115,10 @@ export function renderMissionBlock(input: MissionBlockInput): string {
     const t = m.tasks;
     const header = `- **${truncateMissionText(m.title, TITLE_MAX)}** (id: \`${m.id}\`)${carryOver ? ' [carry-over]' : ''}`;
     const counts = countsLine(input);
+    // "landed" = referenced commits are on the default branch. NOT done: live checks and remaining items are separate.
+    const gitLine = input.git && input.git.state !== 'no_refs'
+        ? `  Git: ${input.git.state}${input.git.partialUnknown ? ' (some unknown)' : ''}`
+        : '';
     const tasks = carryOver || t.total === 0
         ? ''
         : `  Tasks: ${t.total} total — ${t.pending} pending (${t.blocked} blocked), ${t.assigned} assigned, ${t.completed} completed, ${t.failed} failed, ${t.cancelled} cancelled`;
@@ -122,12 +129,12 @@ export function renderMissionBlock(input: MissionBlockInput): string {
             ? m.summary
             : (m.goal ? m.goal.replace(/\s+/g, ' ').trim() : '');
     const summaryLabel = m.summary ? 'Summary' : 'Goal';
-    const fixed = header.length + counts.length + tasks.length + 3; // newlines
+    const fixed = header.length + counts.length + tasks.length + gitLine.length + 3; // newlines
     // Optional lines need room: never let the summary starve them entirely, never exceed the cap.
     const summaryBudget = Math.max(40, Math.min(m.summary ? SUMMARY_MAX : GOAL_FALLBACK_MAX, MISSION_BLOCK_CHAR_CAP - fixed - 40));
     const summaryLine = summaryText ? `  ${summaryLabel}: ${truncateMissionText(summaryText, summaryBudget)}` : '';
 
-    const required = [header, summaryLine, counts, tasks].filter(Boolean);
+    const required = [header, summaryLine, counts, gitLine, tasks].filter(Boolean);
     let used = required.join('\n').length;
 
     const optional: string[] = [];
@@ -163,7 +170,9 @@ export function renderMissionBlock(input: MissionBlockInput): string {
 const SECTION_FOOTER =
     'Continue each mission from its current task state. Do not re-enqueue tasks that already exist — check mesh_view_queue first. '
     + 'Update a mission with mesh_mission_upsert (summary, items_add / items_update) when it changes or reaches a terminal state (completed/abandoned). '
+    + 'When you close a mission, start outcome_reason with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked X on main; not checked Y live`) — a bare "not needed"/"superseded" claim is flagged "scope not recorded" on the owner dashboard. '
     + 'Decision items are the OWNER\'s to answer — never answer one yourself; when an answer arrives act on it. '
+    + 'A "Git: landed" line means only that the referenced commits are on the default branch — it is not completion evidence: close live_check and remaining items separately, and never read "unknown" as "not landed". Put a PR\'s merge SHA (a commit ref) in refs, not only its number — PR numbers are not evaluated. '
     + 'Full goal text: mesh_mission_list verbose.';
 
 /**
@@ -175,6 +184,7 @@ export function buildMissionPromptSection(meshId: string): string {
     const missions = getActiveMeshMissionSummaries(meshId);
     if (missions.length === 0) return '';
     const items = MeshRuntimeStore.getInstance().missionItems();
+    const gitStates = readMissionGitStates(meshId, missions.map(m => m.id));
     const blocks: string[] = [];
     for (const mission of missions) {
         const carryOver = isCarryOverMissionRecord(mission);
@@ -194,6 +204,7 @@ export function buildMissionPromptSection(meshId: string): string {
             openDecisions,
             answered: all.filter(isUnseenAnswer),
             needsMigration: !carryOver && !mission.summary && all.length === 0,
+            git: gitStates.get(mission.id),
         }));
     }
     if (blocks.length === 0) return '';

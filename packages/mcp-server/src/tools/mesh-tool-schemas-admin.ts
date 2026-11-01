@@ -26,8 +26,9 @@ export const MESH_MISSION_UPSERT_TOOL = {
             goal: { type: 'string', description: 'Free-text goal/definition of done (the short summary mesh_mission_list shows). Ignored in bulk.' },
             status: { type: 'string', enum: ['active', 'paused', 'completed', 'abandoned'], description: 'Defaults to active on create. Required in bulk.' },
             summary: { type: 'string', description: 'One-line current state (≤300 chars; longer is clipped). Shown in lists instead of the goal.' },
+            release_note: { type: 'string', description: 'One user/operator-visible sentence (≤400 chars, English, no internal wave/rc/mission wording) describing this mission\'s result for the release CHANGELOG draft. Optionally start with [Added]/[Fixed]/[Changed]. Empty string clears it.' },
             outcome: { type: 'string', enum: ['merged', 'verified_live', 'superseded', 'not_needed', 'owner_abandoned', 'unspecified'], description: 'Why the mission closed (set with status completed/abandoned; omitted → unspecified). owner_abandoned asks the owner to confirm — only use it when the owner really decided.' },
-            outcome_reason: { type: 'string', description: 'Optional (≤500 chars): the evidence/reasoning behind the outcome.' },
+            outcome_reason: { type: 'string', description: 'Optional (≤500 chars): the evidence/reasoning behind the outcome. Start it with `scope:` and say what was checked and what was NOT checked (e.g. `scope: checked merge + unit tests; not checked live`) — closed missions without a `scope:` statement are shown to the owner as "scope not recorded".' },
             carry_over_to: { type: 'string', description: 'On close: mission id that receives the still-open items (default: the mesh carry-over mission).' },
             items_add: {
                 type: 'array',
@@ -112,7 +113,27 @@ export const MESH_MISSION_LIST_TOOL = {
             include_stats: { type: 'boolean', description: 'Attach per-mission ledger stats (durations/attempts). Off by default; tasks aggregate is usually enough.' },
             items: { type: 'boolean', description: 'Attach each mission\'s items (remaining work, live checks, decisions with answers, evidence).' },
             history: { type: 'boolean', description: 'Attach each mission\'s change history (last 50 events; goal edits keep the previous goal text).' },
+            git: { type: 'boolean', description: 'Attach each mission\'s `gitState` (landed | partial | not_landed | unknown | no_refs) and `gitRefs`: whether the commit/branch refs on its items are already on the default branch, judged from git objects. '
+                + 'Cached answer now (stale ones refresh in the background; no fetch). `landed` is NOT completion — it never closes a mission or an item, and `unknown` is not "not landed". Use mesh_mission_git_eval for one mission with evidence or a refresh.' },
         },
+    },
+};
+
+export const MESH_MISSION_GIT_EVAL_TOOL = {
+    name: 'mesh_mission_git_eval',
+    description: 'Evaluate whether the commit/branch refs on ONE mission\'s items (worker-reported commits, Refinery merge evidence, refs you attached) are already contained in the mesh default branch. '
+        + 'The daemon opens git objects itself: ancestry first, then cherry-pick/rebase/squash equivalence; commit-message mission ids, branch-name similarity and PR numbers are never evidence. '
+        + 'Result: `gitState.state` = landed (all refs on the base) | partial | not_landed | unknown | no_refs, plus per-ref status (contained_ancestor | contained_patch_equivalent | not_contained | unknown with a reason), the base SHA compared against and when. '
+        + '`unknown` (object missing, shallow clone, node offline) is never "not landed". `landed` means ONLY "the referenced changes are on the base": it does not mean the work is accepted, done, or that remaining items/live checks are closed, and this tool never changes any mission or item. '
+        + 'Evaluates the host\'s own repositories first, then member nodes. No fetch unless refresh=true (then `git fetch` of the default branch first). Read-only for missions. Put a PR\'s MERGE SHA (a commit ref) on the item — PR numbers are not evaluated.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            mission_id: { type: 'string', description: 'Full mission id (from mesh_mission_list).' },
+            refresh: { type: 'boolean', description: 'Fetch the default branch first, then re-evaluate (otherwise a fresh cached verdict < 10 min old is returned as is).' },
+            verbose: { type: 'boolean', description: 'Include pinned SHAs, base SHA and the detail of each ref verdict.' },
+        },
+        required: ['mission_id'],
     },
 };
 
@@ -274,6 +295,18 @@ export const MESH_REMOVE_NODE_TOOL = {
                 description: 'Optional override for cleanup of delegated sessions attached to this node. preserve keeps history/processes; stop stops live runtimes only; delete_stopped removes completed transcripts only; stop_and_delete stops live runtimes and deletes records.',
             },
             force: { type: 'boolean', description: 'Override the coordinator-base-node guard. Only set true to intentionally tear down this mesh; the coordinator must then be re-registered/restarted. Worktree nodes never need force.' },
+        },
+        required: ['node_id'],
+    },
+};
+
+export const MESH_RETRY_NODE_BOOTSTRAP_TOOL = {
+    name: 'mesh_retry_node_bootstrap',
+    description: 'Retry the required worktree bootstrap (setup scripts) of a local worktree node whose bootstrap failed or went stale. mesh_status / mesh_git_status report worktreeBootstrap.status "failed" with launchBlockedReason worktree_bootstrap_failed; fix the cause, then call this. Refused when a bootstrap is already running or the node is not a local worktree node. The bootstrap runs on the node\'s own machine.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            node_id: { type: 'string', description: 'Worktree node ID whose bootstrap should be retried (from mesh_list_nodes / mesh_status).' },
         },
         required: ['node_id'],
     },

@@ -181,3 +181,29 @@ describe('scanWriteContent / scanStoredContent', () => {
         expect(scanStoredContent('plain rule')).toBeNull();
     });
 });
+
+describe('memory design 2026-11-01: new write origins and the memory_notice source', () => {
+    it('decision_promotion and curator are never staged; only promotion may write the USER target (the store limits it to preferences)', () => {
+        expect(mustStage('decision_promotion')).toBe(false);
+        expect(mustStage('curator')).toBe(false);
+        expect(userTargetAllowed('decision_promotion')).toBe(true);
+        expect(userTargetAllowed('curator')).toBe(false);
+        // the unchanged ones stay as they were (D1: staging for relay / tainted review is kept)
+        expect(mustStage('relay')).toBe(true);
+        expect(mustStage('review_tainted')).toBe(true);
+        expect(userTargetAllowed('relay')).toBe(false);
+        expect(userTargetAllowed('review_tainted')).toBe(false);
+    });
+
+    it('memory_notice is skipped when classifying', () => {
+        expect(classifyWriteOrigin(['human', 'memory_notice'])).toBe('human');
+        expect(classifyWriteOrigin(['human', 'relay', 'memory_notice'])).toBe('relay');
+        expect(classifyWriteOrigin(['memory_notice'])).toBe('relay');
+    });
+
+    it('a lone review input in a truncated log is tainted (fail closed), not "clean by its own index"', () => {
+        expect(classifyWriteOrigin(['review'], { truncated: true })).toBe('review_tainted');
+        expect(classifyWriteOrigin(['memory_notice', 'review'], { truncated: true })).toBe('review_tainted');
+        expect(classifyWriteOrigin(['review'], { truncated: false })).toBe('review');
+    });
+});

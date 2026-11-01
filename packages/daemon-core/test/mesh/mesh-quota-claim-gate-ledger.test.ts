@@ -96,8 +96,13 @@ function createComponents(meshId: string, sessions: LocalSession[]) {
   } as any)
 }
 
-function setMesh(meshId: string, nodes: any[], quotaRouting?: Record<string, unknown>) {
-  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM-LEDGER Mesh', policy: quotaRouting ? { quotaRouting } : {}, nodes })
+// `reserve` = the MACHINE quota reserve (defaults layer) the nodes report in their facts
+// bundle — thresholds are no longer mesh policy (quota/quota-reserve.ts).
+function setMesh(meshId: string, nodes: any[], reserve?: Record<string, number>) {
+  const withReserve = reserve
+    ? nodes.map(n => ({ ...n, nodeFacts: { ...n.nodeFacts, quotaReserve: { version: 1, defaults: reserve } } }))
+    : nodes
+  meshConfigMocks.getMesh.mockReturnValue({ id: meshId, name: 'QUOTA-CLAIM-LEDGER Mesh', policy: {}, nodes: withReserve })
 }
 
 const quotaNode = (quota: Record<string, any> | undefined, overrides: any = {}) => ({
@@ -261,7 +266,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
       // Still blocked, but a DIFFERENT window/remaining% — a genuine transition, not noise.
       setMesh(meshId, [quotaNode({
         'claude-cli': claudeQuota({ weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: null } }),
-      })], { weeklyMinRemainingPercent: 50 })
+      })], { routingLongMinPercent: 50 })
       await triggerMeshQueue(components, meshId)
 
       const entries = readLocalRecords(meshId, { kind: ['quota_claim_gate'] })
@@ -322,7 +327,7 @@ describe('QUOTA-CLAIM-GATE-LEDGER — quota claim gate transitions are recorded 
   it('records "overridden_by_pin" (not "blocked") when a provider-pinned task is claimed through a low quota gate', async () => {
     const meshId = `mesh_quota_ledger_pin_override_${randomUUID().slice(0, 8)}`
     try {
-      setMesh(meshId, [quotaNode({ 'codex-cli': codexQuota({ weekly: { usedPercent: 86, windowMinutes: 10080, resetsAt: null } }) })], { weeklyMinRemainingPercent: 25 })
+      setMesh(meshId, [quotaNode({ 'codex-cli': codexQuota({ weekly: { usedPercent: 86, windowMinutes: 10080, resetsAt: null } }) })], { routingLongMinPercent: 25 })
       const components = createComponents(meshId, [
         { sessionId: 'sess-codex', workingDir: NODE_WS, meshNodeId: NODE_ID, providerType: 'codex-cli' },
       ])

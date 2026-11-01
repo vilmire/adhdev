@@ -31,6 +31,7 @@ import { getMeshMission, getMeshMissions } from './mesh-missions.js';
 import { notifyMissionChanged } from './mesh-mission-change-notifier.js';
 import { applyOwnerConfirmationAnswer } from './mesh-mission-owner-confirm.js';
 import { notifyDecisionPush } from './mesh-mission-decision-push-notifier.js';
+import { notifyDecisionAnswered } from './mesh-mission-decision-answer-notifier.js';
 
 export type DecisionAnswerVia = 'dashboard' | 'assistant' | 'push' | 'cli';
 export const DECISION_ANSWER_VIAS: readonly DecisionAnswerVia[] = ['dashboard', 'assistant', 'push', 'cli'];
@@ -210,6 +211,10 @@ export function answerMissionDecision(
         // "Reopen" on a coordinator's owner_abandoned confirmation reopens the mission (acceptance 11).
         if (result.action !== 'undone') applyOwnerConfirmationAnswer(req.meshId, req.itemId);
         notifyMissionChanged(req.meshId);
+        notifyDecisionAnswered({
+            meshId: req.meshId, missionId: result.missionId, itemId: result.itemId, action: result.action, revision: result.revision,
+            ...(result.action !== 'undone' ? { by: actor.by, via: actor.via, ...(result.answer?.optionId ? { optionId: result.answer.optionId } : {}) } : {}),
+        });
     }
     return result;
 }
@@ -308,14 +313,16 @@ export interface OpenLiveCheckEntry {
     itemId: string;
     text: string;
     machine?: string;
+    /** `failed` = the owner reported "doesn't work"; it stays listed until re-checked. */
+    state: 'open' | 'failed';
     createdAt: string;
     carryOver?: true;
 }
 
-/** Open `live_check` items of one mesh (the "needs you" page lists them next to decisions). Oldest first. */
+/** Open and failed `live_check` items of one mesh (the "needs you" page lists them next to decisions). Oldest first. */
 export function buildOpenLiveChecks(meshId: string): OpenLiveCheckEntry[] {
     const missionCache = new Map<string, { title: string; carryOver: boolean }>();
-    return store().missionItems().listOpenByKind(meshId, 'live_check').map(item => {
+    return store().missionItems().listByKindStates(meshId, 'live_check', ['open', 'failed']).map(item => {
         let m = missionCache.get(item.missionId);
         if (!m) {
             const rec = getMeshMission(meshId, item.missionId);
@@ -324,6 +331,7 @@ export function buildOpenLiveChecks(meshId: string): OpenLiveCheckEntry[] {
         }
         return {
             meshId, missionId: item.missionId, missionTitle: m.title, itemId: item.id, text: item.text,
+            state: item.state === 'failed' ? 'failed' as const : 'open' as const,
             ...(item.machine ? { machine: item.machine } : {}),
             createdAt: item.createdAt,
             ...(m.carryOver ? { carryOver: true as const } : {}),
@@ -335,6 +343,9 @@ export interface MissionStructureEntry {
     meshId: string;
     missionId: string;
     summary?: string;
+    /** Set once the mission is closed (`outcome` / `outcome_reason` as recorded); lets the dashboard flag a missing `scope:` statement. */
+    outcome?: string;
+    outcomeReason?: string;
     openItems: { remaining: number; live_check: number; decision: number; evidence: number };
     /** The auto carry-over mission (the dashboard localizes its title instead of showing the stored string). */
     carryOver?: true;
@@ -354,10 +365,12 @@ export function buildMissionStructure(meshId: string): MissionStructureEntry[] {
         const openItems = counts.get(m.id) ?? { remaining: 0, live_check: 0, decision: 0, evidence: 0 };
         const carryOver = isCarryOverMissionRecord({ isCarryOver: st?.isCarryOver, title: m.title });
         const total = openItems.remaining + openItems.live_check + openItems.decision + openItems.evidence;
-        if (!st?.summary && total === 0 && !carryOver) continue;
+        if (!st?.summary && total === 0 && !carryOver && !st?.outcome) continue;
         out.push({
             meshId, missionId: m.id,
             ...(st?.summary ? { summary: st.summary } : {}),
+            ...(st?.outcome ? { outcome: st.outcome } : {}),
+            ...(st?.outcomeReason ? { outcomeReason: st.outcomeReason } : {}),
             openItems,
             ...(carryOver ? { carryOver: true as const } : {}),
         });

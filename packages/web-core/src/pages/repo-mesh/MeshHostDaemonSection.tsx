@@ -41,6 +41,8 @@ interface Props {
      * section then falls back to a bare picker with no confirm action.
      */
     onSetMeshHost?: (hostDaemonId: string) => void
+    /** Advanced: open the host handoff dialog (experimental; only offered while the pinned host is online). */
+    onOpenHandoff?: () => void
 }
 
 /**
@@ -72,6 +74,7 @@ export function MeshHostDaemonSection({
     onHostRebindDaemonIdChange,
     settingMeshHost,
     onSetMeshHost,
+    onOpenHandoff,
 }: Props) {
     const { t } = useTranslation('common')
 
@@ -91,6 +94,12 @@ export function MeshHostDaemonSection({
                         </span>
                     )}
                 </div>
+
+                {hostOnline && onOpenHandoff && (
+                    <div className="mt-3">
+                        <button className="btn btn-secondary btn-sm" onClick={onOpenHandoff} data-handoff-open>{t('mesh.handoff.open')}</button>
+                    </div>
+                )}
 
                 {/* Host offline: temporary command-routing re-bind (NOT a host change). */}
                 {!hostOnline && (

@@ -1,6 +1,9 @@
 import { remoteProjectHandlers, remoteProjectSpecs, attachRemoteProject } from './remote-project-attach.js';
 import { projectSessionView } from '../../assistant/project-session-view.js';
 import { decisionStatusFields, openDecisionCountsField } from './assistant-decisions-core.js';
+import { missionGitStatusFields } from '../../assistant/mission-git-digest.js';
+import { controlStatusFields } from '../../assistant/control-status.js';
+import { releaseStatusFields } from '../../assistant/release-digest.js';
 import { readTaskReportPage } from '../../assistant/task-report-continuation.js';
 import { recoverAttemptReport, verifiedNativeRead } from '../../assistant/attempt-report-recovery.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
@@ -46,6 +49,8 @@ import type { LocalMeshEntry } from '../../repo-mesh-types.js';
 import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
 import { ASSISTANT_TOOL_SOURCES, assistantToolGate, projectPortsFor, readAssistantSessionId } from './assistant-store.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
+import { computeSendHints, noteSendSkills } from './assistant-skill-verbs.js';
+import { withProjectsMemoryCount, withStatusMemoryCount } from '../../assistant/memory/memory-views.js';
 import { projectSlugBase, projectSlugs, resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
 import { ensureCoordinator, pickCoordinator, type EnsureCoordinatorPorts } from '../../assistant/coordinator-lifecycle.js';
@@ -78,6 +83,9 @@ import {
     readAuthenticatedMcpScope,
     verifyMcpSessionCredential,
 } from '../mcp-command-ingress.js';
+
+import { commitLocalAttachments, loadSendAttachments, wireAttachments } from './assistant-attachments.js';
+import type { LoadedUpload } from '../../artifacts/owner-upload.js';
 
 /** `assistant_projects` is also the dashboard's project list. */
 export const ASSISTANT_PROJECTS_SOURCES = ['ipc', 'standalone', 'p2p', 'ws'] as const;
@@ -687,6 +695,9 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
         routing,
         ...sessionView,
         ...decisionStatusFields(meshId),
+        ...missionGitStatusFields(meshId),
+        ...controlStatusFields(meshId),
+        ...releaseStatusFields(meshId),
         ...(view.success ? {} : { statusError: 'mesh_status_view failed' }),
     };
 }
@@ -767,12 +778,28 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         const { ok: _ok, code, error, ...detail } = composed;
         return fail(code, error, detail);
     }
+    // Owner-uploaded images: the caller must be the bound assistant (artifact-caller auth),
+    // and every id must be one of this assistant session's fresh, unbound staged uploads.
+    let uploads: LoadedUpload[] = [];
+    if (args.attachments !== undefined) {
+        const denied = authorizeAssistantArtifactCaller(args, ASSISTANT_VERB.projectSend);
+        if (denied) return denied;
+        const loaded = loadSendAttachments(args.attachments);
+        if (!loaded.ok) return fail(loaded.code, loaded.error, loaded.detail ?? {});
+        uploads = loaded.uploads;
+    }
     const p = await resolveProject(ports, args.project);
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     const where = { project: p.slug, meshId };
     const clientId = str(args.messageId) || randomUUID();
+    if (uploads.length > 0 && !str(args.messageId)) return fail('invalid_args', 'messageId is required when sending attachments (it makes a retry safe)', where);
     const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
+    const svc = getAssistantServices();
+    const sendNote = () => noteSendSkills(svc, {
+        meshId, messageId: clientId, message, attached: composed.attached, sessionId: readAssistantSessionId(args),
+        hints: computeSendHints(svc, p.slug, message, args.supplement, skills.length > 0),
+    });
 
     if (p.remote) {
         // The host runs the same local path (ensure coordinator → send_chat) under its own mesh id,
@@ -783,6 +810,7 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
             text: composed.text,
             clientId,
             ...(expectedCoordinatorSessionId ? { expectedCoordinatorSessionId } : {}),
+            ...(uploads.length > 0 ? { attachments: wireAttachments(uploads) } : {}),
         });
         if (!out.ok) {
             if (
@@ -805,6 +833,13 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         const body = remoteBody(out);
         const remoteCursor = str(body.cursor) || null;
         const remoteCoordSessionId = str(body.coordinatorSessionId) || null;
+        // A host that predates attachments ignores the key and would deliver the text alone:
+        // say so instead of reporting a clean send.
+        const attachmentNote = uploads.length > 0
+            ? (Number(body.attachmentsImported) === uploads.length
+                ? { attachments: uploads.length }
+                : { attachments: 0, attachmentsWarning: 'attachments_unsupported_by_host: the message was delivered WITHOUT the images; update the host daemon and resend them.' })
+            : {};
         const activeFollowed = p.followedRemote
             ? verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote, body)
             : null;
@@ -830,6 +865,7 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
             }
             if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
         }
+        const skillNote = sendNote();
         return wrap(p.slug, meshId, {
             status: str(body.status) || 'accepted',
             ...(body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {}),
@@ -839,15 +875,23 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
             host: p.remote.label,
             via: 'relay',
             ...attached,
+            ...attachmentNote,
+            ...skillNote,
         });
     }
 
-    const sent = await localProjectSend(ports, p.mesh, composed.text, clientId);
+    let localText = composed.text;
+    if (uploads.length > 0) {
+        const committed = commitLocalAttachments(uploads, meshId, clientId, ports.selfDaemonId());
+        if (!committed.ok) return fail(committed.code, committed.error, where);
+        localText = `${localText}\n\n${committed.block}`;
+    }
+    const sent = await localProjectSend(ports, p.mesh, localText, clientId);
     if (!sent.ok) return fail(sent.code, sent.error, { ...where, ...sent.detail });
     ports.relay.openThread?.(meshId);
     if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
     const { ok: _ok, cursor: _cursor, ...result } = sent;
-    return wrap(p.slug, meshId, { ...result, ...attached });
+    return wrap(p.slug, meshId, { ...result, ...attached, ...(uploads.length > 0 ? { attachments: uploads.length } : {}), ...sendNote() });
 });
 
 export type LocalSendResult =
@@ -1219,9 +1263,9 @@ export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {
         if (p.remote) return fail('project_host_required', 'Run attachment on this project host.');
         return attachRemoteProject(ctx, { meshId: p.mesh.id, targetDaemonId: args.targetDaemonId });
     }),
-    [ASSISTANT_VERB.projects]: projects,
+    [ASSISTANT_VERB.projects]: withProjectsMemoryCount(projects),
     [ASSISTANT_VERB.environment]: environment,
-    [ASSISTANT_VERB.projectStatus]: projectStatus,
+    [ASSISTANT_VERB.projectStatus]: withStatusMemoryCount(projectStatus),
     [ASSISTANT_VERB.projectSend]: projectSend,
     [ASSISTANT_VERB.projectRead]: projectRead,
     [ASSISTANT_VERB.projectAdd]: projectAdd,

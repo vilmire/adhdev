@@ -63,6 +63,11 @@ function okQuota(over: Record<string, any> = {}) {
     };
 }
 
+/** A copy of `node` whose facts report the given MACHINE quota reserve (defaults layer). */
+function withReserve(node: any, defaults: Record<string, number>): any {
+    return { ...node, nodeFacts: { ...node.nodeFacts, quotaReserve: { version: 1, defaults } } };
+}
+
 afterEach(() => {
     try { rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 });
@@ -74,9 +79,8 @@ describe('quota routing policy — resolution & persistence economy', () => {
             // for windows without resetsAt, and quota/refresh.ts pins
             // QUOTA_ROUTABLE_MAX_AGE_MS to the same value.
             staleAfterMs: 60 * MIN,
-            sessionMinRemainingPercent: 10,
-            sessionResetImminentMs: 5 * MIN,
-            weeklyMinRemainingPercent: 15,
+            // The reserve thresholds (10 / 5 min / 15) are the MACHINE's now —
+            // see quota-reserve.test.ts; mesh policy keeps preferences only.
             spreadBonusMax: 30,
             sessionAxisWeeklyHeadroomPercent: 40,
             // ON by default (owner decision): a saturated first choice falls
@@ -88,23 +92,21 @@ describe('quota routing policy — resolution & persistence economy', () => {
     });
 
     it('fills only the unset fields and clamps out-of-range values', () => {
-        expect(resolveQuotaRoutingPolicy({ sessionMinRemainingPercent: 25 })).toEqual({
+        expect(resolveQuotaRoutingPolicy({ spreadBonusMax: 25 })).toEqual({
             ...DEFAULT_QUOTA_ROUTING_POLICY,
-            sessionMinRemainingPercent: 25,
+            spreadBonusMax: 25,
         });
-        // >100% thresholds clamp to 100; a negative stale window falls back to default.
-        expect(resolveQuotaRoutingPolicy({ weeklyMinRemainingPercent: 250 }).weeklyMinRemainingPercent).toBe(100);
+        // >100% percent fields clamp to 100; a negative stale window falls back to default.
         expect(resolveQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 250 }).sessionAxisWeeklyHeadroomPercent).toBe(100);
         // Percent fields clamp into 0..100 (same convention as the gate thresholds).
         expect(resolveQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: -1 }).sessionAxisWeeklyHeadroomPercent).toBe(0);
         expect(resolveQuotaRoutingPolicy({ staleAfterMs: -5 }).staleAfterMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.staleAfterMs);
-        expect(resolveQuotaRoutingPolicy({ sessionResetImminentMs: -1 }).sessionResetImminentMs).toBe(DEFAULT_QUOTA_ROUTING_POLICY.sessionResetImminentMs);
     });
 
     it('drops an absent or all-default quotaRouting from the persisted policy', () => {
         expect(normalizePolicyOverrides(undefined).quotaRouting).toBeUndefined();
         expect(normalizePolicyOverrides({
-            quotaRouting: { sessionMinRemainingPercent: 10, weeklyMinRemainingPercent: 15 },
+            quotaRouting: { sessionAxisWeeklyHeadroomPercent: 40, quotaBusyFallback: true },
         } as any).quotaRouting).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ staleAfterMs: 60 * MIN })).toBeUndefined();
         expect(normalizeQuotaRoutingPolicy({ sessionAxisWeeklyHeadroomPercent: 40 })).toBeUndefined();
@@ -115,9 +117,9 @@ describe('quota routing policy — resolution & persistence economy', () => {
 
     it('persists only explicit non-default overrides, idempotently', () => {
         const merged = mergePolicyOverrides(undefined, {
-            quotaRouting: { sessionMinRemainingPercent: 25, staleAfterMs: 10 * MIN },
+            quotaRouting: { sessionAxisWeeklyHeadroomPercent: 25, staleAfterMs: 10 * MIN },
         } as any);
-        expect(merged.quotaRouting).toEqual({ sessionMinRemainingPercent: 25, staleAfterMs: 10 * MIN });
+        expect(merged.quotaRouting).toEqual({ sessionAxisWeeklyHeadroomPercent: 25, staleAfterMs: 10 * MIN });
         const remerged = mergePolicyOverrides(merged, undefined);
         expect(remerged.quotaRouting).toEqual(merged.quotaRouting);
     });
@@ -176,9 +178,9 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
 
     it('honours configured thresholds', () => {
         const node = nodeWithQuota({ 'claude-cli': okQuota() }); // session remaining 50
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionMinRemainingPercent: 60 }, NOW)?.reason)
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingSessionMinPercent: 60 }), 'claude-cli', null, NOW)?.reason)
             .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionMinRemainingPercent: 40 }, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingSessionMinPercent: 40 }), 'claude-cli', null, NOW)).toBeNull();
     });
 
     it('fails OPEN on a stale snapshot — old data must not exclude a node', () => {
@@ -254,14 +256,14 @@ describe('evaluateProviderQuotaGate — launch gate (fail-open)', () => {
         const clone = { id: 'worktree-node', clonedFromNodeId: source.id };
         const mesh = { nodes: [source, clone] };
 
-        expect(evaluateProviderQuotaGate(clone, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW, mesh)?.reason)
+        expect(evaluateProviderQuotaGate(withReserve(clone, { routingLongMinPercent: 80 }), 'kimi', null, NOW, mesh)?.reason)
             .toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
-        expect(evaluateProviderQuotaGate(clone, 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW, mesh))
+        expect(evaluateProviderQuotaGate(withReserve(clone, { routingLongMinPercent: 80 }), 'codex-cli', null, NOW, mesh))
             .toBeNull();
         const ranked = rankProvidersByQuotaGate(
-            clone,
+            withReserve(clone, { routingLongMinPercent: 80 }),
             ['kimi', 'codex-cli'],
-            { weeklyMinRemainingPercent: 80 },
+            null,
             NOW,
             mesh,
         );
@@ -624,7 +626,7 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
         const node = nodeWithQuota({
             kimi: retainedQuota({ weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: null } }),
         });
-        const block = evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW);
+        const block = evaluateProviderQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), 'kimi', null, NOW);
         expect(block?.reason).toBe(PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON);
         expect(block?.remainingPercent).toBe(0);
     });
@@ -662,14 +664,14 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
                 updatedAt: NOW - 85 * MIN,
             }),
         });
-        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), 'kimi', null, NOW)).toBeNull();
     });
 
     it('keeps a fresh retained reading with sufficient headroom gate-clear', () => {
         const node = nodeWithQuota({
             kimi: retainedQuota({ weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }),
         });
-        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), 'kimi', null, NOW)).toBeNull();
     });
 
     it('fails OPEN when an error has windows but no lastGoodWindows provenance', () => {
@@ -679,7 +681,7 @@ describe('evaluateProviderQuotaGate — retained last-good windows', () => {
                 metadata: { source: 'oauth', failureKind: 'expired-token' },
             }),
         });
-        expect(evaluateProviderQuotaGate(node, 'kimi', { weeklyMinRemainingPercent: 80 }, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), 'kimi', null, NOW)).toBeNull();
     });
 });
 
@@ -691,12 +693,12 @@ describe('evaluateProviderQuotaGate — session reset-imminent relaxation', () =
         session: { usedPercent: 95, windowMinutes: 300, resetsAt },
     });
 
-    it('WAIVES the session block when the reset is less than sessionResetImminentMs away', () => {
+    it('WAIVES the session block when the reset is less than routingSessionResetImminentMs away', () => {
         const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 4 * MIN) });
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)).toBeNull();
     });
 
-    it('keeps the block when the reset is further than sessionResetImminentMs away', () => {
+    it('keeps the block when the reset is further than routingSessionResetImminentMs away', () => {
         const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 30 * MIN) });
         expect(evaluateProviderQuotaGate(node, 'claude-cli', null, NOW)?.reason)
             .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
@@ -713,10 +715,10 @@ describe('evaluateProviderQuotaGate — session reset-imminent relaxation', () =
             .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
     });
 
-    it('honours a configured sessionResetImminentMs', () => {
+    it('honours a configured routingSessionResetImminentMs', () => {
         const node = nodeWithQuota({ 'claude-cli': lowSession(NOW + 8 * MIN) });
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionResetImminentMs: 10 * MIN }, NOW)).toBeNull();
-        expect(evaluateProviderQuotaGate(node, 'claude-cli', { sessionResetImminentMs: 2 * MIN }, NOW)?.reason)
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingSessionResetImminentMs: 10 * MIN }), 'claude-cli', null, NOW)).toBeNull();
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingSessionResetImminentMs: 2 * MIN }), 'claude-cli', null, NOW)?.reason)
             .toBe(PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON);
     });
 
@@ -1844,7 +1846,7 @@ describe('resolveRecoveryRelaunchProvider — the recovery-relaunch gate', () =>
         // 20% remaining clears the default 15% threshold...
         expect(resolveRecoveryRelaunchProvider(node, 'claude-cli', ['claude-cli'], null, NOW).action).toBe('keep');
         // ...and is blocked once the operator raises it.
-        expect(resolveRecoveryRelaunchProvider(node, 'claude-cli', ['claude-cli'], { weeklyMinRemainingPercent: 30 }, NOW).action).toBe('block');
+        expect(resolveRecoveryRelaunchProvider(withReserve(node, { routingLongMinPercent: 30 }), 'claude-cli', ['claude-cli'], null, NOW).action).toBe('block');
     });
 
     it('blocks defensively when the failed provider type is missing', () => {
@@ -1894,12 +1896,12 @@ describe('evaluateProviderQuotaGate — per-window resetsAt gating vs unavailabl
             }),
         });
 
-        expect(evaluateProviderQuotaGate(node, 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW)).toMatchObject({
+        expect(evaluateProviderQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), 'codex-cli', null, NOW)).toMatchObject({
             reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
             window: 'weekly',
             remainingPercent: 0,
         });
-        const ranked = rankProvidersByQuotaGate(node, ['codex-cli'], { weeklyMinRemainingPercent: 80 }, NOW);
+        const ranked = rankProvidersByQuotaGate(withReserve(node, { routingLongMinPercent: 80 }), ['codex-cli'], null, NOW);
         expect(ranked.clear).toEqual([]);
         expect(ranked.gated).toHaveLength(1);
     });

@@ -458,3 +458,96 @@ describe('snapshot re-scan', () => {
         expect(readFileSync(memPath('MEMORY.md'), 'utf-8')).toBe(`good one\n§\n${bad.join('\n§\n')}\n§\nnew rule\n`);
     });
 });
+
+// ── Memory design 2026-11-01 §3.1 (WP7): the closed list of what is written without a person ─────────────
+
+import Database from 'better-sqlite3';
+import { ensureAssistantMemorySchema } from '../../src/mesh/assistant-memory-schema.js';
+import { MemoryArchive } from '../../src/assistant/memory/memory-archive.js';
+import { undoRate } from '../../src/assistant/memory/memory-undo.js';
+import type { StoreWriteOrigin } from '../../src/assistant/store-guards.js';
+
+describe('automatic writes and staging: the closed matrix (design §3.1)', () => {
+    type Probe = 'memory-core' | 'user-core' | 'memory-project' | 'user-archive' | 'memory-archive-move';
+    const probe = (s: AssistantMemoryStore, origin: StoreWriteOrigin, p: Probe, tag: string): string => {
+        const text = `probe ${p} ${tag}`;
+        switch (p) {
+            case 'memory-core': return s.apply({ action: 'add', target: 'memory', content: text }, origin).result;
+            case 'user-core': return s.apply({ action: 'add', target: 'user', content: text }, origin).result;
+            case 'memory-project': return s.apply({ action: 'add', target: 'memory', content: text, scope: 'project', projectRef: 'm1' }, origin).result;
+            case 'user-archive': return s.apply({ action: 'add', target: 'user', content: text, scope: 'archive' }, origin).result;
+            case 'memory-archive-move': return s.apply({ action: 'archive', target: 'memory', match: 'movable' }, origin).result;
+        }
+    };
+    const MATRIX: Record<StoreWriteOrigin, Record<Probe, string>> = {
+        // The person's own words and the clean review turn apply directly.
+        human: { 'memory-core': 'applied', 'user-core': 'applied', 'memory-project': 'applied', 'user-archive': 'applied', 'memory-archive-move': 'applied' },
+        review: { 'memory-core': 'applied', 'user-core': 'applied', 'memory-project': 'applied', 'user-archive': 'applied', 'memory-archive-move': 'applied' },
+        owner: { 'memory-core': 'applied', 'user-core': 'applied', 'memory-project': 'applied', 'user-archive': 'applied', 'memory-archive-move': 'applied' },
+        // D1: relay and tainted-review writes stay STAGED; USER (incl. USER preferences in the archive) is refused outright.
+        relay: { 'memory-core': 'staged', 'user-core': 'memory_user_requires_human', 'memory-project': 'staged', 'user-archive': 'memory_user_requires_human', 'memory-archive-move': 'staged' },
+        review_tainted: { 'memory-core': 'staged', 'user-core': 'memory_user_requires_human', 'memory-project': 'staged', 'user-archive': 'memory_user_requires_human', 'memory-archive-move': 'staged' },
+        // The promotion origin may write a preference and nothing else.
+        decision_promotion: { 'memory-core': 'memory_origin_scope_denied', 'user-core': 'applied', 'memory-project': 'memory_origin_scope_denied', 'user-archive': 'applied', 'memory-archive-move': 'memory_origin_scope_denied' },
+        // The curator is not a person: no USER, no adds, no moves.
+        curator: { 'memory-core': 'memory_origin_scope_denied', 'user-core': 'memory_user_requires_human', 'memory-project': 'memory_origin_scope_denied', 'user-archive': 'memory_user_requires_human', 'memory-archive-move': 'memory_origin_scope_denied' },
+    };
+
+    for (const [origin, row] of Object.entries(MATRIX) as Array<[StoreWriteOrigin, Record<Probe, string>]>) {
+        it(`${origin}: ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(', ')}`, () => {
+            const db = new Database(':memory:');
+            ensureAssistantMemorySchema(db);
+            const s = new AssistantMemoryStore({ configDir: dir, now: () => clock, archive: new MemoryArchive(db) });
+            s.apply({ action: 'add', target: 'memory', content: 'movable entry' }, 'owner');
+            const got = Object.fromEntries((Object.keys(row) as Probe[]).map((p) => [p, probe(s, origin, p, origin)]));
+            expect(got).toEqual(row);
+            db.close();
+        });
+    }
+
+    it('a staged archive-tier write changes nothing until the owner resolves it', () => {
+        const db = new Database(':memory:');
+        ensureAssistantMemorySchema(db);
+        const archive = new MemoryArchive(db);
+        const s = new AssistantMemoryStore({ configDir: dir, now: () => clock, archive });
+        const r = s.apply({ action: 'add', target: 'memory', content: 'held fact', scope: 'archive' }, 'relay');
+        expect(r.result).toBe('staged');
+        expect(archive.active()).toHaveLength(0);
+        expect(s.resolveStaged((r as { stagedId: string }).stagedId, 'discard').result).toBe('discarded');
+        expect(archive.active()).toHaveLength(0);
+        db.close();
+    });
+});
+
+describe('write counters (M-mem-1) and the undo rate (M-mem-2)', () => {
+    it('counts every attempt by origin and result, and derives undone / automatically applied', () => {
+        const db = new Database(':memory:');
+        ensureAssistantMemorySchema(db);
+        const archive = new MemoryArchive(db, () => clock.getTime());
+        const s = new AssistantMemoryStore({ configDir: dir, now: () => clock, archive });
+        for (let i = 0; i < 4; i++) s.apply({ action: 'add', target: 'memory', content: `auto ${i}` }, 'human');
+        s.apply({ action: 'add', target: 'memory', content: 'auto 0' }, 'human'); // duplicate
+        s.apply({ action: 'add', target: 'memory', content: 'relayed' }, 'relay');
+        s.undo({ id: s.readJournal()[0]!.jid! });
+        const m = Object.fromEntries(archive.metrics().map((r) => [r.metric, r.n]));
+        expect(m.memory_write_human_applied).toBe(4);
+        expect(m.memory_write_human_memory_duplicate).toBe(1);
+        expect(m.memory_write_relay_staged).toBe(1);
+        expect(m.memory_write_owner_reverted).toBe(1);
+        expect(s.undoStats()).toEqual({ autoApplied: 4, undone: 1, rate: 0.25 });
+        db.close();
+    });
+
+    it('undoRate: no automatic writes is a zero rate, not NaN', () => {
+        expect(undoRate([])).toEqual({ autoApplied: 0, undone: 0, rate: 0 });
+        expect(undoRate([{ metric: 'memory_write_owner_reverted', n: 3 }])).toEqual({ autoApplied: 0, undone: 3, rate: 0 });
+        expect(undoRate([{ metric: 'memory_write_curator_applied', n: 10 }, { metric: 'memory_write_relay_applied', n: 99 }, { metric: 'memory_write_owner_reverted', n: 1 }]))
+            .toEqual({ autoApplied: 10, undone: 1, rate: 0.1 });
+    });
+
+    it('a store without a database counts nothing and never fails', () => {
+        const s = new AssistantMemoryStore({ configDir: dir, now: () => clock });
+        expect(s.apply({ action: 'add', target: 'memory', content: 'x' }, 'human').result).toBe('applied');
+        expect(s.undoStats()).toEqual({ autoApplied: 0, undone: 0, rate: 0 });
+    });
+});

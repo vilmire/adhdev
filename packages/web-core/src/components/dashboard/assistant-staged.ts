@@ -20,7 +20,7 @@ export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as cons
 
 /** What the write changes: the assistant's own memory, the person's profile, a skill, a project note,
  * or this machine's launch default for a role (assistant / coordinator). */
-export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault' | 'driver_activation' | 'driver_action_request'
+export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault' | 'driver_activation' | 'driver_action_request' | 'session_control' | 'host_handoff'
 export type AssistantStagedLaunchRole = 'assistant' | 'coordinator'
 export type AssistantStagedDecision = 'apply' | 'discard'
 
@@ -59,6 +59,35 @@ export interface DriverActivationPreview {
     declaredAccess: { network?: string[]; filesystem?: string[]; desktopControl?: boolean }
 }
 
+/** Why the daemon proposes saving a recurring request as a skill (`skillProposals[]` of the list answer). */
+export interface AssistantSkillProposalEvidence {
+    signalCount: number
+    distinctDays: number
+    spanDays: number
+    /** The owner's own words (<= 120 chars), shown as the example. */
+    excerpt: string
+}
+
+/** The draft of a proposed skill, editable before saving ("edit, then save"). */
+export interface AssistantSkillDraft {
+    name: string
+    description: string
+    body: string
+    project?: string
+}
+
+/** A session-control / host-handoff card (`ctl-*`, 1 h TTL): ids, enums and numbers only. */
+export interface AssistantStagedControl {
+    project: string
+    trigger: 'owner_request' | 'busy_target' | 'switch_provider' | 'quota_exhausted'
+    role?: 'coordinator' | 'worker' | 'assistant'
+    provider?: string
+    reason?: string
+    expiresAt?: number
+    quota?: { fromProvider: string; fromRemainingPct?: number; toProvider: string; toRemainingPct?: number; resetsAt?: number }
+    targetDaemonId?: string
+}
+
 export interface AssistantStagedItem {
     id: string
     kind: AssistantStagedKind
@@ -81,6 +110,11 @@ export interface AssistantStagedItem {
     /** Launch default only — the role whose next-launch default the proposal sets or clears. */
     role?: AssistantStagedLaunchRole
     driverActivation?: DriverActivationPreview
+    /** Skill only — `reason === 'proposed_procedure'`: the evidence for the one-tap save card. */
+    proposal?: AssistantSkillProposalEvidence
+    /** Skill create only: the editable draft. */
+    skillDraft?: AssistantSkillDraft
+    control?: AssistantStagedControl
     /** Aggregated Needs-you inbox only: the machine that holds this write (set when more than one daemon is connected). */
     machine?: string
 }
@@ -142,6 +176,9 @@ function memoryItem(r: Record<string, any>): AssistantStagedItem | null {
     if (action === 'add') item.text = s(op.content)
     else if (action === 'replace') item.diff = { before: s(op.match), after: s(op.content) }
     else if (action === 'remove') item.diff = { before: s(op.match), after: '' }
+    // Archive move: the entry being moved down; project / archive scope: where the write lands.
+    else if (action === 'archive') item.text = s(op.match)
+    if (s(op.scope) && op.scope !== 'core') item.detail = s(op.scope)
     return item
 }
 
@@ -154,6 +191,7 @@ function skillItem(r: Record<string, any>): AssistantStagedItem | null {
     if (s(r.reason)) item.reason = s(r.reason)
     if (action === 'create') {
         item.text = [s(op.description), s(op.body)].filter(Boolean).join('\n\n')
+        item.skillDraft = { name: s(op.name), description: s(op.description), body: s(op.body), ...(s(op.project) ? { project: s(op.project) } : {}) }
     } else if (action === 'patch') {
         if (s(op.file)) item.detail = s(op.file)
         if (typeof op.old === 'string') item.diff = { before: op.old, after: s(op.new) }
@@ -196,6 +234,37 @@ function launchDefaultItem(r: Record<string, any>): AssistantStagedItem | null {
     if (!item) return null
     item.role = role
     item.diff = { before: launchSelectionText(r.previous), after: launchSelectionText(selection) }
+    return item
+}
+
+const CONTROL_TRIGGERS = ['owner_request', 'busy_target', 'switch_provider', 'quota_exhausted']
+const CONTROL_ROLES = ['coordinator', 'worker', 'assistant']
+
+/** `ctl-*` cards: a session stop / restart / provider switch, or a host handoff. Unknown shapes are dropped. */
+function controlItem(r: Record<string, any>): AssistantStagedItem | null {
+    const kind = r.kind === 'host_handoff' ? 'host_handoff' : r.kind === 'session_control' ? 'session_control' : null
+    if (!kind || !/^ctl-[a-f0-9]+$/.test(s(r.id)) || !s(r.project) || !CONTROL_TRIGGERS.includes(s(r.trigger))) return null
+    const at = typeof r.createdAt === 'number' && Number.isFinite(r.createdAt) ? new Date(r.createdAt).toISOString() : ''
+    const action = kind === 'host_handoff' ? 'start' : s(r.action)
+    if (!action) return null
+    const item = base({ id: r.id, origin: s(r.trigger) === 'quota_exhausted' ? 'quota' : 'assistant', createdAt: at }, kind, action, s(r.project))
+    if (!item) return null
+    const q = rec(r.quota)
+    item.control = {
+        project: s(r.project),
+        trigger: s(r.trigger) as AssistantStagedControl['trigger'],
+        ...(CONTROL_ROLES.includes(s(r.role)) ? { role: s(r.role) as AssistantStagedControl['role'] } : {}),
+        ...(s(r.provider) ? { provider: s(r.provider) } : {}),
+        ...(s(r.reason) ? { reason: s(r.reason) } : {}),
+        ...(typeof r.expiresAt === 'number' ? { expiresAt: r.expiresAt } : {}),
+        ...(s(r.targetDaemonId) ? { targetDaemonId: s(r.targetDaemonId) } : {}),
+        ...(q && s(q.fromProvider) && s(q.toProvider) ? { quota: {
+            fromProvider: s(q.fromProvider), toProvider: s(q.toProvider),
+            ...(typeof q.fromRemainingPct === 'number' ? { fromRemainingPct: q.fromRemainingPct } : {}),
+            ...(typeof q.toRemainingPct === 'number' ? { toRemainingPct: q.toRemainingPct } : {}),
+            ...(typeof q.resetsAt === 'number' ? { resetsAt: q.resetsAt } : {}),
+        } } : {}),
+    }
     return item
 }
 
@@ -255,7 +324,7 @@ function driverActionItem(r: Record<string, any>): AssistantStagedItem | null {
 export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     const r = unwrapStagedAnswer(raw)
     if (!r || r.success === false) return null
-    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults) && !Array.isArray(r.driverActivations) && !Array.isArray(r.driverActions)) return null
+    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults) && !Array.isArray(r.driverActivations) && !Array.isArray(r.driverActions) && !Array.isArray(r.control)) return null
     const out: AssistantStagedItem[] = []
     const take = (list: unknown, fn: (x: Record<string, any>) => AssistantStagedItem | null) => {
         if (!Array.isArray(list)) return
@@ -267,10 +336,26 @@ export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     }
     take(r.memory, memoryItem)
     take(r.skills, skillItem)
+    // Save proposals: attach the daemon's evidence (how many similar requests) to their cards.
+    if (Array.isArray(r.skillProposals)) {
+        for (const x of r.skillProposals) {
+            const ev = rec(x)
+            const item = ev ? out.find(i => i.id === s(ev.stagedId)) : undefined
+            if (ev && item && s(item.reason) === 'proposed_procedure') {
+                item.proposal = {
+                    signalCount: num(ev.signalCount, 0),
+                    distinctDays: num(ev.distinctDays, 0),
+                    spanDays: Math.max(1, num(ev.spanDays, 1)),
+                    excerpt: s(ev.excerpt),
+                }
+            }
+        }
+    }
     take(r.notes, noteItem)
     take(r.launchDefaults, launchDefaultItem)
     take(r.driverActivations, driverActivationItem)
     take(r.driverActions, driverActionItem)
+    take(r.control, controlItem)
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 

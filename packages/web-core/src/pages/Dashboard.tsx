@@ -36,6 +36,7 @@ import { useInteractivePrompt } from '../hooks/useInteractivePrompt'
 import DashboardMainView from '../components/dashboard/DashboardMainView'
 import DashboardOverlays from '../components/dashboard/DashboardOverlays'
 import DashboardVersionBanner from '../components/dashboard/DashboardVersionBanner'
+import LiveCheckPrompt from '../components/dashboard/LiveCheckPrompt'
 import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
@@ -490,6 +491,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                     onDismiss={() => setVersionBannerDismissed(true)}
                 />
             )}
+            <LiveCheckPrompt daemons={ides} />
             <DashboardMainView
                 showMobileChatMode={showMobileChatMode}
                 isMobile={isMobile}

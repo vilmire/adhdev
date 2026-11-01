@@ -6,9 +6,8 @@
  *   - session ids  → the daemon/session lists (`useBaseDaemons().ides`)
  *   - `mi_…`       → NeedsYou snapshot (open/answered decisions, live checks)
  *   - mission/task → NeedsYou missions + the shared coordinator mesh-status store
- *   - `art_…`      → shape-checked; only offered when this chat has a daemon to ask (the
- *                    click then looks the artifact up with the existing `artifact_list` /
- *                    `artifact_fetch` commands, and says so if it is not there)
+ *   - `art_…`      → only ids the host really lists (metadata cache fed by a throttled background
+ *                    `artifact_list` sweep, mesh scope then session); an invented `art_<16hex>` stays text
  * An id nobody knows is never linked. The context value only changes when the *set* of known
  * ids changes (signature), so rows do not re-parse on every status tick.
  *
@@ -45,7 +44,11 @@ export interface ChatIdLinkProviderProps {
 
 const ARTIFACT_LIST_PAGE = 100
 const ARTIFACT_LIST_MAX_PAGES = 5
+const ARTIFACT_SWEEP_MS = 30_000
 const metaCache = new Map<string, { hostDaemonId: string; attachment: ChatAttachmentMeta }>()
+
+/** Test hook: forget every artifact id learned so far. */
+export function clearKnownArtifactsForTest() { metaCache.clear() }
 
 export function sessionHref(id: string): string {
     return `/dashboard?activeTab=${encodeURIComponent(id)}`
@@ -98,6 +101,7 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
     const [meshTick, setMeshTick] = useState(0)
     const [viewer, setViewer] = useState<ArtifactViewerItem | null>(null)
     const [notice, setNotice] = useState<string | null>(null)
+    const [artifactTick, setArtifactTick] = useState(0)
 
     // Mesh status changes → bump only when the id population changed (count signature), throttled.
     const meshSigRef = useRef('')
@@ -140,11 +144,14 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
     stateRef.current = { known, canAskForArtifacts, sendCommand, ides, contextKey, daemonId, sessionId, meshCoordinatorDaemonId, navigate, t }
 
     // The context value changes only when the known-id population does.
-    const signature = `${canAskForArtifacts}|${[...known.sessions].join(',')}|${[...known.decisions.keys()].join(',')}|${[...known.missions.keys()].join(',')}|${[...known.tasks.keys()].join(',')}`
+    const signature = `${canAskForArtifacts}|${[...known.sessions].join(',')}|${[...known.decisions.keys()].join(',')}|${[...known.missions.keys()].join(',')}|${[...known.tasks.keys()].join(',')}|art:${artifactTick}:${metaCache.size}`
 
-    const findArtifact = useCallback(async (artifactId: string) => {
-        const cached = metaCache.get(artifactId)
-        if (cached) return cached
+    /**
+     * Lists artifacts the way a click would (meshes this host coordinates first, then the chat's own
+     * session, <= ARTIFACT_LIST_MAX_PAGES pages each) and records every one in `metaCache`.
+     * With `stopAt` it returns as soon as that id is seen; without it, it collects everything (sweep).
+     */
+    const collectArtifacts = useCallback(async (stopAt?: string) => {
         const st = stateRef.current
         const target = resolveArtifactSessionTarget({
             daemonId: st.daemonId, sessionId: st.sessionId, meshCoordinatorDaemonId: st.meshCoordinatorDaemonId,
@@ -155,7 +162,7 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
         const keep = (attachment: ChatAttachmentMeta, fallbackSession?: string) => {
             const withOrigin = attachment.originSessionId || !fallbackSession ? attachment : { ...attachment, originSessionId: fallbackSession }
             const hit = { hostDaemonId, attachment: withOrigin }
-            metaCache.set(artifactId, hit)
+            metaCache.set(attachment.artifactId, hit)
             return hit
         }
         const listPages = async (args: Record<string, unknown>, fallbackSession?: string) => {
@@ -165,14 +172,16 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
                 const body = unwrapDaemonCommandBody<Record<string, unknown>>(raw)
                 if (!body || body.success === false) return null
                 const list = Array.isArray(body.attachments) ? (body.attachments as ChatAttachmentMeta[]) : []
-                const found = list.find(a => a.artifactId === artifactId)
-                if (found) return keep(found, fallbackSession)
+                for (const a of list) {
+                    if (!a?.artifactId) continue
+                    const hit = keep(a, fallbackSession)
+                    if (stopAt && a.artifactId === stopAt) return hit
+                }
                 if (body.hasMore !== true || typeof body.nextCursor !== 'string') return null
                 cursor = body.nextCursor
             }
             return null
         }
-        // Meshes this host coordinates first (a coordinator quotes worker artifacts), then the chat's own session.
         for (const { meshId, daemonId: meshDaemon } of listCoordinatorMeshStatuses()) {
             if (meshDaemon && meshDaemon !== hostDaemonId) continue
             const hit = await listPages({ meshId }).catch(() => null)
@@ -182,6 +191,47 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
         if (sid) return listPages({ sessionId: sid, targetSessionId: sid }, sid).catch(() => null)
         return null
     }, [])
+
+    const findArtifact = useCallback(async (artifactId: string) => {
+        const cached = metaCache.get(artifactId)
+        if (cached) return cached
+        return collectArtifacts(artifactId)
+    }, [collectArtifacts])
+
+    // Background sweep: only artifacts the host really lists become links. Demand-driven — it runs only while
+    // the rendered chat names an `art_` id that is not known yet (the resolver records it), so a chat without
+    // artifact ids sends no `artifact_list` at all. Throttled; bumps the signature on growth.
+    const wantedArtifactsRef = useRef(new Set<string>())
+    const sweepKickRef = useRef<(() => void) | null>(null)
+    useEffect(() => {
+        if (!canAskForArtifacts) return
+        let cancelled = false
+        let running = false
+        let lastSweepAt = 0
+        let timer: ReturnType<typeof setTimeout> | null = null
+        const missing = () => [...wantedArtifactsRef.current].some(id => !metaCache.has(id))
+        const sweep = async () => {
+            timer = null
+            if (running || cancelled || !missing()) return
+            running = true
+            lastSweepAt = Date.now()
+            const before = metaCache.size
+            try { await collectArtifacts() } catch { /* best effort */ }
+            running = false
+            if (cancelled) return
+            if (metaCache.size !== before) setArtifactTick(n => n + 1)
+            if (missing()) schedule()
+        }
+        const schedule = () => {
+            if (cancelled || timer || running) return
+            const wait = lastSweepAt === 0 ? 0 : Math.max(0, lastSweepAt + ARTIFACT_SWEEP_MS - Date.now())
+            if (wait === 0) { void sweep(); return }
+            timer = setTimeout(() => { void sweep() }, wait)
+        }
+        sweepKickRef.current = schedule
+        schedule()
+        return () => { cancelled = true; sweepKickRef.current = null; if (timer) clearTimeout(timer) }
+    }, [canAskForArtifacts, contextKey, daemonId, sessionId, meshCoordinatorDaemonId, collectArtifacts])
 
     const openArtifact = useCallback(async (artifactId: string, newWindow: boolean) => {
         const st = stateRef.current
@@ -207,7 +257,16 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
             if (!isChatIdShape(id)) return null
             const k = stateRef.current.known
             const key = id.toLowerCase()
-            if (id.startsWith('art_')) return stateRef.current.canAskForArtifacts ? { kind: 'artifact', id } : null
+            if (id.startsWith('art_')) {
+                if (!stateRef.current.canAskForArtifacts) return null
+                if (metaCache.has(id)) return { kind: 'artifact', id }
+                if (!wantedArtifactsRef.current.has(id)) {
+                    wantedArtifactsRef.current.add(id)
+                    const kick = sweepKickRef.current
+                    if (kick) queueMicrotask(kick)
+                }
+                return null
+            }
             if (id.startsWith('mi_')) {
                 const meshId = k.decisions.get(id)
                 return meshId ? { kind: 'decision', id, meshId } : null

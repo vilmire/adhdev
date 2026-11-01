@@ -4,7 +4,7 @@
  * cancel / requeue. Pure data; ALL_MESH_TOOLS in mesh-tool-schemas.ts is the registry.
  */
 import { MESH_TASK_INPUT_SCHEMA } from './mesh-tool-input-schemas.js';
-import { enumOf, MESH_TASK_MODES, MESH_TASK_PRIORITIES, MESH_THINKING_LEVELS, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+import { enumOf, CANCEL_REASONS, MESH_TASK_MODES, MESH_TASK_PRIORITIES, MESH_THINKING_LEVELS, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 
 /**
  * Enqueue discovery metadata.
@@ -182,6 +182,20 @@ export const MESH_QUEUE_CANCEL_TOOL = {
             reason: { type: 'string', description: 'Optional operator-visible reason for cancellation.' },
         },
         required: ['task_id'],
+    },
+};
+
+export const MESH_DIRECT_CANCEL_TOOL = {
+    name: 'mesh_direct_cancel',
+    description: 'Cancel a mesh_direct (mesh_send_task) attempt through the turn ledger: records cancel evidence and starts the proof-fenced stop of the exact writer session. It never force-releases a claim — stopPending:true means the stop is durable but the writer is not yet proven stopped (it settles on its own). An already-finished attempt is a no-op; attempts owned by another daemon and queue tasks are refused (use mesh_queue_cancel for queue tasks). Pass exactly one of task_id or attempt_id.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_id: { type: 'string', description: 'The direct-dispatch task ID (taskId returned by mesh_send_task) whose latest attempt to cancel.' },
+            attempt_id: { type: 'string', description: 'Exact turn attempt ID to cancel (alternative to task_id).' },
+            reason: { ...enumOf(CANCEL_REASONS), description: 'Cancel reason recorded on the attempt. Default operator_cancel. intentional_cleanup is bookkeeping only (no session stop is sent for it).' },
+        },
+        required: [] as string[],
     },
 };
 

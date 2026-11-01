@@ -270,7 +270,7 @@ describe('Blueprint graph — edges and re-layout discipline', () => {
 
     it('a future not_before shows "held until" instead of plain pending', async () => {
         const graph = await mountGraph([
-            task('held', 'pending', { notBefore: '2099-01-01T00:00:00.000Z', dependsOn: [] }),
+            task('held', 'pending', { notBefore: '2099-06-15T12:00:00.000Z', dependsOn: [] }),
             task('next', 'pending', { dependsOn: ['held'] }),
         ])
         const card = graph.container.querySelector('[data-node-id="task:held"] [data-testid="bp-graph-task"]')!

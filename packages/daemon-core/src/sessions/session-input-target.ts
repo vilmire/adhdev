@@ -33,6 +33,7 @@ export interface SessionInputAdapterLike {
     sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean, messageId?: string): { accepted: boolean; reason?: string };
     interruptTurn?: SessionInputTarget['interruptTurn'];
     hasQueuedSend?(messageId: string): boolean;
+    submitState?(messageId: string): 'in_flight' | 'confirmed' | 'unconfirmed' | 'unknown';
     claimQueuedSend?(messageId: string): ClaimedSessionInput | null;
     restoreQueuedSend?(claimed: ClaimedSessionInput): void;
     reserveDrain?(ttlMs: number): void;
@@ -98,6 +99,7 @@ export function buildSessionInputTarget(args: {
     if (instance && typeof instance.reportSubmitUnconfirmed === 'function') target.reportSubmitUnconfirmed = (id, firstWrittenAt) => instance.reportSubmitUnconfirmed!(id, firstWrittenAt);
     if (instance && typeof instance.confirmSubmitConsumption === 'function') target.confirmSubmitConsumption = (sinceMs, opts) => instance.confirmSubmitConsumption!(sinceMs, opts);
     if (instance && typeof instance.canReportSubmitVerdict === 'function') target.canReportSubmitVerdict = (id, ref) => instance.canReportSubmitVerdict!(id, ref);
+    if (typeof adapter.submitState === 'function') target.submitState = (id) => adapter.submitState!(id);
     if (typeof adapter.hasQueuedSend === 'function') target.hasQueuedSend = (id) => adapter.hasQueuedSend!(id);
     if (typeof adapter.claimQueuedSend === 'function') target.claimQueuedSend = (id) => adapter.claimQueuedSend!(id);
     if (typeof adapter.restoreQueuedSend === 'function') target.restoreQueuedSend = (c) => adapter.restoreQueuedSend!(c);

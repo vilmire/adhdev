@@ -9,6 +9,7 @@ import { ASSISTANT_OWNER_VERBS, ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { DaemonCommandRouter, getDaemonCommandRegistry } from '../../src/commands/router.js';
 import { specAcceptsMeshSource } from '../../src/commands/command-registry.js';
 import { ASSISTANT_MEMORY_LIMITS_COMMAND } from '../../src/commands/high-family/assistant-store.js';
+import { ASSISTANT_SKILLS_LIST_COMMAND } from '../../src/commands/high-family/assistant-skill-verbs.js';
 
 const EXPECTED_SOURCES: Record<string, string[]> = {
     driver_list: ['ipc', 'standalone'],
@@ -26,6 +27,7 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_project_attach_remote: ['ipc', 'standalone'],
     assistant_discover_repos: ['ipc', 'standalone'],
     assistant_memory: ['ipc', 'standalone'],
+    assistant_memory_search: ['ipc', 'standalone'],
     assistant_skill_view: ['ipc', 'standalone'],
     assistant_skill_manage: ['ipc', 'standalone'],
     assistant_project_note: ['ipc', 'standalone'],
@@ -35,10 +37,14 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_artifact_read: ['ipc', 'standalone'],
     assistant_decision_answer: ['ipc', 'standalone'],
     assistant_decision_request: ['ipc', 'standalone'],
+    assistant_session_control: ['ipc', 'standalone'],
     assistant_staged_resolve: ['p2p', 'standalone', 'ws'],
     assistant_store_admin: ['p2p', 'standalone', 'ws'],
     assistant_memory_limits: ['p2p', 'standalone', 'ws'],
+    assistant_skills_list: ['p2p', 'standalone', 'ws'],
     assistant_import_skills: ['p2p', 'standalone', 'ws'],
+    assistant_memory_digest: ['p2p', 'standalone', 'ws'],
+    assistant_memory_undo: ['p2p', 'standalone', 'ws'],
     assistant_threads: ['ipc', 'p2p', 'standalone', 'ws'],
     assistant_thread_close: ['p2p', 'standalone', 'ws'],
     launch_assistant: ['ipc', 'p2p', 'standalone', 'ws'],
@@ -58,7 +64,7 @@ describe('assistant verbs — sources', () => {
     });
 
     it('no registered assistant verb accepts mesh or omits a sources list', () => {
-        const assistantVerbs = new Set<string>([...Object.values(ASSISTANT_VERB), ASSISTANT_MEMORY_LIMITS_COMMAND]);
+        const assistantVerbs = new Set<string>([...Object.values(ASSISTANT_VERB), ASSISTANT_MEMORY_LIMITS_COMMAND, ASSISTANT_SKILLS_LIST_COMMAND]);
         const specs = registry.list().filter((s) => assistantVerbs.has(s.name));
         expect(specs.map((s) => s.name).sort()).toEqual([...assistantVerbs].sort());
         expect(specs.length).toBe(Object.keys(EXPECTED_SOURCES).length);
@@ -77,6 +83,7 @@ describe('assistant verbs — sources', () => {
         for (const verb of [
             ...ASSISTANT_OWNER_VERBS,
             ASSISTANT_MEMORY_LIMITS_COMMAND,
+            ASSISTANT_SKILLS_LIST_COMMAND,
             'assistant_remote_project_catalog',
             'assistant_remote_project_access',
             'assistant_remote_follow',
@@ -105,5 +112,13 @@ describe('assistant verbs — sources', () => {
             'ipc',
         );
         expect(adminIpcResult).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+    });
+
+    it('assistant_skills_list (owner skill list) and the dir import reject ipc, so the assistant\'s MCP server cannot reach them', async () => {
+        expect(registry.get('assistant_skills_list')?.sources).toEqual(['p2p', 'ws', 'standalone']);
+        const router = new DaemonCommandRouter({} as any);
+        expect(await router.execute('assistant_skills_list', {}, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+        expect(await router.execute(ASSISTANT_VERB.importSkills, { source: 'dir', project: 'x' }, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+        expect(await router.execute(ASSISTANT_VERB.storeAdmin, { target: 'skill', action: 'create', name: 'x' }, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
     });
 });

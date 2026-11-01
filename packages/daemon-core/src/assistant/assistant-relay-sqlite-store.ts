@@ -306,6 +306,8 @@ export const ASSISTANT_METRIC_COLUMNS = [
     'assistant_sends', 'human_sends', 'relays', 'project_reads', 'memory_writes', 'memory_discards',
     'skill_views', 'skill_attaches', 'skill_writes', 'review_turns', 'review_turns_with_writes',
     'review_writes_applied', 'review_writes_approved', 'relay_gaps',
+    'skill_hints', 'skill_hint_accepts', 'skill_proposals', 'skill_proposal_saves', 'skill_proposal_dismisses',
+    'session_controls', 'quota_failovers_proposed', 'quota_failovers_accepted', 'quota_failovers_auto',
 ] as const;
 export type AssistantMetricColumn = typeof ASSISTANT_METRIC_COLUMNS[number];
 

@@ -120,6 +120,8 @@ export interface AssistantCoordinatorView {
     managedByAssistant: boolean;
     /** Registry start time (ms) when known; ordering only. */
     startedAt?: number;
+    /** Being replaced by a provider switch: never picked (design 2026-11-01 §5.1). */
+    draining?: boolean;
 }
 
 export interface CoordinatorLaunchOutcome {
@@ -147,7 +149,7 @@ export type EnsureCoordinatorResult =
 
 /** managedByAssistant → idle → most recently started (registry order breaks remaining ties). */
 export function pickCoordinator(views: readonly AssistantCoordinatorView[]): AssistantCoordinatorView | null {
-    const liveViews = views.filter((v) => !isConfirmedTerminalCoordinator(v));
+    const liveViews = views.filter((v) => !v.draining && !isConfirmedTerminalCoordinator(v));
     if (liveViews.length === 0) return null;
     const rank = (v: AssistantCoordinatorView) => (v.managedByAssistant ? 2 : 0) + (v.idle ? 1 : 0);
     return [...liveViews].sort((a, b) => rank(b) - rank(a) || (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];

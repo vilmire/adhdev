@@ -34,6 +34,8 @@ export interface MeshMissionRow {
     summary?: string;
     outcome?: string;
     outcomeReason?: string;
+    /** One user/operator-visible sentence for the release CHANGELOG draft. */
+    releaseNote?: string;
     /** Increments on every mission write; 1 for rows that predate the structured columns. */
     version?: number;
     isCarryOver?: boolean;
@@ -48,6 +50,7 @@ export function missionRowFromSql(row: Record<string, any>): MeshMissionRow {
         ...(row.summary ? { summary: row.summary } : {}),
         ...(row.outcome ? { outcome: row.outcome } : {}),
         ...(row.outcome_reason ? { outcomeReason: row.outcome_reason } : {}),
+        ...(row.release_note ? { releaseNote: row.release_note } : {}),
         ...(typeof row.version === 'number' ? { version: row.version } : {}),
         ...(row.is_carry_over === 1 ? { isCarryOver: true } : {}),
     };
@@ -56,6 +59,10 @@ export function missionRowFromSql(row: Record<string, any>): MeshMissionRow {
 export type MissionEventType =
     | 'created' | 'status_changed' | 'summary_changed' | 'goal_changed' | 'item_added'
     | 'item_state_changed' | 'decision_answered' | 'decision_answer_changed' | 'decision_answer_undone' | 'decision_reminded' | 'outcome_set' | 'items_moved'
+    /** mission-level git containment projection changed (design 2026-11-01-mission-git-refs §4); recorded on transitions only */
+    | 'git_state_changed'
+    /** release membership changed (design 2026-11-01-release-objects §3); recorded on the mission so its history shows it */
+    | 'release_attached' | 'release_moved' | 'release_detached' | 'release_note_changed'
     /** retention: one summary row replacing a long-closed mission's history */
     | 'collapsed';
 
@@ -88,6 +95,7 @@ export interface MissionEventRecord {
 
 export interface MissionStructuredFields {
     summary?: string;
+    releaseNote?: string;
     outcome?: string;
     outcomeReason?: string;
     version: number;
@@ -135,11 +143,12 @@ export class MissionItemStore {
     // ── structured mission columns ──────────────────────────────────────────
 
     getStructured(meshId: string, missionId: string): MissionStructuredFields | null {
-        const row = this.db.prepare('SELECT summary, outcome, outcome_reason, version, is_carry_over FROM mesh_missions WHERE mesh_id = ? AND id = ?')
+        const row = this.db.prepare('SELECT summary, release_note, outcome, outcome_reason, version, is_carry_over FROM mesh_missions WHERE mesh_id = ? AND id = ?')
             .get(meshId, missionId) as Record<string, any> | undefined;
         if (!row) return null;
         return {
             ...(row.summary ? { summary: row.summary } : {}),
+            ...(row.release_note ? { releaseNote: row.release_note } : {}),
             ...(row.outcome ? { outcome: row.outcome } : {}),
             ...(row.outcome_reason ? { outcomeReason: row.outcome_reason } : {}),
             version: typeof row.version === 'number' ? row.version : 1,
@@ -148,10 +157,11 @@ export class MissionItemStore {
     }
 
     /** Set summary/outcome/outcome_reason. `null` clears; `undefined` leaves untouched. Does NOT bump the version (see {@link bumpVersion}). */
-    setStructured(meshId: string, missionId: string, patch: { summary?: string | null; outcome?: string | null; outcomeReason?: string | null }): void {
+    setStructured(meshId: string, missionId: string, patch: { summary?: string | null; releaseNote?: string | null; outcome?: string | null; outcomeReason?: string | null }): void {
         const sets: string[] = [];
         const args: unknown[] = [];
         if (patch.summary !== undefined) { sets.push('summary = ?'); args.push(patch.summary); }
+        if (patch.releaseNote !== undefined) { sets.push('release_note = ?'); args.push(patch.releaseNote); }
         if (patch.outcome !== undefined) { sets.push('outcome = ?'); args.push(patch.outcome); }
         if (patch.outcomeReason !== undefined) { sets.push('outcome_reason = ?'); args.push(patch.outcomeReason); }
         if (!sets.length) return;
@@ -357,6 +367,8 @@ export class MissionItemStore {
             // Already collapsed (exactly the one summary row) → nothing to do.
             if (m.n <= 1 && m.c === m.n) continue;
             deleted += Number(this.db.prepare('DELETE FROM mesh_mission_events WHERE mission_id = ?').run(m.id).changes);
+            // A collapsed mission's per-ref git verdicts go with its history (design 2026-11-01-mission-git-refs §4).
+            try { this.db.prepare('DELETE FROM mesh_mission_ref_evals WHERE mission_id = ?').run(m.id); } catch { /* table absent on a legacy handle */ }
             this.db.prepare('INSERT INTO mesh_mission_events (mission_id, mesh_id, type, actor, payload_json, at) VALUES (?, ?, ?, ?, ?, ?)')
                 .run(m.id, m.mesh_id, 'collapsed', 'retention', JSON.stringify({ status: m.status, outcome: m.outcome ?? 'unspecified', closedAt: m.updated_at, eventsCollapsed: m.n }), new Date(nowMs).toISOString());
             collapsedMissions++;
@@ -374,5 +386,9 @@ export class MissionItemStore {
     clearMesh(meshId: string): void {
         this.db.prepare('DELETE FROM mesh_mission_items WHERE mesh_id = ?').run(meshId);
         this.db.prepare('DELETE FROM mesh_mission_events WHERE mesh_id = ?').run(meshId);
+        try { this.db.prepare('DELETE FROM mesh_mission_ref_evals WHERE mesh_id = ?').run(meshId); } catch { /* table absent on a legacy handle */ }
+        for (const table of ['mesh_releases', 'mesh_release_missions', 'mesh_release_events']) {
+            try { this.db.prepare(`DELETE FROM ${table} WHERE mesh_id = ?`).run(meshId); } catch { /* table absent on a legacy handle */ }
+        }
     }
 }

@@ -88,7 +88,8 @@ describe('planAssistantMcp', () => {
         // 16 → 18 (Driver G1a-6): driver_list + driver_describe.
         // 18 → 20 (Artifact sharing): artifact_list + artifact_read.
         // 20 → 22 (Owner decisions): decision_answer + decision_request.
-        expect(ASSISTANT_TOOLS).toHaveLength(22);
+        // 22 → 23 (Memory archive): memory_search; 23 → 24 (Session control): session_control.
+        expect(ASSISTANT_TOOLS).toHaveLength(24);
         expect(ASSISTANT_TOOLS).toEqual(expect.arrayContaining(['launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe', 'artifact_list', 'artifact_read']));
         expect(ASSISTANT_TOOLS).toEqual(expect.arrayContaining(['environment', 'project_watch', 'assistant_action']));
         expect(ASSISTANT_TOOLS).not.toContain('WebSearch');

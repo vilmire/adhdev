@@ -15,7 +15,7 @@ import type { SkillCallContext, SkillManageOp } from './skill-store.js';
 
 export interface SkillJournalRecord {
     ts: string;
-    action: 'create' | 'patch' | 'archive' | 'pin' | 'unpin' | 'restore' | 'clear_review' | 'curate' | 'import';
+    action: 'create' | 'patch' | 'archive' | 'pin' | 'unpin' | 'restore' | 'clear_review' | 'curate' | 'import' | 'starter_install';
     name: string;
     origin: StoreWriteOrigin | 'curator';
     /** `applied`, `staged`, `discarded` or a refusal code. */
@@ -77,12 +77,14 @@ export interface StagedSkillWrite {
     id: string;
     createdAt: string;
     origin: StoreWriteOrigin;
-    /** `origin`: written after a non-human input; `protected_skill`: agent patch on an owner/imported skill. */
-    reason: 'origin' | 'protected_skill';
+    /** `origin`: written after a non-human input; `protected_skill`: agent patch on an owner/imported skill; `proposed_procedure`: a save proposal for a recurring procedure (owner one-tap card). */
+    reason: 'origin' | 'protected_skill' | 'proposed_procedure';
     op: SkillManageOp;
     ctx: SkillCallContext | null;
     /** Review turn that staged it — the owner can resolve one review's writes together. */
     reviewTurnId?: string;
+    /** `proposed_procedure`: the recurring-procedure candidate this create answers. */
+    proposalId?: string;
 }
 
 export class SkillStaging {

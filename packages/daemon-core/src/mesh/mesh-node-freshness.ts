@@ -443,7 +443,7 @@ export function finalizeMeshNodeStatus(args: {
             status.launchBlockedReason = 'worktree_bootstrap_failed';
             status.launchBlockedMessage = readStringValue(bootstrap.error)
                 || 'Required worktree bootstrap failed; resolve it before launching an agent into this node.';
-            status.recoveryHint = 'Run retry_mesh_node_bootstrap to retry';
+            status.recoveryHint = 'Run mesh_retry_node_bootstrap(node_id) to retry';
             return;
         }
         if (bootstrap.status === 'running' && bootstrap.required !== false) {

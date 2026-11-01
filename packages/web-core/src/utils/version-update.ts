@@ -77,3 +77,18 @@ export function isVersionUpdateRequired(daemon: DaemonData, appVersion: string |
     if (!daemonParts || !appParts) return false;
     return daemonParts[0] !== appParts[0] || daemonParts[1] !== appParts[1];
 }
+
+/** Same release track: both prereleases (same base, preview rc line) or both releases. */
+export function isSameVersionTrack(a: string, b: string): boolean {
+    const pa = parseVersion(a);
+    const pb = parseVersion(b);
+    if (!pa || !pb) return false;
+    if (pa.isPrerelease !== pb.isPrerelease) return false;
+    if (!pa.isPrerelease) return true;
+    return pa.base.every((n, i) => n === pb.base[i]);
+}
+
+/** True when `candidate` is strictly newer than `current` using the rc-aware ordering. */
+export function isVersionNewer(candidate: string, current: string): boolean {
+    return isDaemonBehindTarget(current, candidate) && candidate.trim() !== current.trim();
+}

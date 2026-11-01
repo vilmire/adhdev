@@ -14,6 +14,8 @@
 import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { getDaemonBuildInfo } from '../build-info.js';
 import { readQuotaCache } from '../quota/refresh.js';
+import { getQuotaReserveConfig } from '../config/config.js';
+import { quotaReserveForFacts } from '../quota/quota-reserve.js';
 import { getProviderSpecPins, getProviderEnablementFacts, readCachedProviderInventory } from '../detection/cli-detector.js';
 
 /**
@@ -102,6 +104,15 @@ export function buildLocalNodeFacts(deps?: {
             return undefined; // facts stamp is best-effort observability
         }
     })();
+    // The machine's quota reserve rides the bundle so a coordinator judges this
+    // machine's snapshots with THIS machine's bar (config read is memoized).
+    const quotaReserve = (() => {
+        try {
+            return quotaReserveForFacts(getQuotaReserveConfig());
+        } catch {
+            return undefined; // facts stamp is best-effort observability
+        }
+    })();
     return {
         schemaVersion: 1,
         providerInventory: readCachedProviderInventory(),
@@ -114,5 +125,6 @@ export function buildLocalNodeFacts(deps?: {
         ...(machineNickname ? { machineNickname } : {}),
         ...(quota ? { quota } : {}),
         ...(providerEnablement ? { providerEnablement } : {}),
+        ...(quotaReserve ? { quotaReserve: quotaReserve as MeshNodeFacts['quotaReserve'] } : {}),
     };
 }

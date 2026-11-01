@@ -420,7 +420,9 @@ test('mesh policy quotaRouting thresholds drive the gate', async () => {
   assert.equal(lenientResult.success !== false, true, 'default 15% threshold does not gate 30%');
   assert.equal(launchedType(lenient.launchCalls), 'kimi');
 
-  const strict = makeCtx(slots, facts, { quotaRouting: { weeklyMinRemainingPercent: 50 } });
+  // The 50% floor is the node's MACHINE quota reserve (reported in its facts bundle),
+  // not mesh policy: thresholds moved off the mesh (machine quota reserve design).
+  const strict = makeCtx(slots, { ...facts, quotaReserve: { version: 1, defaults: { routingLongMinPercent: 50 } } });
   const strictResult = JSON.parse(await meshLaunchSession(strict.ctx, { node_id: 'node-a' }));
   assert.equal(strictResult.success, false, 'configured 50% threshold gates 30%');
   assert.equal(strictResult.code, 'mesh_all_providers_quota_gated');

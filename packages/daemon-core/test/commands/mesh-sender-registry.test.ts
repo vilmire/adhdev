@@ -49,6 +49,8 @@ const EXPECTED_CLASSES: Record<string, string> = {
     remove_mesh_node: 'any_member_mesh',
     clone_mesh_node: 'any_member_mesh',
     retry_mesh_node_bootstrap: 'any_member_mesh',
+    // host → member: read-only ref containment probe of the member's own repos (inputs validated in mission-ref-input.ts)
+    mesh_ref_containment_probe: 'any_member_mesh',
     fast_forward_mesh_node: 'any_member_mesh',
     refine_mesh_node: 'any_member_mesh',
     get_mesh_node_logs: 'any_member_mesh',
@@ -59,6 +61,14 @@ const EXPECTED_CLASSES: Record<string, string> = {
     // another daemon's assistant drives a mesh THIS daemon hosts (owner decision
     // 2026-10-08): the sender must be on that mesh's roster here
     assistant_remote_project: 'roster',
+    // host handoff peer verbs (design 2026-11-01 §7.6): the sender must be on the mesh roster; the engines also pin the handoff's recorded peer
+    mesh_host_handoff_capability: 'roster',
+    mesh_host_handoff_chunk: 'roster',
+    mesh_host_handoff_ack: 'roster',
+    mesh_host_handoff_activate: 'roster',
+    mesh_host_handoff_status: 'roster',
+    mesh_host_handoff_discard: 'roster',
+    mesh_host_handoff_certificate: 'roster',
 };
 
 describe('mesh sender policy — registry', () => {
