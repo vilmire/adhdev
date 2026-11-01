@@ -23846,6 +23846,7 @@ var require_dist3 = __commonJS({
       DELIVERY_OUTCOMES: () => DELIVERY_OUTCOMES2,
       DELIVERY_VIAS: () => DELIVERY_VIAS2,
       DISPATCH_FAILURE_REASONS: () => DISPATCH_FAILURE_REASONS2,
+      DISPATCH_REFUSAL_DETAIL_MAX: () => DISPATCH_REFUSAL_DETAIL_MAX2,
       EVIDENCE_ENVELOPE_FIELD_SPECS: () => EVIDENCE_ENVELOPE_FIELD_SPECS2,
       EVIDENCE_SOURCE_IDS: () => EVIDENCE_SOURCE_IDS2,
       HOLD_REASONS: () => HOLD_REASONS2,
@@ -24202,6 +24203,7 @@ var require_dist3 = __commonJS({
       renderMissionBriefBlock: () => renderMissionBriefBlock2,
       renderWorkerProtocolFooter: () => renderWorkerProtocolFooter2,
       retiredMeshToolError: () => retiredMeshToolError2,
+      sanitizeDispatchRefusalDetail: () => sanitizeDispatchRefusalDetail2,
       sanitizeModelIdentifier: () => sanitizeModelIdentifier,
       sanitizeRefusalCode: () => sanitizeRefusalCode2,
       sanitizeRemoteRepoIdentity: () => sanitizeRemoteRepoIdentity,
@@ -25468,6 +25470,16 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (!normalized) return void 0;
       return normalized.slice(0, 64);
     }
+    function sanitizeDispatchRefusalDetail2(code, message) {
+      const cleanCode = sanitizeRefusalCode2(code);
+      let cleanMessage;
+      if (typeof message === "string") {
+        const line = message.replace(/(?:[A-Za-z]:)?[\\/](?:Users|home)[\\/][^\s\\/]+/g, "~").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+        if (line) cleanMessage = line.length > DISPATCH_REFUSAL_DETAIL_MAX2 ? `${line.slice(0, DISPATCH_REFUSAL_DETAIL_MAX2 - 1)}\u2026` : line;
+      }
+      if (!cleanCode && !cleanMessage) return void 0;
+      return { ...cleanCode ? { code: cleanCode } : {}, ...cleanMessage ? { message: cleanMessage } : {} };
+    }
     function makeGuard22(values) {
       const set2 = new Set(values);
       return (value) => typeof value === "string" && set2.has(value);
@@ -26171,13 +26183,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       return true;
     }
     function isLedgerQuerySummaryWire2(value) {
-      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
+      const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed"];
       if (!isRecord2(value) || !hasOnlyKeys22(value, keys)) return false;
       if (!isEvidenceIdentifier2(value.meshId)) return false;
       for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
         if (!isNonNegativeInt2(value[k])) return false;
       }
       if (value.taskBlocked !== void 0 && !isNonNegativeInt2(value.taskBlocked)) return false;
+      if (value.refineFailed !== void 0 && !isNonNegativeInt2(value.refineFailed)) return false;
       if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
       return true;
     }
@@ -27289,6 +27302,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var DELIVERY_OUTCOMES2;
     var DELIVERY_VIAS2;
     var DISPATCH_FAILURE_REASONS2;
+    var DISPATCH_REFUSAL_DETAIL_MAX2;
     var CONSUME_PROFILES2;
     var SESSION_REBOUND_REASONS2;
     var SUSPENSION_MODALS2;
@@ -28132,6 +28146,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         DELIVERY_OUTCOMES2 = ["delivered", "queued"];
         DELIVERY_VIAS2 = ["local", "p2p"];
         DISPATCH_FAILURE_REASONS2 = ["worker_absent", "transport_error", "spawn_failed", "rejected_by_worker", "timeout", "submit_unconfirmed"];
+        DISPATCH_REFUSAL_DETAIL_MAX2 = 200;
         CONSUME_PROFILES2 = ["default", "native_source"];
         SESSION_REBOUND_REASONS2 = ["restart", "live_holder"];
         SUSPENSION_MODALS2 = ["approval", "choice"];
@@ -28206,6 +28221,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           "reclaim_budget_exhausted",
           "hollow_max_retries",
           "migration_orphan",
+          // a stopping attempt whose writer node stayed unreachable (or was removed) past the bound
+          "writer_unreachable",
           // reclaims (generation + 1)
           "dispatch_refused_session_exited",
           "dispatch_refused_no_target",
@@ -44691,6 +44708,7 @@ ${error.message || ""}`;
           noTurnDeadlineMs: 9e5,
           stallNoticeMs: 18e4,
           hardCeilingMs: 54e5,
+          stoppingUnreachableMaxMs: 24 * 36e5,
           awaitReportMs: 6e5,
           livenessProbeIntervalFinalizingMs: 6e4,
           awaitEndMs: 6e4
@@ -44734,6 +44752,7 @@ ${error.message || ""}`;
             max: 24 * HOUR,
             aliases: [{ name: "MESH_INFLIGHT_ACKED_HOLD_HARD_CEILING_MS", min: 0, max: 24 * HOUR }]
           },
+          { field: "stoppingUnreachableMaxMs", canonical: "ADHDEV_STOPPING_UNREACHABLE_MAX_MS", min: 0, max: 30 * 24 * HOUR, aliases: [] },
           { field: "awaitReportMs", canonical: "ADHDEV_TURN_AWAIT_REPORT_MS", min: 0, max: HOUR, aliases: [] },
           { field: "livenessProbeIntervalFinalizingMs", canonical: "ADHDEV_TURN_LIVENESS_PROBE_INTERVAL_FINALIZING_MS", min: 0, max: HOUR, aliases: [] },
           { field: "awaitEndMs", canonical: "ADHDEV_TURN_AWAIT_END_MS", min: 0, max: HOUR, aliases: [] }
@@ -61201,6 +61220,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       releaseHolds(draft, "*", reason === "hard_ceiling" ? [] : ["hard_ceiling"]);
       requestWriterStop(draft);
     }
+    function settleUnreachableWriter(draft, stop, by) {
+      stop.confirmed = true;
+      stop.settledBy = by;
+      if (stop.terminal && stop.terminal.outcome !== "failed") {
+        commit(draft, stop.terminal.outcome, stop.terminal.strength, stop.reason, stop.terminal);
+        return;
+      }
+      stop.terminal = { outcome: "failed", strength: "genuine", source: "scheduler" };
+      commit(draft, "failed", "genuine", "writer_unreachable", stop.terminal);
+    }
     function reduceStopping(input) {
       const a = cloneAttempt(input.attempt), ev = input.evidence;
       a.data.writerStop = { ...a.data.writerStop };
@@ -61222,7 +61251,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         stop.reason = ev.reason;
         stop.terminal = { outcome: "cancelled", strength: "genuine", source: ev.source };
       }
-      if (input.stopConfirmed) {
+      if (input.writerUnreachable && !input.stopConfirmed && ev.kind !== "cancel") {
+        settleUnreachableWriter(draft, stop, input.writerUnreachable);
+      } else if (input.stopConfirmed) {
         stop.confirmed = true;
         if (stop.terminal) {
           if (stop.terminal.adoptSessionId) {
@@ -61244,7 +61275,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
       } else if (ev.kind === "worker_report") ACTIONS.record_report(draft);
       else draft.effects.push({ kind: "record", note: "writer_stop_checkpoint_pending" });
-      return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: "applied", rule: input.stopConfirmed ? "writer_settled" : "WR" };
+      return { attempt: a, holds: [...draft.holds.values()], effects: draft.effects, verdict: "applied", rule: input.stopConfirmed ? "writer_settled" : input.writerUnreachable && a.data.writerStop?.confirmed ? "writer_unreachable_settled" : "WR" };
     }
     function newAttempt(ev, fields) {
       return {
@@ -85894,6 +85925,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       __clearLocalRecordsForTests: () => __clearLocalRecordsForTests,
       getLocalRecordSummary: () => getLocalRecordSummary,
       getSessionRecoveryContext: () => getSessionRecoveryContext,
+      isRefineJobRecord: () => isRefineJobRecord,
       pruneLocalRecords: () => pruneLocalRecords,
       readActiveWorkRecords: () => readActiveWorkRecords,
       readLocalRecordHeads: () => readLocalRecordHeads,
@@ -85964,6 +85996,23 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         where.push(`attempt_id || '#committed' NOT IN (${opts.excludeIds.map(() => "?").join(",")})`);
         args.push(...opts.excludeIds);
       }
+      let refusalStore;
+      const refusalDetailFor = (row2) => {
+        if (row2.terminal_outcome !== "failed" || row2.terminal_reason !== "dispatch_failed") return void 0;
+        try {
+          refusalStore ??= opts.db ? new LocalRecordStore(opts.db) : store2();
+          const records = refusalStore.query(meshId, { kinds: ["dispatch_failed"], taskId: row2.task_id });
+          for (let i = records.length - 1; i >= 0; i--) {
+            const payload = records[i].payload;
+            const detail = payload?.detail;
+            if (!detail || typeof detail !== "object") continue;
+            if (typeof payload?.attemptId === "string" && payload.attemptId !== row2.attempt_id) continue;
+            return detail;
+          }
+        } catch {
+        }
+        return void 0;
+      };
       const toView = (row2) => {
         const completed = row2.terminal_outcome === "completed";
         const cancelled = row2.terminal_outcome === "cancelled";
@@ -85990,6 +86039,10 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
             ...row2.terminal_source ? { terminalSource: row2.terminal_source } : {},
             ...completed && row2.terminal_strength === "weak" ? { evidenceLevel: "weak" } : {},
             ...!completed && !blocked && !cancelled && row2.terminal_reason ? { error: row2.terminal_reason } : {},
+            ...(() => {
+              const detail = refusalDetailFor(row2);
+              return detail ? { detail } : {};
+            })(),
             ...cancelled ? { intentional: true, intentionalStopReason: "operator_cleanup" } : {}
           }
         };
@@ -86098,13 +86151,17 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
       let taskBlocked = counts2.get("task_blocked") ?? 0;
       let taskFailed = 0;
       let taskStalled = 0;
+      let refineFailed = 0;
       let recentFailures = 0;
       const failureRows = counts2.get("task_failed") || counts2.get("task_stalled") ? readLocalRecordHeads(meshId, ["task_failed", "task_stalled"], CLEANUP_STOP_PROJECTION, { turnTerminals: false }) : [];
       const localTerminalTasks = /* @__PURE__ */ new Set();
       for (const row2 of failureRows) {
         if (row2.taskId) localTerminalTasks.add(`${row2.kind}\0${row2.taskId}`);
         if (isIntentionalCleanupStopEntry(row2)) continue;
-        if (isRefineJobRecord(row2)) continue;
+        if (isRefineJobRecord(row2)) {
+          if (row2.kind === "task_failed") refineFailed++;
+          continue;
+        }
         if (row2.kind === "task_stalled") {
           taskStalled++;
           continue;
@@ -86141,6 +86198,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         taskCompleted,
         taskBlocked,
         taskFailed,
+        refineFailed,
         taskStalled,
         sessionLaunched: counts2.get("session_launched") ?? 0,
         checkpointCreated: counts2.get("checkpoint_created") ?? 0,
@@ -86285,6 +86343,7 @@ Valid status values: \`completed\` | \`failed\` | \`blocked\` | \`partial\`.`;
         init_dist();
         init_mesh_runtime_store();
         init_mesh_ledger();
+        init_mesh_local_record_store();
         DEFAULT_LOCAL_RECORD_SLICE_LIMIT = 100;
         MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
         RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1e3;
@@ -87630,7 +87689,20 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           meshRecord(ctx.meshId, "dispatch_failed", {
             nodeId: ctx.nodeId,
             sessionId: ctx.sessionId,
-            payload: { taskId: ctx.task.id, deliveryId: delivery.id, error: e?.message, retryable, transport: ctx.transport }
+            payload: {
+              taskId: ctx.task.id,
+              deliveryId: delivery.id,
+              error: e?.message,
+              retryable,
+              transport: ctx.transport,
+              // Bounded refusal detail so the committed task_failed view (mesh_task_history)
+              // can still say WHY after the daemon logs rotate; see readTurnTerminalViews.
+              ...ctx.attemptRef ? { attemptId: ctx.attemptRef.attemptId } : {},
+              ...(() => {
+                const detail = sanitizeDispatchRefusalDetail2(applicationRefusalCode ?? e?.code, e?.message);
+                return detail ? { detail } : {};
+              })()
+            }
           }, { local: true });
         } catch {
         }
@@ -122608,6 +122680,34 @@ ${detail.join("\n")}` : stripped;
         init_mesh_task_mode_guardrail();
       }
     });
+    function isRefineJobFailure(entry) {
+      return entry.kind === "task_failed" && isRefineJobRecord(entry);
+    }
+    function storedKindsForRequest(kinds) {
+      if (!kinds || kinds.length === 0) return void 0;
+      return [...new Set(kinds.map((k) => k === REFINE_JOB_FAILED_KIND ? "task_failed" : k))];
+    }
+    function presentRefineFailureKinds(entries2, requested) {
+      const wantsRefine = !requested || requested.length === 0 || requested.includes(REFINE_JOB_FAILED_KIND);
+      const wantsTask = !requested || requested.length === 0 || requested.includes("task_failed");
+      const out = [];
+      for (const entry of entries2) {
+        if (isRefineJobFailure(entry)) {
+          if (wantsRefine) out.push({ ...entry, kind: REFINE_JOB_FAILED_KIND });
+        } else if (entry.kind !== "task_failed" || wantsTask) {
+          out.push(entry);
+        }
+      }
+      return out;
+    }
+    var REFINE_JOB_FAILED_KIND;
+    var init_mesh_refine_failure_kind = __esm2({
+      "src/mesh/mesh-refine-failure-kind.ts"() {
+        "use strict";
+        init_mesh_local_records();
+        REFINE_JOB_FAILED_KIND = "refine_job_failed";
+      }
+    });
     function badRequest(command) {
       return { success: false, error: `${command}: request failed decode (bad shape)` };
     }
@@ -122716,6 +122816,7 @@ ${detail.join("\n")}` : stripped;
         init_mesh_queue_hold();
         init_dist();
         init_mesh_record();
+        init_mesh_refine_failure_kind();
         init_mesh_local_records();
         init_mesh_runtime_store();
         init_mesh_quota_ranking_records();
@@ -122743,12 +122844,16 @@ ${detail.join("\n")}` : stripped;
           const req = decodeLedgerQueryRequest(args);
           if (!req) return badRequest("ledger_query");
           try {
-            const entries2 = readLocalRecords(req.meshId, {
-              ...req.tail !== void 0 ? { tail: req.tail } : {},
+            const storedKinds = storedKindsForRequest(req.kind);
+            const refineSensitive = !storedKinds || storedKinds.includes("task_failed");
+            const readTail = req.tail !== void 0 && refineSensitive ? Math.min(req.tail * 4, 2e3) : req.tail;
+            let entries2 = presentRefineFailureKinds(readLocalRecords(req.meshId, {
+              ...readTail !== void 0 ? { tail: readTail } : {},
               ...req.since !== void 0 ? { since: req.since } : {},
-              ...req.kind ? { kind: [...req.kind] } : {},
+              ...storedKinds ? { kind: storedKinds } : {},
               ...req.node ? { node: req.node } : {}
-            });
+            }), req.kind);
+            if (req.tail !== void 0 && entries2.length > req.tail) entries2 = entries2.slice(-req.tail);
             const response = {
               entries: entries2.map(toLedgerQueryEntry).filter((e) => e !== null),
               ...req.includeSummary ? { summary: getLocalRecordSummary(req.meshId) } : {}
@@ -151281,6 +151386,7 @@ ${tail}` : ""
     }
     function createTurnLedger(deps) {
       const confirmedStops = /* @__PURE__ */ new Set();
+      const unreachableSettles = /* @__PURE__ */ new Map();
       const store5 = deps.store ?? new TurnStore(deps.db);
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
@@ -151329,6 +151435,53 @@ ${tail}` : ""
           if (settled.rule === "writer_settled") ports.revokeWorkerBind?.(request);
         } finally {
           confirmedStops.delete(eventId);
+        }
+      }
+      const unreachableSince = /* @__PURE__ */ new Map();
+      const removedSeen = /* @__PURE__ */ new Set();
+      function inspectionUnreachable(outcome) {
+        if (outcome.error !== void 0) return true;
+        const r = outcome.receipt;
+        if (!r || typeof r !== "object") return true;
+        if (r.success === true) return false;
+        return r.code === "writer_checkpoint_pending" && (r.reason === "worker_host_unresolved" || r.reason === "strict_stop_peer_capability_unconfirmed" || r.reason === "uncaptured_legacy_stop_identity");
+      }
+      function settleUnreachable(a, mode) {
+        const stop = a.data.writerStop;
+        if (!stop) return false;
+        const eventId = `writer_unreachable:${stop.requestId}`;
+        unreachableSettles.set(eventId, mode);
+        try {
+          const settled = observe({
+            eventId,
+            kind: "operator_status",
+            source: "scheduler",
+            at: now(),
+            observedBy: deps.selfDaemonId,
+            sessionId: a.sessionId,
+            attemptRef: { attemptId: a.attemptId, generation: a.generation },
+            status: "failed",
+            reason: "operator_update"
+          });
+          if (settled.rule !== "writer_unreachable_settled") return false;
+          ports.revokeWorkerBind?.({
+            attemptId: a.attemptId,
+            generation: a.generation,
+            sessionId: a.sessionId,
+            meshId: a.meshId,
+            taskId: a.taskId,
+            nodeId: a.nodeId,
+            dispatchNonce: a.dispatchNonce,
+            providerType: a.providerType,
+            ownerDaemonId: a.ownerDaemonId,
+            messageId: a.messageId,
+            revokeBind: true,
+            stopRequestId: stop.requestId
+          });
+          log.warn(`turn-ledger: stopping attempt ${a.attemptId} settled as writer_unreachable (${mode})`);
+          return true;
+        } finally {
+          unreachableSettles.delete(eventId);
         }
       }
       function resolveAttempt(evidence) {
@@ -151436,7 +151589,15 @@ ${tail}` : ""
             }
           }
         }
-        let result = reduce({ attempt, holds, evidence, policy, nowMs: nowMs2, stopConfirmed: confirmedStops.has(evidence.eventId) });
+        let result = reduce({
+          attempt,
+          holds,
+          evidence,
+          policy,
+          nowMs: nowMs2,
+          stopConfirmed: confirmedStops.has(evidence.eventId),
+          ...unreachableSettles.has(evidence.eventId) ? { writerUnreachable: unreachableSettles.get(evidence.eventId) } : {}
+        });
         if (triggerBackgroundWorkProbe && attempt) {
           result = {
             ...result,
@@ -151756,18 +151917,40 @@ ${tail}` : ""
               stopRequestId: a.data.writerStop.requestId,
               inspectOnly: true
             };
+            let outcome = {};
             try {
-              settleWriterStop(request, await ports.cancelDispatch?.(request));
+              const receipt = await ports.cancelDispatch?.(request);
+              outcome = { receipt };
+              settleWriterStop(request, receipt);
             } catch (error) {
+              outcome = { error };
               log.warn(`writer checkpoint remains pending: ${String(error)}`);
             }
             if (store5.getAttempt(a.attemptId)?.state === "stopping") {
+              const removed = !!a.meshId && !!a.nodeId && ports.writerNodeRemoved?.({ meshId: a.meshId, nodeId: a.nodeId }) === true;
+              if (removed) {
+                if (!removedSeen.has(backoffKey)) removedSeen.add(backoffKey);
+                else if (settleUnreachable(a, "node_removed")) {
+                  unreachableSince.delete(backoffKey);
+                  removedSeen.delete(backoffKey);
+                  continue;
+                }
+              } else if (removedSeen.delete(backoffKey), inspectionUnreachable(outcome)) {
+                const since = unreachableSince.get(backoffKey) ?? nowMs2;
+                unreachableSince.set(backoffKey, since);
+                if (policy.stoppingUnreachableMaxMs > 0 && nowMs2 - since >= policy.stoppingUnreachableMaxMs && settleUnreachable(a, "unreachable_bound")) {
+                  unreachableSince.delete(backoffKey);
+                  continue;
+                }
+              } else unreachableSince.delete(backoffKey);
               const unsettled = (backoff?.unsettled ?? 0) + 1;
               stopInspectBackoff.set(backoffKey, { unsettled, nextDueAt: now() + stopInspectDelayMs(unsettled) });
             } else stopInspectBackoff.delete(backoffKey);
           }
           if (!attemptId) {
             for (const key5 of [...stopInspectBackoff.keys()]) if (!stillStopping.has(key5)) stopInspectBackoff.delete(key5);
+            for (const key5 of [...unreachableSince.keys()]) if (!stillStopping.has(key5)) unreachableSince.delete(key5);
+            for (const key5 of [...removedSeen]) if (!stillStopping.has(key5)) removedSeen.delete(key5);
           }
         },
         notifyMeshEvent,
@@ -154016,6 +154199,16 @@ ${tail}` : ""
             reason: "turn_ledger_cancel_dispatch"
           });
         },
+        // The writer's node left the mesh: nobody can be asked to confirm its stop. Unknown
+        // mesh / unreadable membership is never "removed".
+        writerNodeRemoved: ({ meshId, nodeId }) => {
+          try {
+            const mesh = getMeshWithCache(components, meshId);
+            return Array.isArray(mesh?.nodes) && mesh.nodes.length > 0 && !mesh.nodes.some((n) => meshNodeIdMatches7(n, nodeId));
+          } catch {
+            return false;
+          }
+        },
         releaseAttemptRef: ({ attemptId }) => releaseLocalAttemptRef(components, attemptId),
         // WORKER-BIND-IDLE-DETACH: the default (bind/token revoke) plus the
         // local stamp detach withheld from the session's own idle edge — see
@@ -154523,6 +154716,7 @@ ${tail}` : ""
         init_config();
         init_logger();
         init_dist();
+        init_mesh_queue_mesh_view();
         init_mesh_dispatch_redelivery();
         init_probe();
         init_chat_message_normalization();
@@ -192856,12 +193050,12 @@ ${output}` : "";
           };
           const buildRecentActivityBestEffort = async (id4) => {
             try {
-              const { getLocalRecordSummary: getLocalRecordSummary2, readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
+              const { getLocalRecordSummary: getLocalRecordSummary2, readLocalRecords: readLocalRecords2, isRefineJobRecord: isRefineJobRecord2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
               const { isIntentionalCleanupStopEntry: isIntentionalCleanupStopEntry2 } = await Promise.resolve().then(() => (init_mesh_ledger(), mesh_ledger_exports));
               const { getMeshQueueStats: getMeshQueueStats2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
               const summary = getLocalRecordSummary2(id4);
               const queue = getMeshQueueStats2(id4);
-              const failureEntries = readLocalRecords2(id4, { kind: ["task_failed"], tail: 20 }).filter((e) => !isIntentionalCleanupStopEntry2(e)).slice(-5);
+              const failureEntries = readLocalRecords2(id4, { kind: ["task_failed"], tail: 20 }).filter((e) => !isIntentionalCleanupStopEntry2(e) && !isRefineJobRecord2(e)).slice(-5);
               const recentFailures = failureEntries.map((e) => {
                 const p = e.payload || {};
                 const raw = typeof p.taskSummary === "string" ? p.taskSummary : typeof p.message === "string" ? p.message : typeof p.error === "string" ? p.error : "";
@@ -232137,6 +232331,17 @@ function sanitizeRefusalCode(value) {
   if (!normalized) return void 0;
   return normalized.slice(0, 64);
 }
+var DISPATCH_REFUSAL_DETAIL_MAX = 200;
+function sanitizeDispatchRefusalDetail(code, message) {
+  const cleanCode = sanitizeRefusalCode(code);
+  let cleanMessage;
+  if (typeof message === "string") {
+    const line = message.replace(/(?:[A-Za-z]:)?[\\/](?:Users|home)[\\/][^\s\\/]+/g, "~").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+    if (line) cleanMessage = line.length > DISPATCH_REFUSAL_DETAIL_MAX ? `${line.slice(0, DISPATCH_REFUSAL_DETAIL_MAX - 1)}\u2026` : line;
+  }
+  if (!cleanCode && !cleanMessage) return void 0;
+  return { ...cleanCode ? { code: cleanCode } : {}, ...cleanMessage ? { message: cleanMessage } : {} };
+}
 var CONSUME_PROFILES = ["default", "native_source"];
 var SESSION_REBOUND_REASONS = ["restart", "live_holder"];
 var SUSPENSION_MODALS = ["approval", "choice"];
@@ -232211,6 +232416,8 @@ var TURN_REASONS = [
   "reclaim_budget_exhausted",
   "hollow_max_retries",
   "migration_orphan",
+  // a stopping attempt whose writer node stayed unreachable (or was removed) past the bound
+  "writer_unreachable",
   // reclaims (generation + 1)
   "dispatch_refused_session_exited",
   "dispatch_refused_no_target",
@@ -232572,13 +232779,14 @@ function isLedgerQueryEntryWire(value) {
   return true;
 }
 function isLedgerQuerySummaryWire(value) {
-  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures"];
+  const keys = ["meshId", "totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskBlocked", "taskStalled", "sessionLaunched", "checkpointCreated", "lastActivityAt", "recentFailures", "taskBlocked", "refineFailed"];
   if (!isRecord(value) || !hasOnlyKeys2(value, keys)) return false;
   if (!isEvidenceIdentifier(value.meshId)) return false;
   for (const k of ["totalEntries", "taskDispatched", "taskCompleted", "taskFailed", "taskStalled", "sessionLaunched", "checkpointCreated", "recentFailures"]) {
     if (!isNonNegativeInt(value[k])) return false;
   }
   if (value.taskBlocked !== void 0 && !isNonNegativeInt(value.taskBlocked)) return false;
+  if (value.refineFailed !== void 0 && !isNonNegativeInt(value.refineFailed)) return false;
   if (value.lastActivityAt !== null && typeof value.lastActivityAt !== "string") return false;
   return true;
 }
@@ -241134,6 +241342,20 @@ async function observeDirectDispatchOutcome(ctx, attemptRef, opts) {
           ...refusalCode ? { refusalCode } : {}
         }
       });
+      const detail = sanitizeDispatchRefusalDetail(opts.refusalCode, opts.refusalDetail);
+      if (detail && ctx.mesh?.id) {
+        try {
+          await recordLocal(ctx.transport, {
+            meshId: ctx.mesh.id,
+            kind: "dispatch_failed",
+            nodeId: opts.nodeId,
+            sessionId: opts.sessionId,
+            taskId: opts.taskId,
+            payload: { taskId: opts.taskId, attemptId: attemptRef.attemptId, transport: "mcp_direct", detail }
+          });
+        } catch {
+        }
+      }
       if (!opts.workerAbsent) {
         process.stderr.write(
           `[adhdev-mesh] dispatch to ${opts.nodeId ?? "unknown-node"} refused by worker: ${refusalCode ?? opts.refusalCode ?? "unknown"}` + (opts.refusalDetail ? ` \u2014 ${opts.refusalDetail}` : "") + "\n"

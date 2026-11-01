@@ -126,10 +126,11 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
     }
     // A committed `dispatch_failed` carries only the closed reason; the refusal text
     // lives in the local `dispatch_failed` record written at the dispatch site.
-    const refusalStore = opts.db ? new LocalRecordStore(opts.db) : store();
+    let refusalStore: LocalRecordStore | undefined;
     const refusalDetailFor = (row: TerminalRow): { code?: string; message?: string } | undefined => {
         if (row.terminal_outcome !== 'failed' || row.terminal_reason !== 'dispatch_failed') return undefined;
         try {
+            refusalStore ??= opts.db ? new LocalRecordStore(opts.db) : store();
             const records = refusalStore.query(meshId, { kinds: ['dispatch_failed'], taskId: row.task_id });
             for (let i = records.length - 1; i >= 0; i--) {
                 const payload = records[i].payload as Record<string, unknown> | undefined;
