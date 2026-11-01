@@ -29,7 +29,12 @@ import { StagePipelineRuntime } from './stage-pipeline-runtime.js';
 import { setStageHookTarget } from './stage-hooks.js';
 import { setStageNoticeLookup } from './stage-notice-silence.js';
 import { isStageChild, isStageParent } from './stage-state.js';
-import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, ReviewerWorkspaceProvider } from './stage-ports.js';
+import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, SelfCheckResult, ReviewerWorkspaceProvider } from './stage-ports.js';
+import { runMeshRefineValidationProfile } from './refine-profile-run.js';
+import { prepareLightWorkspace, removeLightWorkspace } from './light-workspace.js';
+import { loadLightWorkspaceConfig } from './light-workspace-config.js';
+
+const SELF_CHECK_LOG_MAX = 60_000;
 
 const execFileAsync = promisify(execFile);
 /** Past this many untracked/ignored files the stat hash is not attempted: the fingerprint is unavailable (fail closed). */
@@ -100,12 +105,81 @@ export const defaultStageGit: StageGitPort = {
     async isClean(workspace) { try { return (await git(workspace, ['status', '--porcelain'])).trim() === ''; } catch { return false; } },
 };
 
-/** Fallback until the light-workspace fast profile lands: skip without bouncing. */
+/** Mapping of the shared profile runner's summary onto the stage self-check result (docs: review-in-task §4.2). */
+export function mapProfileSummary(summary: { status?: string; failureCode?: string; skippedReason?: string; commandsRun?: unknown[] }): SelfCheckResult {
+    const log = (() => { try { return JSON.stringify(summary.commandsRun ?? [], null, 1).slice(-SELF_CHECK_LOG_MAX); } catch { return ''; } })();
+    if (summary.status === 'passed') return { status: 'passed', log };
+    if (summary.failureCode === 'validation_profile_unknown' || summary.status === 'skipped') {
+        return { status: 'skipped_not_configured', log: summary.skippedReason ?? 'no validation.profiles.fast configured' };
+    }
+    return { status: 'failed', log: `${summary.failureCode ? `${summary.failureCode}\n` : ''}${log}` };
+}
+
+export interface SelfCheckDeps {
+    getMesh: (meshId: string) => unknown;
+    run: (mesh: unknown, workspace: string, profile: string, opts: { baseSha: string }) => Promise<Parameters<typeof mapProfileSummary>[0]>;
+}
+
+/**
+ * Self-check through the shared `fast` validation profile (refine-profile-run.ts, the same runner light landing uses).
+ * Config without `profiles.fast` → skipped_not_configured; a thrown error → skipped_infra_error (never bounces).
+ */
+export function createRefineProfileSelfCheck(deps: SelfCheckDeps = { getMesh: id => getMesh(id), run: (m, w, p, o) => runMeshRefineValidationProfile(m, w, p, o) as never }): SelfCheckRunner {
+    return {
+        async run(req) {
+            try {
+                return mapProfileSummary(await deps.run(deps.getMesh(req.meshId) ?? null, req.workspace, req.profile, { baseSha: req.baseSha }));
+            } catch (e: any) {
+                return { status: 'skipped_infra_error', log: `self-check runner error: ${e?.message || e}` };
+            }
+        },
+    };
+}
+
+/** Fallback when no runner is connected: skip without bouncing. */
 export const unavailableSelfCheck: SelfCheckRunner = {
     async run() { return { status: 'unavailable', log: 'no self-check runner is connected on this daemon (fast profile not available)' }; },
 };
 
-/** Fallback until the light workspace lands: the reviewer reads the parent's checkout under the read lease. */
+export interface LightReviewerDeps {
+    loadConfig: typeof loadLightWorkspaceConfig;
+    prepare: typeof prepareLightWorkspace;
+    remove: typeof removeLightWorkspace;
+}
+
+/**
+ * Reviewer workspace backed by main's light workspace (detached checkout of the round head, no branch). Returns null
+ * for a repo without `.adhdev/light-workspace.json` or when preparation fails (→ read-lease fallback).
+ *
+ * ★NOT installed in production by default: a prepared workspace only helps if the review child's claim is routed to a
+ * session launched INTO that path (main's light dispatcher does that for `light` rows at the default base sha, not at
+ * an arbitrary round head). Without that routing a regular session would claim the child with the read lease skipped,
+ * which would also disable the mutation detector. Install with `setStagePorts({ reviewerWorkspace: createLightReviewerWorkspaceProvider() })`
+ * once the dispatcher can launch a session into a given path for a stage child.
+ */
+export function createLightReviewerWorkspaceProvider(deps: LightReviewerDeps = { loadConfig: loadLightWorkspaceConfig, prepare: prepareLightWorkspace, remove: removeLightWorkspace }): ReviewerWorkspaceProvider {
+    return {
+        async prepare(req) {
+            const cfg = deps.loadConfig(req.sourceWorkspace);
+            if (!cfg.ok) return null;
+            try {
+                const handle = await deps.prepare({
+                    meshId: req.meshId, taskId: req.parentTaskId, checkoutRoot: req.sourceWorkspace, config: cfg.config,
+                    rootBaseSha: req.rootSha, branch: false, keySuffix: `review-r${req.round}`,
+                });
+                return {
+                    path: handle.path, headSha: handle.rootBaseSha,
+                    release: async () => { await deps.remove({ path: handle.path, checkoutRoot: req.sourceWorkspace, config: cfg.config }); },
+                };
+            } catch (e: any) {
+                LOG.warn('StagePipeline', `light reviewer workspace unavailable for ${req.parentTaskId}: ${e?.message || e}`);
+                return null;
+            }
+        },
+    };
+}
+
+/** Fallback until a reviewer workspace is routed: the reviewer reads the parent's checkout under the read lease. */
 export const noReviewerWorkspace: ReviewerWorkspaceProvider = { async prepare() { return null; } };
 
 /**
@@ -116,6 +190,7 @@ export type StageArtifactRegistrar = (input: { sessionId: string; workspaceRoot:
 let artifactRegistrar: StageArtifactRegistrar | null = null;
 export function setStageArtifactRegistrar(fn: StageArtifactRegistrar | null): void { artifactRegistrar = fn; }
 
+const defaultSelfCheck = createRefineProfileSelfCheck();
 let overrides: { selfCheck?: SelfCheckRunner; reviewerWorkspace?: ReviewerWorkspaceProvider } = {};
 /** Connect the light-workspace seams. Call before (or after) installStagePipeline; read lazily per use. */
 export function setStagePorts(next: { selfCheck?: SelfCheckRunner; reviewerWorkspace?: ReviewerWorkspaceProvider }): void { overrides = { ...overrides, ...next }; }
@@ -135,7 +210,7 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
     const store = () => MeshRuntimeStore.getInstance();
     return {
         now: () => Date.now(),
-        selfCheck: { run: req => (overrides.selfCheck ?? unavailableSelfCheck).run(req) },
+        selfCheck: { run: req => (overrides.selfCheck ?? defaultSelfCheck).run(req) },
         reviewerWorkspace: { prepare: req => (overrides.reviewerWorkspace ?? noReviewerWorkspace).prepare(req) },
         git: defaultStageGit,
         artifacts: {

@@ -185,6 +185,21 @@ describe('stage pipeline runtime', () => {
         expect(h.parent().stageState!.reviewFingerprint).toBe('fp0');
     });
 
+    it('releases a prepared reviewer workspace when the review child ends, is cancelled, or enqueue fails', async () => {
+        let released = 0;
+        const withWs = (h: ReturnType<typeof harness>) => { (h.rt as unknown as { ports: StageRuntimePorts }).ports.reviewerWorkspace = { prepare: async () => ({ path: '/opt/light', headSha: 'h', release: async () => { released++; } }) }; };
+        const a = harness(); withWs(a);
+        await a.implDone('a1'); expect(released).toBe(0);
+        await a.review({ verdict: 'approve' }); expect(released).toBe(1);
+        const b = harness(); withWs(b);
+        await b.implDone('a1'); b.advance(5 * 3600_000); await b.rt.tick(); await b.rt.idle();
+        expect(released).toBe(2); // ceiling cancels the open child and releases its workspace
+        const c = harness(); withWs(c);
+        (c.rt as unknown as { ports: StageRuntimePorts }).ports.queue.enqueueReviewChild = () => { throw new Error('queue down'); };
+        await c.implDone('a1');
+        expect(released).toBe(3); // enqueue failed after prepare: nothing leaks
+    });
+
     it('a prepared reviewer workspace is exempt from the mutation check', async () => {
         const h = harness();
         // swap in a provider that returns a light workspace

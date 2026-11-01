@@ -7,7 +7,7 @@ import { join } from 'node:path';
 vi.mock('../../src/config/config.js', () => ({ getConfigDir: () => join(tmpdir(), 'adhdev-stage-ports-cfg'), loadConfig: () => ({}), getMachineId: () => 'm', getMachineNickname: () => null }));
 vi.mock('../../src/config/mesh-config.js', () => ({ getMesh: vi.fn(() => undefined), getMeshByRepo: vi.fn(), listMeshes: vi.fn(() => []) }));
 
-import { defaultStageGit, noReviewerWorkspace, resolveStagePipelineCeilingMs, unavailableSelfCheck, createProductionStagePorts, setStageArtifactRegistrar, setStagePorts } from '../../src/mesh/stage-ports-default.js';
+import { defaultStageGit, noReviewerWorkspace, resolveStagePipelineCeilingMs, unavailableSelfCheck, mapProfileSummary, createRefineProfileSelfCheck, createLightReviewerWorkspaceProvider, createProductionStagePorts, setStageArtifactRegistrar, setStagePorts } from '../../src/mesh/stage-ports-default.js';
 
 const dirs: string[] = [];
 afterEach(() => { dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })); setStageArtifactRegistrar(null); setStagePorts({ selfCheck: undefined, reviewerWorkspace: undefined }); });
@@ -85,12 +85,45 @@ describe('production stage ports', () => {
         expect((await unavailableSelfCheck.run({ meshId: 'm', taskId: 't', workspace: '/opt/ws', baseSha: 'b', profile: 'fast' })).status).toBe('unavailable');
         expect(await noReviewerWorkspace.prepare({} as never)).toBeNull();
         const ports = createProductionStagePorts({ sessionRegistry: undefined, instanceManager: undefined } as never);
-        expect((await ports.selfCheck.run({ meshId: 'm', taskId: 't', workspace: '/opt/ws', baseSha: 'b', profile: 'fast' })).status).toBe('unavailable');
         // a connected runner replaces the fallback without re-creating the ports
         setStagePorts({ selfCheck: { run: async () => ({ status: 'passed', log: 'ok' }) } });
         expect((await ports.selfCheck.run({ meshId: 'm', taskId: 't', workspace: '/opt/ws', baseSha: 'b', profile: 'fast' })).status).toBe('passed');
         setStagePorts({ reviewerWorkspace: { prepare: async () => ({ path: '/opt/light', headSha: 'h', release: async () => undefined }) } });
         expect((await ports.reviewerWorkspace.prepare({} as never))?.path).toBe('/opt/light');
+    });
+
+    it('self-check maps the shared fast profile: passed / failed / not configured / infra error', async () => {
+        const req = { meshId: 'm', taskId: 't', workspace: '/opt/ws', baseSha: 'b1', profile: 'fast' as const };
+        const seen: Array<{ profile: string; baseSha: string }> = [];
+        const mk = (impl: () => Promise<any>) => createRefineProfileSelfCheck({ getMesh: () => ({ id: 'm' }), run: async (_m, _w, profile, o) => { seen.push({ profile, baseSha: o.baseSha }); return impl(); } });
+        expect((await mk(async () => ({ status: 'passed', commandsRun: [{ command: 'x', exit: 0 }] })).run(req)).status).toBe('passed');
+        const failed = await mk(async () => ({ status: 'failed', failureCode: 'command_failed', commandsRun: [{ command: 'lint', exit: 1 }] })).run(req);
+        expect(failed.status).toBe('failed'); expect(failed.log).toContain('lint');
+        expect((await mk(async () => ({ status: 'failed', failureCode: 'validation_profile_unknown' })).run(req)).status).toBe('skipped_not_configured');
+        expect((await mk(async () => ({ status: 'skipped', skippedReason: 'validation_unavailable' })).run(req)).status).toBe('skipped_not_configured');
+        expect((await mk(async () => { throw new Error('spawn blew up'); }).run(req)).status).toBe('skipped_infra_error');
+        expect(seen[0]).toEqual({ profile: 'fast', baseSha: 'b1' });
+        expect(mapProfileSummary({ status: 'passed' }).status).toBe('passed');
+    });
+
+    it('light reviewer workspace: null without config, detached head checkout with config, release removes it', async () => {
+        const req = { meshId: 'm', parentTaskId: 'p1', reviewTaskId: 'r1', round: 2, rootSha: 'abc123', baseSha: 'b', sourceWorkspace: '/opt/checkout' };
+        const calls: any[] = []; const removed: any[] = [];
+        const none = createLightReviewerWorkspaceProvider({ loadConfig: (() => ({ ok: false, reason: 'missing', message: 'x', path: 'p' })) as never, prepare: (async () => { throw new Error('unreachable'); }) as never, remove: (async () => ({ removed: true, linksUnlinked: 0 })) as never });
+        expect(await none.prepare(req)).toBeNull();
+        const cfg = { version: 1, linkNodeModules: ['node_modules'] };
+        const ok = createLightReviewerWorkspaceProvider({
+            loadConfig: (() => ({ ok: true, config: cfg, path: 'p' })) as never,
+            prepare: (async (i: any) => { calls.push(i); return { path: '/opt/light/ws-r2', rootBaseSha: 'abc123' }; }) as never,
+            remove: (async (i: any) => { removed.push(i); return { removed: true, linksUnlinked: 0 }; }) as never,
+        });
+        const ws = (await ok.prepare(req))!;
+        expect(calls[0]).toMatchObject({ meshId: 'm', taskId: 'p1', checkoutRoot: '/opt/checkout', rootBaseSha: 'abc123', branch: false, keySuffix: 'review-r2' });
+        expect(ws).toMatchObject({ path: '/opt/light/ws-r2', headSha: 'abc123' });
+        await ws.release();
+        expect(removed[0]).toMatchObject({ path: '/opt/light/ws-r2', checkoutRoot: '/opt/checkout' });
+        const broken = createLightReviewerWorkspaceProvider({ loadConfig: (() => ({ ok: true, config: cfg, path: 'p' })) as never, prepare: (async () => { throw new Error('disk full'); }) as never, remove: removed as never });
+        expect(await broken.prepare(req)).toBeNull();
     });
 
     it('artifact port registers through the injected registrar with producerRole pipeline', () => {

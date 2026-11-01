@@ -17,6 +17,8 @@ const DIFF_MAX = 1_500_000;
 export class StagePipelineRuntime {
     /** Parents with an effect chain in flight (serializes per parent; events arriving meanwhile queue behind it). */
     private readonly chains = new Map<string, Promise<void>>();
+    /** Prepared reviewer workspaces by review child id; released when the child ends (or is cancelled). In-memory: a daemon restart leaves them to the light-workspace sweep. */
+    private readonly reviewerWorkspaces = new Map<string, { release(): Promise<void> }>();
     constructor(private readonly ports: StageRuntimePorts) {}
 
     private iso(): string { return new Date(this.ports.now()).toISOString(); }
@@ -69,6 +71,7 @@ export class StagePipelineRuntime {
         return this.serial(meshId, parentId, async () => {
             const parent = this.ports.queue.get(meshId, parentId);
             if (!parent || !isStageParent(parent)) return;
+            await this.releaseReviewerWorkspace(childId); // the review child ended: its workspace is no longer needed
             const st = parent.stageState!;
             if (st.phase !== 'reviewing' && st.phase !== 'awaiting_review') return;
             if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return; // a superseded child
@@ -225,6 +228,7 @@ export class StagePipelineRuntime {
                 for (const cid of st.reviewTaskIds) {
                     const c = this.ports.queue.get(meshId, cid);
                     if (c && (c.status === 'pending' || c.status === 'assigned')) this.ports.queue.cancel(meshId, cid, 'stage_parent_closed');
+                    await this.releaseReviewerWorkspace(cid);
                 }
                 return;
             case 'run_self_check': {
@@ -269,12 +273,19 @@ export class StagePipelineRuntime {
                     fingerprint = await this.safeFingerprint(workspace);
                     if (!fingerprint) fingerprint = await this.safeFingerprint(workspace);
                 }
-                const child = this.ports.queue.enqueueReviewChild(parent, {
-                    round: effect.round, message: msg, inputArtifactIds: inputs,
-                    independence: 'different_provider',
-                    ...(reuse ? { targetSessionId: reuse } : {}),
-                    ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
-                });
+                let child: MeshWorkQueueEntry;
+                try {
+                    child = this.ports.queue.enqueueReviewChild(parent, {
+                        round: effect.round, message: msg, inputArtifactIds: inputs,
+                        independence: 'different_provider',
+                        ...(reuse ? { targetSessionId: reuse } : {}),
+                        ...(ws ? { reviewerWorkspace: { path: ws.path, headSha: ws.headSha } } : {}),
+                    });
+                } catch (e) {
+                    if (ws) await ws.release().catch(() => undefined);
+                    throw e;
+                }
+                if (ws) this.reviewerWorkspaces.set(child.id, ws);
                 this.ports.queue.mutate(meshId, id, e => {
                     e.stageState!.reviewTaskIds = [...e.stageState!.reviewTaskIds, child.id];
                     delete e.stageState!.reviewFingerprint;
@@ -315,6 +326,13 @@ export class StagePipelineRuntime {
                 return;
             }
         }
+    }
+
+    private async releaseReviewerWorkspace(childId: string): Promise<void> {
+        const ws = this.reviewerWorkspaces.get(childId);
+        if (!ws) return;
+        this.reviewerWorkspaces.delete(childId);
+        try { await ws.release(); } catch { /* the light-workspace sweep reclaims leftovers */ }
     }
 
     private async safeFingerprint(workspace: string): Promise<string | null> {
