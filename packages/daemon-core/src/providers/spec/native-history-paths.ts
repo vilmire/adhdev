@@ -524,7 +524,7 @@ export function newestRecentFileAcrossDateWindow(
     return best ? best.p : null;
 }
 
-function expandPathForDate(template: string, input: NativeHistoryInput, day: Date): string | null {
+export function expandPathForDate(template: string, input: NativeHistoryInput, day: Date): string | null {
     // Reuse expandPath logic but stamp {yyyy}/{mm}/{dd} from the given day.
     if (!template) return null;
     let out = template;

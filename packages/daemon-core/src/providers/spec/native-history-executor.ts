@@ -45,11 +45,12 @@ import {
     collectSidecarSourceEvidenceAsync, refreshSidecarPromptEvidenceAsync, sourceRevisionAsync, type SidecarSourceEvidence, type SidecarSourceCandidate,
 } from './native-history-paths.js';
 export { claimKeyForPath } from './native-history-paths.js';
+import { recoverCodexSourceFromPersistedInputs } from './native-history-codex-recovery.js';
 import { pinnedTranscript, rankPromptEvidenceCandidates } from './native-history-prompt-bind.js';
 import {
     containsSentPrompt, hasExclusiveSentInput, hasRecordedSentInput, sentPromptSnippets,
 } from '../native-history/sent-prompt-registry.js';
-import { executeSqlite } from './native-history-sqlite.js';
+import { executeSqlite, listSqliteSessions } from './native-history-sqlite.js';
 import {
     compileRecordShapes, compileUsageShapes, projectUsageRecord, projectMessages,
     parseTimestamp,
@@ -209,6 +210,10 @@ export function executeNativeHistoryList(cfg: NativeHistoryConfig, input?: Nativ
     if (!cfg?.source) return null;
     // sqlite sources enumerate through their own `session_query`; only jsonl
     // stores are file-per-session and enumerable by directory walk here.
+    if (cfg.source.kind === 'sqlite') {
+        const rows = listSqliteSessions(cfg.source, input ?? {});
+        return rows ? { sessions: rows.sort((a, b) => b.lastMessageAt - a.lastMessageAt) } : null;
+    }
     if (cfg.source.kind !== 'jsonl') return null;
     return { sessions: enumerateJsonlSessions(cfg.source, input ?? {}) };
 }
@@ -899,6 +904,25 @@ function pickRecentByPromptEvidence(candidates: string[], input: NativeHistoryIn
 }
 
 function resolveCodexInstanceSource(
+    src: NativeHistoryJsonlSource,
+    resolved: string,
+    dir: string | null,
+    filePat: RegExp,
+    windowMs: number,
+    sessionFloor: number,
+    workspaceHint: string,
+    input: NativeHistoryInput,
+): JsonlSourceResolution {
+    const primary = resolveCodexInstanceSourceLive(src, resolved, dir, filePat, windowMs, sessionFloor, workspaceHint, input);
+    if (primary.outcome?.ownerConfirmed === true || primary.outcome?.unavailableReason) return primary;
+    // Restart recovery: the live evidence (registry, spawn floor) is gone; fall
+    // back to the persisted per-instance inputs (see native-history-codex-recovery.ts).
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    const rec = recoverCodexSourceFromPersistedInputs(src, input, owner);
+    return rec ? { path: rec.path, outcome: { attribution: 'claimed', ownerConfirmed: true } } : primary;
+}
+
+function resolveCodexInstanceSourceLive(
     src: NativeHistoryJsonlSource,
     _resolved: string,
     dir: string | null,

@@ -184,3 +184,33 @@ function pickSqliteSessionByPromptEvidence(
     if (!own) return '';
     return claimTranscript(key(own), owner) === 'denied' ? '' : own;
 }
+
+/** Enumerate sessions for `list_saved_sessions` via the spec's `list_query`. */
+export function listSqliteSessions(src: NativeHistorySqliteSource, input: NativeHistoryInput): NativeHistorySqliteListRow[] | null {
+    if (!src.list_query) return null;
+    const resolved = expandPath(src.path, input);
+    if (!resolved || !fs.existsSync(resolved)) return [];
+    let db: any;
+    try { db = new (loadBetterSqlite3())(resolved, { readonly: true, fileMustExist: true }); } catch { return []; }
+    try {
+        const rows: any[] = db.prepare(src.list_query).all();
+        const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+        const mtime = safeMtimeMs(resolved);
+        return rows.filter(r => r?.id != null && String(r.id)).map(r => ({
+            historySessionId: String(r.id),
+            ...(r.title ? { sessionTitle: String(r.title) } : {}),
+            ...(r.preview ? { preview: String(r.preview) } : {}),
+            ...(r.workspace ? { workspace: String(r.workspace) } : {}),
+            messageCount: num(r.message_count),
+            firstMessageAt: num(r.first_at),
+            lastMessageAt: num(r.last_at),
+            sourcePath: resolved,
+            sourceMtimeMs: mtime,
+        }));
+    } catch { return []; } finally { try { db.close(); } catch { /* ignore */ } }
+}
+
+export interface NativeHistorySqliteListRow {
+    historySessionId: string; sessionTitle?: string; preview?: string; workspace?: string;
+    messageCount: number; firstMessageAt: number; lastMessageAt: number; sourcePath: string; sourceMtimeMs: number;
+}

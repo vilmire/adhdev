@@ -141,10 +141,10 @@ export function applySpecNativeHistoryWiring(
             : (input: any) => executeNativeHistory(nh, input);
           // Only jsonl stores are file-per-session and enumerable by a
           // directory walk. sqlite sources enumerate through their own
-          // `session_query` (not implemented as a lister yet), so leave
-          // listSessions unwired there rather than advertising an enumerator
+          // `list_query` (optional in the spec), so leave
+          // listSessions unwired without one rather than advertising an enumerator
           // that always returns empty.
-          if (nh.source.kind === 'jsonl') {
+          if (nh.source.kind === 'jsonl' || (nh.source.kind === 'sqlite' && typeof nh.source.list_query === 'string' && nh.source.list_query.trim())) {
             lister = (input: any) => executeNativeHistoryList(nh, input);
           }
         } else if (nh.override_path) {

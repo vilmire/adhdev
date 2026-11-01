@@ -185,6 +185,13 @@ export interface NativeHistorySqliteSource {
     session_query: string;
     message_query: string;
     message_map: NativeHistoryMessageMap;
+    /**
+     * Optional enumeration query for `list_saved_sessions` (without it a sqlite
+     * store lists nothing). One row per session, columns by name: `id`
+     * (required), `title`, `workspace`, `first_at` / `last_at` (epoch ms),
+     * `message_count`, `preview`.
+     */
+    list_query?: string;
 }
 
 /**

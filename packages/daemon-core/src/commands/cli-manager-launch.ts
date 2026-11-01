@@ -44,6 +44,7 @@ import type { DaemonCliManager } from './cli-manager.js';
 import { IDENTITY } from '../track-identity.js';
 import { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '../standalone-mcp-auth.js';
 import { ensureMcpSessionCredential } from './mcp-command-ingress.js';
+import { recordPersistedProviderSessionPin } from '../config/state-store.js';
 
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
 export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'roleRestartInputs' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
@@ -355,7 +356,10 @@ async function startCliPtySession(
                 // The launch-arg providers (claude/codex) already consumed it at spawn.
                 ...(options?.initialThinkingLevel && !launchProvider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {}),
                 launchRecord: cliLaunchRecord,
-                onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
+                onProviderSessionResolved: ({ instanceId, providerSessionId, providerName, providerType, workspace }) => {
+                    // Persist the proven session->native id pin so a daemon restart
+                    // (live registry/spawn floor gone) can still exact-bind it.
+                    try { recordPersistedProviderSessionPin(instanceId, providerSessionId); } catch { /* best-effort */ }
                     host.persistRecentActivity({
                         kind: 'cli',
                         providerType,
