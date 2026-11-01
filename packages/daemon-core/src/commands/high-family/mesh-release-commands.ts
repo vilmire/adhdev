@@ -75,7 +75,7 @@ export function classifyReleaseCaller(rawArgs: Record<string, unknown>, command:
         return { ok: true, actor: 'owner' };
     }
     if (source === 'p2p' || source === 'standalone' || source === 'ext') return { ok: true, actor: 'owner' };
-    return refuse(`source '${source || 'unknown'}' cannot change release state`);
+    return refuse(`source '${source || 'unknown'}' cannot use release commands`);
 }
 
 function fail(code: string, error: string) {

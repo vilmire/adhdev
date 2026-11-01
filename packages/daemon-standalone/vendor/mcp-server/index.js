@@ -80615,7 +80615,7 @@ ${includeRefs[0]}`;
         init_dist();
         init_mcp_command_ingress();
         COMMAND_SOURCE_ARG = "_commandSource";
-        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer", "mission_decision_push_relay_answer", "mission_live_check_resolve"]);
+        COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve", "mission_decision_answer", "mission_decision_push_relay_answer", "mission_live_check_resolve", "release_upsert", "release_scope", "release_list", "release_record_deploy", "release_changelog_draft"]);
         UNVERIFIED_DASHBOARD_INPUT_ARG = "_unverifiedDashboardInput";
         UNVERIFIED_DASHBOARD_INPUT_COMMANDS = /* @__PURE__ */ new Set(["send_chat", "pty_input"]);
         TRUSTED_OWNER_INGRESS_STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.trustedOwnerIngressState");
@@ -194937,7 +194937,7 @@ ${lines.join("\n")}
         return { ok: true, actor: "owner" };
       }
       if (source2 === "p2p" || source2 === "standalone" || source2 === "ext") return { ok: true, actor: "owner" };
-      return refuse7(`source '${source2 || "unknown"}' cannot change release state`);
+      return refuse7(`source '${source2 || "unknown"}' cannot use release commands`);
     }
     function fail10(code, error) {
       return { success: false, code, error };
