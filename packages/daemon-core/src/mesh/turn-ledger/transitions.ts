@@ -89,7 +89,7 @@ export type EffectTemplate =
     | { e: 'act'; act: ActionId }
     | { e: 'hold'; reason: HoldReason | 'from_admission'; until: UntilExpr; onExpire: HoldOnExpire; meshOnly?: true; generationAgnostic?: true }
     | { e: 'release'; reasons: readonly HoldReason[] | '*' | 'expired_hold' }
-    | { e: 'commit'; outcome: TurnOutcome | 'from_report' | 'from_recorded_report' | 'from_operator'; strength: CommitStrength; reason: TurnReason | 'from_cancel' | 'from_operator' | 'from_provider_failure'
+    | { e: 'commit'; outcome: TurnOutcome | 'from_report' | 'from_recorded_report' | 'from_operator'; strength: CommitStrength; reason: TurnReason | 'from_cancel' | 'from_operator' | 'from_provider_failure' | 'from_session_error'
         /** `recorded_report` = the text (summary pointer + local text event) of the report R17g recorded on the attempt, not the committing evidence's. */
         text?: 'recorded_report' }
     | { e: 'reclaim'; reason: TurnReason | 'from_refusal' | 'from_exit_state' }
@@ -453,7 +453,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
         { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'from_provider_failure' },
     ] },
     { id: 'R21', lane: 'current', from: 'nonterminal', on: ['session_error'], to: 'failed', verdict: 'applied', effects: [
-        { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'session_error' },
+        { e: 'commit', outcome: 'failed', strength: 'genuine', reason: 'from_session_error' },
     ] },
     { id: 'R22', lane: 'current', from: 'nonterminal', on: ['cancel'], to: 'cancelled', verdict: 'applied', effects: [
         { e: 'cancel_dispatch', target: 'current', when: 'not_intentional_cleanup' },

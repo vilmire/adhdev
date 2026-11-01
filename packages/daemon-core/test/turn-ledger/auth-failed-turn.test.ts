@@ -122,3 +122,34 @@ describe('auth-failed turn — ledger + scheduler end to end', () => {
         expect(text).toContain('non-retryable authentication failure');
     });
 });
+
+// Infra RCA 2026-11-01: every `session_error` evidence committed the opaque
+// reason `session_error`, so a cursor/codex worker that died on a login prompt
+// was indistinguishable from an adapter crash in the task history. The evidence
+// already carries the class; auth and billing keep their own terminal reasons.
+describe('session_error evidence keeps its actionable class (R21)', () => {
+    const commitOf = (reason: string, scope: 'plain' | 'mesh_direct' = 'plain') => reduce({
+        attempt: makeAttempt('generating', { scope }), holds: [makeHold('liveness'), makeHold('hard_ceiling')],
+        evidence: ev('session_error', { reason: reason as never }),
+        policy: POLICY, nowMs: NOW,
+    });
+
+    it.each([
+        ['auth_failed', 'provider_auth_failed'],
+        ['billing_failed', 'provider_billing_failed'],
+        ['spawn_failed', 'session_error'],
+        ['adapter_error', 'session_error'],
+        ['provider_error', 'session_error'],
+        ['unknown', 'session_error'],
+    ])('plain attempt: %s commits failed/%s', (cls, terminalReason) => {
+        const r = commitOf(cls);
+        expect(r.rule).toBe('R21');
+        expect(r.attempt?.terminal).toMatchObject({ outcome: 'failed', strength: 'genuine', reason: terminalReason });
+    });
+
+    it('a mesh attempt keeps the class through the writer-stop settlement', () => {
+        const r = commitOf('auth_failed', 'mesh_direct');
+        expect(r.attempt?.state).toBe('stopping');
+        expect(r.attempt?.data.writerStop?.reason).toBe('provider_auth_failed');
+    });
+});

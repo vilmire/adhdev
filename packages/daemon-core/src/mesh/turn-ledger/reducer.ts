@@ -1056,6 +1056,12 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
             else if (template.reason === 'from_provider_failure') {
                 const failure = (ev as TurnEvidenceOf<'process_exit' | 'turn_end'>).providerFailure ?? 'provider_error';
                 reason = failure === 'provider_error' ? failure : `provider_${failure}`;
+            } else if (template.reason === 'from_session_error') {
+                // The evidence already classified the error. Keep the two classes a
+                // coordinator can act on (re-login, top up) instead of collapsing every
+                // session error into one opaque reason; the rest stay `session_error`.
+                const cls = (ev as TurnEvidenceOf<'session_error'>).reason;
+                reason = cls === 'auth_failed' ? 'provider_auth_failed' : cls === 'billing_failed' ? 'provider_billing_failed' : 'session_error';
             } else reason = template.reason;
             commit(draft, outcome, template.strength, reason, template.text === 'recorded_report' ? recordedReportText(draft) : undefined);
             return;
