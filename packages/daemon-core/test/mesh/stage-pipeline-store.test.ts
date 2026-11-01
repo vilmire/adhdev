@@ -241,3 +241,17 @@ describe('review routing (stage-aware)', () => {
         expect(reviewRoutingRefusal(task, parent, 'claude-cli', undefined, [])).toBe('review_independence_required');
     });
 });
+
+import { SESSION_COMPLETION_ACCEPTED_EVENT } from '../../src/mesh/mesh-session-lifetime.js';
+import { createProductionStagePorts } from '../../src/mesh/stage-ports-default.js';
+describe('implementer finished after final release', () => {
+    it('records the accepted-completion audit row the reaper reads', () => {
+        const mesh = newMesh();
+        const t = enqueueTask(mesh, 'fix', stagey); assigned(mesh, t.id, { attemptId: 'att-9' });
+        seedMeshAttempt({ meshId: mesh, taskId: t.id, sessionId: 'sess-impl', attemptId: 'att-9', attemptNo: 0, stage: 'completed' });
+        const ports = createProductionStagePorts({} as never);
+        ports.events.implementerFinished!(getQueueEntryById(mesh, t.id)!);
+        const rows = store().turnStore().listWorkerEventsForTask(mesh, t.id, SESSION_COMPLETION_ACCEPTED_EVENT);
+        expect(rows.map(r => r.attemptId)).toEqual(['att-9']);
+    });
+});

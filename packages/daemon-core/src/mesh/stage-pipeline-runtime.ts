@@ -281,6 +281,7 @@ export class StagePipelineRuntime {
                 if (!lifted) return;
                 this.ports.queue.commitParent(lifted, effect.status, { finalSummary: text, evidence: { stage: { phase: 'done', rounds: st.round, lastVerdict: st.lastVerdict, blockedReason: st.blockedReason } } }, `stage_${effect.status}`);
                 this.ports.events.notifyParentTerminal(lifted, effect.status, text);
+                if (effect.status === 'completed') this.ports.events.implementerFinished?.(lifted);
                 dropStageReport(meshId, id);
                 return;
             }

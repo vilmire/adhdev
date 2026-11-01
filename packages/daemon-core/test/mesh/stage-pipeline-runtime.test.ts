@@ -14,7 +14,7 @@ const PARENT = 'p1';
 function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckResult[]; diff?: boolean; independence?: 'different_provider' | 'fresh_session_ok' } = {}) {
     let nowMs = Date.parse('2026-11-01T00:00:00Z');
     const rows = new Map<string, MeshWorkQueueEntry>();
-    const log = { progress: [] as string[], notices: [] as Array<{ status: string; report: string }>, commits: [] as Array<{ status: string; text: string }>, revisions: [] as string[], artifacts: [] as string[], cancelled: [] as string[], sessions: new Set<string>(['impl-s', 'rev-s']) };
+    const log = { progress: [] as string[], notices: [] as Array<{ status: string; report: string }>, commits: [] as Array<{ status: string; text: string }>, revisions: [] as string[], artifacts: [] as string[], cancelled: [] as string[], finished: [] as string[], sessions: new Set<string>(['impl-s', 'rev-s']) };
     const parent: MeshWorkQueueEntry = {
         id: PARENT, meshId: MESH, message: 'do the thing', status: 'assigned', taskMode: 'code_change', difficulty: 'medium',
         assignedSessionId: 'impl-s', assignedProviderType: 'claude-cli', missionId: 'mi1',
@@ -48,7 +48,7 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
             requeueForRevision: (e, memo) => { log.revisions.push(memo); e.status = 'assigned'; },
             sessionAlive: s => !!s && log.sessions.has(s),
         },
-        events: { progress: (_m, _t, t) => log.progress.push(t), notifyParentTerminal: (_p, status, report) => log.notices.push({ status, report }) },
+        events: { implementerFinished: p => { log.finished.push(p.id); }, progress: (_m, _t, t) => log.progress.push(t), notifyParentTerminal: (_p, status, report) => log.notices.push({ status, report }) },
         workspaceOf: () => '/opt/ws',
         pipelineCeilingMs: () => 4 * 3600_000,
     };
@@ -80,6 +80,7 @@ describe('stage pipeline runtime', () => {
         await h.review({ verdict: 'approve' });
         expect(h.log.commits).toHaveLength(1);
         expect(h.log.commits[0].status).toBe('completed');
+        expect(h.log.finished).toEqual([PARENT]); // implementer session recorded as finished only on the final release
         expect(h.log.commits[0].text).toContain('review: approve · 1 round');
         expect(h.log.notices).toHaveLength(1);
     });
@@ -132,6 +133,7 @@ describe('stage pipeline runtime', () => {
         await h.implDone('a1');
         await h.review({ verdict: 'reject_approach', findings: [h.f('f1')] });
         expect(h.parent().stageState!.blockedReason).toBe('review_rejected_approach');
+        expect(h.log.finished).toEqual([]); // blocked: the session stays for a coordinator decision
         expect(h.log.revisions).toHaveLength(0);
     });
 

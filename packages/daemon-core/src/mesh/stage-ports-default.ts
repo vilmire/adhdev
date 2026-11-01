@@ -19,6 +19,7 @@ import { getConfigDir } from '../config/config.js';
 import { getMesh, listMeshes } from '../config/mesh-config.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { meshRecord } from './mesh-record.js';
+import { recordAcceptedSessionCompletion } from './mesh-session-lifetime.js';
 import { LOG } from '../logging/logger.js';
 import { STAGE_PIPELINE_CEILING_DEFAULT_MS } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
@@ -172,6 +173,10 @@ export function createProductionStagePorts(components: Pick<DaemonComponents, 's
         events: {
             progress: (meshId, taskId, text) => {
                 try { meshRecord(meshId, 'stage_progress', { payload: { taskId, text: text.slice(0, 300) } }, { local: true }); } catch { /* audit only */ }
+            },
+            implementerFinished: parent => {
+                // The worker-report hook skipped this while the report was held; record it now (same audit row the reaper reads).
+                recordAcceptedSessionCompletion({ meshId: parent.meshId, taskId: parent.id, ...(parent.assignedSessionId ? { sessionId: parent.assignedSessionId } : {}), ...(parent.attemptId ? { attemptId: parent.attemptId } : {}) }, Date.now());
             },
             notifyParentTerminal: (parent, status, report) => {
                 const message = `[System] Stage task ${parent.id} ${status}.\n${report}`;

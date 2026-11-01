@@ -70,6 +70,8 @@ export interface StageEventPort {
     progress(meshId: string, taskId: string, text: string): void;
     /** The ONE coordinator wake: the parent's terminal notice. */
     notifyParentTerminal(parent: MeshWorkQueueEntry, status: 'completed' | 'blocked' | 'failed', report: string): void;
+    /** The implementer session's work is finished (final release): let the session-lifetime reaper treat it like any finished worker. */
+    implementerFinished?(parent: MeshWorkQueueEntry): void;
 }
 
 export interface StageRuntimePorts {
