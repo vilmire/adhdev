@@ -465,7 +465,7 @@ function boundedStringList(value: unknown): string[] {
 const ARTIFACT_KINDS_WIRE: readonly ArtifactKind[] = ['markdown', 'image', 'diff', 'json', 'text'];
 const ARTIFACT_PREVIEW_WIRE_MAX = 600;
 // Mirrors ARTIFACT_PRODUCER_ROLES (artifacts/types.ts); kept local so this codec stays free of node built-ins.
-const ARTIFACT_PRODUCER_ROLES_WIRE: readonly ArtifactProducerRole[] = ['worker', 'coordinator', 'assistant', 'user', 'session'];
+const ARTIFACT_PRODUCER_ROLES_WIRE: readonly ArtifactProducerRole[] = ['worker', 'coordinator', 'assistant', 'user', 'session', 'pipeline'];
 
 export function readChatAttachment(value: unknown): ChatAttachmentMeta | null {
     const raw = recordField(value);

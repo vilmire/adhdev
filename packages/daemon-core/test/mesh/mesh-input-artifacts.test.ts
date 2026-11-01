@@ -108,6 +108,17 @@ describe('mission artifact auto-inherit', () => {
         expect(resolveInheritedArtifactIds(MESH, MISSION)).toEqual([a2, a1]);
     });
 
+    it("inherits daemon 'pipeline' artifacts of a finished task, but not of a running one or without a task", () => {
+        const done = finishedTask(MISSION, 'completed');
+        const running = finishedTask(MISSION, 'assigned');
+        const p1 = art({ taskId: done.id, role: 'pipeline' });
+        art({ taskId: running.id, role: 'pipeline' });
+        art({ taskId: null, role: 'pipeline' });
+        art({ taskId: done.id, role: 'assistant' });
+        const next = enqueueTask(MESH, 'follow-up', { ...opts, missionId: MISSION });
+        expect(next.inputArtifactIds).toEqual([p1]);
+    });
+
     it('inherits nothing inside the carry-over mission (a bucket of unrelated leftovers)', () => {
         const carryId = ensureCarryOverMission(MESH);
         const done = finishedTask(carryId, 'completed');

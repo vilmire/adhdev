@@ -124,9 +124,11 @@ export function listInheritableArtifacts(
         const eligible = records.filter((rec) => {
             if (!isSameBoundMesh(rec.meshId, mesh) || trimmed(rec.missionId) !== mission) return false;
             if (exclude.has(rec.artifactId)) return false;
-            // Only findings a WORKER wrote for a finished task of this mission. Coordinator
+            // Only findings a WORKER (or the daemon pipeline) wrote for a finished task of this mission. Coordinator
             // artifacts (handoffs, owner notes, snapshots) travel only when named explicitly.
-            if (trimmed(rec.producerRole as string) !== 'worker') return false;
+            // 'pipeline' = daemon-produced evidence (light-task patch/diff artifacts, review-stage records).
+            const producer = trimmed(rec.producerRole as string);
+            if (producer !== 'worker' && producer !== 'pipeline') return false;
             const producerTask = trimmed(rec.taskId);
             if (!producerTask || producerTask === excludeTask) return false;
             return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? '');

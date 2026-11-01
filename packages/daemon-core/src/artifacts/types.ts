@@ -49,7 +49,7 @@ export function maxBase64EncodedBytes(rawBytes: number): number {
 /** Metadata retention horizon for session_artifacts (30 days, OD-7). */
 export const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type ArtifactProducerRole = 'worker' | 'coordinator' | 'assistant' | 'user' | 'session';
+export type ArtifactProducerRole = 'worker' | 'coordinator' | 'assistant' | 'user' | 'session' | 'pipeline';
 
 export const UNTRUSTED_ARTIFACT_OPEN_TAG = '<untrusted_artifact_content>';
 export const UNTRUSTED_ARTIFACT_CLOSE_TAG = '</untrusted_artifact_content>';
@@ -146,6 +146,7 @@ export const ARTIFACT_PRODUCER_ROLES: readonly ArtifactProducerRole[] = Object.f
     'assistant',
     'user',
     'session',
+    'pipeline',
 ]);
 
 export function isArtifactProducerRole(value: unknown): value is ArtifactProducerRole {

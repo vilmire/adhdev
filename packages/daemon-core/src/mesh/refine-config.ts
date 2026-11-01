@@ -85,8 +85,16 @@ export interface RepoMeshRefineConfig {
             prepare?: RepoMeshRefineValidationCommandConfig[];
             phases: Array<{ id: string; concurrency?: number; lanes: Array<{ id: string; commands: string[]; env?: Record<string, string> }> }>;
         };
+        /**
+         * LIGHT-TASK: named validation profiles — each a subset of the configured
+         * command ids (no new command definitions). A profile run executes only those
+         * commands; every other gate is recorded `skipped_by_profile`.
+         */
+        profiles?: Record<string, { commands: string[] }>;
     };
 }
+
+export const MESH_REFINE_PROFILE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
 
 export interface MeshRefineValidationCommandPlan {
     command: string;
@@ -155,6 +163,8 @@ export interface MeshRefineValidationPlan {
     commands: MeshRefineValidationCommandPlan[];
     /** REFINE-LANES: the validated lane schedule; absent → serial in array order. */
     schedule?: MeshRefineSchedulePlan;
+    /** LIGHT-TASK: validated named profiles (command-id subsets); absent → none declared. */
+    profiles?: Record<string, { commands: string[] }>;
     rejectedCommands: Array<Record<string, unknown>>;
     /** M2-2: deprecation notices (e.g. validation.bootstrapCommands present). */
     deprecationWarnings: string[];
@@ -236,6 +246,15 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             reads: { type: 'array', items: { type: 'string' }, description: "REFINE-LANES: dist/ trees this command reads. Undeclared = reads everything ('*')." },
                             writes: { type: 'array', items: { type: 'string' }, description: 'REFINE-LANES: repo paths this command may mutate (rebuilt dist/ trees and temporarily rewritten sources). Required ([] when none) for commands in a phase whose lanes overlap.' },
                         },
+                    },
+                },
+                profiles: {
+                    type: 'object',
+                    description: 'LIGHT-TASK: named validation profiles. Each profile lists command ids (a subset of validation.commands, which must carry ids); a profile run executes only those and records every other gate as skipped_by_profile. Profile names match ^[a-z][a-z0-9_-]{0,31}$.',
+                    additionalProperties: {
+                        type: 'object',
+                        required: ['commands'],
+                        properties: { commands: { type: 'array', items: { type: 'string' } } },
                     },
                 },
                 schedule: {
@@ -416,7 +435,7 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string, conte
 
 const isRecord = isMeshConfigRecord;
 
-export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; schedule?: MeshRefineSchedulePlan; rejectedCommands: Array<Record<string, unknown>>; bootstrapMode: 'inherit' | 'skip'; deprecationWarnings: string[] } {
+export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; schedule?: MeshRefineSchedulePlan; profiles?: Record<string, { commands: string[] }>; rejectedCommands: Array<Record<string, unknown>>; bootstrapMode: 'inherit' | 'skip'; deprecationWarnings: string[] } {
     const errors: string[] = [];
     const bootstrapCommands: MeshRefineValidationCommandPlan[] = [];
     const commands: MeshRefineValidationCommandPlan[] = [];
@@ -472,7 +491,38 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
         errors.push(...result.errors);
         schedule = result.schedule;
     }
-    return { valid: errors.length === 0, errors, bootstrapCommands, commands, ...(schedule ? { schedule } : {}), rejectedCommands, bootstrapMode, deprecationWarnings };
+    const profiles = isRecord(validation) ? normalizeMeshRefineProfiles(validation.profiles, commands, errors) : undefined;
+    return { valid: errors.length === 0, errors, bootstrapCommands, commands, ...(schedule ? { schedule } : {}), ...(profiles ? { profiles } : {}), rejectedCommands, bootstrapMode, deprecationWarnings };
+}
+
+/**
+ * LIGHT-TASK: validate `validation.profiles`. A profile is a list of EXISTING command
+ * ids — it never defines commands, so a profile cannot smuggle in a gate the full run
+ * does not have. An unknown id, a duplicate id, a bad profile name, or an empty list
+ * invalidates the whole config (a profile that silently shrinks is the failure mode).
+ */
+export function normalizeMeshRefineProfiles(
+    raw: unknown,
+    commands: MeshRefineValidationCommandPlan[],
+    errors: string[],
+): Record<string, { commands: string[] }> | undefined {
+    if (raw === undefined) return undefined;
+    if (!isRecord(raw)) { errors.push('validation.profiles must be an object'); return undefined; }
+    const ids = new Set(commands.map(c => c.id).filter((id): id is string => !!id));
+    const out: Record<string, { commands: string[] }> = {};
+    for (const [name, def] of Object.entries(raw)) {
+        const where = `validation.profiles.${name}`;
+        if (!MESH_REFINE_PROFILE_NAME_RE.test(name)) { errors.push(`${where}: profile name must match ${MESH_REFINE_PROFILE_NAME_RE}`); continue; }
+        if (!isRecord(def) || !Array.isArray(def.commands) || def.commands.length === 0 || !def.commands.every(c => typeof c === 'string')) {
+            errors.push(`${where}.commands must be a non-empty array of command ids`);
+            continue;
+        }
+        const list = def.commands as string[];
+        if (new Set(list).size !== list.length) errors.push(`${where}.commands lists a command id twice`);
+        for (const id of list) if (!ids.has(id)) errors.push(`${where}.commands references unknown command id "${id}" (profiles may only select validation.commands that carry an id)`);
+        out[name] = { commands: [...new Set(list)] };
+    }
+    return Object.keys(out).length ? out : undefined;
 }
 
 function readConfigFromBaseRef(gitCwd: string, ref: string, relative: string): string | undefined {
@@ -647,6 +697,7 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string, op
         bootstrapCommands: validation.bootstrapCommands,
         commands: validation.commands,
         ...(validation.schedule ? { schedule: validation.schedule } : {}),
+        ...(validation.profiles ? { profiles: validation.profiles } : {}),
         rejectedCommands: validation.rejectedCommands,
         deprecationWarnings: validation.deprecationWarnings,
         suggestions: suggestion.suggestions,

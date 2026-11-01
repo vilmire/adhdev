@@ -30,6 +30,7 @@ import { runScheduledRefinePhases, spawnRefineGateChild, terminateRefineChild } 
 import type { RefineGroupChild, RefineLaneCommandHandle, RefineLaneCommandOutcome, ScheduledRefineRunReport } from './mesh-refine-lanes.js';
 import { planScheduledRefineRun } from './refine-schedule.js';
 import { randomUUID } from 'crypto';
+import { applyRefineProfileSelection, selectRefineProfileCommands } from './refine-profile.js';
 // ★B1: type-only — the gate never emits, it only carries the caller's channel.
 import type { RefineProgressContext } from './mesh-refine-progress.js';
 import type { MeshRefineStageStatus } from './mesh-refine-gitlink-utils.js';
@@ -674,6 +675,16 @@ interface MeshRefineValidationGateOptions {
      * {@link buildRefineVendorDriftHint}.
      */
     branchWasRebased?: boolean;
+    /**
+     * LIGHT-TASK: run only the commands of this named `validation.profiles` entry;
+     * every other gate is recorded `skipped_by_profile`. Absent → the full set.
+     * See refine-profile.ts / {@link runMeshRefineValidationProfile}.
+     */
+    profile?: string;
+    /** LIGHT-TASK: exported to profile commands as ADHDEV_REFINE_BASE_SHA (verify-affected diff base). */
+    baseSha?: string;
+    /** LIGHT-TASK: skip the node bootstrap stage (light/review workspaces share a linked node_modules; they must never install). */
+    skipBootstrap?: boolean;
 }
 
 function refineCommandRecord(candidate: MeshRefineValidationCommand, cwd: string, startedAt: number, result: any, passed: boolean, extras: Record<string, unknown> = {}) {
@@ -1140,9 +1151,17 @@ export async function runMeshRefineValidationGate(
         return summary;
     }
 
-    const bootstrap = await runRefineWorktreeBootstrap(mesh, workspace, selection, summary, opts);
+    const profileRun = opts?.profile ? selectRefineProfileCommands(selection.commands, selection.profiles, opts.profile, opts.baseSha) : undefined;
+    if (profileRun && 'error' in profileRun) {
+        Object.assign(summary, { status: 'failed', failureKind: 'validation_profile_unknown', failureCode: 'validation_profile_unknown', skippedReason: profileRun.error });
+        return summary;
+    }
+    const bootstrap = opts?.skipBootstrap
+        ? (summary.bootstrap = { stage: 'skipped', skipped: true }, { runLegacyBootstrapCommands: false })
+        : await runRefineWorktreeBootstrap(mesh, workspace, selection, summary, opts);
     if (bootstrap === 'failed') return summary;
-    const commandsToRun = selectRefineCommandsToRun(selection, summary, opts?.changeImpact);
+    let commandsToRun = selectRefineCommandsToRun(selection, summary, opts?.changeImpact);
+    if (profileRun) commandsToRun = applyRefineProfileSelection(profileRun, commandsToRun, summary.commandsRun);
     if (bootstrap.runLegacyBootstrapCommands && !(await runLegacyRefineBootstrap(execFileAsync, workspace, selection, summary))) {
         return summary;
     }
