@@ -191,6 +191,8 @@ export async function meshStatus(outerCtx: MeshContext, args: { includeStaleDire
             strategy: schedulingRuntime.strategy,
         },
         payloadMode: compact ? 'compact' : 'full',
+        // Review-in-task metrics (daemon-derived; present only once the mesh ran a stage task).
+        ...(view.reviewStats ? { reviewStats: view.reviewStats } : {}),
         refreshedAt: new Date().toISOString(),
         // Static provenance prose: verbose only.
         ...(compact ? {} : { sourceOfTruth: {

@@ -19,6 +19,7 @@ import { readMissionGitState } from './mesh-mission-git-eval.js';
 import type { MeshQueueFacts } from './mesh-runtime-store-queue-reads.js';
 import { deriveDependencyFailures } from './mesh-dependency-failure.js';
 import { computeMeshMissionStatsBatch, type MeshMissionStats } from './mesh-task-stats.js';
+import { computeStageReviewStatsForMesh, type StageReviewStats } from './stage-stats.js';
 import { meshRecord } from './mesh-record.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { normalizeMissionBrief, type MissionBrief } from '@adhdev/mesh-shared';
@@ -413,7 +414,7 @@ export function summarizeMeshMissions(meshId: string, missions: readonly MeshMis
 }
 
 /** Attach the stats rollup to each summary, computed in ONE pass (computeMeshMissionStatsBatch). */
-function withMissionStats<T extends { id: string }>(meshId: string, summaries: T[]): Array<T & { stats?: MeshMissionStats }> {
+function withMissionStats<T extends { id: string }>(meshId: string, summaries: T[]): Array<T & { stats?: MeshMissionStats; reviewStats?: StageReviewStats }> {
     if (summaries.length === 0) return summaries;
     let stats: Map<string, MeshMissionStats>;
     try {
@@ -421,7 +422,12 @@ function withMissionStats<T extends { id: string }>(meshId: string, summaries: T
     } catch {
         return summaries; // stats optional — omit on failure
     }
-    return summaries.map(summary => (stats.has(summary.id) ? { ...summary, stats: stats.get(summary.id)! } : summary));
+    // Review-in-task: per-mission review metrics, only for missions that ran a stage task.
+    return summaries.map(summary => {
+        if (!stats.has(summary.id)) return summary;
+        const reviewStats = computeStageReviewStatsForMesh(meshId, summary.id);
+        return { ...summary, stats: stats.get(summary.id)!, ...(reviewStats ? { reviewStats } : {}) };
+    });
 }
 
 /**

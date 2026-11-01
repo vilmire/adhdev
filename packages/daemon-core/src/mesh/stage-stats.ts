@@ -3,6 +3,7 @@
 
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { isStageChild, isStageParent } from './stage-state.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
 
 export interface StageReviewStats {
     stageTasks: number;
@@ -48,4 +49,37 @@ export function computeStageReviewStats(queue: readonly MeshWorkQueueEntry[]): S
     const f = out.independenceFallback;
     f.share = f.total ? f.used / f.total : 0;
     return out;
+}
+
+/**
+ * Slim read of the stage-relevant fields of every queue row of a mesh (no full payload parse of the whole queue).
+ * Rows keep only what computeStageReviewStats looks at.
+ */
+export function readStageStatsRows(meshId: string): MeshWorkQueueEntry[] {
+    const rows = MeshRuntimeStore.getInstance().db.prepare(
+        `SELECT id, status,
+                json_extract(payload, '$.missionId') AS missionId, json_extract(payload, '$.origin') AS origin,
+                json_extract(payload, '$.parentTaskId') AS parentTaskId, json_extract(payload, '$.stageRole') AS stageRole,
+                json_extract(payload, '$.stagePlan') AS stagePlan, json_extract(payload, '$.stageState') AS stageState
+         FROM mesh_queue WHERE mesh_id = ? AND json_valid(payload)`,
+    ).all(meshId) as Array<Record<string, unknown>>;
+    const parse = (v: unknown) => { if (typeof v !== 'string') return undefined; try { return JSON.parse(v); } catch { return undefined; } };
+    return rows.map(r => ({
+        id: r.id as string, meshId, status: r.status as MeshWorkQueueEntry['status'],
+        ...(r.missionId ? { missionId: r.missionId as string } : {}),
+        ...(r.origin ? { origin: r.origin as 'stage' | 'coordinator' } : {}),
+        ...(r.parentTaskId ? { parentTaskId: r.parentTaskId as string } : {}),
+        ...(r.stageRole ? { stageRole: r.stageRole as 'review' } : {}),
+        ...(r.stagePlan ? { stagePlan: parse(r.stagePlan) } : {}),
+        ...(r.stageState ? { stageState: parse(r.stageState) } : {}),
+    })) as MeshWorkQueueEntry[];
+}
+
+/** Mesh-wide review stats, or undefined when the mesh has no stage task at all (keeps payloads unchanged). */
+export function computeStageReviewStatsForMesh(meshId: string, missionId?: string): StageReviewStats | undefined {
+    try {
+        const rows = readStageStatsRows(meshId);
+        if (!rows.some(r => isStageParent(r) || isStageChild(r))) return undefined;
+        return computeStageReviewStats(missionId ? rows.filter(r => r.missionId === missionId) : rows);
+    } catch { return undefined; }
 }

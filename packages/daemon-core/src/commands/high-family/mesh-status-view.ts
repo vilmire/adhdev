@@ -34,6 +34,7 @@
  *   one call — so no tool decides locality itself (read_chat's replica hop,
  *   related-repo git, launch / session targeting, refine config reads …).
  */
+import { computeStageReviewStatsForMesh } from '../../mesh/stage-stats.js';
 import * as fs from 'fs';
 import { daemonIdsEquivalent, meshNodeIdMatches, TURN_IPC_PROTOCOL_VERSION, readText, readOptionalRecord } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
@@ -199,7 +200,8 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
             localMachineId: getMachineId() || '',
             hasMeshTransport: typeof ctx.deps.dispatchMeshCommand === 'function',
         });
-        return { success: true, ...view, routes };
+        const reviewStats = computeStageReviewStatsForMesh(meshId); // review-in-task §2 metrics (absent without stage tasks)
+        return { success: true, ...view, routes, ...(reviewStats ? { reviewStats } : {}) };
     },
 
     mesh_dispatch_route: async (ctx: HighFamilyContext, args: any) => {

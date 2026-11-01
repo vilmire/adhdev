@@ -255,3 +255,22 @@ describe('implementer finished after final release', () => {
         expect(rows.map(r => r.attemptId)).toEqual(['att-9']);
     });
 });
+
+import { computeStageReviewStatsForMesh, readStageStatsRows } from '../../src/mesh/stage-stats.js';
+describe('review stats wiring', () => {
+    it('derives mesh and per-mission stats from the slim store read; absent when no stage task exists', () => {
+        const mesh = newMesh();
+        enqueueTask(mesh, 'plain', { ...medium, difficulty: 'easy', missionId: 'mi' });
+        expect(computeStageReviewStatsForMesh(mesh)).toBeUndefined();
+        const parent = enqueueTask(mesh, 'fix', { ...stagey, missionId: 'mi' }); assigned(mesh, parent.id);
+        const e = store().findQueueEntryById(mesh, parent.id)!; e.stageState!.round = 2; e.stageState!.lastVerdict = 'approve'; e.stageState!.released = true; e.status = 'completed'; store().updateQueueEntry(e);
+        enqueueTask(mesh, 'review', { difficulty: 'medium', missionId: 'mi', stageChild: { parentTaskId: parent.id, round: 1, review: { sourceTaskId: parent.id, independence: 'different_provider' } } } as any);
+        expect(readStageStatsRows(mesh).map(r => r.id)).toContain(parent.id);
+        const stats = computeStageReviewStatsForMesh(mesh)!;
+        expect(stats.stageTasks).toBe(1);
+        expect(stats.coordinatorRowsByMission).toEqual({ mi: 2 }); // plain + stage parent; the review child is daemon-created
+        expect(stats.allRowsByMission).toEqual({ mi: 3 });
+        expect(stats.roundsDistribution).toEqual({ '2': 1 });
+        expect(computeStageReviewStatsForMesh(mesh, 'other')!.stageTasks).toBe(0);
+    });
+});

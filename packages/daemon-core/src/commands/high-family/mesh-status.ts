@@ -96,6 +96,7 @@ import {
 } from './mesh-status-node-state.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { getInputArtifactDispatchStats } from '../../mesh/mesh-input-artifacts.js';
+import { computeStageReviewStatsForMesh } from '../../mesh/stage-stats.js';
 
 /**
  * The `sections: ['nodes']` answer: node statuses (+ the held-runtime marker and
@@ -342,6 +343,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // chunk ceiling). Summarize at the read, before anything downstream sees it.
                     const rawQueue = getQueue(meshId, { status: ['pending', 'assigned'] });
                     const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map(task => ({ ...summarizeQueueEntryInputForView(task), ...(task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {}) }));
+                    const reviewStats = computeStageReviewStatsForMesh(meshId); // review-in-task §2 metrics (absent when the mesh has no stage task)
                     const queueSummary = { ...getMeshQueueStats(meshId), inputArtifacts: getInputArtifactDispatchStats(meshId) };
 
                     // Scheduling-runtime projection — the load-balancer's live view (tie-break
@@ -846,6 +848,7 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                             strategy: schedulingRuntime.strategy,
                         },
                         queue: { tasks: queue, summary: queueSummary },
+                        ...(reviewStats ? { reviewStats } : {}),
                         ledger: { entries: ledgerEntries, summary: ledgerSummary },
                         // Always present (possibly empty): the dashboard reads a missing field as
                         // "this daemon predates missions" and tells the user to update it.
