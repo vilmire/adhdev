@@ -27,6 +27,7 @@ import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { formatTaskCardTime, taskCardTimeSource } from './taskDagViewModel'
 import { queueTaskDisplayText } from '../../utils/queue-task-label'
+import { stageChip } from '../../utils/stage-chip'
 import type { BlueprintTaskRow } from './useBlueprintGroups'
 
 /** Status word → dot tone + text tone, per section emphasis. */
@@ -109,6 +110,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             ? 'text-accent'
             : 'text-text-muted'
     const provider = task.assignedProviderType || task.autoLaunch?.providerType
+    const stage = stageChip(task as Parameters<typeof stageChip>[0])
     return (
         <div
             role="button"
@@ -138,7 +140,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             {(row.awaitingApproval || row.awaitingChoice || row.dependencyFailureCount > 0
                 || row.waitingOn.length > 0 || row.missingDeps.length > 0 || pinnedSlot || task.difficulty
                 || (task.priority && task.priority !== 'normal') || task.readonly || task.taskMode === 'live_debug_readonly' || task.light
-                || missionTitle || provider || nodeLabel) && (
+                || missionTitle || provider || nodeLabel || stage) && (
                 <div className="flex min-w-0 flex-wrap items-center gap-1 pl-4">
                     {row.awaitingApproval && (
                         <span className={amberChip()} title={row.sessionNote ?? undefined}>
@@ -172,6 +174,12 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                             title={t('mesh.taskDag.predictedSlotPinned')}
                         >
                             📌 {pinnedSlot}
+                        </span>
+                    )}
+                    {stage && (
+                        <span className={neutralChip()} title={(task as Parameters<typeof stageChip>[0])?.stageState?.blockedReason ?? undefined}>
+                            {t(`mesh.blueprint.list.${stage.key}`, { round: stage.round })}
+                            {stage.round && stage.key !== 'stageReviewChild' ? ` · ${t('mesh.blueprint.list.stageRound', { round: stage.round })}` : ''}
                         </span>
                     )}
                     {task.difficulty && <span className={neutralChip()}>{task.difficulty}</span>}

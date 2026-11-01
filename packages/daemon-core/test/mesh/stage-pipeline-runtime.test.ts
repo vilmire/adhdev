@@ -216,3 +216,33 @@ describe('stage pipeline runtime', () => {
         expect((await g.rt.decide(MESH, PARENT, 'accept')).error).toBe('stage_task_not_blocked');
     });
 });
+
+import { stageFooterInput } from '../../src/mesh/stage-state.js';
+import { computeStageReviewStats } from '../../src/mesh/stage-stats.js';
+
+describe('stage footer input + review stats', () => {
+    const base = { stagePlan: { review: true as const, maxRevisions: 2 as const, independence: 'fresh_session_ok' as const } };
+    it('maps rows to implement / revise / review footer variants', () => {
+        const s0 = initialStageState('2026-11-01T00:00:00Z');
+        expect(stageFooterInput({ ...base, stageState: s0 } as never)).toMatchObject({ role: 'implement', maxRevisions: 2 });
+        expect(stageFooterInput({ ...base, stageState: { ...s0, round: 1 } } as never)).toMatchObject({ role: 'revise', round: 1 });
+        expect(stageFooterInput({ origin: 'stage', parentTaskId: 'p', stageRole: 'review', stageRound: 2, reviewerWorkspace: { path: '/opt/ws', headSha: 'h' } } as never)).toEqual({ role: 'review', round: 2, maxRevisions: 0, workspace: '/opt/ws' });
+        expect(stageFooterInput({} as never)).toBeUndefined();
+    });
+    it('derives coordinator-vs-all dispatch counts, rounds, blocked reasons and fallback share', () => {
+        const parent = (id: string, status: string, patch: object) => ({ id, meshId: 'm', missionId: 'mi', status, ...base, stageState: { ...initialStageState('2026-11-01T00:00:00Z'), ...patch }, origin: 'coordinator' }) as never;
+        const child = (id: string) => ({ id, meshId: 'm', missionId: 'mi', status: 'completed', origin: 'stage', parentTaskId: 'a', stageRole: 'review' }) as never;
+        const stats = computeStageReviewStats([
+            parent('a', 'completed', { round: 2, lastVerdict: 'approve', released: true, independenceUsed: 'fresh_session_fallback' }),
+            parent('b', 'blocked', { round: 3, blockedReason: 'review_unresolved', released: true, independenceUsed: 'different_provider' }),
+            parent('c', 'assigned', { round: 1 }),
+            child('a:r1'), child('a:r2'),
+        ]);
+        expect(stats.coordinatorRowsByMission).toEqual({ mi: 3 });
+        expect(stats.allRowsByMission).toEqual({ mi: 5 });
+        expect(stats.roundsDistribution).toEqual({ '2': 1, '3': 1 });
+        expect(stats.blockedByReason).toEqual({ review_unresolved: 1 });
+        expect(stats.firstReviewFoundDefects).toBe(1);
+        expect(stats.independenceFallback).toEqual({ used: 1, total: 2, share: 0.5 });
+    });
+});

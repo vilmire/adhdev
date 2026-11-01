@@ -49,3 +49,13 @@ export function isStageNoticeSilent(entry: StageRow | null | undefined): boolean
     if (isStageChild(entry)) return true;
     return isStageParent(entry) && !entry.stageState!.released && entry.status === 'assigned';
 }
+
+/** Footer `stage` input for a stage dispatch (implement / revise parent, or a review child), else undefined. */
+export function stageFooterInput(task: Pick<MeshWorkQueueEntry, 'stagePlan' | 'stageState' | 'origin' | 'parentTaskId' | 'stageRole' | 'stageRound' | 'reviewerWorkspace'>):
+    { role: 'implement' | 'revise' | 'review'; round: number; maxRevisions: number; workspace?: string } | undefined {
+    if (isStageChild(task)) return { role: 'review', round: task.stageRound ?? 1, maxRevisions: 0, ...(task.reviewerWorkspace ? { workspace: task.reviewerWorkspace.path } : {}) };
+    if (!isStageParent(task)) return undefined;
+    const s = task.stageState!;
+    const revising = s.round > 0 || s.selfCheckBounces > 0;
+    return { role: revising ? 'revise' : 'implement', round: Math.max(1, s.round), maxRevisions: task.stagePlan!.maxRevisions };
+}

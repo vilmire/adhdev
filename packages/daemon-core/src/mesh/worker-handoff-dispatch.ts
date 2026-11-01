@@ -32,6 +32,7 @@
  */
 
 import { resolveLightFooterInput } from './light-footer.js';
+import { stageFooterInput } from './stage-state.js';
 import {
     appendWorkerProtocolFooter,
     hasWorkerProtocolFooter,
@@ -75,6 +76,14 @@ export interface DispatchableTask {
     inputArtifactIds?: string[];
     /** `false` = the task opted out of mission artifact auto-inherit. */
     inheritArtifacts?: boolean;
+    /** Review-in-task fields (stage parent / review child) — drive the footer's STAGE paragraph. */
+    stagePlan?: import('@adhdev/mesh-shared').MeshTaskStagePlan;
+    stageState?: import('@adhdev/mesh-shared').MeshTaskStageState;
+    origin?: 'coordinator' | 'stage';
+    parentTaskId?: string;
+    stageRole?: 'review';
+    stageRound?: number;
+    reviewerWorkspace?: { path: string; headSha: string };
 }
 
 /**
@@ -203,6 +212,7 @@ export function resolveDispatchMessage(
         ...(missionBrief ? { missionBrief } : {}),
         ...(typeof target.workerMcp === 'boolean' ? { workerMcp: target.workerMcp } : {}),
         ...(task.light ? { light: resolveLightFooterInput(task) } : {}),
+        ...(stageFooterInput(task) ? { stage: stageFooterInput(task)! } : {}),
     });
 }
 
