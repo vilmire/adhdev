@@ -47,13 +47,13 @@ describe('production stage ports', () => {
         writeFileSync(join(dir, 'secret.cfg'), 'v2-longer');
         const afterIgnored = (await defaultStageGit.fingerprint(dir))!;
         expect(afterIgnored).not.toBe(base);
-        // 2. an edit inside an ignored directory
+        // 2. an ignored DIRECTORY is summarised by its own stat (not enumerated): adding an entry to it is detected
         const { mkdirSync } = await import('node:fs');
         mkdirSync(join(dir, 'build')); writeFileSync(join(dir, 'build', 'out.js'), 'x');
         const withBuild = (await defaultStageGit.fingerprint(dir))!;
         expect(withBuild).not.toBe(afterIgnored);
         await new Promise(r => setTimeout(r, 15));
-        writeFileSync(join(dir, 'build', 'out.js'), 'xyz');
+        writeFileSync(join(dir, 'build', 'second.js'), 'y');
         expect(await defaultStageGit.fingerprint(dir)).not.toBe(withBuild);
         // 3. skip-worktree flag (hides later edits from status/diff)
         const before = (await defaultStageGit.fingerprint(dir))!;
@@ -65,6 +65,20 @@ describe('production stage ports', () => {
         const clean = (await defaultStageGit.fingerprint(dir))!;
         writeFileSync(join(dir, 'a.txt'), '2\n');
         expect(await defaultStageGit.fingerprint(dir)).not.toBe(clean);
+    });
+
+    it('fingerprint fails closed on a spent budget or too many entries, and never blocks the event loop on the stat pass', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'stage-fp2-')); dirs.push(dir);
+        git(dir, 'init', '-b', 'main'); writeFileSync(join(dir, 'a.txt'), '1\n'); git(dir, 'add', '.'); git(dir, 'commit', '-m', 'one');
+        for (let i = 0; i < 40; i++) writeFileSync(join(dir, `u${i}.txt`), String(i));
+        expect(await defaultStageGit.fingerprint(dir, { budgetMs: -1 })).toBeNull();
+        expect(await defaultStageGit.fingerprint(dir, { maxEntries: 10 })).toBeNull();
+        let ticks = 0;
+        const timer = setInterval(() => { ticks++; }, 1);
+        const fp = await defaultStageGit.fingerprint(dir, { concurrency: 4 });
+        clearInterval(timer);
+        expect(fp).toBeTruthy();
+        expect(ticks).toBeGreaterThan(0); // the loop kept turning while stats were in flight
     });
 
     it('fallback seams: self-check unavailable (no bounce), reviewer workspace null (read lease)', async () => {

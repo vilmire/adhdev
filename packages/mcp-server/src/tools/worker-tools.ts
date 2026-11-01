@@ -193,7 +193,16 @@ export const REPORT_COMPLETION_TOOL = {
           prior_findings: { type: 'array', items: { type: 'object' } },
           checked: { type: 'array', items: { type: 'string' } },
           not_checked: { type: 'array', items: { type: 'string' } },
-          tests_run: {
+          tests_run: { type: 'array', items: { type: 'object' } },
+        },
+        required: ['verdict', 'findings', 'checked', 'not_checked'],
+      },
+      finding_responses: {
+        type: 'array',
+        description: 'ONLY when revising after a review: one entry per open blocking/major finding in your memo — {id, response: fixed | disputed, note}. A disputed finding needs your reasoning; the reviewer judges it next round.',
+        items: { type: 'object', properties: { id: { type: 'string' }, response: { type: 'string', enum: ['fixed', 'disputed'] }, note: { type: 'string' } }, required: ['id', 'response', 'note'] },
+      },
+      tests_run: {
         type: 'array',
         maxItems: 20,
         items: {

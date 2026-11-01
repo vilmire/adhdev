@@ -36,7 +36,7 @@ export interface StageGitPort {
     /** `git diff base..head` text (root only; bounded by the caller). */
     diff(workspace: string, base: string, head: string): Promise<string>;
     /** Opaque fingerprint of HEAD + working-tree status; equal fingerprints = the checkout did not change. Null when unreadable. */
-    fingerprint(workspace: string): Promise<string | null>;
+    fingerprint(workspace: string, limits?: { budgetMs?: number; maxEntries?: number; concurrency?: number }): Promise<string | null>;
     /** True when the working tree has no uncommitted changes. */
     isClean(workspace: string): Promise<boolean>;
 }

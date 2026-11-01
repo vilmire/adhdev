@@ -34,6 +34,9 @@ import type { StageGitPort, StageRuntimePorts, SelfCheckRunner, ReviewerWorkspac
 const execFileAsync = promisify(execFile);
 /** Past this many untracked/ignored files the stat hash is not attempted: the fingerprint is unavailable (fail closed). */
 const MAX_FINGERPRINT_OTHER_FILES = 300_000;
+/** Wall-clock budget and stat concurrency of the checkout fingerprint (fail closed past the budget). */
+const FINGERPRINT_BUDGET_MS = 20_000;
+const FINGERPRINT_STAT_CONCURRENCY = 32;
 
 async function git(cwd: string, args: string[], maxBuffer = 8 * 1024 * 1024): Promise<string> {
     const { stdout } = await execFileAsync('git', args, { cwd, windowsHide: true, timeout: 30_000, maxBuffer });
@@ -52,11 +55,17 @@ export const defaultStageGit: StageGitPort = {
     /**
      * Content-based checkout fingerprint (review-in-task §11). Covers: HEAD; porcelain status incl. untracked and ignored
      * entries; a hash of `git diff HEAD --binary` (tracked content); `git ls-files -v` (skip-worktree / assume-unchanged
-     * bits); and a stat hash (path, size, mtime) of every untracked/ignored file, since status names those without
-     * reflecting content edits. fsmonitor is disabled so a stale daemon cannot hide changes. Any failure → null (the
-     * caller treats that as "cannot verify").
+     * bits); and a stat hash (path, size, mtime) of untracked files (enumerated) and ignored entries (summarised: an ignored
+     * directory is one `--directory` entry, so a node_modules-sized tree is not walked file by file; only the directory's
+     * own stat is hashed). fsmonitor is disabled so a stale daemon cannot hide changes. Stats run asynchronously with
+     * bounded concurrency under a wall-clock budget and an incremental file cap; any failure, cap or timeout → null (the
+     * caller treats that as "cannot verify" and fails closed).
      */
-    async fingerprint(workspace) {
+    async fingerprint(workspace, limits: { budgetMs?: number; maxEntries?: number; concurrency?: number } = {}) {
+        const budgetMs = limits.budgetMs ?? FINGERPRINT_BUDGET_MS;
+        const maxEntries = limits.maxEntries ?? MAX_FINGERPRINT_OTHER_FILES;
+        const concurrency = limits.concurrency ?? FINGERPRINT_STAT_CONCURRENCY;
+        const deadline = Date.now() + budgetMs;
         try {
             const g = (args: string[], max = 64 * 1024 * 1024) => git(workspace, ['-c', 'core.fsmonitor=false', ...args], max);
             const sha = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -64,14 +73,28 @@ export const defaultStageGit: StageGitPort = {
             const status = await g(['status', '--porcelain=v1', '--untracked-files=all', '--ignored=matching']);
             const diff = await g(['diff', 'HEAD', '--binary']);
             const lsv = await g(['ls-files', '-v']);
-            const others = (await g(['ls-files', '-z', '-o'])).split('\0').filter(Boolean);
-            if (others.length > MAX_FINGERPRINT_OTHER_FILES) return null;
-            const stat = createHash('sha256');
-            for (const rel of others.sort()) {
-                try { const st = fs.lstatSync(path.join(workspace, rel)); stat.update(`${rel}\0${st.size}\0${st.mtimeMs}\n`); }
-                catch { stat.update(`${rel}\0gone\n`); }
-            }
-            return [head, sha(status), sha(diff), sha(lsv), stat.digest('hex')].join('\n');
+            const untracked = (await g(['ls-files', '-z', '-o', '--exclude-standard'])).split('\0').filter(Boolean);
+            const ignored = (await g(['ls-files', '-z', '-o', '-i', '--exclude-standard', '--directory'])).split('\0').filter(Boolean);
+            const entries = [...untracked.map(p => `u:${p}`), ...ignored.map(p => `i:${p}`)];
+            if (entries.length > maxEntries) return null;
+            entries.sort();
+            const lines: string[] = new Array(entries.length);
+            let next = 0;
+            let failed = false;
+            const worker = async () => {
+                for (;;) {
+                    if (failed) return;
+                    if (Date.now() > deadline) { failed = true; return; }
+                    const i = next++;
+                    if (i >= entries.length) return;
+                    const rel = entries[i].slice(2);
+                    try { const st = await fs.promises.lstat(path.join(workspace, rel)); lines[i] = `${entries[i]}\0${st.size}\0${st.mtimeMs}`; }
+                    catch { lines[i] = `${entries[i]}\0gone`; }
+                }
+            };
+            await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, entries.length)) }, worker));
+            if (failed || Date.now() > deadline) return null;
+            return [head, sha(status), sha(diff), sha(lsv), sha(lines.join('\n'))].join('\n');
         } catch { return null; }
     },
     async isClean(workspace) { try { return (await git(workspace, ['status', '--porcelain'])).trim() === ''; } catch { return false; } },
