@@ -3,6 +3,7 @@ import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
+import { admitLightBaseNode } from '../../mesh/light-task-admission.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 import { queueTaskHoldView } from '../../mesh/mesh-queue-hold.js';
@@ -365,7 +366,13 @@ const queueEnqueue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     if (!req) return badRequest('queue_enqueue');
     try {
         const role = await ownQueueRole(_ctx, req.meshId);
-        const entry = enqueueTask(req.meshId, req.message, withOwnRole(req.options as Record<string, unknown> | undefined, role) as Parameters<typeof enqueueTask>[2]);
+        let options = req.options as Record<string, unknown> | undefined;
+        // LIGHT-TASK: context-dependent admission (local base node + valid light-workspace.json); resolves lightBaseNodeId.
+        if (options?.light === true) {
+            const admitted = admitLightBaseNode(getMesh(req.meshId), _ctx.deps.statusInstanceId, typeof options.lightBaseNodeId === 'string' ? options.lightBaseNodeId : undefined);
+            options = { ...options, lightBaseNodeId: admitted.lightBaseNodeId };
+        }
+        const entry = enqueueTask(req.meshId, req.message, withOwnRole(options, role) as Parameters<typeof enqueueTask>[2]);
         const response: QueueEnqueueResponse = { entry: queueWire(entry)! };
         return { success: true, ...response };
     } catch (e) {

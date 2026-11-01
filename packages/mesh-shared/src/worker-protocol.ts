@@ -86,6 +86,27 @@ export interface WorkerProtocolFooterInput {
      * which is what every worker launched with the default gate receives.
      */
     workerMcp?: boolean
+    /**
+     * Same-machine light task: the worker runs in a temporary light workspace.
+     * Renders the light-workspace rules (stay inside, commit there, no installs).
+     */
+    light?: { workspace: string; baseSha: string; ossBaseSha?: string; ownedPaths: string[] }
+}
+
+/** Light-workspace worker rules (design §9). */
+export function renderLightWorkspaceRules(light: NonNullable<WorkerProtocolFooterInput['light']>): string[] {
+    const base = light.ossBaseSha ? `${light.baseSha} (oss ${light.ossBaseSha})` : light.baseSha
+    return [
+        `You are working in a temporary light workspace at \`${light.workspace}\` based on \`${base}\`. `
+            + 'Work only inside it. Commit your change there (the branch is already set up); do not push.',
+        'Do not run `npm install`/`npm ci`/`npm rebuild`/`node-gyp`, do not change package.json or lockfiles — '
+            + 'if the fix needs a dependency change, stop and report `blocked`.',
+        'Do not start long-running servers on fixed ports. Run the narrowest tests that cover your change and '
+            + 'list them in `report_completion.testsRun`.',
+        light.ownedPaths.length
+            ? `Stay inside \`owned_paths\` (${light.ownedPaths.join(', ')}); if you must touch more, say why in the summary.`
+            : 'Stay inside the paths the task names; if you must touch more, say why in the summary.',
+    ]
 }
 
 export function hasWorkerProtocolFooter(body: string): boolean {
@@ -123,6 +144,7 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     if (input.readonly) scope.push('read-only')
     if (scope.length) lines.push(`You are a delegated worker (${scope.join(', ')}).`)
     else lines.push('You are a delegated worker.')
+    if (input.light) lines.push(...renderLightWorkspaceRules(input.light))
     if (input.workerMcp === false) {
         lines.push(
             'This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, '

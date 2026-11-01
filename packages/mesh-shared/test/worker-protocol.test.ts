@@ -211,3 +211,21 @@ describe('renderWorkerProtocolFooter — worker MCP availability', () => {
         expect(stripWorkerProtocolFooter(body)).toBe('do the thing')
     })
 })
+
+describe('renderWorkerProtocolFooter — light workspace', () => {
+    const light = { workspace: '/opt/lw/abc', baseSha: 'a'.repeat(40), ownedPaths: ['src/a.ts', 'src/b/**'] }
+    it('renders the light rules in both the tools and no-tools variants and keeps the marker first', () => {
+        for (const workerMcp of [undefined, false] as const) {
+            const footer = renderWorkerProtocolFooter({ taskId: 't1', light, workerMcp })
+            expect(footer.startsWith(WORKER_PROTOCOL_FOOTER_MARKER)).toBe(true)
+            expect(footer).toContain('temporary light workspace at `/opt/lw/abc`')
+            expect(footer).toContain('do not push')
+            expect(footer).toContain('Do not run `npm install`')
+            expect(footer).toContain('src/a.ts, src/b/**')
+            expect(footer).toContain('testsRun')
+        }
+    })
+    it('adds nothing without the light input', () => {
+        expect(renderWorkerProtocolFooter({ taskId: 't1' })).not.toContain('light workspace')
+    })
+})

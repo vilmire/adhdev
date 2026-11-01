@@ -147,6 +147,9 @@ interface EnqueueTaskArgsShape {
     maxRetries?: number; max_retries?: number;
     /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths. */
     owned_paths?: unknown; ownedPaths?: unknown;
+    /** LIGHT-TASK: run in a per-task light workspace on the coordinator machine. */
+    light?: boolean;
+    light_base_node_id?: string; lightBaseNodeId?: string;
     /** OD-4 (artifact sharing) — artifact IDs (any mission) this worker task may read. */
     input_artifact_ids?: unknown; inputArtifactIds?: unknown;
     /** Opt out of mission artifact auto-inherit: `false` keeps the task's input artifacts to the explicit ids. */
@@ -182,6 +185,9 @@ interface NormalizedEnqueueTaskArgs {
      * unchanged for the daemon to normalize/reject.
      */
     ownedPaths: string[] | undefined;
+    /** LIGHT-TASK: forwarded verbatim; the daemon admits (local base node, config) or refuses with a `light_*` code. */
+    light: boolean;
+    lightBaseNodeId: string | undefined;
 }
 
 type NormalizeEnqueueTaskResult =
@@ -336,6 +342,8 @@ async function normalizeEnqueueTaskArgs(
             message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
             explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
+            light: args.light === true,
+            lightBaseNodeId: readString(args.lightBaseNodeId) || readString(args.light_base_node_id) || undefined,
         },
     };
 }
@@ -398,7 +406,7 @@ export async function meshEnqueueTask(
     const {
         message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
-        explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
+        explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths, light, lightBaseNodeId,
     } = normalized.value;
     // G4: duplicate detection. Default is warn-only; block is opt-in (block_duplicate=true).
     // allow_duplicate=true silences the warning entirely (explicit intentional re-enqueue).
@@ -439,6 +447,8 @@ export async function meshEnqueueTask(
                 ...(notBefore ? { notBefore } : {}),
                 ...(maxRetries !== undefined ? { maxRetries } : {}),
                 ...(ownedPaths ? { ownedPaths } : {}),
+                ...(light ? { light: true } : {}),
+                ...(light && lightBaseNodeId ? { lightBaseNodeId } : {}),
                 ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
             },
         })).entry as unknown as MeshWorkQueueEntry;

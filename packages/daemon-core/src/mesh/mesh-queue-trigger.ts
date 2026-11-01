@@ -21,6 +21,7 @@ import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { type QuotaClaimDrainTrace, logAllQuotaClaimCandidatesBlocked, clearAllQuotaClaimCandidatesBlockedState } from './mesh-queue-observability.js';
 import { resolveNodeSchedulingPriority, resolveDelegatedSessionIdleTtlMinutes, resolveMeshPolicy } from '../repo-mesh-types.js';
 import { maybeAutoLaunchOneQueueSession } from './mesh-queue-autolaunch.js';
+import { dispatchLightTasks } from './light-task-dispatch.js';
 import { LOG } from '../logging/logger.js';
 import { sweepAutoLaunchOrphanSessions, isAutoLaunchWithinAwaitClaimWindow } from './mesh-autolaunch-integrity.js';
 import { maybeAutoFastForwardIdleNode } from './mesh-auto-fast-forward.js';
@@ -334,6 +335,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
             return false;
         });
     trackInFlightAutoLaunch(meshId, autoLaunchPromise);
+    void dispatchLightTasks(components, meshId, mesh).catch(e => LOG.warn('LightTask', `light dispatch scan failed for mesh ${meshId}: ${e?.message || e}`)); // light rows: light-task-dispatch.ts
     // Give the launch scan its synchronous prologue (gates + per-task lock + markAutoLaunch)
     // a chance to land before we snapshot the queue, without waiting on any spawn I/O. If it
     // settles within this turn we report it exactly as the old await did.

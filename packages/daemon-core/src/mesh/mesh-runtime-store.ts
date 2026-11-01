@@ -524,7 +524,8 @@ export class MeshRuntimeStore {
             SELECT payload FROM mesh_queue
             WHERE mesh_id = ? AND ${ACTIVE_WRITER_CLAIM_SQL} AND assigned_node_id IN (${placeholders})
         `).all(meshId, ...nodeIdForms) as Array<{ payload: string }>;
-        return rows.some(row => !isTaskReadonly(JSON.parse(row.payload) as MeshWorkQueueEntry));
+        // LIGHT-TASK: a light row runs in its own scratch checkout, so it never makes the node write-busy.
+        return rows.some(row => { const e = JSON.parse(row.payload) as MeshWorkQueueEntry; return !isTaskReadonly(e) && !e.light; });
     }
 
     /**

@@ -31,6 +31,7 @@
  * looking for `report_completion` it cannot call.
  */
 
+import { resolveLightFooterInput } from './light-footer.js';
 import {
     appendWorkerProtocolFooter,
     hasWorkerProtocolFooter,
@@ -61,6 +62,10 @@ export interface DispatchableTask {
     difficulty?: string;
     phase?: import('@adhdev/mesh-shared').MeshTaskPhase;
     readonly?: boolean;
+    /** LIGHT-TASK: renders the light-workspace rules in the footer (see light-footer.ts). */
+    light?: true;
+    lightWorkspaceId?: string;
+    ownedPaths?: import('@adhdev/mesh-shared').OwnedPathsDeclaration;
     missionId?: string;
     /** Files the task is expected to touch, when known — drives handoff-note relevance. */
     touchedFiles?: unknown;
@@ -197,6 +202,7 @@ export function resolveDispatchMessage(
         ...(enclosedHandoffNotes > 0 ? { enclosedHandoffNotes } : {}),
         ...(missionBrief ? { missionBrief } : {}),
         ...(typeof target.workerMcp === 'boolean' ? { workerMcp: target.workerMcp } : {}),
+        ...(task.light ? { light: resolveLightFooterInput(task) } : {}),
     });
 }
 

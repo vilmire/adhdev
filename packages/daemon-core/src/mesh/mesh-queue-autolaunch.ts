@@ -712,7 +712,7 @@ function decideAutoLaunchSlot(
     return { effectiveProviderType, slot: slotDecision.slot, model: finalization.model, demotionReason: finalization.demotionReason };
 }
 
-interface AutoLaunchPlan {
+export interface AutoLaunchPlan {
     resolved: Awaited<ReturnType<typeof resolveUsableProvider>>;
     effectiveProviderType: string;
     effectiveModel: string | undefined;
@@ -727,7 +727,7 @@ interface AutoLaunchPlan {
  * quota-busy fallback, model compatibility, difficulty-floor parity, provider cap, and
  * the worker launch envelope. Returns null after recording the skip reason.
  */
-async function resolveAutoLaunchPlan(
+export async function resolveAutoLaunchPlan(
     components: DaemonComponents,
     meshId: string,
     mesh: any,
@@ -1098,7 +1098,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
     // rank descending keeps created_at order within a priority band). The claim path applies
     // the same ordering, so the launched session pulls the same task the scan chose.
     const pending = queue
-        .filter(task => task.status === 'pending')
+        .filter(task => task.status === 'pending' && !task.light) // light rows: light-task-dispatch.ts
         .sort((a, b) => meshTaskPriorityRank(b.priority) - meshTaskPriorityRank(a.priority));
     pruneAwaitClaimBackoff(meshId, pending);
     if (!pending.length) return false;

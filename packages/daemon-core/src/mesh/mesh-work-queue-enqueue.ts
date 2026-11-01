@@ -10,6 +10,7 @@ import {
     MESH_TASK_DIFFICULTIES,
     isMeshTaskDifficulty,
     normalizeOwnedPaths,
+    LIGHT_REJECT,
     type MeshTaskMode,
 } from '@adhdev/mesh-shared';
 import type {
@@ -117,6 +118,16 @@ function assertMeshTaskDifficulty(value: unknown, callerLabel: string): MeshTask
 /**
  * Add a new task to the mesh queue.
  */
+/** LIGHT-TASK shape rules that need no node/config context (design §6). */
+function assertLightEnqueueShape(taskMode: string | undefined, readonly: boolean, ownedPaths: unknown): void {
+    if (readonly || (taskMode && taskMode !== 'code_change')) {
+        throw new Error(`${LIGHT_REJECT.MODE_CONFLICT}: a light task must be a code_change (not readonly / ${taskMode ?? 'unknown'} mode).`);
+    }
+    if (!Array.isArray(ownedPaths) || ownedPaths.length === 0) {
+        throw new Error(`${LIGHT_REJECT.REQUIRES_OWNED_PATHS}: light tasks must declare owned_paths (repo-relative files/dirs).`);
+    }
+}
+
 export function enqueueTask(
     meshId: string,
     message: string,
@@ -139,6 +150,8 @@ export function enqueueTask(
     if (!modeValidation.valid) {
         throw new Error(buildMeshTaskModeViolationError(modeValidation));
     }
+    const light = opts?.light === true;
+    if (light) assertLightEnqueueShape(modeValidation.taskMode, readonly, opts?.ownedPaths);
     const id = typeof opts?.id === 'string' && opts.id.trim() ? opts.id.trim() : randomUUID();
     const dependsOn = normalizeDependsOn(opts?.dependsOn);
     const explicitInputArtifactIds = normalizeInputArtifactIds(opts?.inputArtifactIds ?? opts?.input_artifact_ids);
@@ -209,6 +222,8 @@ export function enqueueTask(
             status: 'pending',
             taskMode: modeValidation.taskMode,
             ...(readonly ? { readonly: true } : {}),
+            ...(light ? { light: true as const } : {}),
+            ...(light && typeof opts?.lightBaseNodeId === 'string' && opts.lightBaseNodeId.trim() ? { lightBaseNodeId: opts.lightBaseNodeId.trim() } : {}),
             targetNodeId: opts?.targetNodeId,
             targetSessionId: opts?.targetSessionId,
             requiredTags: resolvedRequiredTags,

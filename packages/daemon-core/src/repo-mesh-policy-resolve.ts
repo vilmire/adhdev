@@ -67,6 +67,14 @@ export function resolveMaxReadonlyParallelTasks(maxParallelTasks: number, multip
 }
 
 /**
+ * LIGHT-TASK cap (design L9): `min(3, maxParallelTasks)`, at least 1. Light rows also count toward the
+ * mesh-wide write cap; this is the additional disk/CPU ceiling for scratch workspaces.
+ */
+export function resolveMaxLightParallelTasks(maxParallelTasks: number): number {
+    return Math.max(1, Math.min(3, Math.floor(maxParallelTasks) || 1));
+}
+
+/**
  * Resolve the effective global write-task parallel cap from a raw policy value,
  * clamped to [MESH_MAX_PARALLEL_TASKS_MIN, MESH_MAX_PARALLEL_TASKS_MAX] and
  * defaulting to DEFAULT_MESH_POLICY.maxParallelTasks for a missing/NaN value.

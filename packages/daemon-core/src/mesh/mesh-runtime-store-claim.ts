@@ -1,5 +1,6 @@
 import { sessionIsStopping } from './mesh-session-stop-fence.js';
 import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
+import { lightClaimAllows } from './light-claim-rule.js';
 import { realpathSync } from 'node:fs';
 import { reviewRoutingRefusal } from './mesh-task-routing-contract.js';
 import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
@@ -117,6 +118,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             nodeIsWorktree?: boolean;
             assignedTranscriptProfile?: MeshWorkQueueEntry['assignedTranscriptProfile'];
             allowedTaskDifficulties?: readonly import('@adhdev/mesh-shared').MeshTaskDifficulty[];
+            /** LIGHT-TASK: the light workspace the claiming session was launched into (see light-claim-rule.ts). */
+            lightWorkspaceId?: string;
             /**
              * GIT-GATE (owner-requested follow-up to H1): the claiming node's git
              * telemetry verdict, resolved by the CALLER (mesh-queue-assignment.ts
@@ -268,7 +271,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
                 WHERE mesh_id = ? AND status = 'pending' AND target_node_id IS NULL AND target_session_id IS NULL
                 ORDER BY created_at ASC
             `, meshId),
-        ];
+        ].filter(candidate => lightClaimAllows(candidate, sessionId, opts?.lightWorkspaceId));
 
         // M1: a task with unmet dependencies is not claimable.
         // Resolve dependency statuses in one query over the union of referenced ids.
@@ -295,6 +298,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // single predicate shared with the cap counters / auto-launch / guardrail).
         const nodeConflictAllows = (candidate: MeshWorkQueueEntry): boolean => {
             if (isTaskReadonly(candidate)) return true;
+            // LIGHT-TASK: runs in its own scratch checkout — the node's one-writer rule does not apply.
+            if (candidate.light) return true;
             if (nodeWriteBusy) return false;
             // Review input is a read lease on the actual worktree, not a second writer.
             return !host.assignedRowsMeshWide(meshId).some(row => {
@@ -340,11 +345,11 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId }
             : undefined;
         const nodeNotDirty = (candidate: MeshWorkQueueEntry): boolean => {
-            if (!nodeDirtyGate) return true;
+            if (!nodeDirtyGate || candidate.light) return true;
             return dirtyWriteVerdict(nodeDirtyGate, candidate) !== 'refuse';
         };
         const nodeNotStaleBehind = (candidate: MeshWorkQueueEntry): boolean => {
-            if (!nodeGitGate || isTaskReadonly(candidate)) return true;
+            if (!nodeGitGate || isTaskReadonly(candidate) || candidate.light) return true;
             return !nodeGitGate.staleBehind;
         };
 

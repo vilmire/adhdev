@@ -86,6 +86,19 @@ export interface MeshWorkQueueEntry {
      * 'live_debug_readonly'` remains an OR-fallback so legacy rows behave unchanged.
      */
     readonly?: boolean;
+    /**
+     * LIGHT-TASK: runs in a per-task light workspace on the coordinator machine instead of
+     * a node checkout (design 2026-11-01-same-machine-light-task.md). Orthogonal axis stored
+     * in the payload (no column). Never claimable by a regular session — only by the light
+     * session the dispatcher pins (`targetSessionId` + `lightWorkspaceId`).
+     */
+    light?: true;
+    /** LIGHT-TASK: the local base node whose checkout is the workspace's git source (resolved at enqueue). */
+    lightBaseNodeId?: string;
+    /** LIGHT-TASK: registry id of the prepared workspace (set by the dispatcher). */
+    lightWorkspaceId?: string;
+    /** LIGHT-TASK: captured result (patch artifacts, apply-check, landing state). */
+    lightResult?: import('@adhdev/mesh-shared').LightTaskResult;
     /** If specified, only this node can claim the task (used by legacy mesh_send_task) */
     targetNodeId?: string;
     /** If specified, only this runtime session can claim the task */
@@ -371,6 +384,9 @@ export interface MeshEnqueueTaskOptions {
     taskMode?: MeshTaskMode | string;
     /** QUEUE-NODE-SERIALIZATION: explicit read-only axis (orthogonal to taskMode). */
     readonly?: boolean;
+    /** LIGHT-TASK: see MeshWorkQueueEntry.light. Refused with a `light_*` code unless admissible. */
+    light?: boolean;
+    lightBaseNodeId?: string;
     requiredTags?: string[];
     /**
      * H1 (path ownership): repo-relative paths/subtrees this `code_change` task will

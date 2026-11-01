@@ -298,11 +298,15 @@ function buildClaimOptions(p: {
     if (nodeGitGate.staleBehind && resolveAutoFastForwardPolicy(mesh).mode === 'continuous') {
         void maybeAutoFastForwardIdleNode(components, { meshId, nodeId, sessionId, providerType }).catch(() => { /* best-effort */ });
     }
+    // LIGHT-TASK: a session launched into a light workspace claims only its own pinned light row
+    // (light-claim-rule.ts) and is physically anchored to that workspace, not to the base node's checkout.
+    const lightWorkspaceId = readText((p.claimState?.settings as Record<string, unknown> | undefined)?.lightWorkspaceId) || undefined;
     return {
         capabilityTags: buildMeshNodeCapabilityTags(node, providerType),
         assignedTranscriptProfile,
         options: {
-            physicalContext: { workspace: readText(node?.workspace), machineId: getMachineId() ?? '' },
+            physicalContext: { workspace: (lightWorkspaceId && readText(p.claimState?.workspace)) || readText(node?.workspace), machineId: getMachineId() ?? '' },
+            ...(lightWorkspaceId ? { lightWorkspaceId } : {}),
             providerType,
             ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
             ...(assignedModel ? { assignedModel } : {}),
