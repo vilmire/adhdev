@@ -5,6 +5,7 @@
 //   setStagePorts({ reviewerWorkspace })    — default returns null (existing read-lease path is used).
 // Everything else is implemented here against the real queue, git, artifact store and notice runtime.
 
+import type { ArtifactKind } from '../artifacts/types.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -185,9 +186,11 @@ export const noReviewerWorkspace: ReviewerWorkspaceProvider = { async prepare() 
  * Artifact registration is injected: src/mesh must not value-import src/artifacts (import-boundary gate).
  * boot/stages/mesh-runtime.ts wires `registerSessionArtifact` bound to the mesh runtime DB.
  */
-export type StageArtifactRegistrar = (input: { sessionId: string; workspaceRoot: string; path: string; taskId: string; meshId: string; missionId?: string; producerRole: string; title: string }) => string | null;
+export type StageArtifactRegistrar = (input: { sessionId: string; workspaceRoot: string; path: string; taskId: string; meshId: string; missionId?: string; producerRole: string; title: string; kind?: ArtifactKind }) => string | null;
 let artifactRegistrar: StageArtifactRegistrar | null = null;
 export function setStageArtifactRegistrar(fn: StageArtifactRegistrar | null): void { artifactRegistrar = fn; }
+/** The boot-installed registrar (also used by light-task result capture); null until boot wires it. */
+export function getStageArtifactRegistrar(): StageArtifactRegistrar | null { return artifactRegistrar; }
 
 const defaultSelfCheck = createRefineProfileSelfCheck();
 let overrides: { selfCheck?: SelfCheckRunner; reviewerWorkspace?: ReviewerWorkspaceProvider } = {};

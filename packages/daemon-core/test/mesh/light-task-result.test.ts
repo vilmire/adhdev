@@ -73,6 +73,8 @@ function cleanup(meshId: string) {
 
 import { execFileSync } from 'child_process'
 import { captureLightTaskResult } from '../../src/mesh/light-task-result.js'
+import { setStageArtifactRegistrar } from '../../src/mesh/stage-ports-default.js'
+import { registerSessionArtifact } from '../../src/artifacts/artifact-store.js'
 import { setLightWorkspaceFingerprint } from '../../src/mesh/mesh-light-workspace-store.js'
 import { prepareLightWorkspace } from '../../src/mesh/light-workspace.js'
 import { takeLightCheckoutFingerprint } from '../../src/mesh/light-checkout-fingerprint.js'
@@ -85,6 +87,8 @@ const write = (p: string, s: string) => { fs.mkdirSync(path.dirname(p), { recurs
 describe('LIGHT-TASK result capture (real git)', () => {
   let tmp: string, checkout: string, cfg: any, meshId: string
   beforeEach(() => {
+    // Boot wires this in production (boot/stages/mesh-runtime.ts).
+    setStageArtifactRegistrar((input) => registerSessionArtifact(MeshRuntimeStore.getInstance().db as never, input).record.artifactId)
     tmp = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), 'lw-result-')))
     const subSrc = path.join(tmp, 'sub-src'); fs.mkdirSync(subSrc); git(subSrc, 'init', '-q', '-b', 'main')
     write(path.join(subSrc, 'a.txt'), 'sub\n'); git(subSrc, 'add', '.'); git(subSrc, 'commit', '-q', '-m', 'sub')

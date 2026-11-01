@@ -59,7 +59,7 @@ describe('registration', () => {
     it('every store command is in the turn IPC map, reachable over local IPC only', () => {
         const names = Object.keys(meshStoreIpcHandlers);
         expect(names.sort()).toEqual([
-            'active_work_query', 'direct_dispatch_record', 'ledger_query', 'mission_list_query',
+            'active_work_query', 'direct_dispatch_record', 'ledger_query', 'light_discard', 'light_land', 'mission_list_query',
             'queue_cancel', 'queue_enqueue', 'queue_enqueue_batch', 'queue_query', 'queue_requeue', 'queue_revise',
             'record_local', 'recovery_context_query', 'tool_call_record',
         ]);

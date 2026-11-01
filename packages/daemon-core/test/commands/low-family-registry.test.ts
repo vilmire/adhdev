@@ -111,7 +111,7 @@ const TURN_LEDGER_IPC_CMDS = [
   // C-W9b / C-W9a store commands (mesh-store-ipc.ts, merged into the same map).
   'tool_call_record', 'ledger_query', 'mission_list_query', 'record_local', 'queue_query',
   'queue_enqueue', 'queue_enqueue_batch', 'queue_cancel', 'queue_requeue', 'queue_revise', 'direct_dispatch_record',
-  'active_work_query', 'recovery_context_query',
+  'active_work_query', 'recovery_context_query', 'light_land', 'light_discard',
   // C-W9c store commands (mesh-stats-ipc.ts, merged into the same map): the last
   // mcp-server in-process daemon-core paths — task/mission stats, one prune
   // audit, orphaned-pin notify.
@@ -152,7 +152,7 @@ const NEW_WORK_HOLD_CMDS = [
 ]
 
 describe('low-family registry', () => {
-  it('registers all 127 LOW family commands once, no overlap', () => {
+  it('registers all 129 LOW family commands once, no overlap', () => {
     const all = [
       ...SESSION_HOST_CMDS, ...SPEC_CMDS, ...REFINE_CMDS,
       ...DIAGNOSTICS_CMDS, ...STATUS_META_CMDS, ...COORDINATOR_PROMPT_CMDS,
@@ -177,8 +177,9 @@ describe('low-family registry', () => {
     // commands (8 owner + 1 mesh peer, 2026-10-28) = 124; (the 2 one-off operator-recovery
     // commands added in rc33 were removed again, mission e6d4293c, so they net out.)
     // rc.37: + mesh_direct_cancel = 125; + 2 machine quota reserve commands
-    // (quota_reserve_get/set, 2026-11-01) = 127.
-    expect(all).toHaveLength(127)
+    // (quota_reserve_get/set, 2026-11-01) = 127; + light_land/light_discard
+    // (same-machine light tasks, 2026-11-01) = 129.
+    expect(all).toHaveLength(129)
     // no duplicate command names across families
     expect(new Set(all).size).toBe(all.length)
     expect(lowFamilyNames()).toHaveLength(all.length)

@@ -857,7 +857,8 @@ test('mesh_task_history returns pending async refine failure events instead of d
 
     const first = JSON.parse(await meshTaskHistory(ctx as any, { tail: 5 }));
     assert.equal(first.entries.length, 1);
-    assert.equal(first.entries[0].kind, 'task_failed');
+    // Refinery job failures are presented apart from task failures (stored kind unchanged).
+    assert.equal(first.entries[0].kind, 'refine_job_failed');
     assert.equal(first.entries[0].payload.result.code, 'validation_failed');
     assert.equal(first.pendingCoordinatorEvents.length, 1);
     assert.equal(first.pendingCoordinatorEvents[0].event, 'refine:failed');

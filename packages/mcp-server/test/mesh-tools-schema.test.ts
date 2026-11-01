@@ -42,7 +42,7 @@ test('mesh_enqueue_task schema exposes optional capability tag requirements', ()
   assert.equal(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.type, 'array');
   assert.equal('requiredTags' in MESH_ENQUEUE_TASK_TOOL.inputSchema.properties, false);
   assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /os=darwin/);
-  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /Omit provider= unless intentionally restricting routing/);
+  assert.match(MESH_ENQUEUE_TASK_TOOL.inputSchema.properties.required_tags.description, /omit provider= unless (pinning|intentionally restricting routing)/i);
 });
 
 test('mesh_launch_session schema maps providers, keeps type optional, and has no claude default', () => {

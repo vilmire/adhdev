@@ -12,7 +12,7 @@ import {
     type LightApplyCheck, type LightApplyCheckSide, type LightTaskResult, type LightTestRun, type LightWarning,
     type MeshSourceCandidate,
 } from '@adhdev/mesh-shared';
-import { ArtifactStore } from '../artifacts/artifact-store.js';
+import { getStageArtifactRegistrar } from './stage-ports-default.js';
 import { getMachineId } from '../config/config.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 import { getMesh } from '../config/mesh-config.js';
@@ -122,10 +122,12 @@ function registerPatch(task: MeshWorkQueueEntry, ws: LightWorkspaceRow, name: st
     const sessionId = task.assignedSessionId || task.targetSessionId;
     if (!sessionId) return undefined;
     try {
-        return new ArtifactStore(MeshRuntimeStore.getInstance().db).register({
-            sessionId, workspaceRoot: dir, path: name, meshId: task.meshId, taskId: task.id, missionId: task.missionId ?? null,
+        const register = getStageArtifactRegistrar();
+        if (!register) throw new Error('artifact registrar not installed');
+        return register({
+            sessionId, workspaceRoot: dir, path: name, meshId: task.meshId, taskId: task.id, ...(task.missionId ? { missionId: task.missionId } : {}),
             producerRole: 'pipeline', kind: 'diff', title,
-        }).record.artifactId;
+        }) ?? undefined;
     } catch (e: any) {
         LOG.warn('LightTask', `patch artifact ${name} for ${task.id} not registered: ${e?.message || e}`);
         return undefined;
