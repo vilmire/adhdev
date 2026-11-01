@@ -172,6 +172,7 @@ export const MESH_VIEW_QUEUE_TOOL = {
                 description: 'Optional row view. active returns pending/assigned rows, historical returns completed/blocked/failed/cancelled rows, all returns every persisted queue row. Defaults to all for compatibility.',
             },
             compact: { type: 'boolean', description: 'Slim payload for LLM callers. Default true. Drops large historical (completed/blocked/failed/cancelled) queue row arrays, the full staleDirectWork orphan array (kept as staleDirectWorkSummary counts), and per-row maintenance cleanupCandidates in favor of counts; pending/assigned active rows are retained. Set false (or verbose=true) for the full dashboard-grade payload.' },
+            include_stage_children: { type: 'boolean', description: 'List review-in-task review children as separate rows (default: folded under the parent, which carries a `stage` summary).' },
             verbose: { type: 'boolean', description: 'Force the full payload; overrides compact.' },
         },
     },

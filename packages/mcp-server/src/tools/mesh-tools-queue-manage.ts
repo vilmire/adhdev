@@ -1,4 +1,5 @@
 import { queueRevise } from '../ipc/turn-commands.js';
+import { foldStageChildren } from './stage-queue-fold.js';
 import type { QueueReviseRequest } from '@adhdev/mesh-shared';
 // Mesh tool implementations — queue management: viewing the queue, cancelling a
 // task (with the in-flight stop of the session that claimed it) and requeueing.
@@ -17,7 +18,7 @@ import { unwrapCommandPayload } from './mesh-session-helpers.js';
 
 export async function meshViewQueue(
     ctx: MeshContext,
-    args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean; refresh?: boolean },
+    args: { status?: string[]; view?: QueueViewMode; compact?: boolean; verbose?: boolean; refresh?: boolean; include_stage_children?: boolean },
 ): Promise<string> {
     const rateResult = await recordMeshCoordinatorToolCall(ctx, 'mesh_view_queue');
     // Default to the slim payload for LLM callers; verbose forces the full payload.
@@ -54,7 +55,8 @@ export async function meshViewQueue(
         // sessions merge identically), so it's reused below for the active-work
         // evidence instead of probing twice.
         const liveNodes = await collectMeshNodesWithRuntime(ctx, probeOpts);
-        const fullQueue = prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes));
+        // Review-in-task: review children fold under their parent (listed only on request).
+        const fullQueue = foldStageChildren(prioritizeActiveQueueRows(annotateQueueStaleness(withDependencies, ctx.mesh, liveNodes)), args.include_stage_children === true);
         const queue = filterQueueForView(fullQueue, view, statusFilter);
         const viewStatuses = queueViewStatusSet(view, statusFilter);
         const summary = activeView

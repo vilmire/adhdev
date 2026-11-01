@@ -25,3 +25,18 @@ test('enqueue schema advertises review and stays within the 4 KB budget; stage d
   assert.ok(JSON.stringify(MESH_ENQUEUE_TASK_TOOL).length <= 4000);
   assert.deepEqual((MESH_TASK_STAGE_DECIDE_TOOL.inputSchema.properties.action as { enum: string[] }).enum, ['accept', 'revise_once', 'rereview', 'abandon']);
 });
+
+import { foldStageChildren } from '../src/tools/stage-queue-fold.js';
+test('mesh_view_queue folds review children under their parent', () => {
+  const rows = [
+    { id: 'p', status: 'assigned', stagePlan: { maxRevisions: 2 }, stageState: { phase: 'reviewing', round: 2, lastVerdict: 'changes_requested', openFindingIds: ['f1'], reviewTaskIds: ['c1', 'c2'] } },
+    { id: 'c1', status: 'completed', origin: 'stage', parentTaskId: 'p', stageRole: 'review', stageRound: 1 },
+    { id: 'c2', status: 'assigned', origin: 'stage', parentTaskId: 'p', stageRole: 'review', stageRound: 2 },
+    { id: 'plain', status: 'pending' },
+  ];
+  const folded = foldStageChildren(rows);
+  assert.deepEqual(folded.map(r => r.id), ['p', 'plain']);
+  assert.deepEqual(folded[0].stage, { phase: 'reviewing', round: 2, maxRevisions: 2, lastVerdict: 'changes_requested', openFindings: 1, reviewTaskIds: ['c1', 'c2'] });
+  assert.equal((folded[1] as { stage?: unknown }).stage, undefined);
+  assert.deepEqual(foldStageChildren(rows, true).map(r => r.id), ['p', 'c1', 'c2', 'plain']);
+});
