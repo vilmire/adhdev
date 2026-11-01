@@ -42668,7 +42668,7 @@ ${error.message || ""}`;
         init_dist();
       }
     });
-    function loadBetterSqlite3() {
+    function loadBetterSqlite3(opts = {}) {
       if (cached3) return cached3;
       const errors = [];
       if (typeof require === "function") {
@@ -42688,7 +42688,7 @@ ${error.message || ""}`;
       } catch (e) {
         errors.push(e);
       }
-      try {
+      if (opts.allowCwdFallback !== false) try {
         cached3 = (0, import_module.createRequire)(`${process.cwd()}/__adhdev_better_sqlite3_loader__.js`)(
           "better-sqlite3"
         );
@@ -42730,8 +42730,9 @@ ${error.message || ""}`;
       if (m === "mutex_incarnation_changed") return "incarnation_changed";
       if (m === "mutex_path_changed") return "path_changed";
       if (m === "mutex_journal_mode_changed") return "journal_mode_changed";
+      if (m === "mutex_sqlite_unavailable") return "sqlite_module_unavailable";
       if (err2.code) return err2.code === "ENOENT" ? "enoent" : err2.code;
-      return m || "unknown";
+      return "unknown";
     }
     function identity(s2) {
       if (!s2.isFile() || s2.nlink !== 1n || s2.ino <= 0n) throw new Error("unsafe_mutex_inode");
@@ -42745,6 +42746,15 @@ ${error.message || ""}`;
       let released = false;
       let added = false;
       try {
+        let Ctor;
+        try {
+          Ctor = loadBetterSqlite3({ allowCwdFallback: false });
+        } catch (loadError) {
+          const detail = loadError?.message ?? String(loadError);
+          void Promise.resolve().then(() => (init_logger(), logger_exports)).then((m) => m.LOG.debug("MeshConfig", `better-sqlite3 unavailable for the meshes.json lock: ${detail}`), () => {
+          });
+          throw new Error("mutex_sqlite_unavailable");
+        }
         const deadline = Date.now() + timeout;
         for (; ; ) {
           try {
@@ -42772,8 +42782,7 @@ ${error.message || ""}`;
           warnOnce("repin", `meshes.json write-lock file ${path128} was replaced or recreated; re-pinning to the new file`);
         }
         incarnations.set(path128, pinned);
-        const Ctor = loadBetterSqlite3();
-        db3 = new Ctor(path128, { timeout: Math.max(0, deadline - Date.now()), fileMustExist: true });
+        db3 = new Ctor(path128, { timeout: Math.max(50, deadline - Date.now()), fileMustExist: true });
         if (db3.pragma("journal_mode", { simple: true }) !== "delete") throw new Error("mutex_journal_mode_changed");
         db3.exec("BEGIN EXCLUSIVE");
         const assertHeld = () => {

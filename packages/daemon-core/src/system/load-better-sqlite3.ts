@@ -22,7 +22,16 @@ let cached: typeof BetterSqlite3 | undefined;
  *   - an esbuild CJS bundle with the throwing `require` shim (createRequire(import.meta.url)),
  *   - a pure ESM module where `require` is undefined (createRequire(import.meta.url)).
  */
-export function loadBetterSqlite3(): typeof BetterSqlite3 {
+export interface LoadBetterSqlite3Options {
+    /**
+     * false = never resolve the addon from `process.cwd()`. Security-sensitive callers
+     * (the meshes.json write lock) must only load the addon shipped with this install,
+     * never a module planted in whatever directory the process was started from.
+     */
+    allowCwdFallback?: boolean;
+}
+
+export function loadBetterSqlite3(opts: LoadBetterSqlite3Options = {}): typeof BetterSqlite3 {
     if (cached) return cached;
 
     const errors: unknown[] = [];
@@ -52,7 +61,8 @@ export function loadBetterSqlite3(): typeof BetterSqlite3 {
     }
 
     // 3) Last resort: createRequire anchored at the current working directory.
-    try {
+    //    Callers that guard a security control opt out (see LoadBetterSqlite3Options).
+    if (opts.allowCwdFallback !== false) try {
         cached = createRequire(`${process.cwd()}/__adhdev_better_sqlite3_loader__.js`)(
             'better-sqlite3',
         ) as typeof BetterSqlite3;

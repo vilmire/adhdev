@@ -38,8 +38,10 @@ function reasonOf(e: unknown): string {
     if (m === 'mutex_incarnation_changed') return 'incarnation_changed';
     if (m === 'mutex_path_changed') return 'path_changed';
     if (m === 'mutex_journal_mode_changed') return 'journal_mode_changed';
+    if (m === 'mutex_sqlite_unavailable') return 'sqlite_module_unavailable';
     if (err.code) return err.code === 'ENOENT' ? 'enoent' : err.code;
-    return m || 'unknown';
+    // Never echo free-form error text into the lock reason / warn-once key.
+    return 'unknown';
 }
 
 // This file is a persistent, local-filesystem SQLite mutex, never a payload DB.
@@ -69,6 +71,16 @@ export function acquireMeshConfigMutex(configPath: string, timeout: number): Mes
     let released = false;
     let added = false;
     try {
+        // Load the addon BEFORE the deadline and the inode pin: module-load latency must
+        // neither eat the lock-wait budget nor widen the pin-to-open window. Only the
+        // addon shipped with this install is accepted (no cwd fallback).
+        let Ctor: typeof Database;
+        try { Ctor = loadBetterSqlite3({ allowCwdFallback: false }) as typeof Database; }
+        catch (loadError) {
+            const detail = (loadError as Error)?.message ?? String(loadError);
+            void import('../logging/logger.js').then(m => m.LOG.debug('MeshConfig', `better-sqlite3 unavailable for the meshes.json lock: ${detail}`), () => {});
+            throw new Error('mutex_sqlite_unavailable');
+        }
         // Fail closed on retained old-protocol holders, regardless of age or
         // marker. Mixed old/new writers must be drained before rollout; old
         // binaries cannot acquire this protocol and cannot be made safe here.
@@ -101,10 +113,7 @@ export function acquireMeshConfigMutex(configPath: string, timeout: number): Mes
             warnOnce('repin', `meshes.json write-lock file ${path} was replaced or recreated; re-pinning to the new file`);
         }
         incarnations.set(path, pinned);
-        // Loaded on first lock, not at import: the mcp-server bundle reaches this module
-        // through daemon-core's entry and ships without the native addon.
-        const Ctor = loadBetterSqlite3() as typeof Database;
-        db = new Ctor(path, { timeout: Math.max(0, deadline - Date.now()), fileMustExist: true });
+        db = new Ctor(path, { timeout: Math.max(50, deadline - Date.now()), fileMustExist: true });
         // No schema or payload writes: an empty SQLite file supports locking.
         // DELETE journal mode is required; a substituted WAL DB is refused.
         if (db.pragma('journal_mode', { simple: true }) !== 'delete') throw new Error('mutex_journal_mode_changed');
