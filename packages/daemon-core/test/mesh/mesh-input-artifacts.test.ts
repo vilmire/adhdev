@@ -22,6 +22,7 @@ import {
     resolveInheritedArtifactIds,
 } from '../../src/mesh/mesh-input-artifacts.js';
 import { resolveDispatchMessage } from '../../src/mesh/worker-handoff-dispatch.js';
+import { ensureCarryOverMission } from '../../src/mesh/mesh-mission-structured.js';
 import { validateWorkerCompletionReport } from '../../src/mesh/worker-report-validation.js';
 
 const MESH = 'mesh-A';
@@ -99,11 +100,21 @@ describe('mission artifact auto-inherit', () => {
         art({ taskId: otherMeshTask.id, mesh: 'mesh-B' });
         art({ taskId: 'task-unknown' });
         art({ taskId: null, role: 'worker' });
-        const coord = art({ taskId: null, role: 'coordinator' });
+        // Coordinator artifacts (handoffs, owner notes) travel only when named explicitly.
+        art({ taskId: null, role: 'coordinator' });
 
         const next = enqueueTask(MESH, 'follow-up', { ...opts, missionId: MISSION });
-        expect(next.inputArtifactIds).toEqual([coord, a2, a1]);
-        expect(resolveInheritedArtifactIds(MESH, MISSION)).toEqual([coord, a2, a1]);
+        expect(next.inputArtifactIds).toEqual([a2, a1]);
+        expect(resolveInheritedArtifactIds(MESH, MISSION)).toEqual([a2, a1]);
+    });
+
+    it('inherits nothing inside the carry-over mission (a bucket of unrelated leftovers)', () => {
+        const carryId = ensureCarryOverMission(MESH);
+        const done = finishedTask(carryId, 'completed');
+        art({ taskId: done.id, mission: carryId });
+        expect(resolveInheritedArtifactIds(MESH, carryId)).toEqual([]);
+        const next = enqueueTask(MESH, 'carry follow-up', { ...opts, missionId: carryId });
+        expect(next.inputArtifactIds ?? []).toEqual([]);
     });
 
     it('keeps explicit ids first, dedupes against them, and never inherits for a missionless task', () => {

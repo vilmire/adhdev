@@ -67721,6 +67721,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       const limit = Math.max(0, Math.min(opts.limit ?? MAX_INHERITED_INPUT_ARTIFACTS, MAX_INHERITED_INPUT_ARTIFACTS));
       if (limit === 0) return [];
       try {
+        const missionRecord = getMeshMission(mesh, mission);
+        if (missionRecord && isCarryOverMissionRecord(missionRecord)) return [];
         const runtime2 = MeshRuntimeStore.getInstance();
         const missionTaskStatus = /* @__PURE__ */ new Map();
         for (const entry of runtime2.getQueueEntries(mesh)) {
@@ -67734,12 +67736,10 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         const eligible = records.filter((rec7) => {
           if (!isSameBoundMesh(rec7.meshId, mesh) || trimmed(rec7.missionId) !== mission) return false;
           if (exclude.has(rec7.artifactId)) return false;
+          if (trimmed(rec7.producerRole) !== "worker") return false;
           const producerTask = trimmed(rec7.taskId);
-          if (producerTask) {
-            if (producerTask === excludeTask) return false;
-            return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? "");
-          }
-          return trimmed(rec7.producerRole) !== "worker";
+          if (!producerTask || producerTask === excludeTask) return false;
+          return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? "");
         });
         return eligible.sort((a, b) => b.createdAt - a.createdAt || b.artifactId.localeCompare(a.artifactId)).slice(0, limit);
       } catch {
@@ -67849,6 +67849,8 @@ ${env2.envelopes.join("\n\n")}${tail}`;
         "use strict";
         init_mesh_runtime_store();
         init_mesh_untrusted_evidence();
+        init_dist();
+        init_mesh_missions();
         MAX_INHERITED_INPUT_ARTIFACTS = 12;
         INHERIT_FROM_STATUSES = /* @__PURE__ */ new Set(["completed", "failed", "blocked"]);
         INPUT_ARTIFACTS_HEADING = "## Input artifacts";
@@ -92734,7 +92736,7 @@ Index only \u2014 each tool's own description carries its parameters and contrac
 - Drivers: \`driver_list\`, \`driver_describe\`. invoke is delegated to a worker task.
 - Artifacts: \`artifact_list\`, \`artifact_read\`, \`artifact_register\`. \uC0AC\uC6A9\uC790\uC5D0\uAC8C \uBCF4\uC5EC\uC904 \uACB0\uACFC\uBB3C(\uC2A4\uD06C\uB9B0\uC0F7\xB7\uBCF4\uACE0\uC11C\xB7\uC0B0\uCD9C\uBB3C)\uC740 artifact_register\uB85C \uB4F1\uB85D.
 - Owner-attached images arrive as read-only artifacts named in the message (\`Owner-attached images \u2026\`). Pass those ids unchanged in a worker task's \`input_artifact_ids\`; do not paste or re-read their bytes. Read one yourself only when your own routing needs it, and then only a small \`artifact_read\` page.
-- Evidence handoff: put evidence you already hold (a diagnosis, repro, log excerpt, review findings) in an artifact (\`artifact_register\`) and pass its id in \`input_artifact_ids\` instead of restating it in the task text. Tasks with a \`mission_id\` automatically inherit the artifacts earlier tasks of the SAME mission produced (newest first, at most 12; set \`inherit_artifacts: false\` to opt out), so for same-mission follow-ups (fix after investigate, re-review after fix) just say what is new. \`artifact_list\` with \`mission_id\` shows what a mission has produced.
+- Evidence handoff: put evidence you already hold (a diagnosis, repro, log excerpt, review findings) in an artifact (\`artifact_register\`) and pass its id in \`input_artifact_ids\` instead of restating it in the task text. Tasks with a \`mission_id\` automatically inherit the artifacts WORKERS registered for earlier finished tasks of the SAME mission (not the carry-over mission; your own artifacts only when you name them; newest first, at most 12; set \`inherit_artifacts: false\` to opt out), so for same-mission follow-ups (fix after investigate, re-review after fix) just say what is new. \`artifact_list\` with \`mission_id\` shows what a mission has produced.
 - Status: \`mesh_status\`, \`mesh_list_nodes\`, \`mesh_route_preview\`, \`mesh_git_status\`, \`mesh_read_node_logs\`
 - Queue: \`mesh_enqueue_task\` (**DEFAULT enqueue surface.**), \`mesh_enqueue_batch\`, \`mesh_view_queue\`, \`mesh_queue_cancel\`, \`mesh_direct_cancel\` (cancel a \`mesh_send_task\` attempt via the turn ledger; the stop settles with proof, never a forced release), \`mesh_queue_requeue\`, \`mesh_queue_revise\` (revise a pending task with its expected revision; source anchors and dependency revisions must remain current)
 - Sessions: \`mesh_send_task\`, \`mesh_launch_session\`, \`mesh_notify_worker\` (memo to a busy worker; published only while worker MCP is on, \`ADHDEV_WORKER_MCP\`, default on), \`mesh_read_chat\`, \`mesh_read_debug\`, \`mesh_read_terminal\`, \`mesh_send_keys\`
@@ -232571,6 +232573,18 @@ var IPC_PROBE_RETRY_MAX_ENV = "ADHDEV_IPC_PROBE_RETRY_MAX";
 var IPC_PROBE_RETRY_BACKOFF_MS_ENV = "ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS";
 var DEFAULT_IPC_PROBE_RETRY_MAX = 1;
 var DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS = 2e3;
+var IPC_CONNECT_RETRY_BUDGET_MS_ENV = "ADHDEV_IPC_CONNECT_RETRY_BUDGET_MS";
+var IPC_CONNECT_RETRY_BASE_MS_ENV = "ADHDEV_IPC_CONNECT_RETRY_BASE_MS";
+var DEFAULT_IPC_CONNECT_RETRY_BUDGET_MS = 45e3;
+var DEFAULT_IPC_CONNECT_RETRY_BASE_MS = 500;
+var IPC_CONNECT_RETRY_MAX_BACKOFF_MS = 8e3;
+function resolveConnectRetryBudgetMs() {
+  return parsePositiveInt(process.env[IPC_CONNECT_RETRY_BUDGET_MS_ENV], DEFAULT_IPC_CONNECT_RETRY_BUDGET_MS);
+}
+function resolveConnectRetryBaseMs() {
+  const v = parsePositiveInt(process.env[IPC_CONNECT_RETRY_BASE_MS_ENV], DEFAULT_IPC_CONNECT_RETRY_BASE_MS);
+  return v > 0 ? v : DEFAULT_IPC_CONNECT_RETRY_BASE_MS;
+}
 function parsePositiveInt(raw, fallback) {
   if (raw === void 0 || raw.trim() === "") return fallback;
   const parsed = Number.parseInt(raw, 10);
@@ -232659,7 +232673,9 @@ function getOrCreateConnection(WebSocketCtor, url) {
     conn.ready = true;
     const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
     for (const { type: type2, args, requestId, mcpAuth } of queued) {
-      if (!conn.pending.has(requestId)) continue;
+      const queuedReq = conn.pending.get(requestId);
+      if (!queuedReq) continue;
+      queuedReq.frameSent = true;
       conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} } }));
     }
   };
@@ -232676,7 +232692,13 @@ function getOrCreateConnection(WebSocketCtor, url) {
     conn.pending.clear();
     for (const req of pendingEntries) {
       clearTimeout(req.timer);
-      req.reject(error);
+      if (!req.frameSent) {
+        const tagged = new Error(error.message);
+        tagged.ipcNotSent = true;
+        req.reject(tagged);
+      } else {
+        req.reject(error);
+      }
     }
   };
   conn.ws.addEventListener("open", () => {
@@ -232781,13 +232803,32 @@ var IpcTransport = class {
   }
   async sendIpcCommand(type2, args) {
     const maxRetries = isRetryableProbeCommand(type2, args) ? resolveProbeRetryMax() : 0;
-    for (let attempt = 0; ; attempt += 1) {
+    const connectBudgetMs = resolveConnectRetryBudgetMs();
+    const connectStartedAt = Date.now();
+    let connectAttempt = 0;
+    for (let attempt = 0; ; ) {
       try {
         return await this.sendIpcCommandOnce(type2, args);
       } catch (e) {
+        if (e?.ipcNotSent) {
+          const remainingMs = connectBudgetMs - (Date.now() - connectStartedAt);
+          if (remainingMs <= 0) {
+            throw new Error(`${e.message} (daemon IPC unreachable; gave up after the ${connectBudgetMs}ms reconnect budget, ${connectAttempt} retries)`);
+          }
+          const waitMs = Math.min(
+            resolveConnectRetryBaseMs() * 2 ** connectAttempt,
+            IPC_CONNECT_RETRY_MAX_BACKOFF_MS,
+            remainingMs
+          );
+          connectAttempt += 1;
+          console.error(`[ipc] daemon IPC unreachable for '${type2}'; command not sent, retrying (${connectAttempt}) in ${waitMs}ms (reconnect budget ${connectBudgetMs}ms)`);
+          await new Promise((resolve2) => setTimeout(resolve2, waitMs));
+          continue;
+        }
         if (!e?.ipcTimeout || attempt >= maxRetries) throw e;
+        attempt += 1;
         const backoffMs = resolveProbeRetryBackoffMs();
-        console.error(`[ipc] probe command '${type2}' timed out; retrying (${attempt + 1}/${maxRetries}) in ${backoffMs}ms \u2014 read-only command, safe to re-send`);
+        console.error(`[ipc] probe command '${type2}' timed out; retrying (${attempt}/${maxRetries}) in ${backoffMs}ms \u2014 read-only command, safe to re-send`);
         await new Promise((resolve2) => setTimeout(resolve2, backoffMs));
       }
     }
@@ -232846,10 +232887,12 @@ var IpcTransport = class {
         trackTimedOutRequest(requestId, type2);
         settleReject(error);
       }, timeoutMs);
-      conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type2, sentAt });
+      const pendingReq = { resolve: settleResolve, reject: settleReject, timer, command: type2, sentAt, frameSent: false };
+      conn.pending.set(requestId, pendingReq);
       conn.lastUsedAt = Date.now();
       const mcpAuth = this.mcpAuth();
       if (conn.ready) {
+        pendingReq.frameSent = true;
         conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} } }));
       } else {
         conn.commandQueue.push({ type: type2, args, requestId, ...mcpAuth ? { mcpAuth } : {} });

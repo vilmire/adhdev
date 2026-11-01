@@ -644,7 +644,12 @@ export function buildQuotaDisplayModel(quota: MeshNodeFactsProviderQuota, now = 
     const worstBucketChip = bucketChips.length > 0
         ? bucketChips.reduce((worst, chip) => ((chip.usedPercent ?? -1) > (worst.usedPercent ?? -1) ? chip : worst))
         : null
-    const compactChip = worstBucketChip ?? session ?? weekly ?? usageChip
+    // The single compact chip is the BINDING axis: the fuller of 5h / 7d (a 5h 0%
+    // next to a 7d 95% must not read as plenty of headroom). Ties keep the 5h axis.
+    const worstAxisChip = session && weekly
+        ? ((weekly.usedPercent ?? -1) > (session.usedPercent ?? -1) ? weekly : session)
+        : session ?? weekly
+    const compactChip = worstBucketChip ?? worstAxisChip ?? usageChip
 
     if (chips.length > 0) {
         return { kind: 'chips', cue, chips, usageLabel: null, message: null, compactChip }

@@ -181,6 +181,29 @@ const IPC_PROBE_RETRY_BACKOFF_MS_ENV = 'ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS';
 const DEFAULT_IPC_PROBE_RETRY_MAX = 1;
 const DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS = 2_000;
 
+// IPC-CONNECT-RETRY: a daemon upgrade/restart takes ~10-20 s, during which the
+// IPC socket refuses connections. A failure where the command frame was never
+// written (tagged `ipcNotSent`) is safe to re-send for ANY command, so retry it
+// with exponential backoff (0.5, 1, 2, 4, 8, ... s) until a total wait budget
+// (default 45 s) is spent. The budget counts only reconnect waiting; once a
+// connection is up the command gets its normal per-command timeout, so the
+// budget never shortens (or stacks onto) that deadline. A frame that WAS sent
+// (socket closed with the request pending) is never retried here.
+const IPC_CONNECT_RETRY_BUDGET_MS_ENV = 'ADHDEV_IPC_CONNECT_RETRY_BUDGET_MS';
+const IPC_CONNECT_RETRY_BASE_MS_ENV = 'ADHDEV_IPC_CONNECT_RETRY_BASE_MS';
+const DEFAULT_IPC_CONNECT_RETRY_BUDGET_MS = 45_000;
+const DEFAULT_IPC_CONNECT_RETRY_BASE_MS = 500;
+const IPC_CONNECT_RETRY_MAX_BACKOFF_MS = 8_000;
+
+export function resolveConnectRetryBudgetMs(): number {
+  return parsePositiveInt(process.env[IPC_CONNECT_RETRY_BUDGET_MS_ENV], DEFAULT_IPC_CONNECT_RETRY_BUDGET_MS);
+}
+
+export function resolveConnectRetryBaseMs(): number {
+  const v = parsePositiveInt(process.env[IPC_CONNECT_RETRY_BASE_MS_ENV], DEFAULT_IPC_CONNECT_RETRY_BASE_MS);
+  return v > 0 ? v : DEFAULT_IPC_CONNECT_RETRY_BASE_MS;
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number.parseInt(raw, 10);
@@ -226,6 +249,8 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
   command: string;
   sentAt: number;
+  /** True once the ext:command frame was written to an open socket. */
+  frameSent: boolean;
 }
 
 // ORPHAN-RESPONSE TRACKING (IPC timeout diagnostics): once a request's timeout
@@ -338,7 +363,9 @@ function getOrCreateConnection(
     conn.ready = true;
     const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
     for (const { type, args, requestId, mcpAuth } of queued) {
-      if (!conn.pending.has(requestId)) continue;
+      const queuedReq = conn.pending.get(requestId);
+      if (!queuedReq) continue;
+      queuedReq.frameSent = true;
       conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) } }));
     }
   };
@@ -356,7 +383,17 @@ function getOrCreateConnection(
     conn.pending.clear();
     for (const req of pendingEntries) {
       clearTimeout(req.timer);
-      req.reject(error);
+      // CONNECT-RETRY: tag a failure whose command frame never left this
+      // process (socket never opened / welcome never arrived) so the send loop
+      // can safely re-send it. A frame that was written has uncertain
+      // delivery and is left untagged.
+      if (!req.frameSent) {
+        const tagged = new Error(error.message);
+        (tagged as any).ipcNotSent = true;
+        req.reject(tagged);
+      } else {
+        req.reject(error);
+      }
     }
   };
 
@@ -505,13 +542,32 @@ export class IpcTransport {
     // get_status_metadata) is intentionally NOT retried here: its 120s budget
     // already dwarfs the observed freeze windows.
     const maxRetries = isRetryableProbeCommand(type, args) ? resolveProbeRetryMax() : 0;
-    for (let attempt = 0; ; attempt += 1) {
+    const connectBudgetMs = resolveConnectRetryBudgetMs();
+    const connectStartedAt = Date.now();
+    let connectAttempt = 0;
+    for (let attempt = 0; ; ) {
       try {
         return await this.sendIpcCommandOnce(type, args);
       } catch (e: any) {
+        if (e?.ipcNotSent) {
+          const remainingMs = connectBudgetMs - (Date.now() - connectStartedAt);
+          if (remainingMs <= 0) {
+            throw new Error(`${e.message} (daemon IPC unreachable; gave up after the ${connectBudgetMs}ms reconnect budget, ${connectAttempt} retries)`);
+          }
+          const waitMs = Math.min(
+            resolveConnectRetryBaseMs() * 2 ** connectAttempt,
+            IPC_CONNECT_RETRY_MAX_BACKOFF_MS,
+            remainingMs,
+          );
+          connectAttempt += 1;
+          console.error(`[ipc] daemon IPC unreachable for '${type}'; command not sent, retrying (${connectAttempt}) in ${waitMs}ms (reconnect budget ${connectBudgetMs}ms)`);
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
         if (!e?.ipcTimeout || attempt >= maxRetries) throw e;
+        attempt += 1;
         const backoffMs = resolveProbeRetryBackoffMs();
-        console.error(`[ipc] probe command '${type}' timed out; retrying (${attempt + 1}/${maxRetries}) in ${backoffMs}ms — read-only command, safe to re-send`);
+        console.error(`[ipc] probe command '${type}' timed out; retrying (${attempt}/${maxRetries}) in ${backoffMs}ms — read-only command, safe to re-send`);
         await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
     }
@@ -588,11 +644,13 @@ export class IpcTransport {
         settleReject(error);
       }, timeoutMs);
 
-      conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type, sentAt });
+      const pendingReq: PendingRequest = { resolve: settleResolve, reject: settleReject, timer, command: type, sentAt, frameSent: false };
+      conn.pending.set(requestId, pendingReq);
       conn.lastUsedAt = Date.now();
 
       const mcpAuth = this.mcpAuth();
       if (conn.ready) {
+        pendingReq.frameSent = true;
         conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) } }));
       } else {
         conn.commandQueue.push({ type, args, requestId, ...(mcpAuth ? { mcpAuth } : {}) });

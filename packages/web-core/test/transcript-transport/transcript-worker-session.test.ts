@@ -166,6 +166,38 @@ describe('runTranscriptWorkerSession', () => {
         }
     })
 
+    it('★ activation is idempotent for sessions that stay in the set: widening 1 -> 2 never closes or re-SUBs the existing one', async () => {
+        const r = await rig([SESSION_A, SESSION_B])
+        const port = fakePort()
+        const subscribes: string[] = []
+        let unsubscribes = 0
+        const realSubscribe = r.consumer.subscribe.bind(r.consumer)
+        const realUnsubscribe = r.consumer.unsubscribe.bind(r.consumer)
+        r.consumer.subscribe = ((peer: PeerHandle, opts: any) => {
+            subscribes.push(String(opts?.params?.topic))
+            return realSubscribe(peer, opts)
+        }) as typeof r.consumer.subscribe
+        r.consumer.unsubscribe = ((sub: any) => {
+            unsubscribes += 1
+            return realUnsubscribe(sub)
+        }) as typeof r.consumer.unsubscribe
+        try {
+            const session = runTranscriptWorkerSession({ node: r.consumer, port, currentPeer: () => r.peer })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A], PRODUCER_DAEMON) })
+            expect(subscribes).toEqual([sessionChatTopic(SESSION_A)])
+
+            // Interest widens, and the same absolute set is re-sent (a repeat push).
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A, SESSION_B], PRODUCER_DAEMON) })
+            port.onmessage?.({ data: transcriptSessionActivation([SESSION_A, SESSION_B], PRODUCER_DAEMON) })
+            expect(subscribes).toEqual([sessionChatTopic(SESSION_A), sessionChatTopic(SESSION_B)])
+            expect(unsubscribes).toBe(0)
+            expect(session.activeSessionIds().sort()).toEqual([SESSION_A, SESSION_B])
+            session.close()
+        } finally {
+            await r.close()
+        }
+    })
+
     it('★ resubscribes from the RETAINED activation after a transport reset', async () => {
         const r = await rig([SESSION_A])
         const port = fakePort()

@@ -25,7 +25,7 @@ const q = (overrides: Record<string, unknown>) => ({
 }) as never
 
 describe('buildQuotaDisplayModel — representative snapshots', () => {
-  it('ok with the 5h/7d axes → tinted window chips, session as the compact chip', () => {
+  it('ok with the 5h/7d axes → tinted window chips, the binding (fuller) axis as the compact chip', () => {
     const model = buildQuotaDisplayModel(q({
       session: { usedPercent: 26, windowMinutes: 300, resetsAt: null },
       weekly: { usedPercent: 92, windowMinutes: 10080, resetsAt: null },
@@ -37,8 +37,19 @@ describe('buildQuotaDisplayModel — representative snapshots', () => {
     expect(model.chips.map(c => c.tone)).toEqual(['good', 'danger'])
     expect(model.message).toBeNull()
     expect(model.usageLabel).toBeNull()
-    // Tight surfaces (provider-row header) show the 5h reading.
-    expect(model.compactChip).toMatchObject({ hint: 'session', label: '5h 26.0% used' })
+    // Tight surfaces (provider-row header) show the BINDING axis: 7d 92% is the
+    // real constraint, a lone "5h 26%" would read as plenty of headroom.
+    expect(model.compactChip).toMatchObject({ hint: 'weekly', label: '7d 92.0% used' })
+    const tie = buildQuotaDisplayModel(q({
+      session: { usedPercent: 40, windowMinutes: 300, resetsAt: null },
+      weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: null },
+    }))
+    expect(tie.compactChip).toMatchObject({ hint: 'session' })
+    const sessionWorse = buildQuotaDisplayModel(q({
+      session: { usedPercent: 80, windowMinutes: 300, resetsAt: null },
+      weekly: { usedPercent: 30, windowMinutes: 10080, resetsAt: null },
+    }))
+    expect(sessionWorse.compactChip).toMatchObject({ hint: 'session' })
   })
 
   it('cursor monthly-only → the 30d billing axis chips, but NO compact chip', () => {

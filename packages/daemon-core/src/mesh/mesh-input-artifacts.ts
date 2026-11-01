@@ -7,9 +7,8 @@
  * investigation the previous task had already written down.
  *
  * Three pieces, one module:
- *   1. {@link resolveInheritedArtifactIds} — the artifacts produced by EARLIER
- *      terminal tasks of the SAME mission (plus mission-scoped coordinator
- *      artifacts), newest first, bounded by {@link MAX_INHERITED_INPUT_ARTIFACTS},
+ *   1. {@link resolveInheritedArtifactIds} — the artifacts WORKERS produced for
+ *      EARLIER terminal tasks of the SAME (non-carry-over) mission, newest first, bounded by {@link MAX_INHERITED_INPUT_ARTIFACTS},
  *      are added to a new task's `inputArtifactIds` (explicit ids always win and
  *      are never dropped). Opt out per task with `inherit_artifacts: false`.
  *   2. {@link buildInputArtifactManifestAppendix} — the compact manifest the worker
@@ -31,6 +30,8 @@
 import type { ArtifactRecord } from '../artifacts/index.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { renderUntrustedEvidenceEnvelopes, type MeshUntrustedEvidenceBlock } from './mesh-untrusted-evidence.js';
+import { isCarryOverMissionRecord } from '@adhdev/mesh-shared';
+import { getMeshMission } from './mesh-missions.js';
 
 /** Upper bound on artifact ids ADDED automatically to one task (explicit ids are never truncated). */
 export const MAX_INHERITED_INPUT_ARTIFACTS = 12;
@@ -106,6 +107,10 @@ export function listInheritableArtifacts(
     const limit = Math.max(0, Math.min(opts.limit ?? MAX_INHERITED_INPUT_ARTIFACTS, MAX_INHERITED_INPUT_ARTIFACTS));
     if (limit === 0) return [];
     try {
+        // A carry-over mission is a bucket of unrelated leftovers: its artifacts are no
+        // evidence for each other, so nothing is inherited there.
+        const missionRecord = getMeshMission(mesh, mission);
+        if (missionRecord && isCarryOverMissionRecord(missionRecord)) return [];
         const runtime = MeshRuntimeStore.getInstance();
         const missionTaskStatus = new Map<string, string>();
         for (const entry of runtime.getQueueEntries(mesh)) {
@@ -119,13 +124,12 @@ export function listInheritableArtifacts(
         const eligible = records.filter((rec) => {
             if (!isSameBoundMesh(rec.meshId, mesh) || trimmed(rec.missionId) !== mission) return false;
             if (exclude.has(rec.artifactId)) return false;
+            // Only findings a WORKER wrote for a finished task of this mission. Coordinator
+            // artifacts (handoffs, owner notes, snapshots) travel only when named explicitly.
+            if (trimmed(rec.producerRole as string) !== 'worker') return false;
             const producerTask = trimmed(rec.taskId);
-            if (producerTask) {
-                if (producerTask === excludeTask) return false;
-                return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? '');
-            }
-            // No producing task: only mission-scoped coordinator-side artifacts, never an unattributed worker file.
-            return trimmed(rec.producerRole as string) !== 'worker';
+            if (!producerTask || producerTask === excludeTask) return false;
+            return INHERIT_FROM_STATUSES.has(missionTaskStatus.get(producerTask) ?? '');
         });
         return eligible
             .sort((a, b) => b.createdAt - a.createdAt || b.artifactId.localeCompare(a.artifactId))
