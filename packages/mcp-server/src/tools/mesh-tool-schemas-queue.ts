@@ -247,3 +247,31 @@ export const MESH_QUEUE_REVISE_TOOL = {
         },
     },
 };
+
+export const MESH_LIGHT_LAND_TOOL = {
+    name: 'mesh_light_land',
+    description: 'Land finished light tasks (mesh_enqueue_task light=true) whose result is `ready`. Default mode refine: composes the results on the current base and runs the refinery with the repo\'s fast validation profile '
+        + '(publish approval and push guards still apply). apply_to_checkout (interactive MCP sessions only) stages the patches in your own checkout, uncommitted. Use dry_run first; conflicts are resolved in the task\'s own session via mesh_send_task.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_ids: { type: 'array', items: { type: 'string' }, description: 'Light task ids, landed in this order.' },
+            mode: { type: 'string', enum: ['refine', 'apply_to_checkout'], description: 'Default refine.' },
+            dry_run: { type: 'boolean', description: 'Show what would land and any conflict; change nothing.' },
+            accept_paths_outside_owned: { type: 'boolean', description: 'Required when a result touched paths outside its owned_paths.' },
+            partial: { type: 'boolean', description: 'Land the tasks before the first conflicting one.' },
+            approved_publish_shas: { type: 'array', items: { type: 'string' }, description: 'Submodule commit SHAs approved for publication (as mesh_refine_node).' },
+        },
+        required: ['task_ids'],
+    },
+};
+
+export const MESH_LIGHT_DISCARD_TOOL = {
+    name: 'mesh_light_discard',
+    description: 'Discard finished (unlanded) light task results: removes their workspaces and branches. The patches are not kept.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: { task_ids: { type: 'array', items: { type: 'string' } } },
+        required: ['task_ids'],
+    },
+};

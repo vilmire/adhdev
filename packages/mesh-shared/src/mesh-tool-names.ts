@@ -30,6 +30,8 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_direct_cancel',
     'mesh_queue_requeue',
     'mesh_queue_revise',
+    'mesh_light_land',
+    'mesh_light_discard',
     'mesh_send_task',
     'mesh_read_chat',
     'mesh_read_debug',

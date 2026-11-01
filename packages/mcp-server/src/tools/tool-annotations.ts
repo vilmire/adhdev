@@ -241,6 +241,9 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // Returns a task to pending, optionally REWRITING its instruction (the
   // previous instruction is overwritten).
   mesh_queue_revise: DESTRUCTIVE_LOCAL,
+  // Lands (merges) or discards finished light-task results.
+  mesh_light_land: DESTRUCTIVE_LOCAL,
+  mesh_light_discard: DESTRUCTIVE_LOCAL,
   mesh_queue_requeue: DESTRUCTIVE_LOCAL,
   // Restores held events back to pending. Explicitly documented as lossless.
 
