@@ -491,6 +491,8 @@ export interface RefineContext {
      * (and every test that builds a context by hand) gets unchanged.
      */
     progress?: RefineProgressContext;
+    /** LIGHT-TASK landing: the node is a light land workspace (fast profile, workspace-aware cleanup). */
+    lightTarget?: import('./refine-light-target.js').RefineLightTarget;
     validationSummary: Awaited<ReturnType<typeof runMeshRefineValidationGate>>;
     patchEquivalence: Awaited<ReturnType<typeof runMeshRefinePatchEquivalenceGate>>;
     submoduleReachability: Awaited<ReturnType<typeof runMeshRefineSubmoduleReachabilityGate>>;

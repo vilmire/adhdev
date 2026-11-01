@@ -8,6 +8,8 @@
  * called by the daemon boot lifecycle). No stage order, event, log string, error
  * message, or result shape was changed — only physical location + `this.` → `self.`.
  */
+import { refineResolveLightRefsStage, type LightRefineLaunch } from './router-refine-light.js';
+import { runMeshRefineValidationProfile } from '../mesh/refine-profile-run.js';
 import { refinePublicationAuthorityRefusal, selectRefineNodePublicationArgs, snapshotRefinePublicationContract, type RefineCommandArgs } from '../mesh/mesh-refine-publication-contract.js';
 import { execFileSync } from 'node:child_process';
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
@@ -63,13 +65,13 @@ import {
      * context. Behavior — stage order, every early-exit, and every result shape —
      * is identical to the previous single inlined body.
      */
-export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRouter, meshId: string, nodeId: string, args: RefineCommandArgs): Promise<CommandRouterResult> {
+export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRouter, meshId: string, nodeId: string, args: RefineCommandArgs, light?: LightRefineLaunch): Promise<CommandRouterResult> {
         const refusal = refinePublicationAuthorityRefusal(args, nodeId);
         if (refusal) return refusal;
         args = selectRefineNodePublicationArgs(args, nodeId);
         const refineStages: Array<Record<string, unknown>> = [];
         try {
-            const resolved = await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
+            const resolved = light ? await refineResolveLightRefsStage(self, meshId, nodeId, args, refineStages, light) : await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
             if (resolved.kind === 'terminal') return resolved.result;
             const ctx = resolved.ctx;
             // ★B1: thread the caller's progress channel onto the context so the stages can
@@ -193,7 +195,11 @@ export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRout
 export async function refineValidationStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
             const { mesh, node, branch, baseBranch, refineStages } = ctx;
             const validationStarted = Date.now();
-            const validationSummary = await runMeshRefineValidationGate(mesh, node.workspace, {
+            // LIGHT-TASK landing: the repo's named fast profile (ADHDEV_REFINE_BASE_SHA = pinned base) instead of the full gate.
+            const runGate = ctx.lightTarget
+                ? ((m: any, w: string, o: any) => runMeshRefineValidationProfile(m, w, ctx.lightTarget!.profile, { ...o, baseSha: ctx.baseHead }))
+                : runMeshRefineValidationGate;
+            const validationSummary = await runGate(mesh, node.workspace, {
                 // (a) Scope the validation command set by coarse change-impact (resolved
                 // in resolve_refs). Undefined → gate runs the full command set (fail-open).
                 changeImpact: ctx.changeImpact,

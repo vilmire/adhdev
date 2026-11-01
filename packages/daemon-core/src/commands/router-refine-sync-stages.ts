@@ -58,6 +58,15 @@ export async function refineResolveRefsStage(self: DaemonCommandRouter,
             const repoRoot = sourceNode?.repoRoot || sourceNode?.workspace;
             if (!repoRoot) return { kind: 'terminal', result: { success: false, code: 'source_parent_not_found', nodeId, sourceNodeId: node.clonedFromNodeId, error: 'Source node repoRoot not found. Have the Mesh Host owner inspect the explicit source binding and use mesh_reattach_source_parent dry-run with expected_old_parent_id before retrying.', refineStages } };
 
+            return refineResolveRefsTail(self, { meshId, nodeId, args, refineStages, mesh, node, sourceNode, repoRoot });
+    }
+
+/** Shared by the node pipeline and the LIGHT landing (router-refine-light.ts): branch/base/head resolution from an already-resolved node. */
+export async function refineResolveRefsTail(self: DaemonCommandRouter, p: {
+        meshId: string; nodeId: string; args: RefineCommandArgs; refineStages: Array<Record<string, unknown>>;
+        mesh: any; node: any; sourceNode: any; repoRoot: string;
+    }): Promise<RefineStageOutcome> {
+            const { meshId, nodeId, args, refineStages, mesh, node, sourceNode, repoRoot } = p;
             const { execFile } = await import('node:child_process');
             const { promisify } = await import('node:util');
             const execFileAsync = promisify(execFile) as unknown as RefineExecFileAsync;

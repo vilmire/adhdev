@@ -503,7 +503,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     refineSessionIds = undefined;
                 }
             }
-            const removeResult = await self.execute('remove_mesh_node', {
+            const removeResult: any = ctx.lightTarget ? await ctx.lightTarget.cleanup() : await self.execute('remove_mesh_node', {
                 meshId,
                 nodeId,
                 ...(refineSessionCleanupMode ? { sessionCleanupMode: refineSessionCleanupMode } : {}),

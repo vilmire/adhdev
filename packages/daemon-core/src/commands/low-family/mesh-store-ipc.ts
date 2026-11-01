@@ -3,6 +3,7 @@ import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
 import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
+import { lightLandIpcHandlers } from './light-land-ipc.js';
 import { admitLightBaseNode } from '../../mesh/light-task-admission.js';
 import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
@@ -610,4 +611,5 @@ export const meshStoreIpcHandlers: Record<string, LowFamilyHandler> = {
     direct_dispatch_record: directDispatchRecord,
     active_work_query: activeWorkQuery,
     recovery_context_query: recoveryContextQuery,
+    ...lightLandIpcHandlers,
 };
