@@ -52,6 +52,25 @@ export interface MeshWorkQueueEntry {
     routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
     review?: import('@adhdev/mesh-shared').MeshReviewConstraint;
     reviewInputScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
+    /**
+     * Review-in-task (docs/design/2026-11-01-review-in-task.md §5.1). PARENT row: the plan the
+     * coordinator enqueued with (`review` option) and the pipeline's persisted phase. Both ride
+     * in the payload JSON (no column) so a daemon restart can resume the pipeline (§8.4).
+     */
+    stagePlan?: import('@adhdev/mesh-shared').MeshTaskStagePlan;
+    stageState?: import('@adhdev/mesh-shared').MeshTaskStageState;
+    /** `'stage'` = a row the stage pipeline created (review child). Absent = coordinator-created. */
+    origin?: 'coordinator' | 'stage';
+    /** Review CHILD row: the stage parent it belongs to, its role and the 1-based review round. */
+    parentTaskId?: string;
+    stageRole?: 'review';
+    stageRound?: number;
+    /**
+     * Review CHILD row: a daemon-prepared reviewer workspace (light workspace pinned to the round
+     * head) from the `ReviewerWorkspaceProvider` port. Present → no read lease and no
+     * `review_input_busy` check (the reviewer cannot collide with the implementer's checkout).
+     */
+    reviewerWorkspace?: { path: string; headSha: string };
     ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
     phase?: import('@adhdev/mesh-shared').MeshTaskPhase;
     revision?: number;
@@ -428,6 +447,24 @@ export interface MeshEnqueueTaskOptions {
      * persisted on the entry for slot matching at assignment time.
      */
     difficulty?: string;
+    /**
+     * Review-in-task (docs/design/2026-11-01-review-in-task.md §9.1): `true`/`false`/
+     * `{max_revisions?, independence?}`. Undefined follows the R5 default — ON for a
+     * non-readonly medium/difficult `code_change`, OFF otherwise. Resolved by
+     * `resolveStagePlan` (mesh-shared) into `stagePlan` + `stageState` on the row.
+     */
+    review?: boolean | { max_revisions?: number; maxRevisions?: number; independence?: string };
+    /**
+     * @internal Stage pipeline only: the row is a daemon-created review child of `parentTaskId`.
+     * Forces `readonly`/`validation` (skipping the prose guardrail — the daemon authored the
+     * message) and stamps the child fields. Never set by an MCP caller.
+     */
+    stageChild?: {
+        parentTaskId: string;
+        round: number;
+        review: import('@adhdev/mesh-shared').MeshReviewConstraint;
+        reviewerWorkspace?: { path: string; headSha: string };
+    };
     /** Explicit task id for batch/template flows (M5). Random UUID when omitted. */
     id?: string;
     /** (3) Originating coordinator session id (for session-anchored completion routing). */

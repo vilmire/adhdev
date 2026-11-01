@@ -123,6 +123,8 @@ export interface MeshTaskStageState {
     findingsFixed?: number
     /** The original coordinator message, preserved while revise memos replace `message`. */
     originalMessage?: string
+    /** Artifact ids the implementer cited in its own report (feed the next stage's input, top 4). */
+    workerArtifactIds?: string[]
     /** True once the parent was released to a terminal by the pipeline (hold lifted). */
     released?: boolean
 }

@@ -10,9 +10,14 @@ import {
     MESH_TASK_DIFFICULTIES,
     isMeshTaskDifficulty,
     normalizeOwnedPaths,
+<<<<<<< HEAD
     LIGHT_REJECT,
+=======
+    resolveStagePlan,
+>>>>>>> 87922152e (feat(mesh): stage pipeline core — reducer, runtime, ports and enqueue review option)
     type MeshTaskMode,
 } from '@adhdev/mesh-shared';
+import { initialStageState } from './stage-state.js';
 import type {
     MeshEnqueueTaskOptions,
     MeshQueueMutationOptions,
@@ -145,8 +150,13 @@ export function enqueueTask(
     if (!message) {
         throw new Error('mesh task message must be a non-empty string');
     }
-    const readonly = opts?.readonly === true;
-    const modeValidation = validateMeshTaskModeRequest(opts?.taskMode, message, readonly);
+    const stageChild = opts?.stageChild;
+    const readonly = stageChild ? true : opts?.readonly === true;
+    // A stage review child's message is authored by the daemon (it names git commands the prose
+    // guardrail would flag on a read-only row), so the guardrail is skipped for it only.
+    const modeValidation = stageChild
+        ? { valid: true as const, taskMode: 'validation' as MeshTaskMode, violations: [] as string[] }
+        : validateMeshTaskModeRequest(opts?.taskMode, message, readonly);
     if (!modeValidation.valid) {
         throw new Error(buildMeshTaskModeViolationError(modeValidation));
     }
@@ -195,6 +205,8 @@ export function enqueueTask(
             if (!effectiveThinkingLevel && preset.thinkingLevel) { effectiveThinkingLevel = preset.thinkingLevel; thinkingLevelSource = 'preset'; }
         }
     } catch { /* preset read is best-effort — never block enqueue */ }
+    // Review-in-task (R5): resolve the `review` option into a plan; throws invalid_review_option.
+    const stagePlan = stageChild ? null : resolveStagePlan(opts?.review, { taskMode: modeValidation.taskMode, difficulty: taskDifficulty, readonly });
     const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);
@@ -241,6 +253,12 @@ export function enqueueTask(
             ...(effectiveModel && modelSource ? { model: effectiveModel, modelSource } : {}),
             ...(effectiveThinkingLevel && thinkingLevelSource ? { thinkingLevel: effectiveThinkingLevel, thinkingLevelSource } : {}),
             difficulty: taskDifficulty,
+            ...(stagePlan ? { stagePlan, stageState: initialStageState(new Date().toISOString()), origin: 'coordinator' as const } : {}),
+            ...(stageChild ? {
+                origin: 'stage' as const, parentTaskId: stageChild.parentTaskId, stageRole: 'review' as const,
+                stageRound: stageChild.round, review: stageChild.review,
+                ...(stageChild.reviewerWorkspace ? { reviewerWorkspace: stageChild.reviewerWorkspace } : {}),
+            } : {}),
             ...(typeof opts?.sourceCoordinatorSessionId === 'string' && opts.sourceCoordinatorSessionId.trim()
                 ? { sourceCoordinatorSessionId: opts.sourceCoordinatorSessionId.trim() }
                 : {}),
