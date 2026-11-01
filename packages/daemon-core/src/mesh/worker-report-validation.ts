@@ -3,7 +3,7 @@
  * `report_completion`, its field limits, and the validator that turns a raw tool
  * payload into a typed WorkerCompletionReport or a list of field errors.
  */
-import { normalizeMissionItemInput, WORKER_COMMITS_MAX, WORKER_DECISIONS_NEEDED_MAX, normalizeReportCommits, isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, LIGHT_TESTS_RUN_MAX, type LightTestRun, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
+import { validateReviewReport, validateFindingResponses, type MeshReviewReport, type MeshFindingResponse, LIGHT_TESTS_RUN_MAX, type LightTestRun, normalizeMissionItemInput, WORKER_COMMITS_MAX, WORKER_DECISIONS_NEEDED_MAX, normalizeReportCommits, isWorkerReportOutcome, WORKER_REPORT_OUTCOMES, WORKER_BRANCH_STATES, WORKER_REPORT_SUMMARY_MAX_CHARS, type WorkerReportOutcome, type WorkerBranchState } from '@adhdev/mesh-shared';
 
 export interface WorkerHandoffNotes {
     /** What the change was FOR — the thing a diff cannot say. */
@@ -34,6 +34,10 @@ export interface WorkerCompletionReport {
     commits?: string[];
     /** Artifact ids (`art_*`) the worker registered for this task's findings — cited so the next same-mission task inherits them. Informational; access is still the OD-4 grant. */
     artifactIds?: string[];
+    /** Review-in-task: the reviewer's verdict (required from a stage review child; refused elsewhere). */
+    review?: MeshReviewReport;
+    /** Review-in-task: the implementer's answer to each open blocking/major finding. */
+    findingResponses?: MeshFindingResponse[];
 }
 
 /** Caps. Oversized input is REJECTED, never silently clipped (see validate below). */
@@ -79,7 +83,7 @@ export function validateWorkerCompletionReport(raw: unknown): {
     }
     const input = raw as Record<string, unknown>;
 
-    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits', 'artifactIds', 'testsRun']);
+    const KNOWN = new Set(['outcome', 'summary', 'handoffNotes', 'touchedFiles', 'branchState', 'blockers', 'decisionsNeeded', 'commits', 'artifactIds', 'review', 'findingResponses', 'testsRun']);
     for (const key of Object.keys(input)) {
         if (!KNOWN.has(key)) {
             errors.push({ field: key, message: `unknown field '${key}' (expected one of: ${[...KNOWN].join(', ')})` });
@@ -150,6 +154,18 @@ export function validateWorkerCompletionReport(raw: unknown): {
         if (!ids || ids.some(id => !id || id.length > 200)) errors.push({ field: 'artifactIds', message: 'artifactIds must be an array of artifact id strings (art_*, ≤200 chars each)' });
         else if (ids.length > WORKER_ARTIFACT_IDS_MAX) errors.push({ field: 'artifactIds', message: `artifactIds has ${ids.length} entries, over the ${WORKER_ARTIFACT_IDS_MAX} limit` });
         else if (ids.length) artifactIds = [...new Set(ids)];
+    }
+
+    // Review-in-task: shape-only here (round-dependent rules run post-identity in stage-report-hook.ts).
+    let review: MeshReviewReport | undefined;
+    if (input.review !== undefined) {
+        const r = validateReviewReport(input.review, { round: 1 });
+        if (r.errors.length) for (const e of r.errors) errors.push(e); else review = r.report;
+    }
+    let findingResponses: MeshFindingResponse[] | undefined;
+    if (input.findingResponses !== undefined) {
+        const r = validateFindingResponses(input.findingResponses);
+        if (r.errors.length) for (const e of r.errors) errors.push(e); else findingResponses = r.responses;
     }
 
     let handoffNotes: WorkerHandoffNotes | undefined;
@@ -230,6 +246,8 @@ export function validateWorkerCompletionReport(raw: unknown): {
             ...(decisionsNeeded ? { decisionsNeeded } : {}),
             ...(commits ? { commits } : {}),
             ...(artifactIds ? { artifactIds } : {}),
+            ...(review ? { review } : {}),
+            ...(findingResponses?.length ? { findingResponses } : {}),
             ...(testsRun?.length ? { testsRun } : {}),
         },
         errors: [],

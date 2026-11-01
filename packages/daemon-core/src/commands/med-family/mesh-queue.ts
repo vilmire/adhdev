@@ -1,4 +1,5 @@
 import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
+import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 /**
@@ -156,6 +157,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         try {
             const { summarizeQueueEntryInputForView, requeueTaskWithOutcome, getQueueEntryById } = await import('../../mesh/mesh-work-queue.js');
             const { requeueRefusalResponse } = await import('../../mesh/mesh-queue-attempt-guard.js');
+            assertNotStageChild(meshId, taskId); // review-in-task §11
             if (args?.force === true) await settleQueueWriter(meshId, taskId, 'superseded');
             // CANON-IDENTITY single-flight hardening (restart-safe): the in-memory in-flight
             // mark requeueTask consults is process-local and is lost across a daemon restart.
@@ -216,6 +218,24 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
         } catch (e: any) {
             return { success: false, error: e.message };
         }
+    },
+
+    /** Review-in-task §9.4: the coordinator's decision on a blocked stage task. */
+    stage_decide_mesh_task: async (ctx: MedFamilyContext, args: any) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        const taskId = typeof args?.taskId === 'string' ? args.taskId.trim() : '';
+        const action = typeof args?.action === 'string' ? args.action.trim() : '';
+        if (!meshId || !taskId) return { success: false, error: 'meshId and taskId required' };
+        const { STAGE_DECIDE_ACTIONS } = await import('@adhdev/mesh-shared');
+        if (!(STAGE_DECIDE_ACTIONS as readonly string[]).includes(action)) return { success: false, error: `action must be one of ${STAGE_DECIDE_ACTIONS.join(' | ')}` };
+        const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'stage decision');
+        if (ownerFailure) return ownerFailure;
+        const { getInstalledStagePipeline } = await import('../../mesh/stage-ports-default.js');
+        const pipeline = getInstalledStagePipeline();
+        if (!pipeline) return { success: false, error: 'stage_pipeline_not_ready' };
+        const note = typeof args?.note === 'string' ? args.note.slice(0, 500) : undefined;
+        const result = await pipeline.runtime.decide(meshId, taskId, action as 'accept' | 'revise_once' | 'rereview' | 'abandon', note);
+        return result.ok ? { success: true, taskId, action } : { success: false, error: result.error };
     },
 
     trigger_mesh_queue: async (ctx: MedFamilyContext, args: any) => {

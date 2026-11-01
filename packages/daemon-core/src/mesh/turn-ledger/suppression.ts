@@ -30,7 +30,9 @@ import { isTerminalTurnState, type TurnState } from './types.js';
 export type NotifySuppression =
     | 'stale_suspension'
     | 'candidate_superseded'
-    | 'attempt_terminal';
+    | 'attempt_terminal'
+    /** Review-in-task: a stage-internal row's notice (review child / held stage parent) never wakes the coordinator. */
+    | 'stage_internal';
 
 interface NotifySuppressionInput {
     notify: NotifyKind;

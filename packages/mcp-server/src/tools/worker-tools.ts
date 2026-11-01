@@ -180,7 +180,20 @@ export const REPORT_COMPLETION_TOOL = {
         items: { type: 'string' },
         description: 'Ids (art_*) of the artifacts you registered with `artifact_register` for this task\'s substantial findings (diagnosis, evidence, repro steps, review findings). The next task in this mission inherits them. Optional.',
       },
-      tests_run: {
+      review: {
+        type: 'object',
+        description:
+          'ONLY for the independent reviewer of a stage task (your task text says so): your verdict. '
+          + 'verdict: approve | approve_with_nits | changes_requested | reject_approach. changes_requested needs >=1 blocking/major finding; approve allows none. '
+          + 'findings[]: {id (stable across rounds), severity: blocking|major|minor|nit, category: correctness|regression|test_gap|scope|security|performance|maintainability, file?, line?, claim, evidence (what you read/ran), suggested_fix?}. '
+          + 'checked[] and not_checked[] (both non-empty): what you verified and what you did not. prior_findings[]: {id, status: resolved|unresolved|dispute_accepted|dispute_rejected} for every earlier blocking/major finding (round 2+). tests_run?[]: {command, exit, passed?, failed?, note?}.',
+        properties: {
+          verdict: { type: 'string', enum: ['approve', 'approve_with_nits', 'changes_requested', 'reject_approach'] },
+          findings: { type: 'array', items: { type: 'object' } },
+          prior_findings: { type: 'array', items: { type: 'object' } },
+          checked: { type: 'array', items: { type: 'string' } },
+          not_checked: { type: 'array', items: { type: 'string' } },
+          tests_run: {
         type: 'array',
         maxItems: 20,
         items: {
@@ -456,10 +469,26 @@ function toDaemonReport(a: Record<string, any>): { report: Record<string, unknow
     ...((a.decisions_needed ?? a.decisionsNeeded) !== undefined ? { decisionsNeeded: a.decisions_needed ?? a.decisionsNeeded } : {}),
     ...(a.commits !== undefined ? { commits: a.commits } : {}),
     ...((a.artifact_ids ?? a.artifactIds) !== undefined ? { artifactIds: a.artifact_ids ?? a.artifactIds } : {}),
+    // Review-in-task: sent ONLY when used, so an ordinary report stays byte-identical for older owner daemons.
+    ...(a.review !== undefined ? { review: reviewToDaemon(a.review) } : {}),
+    ...((a.finding_responses ?? a.findingResponses) !== undefined ? { findingResponses: a.finding_responses ?? a.findingResponses } : {}),
     ...((a.tests_run ?? a.testsRun) !== undefined ? { testsRun: a.tests_run ?? a.testsRun } : {}),
     ...(handoffNotes ? { handoffNotes } : {}),
   };
   return { report, ignoredHandoffKeys };
+}
+
+/** snake_case review payload → the daemon's camelCase `MeshReviewReport` (unknown keys pass through to be rejected there). */
+export function reviewToDaemon(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const r = raw as Record<string, unknown>;
+  const rename = (o: Record<string, unknown>, map: Record<string, string>) =>
+    Object.fromEntries(Object.entries(o).map(([k, v]) => [map[k] ?? k, v]));
+  const out = rename(r, { not_checked: 'notChecked', prior_findings: 'priorFindings', tests_run: 'testsRun' });
+  if (Array.isArray(out.findings)) {
+    out.findings = out.findings.map(f => (f && typeof f === 'object' && !Array.isArray(f) ? rename(f as Record<string, unknown>, { suggested_fix: 'suggestedFix' }) : f));
+  }
+  return out;
 }
 
 interface WorkerToolResult {

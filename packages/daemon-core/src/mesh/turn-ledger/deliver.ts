@@ -43,6 +43,7 @@
 // rendered at deliver time from local `turn_events` rows or the handoff topic.
 // ---------------------------------------------------------------------------
 
+import { isStageInternalNotice } from '../stage-notice-silence.js';
 import { createHash } from 'crypto';
 import type {NoticeSubmitInventory,NoticeWriteState} from './notice-submit-inventory.js';
 import {
@@ -621,7 +622,9 @@ export function createTurnDeliverHandler(deps: TurnDeliverDeps, handlerOpts: Tur
 
         const attemptId = str(p.attemptId);
         const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
-        const suppression = evaluateNotifySuppression({ notify, attempt, generation: row?.generation ?? null });
+        const suppression = isStageInternalNotice(entry.meshId, str(p.taskId) ?? attempt?.taskId, notify)
+            ? 'stage_internal' as const
+            : evaluateNotifySuppression({ notify, attempt, generation: row?.generation ?? null });
         if (suppression) {
             deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${suppression}` });
             counters.suppressed++;
@@ -826,7 +829,10 @@ export function readCoordinatorNotices(deps: ReadNoticesDeps, meshId: string, op
         const entry = row.payload.entry as Record<string, unknown>;
         const notify = (isNotifyKind(entry.notify) ? entry.notify : 'mesh_event') as NotifyKind;
         const attemptId = str(entry.attemptId);
-        const suppression = evaluateNotifySuppression({ notify, attempt: attemptId ? deps.ledger.getAttempt(attemptId) : null, generation: row.generation });
+        const mcpAttempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
+        const suppression = isStageInternalNotice(meshId, str(entry.taskId) ?? mcpAttempt?.taskId, notify)
+            ? 'stage_internal' as const
+            : evaluateNotifySuppression({ notify, attempt: mcpAttempt, generation: row.generation });
         if (suppression) {
             if (ack) deps.ledger.claimDelivery({ writer, seq, meshId, sessionId: str(entry.targetSessionId) ?? '', outcome: `suppressed:${suppression}` });
             continue;

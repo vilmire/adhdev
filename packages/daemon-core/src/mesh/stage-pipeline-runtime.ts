@@ -109,11 +109,13 @@ export class StagePipelineRuntime {
             const st = parent.stageState!;
             if (st.released || st.phase === 'done') continue;
             const age = this.ports.now() - Date.parse(st.startedAt);
+            // Never block the housekeeping tick on a long self-check; skip parents with work already in flight.
+            if (this.chains.has(this.key(parent.meshId, parent.id))) continue;
             if (age > this.ports.pipelineCeilingMs()) {
-                await this.serial(parent.meshId, parent.id, () => this.apply(parent.meshId, parent.id, { kind: 'ceiling', at: this.iso() }));
+                void this.serial(parent.meshId, parent.id, () => this.apply(parent.meshId, parent.id, { kind: 'ceiling', at: this.iso() }));
                 continue;
             }
-            await this.serial(parent.meshId, parent.id, () => this.resumeOne(parent.meshId, parent.id));
+            void this.serial(parent.meshId, parent.id, () => this.resumeOne(parent.meshId, parent.id));
         }
     }
 
@@ -160,10 +162,11 @@ export class StagePipelineRuntime {
             if (!parent || !isStageParent(parent)) { result = { ok: false, error: 'not_a_stage_task' }; return; }
             if (parent.status !== 'blocked' || !parent.stageState!.blockedReason) { result = { ok: false, error: 'stage_task_not_blocked' }; return; }
             if (action === 'accept' || action === 'abandon') {
-                this.ports.queue.commitParent(parent, 'completed', {
-                    finalSummary: `${action === 'accept' ? 'Accepted by coordinator' : 'Abandoned by coordinator'}${note ? `: ${note}` : ''}`,
-                }, `stage_decide:${action}`);
-                if (action === 'abandon') this.ports.queue.cancel(meshId, parentId, 'stage_decide:abandon');
+                if (action === 'accept') {
+                    this.ports.queue.commitParent(parent, 'completed', { finalSummary: `Accepted by coordinator${note ? `: ${note}` : ''}` }, 'stage_decide:accept');
+                } else {
+                    this.ports.queue.cancel(meshId, parentId, `stage_decide:abandon${note ? `: ${note}` : ''}`);
+                }
                 return;
             }
             // Reopen: blocked → assigned (the reducer re-enters revising / awaiting_review).

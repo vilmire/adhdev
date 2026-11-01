@@ -167,7 +167,7 @@ describe('stage pipeline runtime', () => {
         await h.implDone('a1');
         const child = h.lastChild();
         h.advance(5 * 3600_000);
-        await h.rt.tick();
+        await h.rt.tick(); await h.rt.idle();
         expect(h.parent().stageState!.blockedReason).toBe('stage_pipeline_ceiling');
         expect(child.status).toBe('cancelled');
     });

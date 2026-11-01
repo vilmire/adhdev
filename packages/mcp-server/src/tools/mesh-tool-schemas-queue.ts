@@ -4,7 +4,7 @@
  * cancel / requeue. Pure data; ALL_MESH_TOOLS in mesh-tool-schemas.ts is the registry.
  */
 import { MESH_TASK_INPUT_SCHEMA } from './mesh-tool-input-schemas.js';
-import { enumOf, CANCEL_REASONS, MESH_TASK_MODES, MESH_TASK_PRIORITIES, MESH_THINKING_LEVELS, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
+import { enumOf, STAGE_DECIDE_ACTIONS, CANCEL_REASONS, MESH_TASK_MODES, MESH_TASK_PRIORITIES, MESH_THINKING_LEVELS, MESH_TASK_DIFFICULTIES } from '@adhdev/mesh-shared';
 
 /**
  * Enqueue discovery metadata.
@@ -92,6 +92,7 @@ export const MESH_ENQUEUE_TASK_TOOL = {
             depends_on: { type: 'array', items: { type: 'string' }, description: 'Task ids that must finish first; their summaries are appended ("Upstream results"). Cycles rejected.' },
             input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Artifact ids this task may read (any mission).' },
             inherit_artifacts: { type: 'boolean', description: 'Default true: mission tasks also get the ≤12 newest earlier same-mission artifacts; false = off.' },
+            review: { type: ['boolean', 'object'], description: 'In-task review, default ON for medium/difficult code_change (no separate review tasks). false=off; {max_revisions?,independence?}.' },
             mission_id: { type: 'string', description: 'Mission id (full, exact); unknown id rejected (mission_not_found).' },
             priority: { ...enumOf(MESH_TASK_PRIORITIES), description: 'high jumps older normal/low work; default normal.' },
             model: { type: 'string', description: 'Model override, e.g. opus (best-effort).' },
@@ -133,6 +134,7 @@ export const MESH_ENQUEUE_BATCH_TOOL = {
                         depends_on: { type: 'array', items: { type: 'string' }, description: 'Sibling refs and/or existing task ids that must complete first.' },
                         input_artifact_ids: { type: 'array', items: { type: 'string' }, description: 'Artifact ids this task may read (any mission).' },
                         inherit_artifacts: { type: 'boolean', description: 'As mesh_enqueue_task: false opts out of same-mission artifact auto-inherit.' },
+                        review: { type: ['boolean', 'object'], description: 'As mesh_enqueue_task: review-in-task option (default on for medium/difficult code_change).' },
                         mission_id: { type: 'string', description: 'Overrides the top-level mission_id.' },
                         priority: enumOf(MESH_TASK_PRIORITIES),
                         model: { type: 'string' },
@@ -185,6 +187,20 @@ export const MESH_QUEUE_CANCEL_TOOL = {
             reason: { type: 'string', description: 'Optional operator-visible reason for cancellation.' },
         },
         required: ['task_id'],
+    },
+};
+
+export const MESH_TASK_STAGE_DECIDE_TOOL = {
+    name: 'mesh_task_stage_decide',
+    description: 'Decide a BLOCKED review-in-task stage task (blocked reason review_unresolved | review_rejected_approach | review_unavailable | self_check_failed | stage_pipeline_ceiling). accept = take the current head as done (unresolved findings stay on record); revise_once = one more revise round; rereview = review again with a different reviewer; abandon = cancel it. Only for blocked stage tasks.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            task_id: { type: 'string', description: 'The blocked stage (parent) task id.' },
+            action: enumOf(STAGE_DECIDE_ACTIONS),
+            note: { type: 'string', description: 'Optional reason, recorded with the decision.' },
+        },
+        required: ['task_id', 'action'],
     },
 };
 

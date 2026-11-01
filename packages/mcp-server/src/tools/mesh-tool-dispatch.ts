@@ -44,7 +44,7 @@ import type { MeshContext } from './mesh-tools.js';
 import { meshLightLand, meshLightDiscard } from './mesh-tools-light.js';
 import {
     meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
-    meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshQueueRevise,
+    meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshTaskStageDecide, meshQueueRequeue, meshQueueRevise,
     meshReadDebug, meshReadTerminal, meshSendKeys,
     meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon,
     meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
@@ -83,6 +83,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_enqueue_batch: (ctx, a) => meshEnqueueBatch(ctx, a as any),
     mesh_view_queue: (ctx, a) => meshViewQueue(ctx, a as any),
     mesh_queue_cancel: (ctx, a) => meshQueueCancel(ctx, a as any),
+    mesh_task_stage_decide: (ctx, a) => meshTaskStageDecide(ctx, a as any),
     mesh_direct_cancel: (ctx, a) => meshDirectCancel(ctx, a as any),
     mesh_queue_revise: (ctx, a) => meshQueueRevise(ctx, a as any),
     mesh_light_land: (ctx, a) => meshLightLand(ctx, a as any),

@@ -3,6 +3,8 @@ import { realpathSync } from 'node:fs';
 import type { MeshRoutingPreferences, MeshTaskStatus } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { currentPhysicalScope, comparePhysicalOwnership } from './mesh-physical-ownership.js';
+import { reviewIndependenceOf } from '@adhdev/mesh-shared';
+import { isStageParent } from './stage-state.js';
 
 /** Stable preferences with a full eligible fallback; never used as an eligibility filter. */
 export function preferEligible<T>(eligible: readonly T[], preferences: readonly string[] | undefined, key: (value: T) => string): T[] {
@@ -23,14 +25,29 @@ export function normalizeRoutingPreferences(value: unknown): MeshRoutingPreferen
 
 export interface ReviewRoutingContext { workspace: string; machineId: string }
 /** Input availability is proven locally; a remote source needs a future verified transfer contract. */
-export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = []): string | undefined {
+export function reviewRoutingRefusal(task: Pick<MeshWorkQueueEntry, 'review' | 'readonly' | 'taskMode'> & Partial<Pick<MeshWorkQueueEntry, 'reviewerWorkspace'>>, source: MeshWorkQueueEntry | undefined | null, provider: string | undefined, context: ReviewRoutingContext | undefined, active: readonly MeshWorkQueueEntry[] = [], claimingSessionId?: string): string | undefined {
     if (!task.review) return undefined;
     if (!task.readonly && task.taskMode !== 'live_debug_readonly') return 'review_requires_readonly';
-    if (!source?.assignedProviderType || !provider || provider === source.assignedProviderType) return 'review_independence_required';
+    if (!source?.assignedProviderType || !provider) return 'review_independence_required';
+    // Independence: different provider by default; `fresh_session` (stage fallback, R2) allows the same provider
+    // but never the implementer's own session.
+    if (reviewIndependenceOf(task.review) === 'different_provider') {
+        if (provider === source.assignedProviderType) return 'review_independence_required';
+    } else if (claimingSessionId && source.assignedSessionId && claimingSessionId === source.assignedSessionId) {
+        return 'review_independence_required';
+    }
+    // A daemon-prepared reviewer workspace (light workspace pinned to the round head) cannot collide with the
+    // implementer's checkout: no input-availability or busy-writer check applies.
+    if (task.reviewerWorkspace) return undefined;
+    // A stage parent awaiting/under review is `assigned` by design (it keeps its write slot for the revise loop),
+    // so it counts as available input and is never the writer that blocks its own review.
+    const stageSource = isStageParent(source) && source.status === 'assigned'
+        && (source.stageState!.phase === 'awaiting_review' || source.stageState!.phase === 'reviewing');
     const scope = source.ownedPaths && currentPhysicalScope(source.ownershipScope, source.ownedPaths);
-    if (source.status !== 'completed' || !scope || !context || context.machineId !== scope.machineId) return 'review_input_unavailable';
+    if ((source.status !== 'completed' && !stageSource) || !scope || !context || context.machineId !== scope.machineId) return 'review_input_unavailable';
     try { if (realpathSync.native(context.workspace) !== scope.worktree) return 'review_input_unavailable'; } catch { return 'review_input_unavailable'; }
     if (active.some(writer => {
+        if (stageSource && writer.id === source.id) return false;
         if ((writer.status !== 'assigned' && !pendingLaunchReservation(writer)) || writer.readonly || writer.taskMode === 'live_debug_readonly') return false;
         if (pinnedMeshNodeIdMatches(writer.assignedNodeId, scope.nodeId)) return true;
         const paths = writer.ownedPaths ?? { paths: [{ path: '', subtree: true }] };

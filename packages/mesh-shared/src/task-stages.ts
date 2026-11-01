@@ -10,6 +10,8 @@
  * dashboard chips read lives here once.
  */
 
+import type { LightTestRun } from './light-task'
+
 // ─── Vocabulary ─────────────────────────────────────────────────────────
 
 export const REVIEW_VERDICTS = ['approve', 'approve_with_nits', 'changes_requested', 'reject_approach'] as const
@@ -142,7 +144,8 @@ export interface MeshReviewFinding {
 
 export interface MeshPriorFindingStatusEntry { id: string; status: MeshPriorFindingStatus; note?: string }
 
-export interface MeshTestRun { command: string; exit: number; passed?: number; failed?: number; note?: string }
+/** One definition: the light-task `LightTestRun` (same {command, exit, passed?, failed?, note?} shape). */
+export type MeshTestRun = LightTestRun
 
 export interface MeshReviewReport {
     verdict: MeshReviewVerdict
@@ -188,12 +191,12 @@ export interface StagePlanDefaultsInput {
 
 /**
  * Resolve the enqueue-time `review` option into a stage plan, or null when review is off.
- * `review` undefined → R5 default (medium/difficult non-readonly `code_change` → on; easy/freeform/readonly → off).
+ * `review` undefined → R5 default (applied by the MCP layer; the daemon's enqueueTask passes `defaultOn: false` so internal and legacy callers never get a pipeline they did not ask for) (medium/difficult non-readonly `code_change` → on; easy/freeform/readonly → off).
  * Throws `invalid_review_option: …` on malformed input (rejected, never coerced).
  */
-export function resolveStagePlan(raw: unknown, task: StagePlanDefaultsInput): MeshTaskStagePlan | null {
+export function resolveStagePlan(raw: unknown, task: StagePlanDefaultsInput, opts: { defaultOn?: boolean } = {}): MeshTaskStagePlan | null {
     const eligible = isStageEligibleTask(task)
-    if (raw === undefined || raw === null) return defaultsOnFor(task) ? defaultStagePlan() : null
+    if (raw === undefined || raw === null) return (opts.defaultOn ?? true) && defaultsOnFor(task) ? defaultStagePlan() : null
     if (raw === false) return null
     if (raw === true) {
         if (!eligible) throw new Error(`invalid_review_option: review requires a non-readonly code_change task (got taskMode=${task.taskMode ?? 'unset'}${task.readonly ? ', readonly' : ''})`)

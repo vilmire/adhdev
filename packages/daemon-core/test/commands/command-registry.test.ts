@@ -303,7 +303,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     // Explicit source-parent repair; added after the legacy migration.
     'reattach_mesh_source_parent',
     'create_mesh_host_pairing_token', 'apply_mesh_host_join', 'join_mesh_host_pairing', 'revoke_mesh_peer', 'get_mesh_queue',
-    'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'mesh_init',
+    'cancel_mesh_queue_task', 'requeue_mesh_queue_task', 'trigger_mesh_queue', 'stage_decide_mesh_task', 'mesh_init',
     'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',

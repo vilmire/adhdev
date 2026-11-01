@@ -236,6 +236,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // ── Mesh: queue mutation ─────────────────────────────────────────────
   // Cancels queued/assigned work — the pending task is discarded.
   mesh_queue_cancel: DESTRUCTIVE_LOCAL,
+  // Decides a blocked stage task (accept / one more revise / re-review / abandon).
+  mesh_task_stage_decide: DESTRUCTIVE_LOCAL,
   // Cancels a direct attempt and starts the exact writer stop (no forced claim release).
   mesh_direct_cancel: DESTRUCTIVE_LOCAL,
   // Returns a task to pending, optionally REWRITING its instruction (the

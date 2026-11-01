@@ -1,4 +1,6 @@
 import {createNoticeSubmitInventory} from '../../mesh/turn-ledger/notice-submit-inventory.js';
+import { registerSessionArtifact } from '../../artifacts/artifact-store.js';
+import { setStageArtifactRegistrar } from '../../mesh/stage-ports-default.js';
 import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/cooperative-gate.js';
 /**
  * S7 bootMeshRuntime — assemble `DaemonComponents`, attach the mesh bus
@@ -403,6 +405,10 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         counters: () => ({ ...counters, ...(consumer?.counters() ?? {}) }),
     };
     bindMeshNoticeRuntime(notices);
+    // Review-in-task: the stage pipeline registers its diff / self-check / verdict artifacts (producerRole 'pipeline').
+    setStageArtifactRegistrar((input) => {
+        return registerSessionArtifact(MeshRuntimeStore.getInstance().db as never, input).record.artifactId;
+    });
 
     // 4. The turn cursors.
     const index = new MeshTopicIndex(store.db);
@@ -493,6 +499,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
             try { offEvidencePort(); } catch { /* noop */ }
             setActiveTurnLedgerForIpc(null);
             bindMeshNoticeRuntime(null);
+            setStageArtifactRegistrar(null);
         },
     };
 }

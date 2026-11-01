@@ -69,6 +69,7 @@ import { contractAfterAcceptedCompletion, contractHoldHandoffNote, type HeldHand
 import { commitTaskTerminal } from './mesh-task-terminal.js';
 import { isTaskReadonly } from './mesh-work-queue.js';
 import { meshRecord } from './mesh-record.js';
+import { checkStageReportRequirements, stashStageReportForIdentity } from './stage-report-hook.js';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import { observeAcceptedWorkerReport } from './turn-ledger/worker-report-evidence.js';
 import { exchangeWorkerSessionBind, hashWorkerSessionBind, verifyWorkerTaskToken, workerSessionBindStatus, WORKER_BIND_CANARY_PREFIX, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
@@ -133,7 +134,7 @@ interface PriorWorkerReport {
  * that never reached MCP, and the reason the PTY path must stay the fallback
  * rather than being replaced (design §4 "절반만 승격").
  */
-export function findPriorWorkerReport(meshId: string, taskId: string): PriorWorkerReport | null {
+export function findPriorWorkerReport(meshId: string, taskId: string, attemptId?: string): PriorWorkerReport | null {
     if (!meshId || !taskId) return null;
     let rows: ReturnType<ReturnType<MeshRuntimeStore['turnStore']>['listWorkerEventsForTask']>;
     try {
@@ -144,7 +145,8 @@ export function findPriorWorkerReport(meshId: string, taskId: string): PriorWork
         // "unknown", and the scrape is still the documented fallback.
         return null;
     }
-    const row = rows.pop();
+    // Review-in-task: a stage task reports once per attempt, so "already reported" must be asked per attempt.
+    const row = (attemptId ? rows.filter(r => r.attemptId === attemptId) : rows).pop();
     if (!row || !row.attemptId) return null;
     const payload = row.payload as { outcome?: unknown };
     const outcome = payload.outcome === 'completed' || payload.outcome === 'blocked' || payload.outcome === 'failed'
@@ -852,6 +854,9 @@ export function acceptWorkerCompletionReportForIdentity(
         return { accepted: false, refusal: 'invalid_for_task_mode', detail: taskModeError };
     }
 
+    const stageError = checkStageReportRequirements(identity, report); // review-in-task (stage-report-hook.ts)
+    if (stageError) return { accepted: false, refusal: 'invalid_for_task_mode', detail: stageError };
+
     const nowMs = opts.nowMs ?? Date.now();
     const nowIso = new Date(nowMs).toISOString();
     const store = MeshRuntimeStore.getInstance();
@@ -925,7 +930,7 @@ export function acceptWorkerCompletionReportForIdentity(
         if (!evidenceRecorded) {
             // A duplicate insert still means the row exists; only a genuine
             // write failure reaches here with the row absent.
-            const existing = findPriorWorkerReport(identity.meshId, identity.taskId);
+            const existing = findPriorWorkerReport(identity.meshId, identity.taskId, evidenceAttemptId);
             if (!existing) {
                 return {
                     accepted: false,
@@ -961,6 +966,7 @@ export function acceptWorkerCompletionReportForIdentity(
         return { accepted: false, refusal: 'rejected_by_reducer', detail: 'checkpoint_pending:report retained; physical writer stop is unconfirmed' };
     }
     let commit: ReturnType<typeof commitTaskTerminal>;
+    stashStageReportForIdentity(identity, report, nowMs); // review-in-task: pipeline reads it from the terminal hook
     try {
         commit = commitTaskTerminal({
             meshId: identity.meshId,
@@ -1091,7 +1097,7 @@ export function acceptWorkerCompletionReportForIdentity(
     applyWorkerReportToMission(identity.meshId, identity.taskId, report);
     captureLightResultInBackground(identity.meshId, identity.taskId, report);
 
-    recordAcceptedSessionCompletion({ ...identity, attemptId: evidenceAttemptId }, nowMs);
+    if (!commit.held) recordAcceptedSessionCompletion({ ...identity, attemptId: evidenceAttemptId }, nowMs); // a held stage report keeps its session for the revise loop
     return {
         accepted: true,
         taskId: identity.taskId,

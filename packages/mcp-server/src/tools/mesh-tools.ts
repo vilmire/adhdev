@@ -37,7 +37,7 @@ export {
 } from './mesh-tools-route-preview.js';
 
 export { meshEnqueueTask, meshEnqueueBatch } from './mesh-tools-queue.js';
-export { meshQueueCancel, meshQueueRequeue, meshQueueRevise, meshViewQueue } from './mesh-tools-queue-manage.js';
+export { meshQueueCancel, meshTaskStageDecide, meshQueueRequeue, meshQueueRevise, meshViewQueue } from './mesh-tools-queue-manage.js';
 
 export { meshReleaseUpsert, meshReleaseScope, meshReleaseList, meshReleaseRecordDeploy, meshReleaseChangelogDraft } from './mesh-tools-release.js';
 export { MESH_RELEASE_UPSERT_TOOL, MESH_RELEASE_SCOPE_TOOL, MESH_RELEASE_LIST_TOOL, MESH_RELEASE_RECORD_DEPLOY_TOOL, MESH_RELEASE_CHANGELOG_DRAFT_TOOL } from './mesh-tool-schemas-release.js';

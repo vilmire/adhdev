@@ -383,6 +383,8 @@ export function isTerminalTaskEvent(eventName: string): boolean {
  */
 const COORDINATOR_ALERT_EVENTS: ReadonlySet<string> = new Set([
     'mesh:dispatch_blocked',
+    // Review-in-task: the ONE coordinator wake for a stage task (parent terminal + synthesized report).
+    'mesh:stage_terminal',
     // Silent approval-level retraction. It must reach the coordinator that owns
     // the task ledger, but is not itself a terminal task event/notification.
     'agent:approval_resolved',

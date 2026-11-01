@@ -40,6 +40,7 @@ import { contractHousekeeping } from './contract-runtime.js';
 import { depositWorkerMailboxMessage } from './worker-mailbox.js';
 import { liveWorkerHomes, sweepStaleWorkerHomes } from './worker-home-cleanup.js';
 import { publishHeldHandoffNote } from './worker-report.js';
+import { installStagePipeline } from './stage-ports-default.js';
 
 /** Disk/worktree retention: artifacts age in days and the fs/git walk is heavy — hourly. */
 export const DISK_RETENTION_INTERVAL_MS = 60 * 60 * 1000;
@@ -256,10 +257,12 @@ export interface HousekeepingHandle {
 export function startMeshHousekeeping(components: DaemonComponents, intervalMs: number, opts: { claim?: boolean } = {}): HousekeepingHandle {
     const state: HousekeepingState = {};
     let running = false;
+    const stage = installStagePipeline(components); // review-in-task: hooks + ceiling/resume/fallback tick
     const timer = setInterval(() => {
         if (running) return;
         running = true;
         void (async () => {
+            await stage.tick();
             await runMeshHousekeepingTick(components, state);
             if (opts.claim) await claimPendingQueues(components);
         })()
@@ -271,6 +274,7 @@ export function startMeshHousekeeping(components: DaemonComponents, intervalMs: 
     return {
         stop() {
             clearInterval(timer);
+            stage.dispose();
             LOG.info('MeshHousekeeping', 'Mesh housekeeping stopped');
         },
     };

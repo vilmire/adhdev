@@ -75,6 +75,7 @@
  *    spam clock.
  */
 
+import { isStagePipelineParked } from './stage-state.js';
 import { LOG } from '../logging/logger.js';
 import type { SessionInputPort } from '../sessions/session-input-service.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
@@ -319,6 +320,8 @@ export async function maybeInjectIdleActiveMissionReminder(
             'task_question_pending',
             'session_stopped',
         ]);
+        // Review-in-task: a parked stage parent is pending work even though its ledger tail says completed.
+        if (getQueue(meshId, { status: ['assigned'] }).some(isStagePipelineParked)) return false;
         const summary = buildMeshActiveWork({
             meshId,
             queue: getQueue(meshId, { status: ['pending', 'assigned'] }),

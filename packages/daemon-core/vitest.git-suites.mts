@@ -30,6 +30,8 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/light-workspace.test.ts',
   'test/mesh/light-task-result.test.ts',
   'test/mesh/light-land.test.ts',
+  'test/mesh/stage-pipeline-store.test.ts',
+  'test/mesh/stage-ports-default.test.ts',
   'test/commands/worktree-cleanup-parentless-fallback.test.ts',
   'test/commands/mesh-clone-node-registration.test.ts',
   'test/commands/mesh-clone-host-platform-tags.test.ts',

@@ -1,4 +1,5 @@
 import { requireMeshHostQueueOwner } from './mesh-host-ownership.js';
+import { isStagePipelineParked, isStageChild, isStageParent } from './stage-state.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import type { MeshClaimRefusal } from './mesh-runtime-store.js';
 import type { MeshQueueHead } from './mesh-runtime-store-queue-reads.js';
@@ -466,9 +467,12 @@ export { recordTaskAutoLaunch } from './mesh-autolaunch-spawn-budget.js';
 export function cancelTask(
     meshId: string,
     taskId: string,
-    opts?: { reason?: string } & MeshQueueMutationOptions,
+    opts?: { reason?: string; stageManaged?: boolean } & MeshQueueMutationOptions,
 ): MeshWorkQueueEntry | null {
     requireMeshHostQueueOwner(opts);
+    // Review-in-task §11: a review child belongs to the pipeline; the coordinator decides through mesh_task_stage_decide.
+    const stageRow = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+    if (isStageChild(stageRow) && !opts?.stageManaged) throw new Error(`stage_child_managed: task '${taskId}' is a review stage of '${stageRow!.parentTaskId}'; cancel the parent or use mesh_task_stage_decide`);
     const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
@@ -545,6 +549,13 @@ export function cancelTask(
         return { entry: commit.entry ?? entry, cascaded, priorAssignment };
     });
     if (result) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
+    // Review-in-task §11: cancelling the parent cancels its open review children.
+    if (result && isStageParent(stageRow)) {
+        for (const childId of stageRow!.stageState!.reviewTaskIds) {
+            const child = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, childId);
+            if (child && (child.status === 'pending' || child.status === 'assigned')) cancelTask(meshId, childId, { reason: 'stage_parent_cancelled', stageManaged: true });
+        }
+    }
     // Surface the prior binding to the caller (out-of-band from the persisted row, so it is
     // never serialized) so the cancel command handler — which holds DaemonComponents — can
     // stop the now-orphaned worker via the transport-aware stopStaleMeshWorker helper.
@@ -1128,6 +1139,8 @@ export function requeueTaskForLedgerReclaim(meshId: string, taskId: string, reas
         const store = MeshRuntimeStore.getInstance();
         const entry = store.findQueueEntryById(meshId, taskId);
         if (!entry || TERMINAL_TASK_STATUSES.has(entry.status)) return entry;
+        // Review-in-task: a parked stage parent has no open attempt by design — the reclaim must not recycle it.
+        if (isStagePipelineParked(entry)) return entry;
         delete entry.assignedNodeId;
         delete entry.assignedSessionId;
         delete entry.assignedProviderType;

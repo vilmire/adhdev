@@ -5,6 +5,7 @@
 // to recover the same id with an explicit force-requeue. Unknown presence never
 // convicts, and live sessions keep their assignment and node write slot.
 
+import { isStagePipelineParked } from './stage-state.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { getMachineId } from '../config/config.js';
@@ -154,6 +155,7 @@ export function sweepOrphanedUncorrelatedDispatches(meshId: string, deps: Orphan
     const failed: MeshWorkQueueEntry[] = [];
     const rows = MeshRuntimeStore.getInstance().getQueueEntries(meshId, ['assigned']);
     for (const row of rows) {
+        if (isStagePipelineParked(row)) continue; // review-in-task: waiting on the daemon, not an orphan
         const attemptId = readText(row.attemptId);
         const attempt = attemptId ? MeshRuntimeStore.getInstance().turnStore().getAttempt(attemptId) : null;
         // Age from the row's last update. A future-dated or unparseable stamp

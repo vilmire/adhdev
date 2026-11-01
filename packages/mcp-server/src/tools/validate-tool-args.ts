@@ -322,6 +322,11 @@ export const MESH_ACCEPTED_ARG_ALIASES: Readonly<Record<string, Readonly<Record<
             taskId: 'task_id',
         },
     },
+    mesh_task_stage_decide: {
+        [TOP_LEVEL_SCOPE]: {
+            taskId: 'task_id',
+        },
+    },
     mesh_queue_requeue: {
         [TOP_LEVEL_SCOPE]: {
             taskId: 'task_id',

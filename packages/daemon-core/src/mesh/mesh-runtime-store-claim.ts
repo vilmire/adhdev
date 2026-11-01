@@ -3,6 +3,13 @@ import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
 import { lightClaimAllows } from './light-claim-rule.js';
 import { realpathSync } from 'node:fs';
 import { reviewRoutingRefusal } from './mesh-task-routing-contract.js';
+import { noteReviewRefusal } from './stage-independence.js';
+
+/** Review-in-task R2: record why a stage review child was refused (drives the fresh-session fallback window). */
+function noteStageReviewRefusal(candidate: MeshWorkQueueEntry, refusal: string | undefined): string | undefined {
+    if (candidate.origin === 'stage') noteReviewRefusal(candidate.id, refusal);
+    return refusal;
+}
 import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
 import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
@@ -397,8 +404,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         };
         let reviewActive: MeshWorkQueueEntry[] | undefined;
         const reviewRefusal = (candidate: MeshWorkQueueEntry) => candidate.review
-            ? reviewRoutingRefusal(candidate, reviewSource(candidate.review.sourceTaskId), providerType, opts?.physicalContext,
-                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']))
+            ? noteStageReviewRefusal(candidate, reviewRoutingRefusal(candidate, reviewSource(candidate.review.sourceTaskId), providerType, opts?.physicalContext,
+                reviewActive ??= host.getQueueEntries(meshId, ['pending', 'assigned']), sessionId))
             : undefined;
         const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
             // Session ids are single-form (unlike node/daemon ids with their 3
@@ -537,7 +544,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         const now = new Date().toISOString();
         entry.status = 'assigned';
-        if (entry.review) entry.reviewInputScope = reviewSource(entry.review.sourceTaskId)?.ownershipScope;
+        if (entry.review && !entry.reviewerWorkspace) entry.reviewInputScope = reviewSource(entry.review.sourceTaskId)?.ownershipScope;
         entry.revision = (entry.revision ?? 0) + 1;
         if (entry.ownedPaths && entry.ownershipScope) {
             const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership).map(c => c.taskId));

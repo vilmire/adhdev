@@ -534,3 +534,20 @@ export async function meshQueueRevise(ctx: MeshContext, args: { task_id: string;
         return JSON.stringify({ success: true, task });
     } catch (e: any) { return JSON.stringify({ success: false, error: e.message }); }
 }
+
+/** Review-in-task §9.4: decide a blocked stage task (daemon command `stage_decide_mesh_task`). */
+export async function meshTaskStageDecide(
+    ctx: MeshContext,
+    args: { task_id?: string; taskId?: string; action?: string; note?: string },
+): Promise<string> {
+    const taskId = (args.task_id || args.taskId || '').trim();
+    const action = (args.action || '').trim();
+    if (!taskId || !action) return JSON.stringify({ success: false, error: 'task_id and action required' });
+    try {
+        const result = await ctx.transport.command('stage_decide_mesh_task', { meshId: ctx.mesh.id, taskId, action, ...(args.note ? { note: args.note } : {}) });
+        if (result?.success) ctx.transport.command('trigger_mesh_queue', { meshId: ctx.mesh.id }).catch(() => {});
+        return JSON.stringify(result?.success ? { success: true, taskId, action } : { success: false, error: result?.error ?? 'stage decision failed' });
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) });
+    }
+}

@@ -10,11 +10,8 @@ import {
     MESH_TASK_DIFFICULTIES,
     isMeshTaskDifficulty,
     normalizeOwnedPaths,
-<<<<<<< HEAD
     LIGHT_REJECT,
-=======
     resolveStagePlan,
->>>>>>> 87922152e (feat(mesh): stage pipeline core — reducer, runtime, ports and enqueue review option)
     type MeshTaskMode,
 } from '@adhdev/mesh-shared';
 import { initialStageState } from './stage-state.js';
@@ -205,8 +202,9 @@ export function enqueueTask(
             if (!effectiveThinkingLevel && preset.thinkingLevel) { effectiveThinkingLevel = preset.thinkingLevel; thinkingLevelSource = 'preset'; }
         }
     } catch { /* preset read is best-effort — never block enqueue */ }
-    // Review-in-task (R5): resolve the `review` option into a plan; throws invalid_review_option.
-    const stagePlan = stageChild ? null : resolveStagePlan(opts?.review, { taskMode: modeValidation.taskMode, difficulty: taskDifficulty, readonly });
+    // Review-in-task: resolve an EXPLICIT `review` option into a plan (throws invalid_review_option). The R5
+    // default-on is applied by the MCP enqueue tools, so internal/legacy enqueuers never get a pipeline implicitly.
+    const stagePlan = stageChild ? null : resolveStagePlan(opts?.review, { taskMode: modeValidation.taskMode, difficulty: taskDifficulty, readonly }, { defaultOn: false });
     const result = withQueueLock(meshId, () => {
         if (MeshRuntimeStore.getInstance().findQueueEntryById(meshId, id)) {
             throw new Error(`duplicate_task_id: task '${id}' already exists in mesh '${meshId}'`);

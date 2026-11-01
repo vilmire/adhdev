@@ -79,6 +79,8 @@ export function collectSessionIdsWithActiveWork(meshId: string, records?: Reapab
     const ids = new Set<string>();
     for (const task of getQueue(meshId, { status: ['pending', 'assigned'] as any })) {
         const sessionId = readStringValue((task as any)?.assignedSessionId);
+        // Review-in-task: a parked stage parent is `assigned`, so this keeps its implementer session alive for the
+        // revise loop (isStagePipelineParked documents why); the pipeline ceiling is what finally releases it.
         if (sessionId) ids.add(sessionId);
         const target = readStringValue(task.targetSessionId);
         if (target) {

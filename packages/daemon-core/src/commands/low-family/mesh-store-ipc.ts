@@ -1,4 +1,5 @@
 import { settleQueueWriter, WRITER_UNKNOWN_ERROR } from '../../mesh/mesh-queue-retirement.js';
+import { assertNotStageChild } from '../../mesh/stage-guards.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getMachineId } from '../../config/config.js';
@@ -434,6 +435,7 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     const req = decodeQueueRequeueRequest(args);
     if (!req) return badRequest('queue_requeue');
     try {
+        assertNotStageChild(req.meshId, req.taskId); // review-in-task §11
         const role = await ownQueueRole(_ctx, req.meshId);
         if (role?.role === 'host' && req.options?.force === true) await settleQueueWriter(req.meshId, req.taskId, 'superseded');
         const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTaskWithOutcome>[2]);

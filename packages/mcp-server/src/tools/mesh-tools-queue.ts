@@ -39,7 +39,7 @@ import type { MeshWorkQueueEntry } from '@adhdev/daemon-core';
 import type { MeshContext } from './mesh-tools-internal.js';
 import type { MeshTaskBatchEntrySpec } from '@adhdev/daemon-core';
 import type { MeshTaskInput } from './mesh-tool-shared.js';
-import { readString } from '@adhdev/mesh-shared';
+import { readString, resolveStagePlan } from '@adhdev/mesh-shared';
 
 /**
  * G4: normalize a task message for duplicate fingerprinting. Collapses whitespace and
@@ -154,6 +154,8 @@ interface EnqueueTaskArgsShape {
     input_artifact_ids?: unknown; inputArtifactIds?: unknown;
     /** Opt out of mission artifact auto-inherit: `false` keeps the task's input artifacts to the explicit ids. */
     inherit_artifacts?: unknown; inheritArtifacts?: unknown;
+    /** Review-in-task: true | false | {max_revisions?, independence?}. Omitted → R5 default (medium/difficult code_change on). */
+    review?: unknown;
 }
 
 interface NormalizedEnqueueTaskArgs {
@@ -188,6 +190,8 @@ interface NormalizedEnqueueTaskArgs {
     /** LIGHT-TASK: forwarded verbatim; the daemon admits (local base node, config) or refuses with a `light_*` code. */
     light: boolean;
     lightBaseNodeId: string | undefined;
+    /** Review-in-task option as the daemon expects it; undefined = nothing to send (default off for this task). */
+    review: boolean | { max_revisions: number; independence: string } | undefined;
 }
 
 type NormalizeEnqueueTaskResult =
@@ -336,12 +340,21 @@ async function normalizeEnqueueTaskArgs(
     const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
     const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? (rawInputArtifactIds as string[]) : undefined;
     const inheritArtifacts = (args.inheritArtifacts ?? args.inherit_artifacts) === false ? false as const : undefined;
+    // Review-in-task (docs/design/2026-11-01-review-in-task.md §9.1, R5): resolve the option (and its
+    // medium/difficult code_change default) here, so the daemon only ever sees an explicit decision.
+    let review: NormalizedEnqueueTaskArgs['review'];
+    try {
+        const plan = resolveStagePlan(args.review, { taskMode, difficulty, readonly });
+        review = plan ? { max_revisions: plan.maxRevisions, independence: plan.independence } : (args.review === false ? false : undefined);
+    } catch (e) {
+        return { ok: false, code: 'invalid_review_option', error: `${callerLabel}: ${e instanceof Error ? e.message : String(e)}` };
+    }
     return {
         ok: true,
         value: {
             message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
             model, thinkingLevel, difficulty, notBefore, maxRetries,
-            explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths,
+            explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths, review,
             light: args.light === true,
             lightBaseNodeId: readString(args.lightBaseNodeId) || readString(args.light_base_node_id) || undefined,
         },
@@ -406,7 +419,7 @@ export async function meshEnqueueTask(
     const {
         message, taskMode, input, readonly, requiredTags, dependsOn, inputArtifactIds, inheritArtifacts, missionId, priority,
         model, thinkingLevel, difficulty, notBefore, maxRetries,
-        explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths, light, lightBaseNodeId,
+        explicitTargetRaw, preferWorktree, targetNodeId, ownedPaths, light, lightBaseNodeId, review,
     } = normalized.value;
     // G4: duplicate detection. Default is warn-only; block is opt-in (block_duplicate=true).
     // allow_duplicate=true silences the warning entirely (explicit intentional re-enqueue).
@@ -439,7 +452,7 @@ export async function meshEnqueueTask(
             meshId: ctx.mesh.id,
             message,
             options: {
-                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, ...(inputArtifactIds ? { inputArtifactIds } : {}), ...(inheritArtifacts === false ? { inheritArtifacts: false } : {}), missionId, targetNodeId,
+                taskMode, ...(input ? { input } : {}), ...(readonly ? { readonly: true } : {}), requiredTags, dependsOn, ...(inputArtifactIds ? { inputArtifactIds } : {}), ...(inheritArtifacts === false ? { inheritArtifacts: false } : {}), ...(review !== undefined ? { review } : {}), missionId, targetNodeId,
                 ...(priority ? { priority } : {}),
                 ...(model ? { model } : {}),
                 ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -658,6 +671,7 @@ export async function meshEnqueueBatch(
             ...(v.ownedPaths ? { ownedPaths: v.ownedPaths } : {}),
             ...(v.inputArtifactIds ? { inputArtifactIds: v.inputArtifactIds } : {}),
             ...(v.inheritArtifacts === false ? { inheritArtifacts: false } : {}),
+            ...(v.review !== undefined ? { review: v.review } : {}),
             ...(ctx.coordinatorSessionId ? { sourceCoordinatorSessionId: ctx.coordinatorSessionId } : {}),
         });
     }

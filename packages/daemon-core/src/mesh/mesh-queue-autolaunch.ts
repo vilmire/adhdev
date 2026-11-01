@@ -1,5 +1,6 @@
 import { reuseIdleTaskSession } from './mesh-session-reuse.js';
 import { realpathSync } from 'node:fs';
+import { noteReviewRefusal } from './stage-independence.js';
 import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal, CAPACITY_OCCUPYING_STATUSES } from './mesh-task-routing-contract.js';
 import { getMachineId } from '../config/config.js';
 import { currentPhysicalScope } from './mesh-physical-ownership.js';
@@ -743,7 +744,11 @@ export async function resolveAutoLaunchPlan(
         markSkip(nodeId, 'owned_paths_conflict');
         return null;
     }
-    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] })));
+    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => {
+        const refusal = reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId, { status: [...CAPACITY_OCCUPYING_STATUSES] }));
+        if (task.origin === 'stage') noteReviewRefusal(task.id, refusal); // review-in-task R2 fallback window
+        return refusal;
+    });
     if (!resolved.providerType) {
         // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
         // loop (a gated first-choice provider falls through to the node's

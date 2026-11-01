@@ -30,6 +30,8 @@ import { expireWorkerTaskTokensForAttempt, expireWorkerTaskTokensForTask } from 
 import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
+import { shouldHoldStageTerminal } from './stage-state.js';
+import { notifyStageChildTerminal, notifyStageImplCompleted } from './stage-hooks.js';
 
 /** Terminal statuses the choke point accepts. */
 export type MeshTerminalCommitStatus = 'completed' | 'blocked' | 'failed' | 'cancelled';
@@ -74,6 +76,8 @@ interface MeshTerminalCommitResult {
     committed: boolean;
     /** True when the row was ALREADY terminal with the same status — a replayed event. */
     duplicate: boolean;
+    /** True when a stage-pipeline parent's intermediate `completed` was held (row stays `assigned`). */
+    held?: boolean;
 }
 
 /**
@@ -91,9 +95,15 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
             return { entry, committed: false, duplicate: false };
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
+        // Review-in-task: an intermediate stage report is not the task's end — hand it to the pipeline.
+        if (shouldHoldStageTerminal(entry, terminal.status)) return { entry, committed: true, duplicate: false, held: true };
         applyTaskTerminalSteps(store, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false };
     });
+    if (result.held) {
+        afterBridgeCommit(store.db, () => notifyStageImplCompleted(terminal.meshId, terminal.taskId, terminal.attemptId));
+        return result;
+    }
     // Idempotent post-commit cleanup: the replay fence re-enters with
     // duplicate:true for an already-terminal row, so this may run more than once.
     if (result.committed) afterBridgeCommit(store.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
@@ -171,6 +181,10 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
         const entry = store.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
+        if (shouldHoldStageTerminal(entry, input.status)) {
+            afterBridgeCommit(store.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
+            return { entry, transitioned: false };
+        }
         // The commit closes an attempt the queue is retiring to re-dispatch the
         // task (requeue supersede): the attempt ends, the row does not.
         // Only the row transition is fenced: the closed attempt's own worker tokens
@@ -204,6 +218,7 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
 export function afterTaskTerminalCommitted(meshId: string, taskId: string): void {
     try { expireWorkerTaskTokensForTask(meshId, taskId); } catch { /* a stale token still fails the causal checks */ }
     try { discardWorkerMailboxForTask(meshId, taskId); } catch { /* best-effort */ }
+    notifyStageChildTerminal(meshId, taskId);
 }
 
 /** Insert the next immutable output version for this task. */
