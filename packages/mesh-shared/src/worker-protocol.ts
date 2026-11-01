@@ -91,6 +91,12 @@ export interface WorkerProtocolFooterInput {
      * Renders the light-workspace rules (stay inside, commit there, no installs).
      */
     light?: { workspace: string; baseSha: string; ossBaseSha?: string; ownedPaths: string[] }
+    /**
+     * Review-in-task (docs/design/2026-11-01-review-in-task.md §9.3): present when this
+     * dispatch is one stage of a stage pipeline. `workspace` is the reviewer's pinned
+     * workspace path when the daemon prepared one.
+     */
+    stage?: { role: 'implement' | 'revise' | 'review'; round: number; maxRevisions: number; workspace?: string }
 }
 
 /** Light-workspace worker rules (design §9). */
@@ -191,7 +197,27 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
                 + 'honour their conflict guidance and add your own in `handoff_notes` when you report.',
         )
     }
+    if (input.stage) lines.push(...renderStageProtocolLines(input.stage))
     return lines.join('\n')
+}
+
+/** The stage-pipeline paragraph of the worker footer (implement / revise / review). */
+export function renderStageProtocolLines(stage: NonNullable<WorkerProtocolFooterInput['stage']>): string[] {
+    if (stage.role === 'review') {
+        return [
+            `STAGE: you are the independent reviewer (round ${stage.round} of at most ${stage.maxRevisions + 1}). Read the input artifacts first (diff, self-check log, previous verdict).`
+                + (stage.workspace ? ` Your workspace ${stage.workspace} is pinned to the round head — you may run tests, but nothing you change lands; do not fix, record findings instead.` : ' Do not modify the workspace: read it, and record findings instead of fixing.'),
+            'Your `report_completion` MUST carry `review`: {verdict: approve | approve_with_nits | changes_requested | reject_approach, findings[{id, severity, category, claim, evidence, suggested_fix?}], checked[], not_checked[], tests_run?[]}. '
+                + '`changes_requested` needs at least one blocking/major finding; `approve` allows none. From round 2 also give `prior_findings[{id, status}]` for every earlier blocking/major finding. '
+                + '`reject_approach` is only for a wrong approach, not for fixable defects.',
+        ]
+    }
+    return [
+        `STAGE: your \`report_completion\` is a stage report (${stage.role}, round ${stage.round}). An independent reviewer reads your diff next, so commit your work and leave the workspace clean before you report. You may receive review findings as a follow-up memo in this same session.`,
+        ...(stage.role === 'revise'
+            ? ['For every open blocking/major finding in the memo, fill `finding_responses[{id, response: fixed | disputed, note}]` — `disputed` needs your reasoning; the reviewer judges it next round.']
+            : []),
+    ]
 }
 
 /**

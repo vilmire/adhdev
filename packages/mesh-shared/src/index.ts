@@ -54,3 +54,4 @@ export * from './role-launch';
 export * from './task-source-phase';
 export * from './light-task';
 export * from './relay-reprobe'
+export * from './task-stages'

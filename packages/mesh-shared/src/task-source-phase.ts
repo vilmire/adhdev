@@ -58,4 +58,13 @@ export interface MeshIntegrationBatchContract {
 
 /** These only rank legal targets; targetNodeId/SessionId and requiredTags remain hard. */
 export interface MeshRoutingPreferences { nodeIds?: string[]; providers?: string[] }
-export interface MeshReviewConstraint { sourceTaskId: string; differentProvider: true }
+export type MeshReviewIndependence = 'different_provider' | 'fresh_session'
+/**
+ * Review row constraint. `differentProvider: true` is the legacy spelling of
+ * `independence: 'different_provider'`; `independence: 'fresh_session'` is the stage pipeline's
+ * fallback (same provider allowed, but never the implementer's session).
+ */
+export interface MeshReviewConstraint { sourceTaskId: string; differentProvider?: true; independence?: MeshReviewIndependence }
+export function reviewIndependenceOf(review: Pick<MeshReviewConstraint, 'differentProvider' | 'independence'>): MeshReviewIndependence {
+    return review.independence ?? 'different_provider'
+}
