@@ -189873,11 +189873,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
-      const hostBootId = args.dryRun ? "dry-run" : await resolveOperatorCleanupHostBootId(self.deps.sessionHostControl);
+      const matched = sessions.filter((record7) => self.sessionMatchesMeshNode(record7, args.node, args.nodeId, requestedSessionIds));
+      const hostBootId = args.dryRun ? "dry-run" : matched.length > 0 ? await resolveOperatorCleanupHostBootId(self.deps.sessionHostControl) : "no-matched-sessions";
       if (!args.dryRun && !hostBootId) {
         return { success: false, error: "cleanup_host_boot_unknown", retained: true };
       }
-      const matched = sessions.filter((record7) => self.sessionMatchesMeshNode(record7, args.node, args.nodeId, requestedSessionIds));
       const hasExplicitSessionIds = !!requestedSessionIds?.size;
       const stoppedSessionIds = [];
       const deletedSessionIds = [];
