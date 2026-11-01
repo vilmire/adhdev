@@ -1,4 +1,3 @@
-import { operatorRecoverySpecs } from './low-family/operator-recovery.js';
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
 import { maintenanceHoldSpecs } from './low-family/maintenance-hold.js';
 import { admitRouterCommandUnderNewWorkHold, isRouterCommandMaintenanceExempt } from '../maintenance/new-work-hold.js';
@@ -239,7 +238,6 @@ export interface CommandRouterDeps {
     /** Standalone: the HTTP server's listen address, for host pairing address candidates. */
     getMeshListenAddress?: () => MeshListenAddress | null;
     /** Dispatch a command to a remote mesh node via P2P/relay (cloud WebRTC or standalone direct WebSocket). */
-    captureRecoveryPeer?: (daemonId: string, binding: import('@adhdev/session-host-core').RecoveryHostBinding, fenceDigest: string) => import('../mesh/turn-ledger/operator-recovery.js').RecoveryPeerPort | null;
     dispatchMeshCommand?: (daemonId: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>;
     /**
      * Coordinator-held node git state store. Boot passes one persisted in
@@ -319,7 +317,6 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...quotaReserveSpecs,
             ...meshLedgerSpecs,
             ...turnLedgerIpcSpecs,
-            ...operatorRecoverySpecs,
             ...meshNodeLogsSpecs,
             ...workerReportSpecs,
             ...workerBridgeSpecs,

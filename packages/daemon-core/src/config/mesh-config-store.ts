@@ -32,7 +32,6 @@ const MESH_CONFIG_LOCK_WAIT_MS = 2000;
 export const STRICT_MESH_CONFIG_LOCK_WAIT_MS = 300;
 let heldMutex: { path: string; mutex: MeshConfigMutex } | undefined;
 let strictMeshWriteDepth = 0;
-let recoveryOwnershipDepth = 0;
 function assertMeshConfigMutex(): void {
     if (!heldMutex || heldMutex.path !== getMeshConfigPath()) throw new MeshConfigStrictLockError('project_storage_unavailable');
     heldMutex.mutex.assertHeld();
@@ -56,7 +55,6 @@ function withConfigMutex<T>(operation: () => T, timeout: number): T {
     }
 }
 export function withMeshConfigWriteLock<T>(fn: () => T): T {
-    if (recoveryOwnershipDepth) { assertMeshConfigMutex(); throw new MeshConfigStrictLockError('store_busy'); }
     return withConfigMutex(fn, MESH_CONFIG_LOCK_WAIT_MS);
 }
 export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
@@ -65,18 +63,6 @@ export function withStrictMeshConfigWriteLock<T>(operation: () => T): T {
         try { return operation(); } finally { strictMeshWriteDepth--; }
     }, STRICT_MESH_CONFIG_LOCK_WAIT_MS);
 }
-export function inRecoveryMeshOwnershipFence(): boolean {
-    if (recoveryOwnershipDepth) assertMeshConfigMutex();
-    return recoveryOwnershipDepth > 0;
-}
-export function withRecoveryMeshOwnershipFence<T>(operation: () => T): T {
-    if (recoveryOwnershipDepth) { assertMeshConfigMutex(); return operation(); }
-    if (heldMutex) throw new MeshConfigStrictLockError('store_busy');
-    return withStrictMeshConfigWriteLock(() => {
-        recoveryOwnershipDepth++;
-        try { return operation(); } finally { recoveryOwnershipDepth--; }
-    });
-}
 
 /** Durable replace for strict transactions; unrelated saveMeshConfig callers
  * keep their existing behavior. A post-rename failure never claims success. */
@@ -84,7 +70,6 @@ export function saveMeshConfigDurable(config: LocalMeshConfig):
     { ok: true; durable: true } | { ok: false; reason: string; committed: boolean } {
     if (!strictMeshWriteDepth) return { ok: false, reason: 'strict_write_lock_required', committed: false };
     assertMeshConfigMutex();
-    if (recoveryOwnershipDepth) throw new MeshConfigStrictLockError('store_busy');
     const path = getMeshConfigPath();
     const temp = `${path}.tmp-${process.pid}-${randomUUID()}`;
     let committed = false;
@@ -482,7 +467,6 @@ export function saveMeshConfig(config: LocalMeshConfig): void {
     // must also hold the outer lock, so their snapshot cannot overwrite a peer.
     if (!heldMutex) return withMeshConfigWriteLock(() => saveMeshConfig(config));
     assertMeshConfigMutex();
-    if (recoveryOwnershipDepth) throw new MeshConfigStrictLockError('store_busy');
     const path = getMeshConfigPath();
     // Atomic publish: write a per-process tmp sibling, then rename over the
     // target — a concurrent reader never sees a torn, half-written file.
