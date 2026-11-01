@@ -396,7 +396,7 @@ export interface RepoMeshQueueTask {
     difficulty?: string;
     /** LIGHT-TASK: runs in a temporary workspace on the coordinator machine; `lightResult.landing` is its landing state (ready|conflict|blocked|landed|discarded). */
     light?: boolean;
-    lightResult?: { landing: string };
+    lightResult?: { landing: 'ready' | 'conflict' | 'blocked' | 'landed' | 'discarded' };
     /**
      * M1 dependency edges carried on {@link MeshWorkQueueEntry} — like `difficulty`,
      * already on the wire (mesh_status serializes raw queue rows) and typed here the

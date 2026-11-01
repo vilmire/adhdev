@@ -18,6 +18,11 @@
  * (queue dependency edges) — see useBlueprintGroups.
  */
 import { QueueTaskHold } from './QueueTaskHold'
+
+// Wire value narrowed before it becomes an i18n key; unknown states render no chip.
+const LIGHT_LANDINGS = ['ready', 'conflict', 'blocked', 'landed', 'discarded'] as const
+type LightLanding = typeof LIGHT_LANDINGS[number]
+const asLightLanding = (v: unknown): LightLanding | null => (LIGHT_LANDINGS as readonly unknown[]).includes(v) ? v as LightLanding : null
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { formatTaskCardTime, taskCardTimeSource } from './taskDagViewModel'
@@ -88,6 +93,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
 }) {
     const { t } = useTranslation('common')
     const task = row.task
+    const lightLanding = asLightLanding(task.lightResult?.landing)
     const dot = ROW_DOT[row.statusToken] ?? ROW_DOT.pending
     const time = formatTaskCardTime(taskCardTimeSource(task), nowMs, t)
     // Visual weight by section: Running full colour, Blocked full colour with
@@ -171,7 +177,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                     {task.difficulty && <span className={neutralChip()}>{task.difficulty}</span>}
                     {task.priority && task.priority !== 'normal' && <span className={neutralChip()}>{task.priority}</span>}
                     {task.light && <span className={neutralChip()}>{t('mesh.blueprint.lightBadge')}</span>}
-                    {task.light && task.lightResult?.landing && <span className={task.lightResult.landing === 'ready' || task.lightResult.landing === 'landed' ? neutralChip() : amberChip()}>{t(`mesh.blueprint.lightLanding.${task.lightResult.landing}`, { defaultValue: task.lightResult.landing })}</span>}
+                    {task.light && lightLanding && <span className={lightLanding === 'ready' || lightLanding === 'landed' ? neutralChip() : amberChip()}>{t(`mesh.blueprint.lightLanding.${lightLanding}`)}</span>}
                     {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip()}>{t('mesh.blueprint.readonlyBadge')}</span>}
                     {missionTitle && task.missionId && (
                         <button
