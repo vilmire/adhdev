@@ -17,7 +17,7 @@ import { getMachineId } from '../config/config.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 import { getMesh } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
-import { diffLightFingerprints, loadLightFingerprint, takeLightCheckoutFingerprint } from './light-checkout-fingerprint.js';
+import { diffLightFingerprints, parseLightFingerprint, takeLightCheckoutFingerprint } from './light-checkout-fingerprint.js';
 import { lightGit, lightGitOk } from './light-git.js';
 import { lightRepoHash, lightTaskKey } from './light-workspace.js';
 import { getLightWorkspace, setLightWorkspaceState, type LightWorkspaceRow } from './mesh-light-workspace-store.js';
@@ -109,13 +109,14 @@ async function applyCheck(repo: string, ws: LightWorkspaceRow, rootHead: string,
     return { against: rootAgainst, status, ...(conflicts.length ? { conflictPaths: conflicts } : {}) };
 }
 
-function artifactDir(ws: LightWorkspaceRow): string {
+/** Where a result's patch files live (outside the workspace, so they outlive its 24h removal). */
+export function lightArtifactDir(ws: Pick<LightWorkspaceRow, 'repoRoot' | 'taskId'>): string {
     return path.join(resolveConfigDir(), 'light-artifacts', lightRepoHash(ws.repoRoot), lightTaskKey(ws.taskId));
 }
 
 function registerPatch(task: MeshWorkQueueEntry, ws: LightWorkspaceRow, name: string, content: string, title: string): string | undefined {
     if (!content) return undefined;
-    const dir = artifactDir(ws);
+    const dir = lightArtifactDir(ws);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, name), content);
     const sessionId = task.assignedSessionId || task.targetSessionId;
@@ -218,10 +219,14 @@ export async function captureLightTaskResult(input: { meshId: string; taskId: st
     }
 
     // 5. shared checkout fingerprint
-    const before = loadLightFingerprint(lw);
-    if (before) {
-        // Re-scan exactly the directories the baseline covered (already glob-expanded), not a freshly loaded config.
-        const after = await takeLightCheckoutFingerprint(repo, Object.keys(before.nodeModules), subs);
+    // Baseline lives in the daemon DB. Missing/unparsable = fail closed (it can only vanish through a daemon fault or tampering).
+    const before = parseLightFingerprint(ws.fingerprintJson);
+    if (!before) {
+        return finish({ ...common, landing: 'blocked', blockedReason: 'shared_checkout_mutated', blockedDetail: 'baseline_missing', patchArtifactIds: patchIds, ...(ownedPathsMismatch ? { ownedPathsMismatch } : {}) });
+    }
+    {
+        // Re-scan the directories recorded at prepare time (from the config), not anything the baseline file/JSON claims.
+        const after = await takeLightCheckoutFingerprint(repo, ws.linkDirs, subs);
         const diff = diffLightFingerprints(before, after, { touchedPaths, owned: task.ownedPaths });
         if (diff.overlappingPaths.length || diff.nodeModulesChanged.length) {
             return finish({ ...common, landing: 'blocked', blockedReason: 'shared_checkout_mutated', blockedDetail: JSON.stringify({ paths: diff.overlappingPaths.slice(0, 20), nodeModules: diff.nodeModulesChanged }), patchArtifactIds: patchIds, ...(ownedPathsMismatch ? { ownedPathsMismatch } : {}) });

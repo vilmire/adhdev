@@ -93,12 +93,13 @@ export function diffLightFingerprints(before: LightCheckoutFingerprint, after: L
     return { changedPaths: [...changed].sort(), overlappingPaths: overlapping.sort(), nodeModulesChanged, headMoved, refsChanged, stashChanged: before.stashCount !== after.stashCount };
 }
 
-export const LIGHT_FINGERPRINT_SUFFIX = '.adhdev-light-fp.json';
-
-/** The "before" fingerprint lives beside the workspace (outside it, so it never shows up in `git status`). */
-export function saveLightFingerprint(workspacePath: string, fp: LightCheckoutFingerprint): void {
-    fs.writeFileSync(`${workspacePath}${LIGHT_FINGERPRINT_SUFFIX}`, JSON.stringify(fp));
-}
-export function loadLightFingerprint(workspacePath: string): LightCheckoutFingerprint | null {
-    try { return JSON.parse(fs.readFileSync(`${workspacePath}${LIGHT_FINGERPRINT_SUFFIX}`, 'utf8')); } catch { return null; }
+/** Parse a stored baseline; null when absent or structurally invalid (callers treat that as a violation). */
+export function parseLightFingerprint(json: string | undefined): LightCheckoutFingerprint | null {
+    if (!json) return null;
+    try {
+        const v = JSON.parse(json);
+        if (v && typeof v.head === 'string' && v.status && typeof v.status === 'object' && v.nodeModules && typeof v.nodeModules === 'object'
+            && v.branches && typeof v.branches === 'object' && v.submoduleHeads && typeof v.submoduleHeads === 'object') return v;
+    } catch { /* fall through */ }
+    return null;
 }

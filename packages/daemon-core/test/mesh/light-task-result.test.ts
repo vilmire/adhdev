@@ -73,8 +73,9 @@ function cleanup(meshId: string) {
 
 import { execFileSync } from 'child_process'
 import { captureLightTaskResult } from '../../src/mesh/light-task-result.js'
+import { setLightWorkspaceFingerprint } from '../../src/mesh/mesh-light-workspace-store.js'
 import { prepareLightWorkspace } from '../../src/mesh/light-workspace.js'
-import { saveLightFingerprint, takeLightCheckoutFingerprint } from '../../src/mesh/light-checkout-fingerprint.js'
+import { takeLightCheckoutFingerprint } from '../../src/mesh/light-checkout-fingerprint.js'
 import { validateLightWorkspaceConfig } from '../../src/mesh/light-workspace-config.js'
 import { validateWorkerCompletionReport } from '../../src/mesh/worker-report-validation.js'
 
@@ -105,7 +106,7 @@ describe('LIGHT-TASK result capture (real git)', () => {
     const row = enqueueTask(meshId, 'light work', { taskMode: 'code_change', difficulty: 'easy', ownedPaths, light: true, lightBaseNodeId: 'node_alpha' } as any)
     const store = MeshRuntimeStore.getInstance()
     const ws = await prepareLightWorkspace({ meshId, taskId: row.id, checkoutRoot: checkout, config: cfg, db: store.db })
-    saveLightFingerprint(ws.path, await takeLightCheckoutFingerprint(checkout, cfg.linkNodeModules, ['oss']))
+    setLightWorkspaceFingerprint(store.db, ws.workspaceId, await takeLightCheckoutFingerprint(checkout, cfg.linkNodeModules, ['oss']))
     const fresh = store.findQueueEntryById(meshId, row.id)!
     Object.assign(fresh, { lightWorkspaceId: ws.workspaceId, targetSessionId: `sess_${row.id}`, assignedSessionId: `sess_${row.id}`, status: 'assigned' })
     store.updateQueueEntry(fresh)
@@ -183,6 +184,24 @@ describe('LIGHT-TASK result capture (real git)', () => {
     commitIn(ws.path, 'src.txt', 'line1\nWORKER\nline3\n')
     write(path.join(checkout, 'node_modules/newpkg/index.js'), 'x\n')
     expect(await captureLightTaskResult({ meshId, taskId: row.id, report: { outcome: 'completed' } })).toMatchObject({ landing: 'blocked', blockedReason: 'shared_checkout_mutated' })
+  })
+
+  it('a deleted baseline fails closed and keeps the patch artifacts', async () => {
+    const { row, ws, store } = await setup()
+    commitIn(ws.path, 'src.txt', 'line1\nWORKER\nline3\n')
+    store.db.prepare('UPDATE mesh_light_workspaces SET fingerprint_json = NULL WHERE workspace_id = ?').run(ws.workspaceId)
+    const res = await captureLightTaskResult({ meshId, taskId: row.id, report: { outcome: 'completed' } })
+    expect(res).toMatchObject({ landing: 'blocked', blockedReason: 'shared_checkout_mutated', blockedDetail: 'baseline_missing' })
+    expect(res!.patchArtifactIds.length).toBeGreaterThan(0)
+  })
+
+  it('files a worker plants next to the workspace cannot supply or alter the baseline', async () => {
+    const { row, ws, store } = await setup()
+    commitIn(ws.path, 'src.txt', 'line1\nWORKER\nline3\n')
+    store.db.prepare('UPDATE mesh_light_workspaces SET fingerprint_json = NULL WHERE workspace_id = ?').run(ws.workspaceId)
+    const forged = JSON.stringify(await takeLightCheckoutFingerprint(checkout, cfg.linkNodeModules, ['oss']))
+    fs.writeFileSync(`${ws.path}.adhdev-light-fp.json`, forged)
+    expect((await captureLightTaskResult({ meshId, taskId: row.id, report: { outcome: 'completed' } }))).toMatchObject({ landing: 'blocked', blockedDetail: 'baseline_missing' })
   })
 
   it('a non-completed report records no result and marks the workspace failed', async () => {

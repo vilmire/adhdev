@@ -8,10 +8,10 @@ const execFileAsync = promisify(execFile);
 export interface LightGitResult { code: number; stdout: string; stderr: string }
 
 /** Never throws on a non-zero exit; `code` carries it (-1 = spawn/timeout failure). */
-export async function lightGit(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string } = {}): Promise<LightGitResult> {
+export async function lightGit(cwd: string, args: string[], opts: { timeoutMs?: number; input?: string; env?: Record<string, string> } = {}): Promise<LightGitResult> {
     try {
         const p = execFileAsync('git', args, {
-            cwd, encoding: 'utf8', timeout: opts.timeoutMs ?? 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true, env: gitChildEnv(),
+            cwd, encoding: 'utf8', timeout: opts.timeoutMs ?? 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true, env: { ...gitChildEnv(), ...(opts.env ?? {}) },
         });
         if (opts.input !== undefined) (p as any).child?.stdin?.end(opts.input);
         const { stdout, stderr } = await p;
