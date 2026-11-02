@@ -971,6 +971,7 @@
             "artifactsRoleAssistant": "アシスタント",
             "artifactsRoleUser": "ユーザー",
             "artifactsRoleSession": "セッション",
+            "artifactsRolePipeline": "レビューパイプライン",
             "artifactsTaskShort": "タスク …{{id}}",
             "artifactsMissionShort": "ミッション …{{id}}",
             "artifactsOpenAria": "{{title}} を開く",
@@ -1088,6 +1089,20 @@
             "readonlyBadge": "読み取り専用",
             "lightBadge": "ライト",
             "lightLanding": { "ready": "着地待ち", "conflict": "競合", "blocked": "ブロック", "landed": "着地済み", "discarded": "破棄" },
+            "lightBadgeTitle": "ライトタスク：独立した一時ワークスペースで実行されたため、チェックアウトには影響しません。反映前に結果を確認してください。",
+            "lightLandingTitle": {
+                "ready": "結果は問題なく適用できます。次の操作：ベースブランチへ反映するか、破棄してください。",
+                "conflict": "結果がベースブランチにきれいに適用できなくなりました。次の操作：競合を解消するか、結果を破棄してタスクを再実行してください。",
+                "blocked": "結果を自動では反映できません。理由を確認し、修正するか結果を破棄してください。",
+                "landed": "結果は反映済みです。",
+                "discarded": "結果は破棄され、何も反映されていません。"
+            },
+            "lightBlockedReason": {
+                "light_uncommitted_changes": "ブロック：ワーカーがコミットされていない変更を残したため、安全に反映できるものがありません。",
+                "light_dependency_change": "ブロック：ライトタスクが変更してはいけない依存関係ファイル（ロックファイル・マニフェスト）を変更しています。",
+                "light_lineage_unproven": "ブロック：結果が想定したベースコミットから続いていることを確認できませんでした。",
+                "shared_checkout_mutated": "ブロック：タスク実行中に共有チェックアウトが変わったため、結果を信頼できません。"
+            },
             "schedObservedAt": "{{time}} 時点",
             "schedNoNodes": "ルーティング可能なノードがありません。",
             "schedQuotaButton": "クォータ",
@@ -1131,6 +1146,30 @@
                 "stageDone": "レビュー完了",
                 "stageRound": "ラウンド {{round}}",
                 "stageReviewChild": "レビュー r{{round}}",
+                "stageHint": {
+                    "stageImplementing": "ワーカーが実装中です。完了するとレビューに進みます。",
+                    "stageSelfCheck": "ワーカーがレビュー依頼の前に自己チェックを実行しています。",
+                    "stageAwaitingReview": "実装は完了し、レビュアーの開始を待っています。",
+                    "stageReviewing": "別のレビュアーが変更内容を確認しています。",
+                    "stageRevising": "レビュアーから修正依頼があり、ワーカーが修正中です。",
+                    "stageDone": "レビューが完了しました。",
+                    "stageReviewChild": "別のタスクをレビューするレビュアー用タスクです。"
+                },
+                "stageVerdict": {
+                    "approve": "承認",
+                    "approve_with_nits": "軽微な指摘つきで承認",
+                    "changes_requested": "修正依頼",
+                    "reject_approach": "方針を却下"
+                },
+                "stageBlocked": {
+                    "review_unresolved": "許可されたラウンドを使い切ってもレビューの指摘が解消されていません。受け入れる・もう一度修正する・破棄する、のいずれかを決めてください。",
+                    "review_rejected_approach": "レビュアーが方針そのものを却下しました。再試行する前にタスクの進め方を見直してください。",
+                    "review_unavailable": "レビュアーを起動できませんでした。プロバイダーの状態を確認してから、レビューを再試行してください。",
+                    "self_check_failed": "ワーカーの自己チェックが失敗したため、レビューは開始されていません。",
+                    "stage_pipeline_ceiling": "レビューパイプラインがラウンド上限に達しました。",
+                    "reviewer_mutated_source": "読み取り専用のはずのレビュアーがコードを変更したため、判定は無効になりました。",
+                    "reviewer_integrity_unverifiable": "レビューが読み取り専用だったことを確認できず、判定を受け付けませんでした。"
+                },
                 "planShow": "プラン",
                 "planHide": "閉じる",
                 "planTitle": "このタスクの依存プランを表示",
@@ -4250,7 +4289,48 @@
             },
             "roleSource": "送信中",
             "roleTarget": "受信中",
-            "errorCode": "理由: {{code}}"
+            "errorCode": "理由: {{code}}",
+            "loadingProjects": "プロジェクトを読み込み中…",
+            "noProjects": "このマシンにプロジェクトが見つかりません",
+            "selectedCount": "選択中：{{count}} 件",
+            "selectedCountSize": "選択中：{{count}} 件 · {{size}}",
+            "selectedCountFolders": "選択中：{{count}} 件 · ファイル {{size}}（フォルダのサイズはプレビューで表示）",
+            "progressPercent": "{{percent}}%",
+            "errorGeneric": "転送に失敗しました",
+            "errors": {
+                "DIRECT_UNAVAILABLE": "この2台は直接接続できません（ファイアウォールまたは NAT）。ファイル転送には直接接続が必要です。",
+                "LINK_UNAVAILABLE": "マシン間の直接接続を確立できませんでした。両方がオンラインか確認して、もう一度お試しください。",
+                "LINK_LOST": "直接接続が切れ、復旧できませんでした。",
+                "STALE_LINK": "接続が新しいものに置き換えられました。転送をやり直してください。",
+                "PEER_UNREACHABLE": "相手のマシンに接続できません。オンラインか確認してください。",
+                "PEER_REFUSED": "相手のマシンが転送を拒否しました。",
+                "PEER_CANCELLED": "相手のマシンが転送をキャンセルしました。",
+                "PEER_ABORT": "相手のマシンが転送を中止しました。",
+                "PEER_UNAUTHORIZED": "相手のマシンはこのマシンとの転送を許可されていません。両方が同じアカウントのマシンである必要があります。",
+                "CONSENT_EXPIRED": "転送が終わる前に承認の期限が切れました。プレビューしてもう一度承認してください。",
+                "PREVIEW_EXPIRED": "プレビューの期限が切れました。選択内容をもう一度プレビューしてください。",
+                "APPROVAL_MISMATCH": "2台が異なる選択内容を承認しました。プレビューしてもう一度承認してください。",
+                "VERIFY_FAILED": "受信したファイルが送信内容と一致しなかったため、何も公開されていません。",
+                "SOURCE_UNREADABLE": "送信側で、選択したファイルを読み取れませんでした。",
+                "DISK_SPACE_EXHAUSTED": "受信側のディスク容量が足りません。",
+                "TARGET_FAILED": "受信側でファイルを保存できませんでした。",
+                "TEMP_DATA_EXPIRED": "一時的な転送データの期限が切れました。転送をやり直してください。",
+                "WORKSPACE_NOT_REGISTERED": "選択したプロジェクトは、そのマシンに登録されていません。",
+                "TOO_MANY_TRANSFERS": "実行中の転送が多すぎます。どれかが終わるまでお待ちください。",
+                "REVOKED": "承認が取り消されました。",
+                "SUPERSEDED": "新しい転送に置き換えられました。",
+                "INVALID_FINAL_NAME": "使用できないフォルダ名です。別の名前を入力してください。",
+                "NATIVE_HELPER_UNAVAILABLE": "このマシンではファイル転送ヘルパーを利用できません。",
+                "ATOMIC_NOREPLACE_UNSUPPORTED": "このマシンのファイルシステムでは、フォルダを安全に作成できません。",
+                "UNREACHABLE": "マシンに接続できませんでした。",
+                "INTERNAL_ERROR": "予期しないエラーが発生しました。"
+            },
+            "stateHint": {
+                "linking": "マシン間の直接接続を準備しています。",
+                "paused": "接続が切れました。自動で再接続します。進行状況は保持されます。",
+                "awaiting_approval": "こちらは承認済みです。相手のマシンの承認を待っています。",
+                "needs_reapproval": "内容が変わりました。続けるには、もう一度承認してください。"
+            }
         },
         "remoteProjectAttach": {
             "sectionTitle": "リモートプロジェクト接続",
@@ -4939,7 +5019,7 @@
     },
     "artifact": {
         "viewFull": "全体を表示",
-        "viewFullTitle": "全体を表示 (전체 보기)",
+        "viewFullTitle": "全体を表示",
         "collapse": "折りたたむ",
         "download": "ダウンロード",
         "downloading": "ダウンロード中…",

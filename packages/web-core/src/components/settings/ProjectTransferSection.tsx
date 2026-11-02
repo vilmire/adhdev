@@ -27,8 +27,11 @@ export interface ProjectTransferSectionProps {
 const errText = (body: Record<string, any>, fallback: string) =>
     typeof body.detail === 'string' && body.detail ? `${body.code ?? ''} ${body.detail}`.trim() : typeof body.code === 'string' ? body.code : fallback
 
+/** Statuses that explain themselves with one more line under the state word. */
+const STATE_HINTS = new Set(['linking', 'paused', 'awaiting_approval', 'needs_reapproval'])
+
 export function ProjectTransferSection({ machines: machinesProp, sendCommand: sendProp, pollMs = 1500 }: ProjectTransferSectionProps = {}) {
-    const { t } = useTranslation('common')
+    const { t, i18n } = useTranslation('common')
     const baseDaemons = useBaseDaemons()
     const transport = useTransport()
     const sendRef = useRef<SendCommand>(sendProp ?? transport.sendCommand)
@@ -60,6 +63,14 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [error, setError] = useState('')
     const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[] }>>({})
     const [transfers, setTransfers] = useState<TransferView[]>([])
+    // Machines whose workspace list (daemon.metadata lane) is still being fetched.
+    const [metaLoading, setMetaLoading] = useState<Set<string>>(new Set())
+    // Sizes of the files seen while browsing, so the selection can show a total before Preview.
+    const [sizes, setSizes] = useState<Record<string, number>>({})
+    const [selectedDirs, setSelectedDirs] = useState<Set<string>>(new Set())
+
+    // Human text for a wire error code; the raw code stays visible next to it.
+    const errorCodeText = useCallback((code: string) => (i18n.exists(`settings.projectTransfer.errors.${code}`, { ns: 'common' }) ? t(`settings.projectTransfer.errors.${code}`) : ''), [t, i18n])
 
     // The daemon entry only carries `workspaces` once its `daemon.metadata` lane is
     // subscribed (the machine detail page does this on open). Subscribe the chosen
@@ -68,7 +79,11 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const loadMetadata = useDaemonMetadataLoader()
     useEffect(() => {
         if (machinesProp) return
-        for (const id of [fromId, toId]) if (id) void loadMetadata(id).catch(() => undefined)
+        for (const id of [fromId, toId]) {
+            if (!id) continue
+            setMetaLoading(prev => new Set(prev).add(id))
+            void loadMetadata(id).catch(() => undefined).finally(() => setMetaLoading(prev => { const next = new Set(prev); next.delete(id); return next }))
+        }
     }, [machinesProp, fromId, toId, loadMetadata])
 
     const fromMachine = byId.get(fromId)
@@ -89,7 +104,14 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         if (!fromId || !fromWs) { setEntries([]); return }
         let cancelled = false
         void call(sendRef.current, fromId, 'project_transfer_browse', { workspaceId: fromWs, path: dir }).then(body => {
-            if (!cancelled) setEntries(body.success === true && Array.isArray(body.entries) ? body.entries : [])
+            if (cancelled) return
+            const list: BrowseEntry[] = body.success === true && Array.isArray(body.entries) ? body.entries : []
+            setEntries(list)
+            setSizes(prev => {
+                const next = { ...prev }
+                for (const e of list) if (e.kind === 'file' && e.size !== undefined) next[dir ? `${dir}/${e.name}` : e.name] = e.size
+                return next
+            })
         }).catch(() => { if (!cancelled) setEntries([]) })
         return () => { cancelled = true }
     }, [fromId, fromWs, dir])
@@ -116,12 +138,21 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
 
     const toggle = (name: string) => {
         const rel = dir ? `${dir}/${name}` : name
+        const isDir = entries.find(e => e.name === name)?.kind === 'dir'
+        setSelectedDirs(prev => { const next = new Set(prev); if (!isDir || prev.has(rel)) next.delete(rel); else next.add(rel); return next })
         setSelected(prev => { const next = new Set(prev); if (next.has(rel)) next.delete(rel); else next.add(rel); return next })
     }
+    useEffect(() => { if (selected.size === 0) setSelectedDirs(prev => prev.size ? new Set() : prev) }, [selected])
+    const selectedFileBytes = [...selected].reduce((sum, rel) => sum + (sizes[rel] ?? 0), 0)
+    const selectionSummary = selected.size === 0 ? '' : selectedDirs.size > 0
+        ? t('settings.projectTransfer.selectedCountFolders', { count: selected.size, size: formatBytes(selectedFileBytes) })
+        : t('settings.projectTransfer.selectedCountSize', { count: selected.size, size: formatBytes(selectedFileBytes) })
 
     const unsupportedMessage = [fromId, toId].map(id => {
         const c = caps[id]
-        return c && !c.supported ? t('settings.projectTransfer.unsupported', { machine: byId.get(id)?.name ?? id, reason: c.reasons.join(', ') || '?' }) : ''
+        if (!c || c.supported) return ''
+        const reason = c.reasons.map(r => { const h = errorCodeText(r); return h ? `${h} (${r})` : r }).join(' ') || '?'
+        return t('settings.projectTransfer.unsupported', { machine: byId.get(id)?.name ?? id, reason })
     }).find(Boolean) ?? ''
 
     const canPreview = !!(fromId && fromWs && toId && toWs && folder.trim() && selected.size > 0 && toId !== fromId && !unsupportedMessage && !busy)
@@ -133,7 +164,7 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                 workspaceId: fromWs, selected: [...selected], targetDaemonId: toId, targetWorkspaceId: toWs, finalName: folder.trim(),
             })
             if (body.success === true && body.transfer) { setPreview(body.transfer as TransferView); void refresh() }
-            else setError(`${t('settings.projectTransfer.createFailed')}: ${errText(body, '')}`)
+            else setError(`${t('settings.projectTransfer.createFailed')}: ${(typeof body.code === 'string' && errorCodeText(body.code)) || errText(body, '')}`)
         } catch (e) { setError(e instanceof Error ? e.message : t('settings.projectTransfer.createFailed')) }
         finally { setBusy(false) }
     }
@@ -165,12 +196,18 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
             {machines.map(m => <option key={m.id} value={m.id} disabled={!m.online}>{m.name}</option>)}
         </select>
     )
-    const wsOptions = (m: ProjectTransferMachine | undefined, value: string, onChange: (v: string) => void, testId: string) => (
-        <select className="input" value={value} onChange={e => onChange(e.target.value)} disabled={!m} data-testid={testId}>
-            <option value="">{t('settings.projectTransfer.chooseProject')}</option>
-            {(m?.workspaces ?? []).map(w => <option key={w.id} value={w.id}>{w.label || w.path}</option>)}
-        </select>
-    )
+    const wsOptions = (m: ProjectTransferMachine | undefined, value: string, onChange: (v: string) => void, testId: string) => {
+        const list = m?.workspaces ?? []
+        // The list arrives asynchronously; never show an unexplained empty dropdown.
+        const loading = !!m && list.length === 0 && metaLoading.has(m.id)
+        const empty = !!m && list.length === 0 && !loading
+        return (
+            <select className="input" value={value} onChange={e => onChange(e.target.value)} disabled={!m || loading || empty} aria-busy={loading || undefined} data-testid={testId}>
+                <option value="">{loading ? t('settings.projectTransfer.loadingProjects') : empty ? t('settings.projectTransfer.noProjects') : t('settings.projectTransfer.chooseProject')}</option>
+                {list.map(w => <option key={w.id} value={w.id}>{w.label || w.path}</option>)}
+            </select>
+        )
+    }
 
     if (machines.length < 2) {
         return <div className="text-xs text-text-muted px-3.5 py-3 rounded-xl border border-border-subtle bg-bg-glass" data-testid="project-transfer-no-machines">{t('settings.projectTransfer.noMachines')}</div>
@@ -228,7 +265,9 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                 <Button variant="primary" disabled={!canPreview} onClick={() => { void handlePreview() }} data-testid="project-transfer-preview">
                     {busy && !preview ? t('settings.projectTransfer.previewing') : t('settings.projectTransfer.preview')}
                 </Button>
-                {selected.size === 0 && <span className="ml-2 text-xs text-text-muted">{t('settings.projectTransfer.needSelection')}</span>}
+                {selected.size === 0
+                    ? <span className="ml-2 text-xs text-text-muted">{t('settings.projectTransfer.needSelection')}</span>
+                    : <span className="ml-2 text-xs text-text-secondary" data-testid="project-transfer-selection-summary">{selectionSummary}</span>}
             </div>
 
             {preview && (
@@ -264,12 +303,26 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                     const needsMe = (tr.state === 'offered' || tr.state === 'previewed' || tr.state === 'needs_reapproval') && !tr.localApproved
                     return (
                         <div key={tr.id} className="px-3.5 py-3 rounded-xl border border-border-subtle bg-bg-glass flex flex-col gap-1" data-testid={`project-transfer-row-${tr.id}`}>
-                            <div className="flex items-center justify-between text-xs">
-                                <span>{tr.role === 'source' ? t('settings.projectTransfer.roleSource') : t('settings.projectTransfer.roleTarget')} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}</span>
-                                <span className="font-mono">{t(`settings.projectTransfer.state.${tr.state}`, { defaultValue: tr.state })}</span>
+                            <div className="flex items-start justify-between gap-2 text-xs">
+                                <span className="min-w-0 break-words">{tr.role === 'source' ? t('settings.projectTransfer.roleSource') : t('settings.projectTransfer.roleTarget')} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}</span>
+                                <span className={`font-mono shrink-0 ${tr.state === 'failed' ? 'text-status-error' : tr.state === 'paused' ? 'text-status-warning' : ''}`} data-testid={`project-transfer-state-${tr.id}`}>{t(`settings.projectTransfer.state.${tr.state}`, { defaultValue: tr.state })}</span>
                             </div>
-                            {!done && <div className="h-1.5 rounded bg-border-subtle overflow-hidden"><div className="h-full bg-accent-primary" style={{ width: `${pct}%` }} /></div>}
-                            <div className="text-2xs text-text-muted">{formatBytes(tr.bytesDone)} / {formatBytes(tr.totalBytes)}{tr.publishedName ? ` · ${t('settings.projectTransfer.received', { name: tr.publishedName })}` : ''}{tr.errorCode ? ` · ${t('settings.projectTransfer.errorCode', { code: tr.errorCode })}` : ''}</div>
+                            {!done && (
+                                <div className="h-1.5 rounded bg-border-subtle overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+                                    <div className="h-full bg-accent-primary" style={{ width: `${pct}%` }} />
+                                </div>
+                            )}
+                            {STATE_HINTS.has(tr.state) && <div className="text-2xs text-text-muted" data-testid={`project-transfer-hint-${tr.id}`}>{t(`settings.projectTransfer.stateHint.${tr.state}`)}</div>}
+                            <div className="text-2xs text-text-muted">
+                                {formatBytes(tr.bytesDone)} / {formatBytes(tr.totalBytes)}{!done && tr.totalBytes > 0 ? ` (${t('settings.projectTransfer.progressPercent', { percent: pct })})` : ''}
+                                {tr.publishedName ? ` · ${t('settings.projectTransfer.received', { name: tr.publishedName })}` : ''}
+                            </div>
+                            {tr.errorCode && (
+                                <div className={`text-xs ${tr.state === 'failed' ? 'text-status-error' : 'text-text-muted'}`} data-testid={`project-transfer-error-${tr.id}`}>
+                                    {errorCodeText(tr.errorCode) || (tr.state === 'failed' ? t('settings.projectTransfer.errorGeneric') : '')}
+                                    {' '}<span className="font-mono text-3xs opacity-70" title={t('settings.projectTransfer.errorCode', { code: tr.errorCode })}>{tr.errorCode}</span>
+                                </div>
+                            )}
                             {!done && (
                                 <div className="flex gap-2">
                                     {needsMe && tr.role === 'target' && (

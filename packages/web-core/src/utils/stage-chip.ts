@@ -3,10 +3,10 @@
  * stage fields to an i18n key + round, so the task card renders "implementing → … → review done" without
  * knowing the pipeline. Returns null for ordinary tasks.
  */
-export interface StageChip { key: string; round?: number; tone: 'active' | 'done' | 'muted' }
+export interface StageChip { key: string; round?: number; tone: 'active' | 'done' | 'muted'; verdict?: string; blockedReason?: string }
 
 interface StageTaskLike {
-    stageState?: { phase?: string; round?: number; blockedReason?: string; released?: boolean } | null
+    stageState?: { phase?: string; round?: number; blockedReason?: string; lastVerdict?: string; released?: boolean } | null
     origin?: string | null
     stageRole?: string | null
     stageRound?: number | null
@@ -29,5 +29,11 @@ export function stageChip(task: StageTaskLike | null | undefined): StageChip | n
     const phase = task.stageState?.phase
     if (!phase || !PHASE_KEYS[phase]) return null
     const round = task.stageState?.round && task.stageState.round > 0 ? task.stageState.round : undefined
-    return { key: PHASE_KEYS[phase], ...(round ? { round } : {}), tone: phase === 'done' ? 'done' : 'active' }
+    const blockedReason = task.stageState?.blockedReason || undefined
+    // The verdict is only meaningful once a review ran; it rides along on the chip so the row can say "approved" / "changes requested".
+    const verdict = round && task.stageState?.lastVerdict ? task.stageState.lastVerdict : undefined
+    return {
+        key: PHASE_KEYS[phase], ...(round ? { round } : {}), tone: phase === 'done' ? 'done' : 'active',
+        ...(verdict ? { verdict } : {}), ...(blockedReason ? { blockedReason } : {}),
+    }
 }

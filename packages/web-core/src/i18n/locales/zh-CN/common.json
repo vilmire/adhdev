@@ -971,6 +971,7 @@
             "artifactsRoleAssistant": "助手",
             "artifactsRoleUser": "用户",
             "artifactsRoleSession": "会话",
+            "artifactsRolePipeline": "评审流程",
             "artifactsTaskShort": "任务 …{{id}}",
             "artifactsMissionShort": "任务组 …{{id}}",
             "artifactsOpenAria": "打开 {{title}}",
@@ -1088,6 +1089,20 @@
             "readonlyBadge": "只读",
             "lightBadge": "轻量",
             "lightLanding": { "ready": "待合入", "conflict": "冲突", "blocked": "已阻止", "landed": "已合入", "discarded": "已丢弃" },
+            "lightBadgeTitle": "轻量任务：在独立的临时工作区中运行，不会改动你的检出目录。合入前请先检查结果。",
+            "lightLandingTitle": {
+                "ready": "结果可以干净地应用。下一步：将其合入基础分支，或丢弃。",
+                "conflict": "结果已无法干净地应用到基础分支。下一步：解决冲突，或丢弃该结果并重新运行任务。",
+                "blocked": "结果无法自动合入。请查看原因，然后修复或丢弃结果。",
+                "landed": "结果已合入。",
+                "discarded": "结果已丢弃，未合入任何内容。"
+            },
+            "lightBlockedReason": {
+                "light_uncommitted_changes": "已阻止：工作者留下了未提交的更改，没有可以安全合入的内容。",
+                "light_dependency_change": "已阻止：改动涉及依赖文件（锁文件或清单），轻量任务不允许修改这些文件。",
+                "light_lineage_unproven": "已阻止：无法证明结果基于预期的基础提交。",
+                "shared_checkout_mutated": "已阻止：任务运行期间共享检出目录发生了变化，结果不可信。"
+            },
             "schedObservedAt": "截至 {{time}}",
             "schedNoNodes": "没有可路由的节点。",
             "schedQuotaButton": "配额",
@@ -1131,6 +1146,30 @@
                 "stageDone": "评审完成",
                 "stageRound": "第 {{round}} 轮",
                 "stageReviewChild": "评审 r{{round}}",
+                "stageHint": {
+                    "stageImplementing": "工作者正在实现该任务，完成后会进入评审。",
+                    "stageSelfCheck": "工作者在申请评审前正在运行自检。",
+                    "stageAwaitingReview": "实现已完成，等待评审者开始。",
+                    "stageReviewing": "独立的评审者正在检查这次改动。",
+                    "stageRevising": "评审者要求修改，工作者正在修订。",
+                    "stageDone": "评审已完成。",
+                    "stageReviewChild": "该任务是另一个任务的评审任务。"
+                },
+                "stageVerdict": {
+                    "approve": "已通过",
+                    "approve_with_nits": "通过（附小问题）",
+                    "changes_requested": "要求修改",
+                    "reject_approach": "方案被否决"
+                },
+                "stageBlocked": {
+                    "review_unresolved": "在允许的轮次内评审问题仍未解决。请决定是接受、再修改一次，还是丢弃。",
+                    "review_rejected_approach": "评审者否决了整个方案。重试前请重新考虑任务思路。",
+                    "review_unavailable": "无法启动评审者。请检查提供方是否可用，然后重试评审。",
+                    "self_check_failed": "工作者自检未通过，因此未开始评审。",
+                    "stage_pipeline_ceiling": "评审流程已达到轮次上限。",
+                    "reviewer_mutated_source": "本应只读的评审者修改了代码，该结论已作废。",
+                    "reviewer_integrity_unverifiable": "无法确认评审过程是只读的，因此未采纳该结论。"
+                },
                 "planShow": "计划",
                 "planHide": "收起",
                 "planTitle": "查看此任务的依赖计划",
@@ -4250,7 +4289,48 @@
             },
             "roleSource": "发送中",
             "roleTarget": "接收中",
-            "errorCode": "原因:{{code}}"
+            "errorCode": "原因:{{code}}",
+            "loadingProjects": "正在加载项目…",
+            "noProjects": "此设备上没有找到项目",
+            "selectedCount": "已选择：{{count}} 项",
+            "selectedCountSize": "已选择：{{count}} 项 · {{size}}",
+            "selectedCountFolders": "已选择：{{count}} 项 · 文件共 {{size}}（文件夹大小见预览）",
+            "progressPercent": "{{percent}}%",
+            "errorGeneric": "传输失败",
+            "errors": {
+                "DIRECT_UNAVAILABLE": "这两台设备无法直接连接（防火墙或 NAT）。文件传输需要直接连接。",
+                "LINK_UNAVAILABLE": "无法建立设备之间的直接连接。请确认两台设备都在线后重试。",
+                "LINK_LOST": "直接连接已断开且无法恢复。",
+                "STALE_LINK": "连接已被更新的连接取代。请重新开始传输。",
+                "PEER_UNREACHABLE": "无法连接到对方设备。请确认它在线。",
+                "PEER_REFUSED": "对方设备拒绝了这次传输。",
+                "PEER_CANCELLED": "对方设备取消了这次传输。",
+                "PEER_ABORT": "对方设备中止了这次传输。",
+                "PEER_UNAUTHORIZED": "对方设备无权与本设备传输。两台设备都必须属于你的账户。",
+                "CONSENT_EXPIRED": "传输完成前批准已过期。请重新预览并批准。",
+                "PREVIEW_EXPIRED": "预览已过期。请重新预览所选内容。",
+                "APPROVAL_MISMATCH": "两台设备批准的内容不一致。请重新预览并批准。",
+                "VERIFY_FAILED": "接收到的文件与发送内容不一致，因此未发布任何内容。",
+                "SOURCE_UNREADABLE": "发送设备上有所选文件无法读取。",
+                "DISK_SPACE_EXHAUSTED": "接收设备磁盘空间不足。",
+                "TARGET_FAILED": "接收设备无法保存这些文件。",
+                "TEMP_DATA_EXPIRED": "临时传输数据已过期。请重新开始传输。",
+                "WORKSPACE_NOT_REGISTERED": "所选项目已不在该设备上注册。",
+                "TOO_MANY_TRANSFERS": "正在进行的传输过多。请等待其中一个完成。",
+                "REVOKED": "批准已被撤销。",
+                "SUPERSEDED": "这次传输已被更新的传输取代。",
+                "INVALID_FINAL_NAME": "不允许使用该文件夹名称，请换一个。",
+                "NATIVE_HELPER_UNAVAILABLE": "此设备上没有可用的文件传输辅助程序。",
+                "ATOMIC_NOREPLACE_UNSUPPORTED": "此设备的文件系统无法安全地创建文件夹。",
+                "UNREACHABLE": "无法连接到该设备。",
+                "INTERNAL_ERROR": "发生了意外错误。"
+            },
+            "stateHint": {
+                "linking": "正在建立设备之间的直接连接。",
+                "paused": "连接已断开，正在自动重连，进度会保留。",
+                "awaiting_approval": "本设备已批准，正在等待对方设备批准。",
+                "needs_reapproval": "内容有变化，请重新批准以继续。"
+            }
         },
         "remoteProjectAttach": {
             "sectionTitle": "远程项目挂载",
@@ -4939,7 +5019,7 @@
     },
     "artifact": {
         "viewFull": "查看全部",
-        "viewFullTitle": "查看全部 (전체 보기)",
+        "viewFullTitle": "查看全部",
         "collapse": "收起",
         "download": "下载",
         "downloading": "下载中…",

@@ -60,7 +60,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
     en: {
         'chat.artifact': 'Artifact',
         'artifact.viewFull': 'View full',
-        'artifact.viewFullTitle': 'View full (전체 보기)',
+        'artifact.viewFullTitle': 'View full',
         'artifact.collapse': 'Collapse',
         'artifact.download': 'Download',
         'artifact.downloading': 'Downloading…',
@@ -166,7 +166,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
     ja: {
         'chat.artifact': 'アーティファクト',
         'artifact.viewFull': '全体を表示',
-        'artifact.viewFullTitle': '全体を表示 (전체 보기)',
+        'artifact.viewFullTitle': '全体を表示',
         'artifact.collapse': '折りたたむ',
         'artifact.download': 'ダウンロード',
         'artifact.downloading': 'ダウンロード中…',
@@ -219,7 +219,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
     'zh-CN': {
         'chat.artifact': '产物',
         'artifact.viewFull': '查看全部',
-        'artifact.viewFullTitle': '查看全部 (전체 보기)',
+        'artifact.viewFullTitle': '查看全部',
         'artifact.collapse': '收起',
         'artifact.download': '下载',
         'artifact.downloading': '下载中…',
@@ -272,7 +272,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
     es: {
         'chat.artifact': 'Artefacto',
         'artifact.viewFull': 'Ver completo',
-        'artifact.viewFullTitle': 'Ver completo (전체 보기)',
+        'artifact.viewFullTitle': 'Ver completo',
         'artifact.collapse': 'Contraer',
         'artifact.download': 'Descargar',
         'artifact.downloading': 'Descargando…',

@@ -971,6 +971,7 @@
             "artifactsRoleAssistant": "asistente",
             "artifactsRoleUser": "usuario",
             "artifactsRoleSession": "sesión",
+            "artifactsRolePipeline": "Flujo de revisión",
             "artifactsTaskShort": "Tarea …{{id}}",
             "artifactsMissionShort": "Misión …{{id}}",
             "artifactsOpenAria": "Abrir {{title}}",
@@ -1091,6 +1092,20 @@
             "readonlyBadge": "solo lectura",
             "lightBadge": "ligera",
             "lightLanding": { "ready": "lista para aterrizar", "conflict": "conflicto", "blocked": "bloqueada", "landed": "aterrizada", "discarded": "descartada" },
+            "lightBadgeTitle": "Tarea ligera: se ejecutó en un espacio de trabajo temporal aislado, así que tu copia de trabajo no se tocó. Revisa el resultado antes de integrarlo.",
+            "lightLandingTitle": {
+                "ready": "El resultado se aplica sin problemas. Siguiente paso: integrarlo en la rama base o descartarlo.",
+                "conflict": "El resultado ya no se aplica limpiamente a la rama base. Siguiente paso: resolver el conflicto, o descartar el resultado y volver a ejecutar la tarea.",
+                "blocked": "El resultado no se puede integrar automáticamente. Mira el motivo y luego corrígelo o descarta el resultado.",
+                "landed": "El resultado ya está integrado.",
+                "discarded": "El resultado se descartó y no se integró nada."
+            },
+            "lightBlockedReason": {
+                "light_uncommitted_changes": "Bloqueada: el trabajador dejó cambios sin confirmar, así que no hay nada seguro que integrar.",
+                "light_dependency_change": "Bloqueada: el cambio toca archivos de dependencias (lockfile o manifiesto), algo que una tarea ligera no puede hacer.",
+                "light_lineage_unproven": "Bloqueada: no se pudo comprobar que el resultado parta del commit base esperado.",
+                "shared_checkout_mutated": "Bloqueada: la copia de trabajo compartida cambió mientras corría la tarea, por lo que no se puede confiar en el resultado."
+            },
             "schedObservedAt": "a las {{time}}",
             "schedNoNodes": "No hay nodos enrutables.",
             "schedQuotaButton": "Cuota",
@@ -1134,6 +1149,30 @@
                 "stageDone": "revisión lista",
                 "stageRound": "ronda {{round}}",
                 "stageReviewChild": "revisión r{{round}}",
+                "stageHint": {
+                    "stageImplementing": "Un trabajador está implementando esta tarea. Después viene la revisión.",
+                    "stageSelfCheck": "El trabajador ejecuta sus propias comprobaciones antes de pedir revisión.",
+                    "stageAwaitingReview": "La implementación terminó; se espera a que empiece un revisor.",
+                    "stageReviewing": "Un revisor independiente está comprobando el cambio.",
+                    "stageRevising": "El revisor pidió cambios y el trabajador los está haciendo.",
+                    "stageDone": "La revisión terminó.",
+                    "stageReviewChild": "Esta tarea es la del revisor de otra tarea."
+                },
+                "stageVerdict": {
+                    "approve": "aprobada",
+                    "approve_with_nits": "aprobada con reparos menores",
+                    "changes_requested": "cambios solicitados",
+                    "reject_approach": "enfoque rechazado"
+                },
+                "stageBlocked": {
+                    "review_unresolved": "Quedan observaciones sin resolver tras las rondas permitidas. Decide si aceptar, revisar una vez más o descartar.",
+                    "review_rejected_approach": "El revisor rechazó el enfoque completo. Replantea la tarea antes de reintentar.",
+                    "review_unavailable": "No se pudo iniciar ningún revisor. Comprueba la disponibilidad del proveedor y reintenta la revisión.",
+                    "self_check_failed": "Las comprobaciones propias del trabajador fallaron, así que no se inició la revisión.",
+                    "stage_pipeline_ceiling": "El flujo de revisión alcanzó su límite de rondas.",
+                    "reviewer_mutated_source": "El revisor modificó el código que solo debía leer, por lo que su veredicto quedó anulado.",
+                    "reviewer_integrity_unverifiable": "No se pudo verificar que la revisión fuera de solo lectura, así que no se aceptó el veredicto."
+                },
                 "planShow": "plan",
                 "planHide": "ocultar",
                 "planTitle": "Ver el plan de dependencias de esta tarea",
@@ -4253,7 +4292,48 @@
             },
             "roleSource": "Enviando",
             "roleTarget": "Recibiendo",
-            "errorCode": "Motivo: {{code}}"
+            "errorCode": "Motivo: {{code}}",
+            "loadingProjects": "Cargando proyectos…",
+            "noProjects": "No se encontraron proyectos en esta máquina",
+            "selectedCount": "Seleccionados: {{count}}",
+            "selectedCountSize": "Seleccionados: {{count}} · {{size}}",
+            "selectedCountFolders": "Seleccionados: {{count}} · {{size}} en archivos (el tamaño de las carpetas aparece en la vista previa)",
+            "progressPercent": "{{percent}}%",
+            "errorGeneric": "La transferencia falló",
+            "errors": {
+                "DIRECT_UNAVAILABLE": "Estas dos máquinas no pueden conectarse directamente (cortafuegos o NAT). La transferencia de archivos necesita una conexión directa.",
+                "LINK_UNAVAILABLE": "No se pudo establecer la conexión directa entre las máquinas. Comprueba que ambas estén en línea e inténtalo de nuevo.",
+                "LINK_LOST": "La conexión directa se cortó y no se pudo recuperar.",
+                "STALE_LINK": "Una conexión más reciente reemplazó a esta. Inicia la transferencia de nuevo.",
+                "PEER_UNREACHABLE": "No se pudo contactar con la otra máquina. Comprueba que esté en línea.",
+                "PEER_REFUSED": "La otra máquina rechazó la transferencia.",
+                "PEER_CANCELLED": "La otra máquina canceló la transferencia.",
+                "PEER_ABORT": "La otra máquina detuvo la transferencia.",
+                "PEER_UNAUTHORIZED": "La otra máquina no tiene permiso para transferir con esta. Ambas deben pertenecer a tu cuenta.",
+                "CONSENT_EXPIRED": "La aprobación caducó antes de terminar la transferencia. Vuelve a previsualizar y aprobar.",
+                "PREVIEW_EXPIRED": "La vista previa caducó. Vuelve a previsualizar la selección.",
+                "APPROVAL_MISMATCH": "Las dos máquinas aprobaron selecciones distintas. Vuelve a previsualizar y aprobar.",
+                "VERIFY_FAILED": "Los archivos recibidos no coincidían con los enviados, así que no se publicó nada.",
+                "SOURCE_UNREADABLE": "No se pudo leer un archivo seleccionado en la máquina de origen.",
+                "DISK_SPACE_EXHAUSTED": "La máquina de destino se quedó sin espacio en disco.",
+                "TARGET_FAILED": "La máquina de destino no pudo guardar los archivos.",
+                "TEMP_DATA_EXPIRED": "Los datos temporales de la transferencia caducaron. Inicia la transferencia de nuevo.",
+                "WORKSPACE_NOT_REGISTERED": "El proyecto elegido ya no está registrado en esa máquina.",
+                "TOO_MANY_TRANSFERS": "Hay demasiadas transferencias en curso. Espera a que termine alguna.",
+                "REVOKED": "Se revocó la aprobación.",
+                "SUPERSEDED": "Una transferencia más reciente reemplazó a esta.",
+                "INVALID_FINAL_NAME": "Ese nombre de carpeta no está permitido. Elige otro.",
+                "NATIVE_HELPER_UNAVAILABLE": "El asistente de transferencia de archivos no está disponible en esta máquina.",
+                "ATOMIC_NOREPLACE_UNSUPPORTED": "El sistema de archivos de esta máquina no puede crear la carpeta de forma segura.",
+                "UNREACHABLE": "No se pudo contactar con la máquina.",
+                "INTERNAL_ERROR": "Ocurrió un error inesperado."
+            },
+            "stateHint": {
+                "linking": "Estableciendo una conexión directa entre las máquinas.",
+                "paused": "Se cortó la conexión. Se reconecta automáticamente y el progreso se conserva.",
+                "awaiting_approval": "Aprobado aquí. Esperando a que apruebe la otra máquina.",
+                "needs_reapproval": "Algo cambió. Aprueba de nuevo para continuar."
+            }
         },
         "remoteProjectAttach": {
             "sectionTitle": "Conexión remota de proyectos",
@@ -4942,7 +5022,7 @@
     },
     "artifact": {
         "viewFull": "Ver completo",
-        "viewFullTitle": "Ver completo (전체 보기)",
+        "viewFullTitle": "Ver completo",
         "collapse": "Contraer",
         "download": "Descargar",
         "downloading": "Descargando…",

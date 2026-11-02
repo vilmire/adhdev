@@ -15,4 +15,9 @@ describe('stageChip', () => {
     it('marks a review child with its round', () => {
         expect(stageChip({ origin: 'stage', stageRole: 'review', stageRound: 3 })).toEqual({ key: 'stageReviewChild', round: 3, tone: 'muted' })
     })
+    it('carries the verdict (only once a review ran) and the blocked reason', () => {
+        expect(stageChip({ stageState: { phase: 'done', round: 2, lastVerdict: 'approve_with_nits' } })).toMatchObject({ verdict: 'approve_with_nits' })
+        expect(stageChip({ stageState: { phase: 'implementing', round: 0, lastVerdict: 'approve' } })?.verdict).toBeUndefined()
+        expect(stageChip({ stageState: { phase: 'revising', round: 1, blockedReason: 'review_unresolved' } })).toMatchObject({ blockedReason: 'review_unresolved' })
+    })
 })

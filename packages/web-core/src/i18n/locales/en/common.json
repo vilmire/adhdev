@@ -971,6 +971,7 @@
             "artifactsRoleAssistant": "assistant",
             "artifactsRoleUser": "user",
             "artifactsRoleSession": "session",
+            "artifactsRolePipeline": "Review pipeline",
             "artifactsTaskShort": "Task …{{id}}",
             "artifactsMissionShort": "Mission …{{id}}",
             "artifactsOpenAria": "Open {{title}}",
@@ -1088,6 +1089,20 @@
             "readonlyBadge": "read-only",
             "lightBadge": "light",
             "lightLanding": { "ready": "ready to land", "conflict": "conflict", "blocked": "blocked", "landed": "landed", "discarded": "discarded" },
+            "lightBadgeTitle": "Light task: ran in an isolated temporary workspace, so your checkout was not touched. Review the result before it lands.",
+            "lightLandingTitle": {
+                "ready": "The result applies cleanly. Next: land it (merge it into the base branch) or discard it.",
+                "conflict": "The result no longer applies cleanly to the base branch. Next: resolve the conflict, or discard this result and re-run the task.",
+                "blocked": "The result cannot be landed automatically. See the reason, then fix it or discard the result.",
+                "landed": "The result has been landed.",
+                "discarded": "The result was discarded and nothing was landed."
+            },
+            "lightBlockedReason": {
+                "light_uncommitted_changes": "Blocked: the worker left uncommitted changes, so there is nothing safe to land.",
+                "light_dependency_change": "Blocked: the change touches dependency files (lockfile or manifest), which a light task must not do.",
+                "light_lineage_unproven": "Blocked: the result could not be proven to descend from the expected base commit.",
+                "shared_checkout_mutated": "Blocked: the shared checkout changed while the task ran, so the result cannot be trusted."
+            },
             "schedObservedAt": "as of {{time}}",
             "schedNoNodes": "No routable nodes.",
             "schedQuotaButton": "Quota",
@@ -1131,6 +1146,30 @@
                 "stageDone": "review done",
                 "stageRound": "round {{round}}",
                 "stageReviewChild": "review r{{round}}",
+                "stageHint": {
+                    "stageImplementing": "A worker is implementing this task. A review follows when it finishes.",
+                    "stageSelfCheck": "The worker is running its own checks before asking for review.",
+                    "stageAwaitingReview": "Implementation is done; waiting for a reviewer to start.",
+                    "stageReviewing": "A separate reviewer is checking the change.",
+                    "stageRevising": "The reviewer asked for changes; the worker is revising.",
+                    "stageDone": "The review finished.",
+                    "stageReviewChild": "This task is the reviewer for another task."
+                },
+                "stageVerdict": {
+                    "approve": "approved",
+                    "approve_with_nits": "approved with nits",
+                    "changes_requested": "changes requested",
+                    "reject_approach": "approach rejected"
+                },
+                "stageBlocked": {
+                    "review_unresolved": "Review findings are still unresolved after the allowed rounds. Decide whether to accept, revise once more, or discard.",
+                    "review_rejected_approach": "The reviewer rejected the whole approach. Rethink the task before retrying.",
+                    "review_unavailable": "No reviewer could be started. Check provider availability, then retry the review.",
+                    "self_check_failed": "The worker's own checks failed, so the review was not started.",
+                    "stage_pipeline_ceiling": "The review pipeline hit its round limit.",
+                    "reviewer_mutated_source": "The reviewer modified the code it was meant to only read, so the verdict was voided.",
+                    "reviewer_integrity_unverifiable": "The review could not be verified as read-only, so the verdict was not accepted."
+                },
                 "planShow": "plan",
                 "planHide": "hide",
                 "planTitle": "Show this task's dependency plan",
@@ -4250,7 +4289,48 @@
             },
             "roleSource": "Sending",
             "roleTarget": "Receiving",
-            "errorCode": "Reason: {{code}}"
+            "errorCode": "Reason: {{code}}",
+            "loadingProjects": "Loading projects…",
+            "noProjects": "No projects found on this machine",
+            "selectedCount": "Selected: {{count}}",
+            "selectedCountSize": "Selected: {{count}} · {{size}}",
+            "selectedCountFolders": "Selected: {{count}} · {{size}} in files (folder sizes appear in the preview)",
+            "progressPercent": "{{percent}}%",
+            "errorGeneric": "Transfer failed",
+            "errors": {
+                "DIRECT_UNAVAILABLE": "These two machines can't connect directly (firewall or NAT). File transfer needs a direct connection.",
+                "LINK_UNAVAILABLE": "The direct connection between the machines could not be set up. Check both are online and try again.",
+                "LINK_LOST": "The direct connection dropped and could not be restored.",
+                "STALE_LINK": "The connection was replaced by a newer one. Start the transfer again.",
+                "PEER_UNREACHABLE": "The other machine could not be reached. Check that it is online.",
+                "PEER_REFUSED": "The other machine refused the transfer.",
+                "PEER_CANCELLED": "The other machine cancelled the transfer.",
+                "PEER_ABORT": "The other machine stopped the transfer.",
+                "PEER_UNAUTHORIZED": "The other machine is not allowed to transfer with this one. Both must belong to your account.",
+                "CONSENT_EXPIRED": "Approval expired before the transfer finished. Preview and approve again.",
+                "PREVIEW_EXPIRED": "The preview expired. Preview the selection again.",
+                "APPROVAL_MISMATCH": "The two machines approved different selections. Preview and approve again.",
+                "VERIFY_FAILED": "The received files did not match what was sent, so nothing was published.",
+                "SOURCE_UNREADABLE": "A selected file could not be read on the sending machine.",
+                "DISK_SPACE_EXHAUSTED": "The receiving machine ran out of disk space.",
+                "TARGET_FAILED": "The receiving machine could not store the files.",
+                "TEMP_DATA_EXPIRED": "Temporary transfer data expired. Start the transfer again.",
+                "WORKSPACE_NOT_REGISTERED": "The chosen project is no longer registered on that machine.",
+                "TOO_MANY_TRANSFERS": "Too many transfers are running. Wait for one to finish.",
+                "REVOKED": "Approval was revoked.",
+                "SUPERSEDED": "A newer transfer replaced this one.",
+                "INVALID_FINAL_NAME": "That folder name is not allowed. Choose a different name.",
+                "NATIVE_HELPER_UNAVAILABLE": "The file-transfer helper is not available on this machine.",
+                "ATOMIC_NOREPLACE_UNSUPPORTED": "This machine's file system cannot safely create the folder.",
+                "UNREACHABLE": "The machine could not be reached.",
+                "INTERNAL_ERROR": "An unexpected error occurred."
+            },
+            "stateHint": {
+                "linking": "Setting up a direct connection between the machines.",
+                "paused": "The connection dropped. Reconnecting automatically; progress is kept.",
+                "awaiting_approval": "Approved here. Waiting for the other machine to approve.",
+                "needs_reapproval": "Something changed. Approve again to continue."
+            }
         },
         "remoteProjectAttach": {
             "sectionTitle": "Remote project attach",
@@ -4939,7 +5019,7 @@
     },
     "artifact": {
         "viewFull": "View full",
-        "viewFullTitle": "View full (전체 보기)",
+        "viewFullTitle": "View full",
         "collapse": "Collapse",
         "download": "Download",
         "downloading": "Downloading…",

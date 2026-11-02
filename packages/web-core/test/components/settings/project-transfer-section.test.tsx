@@ -76,6 +76,67 @@ describe('ProjectTransferSection', () => {
     })
 })
 
+describe('ProjectTransferSection — states and failures', () => {
+    let container: HTMLDivElement
+    let root: Root
+    beforeEach(() => { container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container) })
+    afterEach(() => { act(() => root.unmount()); container.remove() })
+    const q = (id: string) => container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!
+    const baseTransfer = { id: 'tx1', role: 'source', peerDaemonId: 'daemon_mach_b', finalName: 'incoming', sourceWorkspaceId: 'ws-a', targetWorkspaceId: 'ws-b', selectionDigest: DIGEST, previewExpiresAt: 1, totalBytes: 1000, bytesDone: 250, fileCount: 1, entries: [], excluded: [], localApproved: true, peerApproved: true }
+    const sendWith = (transfer: any) => vi.fn(async (_id: string, cmd: string) => {
+        if (cmd === 'project_transfer_capabilities') return { success: true, supported: true, reasons: [] }
+        if (cmd === 'project_transfer_list') return { success: true, transfers: [transfer] }
+        return { success: true, entries: [] }
+    })
+
+    it('explains a failed transfer in plain words and keeps the code visible', async () => {
+        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'DIRECT_UNAVAILABLE' })} pollMs={60_000} />); await flush() })
+        const err = q('project-transfer-error-tx1')
+        expect(err.textContent).toContain("can't connect directly")
+        expect(err.textContent).toContain('DIRECT_UNAVAILABLE')
+        expect(q('project-transfer-state-tx1').textContent).toBe('Failed')
+    })
+
+    it('falls back to a generic line for an unknown failure code, still showing the code', async () => {
+        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'failed', errorCode: 'SOMETHING_NEW' })} pollMs={60_000} />); await flush() })
+        expect(q('project-transfer-error-tx1').textContent).toContain('Transfer failed')
+        expect(q('project-transfer-error-tx1').textContent).toContain('SOMETHING_NEW')
+    })
+
+    it('shows progress percent, and a hint while reconnecting', async () => {
+        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={sendWith({ ...baseTransfer, state: 'paused' })} pollMs={60_000} />); await flush() })
+        expect(q('project-transfer-state-tx1').textContent).toBe('Reconnecting')
+        expect(q('project-transfer-hint-tx1').textContent).toContain('progress is kept')
+        expect(q('project-transfer-row-tx1').textContent).toContain('(25%)')
+        expect(q('project-transfer-row-tx1').querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('25')
+    })
+
+    it('shows the selected count and size before Preview, noting folder sizes when a folder is ticked', async () => {
+        const send = vi.fn(async (_id: string, cmd: string) => {
+            if (cmd === 'project_transfer_capabilities') return { success: true, supported: true, reasons: [] }
+            if (cmd === 'project_transfer_browse') return { success: true, entries: [{ name: 'src', kind: 'dir' }, { name: 'a.txt', kind: 'file', size: 2048 }] }
+            return { success: true, transfers: [] }
+        })
+        await act(async () => { root.render(<ProjectTransferSection machines={MACHINES} sendCommand={send} pollMs={60_000} />); await flush() })
+        await act(async () => { setValue(q('project-transfer-from-machine') as HTMLSelectElement, 'daemon_mach_a'); await flush() })
+        await act(async () => { setValue(q('project-transfer-from-project') as HTMLSelectElement, 'ws-a'); await flush() })
+        await act(async () => { (q('project-transfer-entry-a.txt').querySelector('input') as HTMLInputElement).click(); await flush() })
+        expect(q('project-transfer-selection-summary').textContent).toBe('Selected: 1 · 2.0 KB')
+        await act(async () => { (q('project-transfer-entry-src').querySelector('input') as HTMLInputElement).click(); await flush() })
+        expect(q('project-transfer-selection-summary').textContent).toContain('Selected: 2')
+        expect(q('project-transfer-selection-summary').textContent).toContain('folder sizes appear in the preview')
+    })
+
+    it('says "no projects" instead of an empty dropdown when a machine has none', async () => {
+        const machines = [{ ...MACHINES[0]!, workspaces: [] }, MACHINES[1]!]
+        await act(async () => { root.render(<ProjectTransferSection machines={machines} sendCommand={vi.fn(async () => ({ success: true, transfers: [] }))} pollMs={60_000} />); await flush() })
+        await act(async () => { setValue(q('project-transfer-from-machine') as HTMLSelectElement, 'daemon_mach_a'); await flush() })
+        const sel = q('project-transfer-from-project') as HTMLSelectElement
+        expect(sel.disabled).toBe(true)
+        expect(sel.options[0]!.textContent).toBe('No projects found on this machine')
+    })
+})
+
 describe('projectTransfer i18n', () => {
   it('every locale defines the same keys as en', () => {
     const flat = (o: any, p = ''): string[] => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, `${p}${k}.`) : [`${p}${k}`]))

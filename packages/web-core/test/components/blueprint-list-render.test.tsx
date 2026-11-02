@@ -98,3 +98,41 @@ describe('MeshBlueprintList — default view', () => {
         expect(withoutEdges).not.toContain('aria-expanded')
     })
 })
+
+
+describe('MeshBlueprintList — light and review-in-task chips', () => {
+    const live = (over: Record<string, unknown>) => task({ id: 't-x', status: 'assigned', message: 'chip row', ...over })
+    const attr = (html: string, testId: string) => new RegExp(`title="([^"]*)"[^>]*data-testid="${testId}"`).exec(html)?.[1] ?? ''
+
+    it('light badge explains itself', () => {
+        const html = renderList({ tasks: [live({ light: true })] })
+        expect(html).toContain('data-testid="blueprint-light-badge"')
+        expect(attr(html, 'blueprint-light-badge')).toContain('isolated temporary workspace')
+    })
+
+    it('landing chip tooltip says what to do next, and why when blocked', () => {
+        const ready = renderList({ tasks: [live({ light: true, lightResult: { landing: 'ready' } })] })
+        expect(ready).toContain('ready to land')
+        expect(attr(ready, 'blueprint-light-landing')).toContain('land it')
+        const blocked = renderList({ tasks: [live({ light: true, lightResult: { landing: 'blocked', blockedReason: 'light_dependency_change' } })] })
+        expect(attr(blocked, 'blueprint-light-landing')).toContain('dependency files')
+        const conflict = renderList({ tasks: [live({ light: true, lightResult: { landing: 'conflict' } })] })
+        expect(attr(conflict, 'blueprint-light-landing')).toContain('resolve the conflict')
+        // unknown wire values render no chip and no raw enum
+        const unknown = renderList({ tasks: [live({ light: true, lightResult: { landing: 'whatever' } })] })
+        expect(unknown).not.toContain('blueprint-light-landing')
+    })
+
+    it('stage chip shows phase, round and verdict with a hint tooltip; blocked reason is explained', () => {
+        const done = renderList({ tasks: [live({ stageState: { phase: 'done', round: 2, lastVerdict: 'changes_requested' } })] })
+        expect(done).toContain('review done')
+        expect(done).toContain('round 2')
+        expect(done).toContain('changes requested')
+        expect(attr(done, 'blueprint-stage-chip')).toContain('review finished')
+        const blocked = renderList({ tasks: [live({ stageState: { phase: 'revising', round: 3, blockedReason: 'review_unresolved' } })] })
+        expect(attr(blocked, 'blueprint-stage-chip')).toContain('still unresolved')
+        // a raw enum never leaks into the tooltip when the reason is unknown
+        const weird = renderList({ tasks: [live({ stageState: { phase: 'revising', round: 1, blockedReason: 'future_reason' } })] })
+        expect(attr(weird, 'blueprint-stage-chip')).not.toContain('future_reason')
+    })
+})

@@ -188,6 +188,20 @@ describe('MeshArtifactsTab', () => {
         expect(heads.join('|')).not.toMatch(/#mission_|#task_/)
     })
 
+    it('names the pipeline producer role "Review pipeline", never the raw enum', async () => {
+        const send = makeSend()
+        // reuse the fixture list but flip the first artifact's producer to the pipeline role
+        const piped = vi.fn(async (d: string, type: string, payload: any) => {
+            const r: any = await send(d, type, payload)
+            if (type === 'artifact_list' || r?.attachments) return { ...r, attachments: (r.attachments ?? []).map((a: any, i: number) => (i === 0 ? { ...a, producerRole: 'pipeline' } : a)) }
+            return r
+        })
+        await mount(piped as any)
+        const text = container.querySelector('[data-testid="mesh-artifact-task"]')!.textContent ?? ''
+        expect(text).toContain('Review pipeline')
+        expect(text).not.toMatch(/\bpipeline\b(?<!Review pipeline)/)
+    })
+
     it('shows a change summary preview and opens from a click anywhere on the row', async () => {
         const send = makeSend()
         await mount(send)

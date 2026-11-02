@@ -23,6 +23,10 @@ import { QueueTaskHold } from './QueueTaskHold'
 const LIGHT_LANDINGS = ['ready', 'conflict', 'blocked', 'landed', 'discarded'] as const
 type LightLanding = typeof LIGHT_LANDINGS[number]
 const asLightLanding = (v: unknown): LightLanding | null => (LIGHT_LANDINGS as readonly unknown[]).includes(v) ? v as LightLanding : null
+const LIGHT_BLOCK_REASONS = ['light_uncommitted_changes', 'light_dependency_change', 'light_lineage_unproven', 'shared_checkout_mutated'] as const
+const STAGE_VERDICTS = ['approve', 'approve_with_nits', 'changes_requested', 'reject_approach'] as const
+const STAGE_BLOCKED = ['review_unresolved', 'review_rejected_approach', 'review_unavailable', 'self_check_failed', 'stage_pipeline_ceiling', 'reviewer_mutated_source', 'reviewer_integrity_unverifiable'] as const
+const oneOf = <T extends string>(list: readonly T[], v: unknown): T | null => (list as readonly unknown[]).includes(v) ? v as T : null
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { formatTaskCardTime, taskCardTimeSource } from './taskDagViewModel'
@@ -111,6 +115,16 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
             : 'text-text-muted'
     const provider = task.assignedProviderType || task.autoLaunch?.providerType
     const stage = stageChip(task as Parameters<typeof stageChip>[0])
+    // Tooltip: what the state means and what to do next. Unknown wire values simply add no extra line.
+    const lightBlockReason = lightLanding === 'blocked' ? oneOf(LIGHT_BLOCK_REASONS, (task.lightResult as { blockedReason?: unknown } | undefined)?.blockedReason) : null
+    const landingTitle = lightLanding
+        ? [t(`mesh.blueprint.lightLandingTitle.${lightLanding}`), lightBlockReason ? t(`mesh.blueprint.lightBlockedReason.${lightBlockReason}`) : null].filter(Boolean).join('\n')
+        : undefined
+    const stageVerdict = stage ? oneOf(STAGE_VERDICTS, stage.verdict) : null
+    const stageBlockedReason = stage ? oneOf(STAGE_BLOCKED, stage.blockedReason) : null
+    const stageTitle = stage
+        ? [t(`mesh.blueprint.list.stageHint.${stage.key}`), stageBlockedReason ? t(`mesh.blueprint.list.stageBlocked.${stageBlockedReason}`) : null].filter(Boolean).join('\n')
+        : undefined
     return (
         <div
             role="button"
@@ -177,15 +191,16 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                         </span>
                     )}
                     {stage && (
-                        <span className={neutralChip()} title={(task as Parameters<typeof stageChip>[0])?.stageState?.blockedReason ?? undefined}>
+                        <span className={stageBlockedReason ? amberChip() : neutralChip()} title={stageTitle} data-testid="blueprint-stage-chip">
                             {t(`mesh.blueprint.list.${stage.key}`, { round: stage.round })}
                             {stage.round && stage.key !== 'stageReviewChild' ? ` · ${t('mesh.blueprint.list.stageRound', { round: stage.round })}` : ''}
+                            {stageVerdict ? ` · ${t(`mesh.blueprint.list.stageVerdict.${stageVerdict}`)}` : ''}
                         </span>
                     )}
                     {task.difficulty && <span className={neutralChip()}>{task.difficulty}</span>}
                     {task.priority && task.priority !== 'normal' && <span className={neutralChip()}>{task.priority}</span>}
-                    {task.light && <span className={neutralChip()}>{t('mesh.blueprint.lightBadge')}</span>}
-                    {task.light && lightLanding && <span className={lightLanding === 'ready' || lightLanding === 'landed' ? neutralChip() : amberChip()}>{t(`mesh.blueprint.lightLanding.${lightLanding}`)}</span>}
+                    {task.light && <span className={neutralChip()} title={t('mesh.blueprint.lightBadgeTitle')} data-testid="blueprint-light-badge">{t('mesh.blueprint.lightBadge')}</span>}
+                    {task.light && lightLanding && <span className={lightLanding === 'ready' || lightLanding === 'landed' || lightLanding === 'discarded' ? neutralChip() : amberChip()} title={landingTitle} data-testid="blueprint-light-landing">{t(`mesh.blueprint.lightLanding.${lightLanding}`)}</span>}
                     {(task.taskMode === 'live_debug_readonly' || task.readonly) && <span className={neutralChip()}>{t('mesh.blueprint.readonlyBadge')}</span>}
                     {missionTitle && task.missionId && (
                         <button

@@ -174,6 +174,7 @@ export default function MeshArtifactsTab({ status, daemonId = null, sendDaemonCo
             case 'assistant': return t('mesh.obs.artifactsRoleAssistant')
             case 'user': return t('mesh.obs.artifactsRoleUser')
             case 'session': return t('mesh.obs.artifactsRoleSession')
+            case 'pipeline': return t('mesh.obs.artifactsRolePipeline')
             default: return role
         }
     }
