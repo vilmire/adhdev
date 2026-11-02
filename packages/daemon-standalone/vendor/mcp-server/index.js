@@ -33326,41 +33326,41 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     function validateRetirementProof(repo, layer, { ref: ref2, env: env2, proofFile } = {}) {
-      const fail14 = () => {
+      const fail15 = () => {
         throw Error("invalid_normal_retirement_proof: current source/output/config and successful command logs required");
       };
       try {
         const proof = JSON.parse((0, import_node_fs3.readFileSync)(proofFile || retirementProofPath(repo, layer, ref2, env2)));
-        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail14();
+        if (proof.version !== 1 || proof.releaseReady !== false || !proof.rootRepo || !proof.ossRepo || proof.snapshots?.[layer] !== retirementSnapshot(repo, layer, ref2, env2)) fail15();
         for (const target2 of ["root", "oss"]) {
-          if (target2 !== layer && proof.snapshots[target2] !== retirementSnapshot(proof[`${target2}Repo`], target2)) fail14();
-          if (proof.snapshots[target2] !== retirementSnapshot(proof[`${target2}Repo`], target2, proof.trees?.[target2])) fail14();
+          if (target2 !== layer && proof.snapshots[target2] !== retirementSnapshot(proof[`${target2}Repo`], target2)) fail15();
+          if (proof.snapshots[target2] !== retirementSnapshot(proof[`${target2}Repo`], target2, proof.trees?.[target2])) fail15();
         }
         if (layer === "root") {
           const pin = retirementGit(repo, ref2 ? ["rev-parse", `${ref2}:oss`] : ["rev-parse", ":oss"], env2);
-          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail14();
+          if (retirementSnapshot(proof.ossRepo, "oss", pin) !== proof.snapshots.oss) fail15();
         }
         const specs = configuredRetirementGates(proof.rootRepo, layer === "root" ? env2 : void 0);
-        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail14();
+        if (JSON.stringify(specs) !== JSON.stringify(proof.specs) || proof.gates?.length !== specs.length) fail15();
         const verifyLog = (receipt) => receipt?.exit === 0 && receipt.logSha256 === digest((0, import_node_fs3.readFileSync)(receipt.log));
-        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail14();
+        if (proof.generation?.command !== "npm run bundle:vendor:all" || !verifyLog(proof.generation)) fail15();
         for (const target2 of ["root", "oss"]) {
           const repo2 = proof[`${target2}Repo`];
           const files = entries(repo2, proof.trees[target2]);
           const generated = (name) => retirementVendorDirs[target2].some((dir) => name.startsWith(`${dir}/`));
           const sources = files.filter((e) => !(target2 === "root" && e[2] === "oss") && !generated(e[2])).map(([mode, oid, path139]) => ({ mode, oid, path: path139 }));
           const outputs2 = files.filter((e) => generated(e[2])).map(([mode, oid, name]) => [name, mode, digest(retirementGit(repo2, ["cat-file", "blob", oid], void 0, true))]);
-          if (proof.generation.sources?.[target2] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target2]) !== JSON.stringify(outputs2)) fail14();
+          if (proof.generation.sources?.[target2] !== digest(JSON.stringify(sources)) || JSON.stringify(proof.generation.outputs?.[target2]) !== JSON.stringify(outputs2)) fail15();
         }
         for (let i = 0; i < specs.length; i++) {
-          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail14();
+          if (JSON.stringify(proof.gates[i].spec) !== JSON.stringify(specs[i]) || !verifyLog(proof.gates[i])) fail15();
           const args = [...specs[i].args];
           if (["vendor-drift-root", "vendor-drift-oss"].includes(specs[i].id)) args.push("--tree", proof.trees[specs[i].id === "vendor-drift-root" ? "root" : "oss"]);
-          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail14();
+          if (JSON.stringify(args) !== JSON.stringify(proof.gates[i].args)) fail15();
         }
         return proof;
       } catch {
-        fail14();
+        fail15();
       }
     }
     var import_node_child_process22;
@@ -67565,9 +67565,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
       const { mkdtempSync: mkdtempSync4, rmSync: rmSync21, openSync: openSync30, closeSync: closeSync30 } = await import("fs");
       const { tmpdir: tmpdir12 } = await import("os");
-      const { join: join181 } = await import("path");
-      const scratch = mkdtempSync4(join181(tmpdir12(), "adhdev-patchid-"));
-      const patchFile = join181(scratch, "patch.diff");
+      const { join: join182 } = await import("path");
+      const scratch = mkdtempSync4(join182(tmpdir12(), "adhdev-patchid-"));
+      const patchFile = join182(scratch, "patch.diff");
       try {
         const out = openSync30(patchFile, "w");
         let diffRun;
@@ -111252,8 +111252,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function sourcesProviding(category, type2) {
-      const inventory = inventoryExternalSources();
-      return inventory.filter((s2) => (s2.providers[category] || []).includes(type2)).map((s2) => s2.sourceName);
+      const inventory2 = inventoryExternalSources();
+      return inventory2.filter((s2) => (s2.providers[category] || []).includes(type2)).map((s2) => s2.sourceName);
     }
     function resolveActiveSource(category, type2, activeFile) {
       const candidates = sourcesProviding(category, type2);
@@ -118337,36 +118337,36 @@ ${result.stderr}`, result.code);
         ...extra.restoredFrom ? { restoredFrom: extra.restoredFrom } : {},
         ...op.sourceRef ? { sourceRef: op.sourceRef } : {}
       });
-      const fail14 = (outcome) => (journal2(outcome.result), outcome);
+      const fail15 = (outcome) => (journal2(outcome.result), outcome);
       const archive = host.archive;
-      if (!archive) return fail14({ result: "memory_archive_unavailable" });
-      if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail14({ result: "memory_user_requires_human" });
-      if (originScopeDenied(op, origin)) return fail14({ result: "memory_origin_scope_denied" });
-      if (kindOrBad === "bad") return fail14({ result: "memory_invalid_format", reason: "bad_kind" });
-      if (scope2 === "project" && !projectRef) return fail14({ result: "memory_invalid_format", reason: "bad_scope" });
+      if (!archive) return fail15({ result: "memory_archive_unavailable" });
+      if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail15({ result: "memory_user_requires_human" });
+      if (originScopeDenied(op, origin)) return fail15({ result: "memory_origin_scope_denied" });
+      if (kindOrBad === "bad") return fail15({ result: "memory_invalid_format", reason: "bad_kind" });
+      if (scope2 === "project" && !projectRef) return fail15({ result: "memory_invalid_format", reason: "bad_scope" });
       const kind = kindOrBad;
       if (content !== null) {
         const reason = validateContent(content);
-        if (reason) return fail14({ result: "memory_invalid_format", reason });
+        if (reason) return fail15({ result: "memory_invalid_format", reason });
       }
       if (op.action !== "add") {
         const match = typeof op.match === "string" ? op.match : "";
-        if (!match.trim()) return fail14({ result: "memory_invalid_format", reason: "empty_match" });
+        if (!match.trim()) return fail15({ result: "memory_invalid_format", reason: "empty_match" });
         const pool = archive.active(scope2, projectRef).filter((e) => e.kind === "preference" === (op.target === "user"));
         const hits = pool.filter((e) => extra.exactMatch ? e.text === match : e.text.includes(match));
-        if (hits.length === 0) return fail14({ result: "memory_no_match" });
-        if (hits.length > 1) return fail14({ result: "memory_ambiguous", candidates: hits.map((e) => firstChars(e.text, CANDIDATE_PREVIEW_CHARS)) });
+        if (hits.length === 0) return fail15({ result: "memory_no_match" });
+        if (hits.length > 1) return fail15({ result: "memory_ambiguous", candidates: hits.map((e) => firstChars(e.text, CANDIDATE_PREVIEW_CHARS)) });
         target2 = hits[0];
         before = target2.text;
-        if (op.action === "replace" && before === content) return fail14({ result: "memory_duplicate" });
+        if (op.action === "replace" && before === content) return fail15({ result: "memory_duplicate" });
       }
       if (content !== null && !(op.action === "replace" && target2 && archive.findActiveByText(scope2, projectRef, content)?.id === target2.id)) {
-        if (archive.findActiveByText(scope2, projectRef, content)) return fail14({ result: "memory_duplicate" });
+        if (archive.findActiveByText(scope2, projectRef, content)) return fail15({ result: "memory_duplicate" });
       }
-      if (content !== null && detectCredential(content)) return fail14({ result: "memory_secret_rejected" });
+      if (content !== null && detectCredential(content)) return fail15({ result: "memory_secret_rejected" });
       const finding = content !== null ? scanWriteContent(content) : null;
       if (finding) {
-        return fail14(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
+        return fail15(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
       }
       if (!resolving && mustStage(origin)) {
         const stagedId = host.stage(op, origin, reviewTurnId);
@@ -118376,8 +118376,8 @@ ${result.stderr}`, result.code);
       if (op.action === "add") {
         const added = archive.add({ scope: scope2, projectRef, kind, text: content, origin, sourceRef: op.sourceRef ?? null });
         if (added.result !== "applied") {
-          if (added.result === "memory_duplicate") return fail14({ result: "memory_duplicate" });
-          return fail14({ result: "memory_budget_exceeded", used: added.used, budget: added.budget });
+          if (added.result === "memory_duplicate") return fail15({ result: "memory_duplicate" });
+          return fail15({ result: "memory_budget_exceeded", used: added.used, budget: added.budget });
         }
         target2 = added.entry;
       } else if (op.action === "replace") {
@@ -118412,22 +118412,22 @@ ${result.stderr}`, result.code);
         tier: "core",
         ...extra.batchId ? { batchId: extra.batchId } : {}
       });
-      const fail14 = (outcome, before = null) => (journalFail(outcome.result, before), outcome);
+      const fail15 = (outcome, before = null) => (journalFail(outcome.result, before), outcome);
       const archive = host.archive;
-      if (!archive) return fail14({ result: "memory_archive_unavailable" });
-      if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail14({ result: "memory_user_requires_human" });
-      if (originScopeDenied(op, origin)) return fail14({ result: "memory_origin_scope_denied" });
+      if (!archive) return fail15({ result: "memory_archive_unavailable" });
+      if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail15({ result: "memory_user_requires_human" });
+      if (originScopeDenied(op, origin)) return fail15({ result: "memory_origin_scope_denied" });
       const kind = archiveKindFor(op.target, op.kind);
-      if (kind === "bad") return fail14({ result: "memory_invalid_format", reason: "bad_kind" });
+      if (kind === "bad") return fail15({ result: "memory_invalid_format", reason: "bad_kind" });
       const state2 = host.readCore(op.target);
-      if (state2.unreadable) return fail14({ result: "memory_store_unreadable" });
+      if (state2.unreadable) return fail15({ result: "memory_store_unreadable" });
       const match = typeof op.match === "string" ? op.match : "";
-      if (!match.trim()) return fail14({ result: "memory_invalid_format", reason: "empty_match" });
+      if (!match.trim()) return fail15({ result: "memory_invalid_format", reason: "empty_match" });
       const hits = state2.entries.filter((e) => e.includes(match));
-      if (hits.length === 0) return fail14({ result: "memory_no_match" });
-      if (hits.length > 1) return fail14({ result: "memory_ambiguous", candidates: hits.map((e) => firstChars(e, CANDIDATE_PREVIEW_CHARS)) });
+      if (hits.length === 0) return fail15({ result: "memory_no_match" });
+      if (hits.length > 1) return fail15({ result: "memory_ambiguous", candidates: hits.map((e) => firstChars(e, CANDIDATE_PREVIEW_CHARS)) });
       const text9 = hits[0];
-      if (archive.findActiveByText("global", null, text9)) return fail14({ result: "memory_duplicate" }, text9);
+      if (archive.findActiveByText("global", null, text9)) return fail15({ result: "memory_duplicate" }, text9);
       if (!resolving && mustStage(origin)) {
         const stagedId = host.stage(op, origin, reviewTurnId);
         journalFail("staged", text9, stagedId);
@@ -118436,7 +118436,7 @@ ${result.stderr}`, result.code);
       const batchId = extra.batchId ?? `b${Date.now().toString(36)}${(0, import_crypto36.randomBytes)(3).toString("hex")}`;
       const added = archive.add({ scope: "global", kind, text: text9, origin });
       if (added.result !== "applied") {
-        return added.result === "memory_duplicate" ? fail14({ result: "memory_duplicate" }, text9) : fail14({ result: "memory_budget_exceeded", used: added.used, budget: added.budget }, text9);
+        return added.result === "memory_duplicate" ? fail15({ result: "memory_duplicate" }, text9) : fail15({ result: "memory_budget_exceeded", used: added.used, budget: added.budget }, text9);
       }
       const removed = host.applyCore({ action: "remove", target: op.target, match: text9 }, resolving ? "owner" : origin, { batchId, exactMatch: true });
       if (removed.result !== "applied") {
@@ -119379,22 +119379,22 @@ ${result.stderr}`, result.code);
               ...extra.batchId ? { batchId: extra.batchId } : {},
               ...extra.restoredFrom ? { restoredFrom: extra.restoredFrom } : {}
             });
-            const fail14 = (outcome) => (journal2(outcome.result), outcome);
-            if (state2.unreadable) return fail14({ result: "memory_store_unreadable" });
-            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail14({ result: "memory_user_requires_human" });
-            if (originScopeDenied(op, origin)) return fail14({ result: "memory_origin_scope_denied" });
+            const fail15 = (outcome) => (journal2(outcome.result), outcome);
+            if (state2.unreadable) return fail15({ result: "memory_store_unreadable" });
+            if (!resolving && op.target === "user" && !userTargetAllowed(origin)) return fail15({ result: "memory_user_requires_human" });
+            if (originScopeDenied(op, origin)) return fail15({ result: "memory_origin_scope_denied" });
             if (content !== null) {
               const reason = validateContent(content);
-              if (reason) return fail14({ result: "memory_invalid_format", reason });
+              if (reason) return fail15({ result: "memory_invalid_format", reason });
             }
             let index = -1;
             if (op.action !== "add") {
               const match = typeof op.match === "string" ? op.match : "";
-              if (!match.trim()) return fail14({ result: "memory_invalid_format", reason: "empty_match" });
+              if (!match.trim()) return fail15({ result: "memory_invalid_format", reason: "empty_match" });
               const hits = state2.entries.map((e, i) => (extra.exactMatch ? e === match : e.includes(match)) ? i : -1).filter((i) => i >= 0);
-              if (hits.length === 0) return fail14({ result: "memory_no_match" });
+              if (hits.length === 0) return fail15({ result: "memory_no_match" });
               if (hits.length > 1) {
-                return fail14({
+                return fail15({
                   result: "memory_ambiguous",
                   candidates: hits.map((i) => firstChars(state2.entries[i], CANDIDATE_PREVIEW_CHARS2))
                 });
@@ -119408,16 +119408,16 @@ ${result.stderr}`, result.code);
             else next.splice(index, 1);
             const used2 = usedOf(next);
             if (used2 > state2.budget && used2 > state2.used) {
-              return fail14({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
+              return fail15({ result: "memory_budget_exceeded", used: used2, budget: state2.budget });
             }
             if (content !== null && state2.entries.some((e, i) => e === content && i !== index)) {
-              return fail14({ result: "memory_duplicate" });
+              return fail15({ result: "memory_duplicate" });
             }
-            if (op.action === "replace" && before === content) return fail14({ result: "memory_duplicate" });
-            if (content !== null && detectCredential(content)) return fail14({ result: "memory_secret_rejected" });
+            if (op.action === "replace" && before === content) return fail15({ result: "memory_duplicate" });
+            if (content !== null && detectCredential(content)) return fail15({ result: "memory_secret_rejected" });
             const finding = content !== null ? scanWriteContent(content) : null;
             if (finding) {
-              return fail14(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
+              return fail15(finding.kind === "hidden_chars" ? { result: "memory_hidden_chars_rejected", pattern: finding.pattern } : { result: "memory_injection_rejected", pattern: finding.pattern });
             }
             if (!resolving && mustStage(origin)) {
               const stagedId = this.stage(op, origin, reviewTurnId);
@@ -121463,11 +121463,11 @@ ${body}`;
           }
           /** Owner import (Hermes): origin `imported`, no staging, every format/limit/credential check. */
           importSkill(input) {
-            const fail14 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
+            const fail15 = (r) => (this.journal.append({ action: "import", name: String(input.name), origin: "owner", result: r.result }), r);
             const { refusal: refusal2, files } = this.prepareImport(input);
-            if (refusal2) return fail14(refusal2);
+            if (refusal2) return fail15(refusal2);
             const live = this.liveCount();
-            if (live >= SKILL_LIMITS.liveSkills) return fail14({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
+            if (live >= SKILL_LIMITS.liveSkills) return fail15({ result: "skill_limit", live, limit: SKILL_LIMITS.liveSkills });
             this.writeFiles(input.name, [{ path: SKILL_FILE, content: composeSkillMd(input.frontmatterRaw, input.body) }, ...files]);
             const { file } = this.loadState();
             file.skills[input.name] = newSkillState("imported", this.now().toISOString());
@@ -121942,21 +121942,21 @@ ${body}`;
           /** Called only behind assistant_staged_resolve's owner-source gate. Read the
            * currently installed tree, never caller-supplied type/digest/permissions. */
           resolve(id4, decision, store5, readCurrent) {
-            const fail14 = (code) => ({ success: false, code });
-            if (decision !== "apply" && decision !== "discard") return fail14("invalid_args");
+            const fail15 = (code) => ({ success: false, code });
+            if (decision !== "apply" && decision !== "discard") return fail15("invalid_args");
             const rec8 = this.read(id4);
-            if (!rec8) return fail14("staged_not_found");
+            if (!rec8) return fail15("staged_not_found");
             if (decision === "discard") {
               this.discarded.add(`${rec8.type}\0${rec8.treeDigest}`);
               this.remove(id4);
               return { success: true, result: "discarded" };
             }
-            if (this.now().getTime() - Date.parse(rec8.createdAt) >= MAX_AGE) return fail14("expired");
+            if (this.now().getTime() - Date.parse(rec8.createdAt) >= MAX_AGE) return fail15("expired");
             const current5 = readCurrent(rec8.type);
-            if (!current5) return fail14("driver_not_installed");
+            if (!current5) return fail15("driver_not_installed");
             const risk = deriveDriverRiskClass(current5.module);
-            if (current5.module.type !== rec8.type || current5.module.name !== rec8.name || current5.module.providerVersion !== rec8.providerVersion || (current5.module.publisher ?? void 0) !== (rec8.publisher ?? void 0) || current5.treeDigest !== rec8.treeDigest || risk.riskClass !== rec8.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec8.reasons) || JSON.stringify(current5.module.declaredAccess ?? {}) !== JSON.stringify(rec8.declaredAccess) || JSON.stringify(current5.module.runtime) !== JSON.stringify(rec8.runtime)) return fail14("stale");
-            if (!store5.approve(current5.module, rec8.treeDigest)) return fail14("driver_disabled");
+            if (current5.module.type !== rec8.type || current5.module.name !== rec8.name || current5.module.providerVersion !== rec8.providerVersion || (current5.module.publisher ?? void 0) !== (rec8.publisher ?? void 0) || current5.treeDigest !== rec8.treeDigest || risk.riskClass !== rec8.riskClass || JSON.stringify(risk.reasons) !== JSON.stringify(rec8.reasons) || JSON.stringify(current5.module.declaredAccess ?? {}) !== JSON.stringify(rec8.declaredAccess) || JSON.stringify(current5.module.runtime) !== JSON.stringify(rec8.runtime)) return fail15("stale");
+            if (!store5.approve(current5.module, rec8.treeDigest)) return fail15("driver_disabled");
             this.remove(id4);
             return { success: true, result: "applied", type: rec8.type, treeDigest: rec8.treeDigest };
           }
@@ -122081,35 +122081,35 @@ ${body}`;
       const issue = selectionSchemaIssue(candidate);
       if (!isLaunchRole(role) || issue) return { ok: false, issue: issue ?? { field: "provider", reason: "invalid_schema" } };
       const selection = { ...candidate };
-      const fail14 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
+      const fail15 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
       try {
         selection.provider = ports.resolveAlias(selection.provider);
         const facts = ports.getProvider(selection.provider, selection.model);
-        if (!facts || facts.type !== selection.provider) return fail14("provider", "provider_unknown");
-        if (facts.category !== "cli") return fail14("provider", "provider_not_cli");
-        if (facts.enabled !== true) return fail14("provider", "provider_disabled");
-        if (facts.detected !== true) return fail14("provider", "provider_not_detected");
-        if (facts.quotaGated === true) return fail14("provider", "provider_quota_gated");
+        if (!facts || facts.type !== selection.provider) return fail15("provider", "provider_unknown");
+        if (facts.category !== "cli") return fail15("provider", "provider_not_cli");
+        if (facts.enabled !== true) return fail15("provider", "provider_disabled");
+        if (facts.detected !== true) return fail15("provider", "provider_not_detected");
+        if (facts.quotaGated === true) return fail15("provider", "provider_quota_gated");
         if (role === "assistant" ? facts.assistant.supported !== true : !["supported", "manual"].includes(facts.coordinator)) {
-          return fail14("provider", "provider_not_eligible");
+          return fail15("provider", "provider_not_eligible");
         }
         const warnings = [];
         if (role === "coordinator" && facts.coordinator === "manual") warnings.push("manual_mcp_setup_required");
         if (selection.model !== void 0) {
-          if (!facts.modelLaunchArgs?.length) return fail14("model", "model_unsupported");
-          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail14("model", "model_provider_mismatch");
+          if (!facts.modelLaunchArgs?.length) return fail15("model", "model_unsupported");
+          if (!isModelCompatibleWithProvider(selection.model, selection.provider)) return fail15("model", "model_provider_mismatch");
           const options = resolveModelOptions(facts.modelOptions, facts.discovery, facts.modelLaunchValueMap);
           if (facts.discovery?.status === "ok") {
-            if (!facts.discovery.models.length) return fail14("model", "catalog_unavailable");
-            if (!options.includes(selection.model)) return fail14("model", "model_not_offered", options);
+            if (!facts.discovery.models.length) return fail15("model", "catalog_unavailable");
+            if (!options.includes(selection.model)) return fail15("model", "model_not_offered", options);
           } else {
             warnings.push("catalog_unverified");
           }
         }
         if (selection.thinkingLevel !== void 0) {
-          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail14("thinkingLevel", "thinking_unsupported");
+          if (!facts.thinkingLaunchArgs?.length && facts.runtimeThinking !== true) return fail15("thinkingLevel", "thinking_unsupported");
           if (!facts.thinkingLevelOptions?.includes(selection.thinkingLevel)) {
-            return fail14("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
+            return fail15("thinkingLevel", "thinking_not_offered", facts.thinkingLevelOptions ?? []);
           }
         }
         const toolRestriction = facts.assistant.toolRestriction;
@@ -122121,7 +122121,7 @@ ${body}`;
           lowersToolLock: role === "assistant" && previousToolRestriction === "enforced" && toolRestriction === "prompt_only"
         };
       } catch {
-        return fail14("provider", "catalog_unavailable");
+        return fail15("provider", "catalog_unavailable");
       }
     }
     var init_validate = __esm2({
@@ -122213,25 +122213,25 @@ ${body}`;
           }
           /** Call only after owner/tool authorization and staging decisions. */
           write(request) {
-            const fail14 = (code, reason) => ({ ok: false, code, reason, committed: false });
+            const fail15 = (code, reason) => ({ ok: false, code, reason, committed: false });
             if (!isRecord11(request) || !hasOnlyKeys3(request, ["role", "selection", "fallback", "expectedRevision", "by", "origin", "previousToolRestriction"]) || !isLaunchRole(request.role) || !integer(request.expectedRevision) || !["owner", "assistant"].includes(request.by) || !origins.includes(request.origin) || request.previousToolRestriction !== void 0 && !["enforced", "prompt_only"].includes(request.previousToolRestriction)) {
-              return fail14("invalid_args", "invalid_write_request");
+              return fail15("invalid_args", "invalid_write_request");
             }
             const dir = (0, import_node_path23.resolve)(this.path, "..");
             const lock = `${this.path}.lock`;
             try {
               (0, import_node_fs29.mkdirSync)(dir, { recursive: true, mode: 448 });
             } catch {
-              return fail14("persistence_failed", "config_directory_unavailable");
+              return fail15("persistence_failed", "config_directory_unavailable");
             }
             const acquired = acquireOwnedLock(lock, this.lockOptions);
-            if (!acquired.ok) return fail14(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
+            if (!acquired.ok) return fail15(acquired.busy ? "store_busy" : "persistence_failed", acquired.reason);
             try {
               const current5 = this.read();
-              if (current5.status === "invalid" || current5.status === "unreadable") return fail14("store_unavailable", current5.reason);
+              if (current5.status === "invalid" || current5.status === "unreadable") return fail15("store_unavailable", current5.reason);
               const revision = current5.status === "ok" ? current5.document.revision : 0;
               if (revision !== request.expectedRevision) return { ok: false, code: "revision_conflict", reason: "document_revision_changed", committed: false, actualRevision: revision };
-              if (revision >= Number.MAX_SAFE_INTEGER) return fail14("store_unavailable", "revision_exhausted");
+              if (revision >= Number.MAX_SAFE_INTEGER) return fail15("store_unavailable", "revision_exhausted");
               let selection = null;
               let warnings = [];
               let lowersToolLock = false;
@@ -134050,7 +134050,7 @@ ${tail}` : ""
         return currentMeshDispatchMessageId(host.settings) === messageId && host.turnEvidencePort === port && ref2?.attemptId === attemptRef?.attemptId && ref2?.generation === attemptRef?.generation;
       };
       const envelope = { sessionId: host.instanceId, observedBy: "cli_fsm", source: "input_service", ...attemptRef ? { attemptRef } : { taskId } };
-      const fail14 = () => {
+      const fail15 = () => {
         LOG.warn("MeshTaskAttach", `${tag} \u2014 reporting dispatch_failed(submit_unconfirmed)${attemptRef ? ` for attempt ${attemptRef.attemptId} g${attemptRef.generation}` : ""}`);
         emitDispatchFailed(port, { ...envelope, workerAbsent: false, reason: "submit_unconfirmed" });
       };
@@ -134075,7 +134075,7 @@ ${tail}` : ""
           LOG.warn("MeshTaskAttach", `${tag} \u2014 non-consumption unproven (${check}); quarantining without dispatch_failed reclaim`);
           return;
         }
-        fail14();
+        fail15();
       });
       return true;
     }
@@ -137820,6 +137820,12 @@ ${tail}` : ""
       };
       const destinations = files.map((file) => {
         const path139 = (0, import_node_path29.join)(safeDir(configDir, file.area, true), file.name);
+        const consumed = `${path139}.consumed`;
+        if ((0, import_node_fs38.existsSync)(consumed)) {
+          const stat2 = (0, import_node_fs38.lstatSync)(consumed);
+          if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("approval consent receipt is not a local file");
+          throw new Error("approval consent receipt already retained");
+        }
         if ((0, import_node_fs38.existsSync)(path139)) {
           verifyExisting(path139, file.data);
         }
@@ -138320,7 +138326,7 @@ ${tail}` : ""
       const meshId = String(mesh?.id || mesh?.name || "");
       const nodeId = entry.nodeId;
       const node = (Array.isArray(mesh?.nodes) ? mesh.nodes : []).find((n) => meshNodeIdMatches7(n, nodeId));
-      const fail14 = (code, error) => {
+      const fail15 = (code, error) => {
         entry.execution = { attempted: true, success: false, code, error };
         metrics.removalFailures++;
       };
@@ -138346,7 +138352,7 @@ ${tail}` : ""
         const precheck = await deps.precheckLocalWorktreeRemovable({ mesh, node, nodeId });
         if (precheck.ok === false) {
           entry.reasonCode = "execution_precheck_refused";
-          fail14(precheck.code, precheck.error);
+          fail15(precheck.code, precheck.error);
           return;
         }
         if (deps.cleanupMeshSessions) {
@@ -138358,7 +138364,7 @@ ${tail}` : ""
         const cleanup = await deps.cleanupLocalWorktreeNode({ mesh, node, nodeId });
         if (cleanup.success === false) {
           entry.reasonCode = "execution_cleanup_failed";
-          fail14(cleanup.code, cleanup.error);
+          fail15(cleanup.code, cleanup.error);
           return;
         }
         if (cleanup.skipped !== true) {
@@ -138386,7 +138392,7 @@ ${tail}` : ""
         try {
           removed = removeNodeFromMesh(meshId, nodeId) === true;
         } catch (e) {
-          fail14("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
+          fail15("execution_membership_not_removed", `Membership removal threw: ${e?.message || e}`);
           return;
         }
         try {
@@ -138398,7 +138404,7 @@ ${tail}` : ""
         }
         if (!removed) {
           entry.reasonCode = "execution_membership_not_removed";
-          fail14("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
+          fail15("execution_membership_not_removed", "Node was not present in the file registry or inline cache; nothing was removed. The next pass retries (partial-failure recoverable).");
           return;
         }
         try {
@@ -141584,11 +141590,11 @@ ${tail}` : ""
           const terminate = async () => {
             try {
               if (process.platform === "win32" && child.pid) {
-                await new Promise((done, fail14) => {
-                  const deadline = setTimeout(() => fail14(new Error("Tree termination unconfirmed")), 5e3);
+                await new Promise((done, fail15) => {
+                  const deadline = setTimeout(() => fail15(new Error("Tree termination unconfirmed")), 5e3);
                   (0, import_node_child_process30.execFile)("taskkill", ["/PID", String(child.pid), "/T", "/F"], { shell: false, windowsHide: true, timeout: 5e3 }, (err2) => {
                     clearTimeout(deadline);
-                    if (err2) fail14(err2);
+                    if (err2) fail15(err2);
                     else done();
                   });
                 });
@@ -148548,7 +148554,7 @@ ${committed.block}`;
     async function switchCoordinator(input, ports) {
       const handoffId = input.handoffId ?? (0, import_node_crypto66.randomUUID)();
       const { meshId, oldSessionId, selection } = input;
-      const fail14 = (code, error) => ({ success: false, code, error, handoffId });
+      const fail15 = (code, error) => ({ success: false, code, error, handoffId });
       ports.setDraining(oldSessionId, true);
       let newSessionId = "";
       try {
@@ -148557,7 +148563,7 @@ ${committed.block}`;
         if (!launched.success || !newSessionId) {
           ports.setDraining(oldSessionId, false);
           ports.log?.(`[session-control] coordinator switch launch failed code=${launched.code ?? "launch_failed"}`);
-          return fail14(launched.code ?? "coordinator_launch_failed", launched.error ?? "replacement coordinator did not start");
+          return fail15(launched.code ?? "coordinator_launch_failed", launched.error ?? "replacement coordinator did not start");
         }
         ports.markSuccessor(newSessionId, oldSessionId);
         const ready2 = await ports.waitReady(newSessionId, input.readyTimeoutMs ?? COORDINATOR_READY_TIMEOUT_MS);
@@ -148578,7 +148584,7 @@ ${committed.block}`;
           }
         }
         ports.log?.(`[session-control] coordinator switch rolled back code=${code}`);
-        return fail14(code, e?.message ?? String(e));
+        return fail15(code, e?.message ?? String(e));
       }
       const stopped = await ports.stop(oldSessionId);
       if (!stopped.success) {
@@ -149948,7 +149954,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             try {
               this.d.mesh.setFence(rec8.meshId, { handoffId: rec8.handoffId, epoch: rec8.epoch });
               this.d.data.freezeWrites?.(rec8.meshId, rec8.handoffId, rec8.epoch);
-              this.d.data.applySnapshot(rec8.meshId, verified.payload, { handoffId: rec8.handoffId, sourceDaemonId: rec8.peerDaemonId, snapshotDigest: manifest.digest });
+              this.d.data.applySnapshot(rec8.meshId, verified.payload, { handoffId: rec8.handoffId, sourceDaemonId: rec8.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec8.epoch });
               this.d.mesh.applyConfig(rec8.meshId, verified.payload.config);
               this.d.mesh.writeHost(rec8.meshId, {
                 role: "host",
@@ -150039,6 +150045,143 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
             }
           }
         };
+      }
+    });
+    function inventory(configDir, meshId) {
+      const path139 = (0, import_node_path42.join)(configDir, "meshes.json");
+      if (!(0, import_node_fs49.existsSync)(path139)) return { ok: false, detail: "project inventory unavailable" };
+      let parsed;
+      try {
+        parsed = JSON.parse((0, import_node_fs49.readFileSync)(path139, "utf8"));
+      } catch {
+        return { ok: false, detail: "project inventory unreadable" };
+      }
+      if (!Array.isArray(parsed.meshes)) return { ok: false, detail: "project inventory invalid" };
+      const mesh = parsed.meshes.find((m) => !!m && typeof m === "object" && m.id === meshId);
+      if (!mesh) return { ok: false, detail: "project is not in the local inventory" };
+      const host = mesh.meshHost;
+      if (host?.handedOffTo) return { ok: false, detail: "project authority already moved" };
+      if (host?.handoffFence) return { ok: false, detail: "project write fence is already held" };
+      if (host?.hostEpoch !== void 0 && !Number.isInteger(host.hostEpoch)) return { ok: false, detail: "project epoch is not an exact integer" };
+      return { ok: true, mesh };
+    }
+    function consumedAmbiguity(configDir) {
+      for (const area of ["staged", "staged-control"]) {
+        const dir = (0, import_node_path42.join)(configDir, "assistant", area);
+        if (!(0, import_node_fs49.existsSync)(dir)) continue;
+        let names;
+        try {
+          names = (0, import_node_fs49.readdirSync)(dir);
+        } catch {
+          return "approval directory is unreadable";
+        }
+        for (const name of names) {
+          if (!name.endsWith(".json.consumed")) continue;
+          const live = name.slice(0, -".consumed".length);
+          if (!/^[A-Za-z0-9_-]+\.json$/.test(live)) return "approval consent receipt name is not exact";
+          const receipt = (0, import_node_path42.join)(dir, name);
+          const stat2 = (0, import_node_fs49.lstatSync)(receipt);
+          if (!stat2.isFile() || stat2.isSymbolicLink()) return "approval consent receipt is not a local file";
+          if ((0, import_node_fs49.existsSync)((0, import_node_path42.join)(dir, live))) return "approval has both a live proposal and a consumed receipt";
+        }
+      }
+      return null;
+    }
+    function assessPreservationBoundary(db3, configDir, meshId) {
+      try {
+        if (!meshId) return fail11("project identity is missing");
+        const found = inventory(configDir, meshId);
+        if (!found.ok) return fail11(found.detail);
+        for (const spec of HOST_SNAPSHOT_TABLES) {
+          if (!db3.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(spec.table)) {
+            return fail11(`required table ${spec.table} is missing`);
+          }
+        }
+        if (!db3.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'assistant_memory_fts'").get()) {
+          return fail11("project memory search index is missing");
+        }
+        const memories = db3.prepare("SELECT e.seq AS seq, e.id AS id, e.text AS text, f.text AS indexed FROM assistant_memory_entry e LEFT JOIN assistant_memory_fts f ON f.rowid = e.seq WHERE e.scope = 'project' AND e.project_ref = ?").all(meshId);
+        for (const row2 of memories) {
+          if (typeof row2.id !== "string" || !row2.id || typeof row2.text !== "string") return fail11("project memory row has no stable id");
+          if (row2.indexed !== row2.text) return fail11("project memory search index does not match the stored entry");
+        }
+        if (db3.prepare("SELECT 1 AS open FROM turn_attempts WHERE mesh_id = ? AND terminal_outcome IS NULL LIMIT 1").get(meshId)) {
+          return fail11("a project turn is still open");
+        }
+        const pending = db3.prepare("SELECT event_id, attempt_id, payload_json FROM turn_events WHERE mesh_id = ? AND publish_state = 'pending'").all(meshId);
+        const seen2 = /* @__PURE__ */ new Set();
+        for (const event of pending) {
+          if (typeof event.event_id !== "string" || !event.event_id || seen2.has(event.event_id)) return fail11("pending notice has no stable id");
+          seen2.add(event.event_id);
+          const attempt = db3.prepare("SELECT terminal_outcome FROM turn_attempts WHERE attempt_id = ? AND mesh_id = ?").get(event.attempt_id, meshId);
+          if (!attempt || attempt.terminal_outcome == null) return fail11("pending notice belongs to an in-flight turn");
+        }
+        const ambiguous = consumedAmbiguity(configDir);
+        if (ambiguous) return fail11(ambiguous);
+        const meshes = [found.mesh];
+        const files = exportProjectApprovalFiles(configDir, meshId, (ref2) => {
+          const resolved = resolveAssistantProject(ref2, meshes);
+          return resolved.ok ? resolved.mesh.id : null;
+        });
+        const epoch = found.mesh.meshHost?.hostEpoch ?? 0;
+        const snap = exportSnapshot({
+          db: db3,
+          meshId,
+          handoffId: `preservation:${meshId}`,
+          fromDaemonId: "preservation-probe",
+          toDaemonId: "preservation-probe",
+          hostEpoch: epoch,
+          meshConfig: found.mesh,
+          projectFiles: files
+        });
+        const verified = verifyStagedSnapshot(snap.manifest, snap.chunks, localTableColumns(db3));
+        if (!verified.ok) return fail11(verified.detail);
+        return { id: "state_preservation", ok: true, detail: "project memory, pending notices, and approval bytes match one durable watermark" };
+      } catch (e) {
+        return fail11(e?.message || "preservation boundary could not be verified");
+      }
+    }
+    function adoptPendingNoticeReceipts(db3, meshId, payload, provenance) {
+      const table = payload.tables.turn_events;
+      if (!table) throw new Error("pending notice table is missing from the snapshot");
+      const col = (name) => table.columns.indexOf(name);
+      const idAt = col("event_id"), meshAt = col("mesh_id"), stateAt = col("publish_state"), bodyAt = col("payload_json");
+      if (idAt < 0 || meshAt < 0 || stateAt < 0) throw new Error("pending notice identity columns are missing");
+      const pending = table.rows.filter((row2) => row2[meshAt] === meshId && row2[stateAt] === "pending");
+      if (!pending.length) return;
+      if (!provenance?.handoffId || !Number.isInteger(provenance.epoch)) throw new Error("notice adoption has no exact handoff receipt");
+      db3.exec(`CREATE TABLE IF NOT EXISTS mesh_host_notice_receipts (
+        mesh_id TEXT NOT NULL, event_id TEXT NOT NULL, payload_sha256 TEXT NOT NULL,
+        handoff_id TEXT NOT NULL, epoch INTEGER NOT NULL, PRIMARY KEY (mesh_id, event_id))`);
+      const select = db3.prepare("SELECT payload_sha256, handoff_id, epoch FROM mesh_host_notice_receipts WHERE mesh_id = ? AND event_id = ?");
+      const insert = db3.prepare("INSERT INTO mesh_host_notice_receipts (mesh_id, event_id, payload_sha256, handoff_id, epoch) VALUES (?, ?, ?, ?, ?)");
+      for (const row2 of pending) {
+        const eventId = row2[idAt];
+        if (typeof eventId !== "string" || !eventId) throw new Error("pending notice has no stable id");
+        const hash3 = sha256Hex(String(bodyAt < 0 ? "" : row2[bodyAt] ?? ""));
+        const existing = select.get(meshId, eventId);
+        if (existing) {
+          if (existing.payload_sha256 !== hash3 || existing.handoff_id !== provenance.handoffId || existing.epoch !== provenance.epoch) {
+            throw new Error(existing.epoch !== provenance.epoch ? "stale epoch notice replay" : "notice receipt conflicts with retained delivery");
+          }
+          continue;
+        }
+        insert.run(meshId, eventId, hash3, provenance.handoffId, provenance.epoch);
+      }
+    }
+    var import_node_fs49;
+    var import_node_path42;
+    var fail11;
+    var init_preservation_boundary = __esm2({
+      "src/mesh/host-handoff/preservation-boundary.ts"() {
+        "use strict";
+        import_node_fs49 = require("fs");
+        import_node_path42 = require("path");
+        init_assistant_projects();
+        init_project_files();
+        init_snapshot_export();
+        init_snapshot_import();
+        fail11 = (detail) => ({ id: "state_preservation", ok: false, code: "state_preservation_unverified", detail });
       }
     });
     function db2() {
@@ -150149,13 +150292,18 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         },
         localColumns: localTableColumns(db2()),
         applySnapshot: (meshId, payload, provenance) => {
-          const counts2 = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => applySnapshotTables(db2(), meshId, payload, provenance));
+          const store5 = MeshRuntimeStore.getInstance().db;
+          const counts2 = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store5.transaction(() => {
+            const applied = applySnapshotTables(db2(), meshId, payload, provenance);
+            adoptPendingNoticeReceipts(db2(), meshId, payload, provenance);
+            return applied;
+          })());
           importProjectApprovalFiles(getConfigDir2(), meshId, payload.files, approvalProjectResolver(payload.config, meshId));
           return counts2;
         },
         freeDiskBytes: () => {
           try {
-            const s2 = (0, import_node_fs49.statfsSync)(getConfigDir2());
+            const s2 = (0, import_node_fs50.statfsSync)(getConfigDir2());
             return Number(s2.bavail) * Number(s2.bsize);
           } catch {
             return 0;
@@ -150230,15 +150378,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       const certificate = liveCertificatePort(host);
       const log = (line) => host.log(line);
       const sourceDeps = {
-        // The inherited snapshot contract omits ledger, pending-event and file
-        // approval state. Fail closed even if the experimental flag is enabled;
-        // the v2 protocol hardening alone is not a complete live migration.
-        preservationCheck: () => ({
-          id: "state_preservation",
-          ok: false,
-          code: "state_preservation_unverified",
-          detail: "Project memory, pending-event adoption and file/config write-freeze coverage require verified transfer adapters before live handoff."
-        }),
+        // Success only when memory, pending notices, and approval bytes verify
+        // together. A missing inventory, open turn, index mismatch, or unreadable
+        // file stays state_preservation_unverified.
+        preservationCheck: (meshId) => assessPreservationBoundary(MeshRuntimeStore.getInstance().db, getConfigDir2(), meshId),
         selfDaemonId: host.selfDaemonId,
         journal: journal2,
         mesh,
@@ -150269,13 +150412,13 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         })
       };
     }
-    var import_node_fs49;
+    var import_node_fs50;
     var import_node_crypto68;
     var HOLD_TTL_MS;
     var init_live_env = __esm2({
       "src/mesh/host-handoff/live-env.ts"() {
         "use strict";
-        import_node_fs49 = require("fs");
+        import_node_fs50 = require("fs");
         import_node_crypto68 = require("crypto");
         init_dist();
         init_config();
@@ -150296,6 +150439,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_project_files();
         init_assistant_projects();
         init_project_write_cut();
+        init_preservation_boundary();
         init_write_fence();
         HOLD_TTL_MS = 30 * 6e4;
       }
@@ -150379,10 +150523,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (provider.type !== selection.provider || !spec || spec.version !== 1 || spec.privateContextDisabled !== true || spec.toolsDisabled !== true || !Array.isArray(spec.args) || spec.args.some((a) => typeof a !== "string" || a.includes("\0")) || !provider.spawn?.command || selection.model !== void 0 && !spec.args.some((a) => a.includes("{{model}}")) || selection.thinkingLevel !== void 0 && !spec.args.some((a) => a.includes("{{thinkingLevel}}")) || !["{{prompt}}", "{{maxTurns}}", "{{maxOutputTokens}}"].every((token) => spec.args.some((a) => a.includes(token)))) {
         return result(false, true, "canary_contract_unsupported");
       }
-      const root = (0, import_node_fs50.mkdtempSync)((0, import_node_path42.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
-      const config = (0, import_node_path42.join)(root, "config"), workspace = (0, import_node_path42.join)(root, "workspace");
-      (0, import_node_fs50.mkdirSync)(config, { mode: 448 });
-      (0, import_node_fs50.mkdirSync)(workspace, { mode: 448 });
+      const root = (0, import_node_fs51.mkdtempSync)((0, import_node_path43.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
+      const config = (0, import_node_path43.join)(root, "config"), workspace = (0, import_node_path43.join)(root, "workspace");
+      (0, import_node_fs51.mkdirSync)(config, { mode: 448 });
+      (0, import_node_fs51.mkdirSync)(workspace, { mode: 448 });
       const substitutions = {
         prompt: HANDOFF_CANARY_PROMPT,
         maxTurns: "1",
@@ -150472,9 +150616,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       });
     }
     var import_node_child_process31;
-    var import_node_fs50;
+    var import_node_fs51;
     var import_node_os13;
-    var import_node_path42;
+    var import_node_path43;
     var import_node_crypto69;
     var HANDOFF_CANARY_PROMPT;
     var HANDOFF_CANARY_OUTPUT;
@@ -150483,9 +150627,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       "src/mesh/host-handoff/target-canary.ts"() {
         "use strict";
         import_node_child_process31 = require("child_process");
-        import_node_fs50 = require("fs");
+        import_node_fs51 = require("fs");
         import_node_os13 = require("os");
-        import_node_path42 = require("path");
+        import_node_path43 = require("path");
         import_node_crypto69 = require("crypto");
         HANDOFF_CANARY_PROMPT = "Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.";
         HANDOFF_CANARY_OUTPUT = "ADHDEV_HANDOFF_READY";
@@ -150503,9 +150647,9 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       let workspace;
       if (node?.workspace) {
         try {
-          workspace = (0, import_node_fs51.realpathSync)(node.workspace);
-          if (!(0, import_node_fs51.statSync)(workspace).isDirectory()) workspace = void 0;
-          else (0, import_node_fs51.accessSync)(workspace, import_node_fs51.constants.R_OK | import_node_fs51.constants.W_OK | import_node_fs51.constants.X_OK);
+          workspace = (0, import_node_fs52.realpathSync)(node.workspace);
+          if (!(0, import_node_fs52.statSync)(workspace).isDirectory()) workspace = void 0;
+          else (0, import_node_fs52.accessSync)(workspace, import_node_fs52.constants.R_OK | import_node_fs52.constants.W_OK | import_node_fs52.constants.X_OK);
         } catch {
           workspace = void 0;
         }
@@ -150520,7 +150664,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
           );
           const root = (await git11(["rev-parse", "--show-toplevel"])).stdout.trim();
           const remote = (await git11(["config", "--get", "remote.origin.url"])).stdout.trim();
-          add("repository_identity", (0, import_node_fs51.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
+          add("repository_identity", (0, import_node_fs52.realpathSync)(root) === workspace && !!p.mesh.repoIdentity && normalizeRepoIdentity(remote) === normalizeRepoIdentity(p.mesh.repoIdentity));
         } catch {
           add("repository_identity", false, "A registered repository with matching identity is required.");
         }
@@ -150550,14 +150694,14 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return { ok: checks.every((c) => c.ok), checks };
     }
     var import_node_child_process32;
-    var import_node_fs51;
+    var import_node_fs52;
     var import_node_util18;
     var exec6;
     var init_target_readiness = __esm2({
       "src/mesh/host-handoff/target-readiness.ts"() {
         "use strict";
         import_node_child_process32 = require("child_process");
-        import_node_fs51 = require("fs");
+        import_node_fs52 = require("fs");
         import_node_util18 = require("util");
         init_dist();
         init_mesh_config_store();
@@ -152314,9 +152458,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     async function collectCoordinatorReplies(opts) {
       const since2 = opts.now - RELAY_AUDIT_RETENTION_MS;
-      const inventory = [...new Map((opts.coordinatorSessions ?? listMeshesReadOnly().flatMap((mesh) => listCoordinatorsForMesh(mesh.id))).map((entry) => [entry.sessionId, entry])).values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
-      const first = inventory.length ? Math.floor(opts.now / 6e4) * SESSION_CAP % inventory.length : 0;
-      const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
+      const inventory2 = [...new Map((opts.coordinatorSessions ?? listMeshesReadOnly().flatMap((mesh) => listCoordinatorsForMesh(mesh.id))).map((entry) => [entry.sessionId, entry])).values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+      const first = inventory2.length ? Math.floor(opts.now / 6e4) * SESSION_CAP % inventory2.length : 0;
+      const sessions = [...inventory2.slice(first), ...inventory2.slice(0, first)].slice(0, SESSION_CAP);
       const out = [];
       const checkpoints = new NativeScanCheckpoints(opts.db);
       const scans2 = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
@@ -155827,7 +155971,7 @@ ${defangRelayBody(text9)}`;
     function record6(v) {
       return v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
     }
-    function fail12(code, error = code, extra = {}) {
+    function fail13(code, error = code, extra = {}) {
       return { success: false, code, error, ...extra };
     }
     async function withMeshRemoteAccessMutex(meshId, fn) {
@@ -155902,21 +156046,21 @@ ${defangRelayBody(text9)}`;
     }
     async function note(meshId, args) {
       const op = parseNoteOp(args);
-      if (typeof op === "string") return fail12("invalid_args", op);
+      if (typeof op === "string") return fail13("invalid_args", op);
       const callerSessionId = str25(args.callerSessionId);
       if (op.action === "list" || op.action === "read") {
         const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
         if (out.result === "note_not_found") {
-          return fail12("note_not_found", String(out.error || "note_not_found"), {
+          return fail13("note_not_found", String(out.error || "note_not_found"), {
             ...typeof out.noteId === "string" ? { noteId: out.noteId } : {}
           });
         }
         return { success: true, ...out };
       }
       const origin = str25(args.origin);
-      if (origin !== "human" && origin !== "owner") return fail12("invalid_args", "origin must be human or owner");
+      if (origin !== "human" && origin !== "owner") return fail13("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
-      if (refusal2) return fail12(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
+      if (refusal2) return fail13(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
       const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || void 0);
       return { success: true, ...applied };
     }
@@ -155937,7 +156081,7 @@ ${defangRelayBody(text9)}`;
         const msg = e instanceof Error ? e.message : String(e);
         return {
           ok: false,
-          result: fail12(
+          result: fail13(
             "host_unavailable_transient",
             `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`
           )
@@ -155950,35 +156094,35 @@ ${defangRelayBody(text9)}`;
         if (!strictRead.ok) return strictRead;
         mesh = strictRead.mesh;
       }
-      if (!mesh) return { ok: false, result: fail12("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
-      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh) return { ok: false, result: fail13("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
+      if (!ports.isHostedHere(mesh)) return { ok: false, result: fail13("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const self = ports.selfDaemonId();
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail12("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail13("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       if (self && !daemonIdsEquivalent5(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail12("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `Host daemon identity mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail12("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail13("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
       if (!sender || !daemonIdsEquivalent5(acl.activeDaemonId, sender)) {
-        return { ok: false, result: fail12("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record6(args.followerAccess);
       const claimedSlot = str25(followerClaim?.accountSlot) || str25(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail12("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail13("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail12("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail13("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -155987,14 +156131,14 @@ ${defangRelayBody(text9)}`;
       if ((op === "artifact_list" || op === "artifact_read") && acl.allowArtifactRead !== true) {
         return {
           ok: false,
-          result: fail12("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+          result: fail13("artifact_read_disabled", `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
             bindingRevision: acl.bindingRevision,
             grantRevision: acl.grantRevision
           })
         };
       }
       if (!followerOpPermitted(op, acl.allowedOps)) {
-        return { ok: false, result: fail12("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
+        return { ok: false, result: fail13("remote_op_forbidden", `Operation '${op}' is not permitted for checkout-less remote followers.`) };
       }
       return { ok: true, acl };
     }
@@ -156030,46 +156174,46 @@ ${defangRelayBody(text9)}`;
       return "live";
     }
     function verifyRemoteFollowerBindingForWake(ports, mesh, meshId, sender, args) {
-      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
+      if (!mesh || !ports.isHostedHere(mesh)) return { ok: false, result: fail13("project_not_hosted_here", `this daemon does not host mesh ${meshId}`) };
       const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-      if (!acl) return { ok: false, result: fail12("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+      if (!acl) return { ok: false, result: fail13("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
       const self = ports.selfDaemonId();
       if (!self || !daemonIdsEquivalent5(acl.hostDaemonId, self)) {
-        return { ok: false, result: fail12("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
       }
       if (acl.status !== "active") {
         return {
           ok: false,
-          result: fail12("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+          result: fail13("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
             grantRevision: acl.grantRevision,
             bindingRevision: acl.bindingRevision
           })
         };
       }
-      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail12("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
+      if (acl.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return { ok: false, result: fail13("remote_access_denied", `Invalid assistant accountSlot '${acl.accountSlot}'.`) };
       const canonSender = canonicalDaemonId2(sender);
       if (!canonSender || daemonIdsEquivalent5(canonSender, self) || !daemonIdsEquivalent5(acl.activeDaemonId, canonSender)) {
-        return { ok: false, result: fail12("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
       }
       const followerClaim = record6(args.followerAccess);
       const localBindingErr = str25(followerClaim?.localBindingError);
-      if (localBindingErr) return { ok: false, result: fail12(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
+      if (localBindingErr) return { ok: false, result: fail13(localBindingErr, `Follower reported local owner-binding error: ${localBindingErr}`) };
       const claimedSlot = str25(followerClaim?.accountSlot) || str25(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail12("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
+      if (claimedSlot !== acl.accountSlot) return { ok: false, result: fail13("remote_access_denied", `Invalid assistant accountSlot '${claimedSlot}'.`) };
       const claimedActiveDaemonId = str25(followerClaim?.activeDaemonId);
       if (claimedActiveDaemonId && !daemonIdsEquivalent5(claimedActiveDaemonId, acl.activeDaemonId)) {
-        return { ok: false, result: fail12("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `Follower activeDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedHostDaemonId = str25(followerClaim?.hostDaemonId);
       if (claimedHostDaemonId && !daemonIdsEquivalent5(claimedHostDaemonId, acl.hostDaemonId)) {
-        return { ok: false, result: fail12("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
+        return { ok: false, result: fail13("remote_access_denied", `Follower hostDaemonId does not match host grant for mesh ${meshId}.`) };
       }
       const claimedBindingRev = typeof args.bindingRevision === "number" ? args.bindingRevision : typeof followerClaim?.bindingRevision === "number" ? followerClaim.bindingRevision : null;
       const claimedGrantRev = typeof args.grantRevision === "number" ? args.grantRevision : typeof followerClaim?.grantRevision === "number" ? followerClaim.grantRevision : null;
       if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
           ok: false,
-          result: fail12("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
+          result: fail13("remote_access_denied", `Follower revision mismatch for mesh ${meshId}.`, {
             actualBindingRevision: acl.bindingRevision,
             actualGrantRevision: acl.grantRevision
           })
@@ -156079,10 +156223,10 @@ ${defangRelayBody(text9)}`;
     }
     async function followerProjectSend(ports, meshId, sender, args) {
       const text9 = typeof args.text === "string" ? args.text : "";
-      if (!text9.trim()) return fail12("invalid_args", "text required");
-      if (text9.length > REMOTE_SEND_MAX_CHARS) return fail12("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+      if (!text9.trim()) return fail13("invalid_args", "text required");
+      if (text9.length > REMOTE_SEND_MAX_CHARS) return fail13("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
       const clientId = str25(args.clientId);
-      if (!clientId || clientId.length > 200) return fail12("invalid_args", "clientId required (at most 200 characters)");
+      if (!clientId || clientId.length > 200) return fail13("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str25(args.expectedCoordinatorSessionId);
       const bodyHash = (0, import_crypto49.createHash)("sha256").update(text9, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
@@ -156112,9 +156256,9 @@ ${defangRelayBody(text9)}`;
         }
       }
       if (prior) {
-        if (prior.bodyHash !== bodyHash) return fail12("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
+        if (prior.bodyHash !== bodyHash) return fail13("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
         if (!live || prior.coordinatorSessionId !== live.sessionId) {
-          return fail12("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
+          return fail13("coordinator_replaced", "The coordinator session changed since the original send; refusing to replay to a replacement session.", {
             originalCoordinatorSessionId: prior.coordinatorSessionId,
             currentCoordinatorSessionId: live?.sessionId ?? null
           });
@@ -156171,7 +156315,7 @@ ${defangRelayBody(text9)}`;
             recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail12("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+              result: fail13("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                 bindingRevision: acl.bindingRevision,
                 grantRevision: acl.grantRevision
               })
@@ -156183,7 +156327,7 @@ ${defangRelayBody(text9)}`;
               recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
               return {
                 ok: false,
-                result: fail12(
+                result: fail13(
                   "wake_rate_limited",
                   reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                   { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -156224,7 +156368,7 @@ ${defangRelayBody(text9)}`;
               if (acl.allowCoordinatorLaunch === false) {
                 if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
                 recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
-                preLaunchDeniedResult = fail12("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
+                preLaunchDeniedResult = fail13("wake_disabled", "No live coordinator session is running on the host and remote follower coordinator wake is disabled for this project.", {
                   bindingRevision: acl.bindingRevision,
                   grantRevision: acl.grantRevision
                 });
@@ -156234,7 +156378,7 @@ ${defangRelayBody(text9)}`;
                 const reserved = reserveFollowerWakeSlot(meshId, sender, checkNow);
                 if (!reserved.ok) {
                   recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
-                  preLaunchDeniedResult = fail12(
+                  preLaunchDeniedResult = fail13(
                     "wake_rate_limited",
                     reserved.reason === "cooldown" ? "Remote follower coordinator wake is in its 60s cooldown window." : "Remote follower coordinator wake rate limit (2 per 15m) exceeded.",
                     { reason: reserved.reason, retryAfterMs: reserved.retryAfterMs }
@@ -156285,7 +156429,7 @@ ${defangRelayBody(text9)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
-              result: fail12("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
+              result: fail13("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
             };
           }
           if (coord.launched) {
@@ -156311,7 +156455,7 @@ ${defangRelayBody(text9)}`;
             recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
             return {
               ok: false,
-              result: fail12("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
+              result: fail13("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
             };
           }
           return {
@@ -156324,7 +156468,7 @@ ${defangRelayBody(text9)}`;
       };
       if (live) {
         if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-          return fail12("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
+          return fail13("coordinator_replaced", "The live coordinator session on the host does not match expectedCoordinatorSessionId.", {
             expectedCoordinatorSessionId,
             currentCoordinatorSessionId: live.sessionId
           });
@@ -156371,7 +156515,7 @@ ${defangRelayBody(text9)}`;
             acl = bindingCheck.acl;
             if (acl.allowCoordinatorLaunch === false) {
               recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target2.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
-              return { ok: false, result: fail12("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
+              return { ok: false, result: fail13("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.") };
             }
           }
           const cursor3 = ports.coordinatorTurns(target2.sessionId, 1).committed[0]?.attemptId ?? null;
@@ -156404,7 +156548,7 @@ ${defangRelayBody(text9)}`;
       }
       const { sent, cursor, messageId } = sendAttempt;
       if (!sent.success) {
-        return fail12(str25(sent.reason) || str25(sent.code) || "send_failed", str25(sent.error) || "send_failed", {
+        return fail13(str25(sent.reason) || str25(sent.code) || "send_failed", str25(sent.error) || "send_failed", {
           launched,
           coordinatorSessionId: live.sessionId,
           messageId
@@ -156447,7 +156591,7 @@ ${defangRelayBody(text9)}`;
         }
         case "send": {
           const hosted = applyHostAttachments(args, meshId, ports.selfDaemonId());
-          if (!hosted.ok) return fail12(hosted.code, hosted.error, hosted.detail ?? {});
+          if (!hosted.ok) return fail13(hosted.code, hosted.error, hosted.detail ?? {});
           args = hosted.args;
           const imported = typeof args.attachmentsImported === "number" ? args.attachmentsImported : 0;
           const reportImported = (r) => imported > 0 && r.success && r.result && typeof r.result === "object" ? { ...r, result: { ...r.result, attachmentsImported: imported } } : r;
@@ -156455,57 +156599,57 @@ ${defangRelayBody(text9)}`;
             return reportImported(await followerProjectSend(ports, meshId, sender, args));
           }
           const text9 = typeof args.text === "string" ? args.text : "";
-          if (!text9.trim()) return fail12("invalid_args", "text required");
-          if (text9.length > REMOTE_SEND_MAX_CHARS) return fail12("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+          if (!text9.trim()) return fail13("invalid_args", "text required");
+          if (text9.length > REMOTE_SEND_MAX_CHARS) return fail13("invalid_args", `text over ${REMOTE_SEND_MAX_CHARS} characters`);
           const clientId = str25(args.clientId);
-          if (!clientId || clientId.length > 200) return fail12("invalid_args", "clientId required (at most 200 characters)");
+          if (!clientId || clientId.length > 200) return fail13("invalid_args", "clientId required (at most 200 characters)");
           const sent = await localProjectSend(ports, mesh, text9, clientId);
-          if (!sent.ok) return fail12(sent.code, sent.error, sent.detail);
+          if (!sent.ok) return fail13(sent.code, sent.error, sent.detail);
           const { ok: _ok, ...result } = sent;
           return reportImported({ success: true, result });
         }
         case "read": {
           const continuation = parseReportContinuation(args);
-          if (typeof continuation === "string") return fail12("invalid_args", continuation);
+          if (typeof continuation === "string") return fail13("invalid_args", continuation);
           const r = await localProjectRead(ports, meshId, readTailArg(args.tail), continuation);
-          return r.ok ? { success: true, result: r.result } : fail12("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
+          return r.ok ? { success: true, result: r.result } : fail13("project_read_failed", r.error, { coordinatorSessionId: r.coordinatorSessionId });
         }
         case "report": {
-          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail12("invalid_args");
+          if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail13("invalid_args");
           return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
         case "artifact_list":
           return { success: true, result: localArtifactList(meshId, args) };
         case "artifact_read": {
           const read2 = await localArtifactRead(ports, meshId, args, ctx);
-          return read2.ok ? { success: true, result: read2.result } : fail12(read2.code, read2.error);
+          return read2.ok ? { success: true, result: read2.result } : fail13(read2.code, read2.error);
         }
         case "decision_list": {
           const withAuto = args.includeAutoApplied === true;
           return { success: true, result: listDecisionsForMesh(meshId, { includeAutoApplied: withAuto }) };
         }
         case "decision_answer": {
-          if (!ctx) return fail12("invalid_args", "decision_answer needs a command context");
+          if (!ctx) return fail13("invalid_args", "decision_answer needs a command context");
           const parsed = parseDecisionAnswers(args);
-          if (typeof parsed === "string") return fail12("invalid_args", parsed);
+          if (typeof parsed === "string") return fail13("invalid_args", parsed);
           return { success: true, result: await applyDecisionAnswers(ctx, meshId, parsed) };
         }
         case "decision_request": {
           const done = registerDecisionRequest(meshId, args);
-          return done.success === true ? { success: true, result: done } : fail12(String(done.code ?? "decision_rejected"), String(done.error ?? "decision_rejected"));
+          return done.success === true ? { success: true, result: done } : fail13(String(done.code ?? "decision_rejected"), String(done.error ?? "decision_rejected"));
         }
         case "inventory":
-          if (isFollower) return fail12("remote_op_forbidden", "inventory is not permitted for remote followers");
+          if (isFollower) return fail13("remote_op_forbidden", "inventory is not permitted for remote followers");
           return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : void 0) };
         case "terminal": {
-          if (isFollower) return fail12("remote_op_forbidden", "terminal is not permitted for remote followers");
-          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail12("invalid_args");
+          if (isFollower) return fail13("remote_op_forbidden", "terminal is not permitted for remote followers");
+          if (!["task", "mission"].includes(String(args.kind)) || typeof args.entityId !== "string" || !args.entityId || args.entityId.length > 200 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some((id4) => typeof id4 !== "string" || id4.length > 200)) return fail13("invalid_args");
           return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind, args.entityId, 0, args.receipts) } };
         }
         case "poll":
           return poll(ports, meshId, args);
         case "note":
-          if (isFollower) return fail12("remote_op_forbidden", "note is not permitted for remote followers");
+          if (isFollower) return fail13("remote_op_forbidden", "note is not permitted for remote followers");
           return note(meshId, args);
       }
     }
@@ -156563,14 +156707,14 @@ ${defangRelayBody(text9)}`;
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const meshId = str25(args.meshId);
           const op = str25(args.op);
-          if (!meshId) return fail12("invalid_args", "meshId required");
-          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail12("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
+          if (!meshId) return fail13("invalid_args", "meshId required");
+          if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail13("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
           try {
             const ports = await projectPortsFor(ctx);
             const meshRead = readHostMeshStrict(ports, meshId);
             if (!meshRead.ok) return meshRead.result;
             const mesh = meshRead.mesh;
-            if (!mesh) return fail12("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+            if (!mesh) return fail13("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
             const sender = readMeshSender(args);
             const self = ports.selfDaemonId();
             const onRoster = isSenderOnWorkerRoster(mesh, self, sender);
@@ -156579,7 +156723,7 @@ ${defangRelayBody(text9)}`;
               const verified = verifyFollowerAcl(ports, mesh, meshId, sender, op, args);
               if (!verified.ok) return verified.result;
             } else if (op !== "inventory" && !ports.isHostedHere(mesh)) {
-              return fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              return fail13("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
             }
             if (op === "send" || op === "note") {
               const who = sender && self && daemonIdsEquivalent5(sender, self) ? "self" : sender.slice(0, 24) || "unknown";
@@ -156592,12 +156736,12 @@ ${defangRelayBody(text9)}`;
           }
         };
         assistantRemoteProjectCatalog = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail12("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail13("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail12("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail13("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             const now = Date.now();
             const hostedMeshes2 = ports.listMeshes().filter((m) => ports.isHostedHere(m));
             const projects2 = hostedMeshes2.map((m) => {
@@ -156637,25 +156781,25 @@ ${defangRelayBody(text9)}`;
           }
         };
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) return fail12("owner_ingress_required", "Remote project access changes require verified owner ingress.");
+          if (!isTrustedOwnerIngress(rawArgs)) return fail13("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const action2 = str25(args.action) || "get";
           const meshId = str25(args.meshId);
-          if (!meshId) return fail12("invalid_args", "meshId required");
+          if (!meshId) return fail13("invalid_args", "meshId required");
           if (action2 !== "grant" && action2 !== "revoke" && action2 !== "get" && action2 !== "set_policy") {
-            return fail12("invalid_args", "action must be grant, revoke, set_policy, or get");
+            return fail13("invalid_args", "action must be grant, revoke, set_policy, or get");
           }
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) return fail12("host_identity_unavailable", "This daemon has no canonical daemon identity.");
+            if (!hostDaemonId) return fail13("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             if (action2 === "get") {
               const mesh = ports.listMeshes().find((m) => m.id === meshId);
-              if (!mesh) return fail12("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-              if (!ports.isHostedHere(mesh)) return fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+              if (!mesh) return fail13("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+              if (!ports.isHostedHere(mesh)) return fail13("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
               if (mesh.assistantRemoteAccess !== void 0 && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
-                return fail12("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                return fail13("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
               }
               return { success: true, action: "get", access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
             }
@@ -156663,10 +156807,10 @@ ${defangRelayBody(text9)}`;
               try {
                 return withStrictMeshConfigWriteLock(() => {
                   const config = readMeshConfigFromDisk();
-                  if (!config) return fail12("project_storage_unavailable", "meshes.json is unavailable");
+                  if (!config) return fail13("project_storage_unavailable", "meshes.json is unavailable");
                   const mesh = config.meshes.find((m) => m.id === meshId);
-                  if (!mesh) return fail12("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
-                  if (!ports.isHostedHere(mesh)) return fail12("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
+                  if (!mesh) return fail13("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
+                  if (!ports.isHostedHere(mesh)) return fail13("project_not_hosted_here", `this daemon does not host mesh ${meshId}`);
                   const rawAcl = mesh.assistantRemoteAccess;
                   const existing = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
                   const rawGrantRev = typeof record6(rawAcl)?.grantRevision === "number" && Number.isInteger(record6(rawAcl).grantRevision) && record6(rawAcl).grantRevision > 0 ? record6(rawAcl).grantRevision : 0;
@@ -156675,11 +156819,11 @@ ${defangRelayBody(text9)}`;
                   if (action2 === "set_policy") {
                     const hasLaunchToggle = typeof args.allowCoordinatorLaunch === "boolean";
                     const hasArtifactToggle = typeof args.allowArtifactRead === "boolean";
-                    if (!hasLaunchToggle && !hasArtifactToggle) return fail12("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
-                    if (rawAcl !== void 0 && !existing) return fail12("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                    if (!existing) return fail12("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
+                    if (!hasLaunchToggle && !hasArtifactToggle) return fail13("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
+                    if (rawAcl !== void 0 && !existing) return fail13("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                    if (!existing) return fail13("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                     if (existing.status !== "active") {
-                      return fail12("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+                      return fail13("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
                         grantRevision: existing.grantRevision,
                         bindingRevision: existing.bindingRevision
                       });
@@ -156692,21 +156836,21 @@ ${defangRelayBody(text9)}`;
                     mesh.assistantRemoteAccess = updated;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail12("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail13("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Updated remote assistant policy on mesh ${meshId} (allowCoordinatorLaunch=${String(updated.allowCoordinatorLaunch)}, allowArtifactRead=${String(updated.allowArtifactRead)}, grantRev=${updated.grantRevision})`);
                     return { success: true, action: "set_policy", access: updated };
                   }
                   if (action2 === "grant") {
                     const rawActiveDaemonId = str25(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
-                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail12("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    if (hostDaemonId && daemonIdsEquivalent5(activeDaemonId, hostDaemonId)) return fail12("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail13("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                    if (hostDaemonId && daemonIdsEquivalent5(activeDaemonId, hostDaemonId)) return fail13("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
                     const slot = str25(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail12("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail13("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
-                    if (bindingRevision === null) return fail12("invalid_args", "bindingRevision must be a positive integer");
+                    if (bindingRevision === null) return fail13("invalid_args", "bindingRevision must be a positive integer");
                     if (existing && daemonIdsEquivalent5(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                      return fail12("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
+                      return fail13("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
@@ -156727,7 +156871,7 @@ ${defangRelayBody(text9)}`;
                     mesh.assistantRemoteAccess = binding;
                     mesh.updatedAt = new Date(now).toISOString();
                     const saved2 = saveMeshConfigDurable(config);
-                    if (!saved2.ok) return fail12("persistence_failed", saved2.reason);
+                    if (!saved2.ok) return fail13("persistence_failed", saved2.reason);
                     LOG.info("Assistant", `Granted remote assistant access on mesh ${meshId} to ${activeDaemonId.slice(0, 24)} (bindingRev=${bindingRevision}, grantRev=${nextGrantRevision2})`);
                     return { success: true, action: "grant", access: binding };
                   }
@@ -156751,12 +156895,12 @@ ${defangRelayBody(text9)}`;
                   mesh.assistantRemoteAccess = tombstone;
                   mesh.updatedAt = new Date(now).toISOString();
                   const saved = saveMeshConfigDurable(config);
-                  if (!saved.ok) return fail12("persistence_failed", saved.reason);
+                  if (!saved.ok) return fail13("persistence_failed", saved.reason);
                   LOG.info("Assistant", `Revoked remote assistant access on mesh ${meshId} (grantRev=${nextGrantRevision})`);
                   return { success: true, action: "revoke", access: tombstone };
                 });
               } catch (err2) {
-                if (err2 instanceof MeshConfigStrictLockError) return fail12(err2.code, err2.message);
+                if (err2 instanceof MeshConfigStrictLockError) return fail13(err2.code, err2.message);
                 throw err2;
               }
             });
@@ -165216,7 +165360,7 @@ ${defangRelayBody(text9)}`;
       let serverOriginGrantPublicKey;
       let serverKeyRotation;
       let serverKeyRotationChain;
-      const fail14 = (code, notifyPeer) => {
+      const fail15 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -165245,28 +165389,28 @@ ${defangRelayBody(text9)}`;
         },
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail14("bad_frame", false);
+          if (state2 === "done") return fail15("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail14(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail14(parsed.code, false);
-          if (state2 === "idle") return fail14("bad_frame", true);
+          if (isParseError(parsed)) return fail15(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail15(parsed.code, false);
+          if (state2 === "idle") return fail15("bad_frame", true);
           if (state2 === "awaiting_challenge") {
-            if (parsed.kind !== "mesh_challenge") return fail14("bad_frame", true);
+            if (parsed.kind !== "mesh_challenge") return fail15("bad_frame", true);
             if (opts.serverDaemonIdExpected && canon(opts.serverDaemonIdExpected) !== canon(parsed.daemonId)) {
-              return fail14("bad_proof", true);
+              return fail15("bad_proof", true);
             }
             const peerHasCap = hasOriginGrantCap(parsed.caps);
             const peerSentKeyMaterial = Boolean(
               parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
             );
             if (peerSentKeyMaterial && !peerHasCap) {
-              return fail14("bad_proof", true);
+              return fail15("bad_proof", true);
             }
             if (localHasOriginGrantCap && peerHasCap && !parsed.originGrantPublicKey) {
-              return fail14("bad_proof", true);
+              return fail15("bad_proof", true);
             }
             if (localHasOriginGrantCap && !peerHasCap && hasCapableNonceSentinel(parsed.nonce, opts.secret, "server", opts.meshId, parsed.daemonId)) {
-              return fail14("bad_proof", true);
+              return fail15("bad_proof", true);
             }
             negotiatedOriginGrant = localHasOriginGrantCap && peerHasCap;
             const inputs = negotiatedOriginGrant ? {
@@ -165292,7 +165436,7 @@ ${defangRelayBody(text9)}`;
               clientDaemonId: opts.daemonId,
               serverDaemonId: parsed.daemonId
             };
-            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail14("bad_proof", true);
+            if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail15("bad_proof", true);
             if (negotiatedOriginGrant && parsed.originGrantPublicKey) {
               if (!canAcceptPeerOriginGrantPublicKey(
                 opts.meshId,
@@ -165303,7 +165447,7 @@ ${defangRelayBody(text9)}`;
                   rotationChain: parsed.keyRotationChain
                 }
               )) {
-                return fail14("bad_proof", true);
+                return fail15("bad_proof", true);
               }
               serverCaps = parsed.caps;
               serverOriginGrantPublicKey = parsed.originGrantPublicKey;
@@ -165325,11 +165469,11 @@ ${defangRelayBody(text9)}`;
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_ok") return fail14("bad_frame", true);
-          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail14("bad_frame", true);
+          if (parsed.kind !== "mesh_ok") return fail15("bad_frame", true);
+          if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail15("bad_frame", true);
           if (!negotiatedOriginGrant) {
             if (parsed.originGrantPublicKey !== void 0 || parsed.keyRotation !== void 0 || parsed.keyRotationChain !== void 0 || parsed.proof !== void 0 || hasOriginGrantCap(parsed.caps)) {
-              return fail14("bad_proof", true);
+              return fail15("bad_proof", true);
             }
             state2 = "done";
             step = {
@@ -165340,16 +165484,16 @@ ${defangRelayBody(text9)}`;
             return step;
           }
           if (!hasOriginGrantCap(parsed.caps) || !capsEquivalent(parsed.caps, serverCaps)) {
-            return fail14("bad_proof", true);
+            return fail15("bad_proof", true);
           }
           if (!originGrantPublicKeysEqual(serverOriginGrantPublicKey, parsed.originGrantPublicKey)) {
-            return fail14("bad_proof", true);
+            return fail15("bad_proof", true);
           }
           if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
-            return fail14("bad_proof", true);
+            return fail15("bad_proof", true);
           }
           if (parsed.keyRotationChain && !rotationChainsEquivalent(parsed.keyRotationChain, serverKeyRotationChain)) {
-            return fail14("bad_proof", true);
+            return fail15("bad_proof", true);
           }
           const okInputs = {
             secret: opts.secret,
@@ -165368,7 +165512,7 @@ ${defangRelayBody(text9)}`;
             serverKeyRotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
           };
           if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
-            return fail14("bad_proof", true);
+            return fail15("bad_proof", true);
           }
           const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
           const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : void 0;
@@ -165382,7 +165526,7 @@ ${defangRelayBody(text9)}`;
                 rotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
               }
             );
-            if (!recorded) return fail14("bad_proof", true);
+            if (!recorded) return fail15("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -165412,7 +165556,7 @@ ${defangRelayBody(text9)}`;
       let clientOriginGrantPublicKey;
       let clientKeyRotation;
       let clientKeyRotationChain;
-      const fail14 = (code, notifyPeer) => {
+      const fail15 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
         if (notifyPeer && code !== "socket_closed") {
@@ -165426,12 +165570,12 @@ ${defangRelayBody(text9)}`;
       return {
         current: () => step,
         onFrame(raw) {
-          if (state2 === "done") return fail14("bad_frame", false);
+          if (state2 === "done") return fail15("bad_frame", false);
           const parsed = parseHandshakeFrame(raw);
-          if (isParseError(parsed)) return fail14(parsed.error, true);
-          if (parsed.kind === "mesh_error") return fail14(parsed.code, false);
+          if (isParseError(parsed)) return fail15(parsed.error, true);
+          if (parsed.kind === "mesh_error") return fail15(parsed.code, false);
           if (state2 === "awaiting_hello") {
-            if (parsed.kind !== "mesh_hello") return fail14("bad_frame", true);
+            if (parsed.kind !== "mesh_hello") return fail15("bad_frame", true);
             const canonicalPeer = canon(parsed.daemonId);
             const secret = opts.resolveSecret(parsed.meshId, canonicalPeer);
             const serverNonce = localHasOriginGrantCap && secret ? mintCapableHandshakeNonce(secret, "server", parsed.meshId, opts.localDaemonId) : mintHandshakeNonce();
@@ -165441,15 +165585,15 @@ ${defangRelayBody(text9)}`;
             );
             if (localHasOriginGrantCap) {
               if (clientSentKeyMaterial && !clientHasCap) {
-                if (secret === null || secret === "") return fail14("unknown_peer", true);
-                return fail14("bad_proof", true);
+                if (secret === null || secret === "") return fail15("unknown_peer", true);
+                return fail15("bad_proof", true);
               }
               if (clientHasCap && !parsed.originGrantPublicKey) {
-                if (secret === null || secret === "") return fail14("unknown_peer", true);
-                return fail14("bad_proof", true);
+                if (secret === null || secret === "") return fail15("unknown_peer", true);
+                return fail15("bad_proof", true);
               }
               if (!clientHasCap && secret && hasCapableNonceSentinel(parsed.nonce, secret, "client", parsed.meshId, parsed.daemonId)) {
-                return fail14("bad_proof", true);
+                return fail15("bad_proof", true);
               }
             }
             negotiatedOriginGrant = Boolean(
@@ -165483,7 +165627,7 @@ ${defangRelayBody(text9)}`;
             const okProof = negotiatedOriginGrant ? computeOkProof(inputs) : void 0;
             if (secret === null || secret === "") {
               proofsEqual(serverProof, clientProof);
-              return fail14("unknown_peer", true);
+              return fail15("unknown_peer", true);
             }
             expectedClientProof = clientProof;
             expectedOkProof = okProof;
@@ -165509,8 +165653,8 @@ ${defangRelayBody(text9)}`;
             });
             return PENDING2;
           }
-          if (parsed.kind !== "mesh_proof") return fail14("bad_frame", true);
-          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail14("bad_proof", true);
+          if (parsed.kind !== "mesh_proof") return fail15("bad_frame", true);
+          if (!proofsEqual(expectedClientProof, parsed.proof)) return fail15("bad_proof", true);
           const validClientPubKey = negotiatedOriginGrant && clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
           if (validClientPubKey) {
             const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
@@ -165522,7 +165666,7 @@ ${defangRelayBody(text9)}`;
                 rotationChain: clientKeyRotationChain
               }
             );
-            if (!recorded) return fail14("bad_proof", true);
+            if (!recorded) return fail15("bad_proof", true);
           }
           state2 = "done";
           step = {
@@ -170344,8 +170488,8 @@ ${marker2}`,
             if (!reply2.success || !Array.isArray(reply2.result)) throw new Error("maintenance_complete_inventory_required");
             return reply2.result;
           };
-          const records = await list5(), inventory = retainedRuntimeInventory(records, state2);
-          if (digest2(inventory) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
+          const records = await list5(), inventory2 = retainedRuntimeInventory(records, state2);
+          if (digest2(inventory2) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
           for (const record8 of records) {
             if (record8.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record8.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
           }
@@ -170353,7 +170497,7 @@ ${marker2}`,
             const expected = listCoordinatorsForMesh(meshId);
             if (expected.length > 1) throw new Error("maintenance_coordinator_binding_missing_or_ambiguous");
             if (!expected.length) return [];
-            const actual = inventory.filter((r) => r.coordinatorMeshId === meshId && r.runtimeId === expected[0].sessionId);
+            const actual = inventory2.filter((r) => r.coordinatorMeshId === meshId && r.runtimeId === expected[0].sessionId);
             if (actual.length !== 1) throw new Error("maintenance_coordinator_binding_missing_or_ambiguous");
             return actual;
           });
@@ -170361,13 +170505,13 @@ ${marker2}`,
             const clientId = `maintenance-observer:${state2.daemonId}:${MAINTENANCE_BOOT_NONCE}`;
             const reply2 = await client.request({ type: "attach_session", payload: { sessionId: r.sessionId, clientId, clientType: "daemon", readOnly: true } });
             if (!reply2.result?.attachedClients?.some((c) => c.clientId === clientId && c.readOnly === true) || JSON.stringify(reply2.result.writeOwner) !== JSON.stringify(r.writeOwner)) throw new Error("maintenance_readonly_attach_required");
-            if (!reply2.success || !reply2.result || digest2(retainedRuntimeInventory([reply2.result], state2)[0]) !== digest2(inventory.find((x) => x.runtimeId === r.sessionId))) throw new Error("maintenance_observation_attach_drift");
+            if (!reply2.success || !reply2.result || digest2(retainedRuntimeInventory([reply2.result], state2)[0]) !== digest2(inventory2.find((x) => x.runtimeId === r.sessionId))) throw new Error("maintenance_observation_attach_drift");
           }
-          if (digest2(retainedRuntimeInventory(await list5(), state2)) !== digest2(inventory)) throw new Error("maintenance_retained_inventory_drift");
+          if (digest2(retainedRuntimeInventory(await list5(), state2)) !== digest2(inventory2)) throw new Error("maintenance_retained_inventory_drift");
           const finalEndpoint = await host.deps.verifiedRetainedEndpoint();
           if (finalEndpoint.path !== endpoint.path) throw new Error("maintenance_retained_endpoint_drift");
-          if (digest2(retainedRuntimeInventory(records, state2)) !== digest2(inventory)) throw new Error("maintenance_coordinator_binding_drift");
-          for (const r of inventory) registry.registerObservation({
+          if (digest2(retainedRuntimeInventory(records, state2)) !== digest2(inventory2)) throw new Error("maintenance_coordinator_binding_drift");
+          for (const r of inventory2) registry.registerObservation({
             sessionId: r.runtimeId,
             parentSessionId: null,
             providerType: r.providerType,
@@ -170377,7 +170521,7 @@ ${marker2}`,
             providerSessionId: r.providerSessionId || void 0,
             maintenanceObservation: { observedAt: Date.now(), epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, meshId: r.coordinatorMeshId || r.meshId || void 0, nodeId: r.nodeId || void 0, daemonId: state2.daemonId, coordinator: !!r.coordinatorMeshId }
           });
-          const bindings2 = inventory.map((r) => {
+          const bindings2 = inventory2.map((r) => {
             const binding = registry.get(r.runtimeId);
             if (!binding?.maintenanceObservation) throw new Error("maintenance_observation_binding_missing");
             return {
@@ -170400,12 +170544,12 @@ ${marker2}`,
             hostPid: state2.retainedHost.pid,
             hostBirth: state2.retainedHost.birth,
             observedAt: Date.now(),
-            sessions: inventory,
+            sessions: inventory2,
             coordinators,
             bindings: bindings2
           };
           const receipt = digest2(proof);
-          observed.set(host, { epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, inventoryDigest: digest2(inventory), receipt, observation: { ...proof, receipt }, sessions: inventory });
+          observed.set(host, { epoch: state2.epoch, bootNonce: MAINTENANCE_BOOT_NONCE, inventoryDigest: digest2(inventory2), receipt, observation: { ...proof, receipt }, sessions: inventory2 });
           return { ...proof, receipt };
         } finally {
           await client.close().catch(() => {
@@ -170572,7 +170716,7 @@ ${marker2}`,
         if (a.proof === "receipt" && (!/^[a-f0-9]{64}$/.test(a.digest) || !["ownerDaemonId", "senderDaemonId", "taskId", "attemptId", "sessionId"].every((k) => typeof a[k] === "string" && /^[A-Za-z0-9_.:-]{1,256}$/.test(a[k])) || !Number.isSafeInteger(a.generation) || a.generation < 0)) throw new Error("maintenance_mcp_ack_invalid");
         return a.proof === "receipt" ? { id: a.id, kind: a.kind, proof: a.proof, digest: a.digest, ownerDaemonId: a.ownerDaemonId, senderDaemonId: a.senderDaemonId, taskId: a.taskId, attemptId: a.attemptId, generation: a.generation, sessionId: a.sessionId } : { id: a.id, kind: a.kind, proof: a.proof };
       });
-      const inventory = {
+      const inventory2 = {
         schema: 1,
         pid: identity5.pid,
         entries: entries2,
@@ -170592,7 +170736,7 @@ ${marker2}`,
       const reply2 = auth.reply({ acknowledgedChallenge: w.nonce });
       clearTimeout(w.timer);
       waiting.delete(name);
-      w.resolve({ identity: identity5, observed: true, observedAt: Date.now(), challenge: w.nonce, inventory });
+      w.resolve({ identity: identity5, observed: true, observedAt: Date.now(), challenge: w.nonce, inventory: inventory2 });
       return reply2;
     }
     async function collectMcpInventories(root, state2, deadlineMs = 2e3) {
@@ -170636,7 +170780,7 @@ ${marker2}`,
     function census(components, state2, root, nonce) {
       const identity5 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
-      const set2 = (name, source2, inventory, pending, reason) => channels[name] = { observed: !reason, source: source2, inventoryDigest: digest3(inventory), pending, ...reason ? { reason } : {}, identity: identity5 };
+      const set2 = (name, source2, inventory2, pending, reason) => channels[name] = { observed: !reason, source: source2, inventoryDigest: digest3(inventory2), pending, ...reason ? { reason } : {}, identity: identity5 };
       const read2 = (names, source2, fn) => {
         try {
           fn();
@@ -199327,11 +199471,11 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { mkdirSync: mkdirSync82, writeFileSync: writeFileSync65 } = await import("fs");
-          const { dirname: dirname74, join: join181 } = await import("path");
+          const { dirname: dirname74, join: join182 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
-          const absolutePath = join181(workspace, relativePath);
+          const absolutePath = join182(workspace, relativePath);
           const validation = normalizeRepoMeshDeclarativeConfig2(scaffold);
           if (!validation.valid) {
             return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join("; ")}` };
@@ -199436,18 +199580,18 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync146, readFileSync: readFileSync132, mkdirSync: mkdirSync82, writeFileSync: writeFileSync65 } = await import("fs");
-          const { dirname: dirname74, join: join181 } = await import("path");
+          const { existsSync: existsSync147, readFileSync: readFileSync133, mkdirSync: mkdirSync82, writeFileSync: writeFileSync65 } = await import("fs");
+          const { dirname: dirname74, join: join182 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
-          let existingPath = join181(workspace, relativePath);
+          let existingPath = join182(workspace, relativePath);
           let existedAsYaml = false;
           for (const relative29 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join181(workspace, relative29);
-            if (!existsSync146(candidate)) continue;
+            const candidate = join182(workspace, relative29);
+            if (!existsSync147(candidate)) continue;
             try {
-              const text9 = readFileSync132(candidate, "utf-8");
+              const text9 = readFileSync133(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text9) : yaml3.load(text9);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -201232,7 +201376,7 @@ ${ptyResult.output.slice(-2e3)}`);
             workspace
           };
         }
-        const { existsSync: existsSync146, readFileSync: readFileSync132, writeFileSync: writeFileSync65, mkdirSync: mkdirSync82 } = await import("fs");
+        const { existsSync: existsSync147, readFileSync: readFileSync133, writeFileSync: writeFileSync65, mkdirSync: mkdirSync82 } = await import("fs");
         const { dirname: dirname74 } = await import("path");
         const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
         let mcpServerEnv;
@@ -201267,12 +201411,12 @@ ${ptyResult.output.slice(-2e3)}`);
             LOG.error("MeshCoordinator", message);
             return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
           }
-          const hadExistingMcpConfig = existsSync146(mcpConfigPath);
+          const hadExistingMcpConfig = existsSync147(mcpConfigPath);
           let existingMcpConfig = {};
           let existingMcpConfigText = "";
           if (hadExistingMcpConfig) {
             try {
-              existingMcpConfigText = readFileSync132(mcpConfigPath, "utf-8");
+              existingMcpConfigText = readFileSync133(mcpConfigPath, "utf-8");
               const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
               existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
             } catch (error) {
@@ -202123,7 +202267,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync146 } = await import("fs");
+          const { existsSync: existsSync147 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -202142,7 +202286,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync146(workspace)) continue;
+            if (!workspace || !existsSync147(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -203110,7 +203254,7 @@ ${lines.join("\n")}
       if (source2 === "p2p" || source2 === "standalone" || source2 === "ext") return { ok: true, actor: "owner" };
       return refuse8(`source '${source2 || "unknown"}' cannot use release commands`);
     }
-    function fail11(code, error) {
+    function fail12(code, error) {
       return { success: false, code, error };
     }
     function releaseWire(r, include) {
@@ -203138,10 +203282,10 @@ ${lines.join("\n")}
     var upsert = async (_ctx, rawArgs) => {
       const raw = rawArgs ?? {};
       const caller = classifyReleaseCaller(raw, RELEASE_UPSERT);
-      if (!caller.ok) return fail11(caller.code, caller.error);
+      if (!caller.ok) return fail12(caller.code, caller.error);
       const args = stripRouterInternalArgs(raw);
       const meshId = readMeshId(raw);
-      if (!meshId) return fail11("invalid_args", "meshId is required");
+      if (!meshId) return fail12("invalid_args", "meshId is required");
       const res = upsertRelease(meshId, {
         ...str222(args.releaseId) ? { releaseId: str222(args.releaseId) } : {},
         ...typeof args.name === "string" ? { name: args.name } : {},
@@ -203150,17 +203294,17 @@ ${lines.join("\n")}
         ...typeof args.version === "string" ? { version: args.version } : {},
         ...typeof args.note === "string" ? { note: args.note } : {}
       }, caller.actor);
-      if (!res.ok) return fail11(res.code, res.error);
+      if (!res.ok) return fail12(res.code, res.error);
       return { success: true, meshId, created: res.created, release: releaseWire(res.release, /* @__PURE__ */ new Set()) };
     };
     var scope = async (_ctx, rawArgs) => {
       const raw = rawArgs ?? {};
       const caller = classifyReleaseCaller(raw, RELEASE_SCOPE);
-      if (!caller.ok) return fail11(caller.code, caller.error);
+      if (!caller.ok) return fail12(caller.code, caller.error);
       const args = stripRouterInternalArgs(raw);
       const meshId = readMeshId(raw);
       const releaseId = str222(args.releaseId);
-      if (!meshId || !releaseId) return fail11("invalid_args", "meshId and releaseId are required");
+      if (!meshId || !releaseId) return fail12("invalid_args", "meshId and releaseId are required");
       const moves = Array.isArray(args.move) ? args.move.map((m) => ({ missionId: str222(m?.missionId ?? m?.mission_id), toReleaseId: str222(m?.toReleaseId ?? m?.to_release_id) })) : void 0;
       const res = scopeRelease(meshId, releaseId, {
         ...Array.isArray(args.add) ? { add: args.add } : {},
@@ -203168,7 +203312,7 @@ ${lines.join("\n")}
         ...Array.isArray(args.remove) ? { remove: args.remove } : {},
         ...typeof args.note === "string" ? { note: args.note } : {}
       }, caller.actor);
-      if (!res.ok) return fail11(res.code, res.error);
+      if (!res.ok) return fail12(res.code, res.error);
       return {
         success: true,
         meshId,
@@ -203181,16 +203325,16 @@ ${lines.join("\n")}
     var list3 = async (_ctx, rawArgs) => {
       const raw = rawArgs ?? {};
       const caller = classifyReleaseCaller(raw, RELEASE_LIST);
-      if (!caller.ok) return fail11(caller.code, caller.error);
+      if (!caller.ok) return fail12(caller.code, caller.error);
       const args = stripRouterInternalArgs(raw);
       const meshId = readMeshId(raw);
-      if (!meshId) return fail11("invalid_args", "meshId is required");
+      if (!meshId) return fail12("invalid_args", "meshId is required");
       const include = new Set(Array.isArray(args.include) ? args.include.filter((v) => typeof v === "string") : []);
       const store5 = meshReleases();
       const releaseId = str222(args.releaseId);
       if (releaseId) {
         const release2 = store5.get(meshId, releaseId);
-        if (!release2) return fail11("release_not_found", `release '${releaseId}' does not exist on this mesh`);
+        if (!release2) return fail12("release_not_found", `release '${releaseId}' does not exist on this mesh`);
         const missions = describeReleaseMissions(meshId, release2, { git: include.has("git"), includeEnded: include.has("events") });
         return {
           success: true,
@@ -203220,10 +203364,10 @@ ${lines.join("\n")}
     var recordDeploy = async (_ctx, rawArgs) => {
       const raw = rawArgs ?? {};
       const caller = classifyReleaseCaller(raw, RELEASE_RECORD_DEPLOY);
-      if (!caller.ok) return fail11(caller.code, caller.error);
+      if (!caller.ok) return fail12(caller.code, caller.error);
       const args = stripRouterInternalArgs(raw);
       const meshId = readMeshId(raw);
-      if (!meshId) return fail11("invalid_args", "meshId is required");
+      if (!meshId) return fail12("invalid_args", "meshId is required");
       const res = recordReleaseDeploy(meshId, {
         ...str222(args.releaseId) ? { releaseId: str222(args.releaseId) } : {},
         channel: str222(args.channel),
@@ -203233,19 +203377,19 @@ ${lines.join("\n")}
         ...args.targets !== void 0 ? { targets: args.targets } : {},
         ...typeof args.name === "string" ? { name: args.name } : {}
       }, caller.actor);
-      if (!res.ok) return fail11(res.code, res.error);
+      if (!res.ok) return fail12(res.code, res.error);
       return { success: true, meshId, created: res.created, release: releaseWire(res.release, /* @__PURE__ */ new Set()), warnings: res.warnings, needsNote: res.needsNote };
     };
     var changelogDraft = async (_ctx, rawArgs) => {
       const raw = rawArgs ?? {};
       const caller = classifyReleaseCaller(raw, RELEASE_CHANGELOG_DRAFT);
-      if (!caller.ok) return fail11(caller.code, caller.error);
+      if (!caller.ok) return fail12(caller.code, caller.error);
       const args = stripRouterInternalArgs(raw);
       const meshId = readMeshId(raw);
       const releaseId = str222(args.releaseId);
-      if (!meshId || !releaseId) return fail11("invalid_args", "meshId and releaseId are required");
+      if (!meshId || !releaseId) return fail12("invalid_args", "meshId and releaseId are required");
       const res = draftReleaseChangelog(meshId, releaseId, caller.actor, { markApplied: args.markApplied === true });
-      if ("error" in res) return fail11(res.code, res.error);
+      if ("error" in res) return fail12(res.code, res.error);
       return { success: true, meshId, release: releaseWire(res.release, /* @__PURE__ */ new Set()), draft: res.draft };
     };
     var meshReleaseHandlers = {
@@ -203781,7 +203925,7 @@ ${lines.join("\n")}
       if (fence.sessionId && dispatches.get(fence.sessionId) === fence) dispatches.delete(fence.sessionId);
     }
     init_owned_lock();
-    var import_node_path44 = require("path");
+    var import_node_path45 = require("path");
     init_config();
     init_command_args();
     function shouldRestoreHostedRuntime(record8, managerTag) {
@@ -203793,13 +203937,13 @@ ${lines.join("\n")}
     init_logger();
     init_binding_owner();
     var import_promises12 = require("fs/promises");
-    var import_node_path43 = require("path");
+    var import_node_path44 = require("path");
     init_dist();
     init_owned_lock();
     var import_session_host_core13 = require_dist();
-    var import_node_fs52 = require("fs");
+    var import_node_fs53 = require("fs");
     async function readPersistedRuntimeRecord(file) {
-      const stream = (0, import_node_fs52.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
+      const stream = (0, import_node_fs53.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
       let text9 = "", cursor = 0, start = -1, depth = 0;
       let quoted = false, escaped = false;
       try {
@@ -203863,7 +204007,7 @@ ${lines.join("\n")}
       } catch (error) {
         if (["ENOENT", "ECONNREFUSED"].includes(error.code ?? "")) {
           try {
-            const pid = Number((await (0, import_promises12.readFile)((0, import_node_path43.join)(configDir, `${namespace}-session-host.pid`), "utf8")).trim());
+            const pid = Number((await (0, import_promises12.readFile)((0, import_node_path44.join)(configDir, `${namespace}-session-host.pid`), "utf8")).trim());
             if (Number.isSafeInteger(pid) && pid > 0 && !isPidAlive(pid)) return /* @__PURE__ */ new Set();
           } catch {
           }
@@ -203877,7 +204021,7 @@ ${lines.join("\n")}
     }
     async function persistedAssistantRuntimeIds(configDir, options) {
       const ids = /* @__PURE__ */ new Set();
-      const hostRoot = (0, import_node_path43.join)(configDir, "session-host");
+      const hostRoot = (0, import_node_path44.join)(configDir, "session-host");
       let namespaces;
       try {
         namespaces = await (0, import_promises12.readdir)(hostRoot);
@@ -203892,7 +204036,7 @@ ${lines.join("\n")}
           if (/^adhdev-(?:test(?:-|$)|input-ann-)/.test(namespace)) continue;
           if (["adhdev", "adhdev-preview"].includes(options.currentNamespace ?? "") && ["adhdev", "adhdev-preview"].includes(namespace)) continue;
         }
-        const runtimes = (0, import_node_path43.join)(hostRoot, namespace, "runtimes");
+        const runtimes = (0, import_node_path44.join)(hostRoot, namespace, "runtimes");
         let files;
         try {
           files = await (0, import_promises12.readdir)(runtimes);
@@ -203904,7 +204048,7 @@ ${lines.join("\n")}
         for (const file of files.filter((f) => /^[\w-]+\.json$/.test(f))) {
           let r;
           try {
-            r = await readPersistedRuntimeRecord((0, import_node_path43.join)(runtimes, file));
+            r = await readPersistedRuntimeRecord((0, import_node_path44.join)(runtimes, file));
           } catch {
             candidates.add(file.slice(0, -5));
             continue;
@@ -203912,7 +204056,7 @@ ${lines.join("\n")}
           if (r.category !== "cli" || r.termination || ["stopped", "failed"].includes(r.lifecycle) || r.sessionId !== options.boundSessionId && !hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) continue;
           if (typeof r.sessionId !== "string" || !/^[\w-]+$/.test(r.sessionId)) throw new Error("assistant_runtime_identity_missing");
           try {
-            await (0, import_promises12.access)((0, import_node_path43.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`));
+            await (0, import_promises12.access)((0, import_node_path44.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`));
             continue;
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
@@ -204027,7 +204171,7 @@ ${lines.join("\n")}
           entry = registry.reload();
         }
         if (entry?.sessionId && !sameHostedBindingOwner(
-          resolveHostedBindingOwner(entry.sessionId, entry.hostOwner, owner, liveIds, (0, import_node_path44.dirname)(registry.path)),
+          resolveHostedBindingOwner(entry.sessionId, entry.hostOwner, owner, liveIds, (0, import_node_path45.dirname)(registry.path)),
           owner
         )) {
           return refused4(entry.hostOwner ? "assistant_owned_by_other_host" : "assistant_binding_owner_unknown");
@@ -204055,9 +204199,9 @@ ${lines.join("\n")}
     init_worker_private_home();
     init_mcp_tool_allow();
     var import_node_crypto74 = require("crypto");
-    var import_node_fs53 = require("fs");
+    var import_node_fs54 = require("fs");
     var os41 = __toESM2(require("os"));
-    var import_node_path45 = require("path");
+    var import_node_path46 = require("path");
     init_mesh_coordinator_config();
     var fs117 = __toESM2(require("fs"));
     var os40 = __toESM2(require("os"));
@@ -204119,7 +204263,7 @@ ${lines.join("\n")}
       return contents.split(/\r?\n/).some((line) => line.trim() === needle);
     }
     init_assistant_launch_plan();
-    var O_NOFOLLOW_FLAG = typeof import_node_fs53.constants.O_NOFOLLOW === "number" ? import_node_fs53.constants.O_NOFOLLOW : 0;
+    var O_NOFOLLOW_FLAG = typeof import_node_fs54.constants.O_NOFOLLOW === "number" ? import_node_fs54.constants.O_NOFOLLOW : 0;
     function unsafePathError(message) {
       return new Error(`assistant_unsafe_path: ${message}`);
     }
@@ -204136,7 +204280,7 @@ ${lines.join("\n")}
     }
     function lstatOrNull(targetPath) {
       try {
-        return (0, import_node_fs53.lstatSync)(targetPath);
+        return (0, import_node_fs54.lstatSync)(targetPath);
       } catch (err2) {
         if (err2?.code === "ENOENT") return null;
         throw err2;
@@ -204146,51 +204290,51 @@ ${lines.join("\n")}
       const home = os41.homedir();
       const candidates = [];
       for (const rel of [".codex", ".gemini", ".claude", ".cursor"]) {
-        const p = (0, import_node_path45.join)(home, rel);
-        candidates.push((0, import_node_path45.resolve)(p));
+        const p = (0, import_node_path46.join)(home, rel);
+        candidates.push((0, import_node_path46.resolve)(p));
         try {
-          candidates.push((0, import_node_fs53.realpathSync)(p));
+          candidates.push((0, import_node_fs54.realpathSync)(p));
         } catch {
         }
       }
       for (const globalDir of candidates) {
-        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path45.sep)) {
+        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path46.sep)) {
           throw unsafePathError(`target ${realTarget} resolves inside global provider config directory ${globalDir}`);
         }
       }
     }
     function ensurePrivateAssistantDirectoryChain(rootDir, targetDir) {
-      const resolvedRoot = (0, import_node_path45.resolve)(rootDir);
-      const resolvedTarget = (0, import_node_path45.resolve)(targetDir);
-      if (!(0, import_node_path45.isAbsolute)(resolvedRoot) || !(0, import_node_path45.isAbsolute)(resolvedTarget)) {
+      const resolvedRoot = (0, import_node_path46.resolve)(rootDir);
+      const resolvedTarget = (0, import_node_path46.resolve)(targetDir);
+      if (!(0, import_node_path46.isAbsolute)(resolvedRoot) || !(0, import_node_path46.isAbsolute)(resolvedTarget)) {
         throw unsafePathError("assistant directory paths must be absolute");
       }
       if (isOverBroadTrustRoot(resolvedRoot)) {
         throw unsafePathError(`refusing over-broad assistant root directory ${resolvedRoot}`);
       }
-      const rel = (0, import_node_path45.relative)(resolvedRoot, resolvedTarget);
-      if (rel === ".." || rel.startsWith(`..${import_node_path45.sep}`) || (0, import_node_path45.isAbsolute)(rel)) {
+      const rel = (0, import_node_path46.relative)(resolvedRoot, resolvedTarget);
+      if (rel === ".." || rel.startsWith(`..${import_node_path46.sep}`) || (0, import_node_path46.isAbsolute)(rel)) {
         throw unsafePathError(`target directory ${resolvedTarget} escapes root ${resolvedRoot}`);
       }
       let rootStat = lstatOrNull(resolvedRoot);
       if (!rootStat) {
-        (0, import_node_fs53.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
+        (0, import_node_fs54.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
         rootStat = lstatOrNull(resolvedRoot);
       }
       if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
         throw unsafePathError(`assistant root ${resolvedRoot} must be a real directory (not a symlink)`);
       }
       assertOwnedByCurrentUser(rootStat, resolvedRoot);
-      const segments = rel.split(import_node_path45.sep).filter(Boolean);
+      const segments = rel.split(import_node_path46.sep).filter(Boolean);
       let cursor = resolvedRoot;
       for (const seg of segments) {
         if (seg === "." || seg === "..") {
           throw unsafePathError(`invalid relative segment "${seg}" under ${resolvedRoot}`);
         }
-        cursor = (0, import_node_path45.join)(cursor, seg);
+        cursor = (0, import_node_path46.join)(cursor, seg);
         let stat2 = lstatOrNull(cursor);
         if (!stat2) {
-          (0, import_node_fs53.mkdirSync)(cursor, { mode: 448 });
+          (0, import_node_fs54.mkdirSync)(cursor, { mode: 448 });
           stat2 = lstatOrNull(cursor);
         }
         if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory()) {
@@ -204198,9 +204342,9 @@ ${lines.join("\n")}
         }
         assertOwnedByCurrentUser(stat2, cursor);
       }
-      const realRoot = (0, import_node_fs53.realpathSync)(resolvedRoot);
-      const realTarget = (0, import_node_fs53.realpathSync)(resolvedTarget);
-      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path45.sep)) {
+      const realRoot = (0, import_node_fs54.realpathSync)(resolvedRoot);
+      const realTarget = (0, import_node_fs54.realpathSync)(resolvedTarget);
+      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path46.sep)) {
         throw unsafePathError(`canonical directory ${realTarget} escapes canonical root ${realRoot}`);
       }
       if (isOverBroadTrustRoot(realTarget)) {
@@ -204213,7 +204357,7 @@ ${lines.join("\n")}
       return ensurePrivateAssistantDirectoryChain(configDir, workspace);
     }
     function readPrivateAssistantConfigSnapshot(requestedFilePath, canonicalFilePath, expectedRealParent) {
-      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path45.resolve)(requestedFilePath), canonicalFilePath])) {
+      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path46.resolve)(requestedFilePath), canonicalFilePath])) {
         const lstat3 = lstatOrNull(candidate);
         if (!lstat3) continue;
         if (lstat3.isSymbolicLink()) {
@@ -204233,17 +204377,17 @@ ${lines.join("\n")}
       }
       let fd = null;
       try {
-        fd = (0, import_node_fs53.openSync)(canonicalFilePath, import_node_fs53.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-        const fstat = (0, import_node_fs53.fstatSync)(fd);
+        fd = (0, import_node_fs54.openSync)(canonicalFilePath, import_node_fs54.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+        const fstat = (0, import_node_fs54.fstatSync)(fd);
         if (!fstat.isFile() || fstat.nlink > 1 || fstat.ino !== lstat2.ino || fstat.dev !== lstat2.dev) {
           throw unsafePathError(`config file ${canonicalFilePath} changed or failed descriptor verification on open`);
         }
         assertOwnedByCurrentUser(fstat, canonicalFilePath);
-        const realFile = (0, import_node_fs53.realpathSync)(canonicalFilePath);
-        if (realFile !== canonicalFilePath || (0, import_node_path45.dirname)(realFile) !== expectedRealParent) {
+        const realFile = (0, import_node_fs54.realpathSync)(canonicalFilePath);
+        if (realFile !== canonicalFilePath || (0, import_node_path46.dirname)(realFile) !== expectedRealParent) {
           throw unsafePathError(`canonical config file ${realFile} does not match expected ${canonicalFilePath}`);
         }
-        const content = (0, import_node_fs53.readFileSync)(fd, "utf-8");
+        const content = (0, import_node_fs54.readFileSync)(fd, "utf-8");
         return {
           exists: true,
           content,
@@ -204255,41 +204399,41 @@ ${lines.join("\n")}
       } finally {
         if (fd !== null) {
           try {
-            (0, import_node_fs53.closeSync)(fd);
+            (0, import_node_fs54.closeSync)(fd);
           } catch {
           }
         }
       }
     }
     function writeProtectedAssistantConfigFile(options) {
-      const resolvedFilePath = (0, import_node_path45.resolve)(options.filePath);
-      const parentDir = (0, import_node_path45.dirname)(resolvedFilePath);
-      const fileName = (0, import_node_path45.basename)(resolvedFilePath);
+      const resolvedFilePath = (0, import_node_path46.resolve)(options.filePath);
+      const parentDir = (0, import_node_path46.dirname)(resolvedFilePath);
+      const fileName = (0, import_node_path46.basename)(resolvedFilePath);
       if (!fileName || fileName === "." || fileName === "..") {
         throw unsafePathError(`invalid config file name: ${options.filePath}`);
       }
       const maxRetries = Math.max(1, options.maxRetries ?? 3);
       const realParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
-      const canonicalFilePath = (0, import_node_path45.join)(realParent, fileName);
+      const canonicalFilePath = (0, import_node_path46.join)(realParent, fileName);
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const snapshot = readPrivateAssistantConfigSnapshot(resolvedFilePath, canonicalFilePath, realParent);
         const next = options.transform(snapshot.content);
         if (snapshot.exists && next === snapshot.content) {
           return { written: false, content: next };
         }
-        const tmpPath = (0, import_node_path45.join)(
+        const tmpPath = (0, import_node_path46.join)(
           realParent,
           `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto74.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
         try {
-          tmpFd = (0, import_node_fs53.openSync)(
+          tmpFd = (0, import_node_fs54.openSync)(
             tmpPath,
-            import_node_fs53.constants.O_CREAT | import_node_fs53.constants.O_EXCL | import_node_fs53.constants.O_WRONLY | O_NOFOLLOW_FLAG,
+            import_node_fs54.constants.O_CREAT | import_node_fs54.constants.O_EXCL | import_node_fs54.constants.O_WRONLY | O_NOFOLLOW_FLAG,
             384
           );
-          const tmpStat = (0, import_node_fs53.fstatSync)(tmpFd);
+          const tmpStat = (0, import_node_fs54.fstatSync)(tmpFd);
           if (!tmpStat.isFile() || tmpStat.nlink !== 1) {
             throw unsafePathError(`temporary config file ${tmpPath} is not an isolated regular file`);
           }
@@ -204297,14 +204441,14 @@ ${lines.join("\n")}
           const buf = Buffer.from(next, "utf-8");
           let offset = 0;
           while (offset < buf.length) {
-            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs53.writeSync)(tmpFd, buf, offset, buf.length - offset);
+            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs54.writeSync)(tmpFd, buf, offset, buf.length - offset);
             if (!Number.isInteger(writtenBytes) || writtenBytes <= 0) {
               throw new Error("EIO: short or zero-byte write while writing temporary assistant config");
             }
             offset += writtenBytes;
           }
-          (0, import_node_fs53.fsyncSync)(tmpFd);
-          (0, import_node_fs53.closeSync)(tmpFd);
+          (0, import_node_fs54.fsyncSync)(tmpFd);
+          (0, import_node_fs54.closeSync)(tmpFd);
           tmpFd = null;
           options.onBeforeRenameForTest?.(attempt, canonicalFilePath, tmpPath);
           const recheckedParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
@@ -204315,7 +204459,7 @@ ${lines.join("\n")}
           const changedConcurrently = preRenameSnapshot.exists !== snapshot.exists || snapshot.exists && (preRenameSnapshot.ino !== snapshot.ino || preRenameSnapshot.dev !== snapshot.dev || preRenameSnapshot.size !== snapshot.size || preRenameSnapshot.mtimeMs !== snapshot.mtimeMs || preRenameSnapshot.content !== snapshot.content);
           if (changedConcurrently) {
             try {
-              (0, import_node_fs53.unlinkSync)(tmpPath);
+              (0, import_node_fs54.unlinkSync)(tmpPath);
             } catch {
             }
             if (attempt + 1 < maxRetries) {
@@ -204323,18 +204467,18 @@ ${lines.join("\n")}
             }
             throw conflictError(`concurrent modification detected on ${canonicalFilePath} after ${maxRetries} attempts`);
           }
-          (0, import_node_fs53.renameSync)(tmpPath, canonicalFilePath);
+          (0, import_node_fs54.renameSync)(tmpPath, canonicalFilePath);
           renamed2 = true;
           if (process.platform !== "win32") {
             let dirFd = null;
             try {
-              dirFd = (0, import_node_fs53.openSync)(realParent, import_node_fs53.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-              (0, import_node_fs53.fsyncSync)(dirFd);
+              dirFd = (0, import_node_fs54.openSync)(realParent, import_node_fs54.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+              (0, import_node_fs54.fsyncSync)(dirFd);
             } catch {
             } finally {
               if (dirFd !== null) {
                 try {
-                  (0, import_node_fs53.closeSync)(dirFd);
+                  (0, import_node_fs54.closeSync)(dirFd);
                 } catch {
                 }
               }
@@ -204344,13 +204488,13 @@ ${lines.join("\n")}
         } finally {
           if (tmpFd !== null) {
             try {
-              (0, import_node_fs53.closeSync)(tmpFd);
+              (0, import_node_fs54.closeSync)(tmpFd);
             } catch {
             }
           }
           if (!renamed2) {
             try {
-              (0, import_node_fs53.unlinkSync)(tmpPath);
+              (0, import_node_fs54.unlinkSync)(tmpPath);
             } catch {
             }
           }
@@ -204359,15 +204503,15 @@ ${lines.join("\n")}
       throw conflictError(`failed to write ${canonicalFilePath} due to repeated concurrent modifications`);
     }
     function resolveAllowedConfigRoot(w, ctx) {
-      const target2 = (0, import_node_path45.resolve)(w.path);
+      const target2 = (0, import_node_path46.resolve)(w.path);
       const candidates = [ctx?.workspace, ctx?.privateHomeDir, ctx?.configDir].filter(
         (c) => typeof c === "string" && c.trim().length > 0
       );
       for (const candidate of candidates) {
-        const resolvedCandidate = (0, import_node_path45.resolve)(candidate);
-        const rel = (0, import_node_path45.relative)(resolvedCandidate, target2);
-        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path45.sep}`) && !(0, import_node_path45.isAbsolute)(rel)) {
-          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path45.resolve)(ctx.configDir)) {
+        const resolvedCandidate = (0, import_node_path46.resolve)(candidate);
+        const rel = (0, import_node_path46.relative)(resolvedCandidate, target2);
+        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path46.sep}`) && !(0, import_node_path46.isAbsolute)(rel)) {
+          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path46.resolve)(ctx.configDir)) {
             ensurePrivateAssistantDirectoryChain(ctx.configDir, resolvedCandidate);
           }
           return resolvedCandidate;
@@ -204376,7 +204520,7 @@ ${lines.join("\n")}
       if (ctx?.configDir) {
         throw unsafePathError(`config path ${w.path} is outside assistant roots under ${ctx.configDir}`);
       }
-      return (0, import_node_path45.dirname)(target2);
+      return (0, import_node_path46.dirname)(target2);
     }
     function writeAssistantMcpConfig(w, ctx) {
       const rootDir = resolveAllowedConfigRoot(w, ctx);
@@ -204573,7 +204717,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function str28(v) {
       return typeof v === "string" ? v.trim() : "";
     }
-    function fail13(code, error = code, extra = {}) {
+    function fail14(code, error = code, extra = {}) {
       LOG.warn("Assistant", `${code}: ${error}`);
       return { success: false, code, error, ...extra };
     }
@@ -204624,7 +204768,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var launchAssistantOnce = async (ctx, args, fence) => {
       const registry = getAssistantRegistry();
       const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
-      if (fence.aborted) return fail13("assistant_launch_timeout");
+      if (fence.aborted) return fail14("assistant_launch_timeout");
       if (admission) {
         if (admission.success) {
           const { getAssistantRuntime: getAssistantRuntime3 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -204665,10 +204809,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       });
       if (!mcp.ok) {
         revokeMcpSessionCredential2(assistantSessionKey);
-        return fail13(mcp.code, mcp.error, { cliType });
+        return fail14(mcp.code, mcp.error, { cliType });
       }
       const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
-      if (!approval.ok) return fail13(approval.code, approval.error, { cliType });
+      if (!approval.ok) return fail14(approval.code, approval.error, { cliType });
       let projects2;
       try {
         projects2 = await promptProjects(ctx);
@@ -204676,16 +204820,16 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
       }
-      if (fence.aborted) return fail13("assistant_launch_timeout");
-      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail13("assistant_restore_pending");
+      if (fence.aborted) return fail14("assistant_launch_timeout");
+      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail14("assistant_restore_pending");
       const svc = getAssistantServices();
       const prompt = buildAssistantSystemPrompt({ projects: projects2, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: /* @__PURE__ */ new Date() });
       svc.memory.markSnapshotTaken();
-      if (!prompt.withinLimit) return fail13("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
+      if (!prompt.withinLimit) return fail14("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
       try {
         ensurePrivateAssistantWorkspace(configDir, workspace);
       } catch (e) {
-        return fail13("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
+        return fail14("assistant_config_write_failed", `could not prepare the assistant workspace: ${e?.message ?? e}`, { cliType, workspace });
       }
       if (mcp.privateHome) {
         try {
@@ -204693,7 +204837,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
           if (prepared.failed.length) LOG.warn("Assistant", `[${cliType}] private HOME imports failed: ${prepared.failed.join(", ")}`);
         } catch (e) {
-          return fail13("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
+          return fail14("assistant_private_home_failed", `could not prepare the assistant's private HOME: ${e?.message ?? e}`, { cliType, workspace });
         }
       }
       try {
@@ -204708,7 +204852,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           }
         }
       } catch (e) {
-        return fail13("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
+        return fail14("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
       }
       const cliArgs = [];
       const launchEnv = {
@@ -204718,7 +204862,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
       const injection = applyMeshCoordinatorSystemPromptInjection2(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
-      if (injection.error) return fail13(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
+      if (injection.error) return fail14(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
       const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
       if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a) => typeof a === "string" && !!a.trim()));
       cliArgs.push(...mcp.cliArgs);
@@ -204727,11 +204871,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       try {
         if (fence.aborted) {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail13("assistant_launch_timeout");
+          return fail14("assistant_launch_timeout");
         }
         if (ctx.deps.cliManager.hostedRestoreState !== "ready") {
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-          return fail13("assistant_restore_pending");
+          return fail14("assistant_restore_pending");
         }
         registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
@@ -204806,13 +204950,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             failures.set(sessionId, { fence, cleanup });
           }
         }
-        if (bindingConflict && !fence.aborted) return fail13("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
-        return fail13(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
+        if (bindingConflict && !fence.aborted) return fail14("assistant_identity_conflict", `Cannot bind ${sessionId}: conflicting registry record ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`, { cleanupPending: fence.cleanupPending });
+        return fail14(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
-        return fail13(str28(launched?.code) || "assistant_launch_failed", str28(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
+        return fail14(str28(launched?.code) || "assistant_launch_failed", str28(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
-      if (!mayBind()) return fail13("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
+      if (!mayBind()) return fail14("assistant_identity_conflict", `Cannot bind launched assistant ${sessionId}: registry session ${registry.reload()?.sessionId ?? "empty"}, namespace ${ctx.deps.cliManager.deps.getHostedBindingOwner?.()?.namespace ?? "unknown"}, current generation ${isCurrent()}`);
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -204833,7 +204977,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         } catch (stopError) {
           LOG.warn("Assistant", `Unbound assistant ${sessionId} could not be stopped after a bind failure: ${String(stopError)}`);
         }
-        return fail13("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
+        return fail14("assistant_bind_failed", `Launched assistant ${sessionId} could not be bound and was stopped: ${error?.message ?? error}`, { cliType, workspace });
       }
       svc.inputLog.begin(sessionId);
       runtime2?.activate("launch");
@@ -204853,9 +204997,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
       const failures = assistantCleanupFailures.get(registry);
       if (failures?.size) {
-        if (!forced) return fail13("assistant_launch_cleanup_pending");
+        if (!forced) return fail14("assistant_launch_cleanup_pending");
         for (const [id4, failure8] of failures) {
-          if (!await failure8.cleanup()) return fail13("assistant_launch_cleanup_pending");
+          if (!await failure8.cleanup()) return fail14("assistant_launch_cleanup_pending");
           failure8.fence.cleanupPending = false;
           failure8.fence.onCleanupAcknowledged?.();
           failures.delete(id4);
@@ -204864,7 +205008,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let pending = assistantStarts.get(registry);
       const meta2 = assistantStartMeta.get(registry);
       if (pending && meta2 && forced && Date.now() - meta2.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
-        if (!meta2.fence.cancelBeforeSpawn()) return fail13("assistant_launch_cancellation_pending");
+        if (!meta2.fence.cancelBeforeSpawn()) return fail14("assistant_launch_cancellation_pending");
         LOG.warn("Assistant", "owner_force cancelled a launch before spawning after the hard ceiling");
         assistantGenerations.delete(registry);
         meta2.clear();
@@ -204878,7 +205022,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       const lockPath = (0, import_path46.join)(lockDir, ".assistant-launch.lock");
       const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
-      if (!lock.ok) return fail13(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
+      if (!lock.ok) return fail14(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
       const fence = new AssistantLaunchFence();
       assistantGenerations.set(registry, fence);
       let timer;
@@ -204899,7 +205043,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         timer = setTimeout(() => {
           fence.aborted = true;
           if (!fence.dispatched) clear();
-          resolve74(fail13("assistant_launch_timeout"));
+          resolve74(fail14("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
       });
@@ -204922,7 +205066,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const caller = readAssistantSessionId(args);
       const live = runtime2.liveSessionId();
       if (live && caller !== live) {
-        return fail13("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
+        return fail14("assistant_session_mismatch", "a live assistant session owns its relays; only its own MCP server may pull them");
       }
       return { success: true, assistantEvents: await runtime2.pull(caller || null) };
     };
@@ -210455,9 +210599,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         addedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       ext.saveExternalSources({ schema: 1, sources: [...file.sources, source2] });
-      const inventory = ext.inventoryExternalSources();
+      const inventory2 = ext.inventoryExternalSources();
       const conflicts = [];
-      const newEntry = inventory.find((e) => e.sourceName === requestedName);
+      const newEntry = inventory2.find((e) => e.sourceName === requestedName);
       if (newEntry) {
         for (const [category, types2] of Object.entries(newEntry.providers)) {
           for (const type2 of types2) {
@@ -210513,17 +210657,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function handleListProviderSources(host, _args) {
       const ext = (init_external_sources(), __toCommonJS2(external_sources_exports));
       const file = ext.loadExternalSources();
-      const inventory = ext.inventoryExternalSources();
+      const inventory2 = ext.inventoryExternalSources();
       const active = ext.loadProvidersActive();
       const sources = file.sources.map((s2) => {
-        const inv = inventory.find((e) => e.sourceName === s2.name);
+        const inv = inventory2.find((e) => e.sourceName === s2.name);
         return {
           ...s2,
           providers: inv?.providers ?? {}
         };
       });
       const conflictMap = /* @__PURE__ */ new Map();
-      for (const inv of inventory) {
+      for (const inv of inventory2) {
         for (const [category, types2] of Object.entries(inv.providers)) {
           for (const type2 of types2) {
             const candidates = ext.sourcesProviding(category, type2);
@@ -210546,8 +210690,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const sourceName = typeof args?.sourceName === "string" ? args.sourceName.trim() : "";
       if (!type2 || !sourceName) return { success: false, error: "type and sourceName are required" };
       const ext = (init_external_sources(), __toCommonJS2(external_sources_exports));
-      const inventory = ext.inventoryExternalSources();
-      const entry = inventory.find((e) => e.sourceName === sourceName);
+      const inventory2 = ext.inventoryExternalSources();
+      const entry = inventory2.find((e) => e.sourceName === sourceName);
       if (!entry) return { success: false, error: `source "${sourceName}" not found` };
       const provided = Object.values(entry.providers).some((types2) => types2.includes(type2));
       if (!provided) return { success: false, error: `source "${sourceName}" does not provide type "${type2}"` };
@@ -225836,7 +225980,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return { entry, registrySnapshot: meshSnapshot2(entry.meshId), recovered: recovered2 };
     }
-    function planCoordinatorRestores(records, owner, liveIds, inventory = records) {
+    function planCoordinatorRestores(records, owner, liveIds, inventory2 = records) {
       const plans = /* @__PURE__ */ new Map();
       try {
         loadMeshCoordinatorRegistry({ strict: true });
@@ -225852,7 +225996,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         try {
           const plan = planCoordinatorRestore(record8, owner, liveIds);
           if (!plan) continue;
-          if (plan.recovered && inventory.some((peer) => peer.runtimeId !== record8.runtimeId && (!peer.lifecycle || ["starting", "running", "stopping", "interrupted"].includes(peer.lifecycle)) && readCoordinatorMeshAssociation(peer.meshCoordinatorFor) === plan.entry.meshId)) {
+          if (plan.recovered && inventory2.some((peer) => peer.runtimeId !== record8.runtimeId && (!peer.lifecycle || ["starting", "running", "stopping", "interrupted"].includes(peer.lifecycle)) && readCoordinatorMeshAssociation(peer.meshCoordinatorFor) === plan.entry.meshId)) {
             refuseCoordinatorRestore("another hosted coordinator candidate exists for this mesh");
           }
           plans.set(record8.runtimeId, plan);
@@ -225872,17 +226016,17 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     async function verifyCoordinatorRecoveryInventory(plan, record8, owner, list5) {
       if (!list5) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
-      let inventory;
+      let inventory2;
       try {
-        inventory = await list5();
+        inventory2 = await list5();
       } catch {
         refuseCoordinatorRestore("coordinator recovery inventory unavailable");
       }
-      if (!Array.isArray(inventory)) refuseCoordinatorRestore("coordinator recovery inventory unavailable");
-      const eligible = inventory.filter((r) => (!r.lifecycle || ["running", "interrupted"].includes(r.lifecycle)) && shouldRestoreHostedRuntime(r, owner?.managedBy));
+      if (!Array.isArray(inventory2)) refuseCoordinatorRestore("coordinator recovery inventory unavailable");
+      const eligible = inventory2.filter((r) => (!r.lifecycle || ["running", "interrupted"].includes(r.lifecycle)) && shouldRestoreHostedRuntime(r, owner?.managedBy));
       const exact = eligible.find((r) => r.runtimeId === record8.runtimeId);
       if (!exact || exact.cliType !== record8.cliType || exact.workspace !== record8.workspace || exact.startedAtMs !== record8.startedAtMs || exact.providerSessionId !== record8.providerSessionId || exact.meshCoordinatorFor !== record8.meshCoordinatorFor) refuseCoordinatorRestore("recovered runtime absent or changed in hosted inventory");
-      const { plans } = planCoordinatorRestores(eligible, owner, new Set(inventory.map((r) => r.runtimeId)), inventory);
+      const { plans } = planCoordinatorRestores(eligible, owner, new Set(inventory2.map((r) => r.runtimeId)), inventory2);
       const current5 = plans.get(record8.runtimeId);
       if (!current5 || current5.registrySnapshot !== plan.registrySnapshot) refuseCoordinatorRestore("coordinator binding changed during recovery");
     }
@@ -234217,11 +234361,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto23 = __toESM2(require("crypto"));
-    var import_node_fs54 = require("fs");
-    var import_node_path46 = require("path");
-    init_provider_cli_shared();
     var import_node_fs55 = require("fs");
     var import_node_path47 = require("path");
+    init_provider_cli_shared();
+    var import_node_fs56 = require("fs");
+    var import_node_path48 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
       tui: [
@@ -235896,7 +236040,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_runtime_store();
     init_logger();
     init_config();
-    var import_node_fs56 = require("fs");
+    var import_node_fs57 = require("fs");
     init_logger();
     var LEGACY_OWNER_MARKER = "operator-recovery-owner";
     var LEGACY_LOCK_RECLAIM_MIN_AGE_MS = 10 * 6e4;
@@ -235907,7 +236051,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       try {
         let st;
         try {
-          st = (0, import_node_fs56.lstatSync)(lock);
+          st = (0, import_node_fs57.lstatSync)(lock);
         } catch (e) {
           if (e.code === "ENOENT") return { reclaimed: false, reason: "absent" };
           throw e;
@@ -235915,8 +236059,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!st.isDirectory()) return { reclaimed: false, reason: "not_directory" };
         const ageMs2 = now - st.mtimeMs;
         if (!(ageMs2 > minAgeMs)) return { reclaimed: false, reason: "fresh" };
-        if ((0, import_node_fs56.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
-        (0, import_node_fs56.rmdirSync)(lock);
+        if ((0, import_node_fs57.readdirSync)(lock).length > 0) return { reclaimed: false, reason: "has_contents" };
+        (0, import_node_fs57.rmdirSync)(lock);
         LOG.warn("MeshConfig", `Removed abandoned legacy mesh write lock ${lock} (age ${Math.round(ageMs2 / 1e3)}s, no ${LEGACY_OWNER_MARKER} marker); left by a crashed older ADHDev version`);
         return { reclaimed: true, ageMs: ageMs2 };
       } catch (e) {

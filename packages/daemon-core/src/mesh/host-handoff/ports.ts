@@ -50,7 +50,7 @@ export interface HandoffDataPort {
     exportSnapshot(a: { meshId: string; handoffId: string; fromDaemonId: string; toDaemonId: string; hostEpoch: number; meshConfig: unknown; launchPlan?: HandoffLaunchPlan }): ExportedSnapshot;
     localColumns(table: string): string[];
     /** One transaction: replace the mesh's host-owned rows with the snapshot. */
-    applySnapshot(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string }): Record<string, number>;
+    applySnapshot(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number }): Record<string, number>;
     freeDiskBytes(): number;
     /** Source: record that the mesh's host-owned data is now read-only history. */
     markHandedOff(row: { meshId: string; handoffId: string; newHostDaemonId: string; epoch: number; handedOffAt: number; retainUntil: number }): void;

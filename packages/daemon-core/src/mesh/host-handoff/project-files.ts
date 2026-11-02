@@ -101,6 +101,12 @@ export function importProjectApprovalFiles(configDir: string, meshId: string, fi
     };
     const destinations = files.map(file => {
         const path = join(safeDir(configDir, file.area, true), file.name);
+        const consumed = `${path}.consumed`;
+        if (existsSync(consumed)) {
+            const stat = lstatSync(consumed);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('approval consent receipt is not a local file');
+            throw new Error('approval consent receipt already retained');
+        }
         if (existsSync(path)) {
             verifyExisting(path, file.data);
         }

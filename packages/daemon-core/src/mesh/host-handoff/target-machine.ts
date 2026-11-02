@@ -205,7 +205,7 @@ export class HostHandoffTarget {
         try {
             this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
             this.d.data.freezeWrites?.(rec.meshId, rec.handoffId, rec.epoch);
-            this.d.data.applySnapshot(rec.meshId, verified.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest });
+            this.d.data.applySnapshot(rec.meshId, verified.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest, epoch: rec.epoch });
             this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
             this.d.mesh.writeHost(rec.meshId, {
                 role: 'host', hostDaemonId: this.d.selfDaemonId, ...((rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId)) ? { hostNodeId: (rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId))! } : {}), hostEpoch: rec.epoch,

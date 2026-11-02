@@ -100,7 +100,7 @@ export function verifyStagedSnapshot(
  * Global INTEGER rowids are storage coordinates, not public identities: explicit
  * provenance maps a colliding source coordinate to its target coordinate. */
 export function applySnapshotTables(db: Db, meshId: string, payload: SnapshotPayload,
-    provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string },
+    provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string; epoch?: number },
     historyIdentity: 'preserve-exact' | 'origin-qualified-prototype' = 'preserve-exact'): Record<string, number> {
     const digest = provenance?.snapshotDigest ?? sha256Hex(JSON.stringify(payload));
     const handoffId = provenance?.handoffId ?? digest;

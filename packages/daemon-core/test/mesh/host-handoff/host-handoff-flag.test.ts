@@ -50,7 +50,7 @@ import { evaluateNewWorkHold, releaseNewWorkHold } from '../../../src/maintenanc
 import { MeshRuntimeStore } from '../../../src/mesh/mesh-runtime-store.js';
 
 describe('acceptance 17 (live modules): the freeze really blocks new work for exactly that mesh', () => {
-    it('blocks production handoff until the complete preservation adapter is verified', async () => {
+    it('keeps an unknown project fail-closed when its preservation boundary cannot be verified', async () => {
         const dispatch = vi.fn();
         const engines = createLiveHandoffEngines({ selfDaemonId: 'source', peerOnline: () => true, dispatch, log: () => {} } as never);
         const preflight = await engines.source.preflight({ meshId: 'missing-project', targetDaemonId: 'target' });

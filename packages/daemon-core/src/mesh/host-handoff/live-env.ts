@@ -27,6 +27,7 @@ import { applySnapshotTables, localTableColumns, approvalProjectResolver } from 
 import { exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
 import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import { acquireProjectFileCut } from './project-write-cut.js';
+import { adoptPendingNoticeReceipts, assessPreservationBoundary } from './preservation-boundary.js';
 import { acquireHandoffWriteFence, releaseHandoffWriteFence, withHandoffImport } from './write-fence.js';
 import type { FreezeCheck, HandoffDataPort, HandoffHoldPort, HandoffMeshPort, HostMetaWrite } from './ports.js';
 import type { HandoffLaunchPlan, HostTransferCertificate } from './types.js';
@@ -146,7 +147,12 @@ export function createLiveDataPort(): HandoffDataPort {
         },
         localColumns: localTableColumns(db() as never),
         applySnapshot: (meshId, payload, provenance) => {
-            const counts = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => applySnapshotTables(db(), meshId, payload, provenance));
+            const store = MeshRuntimeStore.getInstance().db as unknown as { transaction<T>(fn: () => T): () => T };
+            const counts = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => store.transaction(() => {
+                const applied = applySnapshotTables(db(), meshId, payload, provenance);
+                adoptPendingNoticeReceipts(db() as never, meshId, payload, provenance);
+                return applied;
+            })());
             importProjectApprovalFiles(getConfigDir(), meshId, payload.files, approvalProjectResolver(payload.config, meshId));
             return counts;
         },
@@ -220,11 +226,10 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
     const certificate = liveCertificatePort(host);
     const log = (line: string) => host.log(line);
     const sourceDeps: SourceDeps = {
-        // The inherited snapshot contract omits ledger, pending-event and file
-        // approval state. Fail closed even if the experimental flag is enabled;
-        // the v2 protocol hardening alone is not a complete live migration.
-        preservationCheck: () => ({ id: 'state_preservation', ok: false, code: 'state_preservation_unverified',
-            detail: 'Project memory, pending-event adoption and file/config write-freeze coverage require verified transfer adapters before live handoff.' }),
+        // Success only when memory, pending notices, and approval bytes verify
+        // together. A missing inventory, open turn, index mismatch, or unreadable
+        // file stays state_preservation_unverified.
+        preservationCheck: (meshId) => assessPreservationBoundary(MeshRuntimeStore.getInstance().db as never, getConfigDir(), meshId),
         selfDaemonId: host.selfDaemonId, journal, mesh, data, hold: createLiveHoldPort(), freeze: { check: liveFreezeCheck(host) },
         coordinator: { selectLaunch: (m, n) => host.selectLaunch(m, n), stopSource: (meshId) => host.stopCoordinators(meshId) }, certificate,
         peer: (target) => createWirePeerClient(host.dispatch, target), peerOnline: (d) => host.peerOnline(d), clock, log,
