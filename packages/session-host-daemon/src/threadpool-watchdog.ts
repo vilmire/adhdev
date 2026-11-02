@@ -30,6 +30,8 @@ export interface ThreadpoolWatchdogOptions {
 
 export interface ThreadpoolWatchdog {
   stop(): void;
+  /** How long the current probe has been in flight; 0 when none is. */
+  probeInFlightMs(): number;
   /** Runs one check immediately; exposed for tests. */
   tick(): void;
 }
@@ -76,6 +78,7 @@ export function startThreadpoolWatchdog(options: ThreadpoolWatchdogOptions): Thr
       stopped = true;
       clearInterval(timer);
     },
+    probeInFlightMs: () => (inFlightSince === null ? 0 : Math.max(0, now() - inFlightSince)),
     tick,
   };
 }
@@ -91,4 +94,15 @@ export function writeStderrLineSync(line: string): void {
   } catch {
     // noop — nothing else can report it
   }
+}
+
+/**
+ * Ends the process without running libuv's exit cleanup. `process.exit` joins the
+ * pool threads in `uv__threadpool_cleanup`; with a wedged pool that join never
+ * returns, so the host stays alive, serves nothing, and the daemon never respawns
+ * it (2026-11-02: main thread in `uv_thread_join` for hours after the watchdog
+ * fired). Persistence must already be flushed: no exit handler runs after this.
+ */
+export function exitWithoutThreadpoolJoin(kill: (pid: number, signal: NodeJS.Signals) => void = process.kill): void {
+  kill(process.pid, 'SIGKILL');
 }

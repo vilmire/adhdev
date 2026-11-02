@@ -185,6 +185,8 @@ interface ThreadpoolWatchdogOptions {
 }
 interface ThreadpoolWatchdog {
     stop(): void;
+    /** How long the current probe has been in flight; 0 when none is. */
+    probeInFlightMs(): number;
     /** Runs one check immediately; exposed for tests. */
     tick(): void;
 }

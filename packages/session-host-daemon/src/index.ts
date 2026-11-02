@@ -20,7 +20,7 @@ import {
   isManagedSessionHostCommandLine,
   sessionHostInstanceArg,
 } from './server.js';
-import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
+import { exitWithoutThreadpoolJoin, startThreadpoolWatchdog, THREADPOOL_WATCHDOG_INTERVAL_MS, type ThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
 
 export {
   SessionHostServer,
@@ -157,17 +157,25 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
   await server.start();
   writeSessionHostPid(SESSION_HOST_APP_NAME);
 
+  let threadpoolWatchdog: ThreadpoolWatchdog | null = null;
   const shutdown = async () => {
     // A wedged thread pool can leave stop() pending forever; the 2026-10-21
     // host ignored SIGTERM this way and needed SIGKILL. Exit regardless.
     const deadline = setTimeout(() => {
       writeStderrLineSync(`[session-host] stop() did not finish within ${SHUTDOWN_DEADLINE_MS / 1000}s; exiting anyway.`);
+      try {
+        server.flushAllPersistence();
+      } catch {
+        // noop — exiting regardless
+      }
       removeSessionHostPid(SESSION_HOST_APP_NAME);
-      process.exit(1);
+      exitWithoutThreadpoolJoin();
     }, SHUTDOWN_DEADLINE_MS);
     deadline.unref?.();
     await server.stop();
     removeSessionHostPid(SESSION_HOST_APP_NAME);
+    // A pool that stopped answering would hang process.exit in its thread join.
+    if ((threadpoolWatchdog?.probeInFlightMs() ?? 0) > THREADPOOL_WATCHDOG_INTERVAL_MS) exitWithoutThreadpoolJoin();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
@@ -175,7 +183,7 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
 
   // Exiting ends every hosted session, but in this state none of them can take
   // input anyway; the daemon respawns the host as soon as the socket drops.
-  startThreadpoolWatchdog({
+  threadpoolWatchdog = startThreadpoolWatchdog({
     onStall: (stalledForMs) => {
       writeStderrLineSync(
         `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1000)}s ` +
@@ -187,7 +195,7 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
         // noop — exiting regardless
       }
       removeSessionHostPid(SESSION_HOST_APP_NAME);
-      process.exit(1);
+      exitWithoutThreadpoolJoin();
     },
   });
 

@@ -2753,6 +2753,7 @@ function startThreadpoolWatchdog(options) {
       stopped = true;
       clearInterval(timer);
     },
+    probeInFlightMs: () => inFlightSince === null ? 0 : Math.max(0, now() - inFlightSince),
     tick
   };
 }
@@ -2762,6 +2763,9 @@ function writeStderrLineSync(line) {
 `);
   } catch {
   }
+}
+function exitWithoutThreadpoolJoin(kill = process.kill) {
+  kill(process.pid, "SIGKILL");
 }
 
 // src/index.ts
@@ -2851,20 +2855,26 @@ async function runServer(instanceKeyArgs = []) {
   });
   await server.start();
   writeSessionHostPid(SESSION_HOST_APP_NAME);
+  let threadpoolWatchdog = null;
   const shutdown = async () => {
     const deadline = setTimeout(() => {
       writeStderrLineSync(`[session-host] stop() did not finish within ${SHUTDOWN_DEADLINE_MS / 1e3}s; exiting anyway.`);
+      try {
+        server.flushAllPersistence();
+      } catch {
+      }
       removeSessionHostPid(SESSION_HOST_APP_NAME);
-      process.exit(1);
+      exitWithoutThreadpoolJoin();
     }, SHUTDOWN_DEADLINE_MS);
     deadline.unref?.();
     await server.stop();
     removeSessionHostPid(SESSION_HOST_APP_NAME);
+    if ((threadpoolWatchdog?.probeInFlightMs() ?? 0) > THREADPOOL_WATCHDOG_INTERVAL_MS) exitWithoutThreadpoolJoin();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
-  startThreadpoolWatchdog({
+  threadpoolWatchdog = startThreadpoolWatchdog({
     onStall: (stalledForMs) => {
       writeStderrLineSync(
         `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1e3)}s (PTY writes cannot complete); exiting so the daemon respawns the host.`
@@ -2874,7 +2884,7 @@ async function runServer(instanceKeyArgs = []) {
       } catch {
       }
       removeSessionHostPid(SESSION_HOST_APP_NAME);
-      process.exit(1);
+      exitWithoutThreadpoolJoin();
     }
   });
   process.on("exit", () => {

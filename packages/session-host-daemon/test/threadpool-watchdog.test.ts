@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { startThreadpoolWatchdog } from '../src/threadpool-watchdog.js'
+import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { exitWithoutThreadpoolJoin, startThreadpoolWatchdog } from '../src/threadpool-watchdog.js'
 
 // A wedged libuv pool left a live host acknowledging send_input while no PTY
 // write ever completed. The watchdog must report a probe that never finishes,
@@ -92,4 +94,25 @@ test('threadpool watchdog default probe completes on a healthy pool', async () =
   } finally {
     watchdog.stop()
   }
+})
+
+// process.exit joins the pool threads, so with a wedged pool the host stays alive serving
+// nothing and the daemon never respawns it (2026-11-02). The stall path must not use it.
+test('the stall exit does not go through process.exit', () => {
+  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const stall = src.slice(src.indexOf('onStall:'), src.indexOf('Fallback: flush persistence'))
+  assert.match(stall, /exitWithoutThreadpoolJoin\(\)/)
+  assert.doesNotMatch(stall, /process\.exit/)
+})
+
+test('exitWithoutThreadpoolJoin sends SIGKILL to this process', () => {
+  const calls: Array<[number, string]> = []
+  exitWithoutThreadpoolJoin((pid, signal) => { calls.push([pid, signal]) })
+  assert.deepEqual(calls, [[process.pid, 'SIGKILL']])
+})
+
+test('a SIGKILL exit ends a process whose exit handlers would otherwise run', () => {
+  const r = spawnSync(process.execPath, ['-e', "process.on('exit',()=>console.log('ran'));process.kill(process.pid,'SIGKILL');setTimeout(()=>{},5000)"], { encoding: 'utf8', timeout: 4000, windowsHide: true })
+  assert.equal(r.signal, 'SIGKILL')
+  assert.equal(r.stdout, '')
 })
