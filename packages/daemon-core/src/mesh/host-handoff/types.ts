@@ -48,12 +48,19 @@ export interface TableSpec {
     meshColumn: string;
     /** Ordering for a deterministic export (and deterministic digests). */
     orderBy: string;
+    /** Static, code-owned scope for child tables that have no mesh_id. One bound mesh id. */
+    scopeSql?: string;
+    parentTable?: string;
+    parentColumn?: string;
 }
 
 export interface ManifestTable { rows: number; columns: string[] }
 export interface ManifestChunk { seq: number; sha256: string; bytes: number }
 
+export interface HandoffLaunchPlan { provider: string; model?: string; thinkingLevel?: string; targetNodeId?: string }
+
 export interface HandoffManifest {
+    launchPlan?: HandoffLaunchPlan;
     protocol: number;
     handoffId: string;
     meshId: string;
@@ -72,6 +79,7 @@ export interface HandoffManifest {
 }
 
 export interface HandoffRecord {
+    launchPlan?: HandoffLaunchPlan;
     handoffId: string;
     role: HandoffRole;
     meshId: string;
@@ -124,6 +132,7 @@ export interface PeerResult {
 export interface HostTransferCertificate {
     /** Signed assertion made only after the source's trusted runtime census proved stop. */
     sourceStopped?: true;
+    sourceStopProof?: { sessionIds: string[]; checkedAt: number; censusComplete: true };
     meshId: string;
     newHostDaemonId: string;
     newHostNodeId?: string;

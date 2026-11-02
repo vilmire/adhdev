@@ -19,6 +19,7 @@ export function certificatePayload(c: Unsigned): Buffer {
         'adhdev.host-transfer.v1', c.meshId, c.newHostDaemonId, c.newHostNodeId ?? '', String(c.hostEpoch),
         c.newHostPublicKey, c.handoffId, c.previousHostDaemonId, String(c.issuedAt),
         ...(c.sourceStopped === true ? ['source-stopped-v2'] : []),
+        ...(c.sourceStopProof ? ['source-stop-proof', JSON.stringify([c.sourceStopProof.sessionIds, c.sourceStopProof.checkedAt, c.sourceStopProof.censusComplete])] : []),
     ].join('\0'), 'utf8');
 }
 

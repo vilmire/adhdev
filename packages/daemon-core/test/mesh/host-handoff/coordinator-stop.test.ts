@@ -5,12 +5,14 @@ describe('source coordinator stop proof', () => {
     it('waits for terminal census evidence after an ACK and never stops another project', async () => {
         let calls = 0;
         const stop = vi.fn(async () => ({ success: true }));
-        await stopProjectCoordinators('project', {
+        const proof = await stopProjectCoordinators('project', {
             list: async () => [{ sessionId: 'old', providerType: 'test', meta: { meshCoordinatorFor: 'project' },
                 lifecycle: ++calls > 2 ? 'stopped' : 'stopping' },
             { sessionId: 'other', lifecycle: 'running', meta: { meshCoordinatorFor: 'unrelated' } }],
             registered: () => [{ sessionId: 'old', cliType: 'test' }], stop, wait: async () => {},
         });
+        expect(proof).toMatchObject({ sessionIds: ['old'], censusComplete: true });
+        expect(proof.checkedAt).toBeGreaterThan(0);
         expect(stop.mock.calls).toEqual([['old', 'test']]);
         expect(calls).toBe(3);
     });

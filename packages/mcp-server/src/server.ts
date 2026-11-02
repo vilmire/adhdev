@@ -36,6 +36,7 @@ import { GIT_PUSH_TOOL, gitPush } from './tools/git-push.js';
 import { LAUNCH_SESSION_TOOL, launchSession } from './tools/launch-session.js';
 import { STOP_SESSION_TOOL, stopSession } from './tools/stop-session.js';
 import { CHECK_PENDING_TOOL, checkPending } from './tools/check-pending.js';
+import { PROJECT_HOST_HANDOFF_TOOL, canAdvertiseOwnerHandoff, projectHostHandoff } from './tools/project-host-handoff.js';
 import {
   ALL_MESH_TOOLS, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_NOTIFY_WORKER_TOOL,
   // Standard mode publishes these two mesh-bootstrap tools outside mesh mode
@@ -521,6 +522,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     LAUNCH_SESSION_TOOL,
     STOP_SESSION_TOOL,
     CHECK_PENDING_TOOL,
+    ...(canAdvertiseOwnerHandoff(opts) ? [PROJECT_HOST_HANDOFF_TOOL] : []),
     READ_CHAT_TOOL,
     READ_CHAT_DEBUG_TOOL,
     SPEC_DEBUG_TOOL,
@@ -574,6 +576,10 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
 
     try {
       switch (name) {
+        case 'project_host_handoff': {
+          if (!canAdvertiseOwnerHandoff(opts)) return { content: [{ type: 'text', text: JSON.stringify({ success: false, code: 'owner_auth_required' }) }], isError: true };
+          return { content: [{ type: 'text', text: await projectHostHandoff(transport, a) }] };
+        }
         case 'list_daemons': {
           const text = await listDaemons(transport, { format: a.format });
           return { content: [{ type: 'text', text }] };

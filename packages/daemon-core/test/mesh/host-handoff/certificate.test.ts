@@ -31,6 +31,13 @@ describe('acceptance 15: host transfer certificate', () => {
             expect(adoptHostTransfer({ ...cert, ...patch }, member), JSON.stringify(patch)).toMatchObject({ ok: false });
         }
     });
+    it('binds the observed source session IDs and final complete census time into the signature', () => {
+        const cert = signHostTransferCertificate({ ...unsigned, sourceStopped: true,
+            sourceStopProof: { sessionIds: ['old-session'], checkedAt: 100, censusComplete: true } }, oldKeys.privateKey);
+        expect(adoptHostTransfer(cert, member).ok).toBe(true);
+        expect(adoptHostTransfer({ ...cert, sourceStopProof: { sessionIds: ['other-session'], checkedAt: 100, censusComplete: true } }, member))
+            .toMatchObject({ ok: false, code: 'certificate_invalid' });
+    });
     it('an old or equal epoch is refused (a replay of an earlier handoff cannot roll the host back)', () => {
         const cert = signHostTransferCertificate({ ...unsigned, hostEpoch: 2 }, oldKeys.privateKey);
         expect(adoptHostTransfer(cert, member)).toEqual({ ok: false, code: 'certificate_stale_epoch' });

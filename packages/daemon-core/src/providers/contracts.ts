@@ -402,6 +402,8 @@ export interface AutoApproveModesConfig {
 }
 
 export interface ProviderModule {
+  /** Reviewed target-local handoff canary; absent means readiness is unsupported. */
+  hostHandoffCanary?: import('../mesh/host-handoff/target-canary.js').RegisteredCanaryProvider['hostHandoffCanary'];
  /** Unique identifier (e.g. 'cline', 'cursor', 'antigravity-cli') */
   type: string;
  /** Display name (e.g. 'Cline', 'Cursor') */

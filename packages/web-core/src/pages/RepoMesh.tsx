@@ -637,6 +637,7 @@ export default function RepoMesh() {
             onAddNode={handleAddNode}
             onRemoveNode={handleRemoveNode}
             features={{
+                hostHandoff: features.hostHandoff,
                 coordinatorPrompt: features.coordinatorPrompt,
                 meshHostDaemonSection: features.meshHostDaemonSection,
                 addNodeDaemonPicker: features.addNodeDaemonPicker,

@@ -372,6 +372,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   decision_request: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   // Stops / restarts / switches a coordinator, worker or assistant session (status is read-only); stages a card when the target is busy.
   file_transfer: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  project_host_handoff: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   session_control: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 

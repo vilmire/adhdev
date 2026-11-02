@@ -163,6 +163,7 @@ export interface MeshNodeListFeatures {
 
 // Feature flags shape used by MeshDetailView
 export interface MeshDetailViewFeatures {
+    hostHandoff?: boolean
     coordinatorPrompt: boolean
     meshHostDaemonSection: boolean
     addNodeDaemonPicker: boolean

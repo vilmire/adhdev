@@ -2,6 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
+import { acquireHandoffWriteFence } from '../../src/mesh/host-handoff/write-fence.js'
+import { withCoordinatorTransition } from '../../src/mesh/host-handoff/admission.js'
 import { DaemonCommandRouter } from '../../src/commands/router.js'
 import type { ProviderModule } from '../../src/providers/contracts.js'
 
@@ -31,6 +34,7 @@ beforeAll(() => {
 })
 
 afterAll(() => {
+  MeshRuntimeStore.resetForTests()
   if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
   else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
   if (previousMcpEntry === undefined) delete process.env.ADHDEV_MCP_SERVER_PATH
@@ -79,6 +83,26 @@ async function launchCoordinator(extra: Record<string, unknown>) {
   expect(result).toMatchObject({ success: true })
   return (launchCli.mock.calls[0] as any)?.[0] as Record<string, unknown>
 }
+
+describe('durable coordinator handoff admission', () => {
+  it('rejects a stale inline host at the actual launch entry point', async () => {
+    const router = new DaemonCommandRouter({} as any)
+    const meshId = 'fenced-inline-project'
+    acquireHandoffWriteFence(MeshRuntimeStore.getInstance().db as never, meshId, 'handoff', 1)
+    const out = await router.execute('launch_mesh_coordinator', { meshId,
+      inlineMesh: { id: meshId, meshHost: { role: 'host' }, nodes: [{ id: 'node', workspace }] } })
+    expect(out).toMatchObject({ success: false, code: 'mesh_host_handoff_fenced' })
+  })
+  it('serializes project launches/stops without queuing late effects or blocking unrelated projects', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const active = withCoordinatorTransition('project', () => gate)
+    await expect(withCoordinatorTransition('project', async () => 'late')).rejects.toThrow('coordinator_transition_busy')
+    await expect(withCoordinatorTransition('other', async () => 'unrelated')).resolves.toBe('unrelated')
+    release(); await active
+    await expect(withCoordinatorTransition('project', async () => 'retry')).resolves.toBe('retry')
+  })
+})
 
 describe('launch_mesh_coordinator — launch provenance forwarded to launch_cli', () => {
   it('a dialog model / thinking level is a user pick, launched by mesh', async () => {

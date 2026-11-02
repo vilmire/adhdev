@@ -17,7 +17,7 @@ import type {
 import { rowCountsOf, snapshotBytes, type ExportedSnapshot } from './snapshot-export.js';
 import {
     HOST_HANDOFF_ACK_TIMEOUT_MS, HOST_HANDOFF_FREEZE_TIMEOUT_MS, HOST_HANDOFF_PROBE_BASE_MS, HOST_HANDOFF_PROBE_MAX_MS, HOST_HANDOFF_PROTOCOL,
-    HOST_HANDOFF_RETENTION_MS, type HandoffAck, type HandoffErrorCode, type HandoffRecord, type PeerResult, type PreflightCheck, type SourcePhase,
+    HOST_HANDOFF_RETENTION_MS, type HandoffLaunchPlan, type HandoffAck, type HandoffErrorCode, type HandoffRecord, type PeerResult, type PreflightCheck, type SourcePhase,
 } from './types.js';
 
 export interface SourceDeps {
@@ -72,7 +72,7 @@ export class HostHandoffSource {
 
     // ── preflight ────────────────────────────────────────────────────────────
 
-    async preflight(input: StartInput, opts: { allowOwnActive?: string } = {}): Promise<{ ok: boolean; checks: PreflightCheck[]; targetPublicKey?: string; estimateBytes?: number }> {
+    async preflight(input: StartInput, opts: { allowOwnActive?: string } = {}): Promise<{ ok: boolean; checks: PreflightCheck[]; targetPublicKey?: string; estimateBytes?: number; launchPlan?: HandoffLaunchPlan }> {
         const checks: PreflightCheck[] = [];
         const add = (id: string, ok: boolean, code?: HandoffErrorCode, detail?: string) => { checks.push({ id, ok, ...(code && !ok ? { code } : {}), ...(detail ? { detail } : {}) }); return ok; };
         const view = this.d.mesh.read(input.meshId);
@@ -83,19 +83,24 @@ export class HostHandoffSource {
         add('no_other_handoff', !active || active.handoffId === opts.allowOwnActive, 'handoff_in_progress', active?.handoffId);
         add('target_online', this.d.peerOnline(input.targetDaemonId), 'target_offline');
         if (this.d.preservationCheck) checks.push(this.d.preservationCheck(input.meshId));
+        let launchPlan: HandoffLaunchPlan | undefined;
+        if (this.d.coordinator.selectLaunch) {
+            try { launchPlan = this.d.coordinator.selectLaunch(input.meshId, input.targetNodeId); add('launch_selection', true); }
+            catch (e) { add('launch_selection', false, 'target_not_launchable', (e as Error).message); }
+        }
         let targetPublicKey: string | undefined;
         let estimateBytes: number | undefined;
         if (checks.every(c => c.ok)) {
             const probeId = input.handoffId ?? 'probe';
             let cap: Awaited<ReturnType<HandoffPeerClient['capability']>> | undefined;
-            try { cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId }); } catch { cap = undefined; }
+            try { cap = await this.d.peer(input.targetDaemonId).capability({ handoffId: probeId, meshId: input.meshId, fromDaemonId: this.d.selfDaemonId, launchPlan }); } catch { cap = undefined; }
             const capable = !!cap && cap.success === true && cap.protocol === HOST_HANDOFF_PROTOCOL;
             add('peer_capability', capable, 'peer_capability_unconfirmed', capable ? undefined : String(cap?.code ?? 'no_response'));
             if (capable) {
-                add('target_launchable', cap!.ready?.coordinatorLaunchable === true, 'target_not_launchable');
+                add('target_launchable', cap!.ready?.coordinatorLaunchable === true, 'target_not_launchable', JSON.stringify(cap!.ready?.checks ?? []));
                 targetPublicKey = cap!.originGrantPublicKey;
                 try {
-                    const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view!.hostEpoch, meshConfig: view!.config });
+                    const snap = this.d.data.exportSnapshot({ meshId: input.meshId, handoffId: probeId, fromDaemonId: this.d.selfDaemonId, toDaemonId: input.targetDaemonId, hostEpoch: view!.hostEpoch, meshConfig: view!.config, launchPlan });
                     estimateBytes = snapshotBytes(snap);
                     add('disk_space', this.d.data.freeDiskBytes() >= estimateBytes * 2 && cap!.ready?.diskOk !== false, 'insufficient_disk');
                 } catch (e) { add('snapshot_readable', false, 'verify_failed', (e as Error)?.message); }
@@ -104,7 +109,7 @@ export class HostHandoffSource {
             // A coordinator that is merely busy is waited out during `freezing`; an open writer checkpoint is never forced.
             add('no_open_writer_checkpoint', freeze.ready || freeze.code !== 'writer_checkpoint_pending', 'writer_checkpoint_pending', freeze.ready ? undefined : freeze.detail);
         }
-        return { ok: checks.every(c => c.ok), checks, ...(targetPublicKey ? { targetPublicKey } : {}), ...(estimateBytes !== undefined ? { estimateBytes } : {}) };
+        return { ok: checks.every(c => c.ok), checks, ...(launchPlan ? { launchPlan } : {}), ...(targetPublicKey ? { targetPublicKey } : {}), ...(estimateBytes !== undefined ? { estimateBytes } : {}) };
     }
 
     // ── start ────────────────────────────────────────────────────────────────
@@ -125,6 +130,8 @@ export class HostHandoffSource {
                 return { success: true, handoffId: existing.handoffId, phase: existing.phase as SourcePhase };
             }
         }
+        const active = this.d.journal.findActive(input.meshId, 'source');
+        if (active) return refuse('handoff_in_progress', 'another handoff holds the project', { handoffId: active.handoffId });
         const handoffId = input.handoffId ?? this.d.clock.newId();
         const pre = await this.preflight({ ...input, handoffId });
         if (!pre.ok) {
@@ -134,6 +141,7 @@ export class HostHandoffSource {
         const view = this.d.mesh.read(input.meshId)!;
         const now = this.d.clock.now();
         this.d.journal.put({
+            ...(pre.launchPlan ? { launchPlan: pre.launchPlan } : {}),
             handoffId, role: 'source', meshId: input.meshId, peerDaemonId: input.targetDaemonId, phase: 'preflight', epoch: view.hostEpoch + 1,
             ...(input.targetNodeId ? { targetNodeId: input.targetNodeId } : {}), ...(pre.targetPublicKey ? { targetPublicKey: pre.targetPublicKey } : {}),
             createdAt: now, updatedAt: now,
@@ -165,12 +173,24 @@ export class HostHandoffSource {
                     }
                     this.move(handoffId, 'frozen');
                 } else if (rec.phase === 'frozen') {
+                    // Stop admission and the coordinator BEFORE cutting data.
+                    // Staging a snapshot while the coordinator could still write
+                    // would lose changes even if activation itself was fenced.
+                    this.d.mesh.setFence(rec.meshId, { handoffId, epoch: rec.epoch });
+                    if (!this.d.journal.getCertificate(handoffId)?.sourceStopped) {
+                        let sourceStopProof: import('./types.js').HostTransferCertificate['sourceStopProof'];
+                        try { sourceStopProof = await this.d.coordinator.stopSource(rec.meshId) || undefined; }
+                        catch (e) { this.log(`source stop unconfirmed: ${(e as Error)?.message ?? e}`); return; }
+                        this.d.data.freezeWrites?.(rec.meshId, handoffId, rec.epoch);
+                        if (!rec.targetPublicKey) { await this.abortInternal(rec, 'certificate_unavailable'); return; }
+                        this.d.journal.putCertificate(handoffId, this.sourceCertificate(rec, sourceStopProof));
+                    }
                     this.move(handoffId, 'exporting');
                 } else if (rec.phase === 'exporting') {
                     const view = this.d.mesh.read(rec.meshId);
                     if (!view) { await this.abortInternal(rec, 'mesh_unreadable'); return; }
                     try {
-                        const snap = this.d.data.exportSnapshot({ meshId: rec.meshId, handoffId, fromDaemonId: this.d.selfDaemonId, toDaemonId: rec.peerDaemonId, hostEpoch: view.hostEpoch, meshConfig: view.config });
+                        const snap = this.d.data.exportSnapshot({ meshId: rec.meshId, handoffId, fromDaemonId: this.d.selfDaemonId, toDaemonId: rec.peerDaemonId, hostEpoch: view.hostEpoch, meshConfig: view.config, launchPlan: rec.launchPlan });
                         this.snapshots.set(handoffId, snap);
                         this.move(handoffId, 'exported', { manifestDigest: snap.manifest.digest, rowCounts: rowCountsOf(snap.manifest) });
                     } catch (e) { await this.abortInternal(rec, `export_failed:${(e as Error)?.message ?? e}`); return; }
@@ -192,7 +212,7 @@ export class HostHandoffSource {
         if (!snap) {
             const view = this.d.mesh.read(rec.meshId);
             if (!view) return { ok: false, code: 'mesh_unreadable' };
-            snap = this.d.data.exportSnapshot({ meshId: rec.meshId, handoffId: rec.handoffId, fromDaemonId: this.d.selfDaemonId, toDaemonId: rec.peerDaemonId, hostEpoch: view.hostEpoch, meshConfig: view.config });
+            snap = this.d.data.exportSnapshot({ meshId: rec.meshId, handoffId: rec.handoffId, fromDaemonId: this.d.selfDaemonId, toDaemonId: rec.peerDaemonId, hostEpoch: view.hostEpoch, meshConfig: view.config, launchPlan: rec.launchPlan });
             this.snapshots.set(rec.handoffId, snap);
         }
         const peer = this.d.peer(rec.peerDaemonId);
@@ -244,6 +264,13 @@ export class HostHandoffSource {
 
     // ── activate / commit ────────────────────────────────────────────────────
 
+    private sourceCertificate(rec: HandoffRecord, sourceStopProof?: import('./types.js').HostTransferCertificate['sourceStopProof']) {
+        return this.d.certificate.sign({ sourceStopped: true, ...(sourceStopProof ? { sourceStopProof } : {}), meshId: rec.meshId, newHostDaemonId: rec.peerDaemonId,
+            ...(rec.targetNodeId ? { newHostNodeId: rec.targetNodeId } : {}), hostEpoch: rec.epoch,
+            newHostPublicKey: rec.targetPublicKey!, handoffId: rec.handoffId, previousHostDaemonId: this.d.selfDaemonId,
+            issuedAt: this.d.clock.now() });
+    }
+
     private async activate(handoffId: string): Promise<void> {
         if (this.activating.has(handoffId)) return;
         this.activating.add(handoffId);
@@ -259,16 +286,12 @@ export class HostHandoffSource {
         // Fence FIRST. The config-backed admission fence also prevents restore
         // if this daemon dies during stop or while the activate reply is lost.
         this.d.mesh.setFence(rec.meshId, { handoffId, epoch: rec.epoch });
-        try { await this.d.coordinator.stopSource(rec.meshId); }
+        try { if (!this.d.journal.getCertificate(handoffId)?.sourceStopped) await this.d.coordinator.stopSource(rec.meshId); }
         catch (e) {
             this.log(`source stop unconfirmed: ${(e as Error)?.message ?? e}`);
             return; // no activate byte leaves; owner can retry or abort this fenced ACK
         }
-        const cert = this.d.journal.getCertificate(handoffId) ?? this.d.certificate.sign({
-            sourceStopped: true,
-            meshId: rec.meshId, newHostDaemonId: rec.peerDaemonId, ...(rec.targetNodeId ? { newHostNodeId: rec.targetNodeId } : {}),
-            hostEpoch: rec.epoch, newHostPublicKey: rec.targetPublicKey, handoffId, previousHostDaemonId: this.d.selfDaemonId, issuedAt: this.d.clock.now(),
-        });
+        const cert = this.d.journal.getCertificate(handoffId) ?? this.sourceCertificate(rec);
         this.d.journal.putCertificate(handoffId, cert);
         // Durable commit intent BEFORE the first byte of `activate` leaves: from here on, abort is no longer free.
         rec = this.move(handoffId, 'activating', { commitIntentAt: this.d.clock.now() });
@@ -276,7 +299,11 @@ export class HostHandoffSource {
         try { res = await this.d.peer(rec.peerDaemonId).activate({ handoffId, meshId: rec.meshId, epoch: rec.epoch, certificate: cert }); }
         catch (e) { this.move(handoffId, 'uncertain', { probeCount: 0, lastProbeAt: this.d.clock.now() }); this.log(`activate response lost: ${(e as Error)?.message ?? e}`); return; }
         if (res.success && res.applied !== false) { await this.commit(handoffId, { coordinatorReady: res.coordinatorReady === true }, cert); return; }
-        if (res.applied === false) { await this.abortInternal(this.d.journal.get(handoffId, 'source')!, String(res.code ?? 'activate_failed'), true); return; }
+        // A refusal alone does not revoke a delayed activate. Only a retained
+        // tombstone for this exact epoch proves the target cannot later apply.
+        if (res.applied === false && res.discarded === true && res.phase === 'discarded' && res.epoch === rec.epoch) {
+            await this.abortInternal(this.d.journal.get(handoffId, 'source')!, String(res.code ?? 'activate_failed'), true); return;
+        }
         this.move(handoffId, 'uncertain', { probeCount: 0, lastProbeAt: this.d.clock.now() });
     }
 
@@ -314,6 +341,7 @@ export class HostHandoffSource {
         try {
             this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
             await this.d.coordinator.stopSource(rec.meshId);
+            this.d.data.freezeWrites?.(rec.meshId, rec.handoffId, rec.epoch);
             return true;
         } catch (e) {
             this.log(`legacy source stop unconfirmed: ${(e as Error)?.message ?? e}`);
@@ -357,7 +385,7 @@ export class HostHandoffSource {
     async tick(): Promise<void> {
         const now = this.d.clock.now();
         for (const rec of this.d.journal.list().filter(r => r.role === 'source')) {
-            if (rec.phase === 'freezing') await this.advance(rec.handoffId);
+            if (rec.phase === 'freezing' || rec.phase === 'frozen') await this.advance(rec.handoffId);
             else if (rec.phase === 'awaiting_ack' && now - rec.updatedAt >= HOST_HANDOFF_ACK_TIMEOUT_MS) await this.abortInternal(rec, 'ack_timeout');
             else if (rec.phase === 'uncertain' || (rec.phase === 'activating' && !this.activating.has(rec.handoffId) && rec.commitIntentAt)) await this.probe(rec.handoffId, false);
         }
@@ -390,6 +418,7 @@ export class HostHandoffSource {
     async resume(): Promise<void> {
         for (const rec of this.d.journal.list().filter(r => r.role === 'source')) {
             if (rec.phase === 'committed' || rec.phase === 'aborted') continue;
+            if (rec.phase === 'frozen') { await this.advance(rec.handoffId); continue; }
             if (rec.phase === 'acked') { await this.activate(rec.handoffId); continue; }
             if (rec.phase === 'activating' || rec.phase === 'uncertain') {
                 if (rec.phase === 'activating') this.move(rec.handoffId, 'uncertain');
@@ -412,13 +441,28 @@ export class HostHandoffSource {
         }
         if (rec.phase === 'acked') { await this.activate(handoffId); return { success: true, phase: this.d.journal.get(handoffId, 'source')!.phase }; }
         if (rec.phase === 'uncertain' || rec.phase === 'activating') return this.probe(handoffId, true);
-        if (rec.phase === 'freezing') { await this.advance(handoffId); return { success: true, phase: this.d.journal.get(handoffId, 'source')!.phase }; }
+        if (rec.phase === 'freezing' || rec.phase === 'frozen') { await this.advance(handoffId); return { success: true, phase: this.d.journal.get(handoffId, 'source')!.phase }; }
         return { success: true, phase: rec.phase };
     }
 
     /** True while a handoff of the mesh holds it frozen (anything from `freezing` to `uncertain`). */
     isFrozen(meshId: string): boolean {
         return this.d.journal.findActive(meshId, 'source') !== null;
+    }
+
+    async evidence(handoffId: string): Promise<Record<string, unknown>> {
+        const rec = this.d.journal.get(handoffId, 'source');
+        if (!rec) return {};
+        const certificate = this.d.journal.getCertificate(handoffId);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let target: PeerResult | undefined;
+        try {
+            target = await Promise.race([this.d.peer(rec.peerDaemonId).status({ handoffId, meshId: rec.meshId }),
+                new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('target observation timeout')), 3_000); })]);
+        } catch { /* uncertainty is shown; never inferred as coordinator readiness */ }
+        finally { if (timer) clearTimeout(timer); }
+        return { sourceStopped: certificate?.sourceStopped === true, sourceStopProof: certificate?.sourceStopProof,
+            sourceDaemonId: this.d.selfDaemonId, target: target?.success ? target : { unknown: true } };
     }
 
     status(a: { handoffId?: string; meshId?: string }): HandoffRecord | null {

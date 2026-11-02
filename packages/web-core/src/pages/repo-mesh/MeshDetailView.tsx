@@ -256,6 +256,8 @@ export function MeshDetailView({
     const { theme } = useTheme()
     const meshTheme = useMemo(() => getMeshGraphTheme(theme), [theme])
     const [handoffOpen, setHandoffOpen] = useState(false)
+    const handoffHostId = selectedMesh.meshHost?.hostDaemonId || coordinatorDaemonId
+    const canOpenHandoff = features.hostHandoff === true && !!handoffHostId && selectedMesh.meshHost?.hostSynthesized !== true
 
     const selectCls = 'w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary'
     // quotaRouting editors work on the stored OVERRIDES (not the resolved thresholds),
@@ -286,8 +288,11 @@ export function MeshDetailView({
                     onOpenHandoff={hostPinned && coordinatorDaemonId ? () => setHandoffOpen(true) : undefined}
                 />
             )}
-            {features.meshHostDaemonSection && hostPinned && coordinatorDaemonId && handoffOpen && (
-                <MeshHostHandoffDialog open onClose={() => setHandoffOpen(false)} meshId={selectedMesh.id} hostDaemonId={coordinatorDaemonId} daemons={daemons} sendCommand={sendCommand} />
+            {!features.meshHostDaemonSection && canOpenHandoff && (
+                <button className="btn btn-secondary btn-sm mb-3" onClick={() => setHandoffOpen(true)} data-handoff-open>{t('mesh.handoff.open')}</button>
+            )}
+            {canOpenHandoff && handoffOpen && (
+                <MeshHostHandoffDialog open onClose={() => setHandoffOpen(false)} meshId={selectedMesh.id} hostDaemonId={handoffHostId} daemons={daemons} projectNodes={selectedMesh.nodes} sendCommand={sendCommand} />
             )}
 
             <MeshNodeList

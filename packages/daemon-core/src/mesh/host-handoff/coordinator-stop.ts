@@ -15,7 +15,7 @@ export async function stopProjectCoordinators(meshId: string, ports: {
     now?: () => number;
     wait?: () => Promise<void>;
     timeoutMs?: number;
-}): Promise<void> {
+}): Promise<{ sessionIds: string[]; checkedAt: number; censusComplete: true }> {
     const now = ports.now ?? Date.now;
     const deadline = now() + (ports.timeoutMs ?? 30_000);
     const wait = ports.wait ?? (() => new Promise(r => setTimeout(r, 100)));
@@ -51,7 +51,7 @@ export async function stopProjectCoordinators(meshId: string, ports: {
     for (;;) {
         const rows = await census();
         const pending = rows.filter(r => (sessions.has(r.sessionId) || r.meta?.meshCoordinatorFor === meshId) && !terminal(r));
-        if (!pending.length) return;
+        if (!pending.length) return { sessionIds: [...sessions.keys()].sort(), checkedAt: now(), censusComplete: true };
         if (now() >= deadline) throw new Error('source coordinator exit unconfirmed');
         await wait();
     }

@@ -4,7 +4,8 @@
  * is keyed (handoff_id, role) so one daemon can hold both sides in tests.
  */
 
-export interface HandoffSchemaDb { exec(sql: string): unknown }
+import { initializeHandoffWriteFences } from './write-fence.js';
+export interface HandoffSchemaDb { exec(sql: string): unknown; function?(name: string, fn: () => string): unknown; prepare?(sql: string): any }
 
 export function ensureHostHandoffSchema(db: HandoffSchemaDb): void {
     db.exec(`
@@ -46,6 +47,16 @@ export function ensureHostHandoffSchema(db: HandoffSchemaDb): void {
             certificate_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS mesh_host_handoff_archive (
+            handoff_id TEXT NOT NULL, side TEXT NOT NULL, mesh_id TEXT NOT NULL,
+            snapshot_digest TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (handoff_id,side)
+        );
+        CREATE TABLE IF NOT EXISTS mesh_host_handoff_row_map (
+            mesh_id TEXT NOT NULL, table_name TEXT NOT NULL, source_daemon_id TEXT NOT NULL,
+            source_key TEXT NOT NULL, target_key TEXT NOT NULL, snapshot_digest TEXT NOT NULL,
+            PRIMARY KEY(mesh_id,table_name,source_daemon_id,source_key)
+        );
+
         -- Source side after commit: host-owned rows of a handed-off mesh are read-only until retention ends.
         CREATE TABLE IF NOT EXISTS mesh_host_handed_off (
             mesh_id TEXT PRIMARY KEY,
@@ -56,4 +67,6 @@ export function ensureHostHandoffSchema(db: HandoffSchemaDb): void {
             retain_until INTEGER NOT NULL
         );
     `);
+    if (db.prepare && !db.prepare('PRAGMA table_info(mesh_host_handoff)').all().some((c: { name: string }) => c.name === 'launch_plan_json')) db.exec('ALTER TABLE mesh_host_handoff ADD COLUMN launch_plan_json TEXT');
+    if (db.function && db.prepare) initializeHandoffWriteFences(db as Parameters<typeof initializeHandoffWriteFences>[0]);
 }

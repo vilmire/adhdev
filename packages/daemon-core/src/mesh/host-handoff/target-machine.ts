@@ -13,7 +13,7 @@ import type { CertificatePort, HandoffClock, HandoffDataPort, HandoffLog, Handof
 import { verifyStagedSnapshot } from './snapshot-import.js';
 import { sha256Hex } from './snapshot-export.js';
 import { verifyHostTransferCertificate } from './certificate.js';
-import { HOST_HANDOFF_PROTOCOL, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
+import { HOST_HANDOFF_PROTOCOL, type HandoffLaunchPlan, type HandoffAck, type HandoffManifest, type HandoffRecord, type HostTransferCertificate, type PeerResult, type TargetPhase } from './types.js';
 
 export interface TargetDeps {
     selfDaemonId: string;
@@ -51,15 +51,16 @@ export class HostHandoffTarget {
         return daemonIdsEquivalent(rec.peerDaemonId, sender) ? null : fail('wrong_peer');
     }
 
-    capability(a: { handoffId: string; meshId: string; fromDaemonId: string }, sender: string): PeerResult & { protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; ready?: { coordinatorLaunchable: boolean; diskOk: boolean } } {
+    async capability(a: { handoffId: string; meshId: string; fromDaemonId: string; launchPlan?: HandoffLaunchPlan }, sender: string): Promise<PeerResult & { protocol?: number; targetDaemonId?: string; originGrantPublicKey?: string; ready?: { coordinatorLaunchable: boolean; diskOk: boolean; checks?: Array<{ id: string; ok: boolean; detail?: string }> } }> {
         const view = this.d.mesh.read(a.meshId);
         if (!view || view.role !== 'member') return fail('target_not_member', 'this daemon is not a member of the mesh');
         if (!view.hostDaemonId || !daemonIdsEquivalent(view.hostDaemonId, sender)) return fail('wrong_peer', 'sender is not this member\'s host');
         const active = this.d.journal.findActive(a.meshId, 'target');
         if (active && active.handoffId !== a.handoffId) return fail('handoff_in_progress');
+        const readiness = await this.d.coordinator.readiness?.(a.meshId, a.launchPlan);
         return {
             success: true, protocol: HOST_HANDOFF_PROTOCOL, targetDaemonId: this.d.selfDaemonId, originGrantPublicKey: this.d.certificate.ownPublicKey(),
-            ready: { coordinatorLaunchable: this.d.coordinator.canLaunch(a.meshId), diskOk: this.d.data.freeDiskBytes() > 64 * 1024 * 1024 },
+            ready: { coordinatorLaunchable: readiness?.ok ?? this.d.coordinator.canLaunch(a.meshId), ...(readiness ? { checks: readiness.checks } : {}), diskOk: this.d.data.freeDiskBytes() > 64 * 1024 * 1024 },
         };
     }
 
@@ -81,6 +82,7 @@ export class HostHandoffTarget {
         if (other) return fail('handoff_in_progress');
         const now = this.d.clock.now();
         this.d.journal.put({
+            ...(m.launchPlan ? { launchPlan: m.launchPlan, targetNodeId: m.launchPlan.targetNodeId } : {}),
             handoffId: a.handoffId, role: 'target', meshId: a.meshId, peerDaemonId: sender, phase: 'importing', epoch: m.nextEpoch,
             manifestDigest: m.digest, createdAt: now, updatedAt: now,
         });
@@ -176,22 +178,37 @@ export class HostHandoffTarget {
             if (!valid) return fail('certificate_invalid', 'verified source stop certificate required', { applied: false });
         }
         // An active authority is not evidence of a ready coordinator process.
-        if (rec.phase === 'active') return { success: true, applied: true, duplicate: true, coordinatorReady: false };
-        if (rec.phase === 'discarded') return fail('handoff_aborted', undefined, { applied: false });
+        if (rec.phase === 'active') {
+            const observed = await this.d.coordinator.observe?.(rec.meshId, rec.launchPlan);
+            return { success: true, applied: true, duplicate: true, coordinatorReady: observed?.ready === true, ...(observed?.sessionId ? { coordinatorSessionId: observed.sessionId } : {}), observation: observed };
+        }
+        if (rec.phase === 'discarded') return fail('handoff_aborted', undefined, { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch });
         if (a.epoch !== rec.epoch) return fail('stale_epoch', undefined, { applied: false });
         if (rec.phase !== 'verified' && rec.phase !== 'acked' && rec.phase !== 'activating') return fail('not_staged', `phase ${rec.phase}`, { applied: false });
         const manifest = this.d.journal.getManifest(a.handoffId);
         if (!manifest) return fail('not_staged', 'manifest missing', { applied: false });
         const verified = verifyStagedSnapshot(manifest, this.d.journal.getChunks(a.handoffId), t => this.d.data.localColumns(t));
-        if (!verified.ok) { this.discardInternal(rec, `reverify:${verified.code}`); return fail(verified.code, verified.detail, { applied: false }); }
+        if (!verified.ok) { this.discardInternal(rec, `reverify:${verified.code}`); return fail(verified.code, verified.detail, { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch }); }
+        if (manifest.launchPlan && manifest.launchPlan.targetNodeId !== a.certificate.newHostNodeId) return fail('certificate_invalid');
+        if (this.d.coordinator.readiness) {
+            const readiness = await this.d.coordinator.readiness(rec.meshId, manifest.launchPlan);
+            const current = this.d.journal.get(rec.handoffId, 'target');
+            if (!current || current.phase !== rec.phase) return fail('handoff_in_progress');
+            if (!readiness.ok) {
+                if (rec.phase === 'activating') return fail('target_not_launchable', 'Activation remains fenced until target readiness recovers.');
+                this.discardInternal(rec, 'target_readiness_failed');
+                return fail('target_not_launchable', 'Target readiness changed; staged authority discarded.', { applied: false, discarded: true, phase: 'discarded', epoch: rec.epoch });
+            }
+        }
         this.d.journal.putCertificate(a.handoffId, a.certificate);
         this.move(a.handoffId, 'activating');
         try {
             this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
-            this.d.data.applySnapshot(rec.meshId, verified.payload);
+            this.d.data.freezeWrites?.(rec.meshId, rec.handoffId, rec.epoch);
+            this.d.data.applySnapshot(rec.meshId, verified.payload, { handoffId: rec.handoffId, sourceDaemonId: rec.peerDaemonId, snapshotDigest: manifest.digest });
             this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
             this.d.mesh.writeHost(rec.meshId, {
-                role: 'host', hostDaemonId: this.d.selfDaemonId, ...(this.d.selfNodeId?.(rec.meshId) ? { hostNodeId: this.d.selfNodeId(rec.meshId)! } : {}), hostEpoch: rec.epoch,
+                role: 'host', hostDaemonId: this.d.selfDaemonId, ...((rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId)) ? { hostNodeId: (rec.targetNodeId ?? this.d.selfNodeId?.(rec.meshId))! } : {}), hostEpoch: rec.epoch,
             });
         } catch (e) {
             this.log(`apply failed: ${(e as Error)?.message ?? e}`);
@@ -204,11 +221,14 @@ export class HostHandoffTarget {
 
     private async finishActivation(handoffId: string, cert?: HostTransferCertificate): Promise<PeerResult & { applied?: boolean; coordinatorReady?: boolean; coordinatorSessionId?: string }> {
         const rec = this.d.journal.get(handoffId, 'target')!;
+        if (this.d.coordinator.readiness && !(await this.d.coordinator.readiness(rec.meshId, rec.launchPlan)).ok) {
+            return fail('target_not_launchable', 'Applied activation remains fenced until target readiness recovers.');
+        }
         this.move(handoffId, 'active');
         this.d.mesh.setFence(rec.meshId, null, handoffId);
         this.d.journal.clearStage(handoffId);
         let launched: { success: boolean; sessionId?: string; ready: boolean } = { success: false, ready: false };
-        try { launched = await this.d.coordinator.launch(rec.meshId, handoffId); } catch (e) { this.log(`coordinator launch failed: ${(e as Error)?.message ?? e}`); }
+        try { launched = await this.d.coordinator.launch(rec.meshId, handoffId, rec.launchPlan); } catch (e) { this.log(`coordinator launch failed: ${(e as Error)?.message ?? e}`); }
         if (cert) {
             const view = this.d.mesh.read(rec.meshId);
             void this.d.certificate.broadcast(rec.meshId, cert, [this.d.selfDaemonId, rec.peerDaemonId, ...(view ? [] : [])]).catch(() => undefined);
@@ -216,15 +236,19 @@ export class HostHandoffTarget {
         return { success: true, applied: true, coordinatorReady: launched.ready, ...(launched.sessionId ? { coordinatorSessionId: launched.sessionId } : {}) };
     }
 
-    status(a: { handoffId: string; meshId: string }, sender: string): PeerResult & { phase?: string; epoch?: number } {
+    async status(a: { handoffId: string; meshId: string }, sender: string): Promise<PeerResult & { phase?: string; epoch?: number }> {
         const rec = this.d.journal.get(a.handoffId, 'target');
         if (!rec) return { success: true, phase: 'unknown', unknown: true };
         const wrong = this.requireSource(rec, sender); if (wrong) return wrong;
         if (a.meshId !== rec.meshId) return fail('invalid_args');
-        return { success: true, phase: rec.phase, epoch: rec.epoch };
+        const view = this.d.mesh.read(rec.meshId);
+        let observation: import('./ports.js').CoordinatorObservation | undefined;
+        try { observation = await this.d.coordinator.observe?.(rec.meshId, rec.launchPlan); } catch { /* no observation is unknown */ }
+        return { success: true, phase: rec.phase, epoch: rec.epoch, actualHostDaemonId: view?.hostDaemonId, actualHostNodeId: view?.hostNodeId, observation };
     }
 
     discard(a: { handoffId: string; meshId: string }, sender: string): PeerResult {
+        if (this.activations.has(a.handoffId)) return fail('already_committed', 'activation readiness or apply in progress');
         const rec = this.d.journal.get(a.handoffId, 'target');
         if (!rec) return { success: true, duplicate: true };
         const wrong = this.requireSource(rec, sender); if (wrong) return wrong;
@@ -254,18 +278,8 @@ export class HostHandoffTarget {
                 }
             }
             if (rec.phase === 'activating') {
-                // Old journals without a verified v2 stop attestation cannot gain authority.
                 const certificate = this.d.journal.getCertificate(rec.handoffId);
-                if (!certificate?.sourceStopped) continue;
-                const manifest = this.d.journal.getManifest(rec.handoffId);
-                const verified = manifest && verifyStagedSnapshot(manifest, this.d.journal.getChunks(rec.handoffId), t => this.d.data.localColumns(t));
-                if (verified && verified.ok) {
-                    this.d.mesh.setFence(rec.meshId, { handoffId: rec.handoffId, epoch: rec.epoch });
-                    this.d.data.applySnapshot(rec.meshId, verified.payload);
-                    this.d.mesh.applyConfig(rec.meshId, verified.payload.config);
-                    this.d.mesh.writeHost(rec.meshId, { role: 'host', hostDaemonId: this.d.selfDaemonId, ...(this.d.selfNodeId?.(rec.meshId) ? { hostNodeId: this.d.selfNodeId(rec.meshId)! } : {}), hostEpoch: rec.epoch });
-                    await this.finishActivation(rec.handoffId, certificate);
-                }
+                if (certificate?.sourceStopped) await this.activate({ handoffId: rec.handoffId, meshId: rec.meshId, epoch: rec.epoch, certificate }, rec.peerDaemonId);
             }
         }
     }
@@ -273,6 +287,7 @@ export class HostHandoffTarget {
     async tick(): Promise<void> {
         const now = this.d.clock.now();
         for (const rec of this.d.journal.list().filter(r => r.role === 'target')) {
+            if (this.activations.has(rec.handoffId)) continue;
             if ((rec.phase === 'importing' || rec.phase === 'staged' || rec.phase === 'verified' || rec.phase === 'acked') && now - rec.updatedAt >= TARGET_STAGE_TTL_MS) {
                 this.discardInternal(rec, 'stage_ttl');
             }

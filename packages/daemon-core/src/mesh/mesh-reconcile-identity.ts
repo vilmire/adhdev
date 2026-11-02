@@ -54,6 +54,7 @@ export function resolveCoordinatorDaemonIds(components: DaemonComponents): strin
 // entirely.
 export function daemonHostsMesh(mesh: LocalMeshEntry, daemonIds: string[]): boolean {
     const host = mesh.meshHost;
+    if (host?.handoffFence !== undefined) return false;
     // No metadata → default host (standalone compatibility, see createDefaultMeshHostMetadata).
     if (!host) return true;
     if (host.role && host.role !== 'host') return false;

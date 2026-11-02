@@ -43,14 +43,22 @@ export function parseHandoffRecord(v: unknown): HandoffRecordView | null {
     }
 }
 
-export interface HandoffStatusView { enabled: boolean; source: HandoffRecordView | null }
+export interface HandoffEvidenceView { sourceStopped: boolean; sourceDaemonId?: string; sourceSessionIds: string[]; targetHost?: string; targetSession?: string; targetReady: boolean; targetVerified: boolean }
+export interface HandoffStatusView { evidence?: HandoffEvidenceView; enabled: boolean; source: HandoffRecordView | null }
 
 /** `enabled:false` on a daemon with the feature off; an older daemon (unknown verb) reads as disabled too. */
 export function parseHandoffStatus(raw: unknown): HandoffStatusView {
     const r = unwrapHandoffAnswer(raw)
     if (!r) return { enabled: false, source: null }
     if (r.success === false) return { enabled: false, source: null }
-    return { enabled: r.enabled === true, source: parseHandoffRecord(r.source) }
+    const proof = rec(r.evidence), target = rec(proof?.target), observed = rec(target?.observation), stop = rec(proof?.sourceStopProof)
+    const evidence = proof ? { sourceStopped: proof.sourceStopped === true,
+        ...(typeof proof.sourceDaemonId === 'string' ? { sourceDaemonId: proof.sourceDaemonId } : {}),
+        sourceSessionIds: Array.isArray(stop?.sessionIds) ? stop.sessionIds.filter((id: unknown): id is string => typeof id === 'string') : [],
+        ...(typeof target?.actualHostDaemonId === 'string' ? { targetHost: target.actualHostDaemonId } : {}),
+        ...(typeof observed?.sessionId === 'string' ? { targetSession: observed.sessionId } : {}),
+        targetReady: observed?.ready === true, targetVerified: observed?.runtimeVerified === true } : undefined
+    return { enabled: r.enabled === true, source: parseHandoffRecord(r.source), ...(evidence ? { evidence } : {}) }
 }
 
 export function parsePreflight(raw: unknown): { ok: boolean; checks: PreflightCheckView[]; error?: string } {
@@ -91,4 +99,4 @@ export const isHandoffTerminal = (phase: string): boolean => phase === 'committe
 export function canAbortHandoff(phase: string): boolean {
     return !isHandoffTerminal(phase) && phase !== 'activating' && phase !== 'uncertain'
 }
-export const canRetryHandoff = (phase: string): boolean => phase === 'acked' || phase === 'awaiting_ack' || phase === 'uncertain' || phase === 'activating'
+export const canRetryHandoff = (phase: string): boolean => phase === 'frozen' || phase === 'acked' || phase === 'awaiting_ack' || phase === 'uncertain' || phase === 'activating'

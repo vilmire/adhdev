@@ -1,3 +1,4 @@
+import { durableHandoffAdmissionFailure } from '../mesh/host-handoff/admission.js';
 import { cooperativeMaintenanceSpecs } from './low-family/cooperative-maintenance.js';
 import { maintenanceHoldSpecs } from './low-family/maintenance-hold.js';
 import { admitRouterCommandUnderNewWorkHold, isRouterCommandMaintenanceExempt } from '../maintenance/new-work-hold.js';
@@ -700,6 +701,8 @@ export class DaemonCommandRouter {
 
     private async requireMeshHostMutationOwner(meshId: string, inlineMesh: unknown, operation: string): Promise<CommandRouterResult | null> {
         const meshRecord = await this.getMeshForCommand(meshId, inlineMesh, { preferInline: true });
+        const durableFailure = durableHandoffAdmissionFailure(meshId);
+        if (durableFailure) return durableFailure;
         const mesh = meshRecord?.mesh;
         if (!mesh) return { success: false, error: 'Mesh not found' };
         const meshHost = resolveMeshHostStatus(mesh);

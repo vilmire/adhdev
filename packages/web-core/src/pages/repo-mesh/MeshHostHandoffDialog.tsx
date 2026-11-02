@@ -9,9 +9,10 @@ import { useTranslation } from 'react-i18next'
 import Dialog from '../../components/ui/Dialog'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     HANDOFF_STEPS, HOST_HANDOFF_COMMAND, canAbortHandoff, canRetryHandoff, isHandoffTerminal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
-    unwrapHandoffAnswer, type HandoffRecordView, type PreflightCheckView,
+    unwrapHandoffAnswer, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
 } from './host-handoff'
 
 type SendCommand = (daemonId: string, command: string, payload?: any) => Promise<any>
@@ -22,6 +23,7 @@ interface Props {
     meshId: string
     hostDaemonId: string
     daemons: RepoMeshDaemonEntry[]
+    projectNodes?: Array<{ id?: string; daemonId?: string; daemon_id?: string; machineLabel?: string; machine_label?: string; workspace?: string; nodeLabel?: string }>
     sendCommand: SendCommand
 }
 
@@ -31,18 +33,27 @@ function label(d: RepoMeshDaemonEntry): string {
     return d.machineNickname || d.nickname || d.hostname || d.id
 }
 
-export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, daemons, sendCommand }: Props) {
+export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, daemons, projectNodes = [], sendCommand }: Props) {
     const { t } = useTranslation('common')
     const [enabled, setEnabled] = useState<boolean | null>(null)
     const [target, setTarget] = useState('')
+    const [targetNode, setTargetNode] = useState('')
     const [checks, setChecks] = useState<PreflightCheckView[] | null>(null)
     const [preflightOk, setPreflightOk] = useState(false)
+    const [evidence, setEvidence] = useState<HandoffEvidenceView | undefined>()
     const [record, setRecord] = useState<HandoffRecordView | null>(null)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const sendRef = useRef(sendCommand)
     sendRef.current = sendCommand
-    const candidates = daemons.filter(d => d.id !== hostDaemonId)
+    const machines = [...daemons]
+    for (const node of projectNodes) {
+        const id = node.daemonId || node.daemon_id
+        if (id && !machines.some(d => daemonIdsEquivalent(d.id, id))) machines.push({ id, hostname: node.machineLabel || node.machine_label || id })
+    }
+    const candidates = machines.filter(d => !daemonIdsEquivalent(d.id, hostDaemonId))
+    const targetNodes = projectNodes.filter(n => !!(n.daemonId || n.daemon_id) && daemonIdsEquivalent(n.daemonId || n.daemon_id!, target))
+    const targetPayload = { targetDaemonId: target, ...(targetNode ? { targetNodeId: targetNode } : {}) }
 
     const call = useCallback(async (payload: Record<string, unknown>) => unwrapHandoffAnswer(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { meshId, ...payload })) ?? {}, [hostDaemonId, meshId])
 
@@ -51,21 +62,22 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
             const status = parseHandoffStatus(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { op: 'status', meshId }))
             setEnabled(status.enabled)
             setRecord(status.source)
+            setEvidence(status.evidence)
         } catch { setEnabled(false) }
     }, [hostDaemonId, meshId])
 
     useEffect(() => { if (open) { setError(null); void refresh() } }, [open, refresh])
     useEffect(() => {
-        if (!open || !record || isHandoffTerminal(record.phase)) return
+        if (!open || !record || record.phase === 'aborted' || record.phase === 'committed' && evidence?.targetReady) return
         const timer = setInterval(() => { void refresh() }, POLL_MS)
         return () => clearInterval(timer)
-    }, [open, record, refresh])
+    }, [open, record, evidence?.targetReady, refresh])
 
     const runPreflight = async () => {
         if (!target) return
         setBusy(true); setError(null)
         try {
-            const pf = parsePreflight(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { op: 'preflight', meshId, targetDaemonId: target }))
+            const pf = parsePreflight(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { op: 'preflight', meshId, ...targetPayload }))
             setChecks(pf.checks); setPreflightOk(pf.ok)
             if (pf.error) setError(pf.error)
         } catch (e: any) { setError(e?.message || 'failed') } finally { setBusy(false) }
@@ -73,7 +85,7 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
     const start = async () => {
         setBusy(true); setError(null)
         try {
-            const res = parseStartResult(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { op: 'start', meshId, targetDaemonId: target }))
+            const res = parseStartResult(await sendRef.current(hostDaemonId, HOST_HANDOFF_COMMAND, { op: 'start', meshId, ...targetPayload }))
             if (res.ok === false) { setError(res.code); return }
             await refresh()
         } catch (e: any) { setError(e?.message || 'failed') } finally { setBusy(false) }
@@ -103,13 +115,23 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
                         <label className="flex flex-col gap-1">
                             <span className="text-xs text-text-muted">{t('mesh.handoff.target')}</span>
                             <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle text-sm text-text-primary" value={target}
-                                onChange={e => { setTarget(e.target.value); setChecks(null); setPreflightOk(false) }} data-handoff-target>
+                                disabled={busy} onChange={e => {
+                                    const selected = e.target.value
+                                    setTarget(selected); setChecks(null); setPreflightOk(false)
+                                    const nodes = projectNodes.filter(n => !!(n.daemonId || n.daemon_id) && daemonIdsEquivalent(n.daemonId || n.daemon_id!, selected))
+                                    setTargetNode(nodes.length === 1 ? nodes[0]?.id || '' : '')
+                                }} data-handoff-target>
                                 <option value="">{t('mesh.handoff.pickTarget')}</option>
                                 {candidates.map(d => <option key={d.id} value={d.id}>{label(d)}</option>)}
                             </select>
                         </label>
+                        {targetNodes.length > 1 && <select className="w-full px-3 py-2 rounded-lg bg-bg-secondary border border-border-subtle" value={targetNode} disabled={busy}
+                            onChange={e => { setTargetNode(e.target.value); setChecks(null); setPreflightOk(false) }} data-handoff-target-node aria-label={t('mesh.handoff.targetWorkspace')}>
+                            <option value="">{t('mesh.handoff.pickWorkspace')}</option>
+                            {targetNodes.map(n => <option key={n.id} value={n.id}>{n.nodeLabel || n.workspace || n.id}</option>)}
+                        </select>}
                         <div className="flex gap-2">
-                            <button className="btn btn-secondary btn-sm" disabled={!target || busy} onClick={() => void runPreflight()} data-handoff-action="preflight">{t('mesh.handoff.preflight')}</button>
+                            <button className="btn btn-secondary btn-sm" disabled={!target || busy || (targetNodes.length > 1 && !targetNode)} onClick={() => void runPreflight()} data-handoff-action="preflight">{t('mesh.handoff.preflight')}</button>
                             <button className="btn btn-primary btn-sm" disabled={!preflightOk || busy} onClick={() => void start()} data-handoff-action="start">{t('mesh.handoff.start')}</button>
                         </div>
                         {checks && (
@@ -134,7 +156,12 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
                                 </li>
                             ))}
                         </ol>
-                        {record.phase === 'awaiting_ack' && <div data-handoff-ack-waiting>{t('mesh.handoff.awaitingAck')}</div>}
+                        {evidence && <dl className="text-xs" data-handoff-evidence>
+                            <dt>{t('mesh.handoff.actualHost')}</dt><dd data-handoff-actual-host>{evidence.targetHost || t('mesh.handoff.notVerified')}</dd>
+                            <dt>{t('mesh.handoff.actualSession')}</dt><dd data-handoff-actual-session>{evidence.targetVerified && evidence.targetSession || t('mesh.handoff.notVerified')}</dd>
+                            <dt>{t('mesh.handoff.sourceStop')}</dt><dd data-handoff-source-stop>{evidence.sourceStopped ? evidence.sourceSessionIds.join(', ') || t('mesh.handoff.stopVerified') : t('mesh.handoff.notVerified')}</dd>
+                        </dl>}
+                        {record.phase === 'awaiting_ack'  && <div data-handoff-ack-waiting>{t('mesh.handoff.awaitingAck')}</div>}
                         {record.phase === 'committed' && <AlertBanner variant="success">{t('mesh.handoff.done')}</AlertBanner>}
                         {record.phase === 'aborted' && <AlertBanner variant="warning">{t('mesh.handoff.aborted', { reason: record.abortReason || '' })}</AlertBanner>}
                         {uncertain && <AlertBanner variant="warning"><span data-handoff-uncertain>{t('mesh.handoff.uncertain')}</span></AlertBanner>}

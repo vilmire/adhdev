@@ -1,4 +1,5 @@
 import { assertSourceDependencyGraph } from './mesh-task-phase-dependencies.js';
+import { registerHandoffImportFunction } from './host-handoff/write-fence.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
@@ -155,6 +156,7 @@ export class MeshRuntimeStore {
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
         this.db = new (loadDatabaseCtor())(dbPath);
+        registerHandoffImportFunction(this.db);
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('synchronous = NORMAL');
         this.db.pragma('foreign_keys = ON');

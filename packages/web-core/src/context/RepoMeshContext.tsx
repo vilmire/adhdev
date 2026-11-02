@@ -56,6 +56,8 @@ export interface LaunchCoordinatorResult {
 export interface RepoMeshFeatures {
     /** Show "Mesh Host daemon" section with multi-daemon coordinator picker (cloud) */
     meshHostDaemonSection: boolean
+    /** Actual coordinator host migration is available in both owner dashboards. */
+    hostHandoff?: boolean
     /** Show daemon machine picker in "Create Mesh" form (cloud) */
     createDaemonPicker: boolean
     /** Show daemon machine picker in "Add Node" form (cloud) */
@@ -157,6 +159,7 @@ export interface RepoMeshContextValue {
 export const STANDALONE_FEATURES: RepoMeshFeatures = {
     // Multi-daemon UI — not applicable, standalone is single-machine
     meshHostDaemonSection: false,
+    hostHandoff: true,
     createDaemonPicker: false,
     addNodeDaemonPicker: false,
     // Functional features — both platforms
@@ -168,6 +171,7 @@ export const STANDALONE_FEATURES: RepoMeshFeatures = {
 export const CLOUD_FEATURES: RepoMeshFeatures = {
     // Multi-daemon UI — cloud supports multiple connected daemons
     meshHostDaemonSection: true,
+    hostHandoff: true,
     createDaemonPicker: true,
     addNodeDaemonPicker: true,
     // Functional features — both platforms

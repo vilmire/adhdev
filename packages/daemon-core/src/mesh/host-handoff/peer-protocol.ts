@@ -33,7 +33,7 @@ export async function handlePeerVerb(
     const source = engines.source;
     switch (verb) {
         case HOST_HANDOFF_VERB.capability:
-            return target ? target.capability({ handoffId, meshId, fromDaemonId: str(args.fromDaemonId) }, sender) : { success: false, code: 'peer_capability_unconfirmed' };
+            return target ? target.capability({ handoffId, meshId, fromDaemonId: str(args.fromDaemonId), launchPlan: args.launchPlan as never }, sender) : { success: false, code: 'peer_capability_unconfirmed' };
         case HOST_HANDOFF_VERB.chunk: {
             if (!target) return { success: false, code: 'peer_capability_unconfirmed' };
             const op = str(args.op);

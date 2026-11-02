@@ -21,13 +21,13 @@ describe('v2 single authority failure injection', () => {
         w.src.stopFailure = new Error('runtime census unavailable');
         const r = await start() as { handoffId: string };
         await settle(w);
-        expect(phase(w.src, r.handoffId, 'source')).toBe('acked');
+        expect(phase(w.src, r.handoffId, 'source')).toBe('frozen');
         expect(w.src.mesh.read(MESH)?.role).toBe('member');
         expect(w.net.sentVerbs('mesh_host_handoff_activate')).toHaveLength(0);
         expect(w.dst.coordinatorLaunches).toEqual([]);
         w.src.buildEngines();
         await w.src.source.resume();
-        expect(phase(w.src, r.handoffId, 'source')).toBe('acked');
+        expect(phase(w.src, r.handoffId, 'source')).toBe('frozen');
         w.src.stopFailure = null;
         await w.src.source.retry(r.handoffId);
         await settle(w);
@@ -90,6 +90,38 @@ describe('v2 single authority failure injection', () => {
         expect(w.dst.applyCalls).toBe(0);
         w.net.releaseAcks();
         await settle(w);
+    });
+
+    it('does not publish a discard tombstone or expire staging during awaited readiness', async () => {
+        w.net.holdAcks();
+        const r = await start() as { handoffId: string };
+        let release!: () => void, entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const waiting = new Promise<void>(resolve => { entered = resolve; });
+        (w.dst.target as any).d.coordinator.readiness = async () => { entered(); await gate; return { ok: true, checks: [] }; };
+        w.net.releaseAcks(); await waiting;
+        expect(w.dst.target.discard({ handoffId: r.handoffId, meshId: MESH }, SRC)).toMatchObject({ success: false, code: 'already_committed' });
+        w.clock.now += TARGET_STAGE_TTL_MS + 1; await w.dst.target.tick();
+        expect(phase(w.dst, r.handoffId, 'target')).not.toBe('discarded');
+        release(); await settle(w);
+        expect(phase(w.src, r.handoffId, 'source')).toBe('committed');
+        expect(w.dst.coordinatorLaunches).toHaveLength(1);
+    });
+
+    it('serializes restart recovery and peer retry across awaited readiness', async () => {
+        w.dst.applyFailure = new Error('injected partial activation');
+        const r = await start() as { handoffId: string }; await settle(w);
+        expect(phase(w.dst, r.handoffId, 'target')).toBe('activating');
+        w.dst.applyFailure = null;
+        let release!: () => void, entered!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        const waiting = new Promise<void>(resolve => { entered = resolve; });
+        (w.dst.target as any).d.coordinator.readiness = async () => { entered(); await gate; return { ok: true, checks: [] }; };
+        const resuming = w.dst.target.resume(); await waiting;
+        expect(await w.dst.target.activate({ handoffId: r.handoffId, meshId: MESH, epoch: 1, certificate: w.src.journal.getCertificate(r.handoffId)! }, SRC))
+            .toMatchObject({ success: false, code: 'handoff_in_progress' });
+        release(); await resuming;
+        expect(w.dst.coordinatorLaunches).toHaveLength(1);
     });
 
     it('does not report readiness on an active duplicate after failed target launch', async () => {
@@ -166,11 +198,11 @@ describe('acceptance 9: normal handoff', () => {
 
 describe('acceptance 10: failure injection leaves the source host, data intact, staging gone, hold released', () => {
     beforeEach(() => { w = makeWorld(); });
-    const expectSourceStillHost = (before: unknown) => {
+    const expectSourceStillHost = (before: unknown, stopped = true) => {
         expect(w.src.mesh.read(MESH)).toMatchObject({ role: 'host', hostEpoch: 0, handedOff: false });
         expect(w.src.dump()).toEqual(before);
         expect(w.src.holds.size).toBe(0);
-        expect(w.src.coordinatorStops).toEqual([]);
+        expect(w.src.coordinatorStops).toEqual(stopped ? [MESH] : []);
         expect(w.dst.mesh.read(MESH)).toMatchObject({ role: 'member' });
         expect(w.net.sentVerbs('mesh_host_handoff_activate')).toHaveLength(0);
     };
@@ -257,7 +289,7 @@ describe('acceptance 10: failure injection leaves the source host, data intact, 
         w.clock.now += HOST_HANDOFF_FREEZE_TIMEOUT_MS + 1;
         await w.src.source.tick();
         expect(w.src.journal.get(r.handoffId, 'source')).toMatchObject({ phase: 'aborted', abortReason: 'freeze_timeout' });
-        expectSourceStillHost(before);
+        expectSourceStillHost(before, false);
     });
 
     it('a target that disappears before verifying: its staged copy is discarded by TTL and never activates', async () => {
@@ -508,13 +540,13 @@ describe('acceptance 14: epoch enforcement of host-owned writes', () => {
 
 describe('acceptance 17: freeze', () => {
     beforeEach(() => { w = makeWorld(); });
-    it('holds the mesh for the whole handoff and nothing stops a worker or the coordinator before commit', async () => {
+    it('holds only the project and proves its coordinator stopped before snapshot transfer', async () => {
         w.net.holdAcks();
         const r = await start() as { handoffId: string };
         await w.src.source.idle();
         expect(w.src.holds.has(MESH)).toBe(true);
         expect(w.src.source.isFrozen(MESH)).toBe(true);
-        expect(w.src.coordinatorStops).toEqual([]);
+        expect(w.src.coordinatorStops).toEqual([MESH]);
         w.net.releaseAcks();
         await settle(w);
         expect(w.src.holds.has(MESH)).toBe(false);
@@ -549,7 +581,7 @@ describe('acceptance 18: preflight and old daemons', () => {
     });
     it('a target speaking another protocol version is refused too', async () => {
         const original = w.dst.target.capability.bind(w.dst.target);
-        w.dst.target.capability = ((a: never, s: string) => ({ ...original(a, s), protocol: 99 })) as never;
+        w.dst.target.capability = (async (a: never, s: string) => ({ ...await original(a, s), protocol: 99 })) as never;
         expect(await start()).toMatchObject({ success: false, code: 'peer_capability_unconfirmed' });
     });
     it('preflight reports each check: not a member, offline, not launchable, self', async () => {

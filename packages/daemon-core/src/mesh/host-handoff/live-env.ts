@@ -23,9 +23,12 @@ import { createWireAckClient, createWirePeerClient, type PeerDispatch } from './
 import { HostHandoffSource, type SourceDeps } from './source-machine.js';
 import { HostHandoffTarget } from './target-machine.js';
 import { exportSnapshot } from './snapshot-export.js';
-import { applySnapshotTables, localTableColumns } from './snapshot-import.js';
+import { applySnapshotTables, localTableColumns, approvalProjectResolver } from './snapshot-import.js';
+import { exportProjectApprovalFiles, importProjectApprovalFiles } from './project-files.js';
+import { resolveAssistantProject } from '../../assistant/assistant-projects.js';
+import { acquireHandoffWriteFence, releaseHandoffWriteFence, withHandoffImport } from './write-fence.js';
 import type { FreezeCheck, HandoffDataPort, HandoffHoldPort, HandoffMeshPort, HostMetaWrite } from './ports.js';
-import type { HostTransferCertificate } from './types.js';
+import type { HandoffLaunchPlan, HostTransferCertificate } from './types.js';
 
 export interface LiveHandoffHost {
     selfDaemonId: string;
@@ -33,9 +36,12 @@ export interface LiveHandoffHost {
     peerOnline(daemonId: string): boolean;
     /** This daemon's coordinator sessions of a mesh: idle / modal state, and stop. */
     coordinatorState(meshId: string): Array<{ sessionId: string; idle: boolean; modalParked: boolean }>;
-    stopCoordinators(meshId: string): Promise<void>;
+    stopCoordinators(meshId: string): Promise<void | HostTransferCertificate['sourceStopProof']>;
+    observeCoordinator(meshId: string, plan?: HandoffLaunchPlan): Promise<import('./ports.js').CoordinatorObservation>;
+    selectLaunch(meshId: string, targetNodeId?: string): HandoffLaunchPlan;
+    readiness(meshId: string, plan: HandoffLaunchPlan | undefined): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
     canLaunchCoordinator(meshId: string): boolean;
-    launchCoordinator(meshId: string, handoffId: string): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
+    launchCoordinator(meshId: string, handoffId: string, plan?: HandoffLaunchPlan): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
     selfNodeId(meshId: string): string | undefined;
     log(line: string): void;
 }
@@ -66,6 +72,8 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 const prior = mesh.meshHost?.handoffFence;
                 if (fence && prior && prior.handoffId !== fence.handoffId) throw new Error('another handoff holds the source fence');
                 if (!fence && prior && prior.handoffId !== expectedHandoffId) throw new Error('handoff fence identity changed');
+                const store = MeshRuntimeStore.getInstance().db;
+                if (!fence) releaseHandoffWriteFence(store as never, meshId, expectedHandoffId!, mesh.meshHost?.role === 'member' && mesh.meshHost?.handedOffTo?.handoffId === expectedHandoffId);
                 mesh.meshHost = { ...(mesh.meshHost ?? { role: 'host' }), ...(fence ? { handoffFence: fence } : {}) };
                 if (!fence) delete mesh.meshHost.handoffFence;
                 const saved = saveMeshConfigDurable(config);
@@ -84,6 +92,7 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 if (meta.hostPublicKey) next.originGrantPublicKey = meta.hostPublicKey;
                 if (meta.handedOffTo) next.handedOffTo = meta.handedOffTo;
                 mesh.meshHost = next as never;
+                if (meta.hostNodeId) mesh.coordinator = { ...mesh.coordinator, preferredNodeId: meta.hostNodeId };
                 // exactly one node carries the host flag
                 for (const n of mesh.nodes ?? []) {
                     const node = n as { daemonId?: string; role?: string };
@@ -101,9 +110,16 @@ export function createLiveMeshPort(): HandoffMeshPort {
                 const mesh = config.meshes.find(m => m.id === meshId);
                 if (!mesh) throw new Error(`mesh ${meshId} not found`);
                 // Host-owned configuration travels; this daemon's own pairing/secret state and its meshHost stay.
+                const localNodes = mesh.nodes ?? [];
                 const keep = { id: mesh.id, meshHost: mesh.meshHost };
                 const incoming = { ...snapshotConfig };
                 delete (incoming as Record<string, unknown>).meshHost;
+                if (Array.isArray(incoming.nodes)) incoming.nodes = incoming.nodes.map((node: any) => {
+                    const local = localNodes.find(n => n.id === node.id);
+                    if (!local) return node;
+                    if (!local.daemonId || !node.daemonId || !daemonIdsEquivalent(local.daemonId, node.daemonId)) throw new Error('target node identity changed during config apply');
+                    return { ...node, workspace: local.workspace };
+                });
                 Object.assign(mesh, incoming, keep);
                 saveMeshConfig(config);
             });
@@ -113,10 +129,23 @@ export function createLiveMeshPort(): HandoffMeshPort {
 
 export function createLiveDataPort(): HandoffDataPort {
     return {
-        exportSnapshot: (a) => exportSnapshot({ ...a, db: db() }),
+        freezeWrites: (meshId, handoffId, epoch) => acquireHandoffWriteFence(MeshRuntimeStore.getInstance().db as never, meshId, handoffId, epoch),
+        exportSnapshot: (a) => {
+            const config = readMeshConfigFromDisk();
+            if (!config) throw new Error('project inventory unavailable during approval snapshot');
+            const projectFiles = exportProjectApprovalFiles(getConfigDir(), a.meshId, ref => {
+                const resolved = resolveAssistantProject(ref, config.meshes);
+                return resolved.ok ? resolved.mesh.id : null;
+            });
+            return exportSnapshot({ ...a, db: db(), projectFiles });
+        },
         localColumns: localTableColumns(db() as never),
-        applySnapshot: (meshId, payload) => applySnapshotTables(db(), meshId, payload),
-        freeDiskBytes: () => { try { const s = statfsSync(getConfigDir()); return Number(s.bavail) * Number(s.bsize); } catch { return Number.MAX_SAFE_INTEGER; } },
+        applySnapshot: (meshId, payload, provenance) => {
+            const counts = withHandoffImport(MeshRuntimeStore.getInstance().db, meshId, () => applySnapshotTables(db(), meshId, payload, provenance));
+            importProjectApprovalFiles(getConfigDir(), meshId, payload.files, approvalProjectResolver(payload.config, meshId));
+            return counts;
+        },
+        freeDiskBytes: () => { try { const s = statfsSync(getConfigDir()); return Number(s.bavail) * Number(s.bsize); } catch { return 0; } },
         markHandedOff: (row) => {
             (MeshRuntimeStore.getInstance().db.prepare(
                 'INSERT INTO mesh_host_handed_off (mesh_id, handoff_id, new_host_daemon_id, epoch, handed_off_at, retain_until) VALUES (?,?,?,?,?,?) '
@@ -142,14 +171,20 @@ export function createLiveHoldPort(): HandoffHoldPort {
 
 export function liveFreezeCheck(host: LiveHandoffHost) {
     return async (meshId: string): Promise<FreezeCheck> => {
-        const raw = MeshRuntimeStore.getInstance().db as unknown as { prepare(sql: string): { get(...a: unknown[]): unknown } };
+        const raw = MeshRuntimeStore.getInstance().db as unknown as { prepare(sql: string): { get(...a: unknown[]): unknown; all(...a: unknown[]): any[] } };
         const table = raw.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'mesh_writer_stop_captures'").get();
-        if (table && raw.prepare('SELECT 1 AS open FROM mesh_writer_stop_captures WHERE settled = 0 LIMIT 1').get()) {
-            return { ready: false, code: 'writer_checkpoint_pending', detail: 'an unsettled writer stop capture exists' };
+        if (table) for (const row of raw.prepare('SELECT capture_json FROM mesh_writer_stop_captures WHERE settled = 0').all()) {
+            try {
+                const capture = JSON.parse(row.capture_json);
+                const request = JSON.parse(capture.requestKey);
+                if (!Array.isArray(request) || typeof request[0] !== 'string') throw new Error('unscoped capture');
+                if (request[0] === meshId) return { ready: false, code: 'writer_checkpoint_pending', detail: 'this project has an unsettled writer stop capture' };
+            } catch { return { ready: false, code: 'writer_checkpoint_pending', detail: 'writer checkpoint project identity is unverifiable' }; }
         }
         if (raw.prepare("SELECT 1 AS open FROM turn_attempts WHERE mesh_id = ? AND state = 'stopping' LIMIT 1").get(meshId)) {
             return { ready: false, code: 'writer_checkpoint_pending', detail: 'an attempt is stopping' };
         }
+        if (raw.prepare("SELECT 1 FROM turn_attempts WHERE mesh_id=? AND terminal_outcome IS NULL LIMIT 1").get(meshId)) return { ready: false, code: 'coordinator_not_quiescent', detail: 'project worker turns are still draining' };
         const busy = host.coordinatorState(meshId).filter(c => !c.idle || c.modalParked);
         if (busy.length) return { ready: false, code: 'coordinator_not_quiescent', detail: busy.map(b => b.sessionId).join(',') };
         return { ready: true };
@@ -184,9 +219,9 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
         // approval state. Fail closed even if the experimental flag is enabled;
         // the v2 protocol hardening alone is not a complete live migration.
         preservationCheck: () => ({ id: 'state_preservation', ok: false, code: 'state_preservation_unverified',
-            detail: 'Ledger, pending events, approval files and write-freeze coverage require verified transfer adapters before live handoff.' }),
+            detail: 'Project memory, pending-event adoption and file/config write-freeze coverage require verified transfer adapters before live handoff.' }),
         selfDaemonId: host.selfDaemonId, journal, mesh, data, hold: createLiveHoldPort(), freeze: { check: liveFreezeCheck(host) },
-        coordinator: { stopSource: (meshId) => host.stopCoordinators(meshId) }, certificate,
+        coordinator: { selectLaunch: (m, n) => host.selectLaunch(m, n), stopSource: (meshId) => host.stopCoordinators(meshId) }, certificate,
         peer: (target) => createWirePeerClient(host.dispatch, target), peerOnline: (d) => host.peerOnline(d), clock, log,
     };
     return {
@@ -194,7 +229,7 @@ export function createLiveHandoffEngines(host: LiveHandoffHost): LiveHandoffEngi
         source: new HostHandoffSource(sourceDeps),
         target: new HostHandoffTarget({
             selfDaemonId: host.selfDaemonId, journal, mesh, data, clock, certificate, log,
-            coordinator: { canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h) => host.launchCoordinator(m, h) },
+            coordinator: { observe: (m, p) => host.observeCoordinator(m, p), readiness: (m, p) => host.readiness(m, p), canLaunch: (m) => host.canLaunchCoordinator(m), launch: (m, h, p) => host.launchCoordinator(m, h, p) },
             ackClient: createWireAckClient(host.dispatch), selfNodeId: (m) => host.selfNodeId(m),
         }),
     };

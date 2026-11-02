@@ -1,3 +1,4 @@
+import { durableHandoffAdmissionFailure, withCoordinatorTransition } from '../../mesh/host-handoff/admission.js';
 import { resolveRoleLaunch, roleLaunchFailure, roleLaunchProvenance } from '../../launch-defaults/consumer.js';
 /**
  * RF-ROUTER HIGH family — mesh coordinator launch.
@@ -190,8 +191,7 @@ function isWorkspaceLocalPath(configPath: string, workspace: string): boolean {
     return resolvedConfig === resolvedWorkspace || resolvedConfig.startsWith(resolvedWorkspace + pathSep);
 }
 
-export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = {
-    launch_mesh_coordinator: async (ctx: HighFamilyContext, args: any) => {
+const launchCoordinator: HighFamilyHandler = async (ctx: HighFamilyContext, args: any) => {
                 const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
                 let cliType = typeof args?.cliType === 'string' ? args.cliType.trim() : '';
                 // Optional per-launch system-prompt addition. Dashboard or API
@@ -1007,6 +1007,18 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     LOG.error('MeshCoordinator', `Failed: ${e.message}`);
                     return { success: false, error: e.message };
                 }
+};
+
+export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = {
+    launch_mesh_coordinator: async (ctx, args) => {
+        const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
+        try {
+            return await withCoordinatorTransition(meshId, async () => {
+                const refused = durableHandoffAdmissionFailure(meshId);
+                if (refused) return refused;
+                return launchCoordinator(ctx, args);
+            });
+        } catch (e) { return { success: false, code: 'coordinator_transition_busy', error: (e as Error).message }; }
     },
 };
 

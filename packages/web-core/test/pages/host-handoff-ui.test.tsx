@@ -107,6 +107,32 @@ describe('MeshHostHandoffDialog', () => {
         expect((q('[data-handoff-action="abort"]') as HTMLButtonElement).disabled).toBe(false)
     })
 
+    it('binds a selected workspace and displays actual observed host/session plus source stop proof', async () => {
+        const calls: Array<Record<string, unknown>> = []
+        const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
+            calls.push(payload)
+            if (payload.op === 'status') return { success: true, enabled: true, source: null }
+            if (payload.op === 'preflight') return { success: false, ok: false, checks: [{ id: 'target_launchable', ok: false }] }
+            return { success: false }
+        })
+        act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m" hostDaemonId="daemon_host" daemons={daemons}
+            projectNodes={[{ id: 'chosen-node', daemonId: 'daemon_b', workspace: '/fixture/chosen' }, { id: 'other-node', daemonId: 'daemon_b', workspace: '/fixture/other' }]} sendCommand={send as never} />))
+        await flush()
+        await act(async () => { const select = q('[data-handoff-target]') as HTMLSelectElement; select.value = 'daemon_b'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+        expect((q('[data-handoff-action="preflight"]') as HTMLButtonElement).disabled).toBe(true)
+        await act(async () => { const select = q('[data-handoff-target-node]') as HTMLSelectElement; select.value = 'chosen-node'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+        await act(async () => { (q('[data-handoff-action="preflight"]') as HTMLButtonElement).click() })
+        await flush()
+        expect(calls.find(p => p.op === 'preflight')).toMatchObject({ meshId: 'm', targetDaemonId: 'daemon_b', targetNodeId: 'chosen-node' })
+        const status = { success: true, enabled: true, source: { handoffId: 'h', phase: 'committed' }, evidence: { sourceStopped: true, sourceDaemonId: 'daemon_host', sourceStopProof: { sessionIds: ['old-session'] }, target: { actualHostDaemonId: 'daemon_b', observation: { sessionId: 'actual-session', runtimeVerified: true, ready: true } } } }
+        expect(parseHandoffStatus(status).evidence).toMatchObject({ sourceStopped: true, sourceSessionIds: ['old-session'], targetHost: 'daemon_b', targetSession: 'actual-session', targetVerified: true })
+        act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m2" hostDaemonId="daemon_host" daemons={daemons} sendCommand={async () => status} />))
+        await flush()
+        expect(q('[data-handoff-actual-host]')?.textContent).toBe('daemon_b')
+        expect(q('[data-handoff-actual-session]')?.textContent).toBe('actual-session')
+        expect(q('[data-handoff-source-stop]')?.textContent).toBe('old-session')
+    })
+
     it('an uncertain switch disables abort and explains why; retry stays available', async () => {
         const send = vi.fn(async (_d: string, _c: string, p: Record<string, unknown>) => (p.op === 'status' ? { success: true, enabled: true, source: { handoffId: 'h2', phase: 'uncertain' } } : { success: true }))
         act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m" hostDaemonId="daemon_host" daemons={daemons} sendCommand={send as never} />))

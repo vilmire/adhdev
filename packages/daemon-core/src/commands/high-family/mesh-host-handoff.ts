@@ -11,7 +11,7 @@
  * a `host_handoff` card, whose owner approval calls `startHostHandoff`.
  */
 
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { loadConfig } from '../../config/config.js';
@@ -27,6 +27,12 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { collectBriefData, controlHostOf } from './assistant-session-control.js';
 import { stopProjectCoordinators } from '../../mesh/host-handoff/coordinator-stop.js';
 import { listCoordinatorsForMesh } from '../../mesh/coordinator-registry.js';
+import { classifyCoordinatorCensus } from '../../mesh/host-handoff/coordinator-observation.js';
+import { withCoordinatorTransition } from '../../mesh/host-handoff/admission.js';
+import { resolveRoleLaunch } from '../../launch-defaults/consumer.js';
+import { getMesh } from '../../config/mesh-config.js';
+import { resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
+import { inspectTargetReadiness } from '../../mesh/host-handoff/target-readiness.js';
 import { isTrustedOwnerIngress } from '../command-args.js';
 
 function str(v: unknown): string { return typeof v === 'string' ? v.trim() : ''; }
@@ -56,18 +62,83 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
         coordinatorState: (meshId) => listLocalCoordinatorSessions(ctx.deps as never, meshId),
         stopCoordinators: async (meshId) => {
             if (!ctx.deps.sessionHostControl?.listSessions) throw new Error('trusted runtime census unavailable');
-            await stopProjectCoordinators(meshId, {
+            return withCoordinatorTransition(meshId, () => stopProjectCoordinators(meshId, {
                 list: () => ctx.deps.sessionHostControl!.listSessions(),
                 registered: () => listCoordinatorsForMesh(meshId),
                 stop: (targetSessionId, cliType) => host.exec('stop_cli', { cliType, targetSessionId, mode: 'hard', reason: 'host_handoff' }),
+            }));
+        },
+        observeCoordinator: async (meshId, plan) => {
+            const checkedAt = Date.now();
+            if (!ctx.deps.sessionHostControl?.listSessions) return { ready: false, runtimeVerified: false, checkedAt };
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const records = await Promise.race([ctx.deps.sessionHostControl.listSessions(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('runtime census timeout')), 3_000); })]);
+                if (!Array.isArray(records) || records.some(r => !r || typeof r.sessionId !== 'string')) return { ready: false, runtimeVerified: false, checkedAt };
+                const registeredIds = new Set(listCoordinatorsForMesh(meshId).map(r => r.sessionId));
+                const census = classifyCoordinatorCensus(records, meshId, registeredIds);
+                if (!census.verified) return { ready: false, runtimeVerified: false, checkedAt };
+                const live = census.live;
+                const sessionId = live.length === 1 ? live[0]!.sessionId : undefined;
+                const registered = sessionId ? getCoordinatorForSession(sessionId) : undefined;
+                if (sessionId && plan) {
+                    const row = live[0]!;
+                    const selectedNode = getMesh(meshId)?.nodes.find(n => n.id === plan.targetNodeId);
+                    const launch = parseSessionLaunchRecord(row.meta?.launchRecord);
+                    const selection = launch?.roleLaunch?.selection;
+                    if (!selectedNode?.workspace || row.workspace !== selectedNode.workspace || registered?.workspace !== row.workspace
+                        || row.providerType !== plan.provider || registered?.cliType !== plan.provider
+                        || launch?.roleLaunch?.role !== 'coordinator' || selection?.provider !== plan.provider
+                        || selection?.model !== plan.model || selection?.thinkingLevel !== plan.thinkingLevel) return { ready: false, runtimeVerified: false, checkedAt, liveCount: live.length };
+                }
+                const { localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
+                const probe = sessionId ? localSessionReadyProbe(ctx.deps.cliManager?.adapters as never, sessionId) : undefined;
+                return { ready: !!sessionId && registered?.meshId === meshId && !!probe?.(), runtimeVerified: true, liveCount: live.length, checkedAt, ...(sessionId ? { sessionId } : {}) };
+            } catch { return { ready: false, runtimeVerified: false, checkedAt }; }
+            finally { if (timer) clearTimeout(timer); }
+        },
+        selectLaunch: (meshId, targetNodeId) => {
+            const resolved = resolveRoleLaunch(ctx, 'coordinator', {}, meshId);
+            if (!resolved.ok) throw new Error(`Coordinator selection unavailable: ${resolved.reason}`);
+            if (!targetNodeId) throw new Error('An explicit target project workspace is required.');
+            return { ...resolved.selection, targetNodeId };
+        },
+        readiness: async (meshId, plan) => {
+            const mesh = getMesh(meshId);
+            if (!mesh) return { ok: false, checks: [{ id: 'target_project', ok: false }] };
+            return inspectTargetReadiness({ selfDaemonId, mesh: mesh as never, plan,
+                validateSelection: selection => {
+                    const { targetNodeId: _targetNodeId, ...override } = selection;
+                    const resolved = resolveRoleLaunch(ctx, 'coordinator', override);
+                    return resolved.ok && JSON.stringify(resolved.selection) === JSON.stringify({ provider: selection.provider,
+                        ...(selection.model !== undefined ? { model: selection.model } : {}),
+                        ...(selection.thinkingLevel !== undefined ? { thinkingLevel: selection.thinkingLevel } : {}) });
+                },
+                provider: selection => {
+                    const provider = ctx.deps.providerLoader.resolve?.(selection.provider) || ctx.deps.providerLoader.getMeta(selection.provider);
+                    return provider?.spawn ? provider as never : undefined;
+                },
+                coordinatorCapable: (selection, workspace) => {
+                    const provider = ctx.deps.providerLoader.resolve?.(selection.provider) || ctx.deps.providerLoader.getMeta(selection.provider);
+                    const setup = resolveMeshCoordinatorSetup({ provider, cliType: selection.provider, meshId, workspace });
+                    return setup.kind !== 'unsupported' && setup.kind !== 'manual';
+                },
+                census: () => {
+                    if (!ctx.deps.sessionHostControl?.listSessions) throw new Error('trusted runtime census unavailable');
+                    return ctx.deps.sessionHostControl.listSessions();
+                },
             });
         },
         canLaunchCoordinator: (meshId) => {
             const mesh = createLiveMeshPort().read(meshId);
             return !!mesh && (mesh.role === 'member' || mesh.role === 'host');
         },
-        launchCoordinator: async (meshId, handoffId) => {
-            const out = await host.exec('launch_mesh_coordinator', { meshId, managedByAssistant: true });
+        launchCoordinator: async (meshId, handoffId, plan) => {
+            if (!plan?.targetNodeId) return { success: false, ready: false };
+            const census = await liveHost(ctx).observeCoordinator(meshId, plan);
+            if (!census.runtimeVerified) return { success: false, ready: false };
+            if (census.liveCount) return { success: !!census.sessionId, sessionId: census.sessionId, ready: census.ready };
+            const out = await host.exec('launch_mesh_coordinator', { meshId, managedByAssistant: true, coordinatorNodeId: plan.targetNodeId, cliType: plan.provider, initialModel: plan.model, initialThinkingLevel: plan.thinkingLevel });
             const sessionId = str(out?.sessionId);
             if (out?.success !== true || !sessionId) return { success: false, ready: false };
             const { localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
@@ -81,7 +152,8 @@ function liveHost(ctx: HighFamilyContext): LiveHandoffHost {
                     await host.exec('send_chat', { targetSessionId: sessionId, text: brief.text, origin: 'assistant', policy: { mode: 'queue' }, messageId: brief.messageId });
                 } catch (e) { LOG.warn('HostHandoff', `restart brief not delivered: ${(e as Error)?.message ?? e}`); }
             }
-            return { success: true, sessionId, ready };
+            const observed = await liveHost(ctx).observeCoordinator(meshId, plan);
+            return { success: true, sessionId, ready: ready && observed.ready && observed.sessionId === sessionId };
         },
         selfNodeId: (meshId) => {
             const mesh = createLiveMeshPort().read(meshId);
@@ -126,7 +198,7 @@ const ownerVerb: HighFamilyHandler = async (ctx, args) => {
         if (!meshId && !handoffId) return { success: true, enabled: true };
         const source = e.source.status({ ...(handoffId ? { handoffId } : {}), ...(meshId ? { meshId } : {}) });
         const target = handoffId ? e.journal.get(handoffId, 'target') : meshId ? e.journal.list(meshId).filter(r => r.role === 'target').sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null : null;
-        return { success: true, enabled: true, source, target };
+        return { success: true, enabled: true, source, target, ...(source ? { evidence: await e.source.evidence(source.handoffId) } : {}) };
     }
     if (!meshId && !handoffId) return { success: false, code: 'invalid_args', error: 'meshId or handoffId required' };
     if (op === 'preflight' || op === 'start') {

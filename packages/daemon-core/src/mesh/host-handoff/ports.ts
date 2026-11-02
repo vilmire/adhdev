@@ -7,7 +7,7 @@
  */
 
 import type { ExportedSnapshot, SnapshotPayload } from './snapshot-export.js';
-import type { HandoffManifest, HostTransferCertificate } from './types.js';
+import type { HandoffManifest, HandoffLaunchPlan, HostTransferCertificate } from './types.js';
 
 export interface HostMeshView {
     role: 'host' | 'member';
@@ -45,10 +45,12 @@ export interface HandoffMeshPort {
 }
 
 export interface HandoffDataPort {
-    exportSnapshot(a: { meshId: string; handoffId: string; fromDaemonId: string; toDaemonId: string; hostEpoch: number; meshConfig: unknown }): ExportedSnapshot;
+    /** Cut the selected project's SQLite writers after coordinator exit, before export/import. */
+    freezeWrites?(meshId: string, handoffId: string, epoch: number): void;
+    exportSnapshot(a: { meshId: string; handoffId: string; fromDaemonId: string; toDaemonId: string; hostEpoch: number; meshConfig: unknown; launchPlan?: HandoffLaunchPlan }): ExportedSnapshot;
     localColumns(table: string): string[];
     /** One transaction: replace the mesh's host-owned rows with the snapshot. */
-    applySnapshot(meshId: string, payload: SnapshotPayload): Record<string, number>;
+    applySnapshot(meshId: string, payload: SnapshotPayload, provenance?: { handoffId: string; sourceDaemonId: string; snapshotDigest: string }): Record<string, number>;
     freeDiskBytes(): number;
     /** Source: record that the mesh's host-owned data is now read-only history. */
     markHandedOff(row: { meshId: string; handoffId: string; newHostDaemonId: string; epoch: number; handedOffAt: number; retainUntil: number }): void;
@@ -69,14 +71,19 @@ export interface HandoffFreezePort {
 }
 
 export interface SourceCoordinatorPort {
+    selectLaunch?(meshId: string, targetNodeId?: string): HandoffLaunchPlan;
     /** Resolve only after the trusted runtime census proves all project coordinators stopped. */
-    stopSource(meshId: string): Promise<void>;
+    stopSource(meshId: string): Promise<void | HostTransferCertificate['sourceStopProof']>;
 }
 
+export interface CoordinatorObservation { liveCount?: number; ready: boolean; sessionId?: string; runtimeVerified: boolean; checkedAt: number }
+
 export interface TargetCoordinatorPort {
+    observe?(meshId: string, plan?: HandoffLaunchPlan): Promise<CoordinatorObservation>;
+    readiness?(meshId: string, plan: HandoffLaunchPlan | undefined): Promise<{ ok: boolean; checks: Array<{ id: string; ok: boolean; detail?: string }> }>;
     canLaunch(meshId: string): boolean;
     /** Launch the coordinator on the new host with the restart brief; `ready` = it reached ready. */
-    launch(meshId: string, handoffId: string): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
+    launch(meshId: string, handoffId: string, plan?: HandoffLaunchPlan): Promise<{ success: boolean; sessionId?: string; ready: boolean }>;
 }
 
 export interface CertificatePort {
