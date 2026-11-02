@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HANDOFF_CANARY_PROMPT, runTargetCanary, type RegisteredCanaryProvider } from '../../../src/mesh/host-handoff/target-canary.js';
+import { HANDOFF_CANARY_PROMPT, describeCanaryContract, runTargetCanary, type RegisteredCanaryProvider } from '../../../src/mesh/host-handoff/target-canary.js';
 
 function registered(script: string): RegisteredCanaryProvider {
     return { type: 'fixture-cli', spawn: { command: process.execPath }, hostHandoffCanary: { version: 1,
@@ -23,9 +23,14 @@ describe.skipIf(process.platform === 'win32')('target-local bounded authenticati
 
     it('refuses missing isolation/budget contract and a mismatched provider before spawn', async () => {
         expect(await runTargetCanary({ type: 'fixture-cli', spawn: { command: process.execPath } }, { provider: 'fixture-cli' }))
-            .toMatchObject({ ok: false, terminated: true, code: 'canary_contract_unsupported' });
+            .toMatchObject({ ok: false, terminated: true, code: 'canary_contract_unsupported', detail: 'canary_contract_unsupported: missing_declaration:fixture-cli' });
         expect(await runTargetCanary(registered('process.exit(99)'), { provider: 'different-provider' }))
-            .toMatchObject({ ok: false, code: 'canary_contract_unsupported' });
+            .toMatchObject({ ok: false, code: 'canary_contract_unsupported', detail: 'canary_contract_unsupported: provider_mismatch' });
+        const missingToken = registered('process.exit(99)');
+        missingToken.hostHandoffCanary = { ...missingToken.hostHandoffCanary!, args: ['{{prompt}}', '{{maxTurns}}', '{{model}}'] };
+        expect(describeCanaryContract(missingToken, { provider: 'fixture-cli', model: 'chosen-model' })).toBe('canary_contract_unsupported: missing_max_output_tokens_binding');
+        expect(await runTargetCanary(missingToken, { provider: 'fixture-cli', model: 'chosen-model' }))
+            .toMatchObject({ ok: false, code: 'canary_contract_unsupported', detail: 'canary_contract_unsupported: missing_max_output_tokens_binding' });
     });
 
     it('fails closed on timeout after terminating only its private process group', async () => {

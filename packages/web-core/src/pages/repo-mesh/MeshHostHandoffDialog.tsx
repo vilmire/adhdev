@@ -12,7 +12,7 @@ import type { RepoMeshDaemonEntry } from '../../context/RepoMeshContext'
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared'
 import {
     HANDOFF_STEPS, HOST_HANDOFF_COMMAND, canAbortHandoff, canRetryHandoff, isHandoffTerminal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
-    unwrapHandoffAnswer, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
+    unwrapHandoffAnswer, canaryProbeRefusal, type HandoffRecordView, type HandoffEvidenceView, type PreflightCheckView,
 } from './host-handoff'
 
 type SendCommand = (daemonId: string, command: string, payload?: any) => Promise<any>
@@ -134,6 +134,12 @@ export function MeshHostHandoffDialog({ open, onClose, meshId, hostDaemonId, dae
                             <button className="btn btn-secondary btn-sm" disabled={!target || busy || (targetNodes.length > 1 && !targetNode)} onClick={() => void runPreflight()} data-handoff-action="preflight">{t('mesh.handoff.preflight')}</button>
                             <button className="btn btn-primary btn-sm" disabled={!preflightOk || busy} onClick={() => void start()} data-handoff-action="start">{t('mesh.handoff.start')}</button>
                         </div>
+                        {checks && canaryProbeRefusal(checks) && (
+                            <AlertBanner variant="warning">
+                                <span data-handoff-canary-unsupported>{t('mesh.handoff.canaryUnsupported')}</span>
+                                <span className="block text-xs" data-handoff-canary-detail>{canaryProbeRefusal(checks)}</span>
+                            </AlertBanner>
+                        )}
                         {checks && (
                             <ul className="flex flex-col gap-1" data-handoff-checks>
                                 {checks.map(c => (

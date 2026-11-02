@@ -6,7 +6,9 @@ import { mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { describeCanaryContract, type HostHandoffCanarySpec } from '../../shared/host-handoff-canary-contract.js';
 
+export { describeCanaryContract };
 export const HANDOFF_CANARY_PROMPT = 'Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.';
 export const HANDOFF_CANARY_OUTPUT = 'ADHDEV_HANDOFF_READY';
 export const HANDOFF_CANARY_TIMEOUT_MS = 15_000;
@@ -16,17 +18,13 @@ export interface RegisteredCanaryProvider {
     type: string;
     spawn: { command: string };
     /** Local installed-provider contract, not accepted in wire arguments. */
-    hostHandoffCanary?: {
-        version: 1;
-        privateContextDisabled: true;
-        toolsDisabled: true;
-        /** Must contain all fixed budget/prompt substitutions. No shell/interpolation. */
-        args: string[];
-    };
+    hostHandoffCanary?: HostHandoffCanarySpec;
 }
 export interface CanaryEvidence {
     ok: boolean;
     code?: string;
+    /** Stable refusal text. The code stays `canary_contract_unsupported`; this names the missing binding. */
+    detail?: string;
     canaryId: string;
     provider: string;
     selection: CanarySelection;
@@ -40,17 +38,12 @@ export interface CanaryEvidence {
 export async function runTargetCanary(provider: RegisteredCanaryProvider, selection: CanarySelection,
     options: { env?: NodeJS.ProcessEnv; timeoutMs?: number; parentDir?: string } = {}): Promise<CanaryEvidence> {
     const startedAt = Date.now(), canaryId = randomUUID();
-    const result = (ok: boolean, terminated: boolean, code?: string): CanaryEvidence => ({ ok, terminated, ...(code ? { code } : {}),
+    const result = (ok: boolean, terminated: boolean, code?: string, detail?: string): CanaryEvidence => ({ ok, terminated, ...(code ? { code } : {}), ...(detail ? { detail } : {}),
         canaryId, provider: selection.provider, selection, startedAt, finishedAt: Date.now(), maxTurns: 1, maxOutputTokens: 32 });
-    const spec = provider.hostHandoffCanary;
     if (process.platform === 'win32') return result(false, true, 'canary_process_group_unsupported');
-    if (provider.type !== selection.provider || !spec || spec.version !== 1 || spec.privateContextDisabled !== true || spec.toolsDisabled !== true
-        || !Array.isArray(spec.args) || spec.args.some(a => typeof a !== 'string' || a.includes('\0')) || !provider.spawn?.command
-        || (selection.model !== undefined && !spec.args.some(a => a.includes('{{model}}')))
-        || (selection.thinkingLevel !== undefined && !spec.args.some(a => a.includes('{{thinkingLevel}}')))
-        || !['{{prompt}}', '{{maxTurns}}', '{{maxOutputTokens}}'].every(token => spec.args.some(a => a.includes(token)))) {
-        return result(false, true, 'canary_contract_unsupported');
-    }
+    const refusal = describeCanaryContract(provider, selection);
+    if (refusal) return result(false, true, 'canary_contract_unsupported', refusal);
+    const spec = provider.hostHandoffCanary!;
     const root = mkdtempSync(join(options.parentDir ?? tmpdir(), 'adhdev-host-canary-'));
     const config = join(root, 'config'), workspace = join(root, 'workspace');
     mkdirSync(config, { mode: 0o700 }); mkdirSync(workspace, { mode: 0o700 });

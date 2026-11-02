@@ -32,6 +32,6 @@ describe('exact target readiness without release/deployment prerequisites', () =
         p.mesh.repoIdentity = 'example.invalid/owner/project'; p.census = async () => { throw new Error('unresponsive'); };
         expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'session_runtime')?.ok).toBe(false);
         p.census = async () => []; p.provider = () => ({ type: 'fixture-cli', spawn: { command: process.execPath } });
-        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'provider_auth_canary')).toMatchObject({ ok: false, detail: 'canary_contract_unsupported' });
+        expect((await inspectTargetReadiness(p)).checks.find(c => c.id === 'provider_auth_canary')).toMatchObject({ ok: false, detail: 'canary_contract_unsupported: missing_declaration:fixture-cli' });
     });
 });

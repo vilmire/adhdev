@@ -379,6 +379,23 @@
       "type": "string",
       "description": "For a provider with no thinkingLaunchArgs but a runtime reasoning-effort control (e.g. hermes 'reasoning'), the controls[].id to drive at launch for the thinking level. The control's setScript is invoked with { value: <mapped level> }."
     },
+    "hostHandoffCanary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "privateContextDisabled", "toolsDisabled", "args"],
+      "description": "Optional bounded host-handoff auth probe. Absence means this provider is explicitly unsupported for that probe and readiness must refuse before the current source is stopped. Declare it only when the installed CLI has real arguments for the fixed prompt, one turn, 32 output tokens, and the selected model and thinking level, with tools and private context disabled. A placeholder in an unused flag is not a declaration.",
+      "properties": {
+        "version": { "const": 1 },
+        "privateContextDisabled": { "const": true },
+        "toolsDisabled": { "const": true },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Argv template. The loader also requires the substitutions {{prompt}}, {{maxTurns}}, and {{maxOutputTokens}}, plus {{model}} or {{thinkingLevel}} when that selection axis exists."
+        }
+      }
+    },
     "sendDelayMs": {
       "type": "number",
       "minimum": 0,

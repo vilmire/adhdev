@@ -10,7 +10,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MeshHostHandoffDialog } from '../../src/pages/repo-mesh/MeshHostHandoffDialog'
 import {
-    canAbortHandoff, canRetryHandoff, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
+    canAbortHandoff, canRetryHandoff, canaryProbeRefusal, parseHandoffStatus, parsePreflight, parseStartResult, phaseToStep,
 } from '../../src/pages/repo-mesh/host-handoff'
 import { parseStagedList } from '../../src/components/dashboard/assistant-staged'
 import { parseFailoverModes } from '../../src/components/dashboard/AssistantControlSettings'
@@ -35,6 +35,9 @@ describe('host-handoff parsing', () => {
             .toMatchObject({ ok: false, checks: [{ id: 'target_online', ok: false, code: 'target_offline' }, { id: 'is_host', ok: true }] })
         expect(parseStartResult({ success: true, handoffId: 'h1', phase: 'freezing' })).toEqual({ ok: true, handoffId: 'h1', phase: 'freezing' })
         expect(parseStartResult({ success: false, code: 'handoff_in_progress' })).toEqual({ ok: false, code: 'handoff_in_progress' })
+        const nested = JSON.stringify([{ id: 'provider_auth_canary', ok: false, detail: 'canary_contract_unsupported: missing_declaration:codex-cli' }])
+        expect(canaryProbeRefusal([{ id: 'target_launchable', ok: false, code: 'target_not_launchable', detail: nested }])).toBe('canary_contract_unsupported: missing_declaration:codex-cli')
+        expect(canaryProbeRefusal([{ id: 'is_host', ok: true }])).toBeNull()
     })
 })
 
@@ -131,6 +134,25 @@ describe('MeshHostHandoffDialog', () => {
         expect(q('[data-handoff-actual-host]')?.textContent).toBe('daemon_b')
         expect(q('[data-handoff-actual-session]')?.textContent).toBe('actual-session')
         expect(q('[data-handoff-source-stop]')?.textContent).toBe('old-session')
+    })
+
+    it('explains an unsupported canary and keeps start disabled so the source is not stopped', async () => {
+        const nested = JSON.stringify([{ id: 'provider_auth_canary', ok: false, detail: 'canary_contract_unsupported: missing_max_output_tokens_binding' }])
+        const send = vi.fn(async (_d: string, _c: string, payload: Record<string, unknown>) => {
+            if (payload.op === 'status') return { success: true, enabled: true, source: null }
+            if (payload.op === 'preflight') return { success: false, ok: false, checks: [{ id: 'target_launchable', ok: false, code: 'target_not_launchable', detail: nested }] }
+            if (payload.op === 'start') return { success: true, handoffId: 'should-not-start', phase: 'freezing' }
+            return { success: true }
+        })
+        act(() => root.render(<MeshHostHandoffDialog open onClose={() => {}} meshId="m" hostDaemonId="daemon_host" daemons={daemons} sendCommand={send as never} />))
+        await flush()
+        await act(async () => { const select = q('[data-handoff-target]') as HTMLSelectElement; select.value = 'daemon_b'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+        await act(async () => { (q('[data-handoff-action="preflight"]') as HTMLButtonElement).click() })
+        await flush()
+        expect(q('[data-handoff-canary-unsupported]')).not.toBeNull()
+        expect(q('[data-handoff-canary-detail]')?.textContent).toContain('missing_max_output_tokens_binding')
+        expect((q('[data-handoff-action="start"]') as HTMLButtonElement).disabled).toBe(true)
+        expect(send.mock.calls.some(call => (call[2] as { op?: string }).op === 'start')).toBe(false)
     })
 
     it('an uncertain switch disables abort and explains why; retry stays available', async () => {

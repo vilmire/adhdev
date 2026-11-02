@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { validateProviderDefinition } from '../../src/providers/provider-schema.js'
+import { validateCliProviderManifest } from '../../src/providers/sdk/v1/validators/manifest.js'
 
 describe('validateProviderDefinition', () => {
   const baseCapabilities = {
@@ -123,6 +124,20 @@ describe('validateProviderDefinition', () => {
       modes: [{ id: 'future', label: 'Future', strategy: 'post-boot-command', risk: 'safe' }],
     }))
     expect(result.errors).toContain('autoApproveModes.modes[0].strategy post-boot-command is reserved and unsupported in v1')
+  })
+
+  it('accepts only a complete host handoff canary and treats absence as unsupported', () => {
+    const base = { type: 'foo-cli', name: 'Foo CLI', category: 'cli', binary: 'foo', spawn: { command: 'foo' }, modelLaunchArgs: ['--model', '{{model}}'], thinkingLaunchArgs: ['--effort', '{{level}}'] }
+    expect(validateProviderDefinition(base).errors).toEqual([])
+    expect(validateCliProviderManifest(base).ok).toBe(true)
+    const complete = { ...base, hostHandoffCanary: { version: 1, privateContextDisabled: true, toolsDisabled: true, args: ['--prompt', '{{prompt}}', '--turns', '{{maxTurns}}', '--max-tokens', '{{maxOutputTokens}}', '--model', '{{model}}', '--effort', '{{thinkingLevel}}'] } }
+    expect(validateProviderDefinition(complete).errors).toEqual([])
+    expect(validateCliProviderManifest(complete).ok).toBe(true)
+    const missingToken = { ...base, hostHandoffCanary: { version: 1, privateContextDisabled: true, toolsDisabled: true, args: ['{{prompt}}', '{{maxTurns}}', '{{model}}', '{{thinkingLevel}}'] } }
+    expect(validateProviderDefinition(missingToken).errors.join('\n')).toContain('missing_max_output_tokens_binding')
+    expect(validateCliProviderManifest(missingToken).ok).toBe(true)
+    expect(validateProviderDefinition({ ...base, hostHandoffCanary: { version: 1 } }).errors.join('\n')).toContain('declaration_incomplete')
+    expect(validateCliProviderManifest({ ...base, hostHandoffCanary: { version: 1, privateContextDisabled: false, toolsDisabled: true, args: ['{{prompt}}'] } }).ok).toBe(false)
   })
 
   it('accepts a valid CLI provider with typed controls and explicit capabilities', () => {

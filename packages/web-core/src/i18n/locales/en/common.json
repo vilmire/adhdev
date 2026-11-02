@@ -1400,6 +1400,7 @@
             "close": "Close",
             "open": "Move host…",
             "disabled": "Host handoff is experimental and off on this machine (experimental.hostHandoff).",
+            "canaryUnsupported": "This coordinator has no bounded handoff probe, so the current source is not stopped. A supported provider must declare a version 1 probe with tools and private context disabled, and real arguments for the prompt, one turn, 32 output tokens, and the selected model and thinking level. No installed provider declares that probe.",
             "explain": "The host keeps the queue, missions and decisions. Moving it copies them to the chosen machine, checks the copy, and only then switches. Running work is not interrupted; new work is held until it finishes.",
             "target": "New host machine",
             "pickTarget": "Choose a machine…",

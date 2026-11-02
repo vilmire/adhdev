@@ -61,6 +61,27 @@ export function parseHandoffStatus(raw: unknown): HandoffStatusView {
     return { enabled: r.enabled === true, source: parseHandoffRecord(r.source), ...(evidence ? { evidence } : {}) }
 }
 
+/** Nested target readiness is stored as JSON on `target_launchable.detail`. A missing bounded probe must be visible before start. */
+export function canaryProbeRefusal(checks: readonly PreflightCheckView[]): string | null {
+    const nested: PreflightCheckView[] = []
+    for (const check of checks) {
+        if (check.ok || typeof check.detail !== 'string') continue
+        if (check.detail.includes('canary_contract_unsupported')) nested.push(check)
+        if (check.id !== 'target_launchable') continue
+        try {
+            const parsed = JSON.parse(check.detail) as unknown
+            if (!Array.isArray(parsed)) continue
+            for (const item of parsed) {
+                const row = rec(item)
+                if (row && row.ok === false && typeof row.detail === 'string' && row.detail.includes('canary_contract_unsupported')) {
+                    nested.push({ id: typeof row.id === 'string' ? row.id : 'provider_auth_canary', ok: false, detail: row.detail })
+                }
+            }
+        } catch { /* a non-JSON launch detail is shown as its own check */ }
+    }
+    return nested.find(row => row.id === 'provider_auth_canary')?.detail ?? nested[0]?.detail ?? null
+}
+
 export function parsePreflight(raw: unknown): { ok: boolean; checks: PreflightCheckView[]; error?: string } {
     const r = unwrapHandoffAnswer(raw)
     if (!r) return { ok: false, checks: [], error: 'no_answer' }

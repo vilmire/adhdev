@@ -1,4 +1,5 @@
 import { validateDriverProviderManifest } from './sdk/v1/validators/manifest.js';
+import { describeCanaryContract, type CanaryContractProvider } from '../shared/host-handoff-canary-contract.js';
 import type { ProviderModule } from './contracts.js';
 import type { ProviderControlDef, ProviderControlType } from './provider-control-contracts.js';
 import { deriveAutoApproveModeRisk } from './auto-approve-modes.js'
@@ -90,6 +91,9 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'thinkingLevelMap',
   'thinkingLevelOptions',
   'thinkingControlId',
+  // Bounded host-handoff probe. Absence is an explicit unsupported provider.
+  // A present object must name real prompt, turn, token, and selection bindings.
+  'hostHandoffCanary',
   'sendDelayMs',
   'sendKey',
   'submitStrategy',
@@ -184,6 +188,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
 
   validateCapabilities(provider as unknown as ProviderModule, controls, errors)
+  validateHostHandoffCanary(provider, errors)
   validateNativeHistory(provider.nativeHistory, errors)
   validateMeshCoordinator(provider.meshCoordinator, errors)
   validateAutoApproveModes(provider.autoApproveModes, errors)
@@ -281,6 +286,26 @@ export function validateAutoApproveModes(raw: unknown, errors: string[]): void {
   if (defaultModeId && !ids.has(defaultModeId)) {
     errors.push(`autoApproveModes.default must reference an existing mode id: ${defaultModeId}`)
   }
+}
+
+function validateHostHandoffCanary(provider: Record<string, unknown>, errors: string[]): void {
+  if (provider.hostHandoffCanary === undefined) return
+  const spec = provider.hostHandoffCanary
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    errors.push('hostHandoffCanary must be an object')
+    return
+  }
+  const spawn = provider.spawn && typeof provider.spawn === 'object' ? provider.spawn as Record<string, unknown> : {}
+  const declared: CanaryContractProvider = {
+    type: typeof provider.type === 'string' ? provider.type : '',
+    spawn: { command: typeof spawn.command === 'string' ? spawn.command : '' },
+    hostHandoffCanary: spec as CanaryContractProvider['hostHandoffCanary'],
+  }
+  const selection: { provider: string; model?: string; thinkingLevel?: string } = { provider: declared.type }
+  if (Array.isArray(provider.modelLaunchArgs) && provider.modelLaunchArgs.length > 0) selection.model = 'selected'
+  if (Array.isArray(provider.thinkingLaunchArgs) && provider.thinkingLaunchArgs.length > 0) selection.thinkingLevel = 'selected'
+  const refusal = describeCanaryContract(declared, selection)
+  if (refusal) errors.push(`hostHandoffCanary: ${refusal}`)
 }
 
 function validateCapabilities(provider: ProviderModule, controls: ProviderControlDef[], errors: string[]): void {

@@ -1403,6 +1403,7 @@
             "close": "Cerrar",
             "open": "Trasladar host…",
             "disabled": "El traslado de host es experimental y está desactivado en esta máquina (experimental.hostHandoff).",
+            "canaryUnsupported": "Este coordinador no tiene una sonda de traslado acotada, así que el origen actual no se detiene. Un proveedor admitido debe declarar una sonda versión 1 con herramientas y contexto privado desactivados, y argumentos reales para el prompt, un turno, 32 tokens de salida y el modelo y nivel de pensamiento elegidos. Ningún proveedor instalado declara esa sonda.",
             "explain": "El host guarda la cola, las misiones y las decisiones. Trasladarlo las copia a la máquina elegida, verifica la copia y solo entonces cambia. El trabajo en curso no se interrumpe; el trabajo nuevo queda retenido hasta terminar.",
             "target": "Nueva máquina host",
             "pickTarget": "Elige una máquina…",

@@ -112348,6 +112348,23 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               type: "string",
               description: "For a provider with no thinkingLaunchArgs but a runtime reasoning-effort control (e.g. hermes 'reasoning'), the controls[].id to drive at launch for the thinking level. The control's setScript is invoked with { value: <mapped level> }."
             },
+            hostHandoffCanary: {
+              type: "object",
+              additionalProperties: false,
+              required: ["version", "privateContextDisabled", "toolsDisabled", "args"],
+              description: "Optional bounded host-handoff auth probe. Absence means this provider is explicitly unsupported for that probe and readiness must refuse before the current source is stopped. Declare it only when the installed CLI has real arguments for the fixed prompt, one turn, 32 output tokens, and the selected model and thinking level, with tools and private context disabled. A placeholder in an unused flag is not a declaration.",
+              properties: {
+                version: { const: 1 },
+                privateContextDisabled: { const: true },
+                toolsDisabled: { const: true },
+                args: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                  description: "Argv template. The loader also requires the substitutions {{prompt}}, {{maxTurns}}, and {{maxOutputTokens}}, plus {{model}} or {{thinkingLevel}} when that selection axis exists."
+                }
+              }
+            },
             sendDelayMs: {
               type: "number",
               minimum: 0,
@@ -113917,6 +113934,26 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         _ajv = null;
         _cliValidator = null;
         _driverValidator = null;
+      }
+    });
+    function describeCanaryContract(provider, selection) {
+      const spec = provider.hostHandoffCanary;
+      const fail15 = (reason) => `canary_contract_unsupported: ${reason}`;
+      if (provider.type !== selection.provider) return fail15("provider_mismatch");
+      if (!spec) return fail15(`missing_declaration:${selection.provider || "unknown"}`);
+      if (spec.version !== 1 || spec.privateContextDisabled !== true || spec.toolsDisabled !== true || !Array.isArray(spec.args) || spec.args.some((a) => typeof a !== "string" || a.includes("\0")) || !provider.spawn?.command) {
+        return fail15("declaration_incomplete");
+      }
+      if (!spec.args.some((a) => a.includes("{{prompt}}"))) return fail15("missing_prompt_binding");
+      if (!spec.args.some((a) => a.includes("{{maxTurns}}"))) return fail15("missing_max_turns_binding");
+      if (!spec.args.some((a) => a.includes("{{maxOutputTokens}}"))) return fail15("missing_max_output_tokens_binding");
+      if (selection.model !== void 0 && !spec.args.some((a) => a.includes("{{model}}"))) return fail15("missing_model_binding");
+      if (selection.thinkingLevel !== void 0 && !spec.args.some((a) => a.includes("{{thinkingLevel}}"))) return fail15("missing_thinking_binding");
+      return void 0;
+    }
+    var init_host_handoff_canary_contract = __esm2({
+      "src/shared/host-handoff-canary-contract.ts"() {
+        "use strict";
       }
     });
     var native_history_jsonpath_exports = {};
@@ -150575,10 +150612,11 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
     });
     async function runTargetCanary(provider, selection, options = {}) {
       const startedAt = Date.now(), canaryId = (0, import_node_crypto69.randomUUID)();
-      const result = (ok, terminated, code) => ({
+      const result = (ok, terminated, code, detail) => ({
         ok,
         terminated,
         ...code ? { code } : {},
+        ...detail ? { detail } : {},
         canaryId,
         provider: selection.provider,
         selection,
@@ -150587,11 +150625,10 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         maxTurns: 1,
         maxOutputTokens: 32
       });
-      const spec = provider.hostHandoffCanary;
       if (process.platform === "win32") return result(false, true, "canary_process_group_unsupported");
-      if (provider.type !== selection.provider || !spec || spec.version !== 1 || spec.privateContextDisabled !== true || spec.toolsDisabled !== true || !Array.isArray(spec.args) || spec.args.some((a) => typeof a !== "string" || a.includes("\0")) || !provider.spawn?.command || selection.model !== void 0 && !spec.args.some((a) => a.includes("{{model}}")) || selection.thinkingLevel !== void 0 && !spec.args.some((a) => a.includes("{{thinkingLevel}}")) || !["{{prompt}}", "{{maxTurns}}", "{{maxOutputTokens}}"].every((token) => spec.args.some((a) => a.includes(token)))) {
-        return result(false, true, "canary_contract_unsupported");
-      }
+      const refusal2 = describeCanaryContract(provider, selection);
+      if (refusal2) return result(false, true, "canary_contract_unsupported", refusal2);
+      const spec = provider.hostHandoffCanary;
       const root = (0, import_node_fs51.mkdtempSync)((0, import_node_path43.join)(options.parentDir ?? (0, import_node_os13.tmpdir)(), "adhdev-host-canary-"));
       const config = (0, import_node_path43.join)(root, "config"), workspace = (0, import_node_path43.join)(root, "workspace");
       (0, import_node_fs51.mkdirSync)(config, { mode: 448 });
@@ -150700,6 +150737,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         import_node_os13 = require("os");
         import_node_path43 = require("path");
         import_node_crypto69 = require("crypto");
+        init_host_handoff_canary_contract();
         HANDOFF_CANARY_PROMPT = "Reply exactly ADHDEV_HANDOFF_READY. Do not use tools, read files, run commands, or modify any state.";
         HANDOFF_CANARY_OUTPUT = "ADHDEV_HANDOFF_READY";
         HANDOFF_CANARY_TIMEOUT_MS = 15e3;
@@ -150755,7 +150793,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (checks.every((c) => c.ok) && provider && plan) {
         try {
           const evidence = await runTargetCanary(provider, plan);
-          add("provider_auth_canary", evidence.ok && evidence.terminated, evidence.ok ? `canary ${evidence.canaryId}; terminated` : evidence.code);
+          add("provider_auth_canary", evidence.ok && evidence.terminated, evidence.ok ? `canary ${evidence.canaryId}; terminated` : evidence.detail ?? evidence.code);
         } catch {
           add("provider_auth_canary", false, "Canary could not be verified.");
         }
@@ -174280,6 +174318,7 @@ ${marker2}`,
     var path73 = __toESM2(require("path"));
     init_config();
     init_manifest();
+    init_host_handoff_canary_contract();
     init_auto_approve_modes();
     init_open_panel_support();
     var VALID_CAPABILITY_MEDIA_TYPES = /* @__PURE__ */ new Set(["text", "image", "audio", "video", "resource"]);
@@ -174363,6 +174402,9 @@ ${marker2}`,
       "thinkingLevelMap",
       "thinkingLevelOptions",
       "thinkingControlId",
+      // Bounded host-handoff probe. Absence is an explicit unsupported provider.
+      // A present object must name real prompt, turn, token, and selection bindings.
+      "hostHandoffCanary",
       "sendDelayMs",
       "sendKey",
       "submitStrategy",
@@ -174436,6 +174478,7 @@ ${marker2}`,
         warnings.push("Extension providers should have extensionId");
       }
       validateCapabilities(provider, controls, errors);
+      validateHostHandoffCanary(provider, errors);
       validateNativeHistory(provider.nativeHistory, errors);
       validateMeshCoordinator(provider.meshCoordinator, errors);
       validateAutoApproveModes(provider.autoApproveModes, errors);
@@ -174515,6 +174558,25 @@ ${marker2}`,
       if (defaultModeId && !ids.has(defaultModeId)) {
         errors.push(`autoApproveModes.default must reference an existing mode id: ${defaultModeId}`);
       }
+    }
+    function validateHostHandoffCanary(provider, errors) {
+      if (provider.hostHandoffCanary === void 0) return;
+      const spec = provider.hostHandoffCanary;
+      if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
+        errors.push("hostHandoffCanary must be an object");
+        return;
+      }
+      const spawn13 = provider.spawn && typeof provider.spawn === "object" ? provider.spawn : {};
+      const declared = {
+        type: typeof provider.type === "string" ? provider.type : "",
+        spawn: { command: typeof spawn13.command === "string" ? spawn13.command : "" },
+        hostHandoffCanary: spec
+      };
+      const selection = { provider: declared.type };
+      if (Array.isArray(provider.modelLaunchArgs) && provider.modelLaunchArgs.length > 0) selection.model = "selected";
+      if (Array.isArray(provider.thinkingLaunchArgs) && provider.thinkingLaunchArgs.length > 0) selection.thinkingLevel = "selected";
+      const refusal2 = describeCanaryContract(declared, selection);
+      if (refusal2) errors.push(`hostHandoffCanary: ${refusal2}`);
     }
     function validateCapabilities(provider, controls, errors) {
       const capabilities2 = provider.capabilities;
