@@ -44869,6 +44869,17 @@ ${error.message || ""}`;
             return !!this.stmt(`SELECT 1 FROM turn_events WHERE kind = 'delivered'
             AND (event_id = ? OR (event_id = ? AND mesh_id = ?)) LIMIT 1`).get(deliveryClaimId(meshId, writer, seq2), legacyDeliveryClaimId(writer, seq2), meshId);
           }
+          /**
+           * True when a delivery claim that reached a coordinator (typed, queued or surfaced to an MCP
+           * read) already carries `wakeKey` since `sinceMs`. Uses the (mesh, kind, time) index and an
+           * exact substring test on the claim's small JSON payload. Suppressed/empty/refused claims never
+           * store the key, so only a real wake counts.
+           */
+          hasWakeKey(meshId, wakeKey, sinceMs) {
+            const needle = `"wakeKey":${JSON.stringify(wakeKey)}`;
+            return !!this.stmt(`SELECT 1 FROM turn_events WHERE mesh_id = ? AND kind = 'delivered' AND at_ms >= ?
+            AND instr(payload_json, ?) > 0 LIMIT 1`).get(meshId, sinceMs, needle);
+          }
           hasEvent(eventId) {
             return !!this.stmt("SELECT 1 FROM turn_events WHERE event_id = ?").get(eventId);
           }
@@ -45183,6 +45194,8 @@ ${error.message || ""}`;
           livenessDeadlineMs: 48e4,
           noTurnDeadlineMs: 9e5,
           stallNoticeMs: 18e4,
+          stallWakeMs: 9e5,
+          coalesceWindowMs: 3e4,
           hardCeilingMs: 54e5,
           stoppingUnreachableMaxMs: 24 * 36e5,
           awaitReportMs: 6e5,
@@ -45221,6 +45234,8 @@ ${error.message || ""}`;
           },
           { field: "noTurnDeadlineMs", canonical: "ADHDEV_TURN_NO_TURN_DEADLINE_MS", min: 0, max: 6 * HOUR, aliases: [] },
           { field: "stallNoticeMs", canonical: "ADHDEV_TURN_STALL_NOTICE_MS", min: 0, max: HOUR, aliases: [] },
+          { field: "stallWakeMs", canonical: "ADHDEV_TURN_STALL_WAKE_MS", min: 0, max: 6 * HOUR, aliases: [] },
+          { field: "coalesceWindowMs", canonical: "ADHDEV_TURN_COALESCE_WINDOW_MS", min: 0, max: 10 * 6e4, aliases: [] },
           {
             field: "hardCeilingMs",
             canonical: "ADHDEV_TURN_HARD_CEILING_MS",
@@ -53729,8 +53744,15 @@ ${rendered.join("\n\n")}`,
             attempt.candidateNotifiedGeneration = attempt.generation;
           }
           if (template.when === "no_progress_due") {
-            const last = attempt.lastNoProgressNoticeAt;
-            if (last !== null && nowMs2 - last < draft.ctx.policy.livenessDeadlineMs) return;
+            if (attempt.lastNoProgressNoticeAt !== null) {
+              draft.effects.push({ kind: "record", note: "stall_notice_already_sent" });
+              return;
+            }
+            const stalled = ev;
+            if (stalled.stalledMs < draft.ctx.policy.stallWakeMs || STALL_BUSY_STATUSES.has(stalled.observedStatus)) {
+              draft.effects.push({ kind: "record", note: "stall_quiet" });
+              return;
+            }
             ACTIONS.stamp_no_progress_notice(draft);
           }
           const kind = template.notify === "from_modal" ? ev.modal : template.notify;
@@ -53857,6 +53879,7 @@ ${rendered.join("\n\n")}`,
     var RECLAIM_TURN_REASONS;
     var WRITER_STOP_RETRY_MS;
     var WRITER_STOP_MAX_TRIES;
+    var STALL_BUSY_STATUSES;
     var TERMINAL_NOTIFY_KINDS;
     var ACTIONS;
     var init_reducer = __esm2({
@@ -53996,6 +54019,7 @@ ${rendered.join("\n\n")}`,
         ];
         WRITER_STOP_RETRY_MS = 3e4;
         WRITER_STOP_MAX_TRIES = 3;
+        STALL_BUSY_STATUSES = /* @__PURE__ */ new Set(["generating", "starting", "waiting_approval", "waiting_choice"]);
         TERMINAL_NOTIFY_KINDS = ["completed", "blocked", "failed", "cancelled", "stopped"];
         ACTIONS = {
           open_dispatch: (draft) => {
@@ -54810,7 +54834,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
       if (s2.meshWorkerStall) {
         const stalledSuffix = s2.stalledMs !== void 0 ? ` for ${Math.round(s2.stalledMs / 1e3)}s` : "";
         const statusSuffix = s2.observedStatus ? ` (observed status: ${s2.observedStatus})` : "";
-        return `[System] ${s2.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+        return `[System] ${s2.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}. No screen output and no transcript growth for this long, and the provider is not showing a busy status. You get ONE stall notice per attempt; it is NOT a failure or auto-restart. Do this once: mesh_read_chat (compact=true) on that session. If it is idle with the task unfinished, re-send the task to it (mesh_send_task) or mesh_queue_requeue; if it waits on a human prompt, answer it; if it is finishing a long step, do nothing \u2014 its completion notice still arrives.`;
       }
       return `[System] ${s2.nodeLabel} is still reported as generating after a long interval. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
     }
@@ -55035,10 +55059,29 @@ ${resolve20(input.refs.summary, input.resolveRef, missing) ?? ""}`,
         }
       }
     }
+    function noticeWakeKey(input) {
+      if (!WAKE_ONCE_KINDS.has(input.notify) || !input.attemptId) return null;
+      return `${input.meshId}|${input.attemptId}|g${input.generation ?? "-"}|${input.notify}`;
+    }
+    function isHoldableNotice(notify2, forceInjectEvent) {
+      if (notify2 === "mesh_event") return !forceInjectEvent;
+      return HOLDABLE_KINDS.has(notify2);
+    }
+    var WAKE_ONCE_KINDS;
+    var HOLDABLE_KINDS;
     var init_suppression = __esm2({
       "src/mesh/turn-ledger/suppression.ts"() {
         "use strict";
         init_types2();
+        WAKE_ONCE_KINDS = /* @__PURE__ */ new Set([
+          "completed",
+          "failed",
+          "cancelled",
+          "stopped",
+          "blocked",
+          "late_completion"
+        ]);
+        HOLDABLE_KINDS = /* @__PURE__ */ new Set(["progress", "no_progress", "candidate"]);
       }
     });
     function buildMeshWorkerRelayStamp(currentSettings, meshContext) {
@@ -55271,7 +55314,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
           const stalledMs = typeof args.metadataEvent.stalledMs === "number" ? args.metadataEvent.stalledMs : void 0;
           const stalledSuffix = stalledMs !== void 0 ? ` for ${Math.round(stalledMs / 1e3)}s` : "";
           const statusSuffix = observedStatus ? ` (observed status: ${observedStatus})` : "";
-          return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. This is an informational stall \u2014 the worker's screen has been static regardless of its reported status; it may be genuinely idle, waiting, or wedged, so this is NOT a failure or auto-restart. Judge whether to inspect it: wait for a completion notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events), or make one bounded mesh_read_chat check if you need to see its current screen, then wait again.`;
+          return `[System] ${args.nodeLabel}: PTY output unchanged${stalledSuffix}${statusSuffix}${metadata}. No screen output and no transcript growth for this long, and the provider is not showing a busy status. You get ONE stall notice per attempt; it is NOT a failure or auto-restart. Do this once: mesh_read_chat (compact=true) on that session. If it is idle with the task unfinished, re-send the task to it (mesh_send_task) or mesh_queue_requeue; if it waits on a human prompt, answer it; if it is finishing a long step, do nothing \u2014 its completion notice still arrives.`;
         }
         return `[System] ${args.nodeLabel} is still reported as generating after a long interval${metadata}. Wait for a completion/status notice (typed into this session, or attached as pendingCoordinatorEvents to every mesh tool response for an MCP-only coordinator \u2014 drained by get_pending_mesh_events); if the user explicitly asks for status, make one bounded status check and then wait again.`;
       }
@@ -55674,6 +55717,7 @@ ${line}`;
       if (modalMessage) localTexts.set("modal", modalMessage);
       const note2 = str5(notice?.note);
       if (note2) localTexts.set("note", note2);
+      const stallEvidence = notify2 === "no_progress" && isRecord10(evidenceRow?.payload.evidence) && evidenceRow.payload.evidence.kind === "no_progress" ? evidenceRow.payload.evidence : null;
       const reason = attempt?.terminal?.reason;
       const renderKind = notify2 === "failed" && (reason === "finalization_timeout_no_response" || reason === "hollow_max_retries") ? "completed" : notify2;
       const scalars = {
@@ -55696,8 +55740,8 @@ ${line}`;
         ...Array.isArray(notice?.questions) ? { questions: notice.questions } : {},
         ...notify2 === "progress" && attempt?.taskId ? { progressTaskId: attempt.taskId } : {},
         ...isRecord10(notice?.completionMetadata) ? { completionMetadata: notice.completionMetadata } : {},
-        ...typeof notice?.stalledMs === "number" ? { stalledMs: notice.stalledMs, meshWorkerStall: true } : {},
-        ...str5(notice?.observedStatus) ? { observedStatus: str5(notice?.observedStatus) } : {}
+        ...typeof (notice?.stalledMs ?? stallEvidence?.stalledMs) === "number" ? { stalledMs: notice?.stalledMs ?? stallEvidence?.stalledMs, meshWorkerStall: true } : {},
+        ...str5(notice?.observedStatus ?? stallEvidence?.observedStatus) ? { observedStatus: str5(notice?.observedStatus ?? stallEvidence?.observedStatus) } : {}
       };
       const refs = {};
       if (localTexts.has("summary")) refs.summary = localRef("summary");
@@ -55770,6 +55814,8 @@ ${line}`;
       const policy = deps.policy ?? DEFAULT_TURN_POLICY;
       const now = deps.now ?? (() => Date.now());
       const counters4 = deps.counters ?? createTurnDeliverCounters();
+      const stats = deps.stats;
+      const coalesceMs = policy.coalesceWindowMs;
       const log = deps.log ?? NOOP_LOG;
       const run4 = async (entry, signal) => {
         if (entry.kind !== "turn.notify" || !isRecord10(entry.payload)) return { outcome: "skipped", why: "not_notify" };
@@ -55787,10 +55833,12 @@ ${line}`;
         const sessionForClaim = str5(p.targetSessionId) ?? "";
         const attemptId = str5(p.attemptId);
         const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
-        const suppression = isStageInternalNotice(entry.meshId, str5(p.taskId) ?? attempt?.taskId, notify2) ? "stage_internal" : evaluateNotifySuppression({ notify: notify2, attempt, generation: row2?.generation ?? null });
+        const wakeKey = noticeWakeKey({ meshId: entry.meshId, notify: notify2, attemptId: attemptId ?? attempt?.attemptId, generation: row2?.generation ?? attempt?.generation ?? null });
+        const suppression = isStageInternalNotice(entry.meshId, str5(p.taskId) ?? attempt?.taskId, notify2) ? "stage_internal" : evaluateNotifySuppression({ notify: notify2, attempt, generation: row2?.generation ?? null }) ?? (wakeKey && store5.hasWakeKey(entry.meshId, wakeKey, now() - NOTICE_BACKLOG_WINDOW_MS) ? "duplicate_wake" : null);
         if (suppression) {
           deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${suppression}` });
           counters4.suppressed++;
+          stats?.recordSuppressed(entry.meshId, notify2, suppression);
           log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=suppressed:${suppression}`);
           return { outcome: "suppressed", why: suppression };
         }
@@ -55803,6 +55851,24 @@ ${line}`;
         if (!rendered.text.trim()) {
           deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: "empty" });
           return { outcome: "empty" };
+        }
+        if (!backlog && coalesceMs > 0 && isHoldableNotice(notify2, notify2 === "mesh_event" && !!rendered.event && shouldForceInjectMeshEvent(rendered.event))) {
+          const holdUntil = at + coalesceMs;
+          if (now() < holdUntil) {
+            await sleepUntil(deps.waiter, entry.meshId, holdUntil, signal, now);
+            if (isClaimed()) {
+              counters4.ackedElsewhere++;
+              return { outcome: "acked_elsewhere" };
+            }
+            const moved = evaluateNotifySuppression({ notify: notify2, attempt: attemptId ? deps.ledger.getAttempt(attemptId) : null, generation: row2?.generation ?? null });
+            if (moved) {
+              deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: sessionForClaim, outcome: `suppressed:${moved}` });
+              counters4.suppressed++;
+              stats?.recordSuppressed(entry.meshId, notify2, moved);
+              log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=suppressed:${moved} afterHold=true`);
+              return { outcome: "suppressed", why: moved };
+            }
+          }
         }
         const deadline = at + policy.deliveryCeilingMs;
         const startedAt = now();
@@ -55831,6 +55897,8 @@ ${line}`;
             continue;
           }
           const messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+          const extras = backlog ? [] : gatherCoalesced(deps, entry, p, wakeKey);
+          const text9 = extras.length > 0 ? composeCoalesced(deps, entry.meshId, renderNotice({ ...deps, statusLine: void 0 }, entry.meshId, p, row2).text, notify2, rendered.event, extras) : rendered.text;
           let outcome;
           const submitMetadata = deps.submitInventory?.begin(entry, route.sessionId);
           try {
@@ -55840,7 +55908,7 @@ ${line}`;
               sessionId: route.sessionId,
               origin: "mesh",
               policy: { mode: "queue" },
-              input: { parts: [{ type: "text", text: rendered.text }], textFallback: rendered.text },
+              input: { parts: [{ type: "text", text: text9 }], textFallback: text9 },
               createdAt: now()
             });
             submitMetadata?.outcome(outcome.kind);
@@ -55865,18 +55933,69 @@ ${line}`;
             log.warn(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2} outcome=refused:${outcome.reason} session=${route.sessionId}`);
             return { outcome: "refused", reason: outcome.reason };
           }
-          const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind });
+          const claimed = deps.ledger.claimDelivery({ writer: entry.writer, seq: entry.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind, ...wakeKey ? { wakeKey } : {} });
           if (!claimed) counters4.duplicates++;
+          for (const extra of extras) {
+            deps.ledger.claimDelivery({ writer: extra.writer, seq: extra.seq, meshId: entry.meshId, sessionId: route.sessionId, outcome: outcome.kind, ...extra.wakeKey ? { wakeKey: extra.wakeKey } : {} });
+            stats?.recordDelivered(entry.meshId, extra.notify);
+          }
+          stats?.recordDelivered(entry.meshId, notify2);
+          if (outcome.kind === "delivered" || outcome.kind === "queued") stats?.recordWake(entry.meshId, extras.length);
           if (outcome.kind === "delivered") counters4.delivered++;
           else if (outcome.kind === "queued") counters4.queued++;
           else counters4.duplicates++;
           if (route.escalated) counters4.escalated++;
           const waitedMs = now() - startedAt;
-          log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2}${rendered.event ? ` event=${rendered.event}` : ""} outcome=${outcome.kind}${route.escalated ? " escalated=true" : ""} session=${route.sessionId} waitedMs=${waitedMs}`);
+          log.info(`deliver mesh=${entry.meshId} entry=${entry.writer}:${entry.seq} notify=${notify2}${rendered.event ? ` event=${rendered.event}` : ""} outcome=${outcome.kind}${route.escalated ? " escalated=true" : ""}${extras.length ? ` coalesced=${extras.length}` : ""} session=${route.sessionId} waitedMs=${waitedMs}`);
           return { outcome: outcome.kind, sessionId: route.sessionId, escalated: route.escalated, waitedMs };
         }
       };
       return (entry, signal) => deps.submitInventory ? deps.submitInventory.handling(() => run4(entry, signal)) : run4(entry, signal);
+    }
+    function gatherCoalesced(deps, primary, primaryPayload, primaryWakeKey) {
+      const out = [];
+      const seenKeys = new Set(primaryWakeKey ? [primaryWakeKey] : []);
+      const targetOf = (v) => str5(v) ?? "";
+      const wantSession = targetOf(primaryPayload.targetSessionId);
+      let rows;
+      try {
+        rows = pendingNoticeRows(deps, primary.meshId, COALESCE_MAX_EXTRAS * 4 + 8);
+      } catch {
+        return out;
+      }
+      for (const row2 of rows) {
+        if (out.length >= COALESCE_MAX_EXTRAS) break;
+        if (!row2.srcWriter || row2.publishedSeq === null) continue;
+        if (row2.srcWriter === primary.writer && row2.publishedSeq === primary.seq) continue;
+        const entry = isRecord10(row2.payload.entry) ? row2.payload.entry : null;
+        if (!entry || targetOf(entry.targetSessionId) !== wantSession) continue;
+        if (deps.ledger.store.isDeliveryClaimed(primary.meshId, row2.srcWriter, row2.publishedSeq)) continue;
+        const notify2 = isNotifyKind2(entry.notify) ? entry.notify : "mesh_event";
+        const attemptId = str5(entry.attemptId);
+        const attempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
+        if (isStageInternalNotice(primary.meshId, str5(entry.taskId) ?? attempt?.taskId, notify2)) continue;
+        if (evaluateNotifySuppression({ notify: notify2, attempt, generation: row2.generation })) continue;
+        const wakeKey = noticeWakeKey({ meshId: primary.meshId, notify: notify2, attemptId: attemptId ?? attempt?.attemptId, generation: row2.generation ?? attempt?.generation ?? null });
+        if (wakeKey && (seenKeys.has(wakeKey) || deps.ledger.store.hasWakeKey(primary.meshId, wakeKey, (deps.now ?? Date.now)() - NOTICE_BACKLOG_WINDOW_MS))) continue;
+        const rendered = renderNotice({ ...deps, statusLine: void 0 }, primary.meshId, entry, row2);
+        if (rendered.missing > 0 || !rendered.text.trim()) continue;
+        if (wakeKey) seenKeys.add(wakeKey);
+        out.push({ writer: row2.srcWriter, seq: row2.publishedSeq, notify: notify2, event: rendered.event, text: rendered.text, wakeKey });
+      }
+      return out;
+    }
+    function clipExtra(text9, notify2) {
+      if (COALESCE_NEVER_CLIP.has(notify2)) return text9;
+      const points = Array.from(text9);
+      if (points.length <= COALESCE_EXTRA_CLIP_CHARS) return text9;
+      return `${points.slice(0, COALESCE_EXTRA_CLIP_CHARS).join("")}\u2026 (cut \u2014 read the task report or chat once if you need the rest)`;
+    }
+    function composeCoalesced(deps, meshId, primaryText, primaryNotify, primaryEvent, extras) {
+      const wantsLine = (notify2, event) => STATUS_LINE_KINDS.has(notify2) || notify2 === "mesh_event" && !!event && shouldForceInjectMeshEvent(event);
+      const line = wantsLine(primaryNotify, primaryEvent) || extras.some((e) => wantsLine(e.notify, e.event)) ? deps.statusLine?.(meshId) ?? null : null;
+      const parts = [primaryText, `[System] ${extras.length} more notice${extras.length === 1 ? "" : "s"} for this mesh arrived together with the one above:`, ...extras.map((e) => clipExtra(e.text, e.notify))];
+      if (line) parts.push(line);
+      return parts.join("\n\n");
     }
     function listRecentDeliveredNotices(ctx, sinceMs, limit = 200) {
       const out = [];
@@ -55915,6 +56034,7 @@ ${line}`;
       const ack = opts.ack !== false;
       const counters4 = deps.counters ?? createTurnDeliverCounters();
       const out = [];
+      const surfacedKeys = /* @__PURE__ */ new Set();
       for (const row2 of pendingNoticeRows(deps, meshId, opts.limit ?? 200)) {
         const writer = row2.srcWriter;
         const seq2 = row2.publishedSeq;
@@ -55923,14 +56043,19 @@ ${line}`;
         const notify2 = isNotifyKind2(entry.notify) ? entry.notify : "mesh_event";
         const attemptId = str5(entry.attemptId);
         const mcpAttempt = attemptId ? deps.ledger.getAttempt(attemptId) : null;
-        const suppression = isStageInternalNotice(meshId, str5(entry.taskId) ?? mcpAttempt?.taskId, notify2) ? "stage_internal" : evaluateNotifySuppression({ notify: notify2, attempt: mcpAttempt, generation: row2.generation });
+        const wakeKey = noticeWakeKey({ meshId, notify: notify2, attemptId: attemptId ?? mcpAttempt?.attemptId, generation: row2.generation ?? mcpAttempt?.generation ?? null });
+        const nowMs2 = (deps.now ?? (() => Date.now()))();
+        const suppression = isStageInternalNotice(meshId, str5(entry.taskId) ?? mcpAttempt?.taskId, notify2) ? "stage_internal" : evaluateNotifySuppression({ notify: notify2, attempt: mcpAttempt, generation: row2.generation }) ?? (wakeKey && (surfacedKeys.has(wakeKey) || deps.ledger.store.hasWakeKey(meshId, wakeKey, nowMs2 - NOTICE_BACKLOG_WINDOW_MS)) ? "duplicate_wake" : null);
         if (suppression) {
           if (ack) deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: str5(entry.targetSessionId) ?? "", outcome: `suppressed:${suppression}` });
+          if (ack) deps.stats?.recordSuppressed(meshId, notify2, suppression);
           continue;
         }
         const rendered = renderNotice(deps, meshId, entry, row2);
+        if (wakeKey && rendered.text.trim()) surfacedKeys.add(wakeKey);
         if (ack) {
-          deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: opts.surfacedSessionId ?? str5(entry.targetSessionId) ?? "", outcome: "mcp_read" });
+          deps.ledger.claimDelivery({ writer, seq: seq2, meshId, sessionId: opts.surfacedSessionId ?? str5(entry.targetSessionId) ?? "", outcome: "mcp_read", ...wakeKey && rendered.text.trim() ? { wakeKey } : {} });
+          if (rendered.text.trim()) deps.stats?.recordDelivered(meshId, notify2);
         }
         if (!rendered.text.trim()) continue;
         const local = isRecord10(row2.payload.local) && isRecord10(row2.payload.local.payload) ? row2.payload.local.payload : {};
@@ -56047,6 +56172,9 @@ ${line}`;
     var REAL_TIMERS;
     var RETRYABLE_REFUSALS2;
     var MAX_SUBMIT_ROUNDS;
+    var COALESCE_MAX_EXTRAS;
+    var COALESCE_EXTRA_CLIP_CHARS;
+    var COALESCE_NEVER_CLIP;
     var TYPED_DELIVERY_OUTCOMES;
     var NOTICE_BACKLOG_WINDOW_MS;
     var boundNoticeRuntime;
@@ -56079,6 +56207,9 @@ ${line}`;
         };
         RETRYABLE_REFUSALS2 = /* @__PURE__ */ new Set(["no_target", "session_exited", "send_in_flight", "not_ready", "internal_error", "bootstrap_pending", "new_work_held"]);
         MAX_SUBMIT_ROUNDS = 3;
+        COALESCE_MAX_EXTRAS = 5;
+        COALESCE_EXTRA_CLIP_CHARS = 1500;
+        COALESCE_NEVER_CLIP = /* @__PURE__ */ new Set(["blocked", "failed", "stopped", "cancelled", "approval", "choice", "late_completion"]);
         TYPED_DELIVERY_OUTCOMES = /* @__PURE__ */ new Set(["delivered", "queued"]);
         NOTICE_BACKLOG_WINDOW_MS = 24 * 60 * 60 * 1e3;
         boundNoticeRuntime = null;
@@ -106440,13 +106571,14 @@ ${cleanBody}`;
         peeks = /* @__PURE__ */ new Map();
       }
     });
-    function createWorkerSessionHealthMonitor(emit2 = notifyWorkerSessionHealth) {
+    function createWorkerSessionHealthMonitor(emit2 = () => {
+    }) {
       const states = /* @__PURE__ */ new Map();
       function stateFor(owner) {
         const key6 = JSON.stringify([owner.meshId, owner.taskId, owner.sessionId, owner.attemptId, owner.generation]);
         let state2 = states.get(key6);
         if (!state2) {
-          state2 = { status: "", lastAt: 0, edges: [], failures: 0, active: /* @__PURE__ */ new Set() };
+          state2 = { status: "", lastAt: 0, edges: [], failures: 0, active: /* @__PURE__ */ new Set(), since: /* @__PURE__ */ new Map() };
           states.set(key6, state2);
           if (states.size > 500) states.delete(states.keys().next().value);
         }
@@ -106470,7 +106602,11 @@ ${cleanBody}`;
       }
       function publish(owner, state2, signals, at, quietMs, source2) {
         if (state2.edges.length >= WORKER_FLAP_TRANSITIONS && state2.edges[state2.edges.length - 1].at - state2.edges[0].at >= WORKER_FLAP_MIN_SPAN_MS) signals.add("flapping");
+        state2.owner = owner;
+        for (const signal of [...state2.since.keys()]) if (!signals.has(signal)) state2.since.delete(signal);
         for (const signal of signals) {
+          if (!state2.since.has(signal)) state2.since.set(signal, { at, quietMs });
+          else if (signal === "stalled") state2.since.get(signal).quietMs = quietMs;
           if (!state2.active.has(signal)) emit2(owner, {
             signal,
             attemptId: owner.attemptId,
@@ -106531,6 +106667,27 @@ ${cleanBody}`;
           if (state2.failures >= 2) signals.add("deteriorating");
           if (read2.presence === "present" && read2.transcript !== null && !read2.transcript?.activeModal && !["waiting_approval", "waiting_choice", "starting"].includes(status) && !read2.transcript?.finalSummary && quietMs >= stallMs) signals.add("stalled");
           publish(attempt, state2, signals, now, quietMs, "probe");
+        },
+        /** Signals currently held for open attempts of `meshId` (bounded, oldest first). */
+        quiet(meshId, isOpen = () => true) {
+          const out = [];
+          for (const state2 of states.values()) {
+            const o = state2.owner;
+            if (!o || o.meshId !== meshId || state2.since.size === 0 || !isOpen(o.attemptId)) continue;
+            for (const [signal, info] of state2.since) {
+              out.push({
+                signal,
+                sessionId: o.sessionId,
+                attemptId: o.attemptId,
+                generation: o.generation,
+                since: info.at,
+                ...o.taskId ? { taskId: o.taskId } : {},
+                ...o.nodeId ? { nodeId: o.nodeId } : {},
+                ...signal === "stalled" ? { quietSec: Math.round(info.quietMs / 1e3) } : {}
+              });
+            }
+          }
+          return out.sort((a, b) => a.since - b.since).slice(0, QUIET_SIGNAL_LIST_MAX);
         }
       };
     }
@@ -106542,38 +106699,23 @@ ${cleanBody}`;
       }
       return monitor;
     }
-    function notifyWorkerSessionHealth(owner, event) {
-      const trail = event.transitionHistory.map((edge) => `${edge.from}\u2192${edge.to}@${new Date(edge.at).toISOString()}`).join(", ");
-      const coordinatorMessage = `[System] Worker session ${event.sessionId} on node ${owner.nodeId || "unknown"} is ${event.signal} while holding task ${owner.taskId || owner.attemptId} at ${new Date(event.at).toISOString()}. ` + (event.signal === "stalled" ? `No observed progress for ${Math.round(event.quietMs / 1e3)}s. ` : "") + `Consecutive transcript read failures: ${event.readFailureStreak}; generating/idle transitions in 5m: ${event.transitions}. ` + (trail ? `Observed transitions: ${trail}. ` : "") + "This is an advisory session signal; inspect the worker transcript and task history. It does not establish a failure or its cause.";
-      notifyMeshCoordinator({
-        event: "mesh:dispatch_blocked",
-        meshId: owner.meshId,
-        nodeLabel: owner.nodeId || event.sessionId,
-        ...owner.nodeId ? { nodeId: owner.nodeId } : {},
-        eventId: `worker_session_health:${owner.meshId}:${owner.taskId}:${event.sessionId}:${event.attemptId}:g${event.generation}:${event.signal}:${event.at}`,
-        metadataEvent: { ...event, source: "worker_session_health", observationSource: event.source, coordinatorMessage },
-        coordinatorMessage,
-        queuedAt: event.at,
-        ...owner.coordinator?.daemonId ? { targetCoordinatorDaemonId: owner.coordinator.daemonId } : {},
-        ...owner.coordinator?.sessionId ? { targetCoordinatorSessionId: owner.coordinator.sessionId } : {}
-      });
-    }
     var WORKER_FLAP_WINDOW_MS;
     var WORKER_FLAP_MIN_SPAN_MS;
     var WORKER_FLAP_TRANSITIONS;
     var WORKER_FLAP_MIN_IDLE_MS;
     var WORKER_NO_PROGRESS_MIN_MS;
+    var QUIET_SIGNAL_LIST_MAX;
     var monitors;
     var init_worker_session_health = __esm2({
       "src/mesh/turn-ledger/worker-session-health.ts"() {
         "use strict";
         init_probe();
-        init_deliver();
         WORKER_FLAP_WINDOW_MS = 5 * 6e4;
         WORKER_FLAP_MIN_SPAN_MS = 3e4;
         WORKER_FLAP_TRANSITIONS = 4;
         WORKER_FLAP_MIN_IDLE_MS = 5e3;
         WORKER_NO_PROGRESS_MIN_MS = 18e4;
+        QUIET_SIGNAL_LIST_MAX = 12;
         monitors = /* @__PURE__ */ new WeakMap();
       }
     });
@@ -107277,6 +107419,53 @@ ${cleanBody}`;
         init_mesh_events_coordinator();
         init_mesh_event_forwarding();
         init_deliver();
+      }
+    });
+    function createNoticeStats(now = () => Date.now()) {
+      const since2 = now();
+      const meshes = /* @__PURE__ */ new Map();
+      const of = (meshId) => {
+        let m = meshes.get(meshId);
+        if (!m) {
+          m = { wakes: 0, delivered: /* @__PURE__ */ new Map(), suppressed: /* @__PURE__ */ new Map(), coalesced: 0 };
+          meshes.set(meshId, m);
+        }
+        return m;
+      };
+      const bump2 = (map2, key6) => {
+        if (!map2.has(key6) && map2.size >= MAX_KEYS_PER_MAP) key6 = "other";
+        map2.set(key6, (map2.get(key6) ?? 0) + 1);
+      };
+      return {
+        recordDelivered(meshId, kind) {
+          bump2(of(meshId).delivered, kind);
+        },
+        recordSuppressed(meshId, kind, reason) {
+          bump2(of(meshId).suppressed, `${kind}:${reason}`);
+        },
+        recordWake(meshId, extras) {
+          const m = of(meshId);
+          m.wakes += 1;
+          m.coalesced += Math.max(0, extras);
+        },
+        snapshot(meshId) {
+          const m = meshes.get(meshId);
+          if (!m || m.wakes === 0 && m.delivered.size === 0 && m.suppressed.size === 0) return null;
+          return {
+            since: since2,
+            wakes: m.wakes,
+            delivered: Object.fromEntries(m.delivered),
+            suppressed: Object.fromEntries(m.suppressed),
+            coalesced: m.coalesced
+          };
+        }
+      };
+    }
+    var MAX_KEYS_PER_MAP;
+    var init_notice_stats = __esm2({
+      "src/mesh/turn-ledger/notice-stats.ts"() {
+        "use strict";
+        MAX_KEYS_PER_MAP = 64;
       }
     });
     function titleForTask(task) {
@@ -143969,6 +144158,7 @@ ${b.text}`).join("\n\n");
       RELAY_CLOSE: () => RELAY_CLOSE,
       RELAY_DELIVERY_MAX_CHARS: () => RELAY_DELIVERY_MAX_CHARS,
       RELAY_IDLE_CLOSE_GRACE_MS: () => RELAY_IDLE_CLOSE_GRACE_MS,
+      RELAY_INLINE_MAX_CHARS: () => RELAY_INLINE_MAX_CHARS,
       RELAY_MAX_AUTO_PAGES: () => RELAY_MAX_AUTO_PAGES,
       RELAY_MAX_WAIT_MS: () => RELAY_MAX_WAIT_MS,
       RELAY_MESSAGE_ID_PREFIX: () => RELAY_MESSAGE_ID_PREFIX,
@@ -143980,6 +144170,7 @@ ${b.text}`).join("\n\n");
       RELAY_NUDGE_MAX_ATTEMPTS: () => RELAY_NUDGE_MAX_ATTEMPTS,
       RELAY_NUDGE_MAX_CHARS: () => RELAY_NUDGE_MAX_CHARS,
       RELAY_PROGRESS_AFTER_MS: () => RELAY_PROGRESS_AFTER_MS,
+      RELAY_QUIET_LINE_TTL_MS: () => RELAY_QUIET_LINE_TTL_MS,
       RELAY_QUIET_MS: () => RELAY_QUIET_MS,
       RELAY_READABILITY_CACHE_MS: () => RELAY_READABILITY_CACHE_MS,
       RELAY_STALL_AFTER_MS: () => RELAY_STALL_AFTER_MS,
@@ -144183,6 +144374,8 @@ ${b.text}`).join("\n\n");
     var RESTART_NOTE_MAX_AGE_MS;
     var RELAY_DELIVERY_MAX_CHARS;
     var RELAY_NUDGE_MAX_CHARS;
+    var RELAY_INLINE_MAX_CHARS;
+    var RELAY_QUIET_LINE_TTL_MS;
     var RELAY_NUDGE_BACKOFF_MS;
     var RELAY_NUDGE_BACKOFF_MAX_MS;
     var RELAY_NUDGE_MAX_ATTEMPTS;
@@ -144220,6 +144413,8 @@ ${b.text}`).join("\n\n");
         RESTART_NOTE_MAX_AGE_MS = 6 * 60 * 6e4;
         RELAY_DELIVERY_MAX_CHARS = 12e3;
         RELAY_NUDGE_MAX_CHARS = 160;
+        RELAY_INLINE_MAX_CHARS = 2e3;
+        RELAY_QUIET_LINE_TTL_MS = 2 * 60 * 6e4;
         RELAY_NUDGE_BACKOFF_MS = 15e3;
         RELAY_NUDGE_BACKOFF_MAX_MS = 6e4;
         RELAY_NUDGE_MAX_ATTEMPTS = 3;
@@ -151786,7 +151981,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           }
           // ── delivery ────────────────────────────────────────────────────────────
           pushLine(source2, text9, meshId) {
-            this.queue.push({ kind: "line", source: source2, text: text9, messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`, ...meshId ? { meshId } : {} });
+            const quiet = source2 === "progress";
+            this.queue.push({
+              kind: "line",
+              source: source2,
+              text: text9,
+              messageId: `signal:${source2}:${meshId ?? "-"}:${this.clock.now()}:${++this.seq}`,
+              ...meshId ? { meshId } : {},
+              ...quiet ? { quiet: true, queuedAt: this.clock.now() } : {}
+            });
             this.kick();
           }
           kick() {
@@ -151807,11 +152010,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const sid = this.ports.assistantSessionId();
             if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
             const lifecycle = this.lifecycle;
-            const { taken, parts } = await this.takeParts(this.clock.now(), sid);
+            const { taken, parts } = await this.takeParts(this.clock.now(), sid, true);
             const canceled = () => lifecycle !== this.lifecycle || !taken.every((i) => this.queue.includes(i));
             if (canceled()) return;
             if (!parts.length) {
               this.queue = this.queue.filter((i) => !taken.includes(i));
+              return;
+            }
+            if (parts.every((p) => p.quiet)) {
+              this.commitTaken(taken, parts, sid, false, true);
               return;
             }
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
@@ -151820,6 +152027,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const text9 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
             if (taken.some((i) => i.kind === "relay") || text9.includes("\n") && parts.some((p) => p.source === "relay")) {
               const projects2 = parts.flatMap((p) => p.meshId ? [this.ports.projectSlug(p.meshId) ?? p.meshId] : []);
+              if (codePoints(text9) <= RELAY_INLINE_MAX_CHARS) {
+                const inline = await this.ports.submit(sid, { text: text9, messageId, policy: { mode: "queue" } });
+                if (inline.kind === "refused") return;
+                this.commitTaken(taken, parts, sid, inline.kind === "delivered" || inline.kind === "duplicate" && !!this.ports.isParked && !await this.ports.isParked(sid, messageId));
+                if (gap) this.rememberGaps(sid, missed);
+                return;
+              }
               const decision = await this.nudge.decide(
                 { count: parts.length + (gap ? 1 : 0), projects: projects2 },
                 (notice, attempt) => this.ports.submit(sid, { text: notice, messageId: `nudge:${messageId}:${attempt}`, policy: { mode: "queue" } }),
@@ -151863,14 +152077,19 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             return parts.map((p) => ({ source: p.source, messageId: p.messageId, text: p.text, ...p.meshId ? { meshId: p.meshId } : {} }));
           }
           /** Render the head of the queue into parts within the delivery budget (no side effects). */
-          async takeParts(now, sid) {
+          async takeParts(now, sid, push = false) {
             const taken = [];
             const parts = [];
+            const quietLines = [];
             const folded = /* @__PURE__ */ new Map();
             let size = 0;
             for (const item of this.queue) {
               if (item.kind === "line" && item.forSessionId && item.forSessionId !== sid) {
                 taken.push(item);
+                continue;
+              }
+              if (push && item.kind === "line" && item.quiet) {
+                quietLines.push(item);
                 continue;
               }
               if (item.kind === "line" && item.source === "review") {
@@ -151929,6 +152148,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               if (!gap || item.kind === "line" && !item.gapReplies?.some((r) => !gap.replies.includes(r))) taken.push(item);
               size += cost;
             }
+            const waking = parts.some((p) => !p.quiet);
+            for (const item of quietLines) {
+              if (waking) {
+                parts.push({ text: item.text, source: item.source, messageId: item.messageId, quiet: true, ...item.meshId ? { meshId: item.meshId } : {} });
+                taken.push(item);
+              } else if (item.queuedAt !== void 0 && now - item.queuedAt > RELAY_QUIET_LINE_TTL_MS) taken.push(item);
+            }
             for (const [meshId, count2] of folded) {
               const text9 = buildFoldedBacklogLine(this.ports.projectSlug(meshId) ?? meshId, count2);
               parts.push({ text: text9, source: "relay", messageId: `fold:${meshId}:${now}`, meshId });
@@ -151936,7 +152162,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             return { taken, parts };
           }
           /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
-          commitTaken(taken, parts, sid, submitted = false) {
+          commitTaken(taken, parts, sid, submitted = false, silent = false) {
             const at = this.clock.now();
             const emptied = /* @__PURE__ */ new Set();
             for (const { gap } of parts) if (gap) {
@@ -151946,8 +152172,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               if (!gap.item.gapReplies?.length) emptied.add(gap.item);
             }
             this.queue = this.queue.filter((i) => !taken.includes(i) && !emptied.has(i));
-            if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
-            if (sid) {
+            if (sid && !silent) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
+            if (sid && !silent) {
               for (const p of parts) if (p.source === "review") this.ports.onReviewDelivered?.(sid, p.messageId, at);
             }
             const relayItems = taken.filter((i) => i.kind === "relay");
@@ -151985,7 +152211,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               rendered: rendered.includes(id4),
               reason: this.attemptMeta.get(id4)?.reason
             });
-            this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter((id4) => surfaced.has(id4))], coverage);
+            this.ports.store.markDelivered(settled, at, silent ? [...rendered] : [...rendered, ...settled.filter((id4) => surfaced.has(id4))], coverage);
             if (relayItems.length) this.loadDeliveredCoverage(at);
             for (const id4 of settled) {
               this.attemptBodyCapture.delete(id4);
@@ -152092,6 +152318,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
               meshId: item.meshId,
               messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
               surfaced: [...item.attemptIds],
+              quiet: true,
               text: `[ADHDev capture status] ${JSON.stringify(item.attemptIds.map((id4) => ({ attemptId: id4, sourceComplete: false, reason: captureFailureReason(this.attemptMeta.get(id4)?.reason) })))}
 ` + unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session })
             };
@@ -156371,7 +156598,7 @@ ${defangRelayBody(text9)}`;
           source: "input_service",
           verdict: "recorded",
           dedupeKey: input.meshId ? `${input.meshId}:${input.writer}:${input.seq}` : `${input.writer}:${input.seq}`,
-          payload: { ...input.meshId ? { meshId: input.meshId } : {}, ...input.outcome ? { outcome: input.outcome } : {} },
+          payload: { ...input.meshId ? { meshId: input.meshId } : {}, ...input.outcome ? { outcome: input.outcome } : {}, ...input.wakeKey ? { wakeKey: input.wakeKey } : {} },
           srcWriter: input.writer,
           srcSeq: input.seq,
           publishState: "none",
@@ -158816,6 +159043,7 @@ ${defangRelayBody(text9)}`;
       const appendHandoff = rt ? (meshId, kind, payload) => appendMeshHandoff(meshId, kind, payload) : void 0;
       const offEvidencePort = wireTurnEvidencePort(components, ledger, { appendHandoff });
       const counters4 = createTurnDeliverCounters();
+      const noticeStats = createNoticeStats();
       const waiter = createDeliverEdgeWaiter({ now: () => Date.now() });
       const resolveHandoff = resolveHandoffOn(rt);
       const inputPort = components.cliManager.input;
@@ -158831,7 +159059,9 @@ ${defangRelayBody(text9)}`;
         resolveHandoff,
         statusLine: (meshId) => buildMeshStatusLineForNotification(meshId),
         isControlEvent: (event) => event === "coordinator_catchup",
+        policy: resolveTurnPolicy(process.env),
         counters: counters4,
+        stats: noticeStats,
         log: deliverLog
       };
       const notifier = createCoordinatorNotifier({ ledger, selfDaemonIds, ...appendHandoff ? { appendHandoff } : {}, log: deliverLog });
@@ -158861,7 +159091,9 @@ ${defangRelayBody(text9)}`;
         evidence: ledger,
         ...appendHandoff ? { appendHandoff } : {},
         // Deliver outcomes + the cursors' own counters (the consumer arms below).
-        counters: () => ({ ...counters4, ...consumer?.counters() ?? {} })
+        counters: () => ({ ...counters4, ...consumer?.counters() ?? {} }),
+        noticeStats: (meshId) => noticeStats.snapshot(meshId),
+        quietWorkerSignals: (meshId) => workerSessionHealthFor(components).quiet(meshId, (attemptId) => !ledger.getAttempt(attemptId)?.terminal)
       };
       bindMeshNoticeRuntime(notices);
       setStageArtifactRegistrar((input) => {
@@ -159254,6 +159486,9 @@ ${defangRelayBody(text9)}`;
     var init_mesh_runtime = __esm2({
       "src/boot/stages/mesh-runtime.ts"() {
         "use strict";
+        init_notice_stats();
+        init_policy();
+        init_worker_session_health();
         init_notice_submit_inventory();
         init_artifact_store();
         init_stage_ports_default();
@@ -159776,6 +160011,7 @@ ${defangRelayBody(text9)}`;
       createMesh: () => createMesh,
       createMeshRuntimeTurnLedger: () => createMeshRuntimeTurnLedger,
       createNativeHistoryDispatcher: () => createNativeHistoryDispatcher,
+      createNoticeStats: () => createNoticeStats,
       createSessionEventPort: () => createSessionEventPort,
       createSessionInputService: () => createSessionInputService,
       createSessionLifecycleBus: () => createSessionLifecycleBus,
@@ -160094,6 +160330,7 @@ ${defangRelayBody(text9)}`;
       normalizeRepoIdentity: () => normalizeRepoIdentity,
       normalizeRepoMeshDeclarativeConfig: () => normalizeRepoMeshDeclarativeConfig,
       normalizeStandaloneHostJoinUrl: () => normalizeStandaloneHostJoinUrl,
+      noticeWakeKey: () => noticeWakeKey,
       notifyCoordinatorOfOrphanedPins: () => notifyCoordinatorOfOrphanedPins,
       notifyCoordinatorOfParkedTaskDropped: () => notifyCoordinatorOfParkedTaskDropped,
       notifyMeshCoordinator: () => notifyMeshCoordinator,
@@ -162136,6 +162373,7 @@ ${defangRelayBody(text9)}`;
     init_deliver();
     init_routing();
     init_suppression();
+    init_notice_stats();
     init_mesh_topic_index();
     init_mesh_orphaned_pin_notify();
     init_mesh_turn_presentation();
@@ -198587,6 +198825,19 @@ ${output}` : "";
         if (!meshId || !runtime2) {
           return { success: true, events: [], hasLiveCliCoordinator: false, source: "turn.notify", ...runtime2 ? {} : { unavailable: "turn ledger not booted" } };
         }
+        const quietState = () => {
+          let stats = null;
+          let quiet = [];
+          try {
+            stats = runtime2.noticeStats?.(meshId) ?? null;
+          } catch {
+          }
+          try {
+            quiet = runtime2.quietWorkerSignals?.(meshId) ?? [];
+          } catch {
+          }
+          return { ...stats ? { noticeStats: stats } : {}, ...quiet.length ? { quietWorkerSignals: quiet } : {} };
+        };
         const selfCoordinatorInboxRead = args?.selfCoordinatorInboxRead === true;
         const coordinatorDaemonId = typeof args?.coordinatorDaemonId === "string" && args.coordinatorDaemonId.trim() ? args.coordinatorDaemonId.trim() : "";
         const hasLiveCliCoordinator = runtime2.hasLiveCliCoordinator(meshId);
@@ -198597,7 +198848,8 @@ ${output}` : "";
             events: [],
             hasLiveCliCoordinator,
             source: "turn.notify",
-            ...addressedElsewhere ? { replicatedNotAddressed: true } : { deliveredByCursor: true }
+            ...addressedElsewhere ? { replicatedNotAddressed: true } : { deliveredByCursor: true },
+            ...quietState()
           };
         }
         const ack = args?.ack !== false;
@@ -198613,7 +198865,8 @@ ${output}` : "";
           // MCP client must not re-forward them.
           surfacedForSelfCoordinator: true,
           source: "turn.notify",
-          ...runtime2.replicationPending(meshId) ? { replication: "pending" } : {}
+          ...runtime2.replicationPending(meshId) ? { replication: "pending" } : {},
+          ...quietState()
         };
       },
       interactive_prompt_response: async (ctx, args) => {
@@ -241215,6 +241468,10 @@ function applyPendingMeshEvents(ctx, raw) {
   const payload = unwrapCommandPayload(raw);
   const replication = payload?.replication ?? raw?.replication;
   ctx.lastNoticeReplication = replication === "pending" ? "pending" : void 0;
+  const noticeStats = payload?.noticeStats ?? raw?.noticeStats;
+  const quietSignals = payload?.quietWorkerSignals ?? raw?.quietWorkerSignals;
+  ctx.lastNoticeStats = noticeStats && typeof noticeStats === "object" && !Array.isArray(noticeStats) ? noticeStats : void 0;
+  ctx.lastQuietWorkerSignals = Array.isArray(quietSignals) && quietSignals.length > 0 ? quietSignals.slice(0, 12) : void 0;
   const events = normalizePendingMeshCoordinatorEvents(raw).filter(matchesCurrentMesh);
   for (const event of events) {
     rememberMeshSessionProviderMetadataFromEvent({ ...event, metadataEvent: buildMeshForwardPayloadFromPendingEvent(event) });
@@ -244622,6 +244879,8 @@ function applyStatusDrainSections(response, ctx, view, ledgerEntries, compact) {
     if (ctx.lastNoticeReplication === "pending") {
       response.replication = "pending";
     }
+    if (ctx.lastNoticeStats) response.noticeStats = ctx.lastNoticeStats;
+    if (ctx.lastQuietWorkerSignals) response.quietWorkerSignals = ctx.lastQuietWorkerSignals;
   } catch {
   }
 }
@@ -244812,6 +245071,8 @@ async function meshStatus(outerCtx, args = {}) {
   applyStatusDrainSections(response, ctx, view, ledgerEntries, compact);
   outerCtx.noticeDrainCount = ctx.noticeDrainCount;
   outerCtx.lastNoticeReplication = ctx.lastNoticeReplication;
+  outerCtx.lastNoticeStats = ctx.lastNoticeStats;
+  outerCtx.lastQuietWorkerSignals = ctx.lastQuietWorkerSignals;
   return JSON.stringify(response);
 }
 function applyNodeSchedulingAndHints(entry, node, opts) {
