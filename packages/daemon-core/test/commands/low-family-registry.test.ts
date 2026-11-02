@@ -127,12 +127,12 @@ const COOPERATIVE_MAINTENANCE_CMDS = [
   'cooperative_maintenance_status',
 ]
 
-// Project file transfer (low-family/project-transfer.ts): 8 owner commands
+// Project file transfer (low-family/project-transfer.ts): 9 owner commands
 // (p2p + standalone) + the daemon<->daemon `project_transfer_peer` (mesh).
 const PROJECT_TRANSFER_CMDS = [
   'project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create',
   'project_transfer_approve', 'project_transfer_revoke_approval', 'project_transfer_cancel',
-  'project_transfer_list', 'project_transfer_status', 'project_transfer_peer',
+  'project_transfer_list', 'project_transfer_status', 'project_transfer_set_relay', 'project_transfer_peer',
 ]
 
 // Machine quota reserve (owner-only set, readable get): commands/low-family/quota-reserve-commands.ts.

@@ -7,7 +7,7 @@ import { LinkBroker, makeSide, writeTree, type Side } from './helpers.js';
 afterEach(() => resetProjectTransferForTest());
 
 const OWNER = ['project_transfer_capabilities', 'project_transfer_browse', 'project_transfer_create', 'project_transfer_approve',
-  'project_transfer_revoke_approval', 'project_transfer_cancel', 'project_transfer_list', 'project_transfer_status'];
+  'project_transfer_revoke_approval', 'project_transfer_cancel', 'project_transfer_list', 'project_transfer_status', 'project_transfer_set_relay'];
 
 describe('A13 owner-only commands', () => {
   it('owner commands accept only p2p/standalone sources and are not mesh-capable', () => {

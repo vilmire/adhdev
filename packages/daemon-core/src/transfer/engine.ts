@@ -3,7 +3,8 @@
  * Owner-facing methods are called by commands that already proved owner ingress; the
  * peer-facing {@link handlePeerOp} is called with the transport-stamped sender daemon id.
  * Nothing here talks to the server; the control plane is the authenticated mesh relay and
- * the bulk plane is the injected STUN-only {@link TransferLink}.
+ * the bulk plane is the injected {@link TransferLink}: STUN-only, or (owner-approved fallback,
+ * both daemons opt in) TURN-relayed after a direct attempt failed. The relay changes only the path.
  */
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -55,6 +56,12 @@ interface RunCtx {
   retries: number;
   cancelled: boolean;
   starting: boolean;
+  /** This run's links may use a TURN relay (set after the direct attempts failed and both sides allow it). */
+  relay?: boolean;
+  /** The established link really is relayed: its bytes count against the relay limits. */
+  relayActive?: boolean;
+  relayBase?: number;
+  relayCounted?: number;
 }
 
 /**
@@ -69,6 +76,8 @@ const MAX_OPEN_TRANSFERS = 10;
 
 /** Terminal events are logged once, with their code, by terminate(). */
 const LOG_SKIP_EVENTS: ReadonlySet<string> = new Set(['failed', 'cancelled', 'expired', 'revoked']);
+
+const newRun = (): RunCtx => ({ retries: 0, cancelled: false, starting: false });
 
 const fail = (code: string, detail?: string): TransferFailure => ({ ok: false, code, ...(detail ? { detail } : {}) });
 
@@ -86,6 +95,10 @@ export class ProjectTransferEngine {
   }
 
   private now(): number { return this.ports.now ? this.ports.now() : Date.now(); }
+
+  /** Per-machine option (default ON): may this daemon's transfers fall back to a TURN relay? */
+  relayAllowed(): boolean { return this.store.readRelayAllowed(); }
+  setRelayAllowed(allowed: boolean): void { this.store.writeRelayAllowed(allowed === true); }
 
   // ── lifecycle ────────────────────────────────────────────────────────────────
 
@@ -194,11 +207,11 @@ export class ProjectTransferEngine {
 
   // ── capabilities ─────────────────────────────────────────────────────────────
 
-  capabilities(): { supported: boolean; reasons: string[]; platform: string; arch: string } {
+  capabilities(): { supported: boolean; reasons: string[]; platform: string; arch: string; relayAllowed: boolean } {
     const reasons: string[] = [];
     try { getBindingInfo(); } catch { reasons.push('NATIVE_HELPER_UNAVAILABLE'); }
     if (!this.ports.linkFactory) reasons.push('LINK_UNAVAILABLE');
-    return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch };
+    return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch, relayAllowed: this.relayAllowed() };
   }
 
   private requireSupport(): TransferFailure | null {
@@ -306,7 +319,7 @@ export class ProjectTransferEngine {
   private async maybeStart(rec: TransferRecord): Promise<void> {
     if (!rec.localApproval || !rec.peerApproved || TERMINAL_STATES.has(rec.state)) return;
     if (rec.role !== 'source') return; // the target waits for `content`
-    const run = this.runs.get(rec.id) ?? { retries: 0, cancelled: false, starting: false };
+    const run = this.runs.get(rec.id) ?? newRun();
     this.runs.set(rec.id, run);
     if (run.starting) return;
     run.starting = true;
@@ -339,24 +352,29 @@ export class ProjectTransferEngine {
     this.guard(rec);
     const factory = this.ports.linkFactory;
     if (!factory) throw new SessionError('LINK_UNAVAILABLE', 'no link factory');
+    if (run.relay) this.checkRelayLimits(rec);
     run.linkKey = randomBytes(32);
     rec.linkGen += 1;
-    LOG.info(LOG_TAG, `${idTag(rec)} link attempt ${rec.linkGen} started (retries=${run.retries})`);
+    LOG.info(LOG_TAG, `${idTag(rec)} link attempt ${rec.linkGen} started (retries=${run.retries}${run.relay ? ', relay allowed' : ''})`);
     this.setState(rec, 'linking');
     const reply = await this.ports.dispatchPeer(rec.peerDaemonId, {
       op: 'content', transferId: rec.id, selectionDigest: rec.selectionDigest, content: rec.content, linkGen: rec.linkGen, linkKeyB64: run.linkKey.toString('base64'),
+      ...(run.relay ? { relay: true } : {}),
     });
+    // The peer opted out of relays: the direct failure stands.
+    if (!reply?.ok && reply?.code === 'RELAY_NOT_ALLOWED') throw new SessionError('DIRECT_UNAVAILABLE', 'peer does not allow a relay');
     if (!reply?.ok) { const code = safeTransferCode(reply?.code ?? 'PEER_REFUSED'); LOG.warn(LOG_TAG, `${idTag(rec)} peer refused content for link ${rec.linkGen} code=${code}`); throw new SessionError(code, 'peer refused content'); }
-    const link = factory.create({ transferId: rec.id, role: 'initiator', linkGen: rec.linkGen });
+    const link = factory.create({ transferId: rec.id, role: 'initiator', linkGen: rec.linkGen, ...(run.relay ? { allowRelay: true } : {}) });
     run.link = link;
     link.onSignalOut((s) => { void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'signal', transferId: rec.id, linkGen: rec.linkGen, signal: s }).catch(() => {}); });
     const session = new SenderSession(link, rec.id, rec.linkGen, run.linkKey, rec.content!, this.store.spoolDir(rec.id), this.rate, (fi, bi) => {
       rec.blocksDone[fi] = Math.max(rec.blocksDone[fi] ?? 0, bi + 1);
       rec.bytesDone = rec.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, rec.content!.files[i]!.size), 0);
       rec.activityAt = this.now();
+      this.accountRelay(rec, run);
     });
     run.session = session;
-    this.bindEstablished(rec, session);
+    this.bindEstablished(rec, run, session);
     this.armWatchdog(rec, run);
     session.wait().then(() => {
       // All blocks acknowledged: the target now verifies and publishes; its `state` op finalises us.
@@ -370,13 +388,43 @@ export class ProjectTransferEngine {
    * that never connects does not flicker between "transferring" and "connecting" (bug 3: the state
    * used to flip to `transferring` the moment the session object was created, before any link).
    */
-  private bindEstablished(rec: TransferRecord, session: SenderSession | ReceiverSession): void {
+  private bindEstablished(rec: TransferRecord, run: RunCtx, session: SenderSession | ReceiverSession): void {
     const gen = rec.linkGen;
     session.onEstablished(() => {
       if (TERMINAL_STATES.has(rec.state) || rec.linkGen !== gen) return;
-      LOG.info(LOG_TAG, `${idTag(rec)} link ${gen} connected (direct)`);
-      if (rec.state === 'linking') this.setState(rec, 'transferring');
+      // In a relay-allowed run the link reports which path ICE really picked; a link that cannot say
+      // is trusted only as far as the mode it was created in (direct mode can never carry a relay).
+      let reported: 'direct' | 'relay' | 'unknown' = 'unknown';
+      try { reported = run.link?.transportPath?.() ?? 'unknown'; } catch { /* unreadable */ }
+      const path: 'direct' | 'relay' = reported === 'unknown' ? (run.relay ? 'relay' : 'direct') : reported;
+      rec.path = path;
+      run.relayActive = path === 'relay';
+      run.relayBase = rec.bytesDone;
+      run.relayCounted = 0;
+      LOG.info(LOG_TAG, `${idTag(rec)} link ${gen} connected (${path})`);
+      if (rec.state === 'linking') this.setState(rec, 'transferring'); else this.persist(rec);
     });
+  }
+
+  /** Refuse a relay attempt that cannot fit the per-transfer or the daily relay budget. */
+  private checkRelayLimits(rec: TransferRecord): void {
+    const remaining = Math.max(0, rec.totalBytes - rec.bytesDone);
+    if (rec.totalBytes > TRANSFER_LIMITS.relayMaxTransferBytes || this.store.relayUsedToday(this.now()) + remaining > TRANSFER_LIMITS.relayDailyBytes) {
+      throw new SessionError('RELAY_LIMIT_EXCEEDED', 'relay transfer limit');
+    }
+  }
+
+  /** Count bytes that crossed a relayed link (called on every progress step); enforces the limits mid-flight. */
+  private accountRelay(rec: TransferRecord, run: RunCtx): void {
+    if (!run.relayActive) return;
+    const moved = Math.max(0, rec.bytesDone - (run.relayBase ?? 0));
+    const delta = moved - (run.relayCounted ?? 0);
+    if (delta <= 0) return;
+    run.relayCounted = moved;
+    const day = this.store.addRelayBytes(delta, this.now());
+    if (moved > TRANSFER_LIMITS.relayMaxTransferBytes || day > TRANSFER_LIMITS.relayDailyBytes) {
+      this.terminate(rec, 'failed', 'RELAY_LIMIT_EXCEEDED', true);
+    }
   }
 
   private armWatchdog(rec: TransferRecord, run: RunCtx): void {
@@ -391,8 +439,19 @@ export class ProjectTransferEngine {
 
   private onSessionFailure(rec: TransferRecord, run: RunCtx, err: Error): void {
     if (TERMINAL_STATES.has(rec.state) || run.cancelled) return;
+    // A run replaced by a newer link attempt (the peer sent fresh `content`) must not end the transfer.
+    if (this.runs.get(rec.id) !== run) return;
     const code = err instanceof SessionError ? err.code : 'INTERNAL_ERROR';
     LOG.warn(LOG_TAG, `${idTag(rec)} link ${rec.linkGen} failed code=${code}`);
+    // A direct path that cannot exist is not final when both daemons allow a relay: the source retries
+    // with relay allowed, the target waits (paused) for that retry like for any lost link.
+    if (code === 'DIRECT_UNAVAILABLE' && !run.relay && this.relayAllowed()) {
+      this.setState(rec, 'paused', 'paused');
+      try { run.link?.close(); } catch { /* ignore */ }
+      run.link = undefined; run.session = undefined;
+      if (rec.role === 'source') this.escalateToRelay(rec, run);
+      return;
+    }
     if (code === 'LINK_LOST' || code === 'PEER_ABORT') {
       this.setState(rec, 'paused', 'paused');
       try { run.link?.close(); } catch { /* ignore */ }
@@ -403,7 +462,20 @@ export class ProjectTransferEngine {
     this.terminate(rec, 'failed', code, true);
   }
 
+  /** Direct attempts are over and this daemon allows a relay: retry the link with TURN candidates. */
+  private escalateToRelay(rec: TransferRecord, run: RunCtx): void {
+    run.relay = true;
+    run.retries = 0;
+    LOG.info(LOG_TAG, `${idTag(rec)} direct connection unavailable; retrying with relay allowed`);
+    run.retryTimer = setTimeout(() => {
+      if (TERMINAL_STATES.has(rec.state)) return;
+      this.openSourceLink(rec, run).catch((e) => this.onSessionFailure(rec, run, e instanceof Error ? e : new SessionError('INTERNAL_ERROR', String(e))));
+    }, 0);
+    run.retryTimer.unref?.();
+  }
+
   private scheduleRetry(rec: TransferRecord, run: RunCtx): void {
+    if (!run.relay && run.retries >= TRANSFER_LIMITS.directRetriesBeforeRelay && this.relayAllowed()) { this.escalateToRelay(rec, run); return; }
     if (run.retries >= 5) { this.terminate(rec, 'failed', 'DIRECT_UNAVAILABLE', true); return; }
     const delay = Math.min(30_000, 1000 * 2 ** run.retries++);
     LOG.info(LOG_TAG, `${idTag(rec)} retry ${run.retries}/5 scheduled in ${delay}ms`);
@@ -478,6 +550,11 @@ export class ProjectTransferEngine {
     if (args.selectionDigest !== rec.selectionDigest) return fail('APPROVAL_MISMATCH');
     const content = validateContentManifest(args.content, rec.selection);
     if (!Number.isInteger(args.linkGen) || args.linkGen <= rec.linkGen) return fail('PROTOCOL_ERROR');
+    const relay = args.relay === true;
+    if (relay) {
+      if (!this.relayAllowed()) return fail('RELAY_NOT_ALLOWED');
+      try { this.checkRelayLimits(rec); } catch (e) { return fail((e as SessionError).code); }
+    }
     const key = Buffer.from(String(args.linkKeyB64 ?? ''), 'base64');
     if (key.length !== 32) return fail('PROTOCOL_ERROR');
     if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec.state)) return fail('TOO_MANY_TRANSFERS');
@@ -488,12 +565,13 @@ export class ProjectTransferEngine {
 
     const prev = this.runs.get(rec.id);
     if (prev) { clearInterval(prev.watchdog); try { prev.session?.abort('SUPERSEDED'); prev.link?.close(); } catch { /* ignore */ } prev.receiver?.dispose(); }
-    const run: RunCtx = { retries: 0, cancelled: false, starting: false, linkKey: key };
+    const run: RunCtx = { ...newRun(), linkKey: key, ...(relay ? { relay: true } : {}) };
     rec.content = content;
     rec.linkGen = args.linkGen;
     if (rec.blocksDone.length !== content.files.length) rec.blocksDone = content.files.map(() => 0);
     const receiver = new TransferReceiver(ws.path, rec.selection, content, (fi, blocks, bytes) => {
       rec.blocksDone[fi] = blocks; rec.bytesDone = bytes; this.persist(rec);
+      this.accountRelay(rec, run);
     });
     let resume: number[];
     try { resume = receiver.init(rec.blocksDone); } catch (e) { receiver.dispose(); throw e; }
@@ -502,13 +580,13 @@ export class ProjectTransferEngine {
     this.runs.set(rec.id, run);
     this.setState(rec, 'linking');
     LOG.info(LOG_TAG, `${idTag(rec)} link attempt ${rec.linkGen} started (responder)`);
-    const link = factory.create({ transferId: rec.id, role: 'responder', linkGen: rec.linkGen });
+    const link = factory.create({ transferId: rec.id, role: 'responder', linkGen: rec.linkGen, ...(relay ? { allowRelay: true } : {}) });
     run.link = link;
     link.onSignalOut((s) => { void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'signal', transferId: rec.id, linkGen: rec.linkGen, signal: s }).catch(() => {}); });
     const session = new ReceiverSession(link, rec.id, rec.linkGen, key, receiver, resume);
     run.session = session;
     this.armWatchdog(rec, run);
-    this.bindEstablished(rec, session);
+    this.bindEstablished(rec, run, session);
     session.wait().then(() => this.finishTarget(rec, run), (e: Error) => this.onSessionFailure(rec, run, e));
     return { ok: true };
   }
@@ -518,11 +596,11 @@ export class ProjectTransferEngine {
     if (!run?.link || args.linkGen !== rec.linkGen) return fail('STALE_LINK');
     const s = args.signal as TransferSignal;
     if (!s || !['offer', 'answer', 'candidate'].includes(s.kind)) return fail('PROTOCOL_ERROR');
-    if (typeof s.candidate === 'string' && / typ relay\b/.test(s.candidate)) return fail('RELAY_CANDIDATE_REFUSED');
+    if (!run.relay && typeof s.candidate === 'string' && / typ relay\b/.test(s.candidate)) return fail('RELAY_CANDIDATE_REFUSED');
     if (s.kind !== 'candidate') {
       // A remote SDP may embed candidates and must carry exactly one DTLS fingerprint value.
       if (typeof s.sdp !== 'string') return fail('PROTOCOL_ERROR');
-      if (sdpHasRelayCandidate(s.sdp)) return fail('RELAY_CANDIDATE_REFUSED');
+      if (!run.relay && sdpHasRelayCandidate(s.sdp)) return fail('RELAY_CANDIDATE_REFUSED');
       if (!extractSdpFingerprint(s.sdp)) return fail('SDP_FINGERPRINT_INVALID');
     }
     run.link.signalIn(s);

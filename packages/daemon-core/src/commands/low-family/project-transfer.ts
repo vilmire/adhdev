@@ -43,6 +43,8 @@ function view(rec: TransferRecord) {
         fileCount: rec.selection.entries.filter((e) => e.kind === 'file').length,
         entries: rec.selection.entries, excluded: rec.selection.excluded,
         localApproved: !!rec.localApproval, peerApproved: rec.peerApproved === true,
+        // Network path of the latest established link; `relay` = bytes crossed a TURN relay (still end-to-end encrypted).
+        path: rec.path,
     };
 }
 
@@ -53,6 +55,16 @@ const handlers: Record<string, (ctx: LowFamilyContext, args: any) => Promise<R>>
         const engine = getProjectTransferEngine();
         if (!engine) return { success: true, supported: false, reasons: ['TRANSFER_UNAVAILABLE'] };
         return { success: true, ...engine.capabilities() };
+    },
+    // Per-machine option (default ON): allow falling back to a TURN relay when a direct connection fails.
+    project_transfer_set_relay: async (_ctx, args) => {
+        const denied = ownerOnly(args);
+        if (denied) return denied;
+        const engine = getProjectTransferEngine();
+        if (!engine) return unavailable();
+        if (typeof args?.allowRelay !== 'boolean') return { success: false, code: 'INVALID_ARGS', error: 'allowRelay (boolean) required' };
+        engine.setRelayAllowed(args.allowRelay);
+        return { success: true, relayAllowed: engine.relayAllowed() };
     },
     project_transfer_browse: async (_ctx, args) => {
         const denied = ownerOnly(args);
@@ -120,6 +132,7 @@ const OWNER_SOURCES = ['p2p', 'standalone'] as const;
 
 export const projectTransferSpecs = defineCommandSpecs('low', handlers, {
     project_transfer_capabilities: { sources: OWNER_SOURCES },
+    project_transfer_set_relay: { sources: OWNER_SOURCES },
     project_transfer_browse: { sources: OWNER_SOURCES },
     project_transfer_create: { sources: OWNER_SOURCES },
     project_transfer_approve: { sources: OWNER_SOURCES },

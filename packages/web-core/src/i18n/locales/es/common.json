@@ -4242,6 +4242,15 @@
             "sectionTitle": "Transferencia de archivos de proyecto",
             "sectionDescription": "Envía archivos entre tus propias máquinas. Los bytes viajan directamente punto a punto y llegan a una carpeta nueva; nunca se sobrescribe nada.",
             "secretsNote": "Los secretos (archivos .env, claves privadas, credenciales, .git) nunca se envían y no se pueden añadir.",
+            "relay": {
+                "title": "Enviar mediante un relé cuando no sea posible una conexión directa",
+                "recommended": "Recomendado",
+                "hint": "Si dos máquinas no pueden conectarse directamente (cortafuegos o NAT), la transferencia se reintenta automáticamente a través de un relé. Los archivos siguen cifrados de extremo a extremo: el relé solo reenvía bytes cifrados. Límites: 500 MB por transferencia y 2 GB por máquina al día. Ambas máquinas deben permitirlo.",
+                "chooseMachines": "Elige las máquinas de arriba para cambiar este ajuste en ellas.",
+                "machineToggle": "Permitir relé en {{machine}}",
+                "setFailed": "No se pudo cambiar el ajuste del relé",
+                "chip": "mediante relé"
+            },
             "noMachines": "Conecta al menos dos máquinas para transferir archivos.",
             "fromMachine": "Máquina de origen",
             "toMachine": "Máquina de destino",
@@ -4301,7 +4310,8 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "La transferencia falló",
             "errors": {
-                "DIRECT_UNAVAILABLE": "Estas dos máquinas no pueden conectarse directamente (cortafuegos o NAT). La transferencia de archivos necesita una conexión directa.",
+                "DIRECT_UNAVAILABLE": "Estas dos máquinas no pueden conectarse directamente (cortafuegos o NAT) y el envío mediante relé no está activado en ambas. Activa la opción de relé en esta sección para cada máquina para enviar igualmente.",
+                "RELAY_LIMIT_EXCEEDED": "Se alcanzó el límite del relé (500 MB por transferencia, 2 GB por máquina al día). Inténtalo mañana o reduce la selección.",
                 "LINK_UNAVAILABLE": "No se pudo establecer la conexión directa entre las máquinas. Comprueba que ambas estén en línea e inténtalo de nuevo.",
                 "LINK_LOST": "La conexión directa se cortó y no se pudo recuperar.",
                 "STALE_LINK": "Una conexión más reciente reemplazó a esta. Inicia la transferencia de nuevo.",

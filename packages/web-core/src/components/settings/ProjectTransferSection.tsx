@@ -61,7 +61,7 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [preview, setPreview] = useState<TransferView | null>(null)
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState('')
-    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[] }>>({})
+    const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[]; relayAllowed: boolean }>>({})
     const [transfers, setTransfers] = useState<TransferView[]>([])
     // Machines whose workspace list (daemon.metadata lane) is still being fetched.
     const [metaLoading, setMetaLoading] = useState<Set<string>>(new Set())
@@ -94,10 +94,26 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
         for (const id of [fromId, toId]) {
             if (!id || caps[id]) continue
             void call(sendRef.current, id, 'project_transfer_capabilities', {}).then(body => {
-                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [] } }))
-            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'] } })))
+                setCaps(prev => ({ ...prev, [id]: { supported: body.supported === true, reasons: Array.isArray(body.reasons) ? body.reasons : [], relayAllowed: body.relayAllowed !== false } }))
+            }).catch(() => setCaps(prev => ({ ...prev, [id]: { supported: false, reasons: ['UNREACHABLE'], relayAllowed: true } })))
         }
     }, [fromId, toId, caps])
+
+    // Per-machine relay option (default ON on the daemon; shown as recommended).
+    const setRelay = async (id: string, allowRelay: boolean) => {
+        const prev = caps[id]
+        if (!prev) return
+        setCaps(p => ({ ...p, [id]: { ...prev, relayAllowed: allowRelay } }))
+        try {
+            const body = await call(sendRef.current, id, 'project_transfer_set_relay', { allowRelay })
+            if (body.success !== true) throw new Error('set_relay failed')
+            setCaps(p => ({ ...p, [id]: { ...prev, relayAllowed: body.relayAllowed !== false } }))
+        } catch {
+            setCaps(p => ({ ...p, [id]: prev }))
+            setError(t('settings.projectTransfer.relay.setFailed'))
+        }
+    }
+    const relayMachines = [...new Set([fromId, toId].filter(id => id && caps[id]?.supported))]
 
     // Browse the source project.
     useEffect(() => {
@@ -229,6 +245,22 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                 </label>
             </div>
 
+            <div className="rounded-xl border border-border-subtle bg-bg-glass p-3 flex flex-col gap-1.5" data-testid="project-transfer-relay">
+                <div className="flex items-center gap-2 text-xs font-medium">
+                    {t('settings.projectTransfer.relay.title')}
+                    <span className="text-2xs font-normal text-accent-primary border border-border-subtle rounded px-1">{t('settings.projectTransfer.relay.recommended')}</span>
+                </div>
+                <div className="text-2xs text-text-muted">{t('settings.projectTransfer.relay.hint')}</div>
+                {relayMachines.length === 0
+                    ? <div className="text-2xs text-text-muted" data-testid="project-transfer-relay-choose">{t('settings.projectTransfer.relay.chooseMachines')}</div>
+                    : relayMachines.map(id => (
+                        <label key={id} className="flex items-center gap-2 text-xs">
+                            <input type="checkbox" checked={caps[id]?.relayAllowed !== false} onChange={e => { void setRelay(id, e.target.checked) }} data-testid={`project-transfer-relay-toggle-${id}`} />
+                            {t('settings.projectTransfer.relay.machineToggle', { machine: byId.get(id)?.name ?? id })}
+                        </label>
+                    ))}
+            </div>
+
             <label className="flex flex-col gap-1 text-xs">{t('settings.projectTransfer.newFolder')}
                 <input className="input" value={folder} onChange={e => setFolder(e.target.value)} data-testid="project-transfer-folder" />
                 <span className="text-text-muted">{t('settings.projectTransfer.newFolderHint')}</span>
@@ -304,7 +336,9 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
                     return (
                         <div key={tr.id} className="px-3.5 py-3 rounded-xl border border-border-subtle bg-bg-glass flex flex-col gap-1" data-testid={`project-transfer-row-${tr.id}`}>
                             <div className="flex items-start justify-between gap-2 text-xs">
-                                <span className="min-w-0 break-words">{tr.role === 'source' ? t('settings.projectTransfer.roleSource') : t('settings.projectTransfer.roleTarget')} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}</span>
+                                <span className="min-w-0 break-words">{tr.role === 'source' ? t('settings.projectTransfer.roleSource') : t('settings.projectTransfer.roleTarget')} · {tr.finalName} · {byId.get(tr.peerDaemonId)?.name ?? tr.peerDaemonId}
+                                    {tr.path === 'relay' && <span className="ml-1.5 text-2xs text-text-muted border border-border-subtle rounded px-1" data-testid={`project-transfer-path-${tr.id}`}>{t('settings.projectTransfer.relay.chip')}</span>}
+                                </span>
                                 <span className={`font-mono shrink-0 ${tr.state === 'failed' ? 'text-status-error' : tr.state === 'paused' ? 'text-status-warning' : ''}`} data-testid={`project-transfer-state-${tr.id}`}>{t(`settings.projectTransfer.state.${tr.state}`, { defaultValue: tr.state })}</span>
                             </div>
                             {!done && (

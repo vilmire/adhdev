@@ -4239,6 +4239,15 @@
             "sectionTitle": "项目文件传输",
             "sectionDescription": "在你自己的设备之间发送文件。数据通过点对点直连传输,并保存到新文件夹,绝不覆盖任何内容。",
             "secretsNote": "机密信息(.env 文件、私钥、凭据、.git)绝不会被发送,也无法手动添加。",
+            "relay": {
+                "title": "无法直接连接时通过中继发送",
+                "recommended": "推荐",
+                "hint": "如果两台设备无法直接连接（防火墙或 NAT），传输会自动改走中继重试。文件始终保持端到端加密，中继只转发加密后的字节。限制：每次传输 500 MB，每台设备每天 2 GB。两台设备都必须允许。",
+                "chooseMachines": "在上方选择设备后，可修改这些设备的设置。",
+                "machineToggle": "在 {{machine}} 上允许中继",
+                "setFailed": "无法更改中继设置",
+                "chip": "经中继"
+            },
             "noMachines": "至少连接两台设备才能传输文件。",
             "fromMachine": "源设备",
             "toMachine": "目标设备",
@@ -4298,7 +4307,8 @@
             "progressPercent": "{{percent}}%",
             "errorGeneric": "传输失败",
             "errors": {
-                "DIRECT_UNAVAILABLE": "这两台设备无法直接连接（防火墙或 NAT）。文件传输需要直接连接。",
+                "DIRECT_UNAVAILABLE": "这两台设备无法直接连接（防火墙或 NAT），且两台设备没有同时开启中继发送。请在本区域为每台设备开启中继选项后再发送。",
+                "RELAY_LIMIT_EXCEEDED": "已达到中继上限（每次传输 500 MB，每台设备每天 2 GB）。请明天再试，或减少所选内容。",
                 "LINK_UNAVAILABLE": "无法建立设备之间的直接连接。请确认两台设备都在线后重试。",
                 "LINK_LOST": "直接连接已断开且无法恢复。",
                 "STALE_LINK": "连接已被更新的连接取代。请重新开始传输。",

@@ -20,6 +20,8 @@ export interface TransferView {
     excluded: Array<{ path: string; reason: string }>
     localApproved: boolean
     peerApproved: boolean
+    /** Network path of the latest established link; `relay` = bytes crossed a TURN relay. */
+    path?: 'direct' | 'relay'
 }
 
 export interface BrowseEntry { name: string; kind: 'file' | 'dir' | 'other'; size?: number; excluded?: string }

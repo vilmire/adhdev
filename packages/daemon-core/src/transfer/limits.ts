@@ -21,6 +21,14 @@ export const TRANSFER_LIMITS = Object.freeze({
   /** Sender pauses while the link buffers more than this. */
   maxBufferedBytes: MIB,
   linkConnectTimeoutMs: 30_000,
+  /**
+   * Relay (TURN) fallback, owner decision 2026-11-02: per transfer and per daemon per UTC day.
+   * Counted locally; there is no server-side counter.
+   */
+  relayMaxTransferBytes: 500 * MIB,
+  relayDailyBytes: 2 * GIB,
+  /** Failed direct reconnects tolerated before escalating to a relay attempt (when both daemons allow it). */
+  directRetriesBeforeRelay: 2,
 });
 
 export const TRANSFER_RETENTION_MS = Object.freeze({

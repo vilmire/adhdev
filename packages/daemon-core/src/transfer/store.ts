@@ -49,6 +49,8 @@ export interface TransferRecord {
   bytesDone: number;
   totalBytes: number;
   publishedName?: string;
+  /** Network path of the most recent established link (direct, or through a TURN relay). */
+  path?: 'direct' | 'relay';
 }
 
 export interface TransferReceipt {
@@ -118,6 +120,34 @@ export class TransferStore {
 
   readReceipt(id: string): TransferReceipt | null {
     try { return JSON.parse(fs.readFileSync(this.p('receipts', `${id}.json`), 'utf8')) as TransferReceipt; } catch { return null; }
+  }
+
+  // ── relay option (owner decision 2026-11-02) ────────────────────────────────
+
+  /** Per-machine opt-out; relay fallback is ON unless the owner switched it off. */
+  readRelayAllowed(): boolean {
+    try { return JSON.parse(fs.readFileSync(this.p('settings.json'), 'utf8')).allowRelay !== false; } catch { return true; }
+  }
+
+  writeRelayAllowed(allowed: boolean): void {
+    this.atomicWrite(this.p('settings.json'), JSON.stringify({ allowRelay: allowed }));
+  }
+
+  private static dayKey(now: number): string { return new Date(now).toISOString().slice(0, 10); }
+
+  /** Relay bytes this daemon moved today (UTC day). */
+  relayUsedToday(now = Date.now()): number {
+    try {
+      const u = JSON.parse(fs.readFileSync(this.p('relay-usage.json'), 'utf8')) as { day?: string; bytes?: number };
+      return u.day === TransferStore.dayKey(now) && Number.isFinite(u.bytes) ? Math.max(0, Number(u.bytes)) : 0;
+    } catch { return 0; }
+  }
+
+  /** Add relay bytes to today's counter; returns the new total. */
+  addRelayBytes(bytes: number, now = Date.now()): number {
+    const total = this.relayUsedToday(now) + Math.max(0, Math.floor(bytes));
+    this.atomicWrite(this.p('relay-usage.json'), JSON.stringify({ day: TransferStore.dayKey(now), bytes: total }));
+    return total;
   }
 
   /** Masked audit line: no file names, no paths. */

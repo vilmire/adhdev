@@ -1,7 +1,9 @@
 /**
- * Port for the dedicated bulk connection. The host (daemon-cloud) supplies a STUN-only
- * WebRTC implementation; tests use {@link createMemoryLinkPair}. A host that supplies no
- * factory cannot transfer (capabilities.supported=false) — there is no fallback transport.
+ * Port for the dedicated bulk connection. The host (daemon-cloud) supplies a WebRTC
+ * implementation that is STUN-only unless `allowRelay` is set (owner-approved TURN fallback,
+ * see docs/design/2026-11-02-file-transfer-relay-option.md); tests use {@link createMemoryLinkPair}.
+ * A host that supplies no factory cannot transfer (capabilities.supported=false) — there is no
+ * fallback transport.
  */
 export interface TransferSignal {
   kind: 'offer' | 'answer' | 'candidate';
@@ -24,11 +26,14 @@ export interface TransferLink {
   /** DTLS fingerprints (`alg HEX:HEX`), available once SDP has been exchanged. */
   localFingerprint(): string | null;
   remoteFingerprint(): string | null;
+  /** Network path the opened link actually uses. Absent/`unknown` is treated as the mode requested. */
+  transportPath?(): 'direct' | 'relay' | 'unknown';
   close(): void;
 }
 
 export interface TransferLinkFactory {
-  create(opts: { transferId: string; role: 'initiator' | 'responder'; linkGen: number }): TransferLink;
+  /** `allowRelay`: gather TURN candidates and accept relayed pairs. Default (absent/false): STUN-only, relay refused. */
+  create(opts: { transferId: string; role: 'initiator' | 'responder'; linkGen: number; allowRelay?: boolean }): TransferLink;
 }
 
 /** In-memory pair for tests: byte-faithful, ordered, with optional fingerprint override. */
