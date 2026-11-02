@@ -183,27 +183,46 @@ export function buildHistoryTimeCursor(message: { receivedAt?: number; role?: st
     return `${HISTORY_TIME_CURSOR_PREFIX}${Math.floor(at)}:${message.role || ''}:${hashHistoryCursorContent(message.content || '')}`;
 }
 
-export function parseHistoryTimeCursor(cursor: string | undefined): { receivedAt: number; role: string; hash: string } | null {
+/** How far past "now" a cursor timestamp may sit before it is treated as forged/garbled. */
+export const HISTORY_TIME_CURSOR_MAX_SKEW_MS = 5 * 60 * 1000;
+
+export function parseHistoryTimeCursor(cursor: string | undefined, now: number = Date.now()): { receivedAt: number; role: string; hash: string } | null {
     if (!cursor || !cursor.startsWith(HISTORY_TIME_CURSOR_PREFIX)) return null;
     const parts = cursor.slice(HISTORY_TIME_CURSOR_PREFIX.length).split(':');
     if (parts.length !== 3) return null;
     const receivedAt = Number(parts[0]);
     if (!Number.isFinite(receivedAt) || receivedAt <= 0) return null;
+    if (receivedAt > now + HISTORY_TIME_CURSOR_MAX_SKEW_MS) return null;
     return { receivedAt, role: parts[1]!, hash: parts[2]! };
 }
 
 /**
- * Index of the first row of `rows` (sorted by receivedAt) that must NOT be
- * paged - everything before it is strictly older than the cursor. -1 when the
- * cursor is malformed (caller falls back to the count).
+ * Canonical form of a time cursor for cache keys: unbounded distinct cursor strings (garbage,
+ * future timestamps, any non-cursor text) must not each claim an LRU slot. Anything that is not a
+ * usable time cursor collapses to one key; a usable one keeps only its three parsed fields.
  */
-export function resolveTimeCursorIndex(rows: ReadonlyArray<{ receivedAt?: number; role?: string; content?: string }>, cursor: string | undefined): number {
+export function canonicalHistoryCursorKey(cursor: string | undefined): string {
+    if (!cursor) return '';
     const parsed = parseHistoryTimeCursor(cursor);
-    if (!parsed) return -1;
+    if (parsed) return `t:${parsed.receivedAt}:${parsed.role}:${parsed.hash}`;
+    // Non-time identity cursors (count-path identities) are bounded by the caller's own live rows.
+    return cursor.startsWith(HISTORY_TIME_CURSOR_PREFIX) ? 'ts-invalid' : cursor.length > 128 ? `long:${hashHistoryCursorContent(cursor)}` : cursor;
+}
+
+/**
+ * Where a time cursor sits in `rows` (sorted by receivedAt). `index` is the first row that must NOT
+ * be paged - everything before it is strictly older than the cursor. `exact` is true when the
+ * anchor row itself was found. `index` is -1 when the cursor is malformed or implausible, and
+ * `rows.length` when it is newer than every row: neither is a boundary the daemon can vouch for,
+ * so callers treat both as unresolved and fall back to the count.
+ */
+export function resolveTimeCursorIndex(rows: ReadonlyArray<{ receivedAt?: number; role?: string; content?: string }>, cursor: string | undefined): { index: number; exact: boolean } {
+    const parsed = parseHistoryTimeCursor(cursor);
+    if (!parsed) return { index: -1, exact: false };
     for (let i = rows.length - 1; i >= 0; i -= 1) {
         const row = rows[i]!;
         if (Math.floor(Number(row.receivedAt)) === parsed.receivedAt && (row.role || '') === parsed.role
-            && hashHistoryCursorContent(row.content || '') === parsed.hash) return i;
+            && hashHistoryCursorContent(row.content || '') === parsed.hash) return { index: i, exact: true };
     }
     let low = 0;
     let high = rows.length;
@@ -212,7 +231,7 @@ export function resolveTimeCursorIndex(rows: ReadonlyArray<{ receivedAt?: number
         if (Number(rows[mid]!.receivedAt) < parsed.receivedAt) low = mid + 1;
         else high = mid;
     }
-    return low;
+    return { index: low, exact: false };
 }
 
 export function pageHistoryRecords(
@@ -224,6 +243,8 @@ export function pageHistoryRecords(
     historyBehavior?: ProviderHistoryBehavior,
     excludeFromIdentity?: string,
     excludeActivity: boolean = false,
+    /** False when `records` is only the newest slice of a longer history (the bounded reader stopped early). */
+    windowComplete: boolean = true,
 ): { messages: HistoryMessage[]; hasMore: boolean; boundaryResolved?: boolean; boundaryDigest?: string; boundaryKind?: 'time' } {
     // chat_history's prose-only default (mirrors read_chat's `includeActivity`
     // opt-in contract). Applied BEFORE dedup/collapse/paging so offset/limit/
@@ -248,11 +269,22 @@ export function pageHistoryRecords(
     // below gets wrong. Falls back to the count when the cursor is absent or
     // unresolvable — see findCollapsedIndexByIdentity.
     const timeCursor = parseHistoryTimeCursor(excludeFromIdentity) !== null;
-    const cursorIndex = !excludeFromIdentity
-        ? -1
-        : timeCursor
-            ? resolveTimeCursorIndex(collapsed, excludeFromIdentity)
-            : findCollapsedIndexByIdentity(collapsed, excludeFromIdentity);
+    let cursorIndex = -1;
+    let timeResolved = false;
+    if (excludeFromIdentity) {
+        if (timeCursor) {
+            const located = resolveTimeCursorIndex(collapsed, excludeFromIdentity);
+            // In range only: a cursor newer than every row matched nothing, and a cursor older than
+            // every row of a PARTIAL window says nothing about rows we did not read.
+            const inRange = located.index >= 0 && located.index < collapsed.length;
+            if (inRange && (located.exact || located.index > 0 || windowComplete)) {
+                cursorIndex = located.index;
+                timeResolved = true;
+            }
+        } else {
+            cursorIndex = findCollapsedIndexByIdentity(collapsed, excludeFromIdentity);
+        }
+    }
     const boundedExclude = cursorIndex >= 0
         ? collapsed.length - cursorIndex
         : Math.min(normalizePaginationNumber(excludeRecentCount, 0, 0), collapsed.length);
@@ -263,7 +295,7 @@ export function pageHistoryRecords(
         ...(excludeFromIdentity ? { boundaryResolved: cursorIndex >= 0,
             // A resolved time cursor is acknowledged explicitly: a daemon that predates it answers
             // with the count and never sets this, which is how the caller tells the two apart.
-            ...(timeCursor && cursorIndex >= 0 ? { boundaryKind: 'time' as const } : {}),
+            ...(timeResolved ? { boundaryKind: 'time' as const } : {}),
             ...(cursorIndex >= 0 && cursorIndex < collapsed.length ? { boundaryDigest: historyBoundaryDigest(collapsed[cursorIndex]!) } : {}) } : {}),
     };
 }
@@ -272,7 +304,7 @@ export function pageHistoryRecords(
 // of the whole conversation. Treat very large limits (e.g. MAX_SAFE_INTEGER, or
 // anything past a generous ceiling) as a full-history request so restore/seed
 // callers keep their existing behavior.
-const BOUNDED_TAIL_MAX_LIMIT = 5_000;
+export const BOUNDED_TAIL_MAX_LIMIT = 5_000;
 // Slack added to the requested window before sorting/dedup/collapse so the
 // boundary message at the top of the tail dedupes/collapses identically to a
 // full read. Modest and bounded — it only widens the parse window, not output.

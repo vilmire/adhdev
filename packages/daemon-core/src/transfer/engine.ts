@@ -119,8 +119,8 @@ export class ProjectTransferEngine {
   }
 
   private resolveHits = new Map<string, { windowStart: number; n: number }>();
-  /** Per-peer limit for the workspace-name probe op: 30 per minute. */
-  private resolveAllowed(peer: string): boolean {
+  /** Per-peer limit shared by the workspace-name probe op and the agent peer ops (agent_request/status/cancel): 30 per minute. */
+  peerOpAllowed(peer: string): boolean {
     const t = this.now();
     const h = this.resolveHits.get(peer);
     if (!h || t - h.windowStart > 60_000) { this.resolveHits.set(peer, { windowStart: t, n: 1 }); return true; }
@@ -670,7 +670,7 @@ export class ProjectTransferEngine {
       // Which of MY workspaces does this name mean? Exact id or label only (never a path), only among the
       // workspaces of a mesh the asker shares with me, rate limited. Id and label leave; paths never do.
       if (!sender || !this.ports.isPeerAuthorized(sender)) return fail('PEER_UNAUTHORIZED');
-      if (!this.resolveAllowed(sender)) return fail('RATE_LIMITED');
+      if (!this.peerOpAllowed(sender)) return fail('RATE_LIMITED');
       const scope = resolveMeshScope(String(args?.meshId ?? '').slice(0, 200), this.ports.selfDaemonId(), sender);
       const w = scope ? matchScopedWorkspace(scope, String(args?.query ?? '').slice(0, 1024)) : null;
       return w ? { ok: true, workspaceId: w.id, ...(w.label ? { label: w.label } : {}) } : fail('WORKSPACE_NOT_IN_SCOPE');

@@ -296,3 +296,50 @@ describe('coordinator workspace scope (local source)', () => {
     expect(await agent({ ...REMOTE, fromDaemonId: undefined })).toMatchObject({ success: false, code: 'WORKSPACE_NOT_IN_SCOPE' });
   });
 });
+
+describe('review hardening: source machine, validation order, agent-op rate limit', () => {
+  it('a coordinator naming a source machine outside its project is refused with one generic code, before anything is forwarded', async () => {
+    const { s } = world({ 'proj/a.txt': 'x' });
+    const stranger = await agent({ ...REMOTE, fromDaemonId: 'daemon_mach_stranger' });
+    expect(stranger).toMatchObject({ success: false, code: 'machine_not_in_project' });
+    expect(s.engine.list()).toEqual([]);
+    // status/cancel naming a stranger machine get the very same answer
+    expect(await agent({ action: 'status', fromDaemonId: 'daemon_mach_stranger' })).toMatchObject({ success: false, code: 'machine_not_in_project' });
+    // a roster machine and the agent's own daemon still work
+    expect(await agent(REMOTE)).toMatchObject({ success: true });
+    expect(await agent({ ...REMOTE, fromDaemonId: 'daemon_mach_a', fromWorkspace: 'adst', toDaemonId: 'daemon_mach_b' }).then((r) => r.code)).not.toBe('machine_not_in_project');
+  });
+
+  it('a malformed request is answered the same whether or not the source workspace is in scope', async () => {
+    const { s } = world({ 'proj/a.txt': 'x' });
+    const ask = (request: Record<string, unknown>) => s.engine.handlePeerOp('daemon_mach_a', { op: 'agent_request', caller: { role: 'coordinator', sessionId: 'coord-session-1', meshId }, request });
+    const shapes: Array<Record<string, unknown>> = [
+      { toDaemonId: '', selected: ['proj'], targetMode: 'new_folder', finalName: 'x' },
+      { toDaemonId: 'daemon_mach_b', selected: [], targetMode: 'new_folder', finalName: 'x' },
+      { toDaemonId: 'daemon_mach_b', selected: ['proj'], targetMode: 'bogus', finalName: 'x' },
+    ];
+    for (const shape of shapes) {
+      const inScope = await ask({ ...shape, fromWorkspace: 'src' });
+      const outOfScope = await ask({ ...shape, fromWorkspace: 'unscoped' });
+      const unknown = await ask({ ...shape, fromWorkspace: 'nonexistent' });
+      expect(inScope.ok).toBe(false);
+      expect(inScope.code).not.toBe('WORKSPACE_NOT_IN_SCOPE');
+      expect(outOfScope).toEqual(inScope);
+      expect(unknown).toEqual(inScope);
+    }
+  });
+
+  it('agent_request / agent_status / agent_cancel share the per-peer budget of resolve_workspace', async () => {
+    const { s } = world({ 'proj/a.txt': 'x' });
+    const caller = { role: 'coordinator', sessionId: 'coord-session-1', meshId };
+    const ops = ['agent_status', 'agent_cancel', 'agent_request'];
+    let limited = 0;
+    for (let i = 0; i < 40; i++) {
+      const r = await s.engine.handlePeerOp('daemon_mach_a', { op: ops[i % 3], caller, transferId: 'tr_missing', request: { ...REMOTE, fromWorkspace: 'nonexistent' } });
+      if (r.code === 'RATE_LIMITED') limited++;
+    }
+    expect(limited).toBe(10);
+    // another peer keeps its own budget
+    expect((await s.engine.handlePeerOp('daemon_mach_b', { op: 'agent_status', caller })).code).not.toBe('RATE_LIMITED');
+  });
+});

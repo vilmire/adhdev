@@ -118,7 +118,7 @@ test('a replica that reaches the start of the chat answers any tail without a li
     assert.equal(liveCalls.length, 0);
     assert.equal(parsed.messages.length, 40);
     assert.equal(parsed.truncated, undefined);
-    assert.equal(parsed.totalMessagesIsLowerBound, undefined);
+    assert.equal(parsed.totalMessagesIsLowerBound, false, "a complete replica states its total is exact (adapter emits false, not absent)");
   } finally { cleanup(meshId); }
 });
 
@@ -140,5 +140,26 @@ test('a replica window with fewer prose messages than a compact read needs reads
   try {
     await meshReadChat(ctx, { node_id: 'node-remote', session_id: 'sess-remote' });
     assert.equal(liveCalls.length, 1, 'default tail 10 > 4 held, and older messages exist');
+  } finally { cleanup(meshId); }
+});
+
+test('an absurd tail is clamped for both the coverage decision and the relayed live read', async () => {
+  const meshId = 'mesh_replica_window_clamp_live';
+  const { ctx, liveCalls } = createCtx(meshId, snapshot(200, true), 'ok');
+  try {
+    await meshReadChat(ctx, { node_id: 'node-remote', session_id: 'sess-remote', compact: false, tail: 1_000_000 });
+    assert.equal(liveCalls.length, 1);
+    assert.equal(liveCalls[0]!.tailLimit, 500, 'the relayed tailLimit is clamped');
+  } finally { cleanup(meshId); }
+});
+
+test('a replica holding the clamped maximum answers an absurd tail without a live read', async () => {
+  const meshId = 'mesh_replica_window_clamp_replica';
+  const { ctx, liveCalls } = createCtx(meshId, snapshot(600, true), 'ok');
+  try {
+    const parsed = JSON.parse(await meshReadChat(ctx, { node_id: 'node-remote', session_id: 'sess-remote', compact: false, tail: 1_000_000 }));
+    assert.equal(liveCalls.length, 0, 'a huge tail no longer forces a live relay');
+    assert.equal(parsed.transcriptReadSource, 'replica');
+    assert.equal(parsed.messages.length, 500);
   } finally { cleanup(meshId); }
 });

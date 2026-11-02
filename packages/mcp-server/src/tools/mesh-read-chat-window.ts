@@ -9,9 +9,18 @@
 
 type ReadChatTailArgs = { tail?: number; compact?: boolean };
 
+/** Largest tail one read may ask for; a bigger request is clamped, never relayed as-is. */
+export const MAX_READ_CHAT_TAIL = 500;
+
+/** The caller's `tail` after validation and the ceiling (default 10): the value a live read relays. */
+export function clampedReadChatTail(args: ReadChatTailArgs): number {
+    const tail = typeof args.tail === 'number' && Number.isInteger(args.tail) && args.tail > 0 ? args.tail : 10;
+    return Math.min(tail, MAX_READ_CHAT_TAIL);
+}
+
 /** How many messages this read asks for: compact mode caps its tail at 10, compact:false does not. */
 export function requestedReadChatTail(args: ReadChatTailArgs): number {
-    const tail = typeof args.tail === 'number' && Number.isInteger(args.tail) && args.tail > 0 ? args.tail : 10;
+    const tail = clampedReadChatTail(args);
     return args.compact === false ? tail : Math.min(tail, 10);
 }
 

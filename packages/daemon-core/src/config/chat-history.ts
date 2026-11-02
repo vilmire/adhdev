@@ -17,11 +17,15 @@ import type { ProviderHistoryBehavior } from '../providers/contracts.js';
 import { isActivityChatMessage } from '../providers/chat-message-normalization.js';
 import { getHistoryDir, listHistoryFiles } from './chat-history-files.js';
 import { savedHistorySessionCache, buildSavedHistoryFileSignatureMap, buildSavedHistoryCacheSignature, invalidatePersistedSavedHistoryIndex, updateSavedHistoryIndexForSessionStart, updateSavedHistoryIndexForAppendedMessages } from './saved-history-index.js';
-import { readBoundedTailCache, writeBoundedTailCache, pageHistoryRecords, BOUNDED_TAIL_SLACK, isBoundedTailRequest, readBoundedTailRecords, parseHistoryTimeCursor } from './chat-history-tail.js';
+import { readBoundedTailCache, writeBoundedTailCache, pageHistoryRecords, BOUNDED_TAIL_SLACK, isBoundedTailRequest, readBoundedTailRecords, parseHistoryTimeCursor, canonicalHistoryCursorKey, BOUNDED_TAIL_MAX_LIMIT } from './chat-history-tail.js';
 import { cleanupHistoryContent, buildHistoryMessageHash, buildHistoryMessageSignature, dedupeAdjacentHistoryMessages, collapseReplayAssistantTurns, sanitizeHistoryMessage, type HistoryMessage } from './chat-history-messages.js';
 const RETAIN_DAYS = 30;
 /** Ceiling for widening the bounded-tail read to reach a deep time cursor; past it the whole history is read. */
 const BOUNDED_TAIL_CURSOR_MAX_WINDOW = 200_000;
+// A cursor may sit deep, but each widening re-reads the tail (synchronously), so the number of doublings
+// is capped: 2^5 = 32x the first window. A cursor deeper than that is answered from the window in hand
+// with hasMore:true and no boundary acknowledgement (the caller falls back to its count path).
+const BOUNDED_TAIL_CURSOR_MAX_WIDENINGS = 5;
 
 export class ChatHistoryWriter {
 /** Last seen message count per agent (deduplication) */
@@ -493,7 +497,7 @@ export function readChatHistory(
 
         if (bounded) {
             const fileSignatures = buildSavedHistoryFileSignatureMap(dir, files);
-            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${excludeFromIdentity || ''}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}\0${excludeActivity ? '1' : '0'}`;
+            const cacheKey = `${sanitized}\0${historySessionId || ''}\0${offset}\0${limit}\0${excludeRecentCount}\0${canonicalHistoryCursorKey(excludeFromIdentity)}\0${historyBehavior?.collapseConsecutiveAssistantTurns ? '1' : '0'}\0${excludeActivity ? '1' : '0'}`;
             const signature = buildSavedHistoryCacheSignature(files, fileSignatures);
             const cached = readBoundedTailCache(cacheKey, signature);
             if (cached) return cached;
@@ -510,14 +514,25 @@ export function readChatHistory(
             // of rows older than it is in hand (or the whole conversation has been read).
             const timeCursor = parseHistoryTimeCursor(excludeFromIdentity);
             if (timeCursor) {
-                let window = needed;
+                // Rows older than the cursor we want in hand; offset is clamped to the bounded path's ceiling
+                // so a hostile offset cannot push the threshold past what a read can ever satisfy.
+                const target = numericLimit + Math.min(numericOffset, BOUNDED_TAIL_MAX_LIMIT) + Math.max(BOUNDED_TAIL_SLACK, numericLimit);
                 const olderThanCursor = (rows: HistoryMessage[]) => rows.reduce((n, row) => n + (row.receivedAt < timeCursor.receivedAt && !(excludeActivity && isActivityChatMessage(row as any)) ? 1 : 0), 0);
-                while (!readAllFiles && window < BOUNDED_TAIL_CURSOR_MAX_WINDOW && olderThanCursor(records) < numericLimit + numericOffset + Math.max(BOUNDED_TAIL_SLACK, numericLimit)) {
-                    window *= 2;
-                    ({ records, readAllFiles } = readBoundedTailRecords(agentType, dir, files, window));
+                let window = needed;
+                let widenings = 0;
+                while (!readAllFiles && widenings < BOUNDED_TAIL_CURSOR_MAX_WIDENINGS && window < BOUNDED_TAIL_CURSOR_MAX_WINDOW && olderThanCursor(records) < target) {
+                    window = Math.min(window * 2, BOUNDED_TAIL_CURSOR_MAX_WINDOW);
+                    widenings += 1;
+                    const widened = readBoundedTailRecords(agentType, dir, files, window);
+                    // The tail reader may hand back more than asked for (its per-file cache keeps what an earlier,
+                    // wider read fetched), so "no growth" only proves exhaustion when the read also came up short.
+                    const exhausted = widened.records.length <= records.length && widened.records.length < window;
+                    records = widened.records;
+                    readAllFiles = widened.readAllFiles;
+                    if (exhausted) break;
                 }
             }
-            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity, excludeActivity);
+            const result = pageHistoryRecords(agentType, records, offset, limit, excludeRecentCount, historyBehavior, excludeFromIdentity, excludeActivity, readAllFiles);
             // If we read every file, the conversation is fully represented in the
             // window and pageHistoryRecords' hasMore is authoritative. If we
             // stopped early there are older messages we never read, so hasMore

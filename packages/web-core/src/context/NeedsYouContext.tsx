@@ -27,6 +27,7 @@ import {
     NEEDS_YOU_ANSWER_COMMAND,
     NEEDS_YOU_LIVE_CHECK_COMMAND,
     NEEDS_YOU_LIST_COMMAND,
+    PENDING_ACTION_TTL_MS,
     applyPendingOwnerActions,
     buildNeedsYouEntries,
     mergeNeedsYouSnapshots,
@@ -61,6 +62,8 @@ export interface NeedsYouOutcome {
     ok: boolean
     /** Daemon error code / message when !ok. */
     code?: string
+    /** Free text of a failed answer, so the card can put it back in its field instead of losing it. */
+    text?: string
     action?: string
     delivery?: string
 }
@@ -109,9 +112,23 @@ interface DaemonPart { snapshot: NeedsYouSnapshot; stale: boolean }
 
 const clockMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
-/** Dev-visible timing, so the real browser round trip can be measured live (`localStorage.debug`-free: console.debug is hidden by default). */
+/** Set `localStorage['needs-you-debug']` to any non-empty value other than "0" to log round-trip timings. */
+export const NEEDS_YOU_DEBUG_FLAG = 'needs-you-debug'
+
+function timingEnabled(): boolean {
+    try {
+        const v = typeof localStorage !== 'undefined' ? localStorage.getItem(NEEDS_YOU_DEBUG_FLAG) : null
+        return !!v && v !== '0'
+    } catch { return false }
+}
+
+/** Fixed failure classes: raw error text (which can carry ids or content) never reaches the console. */
+type FailureClass = 'timeout' | 'transport' | 'refused'
+
+/** Opt-in timing, so the real browser round trip can be measured live (console.debug is hidden by default). */
 function logTiming(event: string, payload: Record<string, unknown>): void {
-    if (typeof console !== 'undefined') console.debug(`[needs-you] ${event}`, payload)
+    if (typeof console === 'undefined' || !timingEnabled()) return
+    console.debug(`[needs-you] ${event}`, payload)
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -145,6 +162,37 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
         [ides, connectionStates],
     )
     const daemonKey = daemonIds.join(',')
+    // A machine that left the set must not keep its old list or overlays: if it comes back it counts as
+    // "not loaded yet" instead of showing stale data as fresh. Late answers of the removed machine are dropped.
+    useEffect(() => {
+        const current = new Set(daemonKey ? daemonKey.split(',') : [])
+        for (const id of [...seqs.current.keys()]) if (!current.has(id)) seqs.current.set(id, (seqs.current.get(id) ?? 0) + 1)
+        setParts(prev => {
+            const ids = Object.keys(prev)
+            if (ids.every(id => current.has(id))) return prev
+            const out: Record<string, DaemonPart> = {}
+            for (const id of ids) if (current.has(id)) out[id] = prev[id]!
+            return out
+        })
+        setPending(prev => {
+            const entries = Object.entries(prev)
+            if (entries.every(([, a]) => current.has(a.daemonId))) return prev
+            return Object.fromEntries(entries.filter(([, a]) => current.has(a.daemonId)))
+        })
+    }, [daemonKey])
+    // Hard expiry: drop overlays when their time is up (the render path also ignores expired ones).
+    useEffect(() => {
+        const times = Object.values(pending).map(a => a.expiresAt).filter((t): t is number => t !== undefined)
+        if (times.length === 0) return
+        const timer = setTimeout(() => {
+            const now = Date.now()
+            setPending(prev => {
+                const kept = Object.entries(prev).filter(([, a]) => a.expiresAt === undefined || a.expiresAt > now)
+                return kept.length === Object.keys(prev).length ? prev : Object.fromEntries(kept)
+            })
+        }, Math.max(0, Math.min(...times) - Date.now()) + 1)
+        return () => clearTimeout(timer)
+    }, [pending])
     const approvals = useMemo(() => deriveProviderApprovalInbox(ides, connectionStates), [ides, connectionStates])
 
     // Owner-held writes live on whichever daemon staged them: aggregate across all connected daemons.
@@ -169,7 +217,8 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
             next = { snapshot: parseNeedsYouList(raw, id), stale: false }
             logTiming('list', { daemonId: id, ms: Math.round(clockMs() - t0), ok: true })
         } catch (e) {
-            logTiming('list', { daemonId: id, ms: Math.round(clockMs() - t0), ok: false, error: e instanceof Error ? e.message : String(e) })
+            const failure: FailureClass = e instanceof Error && e.message === 'timeout' ? 'timeout' : 'transport'
+            logTiming('list', { daemonId: id, ms: Math.round(clockMs() - t0), ok: false, failure })
         }
         if (seqs.current.get(id) !== mine) return
         if (next) {
@@ -264,21 +313,27 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
     const runPress = useCallback(async (
         label: string,
         input: { daemonId: string; meshId: string; itemId: string },
-        optimistic: PendingOwnerAction | null,
+        optimisticInput: PendingOwnerAction | null,
         send: () => Promise<NeedsYouOutcome>,
+        failExtra: Partial<NeedsYouOutcome> = {},
     ): Promise<NeedsYouOutcome> => {
         const key = pendingActionKey(input)
         const t0 = clockMs()
+        let optimistic = optimisticInput
+        if (optimistic) optimistic = { ...optimistic, expiresAt: Date.now() + PENDING_ACTION_TTL_MS }
         setBusyIds(prev => new Set(prev).add(input.itemId))
         setOutcomes(prev => { if (!(input.itemId in prev)) return prev; const next = { ...prev }; delete next[input.itemId]; return next })
         if (optimistic) setPending(prev => ({ ...prev, [key]: optimistic }))
         let outcome: NeedsYouOutcome
+        let thrown = false
         try {
             outcome = await send()
         } catch (e) {
+            thrown = true
             outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
         }
-        logTiming(label, { daemonId: input.daemonId, ms: Math.round(clockMs() - t0), ok: outcome.ok })
+        if (!outcome.ok) outcome = { ...outcome, ...failExtra }
+        logTiming(label, { daemonId: input.daemonId, ms: Math.round(clockMs() - t0), ok: outcome.ok, ...(outcome.ok ? {} : { failure: (thrown ? (outcome.code === 'timeout' ? 'timeout' : 'transport') : 'refused') satisfies FailureClass }) })
         setOutcomes(prev => ({ ...prev, [input.itemId]: outcome }))
         setBusyIds(prev => { const next = new Set(prev); next.delete(input.itemId); return next })
         if (optimistic) {
@@ -287,7 +342,7 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
                 const cur = prev[key]
                 if (cur !== optimistic) return prev
                 if (!outcome.ok) { const next = { ...prev }; delete next[key]; return next }
-                return { ...prev, [key]: { ...cur, confirmedAt } }
+                return { ...prev, [key]: { ...cur, confirmedAt, expiresAt: confirmedAt + PENDING_ACTION_TTL_MS } }
             })
         }
         // Not awaited: the card already shows the truth; the owning daemon's list catches up on its own.
@@ -296,6 +351,11 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
     }, [refreshDaemons])
 
     const answer = useCallback((input: NeedsYouAnswerInput): Promise<NeedsYouOutcome> => {
+        // Undo reopens the decision: whatever overlay still stands for it must go, or the card stays hidden.
+        if (input.undo) {
+            const undoKey = pendingActionKey(input)
+            setPending(prev => { if (!(undoKey in prev)) return prev; const next = { ...prev }; delete next[undoKey]; return next })
+        }
         const optimistic: PendingOwnerAction | null = input.undo ? null : {
             kind: 'answer', daemonId: input.daemonId, meshId: input.meshId, itemId: input.itemId,
             ...(input.optionId ? { optionId: input.optionId } : {}), ...(input.text ? { text: input.text } : {}), at: new Date().toISOString(),
@@ -314,7 +374,7 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
             return body?.success === true
                 ? { ok: true, ...(typeof body.action === 'string' ? { action: body.action } : {}), ...(typeof body.delivery === 'string' ? { delivery: body.delivery } : {}) }
                 : { ok: false, code: String(body?.code ?? body?.error ?? 'failed') }
-        })
+        }, input.text ? { text: input.text } : {})
     }, [runPress])
 
     const resolveLiveCheck = useCallback((input: NeedsYouLiveCheckInput): Promise<NeedsYouOutcome> => {

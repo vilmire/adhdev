@@ -12,6 +12,7 @@ import { readMeshSender } from '../mesh-sender.js';
 import { readAuthenticatedMcpCommand, readAuthenticatedMcpScope } from '../mcp-command-ingress.js';
 import { stripRouterInternalArgs } from '../router-internal-args.js';
 import { getProjectTransferEngine } from '../../transfer/runtime.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { runAgentTransfer } from '../../transfer/agent-transfer.js';
 import { resolveMeshScope } from '../../transfer/workspace-scope.js';
 import type { TransferRecord } from '../../transfer/store.js';
@@ -190,6 +191,12 @@ handlers.project_transfer_agent = async (_ctx, rawArgs) => {
     const args = stripRouterInternalArgs(raw) as Record<string, unknown>;
     // The coordinator may export only workspaces of the nodes of its OWN mesh on this machine.
     const engine = getProjectTransferEngine();
+    // Another machine may be named as the source only when it is this daemon or a node on the roster
+    // of the caller's own mesh. One generic code: it does not say which machines exist.
+    const fromRaw = str(args.fromDaemonId).trim();
+    if (fromRaw && engine && !daemonIdsEquivalent(fromRaw, engine.selfId()) && !resolveMeshScope(caller.meshId, engine.selfId(), fromRaw)) {
+        return { success: false, code: 'machine_not_in_project', error: 'fromDaemonId must be a machine of this project' };
+    }
     const scope = engine ? resolveMeshScope(caller.meshId, engine.selfId()) : null;
     return runAgentTransfer({ role: 'coordinator', sessionId: caller.sessionId, meshId: caller.meshId }, args, {
         sourceWorkspaceIds: scope ? new Set(scope.workspaces.map((w) => w.id)) : null,

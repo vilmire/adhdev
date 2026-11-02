@@ -1,4 +1,4 @@
-import { buildReplicaWindowNote, replicaCoversRequestedTail } from './mesh-read-chat-window.js';
+import { buildReplicaWindowNote, clampedReadChatTail, replicaCoversRequestedTail } from './mesh-read-chat-window.js';
 import { withProviderPinWarning } from './mesh-provider-pin-advisory.js';
 import type { NodeCapabilitySlot, ProviderApprovalTarget } from '@adhdev/mesh-shared';
 // Mesh tool implementations — session domain.
@@ -306,7 +306,7 @@ export async function meshReadChat(
             workspace: node.workspace,
             ...(cached?.providerType ? { agentType: cached.providerType, providerType: cached.providerType } : {}),
             ...(providerSessionId ? { providerSessionId } : {}),
-            tailLimit: args.tail ?? 10,
+            tailLimit: clampedReadChatTail(args),
         });
     } catch (e: any) {
         // Local read_chat and non-transport (provider/logic) failures keep the existing
@@ -396,7 +396,7 @@ function renderMeshReadChatPayload(
     // compact:false still honours `tail`: keep only the last N messages (a replica payload
     // is the whole retained transcript; a live read already asked for tailLimit=N, so this
     // is a no-op there) and say how many were left out.
-    const tail = typeof args.tail === 'number' && Number.isInteger(args.tail) && args.tail > 0 ? args.tail : undefined;
+    const tail = typeof args.tail === 'number' && Number.isInteger(args.tail) && args.tail > 0 ? clampedReadChatTail(args) : undefined;
     const messages = Array.isArray(payload.messages) ? payload.messages : undefined;
     const tailed = tail !== undefined && messages && messages.length > tail
         ? { messages: messages.slice(-tail), tailOmittedMessageCount: messages.length - tail }

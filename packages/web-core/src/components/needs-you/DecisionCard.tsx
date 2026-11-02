@@ -84,9 +84,11 @@ export default function DecisionCard({
 }: DecisionCardProps) {
     const { t } = useTranslation('common')
     const [picked, setPicked] = useState<string | undefined>(preselect)
-    const [text, setText] = useState('')
+    // A failed free-text answer comes back in the outcome (the card remounts when the optimistic overlay reverts): put it back.
+    const [text, setText] = useState(() => (outcome && !outcome.ok && outcome.text ? outcome.text : ''))
     const rootRef = useRef<HTMLDivElement>(null)
     useEffect(() => { setPicked(preselect) }, [preselect])
+    useEffect(() => { if (outcome && !outcome.ok && outcome.text) setText(cur => cur || outcome.text!) }, [outcome])
     useEffect(() => {
         if (highlighted) rootRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
     }, [highlighted])

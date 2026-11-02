@@ -22,6 +22,8 @@ function reply(r: R): { ok: boolean; code?: string; [k: string]: unknown } {
 
 export async function handleAgentPeerOp(engine: ProjectTransferEngine, sender: string, op: string, args: Record<string, any>): Promise<{ ok: boolean; code?: string; [k: string]: unknown }> {
   if (!sender || !engine.isPeerAllowed(sender)) return { ok: false, code: 'PEER_UNAUTHORIZED' };
+  // Same per-peer budget as resolve_workspace: a peer cannot use these ops to probe at line rate.
+  if (!engine.peerOpAllowed(sender)) return { ok: false, code: 'RATE_LIMITED' };
   const c = args?.caller as { role?: unknown; sessionId?: unknown; meshId?: unknown } | null;
   const role = c?.role;
   const sessionId = typeof c?.sessionId === 'string' ? c.sessionId : '';

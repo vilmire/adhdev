@@ -210,9 +210,17 @@ export function mergeNeedsYouSnapshots(parts: NeedsYouSnapshot[]): NeedsYouSnaps
 // ─── optimistic overlay ─────────────────────────────────────────────────────
 
 /** An owner press shown before the daemon confirms it (cleared on failure, or once a fresh list from the owning daemon arrives). */
+/**
+ * How long an optimistic overlay may outlive its press (and, once the daemon confirmed, its confirmation).
+ * A machine whose list keeps failing must not pin an overlay forever: an unconfirmed press whose command never
+ * came back reverts to the open card (the daemon never said it took it); a confirmed one hands the card back
+ * to whatever the machine's last list says (re-answering an already-answered decision is refused harmlessly).
+ */
+export const PENDING_ACTION_TTL_MS = 120_000
+
 export type PendingOwnerAction =
-    | { kind: 'answer'; daemonId: string; meshId: string; itemId: string; optionId?: string; text?: string; at: string; confirmedAt?: number }
-    | { kind: 'live_check'; daemonId: string; meshId: string; itemId: string; verdict: 'works' | 'doesnt_work'; confirmedAt?: number }
+    | { kind: 'answer'; daemonId: string; meshId: string; itemId: string; optionId?: string; text?: string; at: string; confirmedAt?: number; expiresAt?: number }
+    | { kind: 'live_check'; daemonId: string; meshId: string; itemId: string; verdict: 'works' | 'doesnt_work'; confirmedAt?: number; expiresAt?: number }
 
 export function pendingActionKey(a: { daemonId: string; meshId: string; itemId: string }): string {
     return `${a.daemonId}\u0000${a.meshId}\u0000${a.itemId}`
@@ -223,7 +231,8 @@ export function pendingActionKey(a: { daemonId: string; meshId: string; itemId: 
  * answered" (flagged `sending` until confirmed), a "Works" live check disappears, "Doesn't work" turns failed.
  * Pure; unmatched actions are ignored (the list may already carry the truth).
  */
-export function applyPendingOwnerActions(base: NeedsYouSnapshot, pending: readonly PendingOwnerAction[]): NeedsYouSnapshot {
+export function applyPendingOwnerActions(base: NeedsYouSnapshot, allPending: readonly PendingOwnerAction[], now: number = Date.now()): NeedsYouSnapshot {
+    const pending = allPending.filter(a => a.expiresAt === undefined || a.expiresAt > now)
     if (pending.length === 0) return base
     let decisions = base.decisions
     let liveChecks = base.liveChecks

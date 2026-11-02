@@ -99,7 +99,7 @@ describe('NeedsYouProvider — optimistic presses and per-daemon lists', () => {
         })
         await act(async () => { await latest!.answer({ daemonId: 'dA', meshId: 'm1', itemId: 'mi_1', text: 'hello' }) })
         expect(latest!.count).toBe(1)
-        expect(latest!.outcomes.mi_1).toEqual({ ok: false, code: 'p2p closed' })
+        expect(latest!.outcomes.mi_1).toEqual({ ok: false, code: 'p2p closed', text: 'hello' })
     })
 
     it('keeps the overlay after success until the owning daemon lists the answer, and re-fetches only that daemon', async () => {

@@ -9,7 +9,7 @@
  * a growing transcript and assert the displayed rows (history ++ live) are the
  * transcript exactly: each row once, in order, nothing missing.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReplicatedTranscriptViewV2 } from '@adhdev/daemon-core'
 import { pageHistoryRecords } from '../../../../daemon-core/src/config/chat-history-tail'
 import {
@@ -94,7 +94,9 @@ class Harness {
   }
 }
 
-afterEach(() => resetSessionChatControllersForTest())
+// The daemon rejects cursors stamped beyond now + skew, so pin the clock just after the fixture transcript.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(T0 + 1_000_000_000) })
+afterEach(() => { vi.useRealTimers(); resetSessionChatControllersForTest() })
 
 const contents = (messages: Array<{ content?: unknown }>) => messages.map((m) => String(m.content))
 

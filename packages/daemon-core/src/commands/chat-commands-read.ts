@@ -113,7 +113,9 @@ function readSafeSessionPtyHistoryPage(args: {
     const timeCursorUsable = parseHistoryTimeCursor(args.excludeFromIdentity) !== null
         && ptyMessages.every((message, i) => typeof message.receivedAt === 'number' && message.receivedAt > 0
             && (i === 0 || message.receivedAt >= (ptyMessages[i - 1]!.receivedAt as number)));
-    const cursorIndex = timeCursorUsable ? resolveTimeCursorIndex(ptyMessages as any, args.excludeFromIdentity) : -1;
+    const located = timeCursorUsable ? resolveTimeCursorIndex(ptyMessages as any, args.excludeFromIdentity) : { index: -1, exact: false };
+    // A cursor newer than every row matched nothing: count path, no acknowledgement.
+    const cursorIndex = located.index < ptyMessages.length ? located.index : -1;
     const exclude = cursorIndex >= 0 ? ptyMessages.length - cursorIndex : args.excludeRecentCount;
     const end = Math.max(0, ptyMessages.length - exclude - args.offset);
     const start = Math.max(0, end - args.limit);

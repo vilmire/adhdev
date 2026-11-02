@@ -64,17 +64,19 @@ export function agentView(rec: TransferRecord): Record<string, unknown> {
  * workspace outside it (or an unknown one - same answer, no probing) is refused.
  */
 export async function requestLocal(engine: ProjectTransferEngine, caller: AgentCaller, a: Record<string, unknown>, allowedSourceWorkspaceIds: ReadonlySet<string> | null): Promise<R> {
-  const from = findWorkspace(str(a.fromWorkspace));
-  if (!from || !allowedSourceWorkspaceIds?.has(from.id)) return bad('WORKSPACE_NOT_IN_SCOPE', 'fromWorkspace is not a workspace of this project on that machine (use its workspace id or label)');
+  // Shape first: a malformed request gets the same answer whatever the source name is, so it cannot
+  // be used to tell an in-scope workspace from an out-of-scope one.
   const toDaemonId = str(a.toDaemonId);
   if (!toDaemonId) return bad('INVALID_TARGET', 'toDaemonId is required');
   const selected = Array.isArray(a.selected) ? a.selected.filter((s): s is string => typeof s === 'string') : [];
   if (!selected.length) return bad('MANIFEST_INVALID', 'selected (paths relative to the source workspace) is required');
-  const target = await engine.resolveTargetWorkspace(toDaemonId, str(a.toWorkspace), caller.meshId);
-  if (!target) return bad('WORKSPACE_NOT_IN_SCOPE', 'toWorkspace is not a workspace of this project on the target machine (use its workspace id or label)');
   const mode = a.targetMode === 'existing_path' ? 'existing_path' : a.targetMode === undefined || a.targetMode === 'new_folder' ? 'new_folder' : null;
   if (!mode) return bad('INVALID_TARGET_MODE', "targetMode must be 'new_folder' or 'existing_path'");
   if (mode === 'new_folder' && !str(a.finalName)) return bad('INVALID_FINAL_NAME', 'finalName (the new folder name) is required');
+  const from = findWorkspace(str(a.fromWorkspace));
+  if (!from || !allowedSourceWorkspaceIds?.has(from.id)) return bad('WORKSPACE_NOT_IN_SCOPE', 'fromWorkspace is not a workspace of this project on that machine (use its workspace id or label)');
+  const target = await engine.resolveTargetWorkspace(toDaemonId, str(a.toWorkspace), caller.meshId);
+  if (!target) return bad('WORKSPACE_NOT_IN_SCOPE', 'toWorkspace is not a workspace of this project on the target machine (use its workspace id or label)');
   const requestedBy: TransferRequester = { role: caller.role, sessionId: caller.sessionId, ...(caller.viaDaemonId ? { viaDaemonId: caller.viaDaemonId } : {}) };
   ensureDecisionWithdrawal(engine);
   const created = await engine.create({

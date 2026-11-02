@@ -10,6 +10,7 @@ import type { SeqscribeNodeHandle } from '../../../../daemon-core/src/seqscribe/
 import { rig, waitFor, PRODUCER_WRITER, PRODUCER_DAEMON } from '../../transcript-transport/keyed-chat-rig'
 import { subscribeSessionChat } from '../../../src/transcript-transport/transcript-session-subscription'
 import { sessionChatPolicy, sessionChatTopic } from '../../../src/transcript-transport/topic-addressing'
+import { CHAT_LIVE_BUBBLES_MAX } from '../../../../daemon-core/src/seqscribe/transcript-keyed-codec'
 import { readSession } from '../../../../daemon-core/src/providers/native-history/codex-cli-transcript'
 import type { KeyedChatFrame } from '../../../../daemon-core/src/seqscribe/transcript-keyed-frame'
 import type { TranscriptObservation } from '../../../../daemon-core/src/seqscribe/transcript-observation'
@@ -62,6 +63,12 @@ afterEach(async () => {
 })
 
 it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing empty refresh, read/page failures and restore', async (count) => {
+  // The producer keeps only the newest CHAT_LIVE_BUBBLES_MAX bubbles live (4eed131db); older rows come from
+  // chat_history, so a long chat is asserted against the live window, not the full count.
+  const live = Math.min(count, CHAT_LIVE_BUBBLES_MAX)
+  const first = count - live
+  let appended = 0
+  const shift = () => Math.max(0, live + appended - CHAT_LIVE_BUBBLES_MAX)
   const controller = new SessionChatController({ daemonId: DAEMON, sessionId: SESSION })
   const r = await rig(SESSION)
   cleanup.push(() => r.close())
@@ -132,13 +139,13 @@ it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing emp
   const observedCounts: number[] = []
   const unsubscribe = controller.subscribe(state => observedCounts.push(state.liveMessages.length))
   const baselineIds = controller.getSnapshot().liveMessages.map(m => m.id)
-  const node = [...container.querySelectorAll('*')].find(el => el.textContent === 'synthetic history 0')!
+  const node = [...container.querySelectorAll('*')].find(el => el.textContent === `synthetic history ${first}`)!
   expect(node).toBeTruthy()
   const assertHistory = () => {
-    expect(controller.getSnapshot().liveMessages.slice(0, count).map(m => m.id)).toEqual(baselineIds)
-    expect(container.textContent).toContain('synthetic history 0')
+    expect(controller.getSnapshot().liveMessages.slice(0, live - shift()).map(m => m.id)).toEqual(baselineIds.slice(shift()))
+    expect(container.textContent).toContain(`synthetic history ${first + shift()}`)
     expect(container.textContent).toContain(`synthetic history ${count - 1}`)
-    expect(node.isConnected).toBe(true)
+    if (shift() === 0) expect(node.isConnected).toBe(true)
     expect(readSession(nativePath)!.messages.length).toBeGreaterThanOrEqual(count)
   }
   expect(readSession(`${nativePath}.unavailable`)).toBeNull()
@@ -172,6 +179,7 @@ it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing emp
   assertHistory()
   const echo = { role: 'user', content: 'synthetic new send', timestamp: 1700000010000 }
   const answer = { role: 'assistant', content: 'synthetic receipt answer', timestamp: 1700000010001 }
+  appended = 2
   fs.appendFileSync(nativePath, [echo, answer].map(nativeRow).join('\n') + '\n')
   const restoredMessages = readSession(nativePath)!.messages
   await act(async () => { read(restoredMessages); await settle() })
@@ -189,7 +197,7 @@ it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing emp
   assertHistory()
   await act(async () => { read(restoredMessages); await settle() })
   assertHistory()
-  expect(observedCounts.every(n => n >= count)).toBe(true)
+  expect(observedCounts.every(n => n >= live)).toBe(true)
   unsubscribe()
   let finishOldPage!: (page: { messages: any[]; hasMore: boolean }) => void
   let oldPage!: Promise<boolean>
@@ -200,11 +208,11 @@ it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing emp
   expect(lastObservation?.historySessionId).toBe('history-B')
   expect(sub.view()?.historySessionId).toBe('history-B')
   expect(controller.getSnapshot().liveMessages).toEqual([])
-  expect(container.textContent).not.toContain('synthetic history 0')
+  expect(container.textContent).not.toContain(`synthetic history ${first}`)
   await act(async () => { finishOldPage({ messages: [{ role: 'user', content: 'old foreign page' }], hasMore: true }); await oldPage })
   expect(controller.getSnapshot().historyMessages).toEqual([])
   await act(async () => { read(restoredMessages, { historySessionId: 'history-B', providerSessionId: 'provider-B' }); await settle() })
-  expect(controller.getSnapshot().liveMessages.length).toBeGreaterThanOrEqual(count)
+  expect(controller.getSnapshot().liveMessages.length).toBeGreaterThanOrEqual(live)
   currentService!.dispose()
   operations = 1
   currentService = configureTranscriptProjection({ ...deps, collectObservation: async () => ({ observation: { ...lastObservation!, messages: [] }, verifiedClear: true }) })

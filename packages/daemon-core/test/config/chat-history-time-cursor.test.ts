@@ -21,6 +21,10 @@ import {
 
 const T0 = 1_800_000_000_000
 
+// Cursors beyond now + skew are rejected, so pin the clock just after the fixture history.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(T0 + 1_000_000_000) })
+afterEach(() => { vi.useRealTimers() })
+
 interface Row { role: 'user' | 'assistant'; kind: string; content: string; receivedAt: number }
 
 function transcript(count: number, toolEvery = 0): Row[] {
@@ -79,11 +83,20 @@ describe('pageHistoryRecords time cursor', () => {
         expect(contents).not.toContain('prose-33')
     })
 
-    it('a cursor newer than all history pages the whole tail; older than all yields nothing', () => {
+    it('a cursor newer than all history matched nothing: count path, no acknowledgement; older than all yields nothing', () => {
         const rows = transcript(10).map(toRecord)
         const newer = pageHistoryRecords('hermes-cli', rows, 0, 30, 0, undefined, `ts:${T0 + 999_999}:user:00000000`)
         expect(newer.messages).toHaveLength(10)
-        expect(newer.boundaryKind).toBe('time')
+        expect(newer.boundaryResolved).toBe(false)
+        expect(newer.boundaryKind).toBeUndefined()
+        const forged = pageHistoryRecords('hermes-cli', rows, 0, 3, 2, undefined, `ts:${T0 + 10 ** 12}:user:00000000`)
+        expect(forged.boundaryResolved).toBe(false)
+        expect(forged.boundaryKind).toBeUndefined()
+        expect(forged.messages.map((m) => m.content)).toEqual(['prose-5', 'prose-6', 'prose-7'])
+        // Older than every row of a PARTIAL window says nothing about the rows that were not read.
+        const partial = pageHistoryRecords('hermes-cli', rows, 0, 3, 2, undefined, `ts:${T0 - 5}:user:00000000`, false, false)
+        expect(partial.boundaryResolved).toBe(false)
+        expect(partial.boundaryKind).toBeUndefined()
         const older = pageHistoryRecords('hermes-cli', rows, 0, 30, 0, undefined, `ts:${T0 - 5}:user:00000000`)
         expect(older.messages).toHaveLength(0)
         expect(older.hasMore).toBe(false)

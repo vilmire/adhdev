@@ -38,10 +38,24 @@ export function meshScopeFromEntry(mesh: unknown, machineDaemonId: string, viaDa
     }
     if (!onRoster) return null;
   }
+  // A node with no daemonId is the mesh host's own node (standalone-created meshes never stamp one).
+  // That is only provably THIS machine for a local caller on the daemon that hosts the mesh; for a
+  // peer-served request, or on a member daemon, it could be any machine, so it is skipped.
+  let anonymousNodesAreOurs: boolean | null = null;
+  const anonymousOurs = (): boolean => {
+    if (anonymousNodesAreOurs !== null) return anonymousNodesAreOurs;
+    anonymousNodesAreOurs = false;
+    if (viaDaemonId) return false;
+    try {
+      const st = resolveMeshHostStatus(m as never, { localDaemonId: machineDaemonId });
+      anonymousNodesAreOurs = st.role === 'host' && !!st.hostDaemonId && daemonIdsEquivalent(st.hostDaemonId, machineDaemonId);
+    } catch { anonymousNodesAreOurs = false; }
+    return anonymousNodesAreOurs;
+  };
   const paths = new Set<string>();
   for (const n of nodes) {
     const d = readMeshNodeDaemonId(n);
-    if (d ? !daemonIdsEquivalent(d, machineDaemonId) : false) continue;
+    if (d ? !daemonIdsEquivalent(d, machineDaemonId) : !anonymousOurs()) continue;
     if (typeof n.workspace === 'string' && n.workspace.trim()) paths.add(path.resolve(expandPath(n.workspace)));
   }
   const out: WorkspaceMatch[] = [];
