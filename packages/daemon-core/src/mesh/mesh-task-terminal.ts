@@ -30,7 +30,7 @@ import { expireWorkerTaskTokensForAttempt, expireWorkerTaskTokensForTask } from 
 import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
-import { shouldHoldStageTerminal } from './stage-state.js';
+import { isStageImplReport, shouldHoldStageTerminal } from './stage-state.js';
 import { notifyStageChildTerminal, notifyStageImplCompleted } from './stage-hooks.js';
 
 /** Terminal statuses the choke point accepts. */
@@ -88,6 +88,7 @@ interface MeshTerminalCommitResult {
 export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTerminalCommitResult {
     const store = MeshRuntimeStore.getInstance();
     const nowIso = new Date(terminal.occurredAtMs ?? Date.now()).toISOString();
+    let implReport = false;
     const result = store.transaction((): MeshTerminalCommitResult => {
         const entry = store.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false };
@@ -96,12 +97,15 @@ export function commitTaskTerminal(terminal: MeshTerminalCommitInput): MeshTermi
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
         // Review-in-task: an intermediate stage report is not the task's end — hand it to the pipeline.
-        if (shouldHoldStageTerminal(entry, terminal.status)) return { entry, committed: true, duplicate: false, held: true };
+        if (shouldHoldStageTerminal(entry, terminal.status)) {
+            implReport = isStageImplReport(entry);
+            return { entry, committed: true, duplicate: false, held: true };
+        }
         applyTaskTerminalSteps(store, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false };
     });
     if (result.held) {
-        afterBridgeCommit(store.db, () => notifyStageImplCompleted(terminal.meshId, terminal.taskId, terminal.attemptId));
+        if (implReport) afterBridgeCommit(store.db, () => notifyStageImplCompleted(terminal.meshId, terminal.taskId, terminal.attemptId));
         return result;
     }
     // Idempotent post-commit cleanup: the replay fence re-enters with
@@ -182,7 +186,7 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
         if (shouldHoldStageTerminal(entry, input.status)) {
-            afterBridgeCommit(store.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
+            if (isStageImplReport(entry)) afterBridgeCommit(store.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
             return { entry, transitioned: false };
         }
         // The commit closes an attempt the queue is retiring to re-dispatch the

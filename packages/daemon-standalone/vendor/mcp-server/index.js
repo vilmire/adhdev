@@ -49343,6 +49343,11 @@ ${error.message || ""}`;
     function shouldHoldStageTerminal(entry, status) {
       if (!entry || status !== "completed" || !isStageParent(entry)) return false;
       const s2 = entry.stageState;
+      return !s2.released && s2.phase !== "done";
+    }
+    function isStageImplReport(entry) {
+      if (!entry || !isStageParent(entry)) return false;
+      const s2 = entry.stageState;
       return !s2.released && (s2.phase === "implementing" || s2.phase === "revising");
     }
     function stageFooterInput(task) {
@@ -51984,6 +51989,7 @@ ${rendered.join("\n\n")}`,
     function commitTaskTerminal(terminal) {
       const store5 = MeshRuntimeStore.getInstance();
       const nowIso = new Date(terminal.occurredAtMs ?? Date.now()).toISOString();
+      let implReport = false;
       const result = store5.transaction(() => {
         const entry = store5.findQueueEntryById(terminal.meshId, terminal.taskId);
         if (!entry) return { entry: null, committed: false, duplicate: false };
@@ -51991,12 +51997,15 @@ ${rendered.join("\n\n")}`,
           return { entry, committed: false, duplicate: false };
         }
         if (entry.status === terminal.status) return { entry, committed: true, duplicate: true };
-        if (shouldHoldStageTerminal(entry, terminal.status)) return { entry, committed: true, duplicate: false, held: true };
+        if (shouldHoldStageTerminal(entry, terminal.status)) {
+          implReport = isStageImplReport(entry);
+          return { entry, committed: true, duplicate: false, held: true };
+        }
         applyTaskTerminalSteps(store5, entry, terminal, nowIso);
         return { entry, committed: true, duplicate: false };
       });
       if (result.held) {
-        afterBridgeCommit(store5.db, () => notifyStageImplCompleted(terminal.meshId, terminal.taskId, terminal.attemptId));
+        if (implReport) afterBridgeCommit(store5.db, () => notifyStageImplCompleted(terminal.meshId, terminal.taskId, terminal.attemptId));
         return result;
       }
       if (result.committed) afterBridgeCommit(store5.db, () => afterTaskTerminalCommitted(terminal.meshId, terminal.taskId));
@@ -52029,7 +52038,7 @@ ${rendered.join("\n\n")}`,
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
         if (shouldHoldStageTerminal(entry, input.status)) {
-          afterBridgeCommit(store5.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
+          if (isStageImplReport(entry)) afterBridgeCommit(store5.db, () => notifyStageImplCompleted(input.meshId, input.taskId, input.attemptId));
           return { entry, transitioned: false };
         }
         if (terminalFenced(input.meshId, input.taskId)) {

@@ -40,6 +40,16 @@ export function isStagePipelineParked(entry: StageRow | null | undefined): boole
 export function shouldHoldStageTerminal(entry: StageRow | null | undefined, status: string): boolean {
     if (!entry || status !== 'completed' || !isStageParent(entry)) return false;
     const s = entry.stageState!;
+    // Every `completed` before the pipeline releases the row is held, not only the first one: the turn
+    // ledger commits the same attempt again on the idle edge after the worker report, by which time the
+    // phase has already moved on to self_checking/awaiting_review.
+    return !s.released && s.phase !== 'done';
+}
+
+/** A held `completed` that is the implementer's stage report (hand it to the pipeline), not a repeat commit. */
+export function isStageImplReport(entry: StageRow | null | undefined): boolean {
+    if (!entry || !isStageParent(entry)) return false;
+    const s = entry.stageState!;
     return !s.released && (s.phase === 'implementing' || s.phase === 'revising');
 }
 

@@ -102,6 +102,25 @@ describe('terminal choke point hold', () => {
         expect(getQueueEntryById(mesh, parent.id)!.status).toBe('completed');
     });
 
+    it('keeps holding after the phase moved on (the ledger re-commits on the idle edge) without re-firing the hook', async () => {
+        const mesh = newMesh();
+        const calls: string[] = [];
+        setStageHookTarget({ onImplCompleted: async (_m, id, a) => { calls.push(`impl:${id}:${a}`); }, onChildTerminal: async () => undefined, onChildClaimed: async () => undefined });
+        const parent = enqueueTask(mesh, 'fix', stagey);
+        assigned(mesh, parent.id);
+        commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', source: 'worker_tool_report' });
+        await Promise.resolve();
+        // the pipeline moved the parent to review
+        for (const phase of ['self_checking', 'awaiting_review', 'reviewing'] as const) {
+            const cur = getQueueEntryById(mesh, parent.id)!; cur.stageState!.phase = phase; store().updateQueueEntry(cur);
+            expect(commitTaskTerminal({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', source: 'turn_ledger' })).toMatchObject({ held: true });
+            store().transaction(() => applyTaskTerminalInTxn({ meshId: mesh, taskId: parent.id, status: 'completed', attemptId: 'att1', occurredAtMs: Date.now() }));
+            expect(getQueueEntryById(mesh, parent.id)!.status).toBe('assigned');
+        }
+        await Promise.resolve();
+        expect(calls).toEqual([`impl:${parent.id}:att1`]);
+    });
+
     it('a non-stage task is never held; a child terminal fires the child hook', async () => {
         const mesh = newMesh();
         const calls: string[] = [];
