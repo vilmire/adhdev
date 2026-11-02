@@ -188563,7 +188563,15 @@ ${output}` : "";
       diskMarginBytes: 256 * MIB,
       /** Sender pauses while the link buffers more than this. */
       maxBufferedBytes: MIB,
-      linkConnectTimeoutMs: 3e4
+      linkConnectTimeoutMs: 3e4,
+      /**
+       * Relay (TURN) fallback, owner decision 2026-11-02: per transfer and per daemon per UTC day.
+       * Counted locally; there is no server-side counter.
+       */
+      relayMaxTransferBytes: 500 * MIB,
+      relayDailyBytes: 2 * GIB,
+      /** Failed direct reconnects tolerated before escalating to a relay attempt (when both daemons allow it). */
+      directRetriesBeforeRelay: 2
     });
     var TRANSFER_RETENTION_MS = Object.freeze({
       preview: 15 * 6e4,
@@ -189881,7 +189889,7 @@ ${output}` : "";
     var path111 = __toESM2(require("path"));
     var TERMINAL_STATES = /* @__PURE__ */ new Set(["completed", "failed", "cancelled", "expired", "revoked"]);
     var ACTIVE_STATES = /* @__PURE__ */ new Set(["freezing", "linking", "transferring", "paused", "verifying", "publishing"]);
-    var TransferStore = class {
+    var TransferStore = class _TransferStore {
       constructor(baseDir) {
         this.baseDir = baseDir;
       }
@@ -189951,6 +189959,36 @@ ${output}` : "";
           return null;
         }
       }
+      // ── relay option (owner decision 2026-11-02) ────────────────────────────────
+      /** Per-machine opt-out; relay fallback is ON unless the owner switched it off. */
+      readRelayAllowed() {
+        try {
+          return JSON.parse(fs105.readFileSync(this.p("settings.json"), "utf8")).allowRelay !== false;
+        } catch {
+          return true;
+        }
+      }
+      writeRelayAllowed(allowed) {
+        this.atomicWrite(this.p("settings.json"), JSON.stringify({ allowRelay: allowed }));
+      }
+      static dayKey(now) {
+        return new Date(now).toISOString().slice(0, 10);
+      }
+      /** Relay bytes this daemon moved today (UTC day). */
+      relayUsedToday(now = Date.now()) {
+        try {
+          const u = JSON.parse(fs105.readFileSync(this.p("relay-usage.json"), "utf8"));
+          return u.day === _TransferStore.dayKey(now) && Number.isFinite(u.bytes) ? Math.max(0, Number(u.bytes)) : 0;
+        } catch {
+          return 0;
+        }
+      }
+      /** Add relay bytes to today's counter; returns the new total. */
+      addRelayBytes(bytes, now = Date.now()) {
+        const total = this.relayUsedToday(now) + Math.max(0, Math.floor(bytes));
+        this.atomicWrite(this.p("relay-usage.json"), JSON.stringify({ day: _TransferStore.dayKey(now), bytes: total }));
+        return total;
+      }
       /** Masked audit line: no file names, no paths. */
       audit(entry, now = Date.now()) {
         this.ensure(".");
@@ -189999,6 +190037,7 @@ ${output}` : "";
     var idTag = (rec7) => `${rec7.id.slice(0, 8)}/${rec7.role}`;
     var MAX_OPEN_TRANSFERS = 10;
     var LOG_SKIP_EVENTS = /* @__PURE__ */ new Set(["failed", "cancelled", "expired", "revoked"]);
+    var newRun = () => ({ retries: 0, cancelled: false, starting: false });
     var fail3 = (code, detail) => ({ ok: false, code, ...detail ? { detail } : {} });
     var ProjectTransferEngine = class {
       constructor(ports) {
@@ -190014,6 +190053,13 @@ ${output}` : "";
       runs = /* @__PURE__ */ new Map();
       now() {
         return this.ports.now ? this.ports.now() : Date.now();
+      }
+      /** Per-machine option (default ON): may this daemon's transfers fall back to a TURN relay? */
+      relayAllowed() {
+        return this.store.readRelayAllowed();
+      }
+      setRelayAllowed(allowed) {
+        this.store.writeRelayAllowed(allowed === true);
       }
       // ── lifecycle ────────────────────────────────────────────────────────────────
       /** Boot: every non-terminal approved transfer needs re-approval (restart invalidates consent). */
@@ -190138,7 +190184,7 @@ ${output}` : "";
           reasons.push("NATIVE_HELPER_UNAVAILABLE");
         }
         if (!this.ports.linkFactory) reasons.push("LINK_UNAVAILABLE");
-        return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch };
+        return { supported: reasons.length === 0, reasons, platform: process.platform, arch: process.arch, relayAllowed: this.relayAllowed() };
       }
       requireSupport() {
         const c = this.capabilities();
@@ -190272,7 +190318,7 @@ ${output}` : "";
       async maybeStart(rec7) {
         if (!rec7.localApproval || !rec7.peerApproved || TERMINAL_STATES.has(rec7.state)) return;
         if (rec7.role !== "source") return;
-        const run4 = this.runs.get(rec7.id) ?? { retries: 0, cancelled: false, starting: false };
+        const run4 = this.runs.get(rec7.id) ?? newRun();
         this.runs.set(rec7.id, run4);
         if (run4.starting) return;
         run4.starting = true;
@@ -190309,9 +190355,10 @@ ${output}` : "";
         this.guard(rec7);
         const factory = this.ports.linkFactory;
         if (!factory) throw new SessionError("LINK_UNAVAILABLE", "no link factory");
+        if (run4.relay) this.checkRelayLimits(rec7);
         run4.linkKey = (0, import_node_crypto49.randomBytes)(32);
         rec7.linkGen += 1;
-        LOG.info(LOG_TAG, `${idTag(rec7)} link attempt ${rec7.linkGen} started (retries=${run4.retries})`);
+        LOG.info(LOG_TAG, `${idTag(rec7)} link attempt ${rec7.linkGen} started (retries=${run4.retries}${run4.relay ? ", relay allowed" : ""})`);
         this.setState(rec7, "linking");
         const reply = await this.ports.dispatchPeer(rec7.peerDaemonId, {
           op: "content",
@@ -190319,14 +190366,16 @@ ${output}` : "";
           selectionDigest: rec7.selectionDigest,
           content: rec7.content,
           linkGen: rec7.linkGen,
-          linkKeyB64: run4.linkKey.toString("base64")
+          linkKeyB64: run4.linkKey.toString("base64"),
+          ...run4.relay ? { relay: true } : {}
         });
+        if (!reply?.ok && reply?.code === "RELAY_NOT_ALLOWED") throw new SessionError("DIRECT_UNAVAILABLE", "peer does not allow a relay");
         if (!reply?.ok) {
           const code = safeTransferCode(reply?.code ?? "PEER_REFUSED");
           LOG.warn(LOG_TAG, `${idTag(rec7)} peer refused content for link ${rec7.linkGen} code=${code}`);
           throw new SessionError(code, "peer refused content");
         }
-        const link2 = factory.create({ transferId: rec7.id, role: "initiator", linkGen: rec7.linkGen });
+        const link2 = factory.create({ transferId: rec7.id, role: "initiator", linkGen: rec7.linkGen, ...run4.relay ? { allowRelay: true } : {} });
         run4.link = link2;
         link2.onSignalOut((s2) => {
           void this.ports.dispatchPeer(rec7.peerDaemonId, { op: "signal", transferId: rec7.id, linkGen: rec7.linkGen, signal: s2 }).catch(() => {
@@ -190336,9 +190385,10 @@ ${output}` : "";
           rec7.blocksDone[fi] = Math.max(rec7.blocksDone[fi] ?? 0, bi + 1);
           rec7.bytesDone = rec7.blocksDone.reduce((n, b, i) => n + Math.min(b * TRANSFER_LIMITS.blockBytes, rec7.content.files[i].size), 0);
           rec7.activityAt = this.now();
+          this.accountRelay(rec7, run4);
         });
         run4.session = session;
-        this.bindEstablished(rec7, session);
+        this.bindEstablished(rec7, run4, session);
         this.armWatchdog(rec7, run4);
         session.wait().then(() => {
           if (!TERMINAL_STATES.has(rec7.state)) this.setState(rec7, "verifying");
@@ -190350,13 +190400,43 @@ ${output}` : "";
        * that never connects does not flicker between "transferring" and "connecting" (bug 3: the state
        * used to flip to `transferring` the moment the session object was created, before any link).
        */
-      bindEstablished(rec7, session) {
+      bindEstablished(rec7, run4, session) {
         const gen = rec7.linkGen;
         session.onEstablished(() => {
           if (TERMINAL_STATES.has(rec7.state) || rec7.linkGen !== gen) return;
-          LOG.info(LOG_TAG, `${idTag(rec7)} link ${gen} connected (direct)`);
+          let reported = "unknown";
+          try {
+            reported = run4.link?.transportPath?.() ?? "unknown";
+          } catch {
+          }
+          const path136 = reported === "unknown" ? run4.relay ? "relay" : "direct" : reported;
+          rec7.path = path136;
+          run4.relayActive = path136 === "relay";
+          run4.relayBase = rec7.bytesDone;
+          run4.relayCounted = 0;
+          LOG.info(LOG_TAG, `${idTag(rec7)} link ${gen} connected (${path136})`);
           if (rec7.state === "linking") this.setState(rec7, "transferring");
+          else this.persist(rec7);
         });
+      }
+      /** Refuse a relay attempt that cannot fit the per-transfer or the daily relay budget. */
+      checkRelayLimits(rec7) {
+        const remaining = Math.max(0, rec7.totalBytes - rec7.bytesDone);
+        if (rec7.totalBytes > TRANSFER_LIMITS.relayMaxTransferBytes || this.store.relayUsedToday(this.now()) + remaining > TRANSFER_LIMITS.relayDailyBytes) {
+          throw new SessionError("RELAY_LIMIT_EXCEEDED", "relay transfer limit");
+        }
+      }
+      /** Count bytes that crossed a relayed link (called on every progress step); enforces the limits mid-flight. */
+      accountRelay(rec7, run4) {
+        if (!run4.relayActive) return;
+        const moved = Math.max(0, rec7.bytesDone - (run4.relayBase ?? 0));
+        const delta = moved - (run4.relayCounted ?? 0);
+        if (delta <= 0) return;
+        run4.relayCounted = moved;
+        const day = this.store.addRelayBytes(delta, this.now());
+        if (moved > TRANSFER_LIMITS.relayMaxTransferBytes || day > TRANSFER_LIMITS.relayDailyBytes) {
+          this.terminate(rec7, "failed", "RELAY_LIMIT_EXCEEDED", true);
+        }
       }
       armWatchdog(rec7, run4) {
         clearInterval(run4.watchdog);
@@ -190372,8 +190452,20 @@ ${output}` : "";
       }
       onSessionFailure(rec7, run4, err2) {
         if (TERMINAL_STATES.has(rec7.state) || run4.cancelled) return;
+        if (this.runs.get(rec7.id) !== run4) return;
         const code = err2 instanceof SessionError ? err2.code : "INTERNAL_ERROR";
         LOG.warn(LOG_TAG, `${idTag(rec7)} link ${rec7.linkGen} failed code=${code}`);
+        if (code === "DIRECT_UNAVAILABLE" && !run4.relay && this.relayAllowed()) {
+          this.setState(rec7, "paused", "paused");
+          try {
+            run4.link?.close();
+          } catch {
+          }
+          run4.link = void 0;
+          run4.session = void 0;
+          if (rec7.role === "source") this.escalateToRelay(rec7, run4);
+          return;
+        }
         if (code === "LINK_LOST" || code === "PEER_ABORT") {
           this.setState(rec7, "paused", "paused");
           try {
@@ -190387,7 +190479,22 @@ ${output}` : "";
         }
         this.terminate(rec7, "failed", code, true);
       }
+      /** Direct attempts are over and this daemon allows a relay: retry the link with TURN candidates. */
+      escalateToRelay(rec7, run4) {
+        run4.relay = true;
+        run4.retries = 0;
+        LOG.info(LOG_TAG, `${idTag(rec7)} direct connection unavailable; retrying with relay allowed`);
+        run4.retryTimer = setTimeout(() => {
+          if (TERMINAL_STATES.has(rec7.state)) return;
+          this.openSourceLink(rec7, run4).catch((e) => this.onSessionFailure(rec7, run4, e instanceof Error ? e : new SessionError("INTERNAL_ERROR", String(e))));
+        }, 0);
+        run4.retryTimer.unref?.();
+      }
       scheduleRetry(rec7, run4) {
+        if (!run4.relay && run4.retries >= TRANSFER_LIMITS.directRetriesBeforeRelay && this.relayAllowed()) {
+          this.escalateToRelay(rec7, run4);
+          return;
+        }
         if (run4.retries >= 5) {
           this.terminate(rec7, "failed", "DIRECT_UNAVAILABLE", true);
           return;
@@ -190487,6 +190594,15 @@ ${output}` : "";
         if (args.selectionDigest !== rec7.selectionDigest) return fail3("APPROVAL_MISMATCH");
         const content = validateContentManifest(args.content, rec7.selection);
         if (!Number.isInteger(args.linkGen) || args.linkGen <= rec7.linkGen) return fail3("PROTOCOL_ERROR");
+        const relay = args.relay === true;
+        if (relay) {
+          if (!this.relayAllowed()) return fail3("RELAY_NOT_ALLOWED");
+          try {
+            this.checkRelayLimits(rec7);
+          } catch (e) {
+            return fail3(e.code);
+          }
+        }
         const key6 = Buffer.from(String(args.linkKeyB64 ?? ""), "base64");
         if (key6.length !== 32) return fail3("PROTOCOL_ERROR");
         if (this.activeCount() >= TRANSFER_LIMITS.maxConcurrentPerDaemon && !ACTIVE_STATES.has(rec7.state)) return fail3("TOO_MANY_TRANSFERS");
@@ -190504,7 +190620,7 @@ ${output}` : "";
           }
           prev.receiver?.dispose();
         }
-        const run4 = { retries: 0, cancelled: false, starting: false, linkKey: key6 };
+        const run4 = { ...newRun(), linkKey: key6, ...relay ? { relay: true } : {} };
         rec7.content = content;
         rec7.linkGen = args.linkGen;
         if (rec7.blocksDone.length !== content.files.length) rec7.blocksDone = content.files.map(() => 0);
@@ -190512,6 +190628,7 @@ ${output}` : "";
           rec7.blocksDone[fi] = blocks2;
           rec7.bytesDone = bytes;
           this.persist(rec7);
+          this.accountRelay(rec7, run4);
         });
         let resume;
         try {
@@ -190525,7 +190642,7 @@ ${output}` : "";
         this.runs.set(rec7.id, run4);
         this.setState(rec7, "linking");
         LOG.info(LOG_TAG, `${idTag(rec7)} link attempt ${rec7.linkGen} started (responder)`);
-        const link2 = factory.create({ transferId: rec7.id, role: "responder", linkGen: rec7.linkGen });
+        const link2 = factory.create({ transferId: rec7.id, role: "responder", linkGen: rec7.linkGen, ...relay ? { allowRelay: true } : {} });
         run4.link = link2;
         link2.onSignalOut((s2) => {
           void this.ports.dispatchPeer(rec7.peerDaemonId, { op: "signal", transferId: rec7.id, linkGen: rec7.linkGen, signal: s2 }).catch(() => {
@@ -190534,7 +190651,7 @@ ${output}` : "";
         const session = new ReceiverSession(link2, rec7.id, rec7.linkGen, key6, receiver, resume);
         run4.session = session;
         this.armWatchdog(rec7, run4);
-        this.bindEstablished(rec7, session);
+        this.bindEstablished(rec7, run4, session);
         session.wait().then(() => this.finishTarget(rec7, run4), (e) => this.onSessionFailure(rec7, run4, e));
         return { ok: true };
       }
@@ -190543,10 +190660,10 @@ ${output}` : "";
         if (!run4?.link || args.linkGen !== rec7.linkGen) return fail3("STALE_LINK");
         const s2 = args.signal;
         if (!s2 || !["offer", "answer", "candidate"].includes(s2.kind)) return fail3("PROTOCOL_ERROR");
-        if (typeof s2.candidate === "string" && / typ relay\b/.test(s2.candidate)) return fail3("RELAY_CANDIDATE_REFUSED");
+        if (!run4.relay && typeof s2.candidate === "string" && / typ relay\b/.test(s2.candidate)) return fail3("RELAY_CANDIDATE_REFUSED");
         if (s2.kind !== "candidate") {
           if (typeof s2.sdp !== "string") return fail3("PROTOCOL_ERROR");
-          if (sdpHasRelayCandidate(s2.sdp)) return fail3("RELAY_CANDIDATE_REFUSED");
+          if (!run4.relay && sdpHasRelayCandidate(s2.sdp)) return fail3("RELAY_CANDIDATE_REFUSED");
           if (!extractSdpFingerprint(s2.sdp)) return fail3("SDP_FINGERPRINT_INVALID");
         }
         run4.link.signalIn(s2);
@@ -190667,7 +190784,9 @@ ${output}` : "";
         entries: rec7.selection.entries,
         excluded: rec7.selection.excluded,
         localApproved: !!rec7.localApproval,
-        peerApproved: rec7.peerApproved === true
+        peerApproved: rec7.peerApproved === true,
+        // Network path of the latest established link; `relay` = bytes crossed a TURN relay (still end-to-end encrypted).
+        path: rec7.path
       };
     }
     var handlers = {
@@ -190677,6 +190796,16 @@ ${output}` : "";
         const engine2 = getProjectTransferEngine();
         if (!engine2) return { success: true, supported: false, reasons: ["TRANSFER_UNAVAILABLE"] };
         return { success: true, ...engine2.capabilities() };
+      },
+      // Per-machine option (default ON): allow falling back to a TURN relay when a direct connection fails.
+      project_transfer_set_relay: async (_ctx, args) => {
+        const denied = ownerOnly(args);
+        if (denied) return denied;
+        const engine2 = getProjectTransferEngine();
+        if (!engine2) return unavailable();
+        if (typeof args?.allowRelay !== "boolean") return { success: false, code: "INVALID_ARGS", error: "allowRelay (boolean) required" };
+        engine2.setRelayAllowed(args.allowRelay);
+        return { success: true, relayAllowed: engine2.relayAllowed() };
       },
       project_transfer_browse: async (_ctx, args) => {
         const denied = ownerOnly(args);
@@ -190745,6 +190874,7 @@ ${output}` : "";
     var OWNER_SOURCES = ["p2p", "standalone"];
     var projectTransferSpecs = defineCommandSpecs("low", handlers, {
       project_transfer_capabilities: { sources: OWNER_SOURCES },
+      project_transfer_set_relay: { sources: OWNER_SOURCES },
       project_transfer_browse: { sources: OWNER_SOURCES },
       project_transfer_create: { sources: OWNER_SOURCES },
       project_transfer_approve: { sources: OWNER_SOURCES },
