@@ -306,7 +306,7 @@ test('decision_answer: batch answers pass through whole, the assistant session c
   }
 });
 
-test('project_send declares owner-upload attachments and sends the session credential only when they are used', async () => {
+test('project_send declares owner-upload attachments and always sends the env session credential', async () => {
   const tools = resolveAssistantModeTools();
   const send = tools.find(t => t.name === 'project_send')!;
   const att = send.inputSchema.properties.attachments as { type?: string; maxItems?: number; items?: { type?: string } };
@@ -318,8 +318,12 @@ test('project_send declares owner-upload attachments and sends the session crede
   process.env.ADHDEV_MCP_SESSION_CREDENTIAL = 'cred-xyz';
   try {
     const plain = fakeTransport();
-    await handleAssistantToolCall(plain, tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi' });
-    assert.equal(plain.calls[0].args.mcpSessionCredential, undefined, 'a text-only send carries no credential');
+    await callAssistantTool(plain, 'project_send', { project: 'adhdev', message: 'hi', mcpSessionCredential: 'forged' }, 'sess');
+    assert.equal(plain.calls[0].args.mcpSessionCredential, 'cred-xyz', 'a text-only send still carries the env credential');
+    assert.equal(plain.calls[0].args.assistantSessionId, 'sess');
+    const empty = fakeTransport();
+    await callAssistantTool(empty, 'project_send', { project: 'adhdev', message: 'hi', attachments: [] }, 'sess');
+    assert.equal(empty.calls[0].args.mcpSessionCredential, 'cred-xyz', 'an empty attachment list still carries the env credential');
     const withImages = fakeTransport();
     const res = await handleAssistantToolCall(withImages, tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi', messageId: 'm1', attachments: ['art_a'] });
     assert.equal(res.isError, undefined, res.content[0]?.text);
@@ -327,6 +331,10 @@ test('project_send declares owner-upload attachments and sends the session crede
     assert.deepEqual(withImages.calls[0].args.attachments, ['art_a']);
     const bad = await handleAssistantToolCall(fakeTransport(), tools, 'sess', 'project_send', { project: 'adhdev', message: 'hi', attachments: ['a'], extra: 1 });
     assert.equal(bad.isError, true, 'unknown keys are still refused');
+    delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL;
+    const missing = fakeTransport();
+    await callAssistantTool(missing, 'project_send', { project: 'adhdev', message: 'hi', mcpSessionCredential: 'forged' }, 'sess');
+    assert.equal(missing.calls[0].args.mcpSessionCredential, undefined, 'a missing env credential does not keep a forged argument');
   } finally {
     if (prev === undefined) delete process.env.ADHDEV_MCP_SESSION_CREDENTIAL; else process.env.ADHDEV_MCP_SESSION_CREDENTIAL = prev;
   }

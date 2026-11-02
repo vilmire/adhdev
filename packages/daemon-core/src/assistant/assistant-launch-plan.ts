@@ -181,6 +181,7 @@ export function buildAssistantCodexOverrideArgs(serverName: string, server: Assi
     return args;
 }
 
+import { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '../standalone-mcp-auth.js';
 import {
     assertCompatibleAssistantServerIdentity,
     formatTomlSegment,
@@ -199,14 +200,24 @@ export {
     withoutAssistantSessionEnv,
 };
 
-/** The assistant MCP server launch with its session id in the entry's own env (absent id → unchanged). */
+/**
+ * The assistant MCP server launch with its session id and, when the verb already
+ * minted one, the current session credential in the entry's own env. Codex turns
+ * that env into `-c` overrides; the persisted Codex toml strips both afterwards.
+ * Absent id and credential → unchanged.
+ */
 export function withAssistantSessionEnv(
     server: { command: string; args: string[]; env?: Record<string, string> },
     sessionId: string | undefined,
+    sessionCredential?: string,
 ): AssistantMcpServerLaunch {
     const id = typeof sessionId === 'string' ? sessionId.trim() : '';
-    if (!id) return server;
-    return { ...server, env: { ...(server.env ?? {}), [ASSISTANT_SESSION_ID_ENV]: id } };
+    const credential = typeof sessionCredential === 'string' ? sessionCredential.trim() : '';
+    if (!id && !credential) return server;
+    const env: Record<string, string> = { ...(server.env ?? {}) };
+    if (id) env[ASSISTANT_SESSION_ID_ENV] = id;
+    if (credential) env[ADHDEV_MCP_SESSION_CREDENTIAL_ENV] = credential;
+    return { ...server, env };
 }
 
 /**
@@ -245,6 +256,11 @@ export function planAssistantMcp(input: {
     configDir: string;
     /** The session id the launch will use (minted before planning); stamped into the server env. */
     sessionId?: string;
+    /**
+     * Current assistant MCP credential. Stamped into the server env the child
+     * actually receives. Codex persists the server only after this key is stripped.
+     */
+    sessionCredential?: string;
     /** The manifest's `meshCoordinator.mcpConfig.path`, verbatim — re-resolved against a private HOME. */
     declaredMcpConfigPath?: string;
 }): AssistantMcpPlan {
@@ -262,7 +278,7 @@ export function planAssistantMcp(input: {
                 error: `${cliType} registers MCP servers in its global config; the assistant does not register one on your behalf`,
             };
         }
-        const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
+        const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId, input.sessionCredential);
         const persistedCodexServer = withoutAssistantSessionEnv(codexServer);
         const path = assistantCodexMcpConfigPath(workspace);
         return {
@@ -273,7 +289,7 @@ export function planAssistantMcp(input: {
             toolRestriction: 'prompt_only',
         };
     }
-    const mcpServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
+    const mcpServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId, input.sessionCredential);
     if (cliType === 'claude-cli') {
         const path = assistantClaudeMcpConfigPath(configDir);
         return {

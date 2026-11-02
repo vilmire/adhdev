@@ -14,6 +14,7 @@
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { ASSISTANT_SESSION_ID_ENV } from '@adhdev/mesh-shared';
+import { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } from '../standalone-mcp-auth.js';
 
 export interface AssistantCodexMcpServerSpec {
     command: string;
@@ -95,12 +96,17 @@ export function formatTomlSegment(segment: string): string {
     return /^[A-Za-z0-9_-]+$/.test(segment) ? segment : JSON.stringify(segment);
 }
 
-/** Return a copy of `server` with the per-session `ADHDEV_ASSISTANT_SESSION_ID` key removed from `env`. */
+const EPHEMERAL_ASSISTANT_ENV = new Set<string>([
+    ASSISTANT_SESSION_ID_ENV,
+    ADHDEV_MCP_SESSION_CREDENTIAL_ENV,
+]);
+
+/** Return a copy of `server` without per-launch session id or raw MCP credential env. */
 export function withoutAssistantSessionEnv<T extends AssistantCodexMcpServerSpec>(server: T): T {
     if (!server.env) return { command: server.command, args: [...server.args] } as T;
     const nextEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(server.env)) {
-        if (k !== ASSISTANT_SESSION_ID_ENV) nextEnv[k] = v;
+        if (!EPHEMERAL_ASSISTANT_ENV.has(k)) nextEnv[k] = v;
     }
     if (Object.keys(nextEnv).length === 0) return { command: server.command, args: [...server.args] } as T;
     return { command: server.command, args: [...server.args], env: nextEnv } as T;

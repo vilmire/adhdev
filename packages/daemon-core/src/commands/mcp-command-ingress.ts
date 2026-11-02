@@ -1,6 +1,12 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { join } from 'node:path';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
+import {
+    FileMcpSessionCredentialStore,
+    type McpSessionCredentialPersistence,
+    type PersistedMcpSessionCredential,
+} from './mcp-session-credential-store.js';
 
 /**
  * An authenticated internal MCP request is not a dashboard owner. Retain only
@@ -43,14 +49,19 @@ export interface AuthenticatedMcpScope {
 }
 
 interface McpSessionCredentialRecord {
-    readonly token: string;
+    readonly tokenHash: string;
+    /** Raw secret. Set at mint and again when the child presents the token. Never persisted. */
+    token?: string;
     readonly sessionId: string;
     meshId?: string;
     isCoordinator: boolean;
+    mintedAtMs: number;
 }
 
 interface McpSessionCredentialStore {
     readonly byToken: Map<string, McpSessionCredentialRecord>;
+    readonly byHash: Map<string, McpSessionCredentialRecord>;
+    /** sessionId → tokenHash. */
     readonly bySessionId: Map<string, string>;
 }
 
@@ -83,12 +94,119 @@ if (!sharedCredentials[CREDENTIAL_STORE_KEY]) {
     Object.defineProperty(sharedCredentials, CREDENTIAL_STORE_KEY, {
         value: {
             byToken: new Map<string, McpSessionCredentialRecord>(),
+            byHash: new Map<string, McpSessionCredentialRecord>(),
             bySessionId: new Map<string, string>(),
         },
         enumerable: false, configurable: false, writable: false,
     });
 }
 const credentialStore = sharedCredentials[CREDENTIAL_STORE_KEY]!;
+// A process that loaded an older store shape has no hash index. Keep it present.
+if (!credentialStore.byHash) {
+    (credentialStore as { byHash: Map<string, McpSessionCredentialRecord> }).byHash = new Map();
+}
+
+let credentialPersistence: McpSessionCredentialPersistence | null = null;
+let credentialPersistenceTestOwned = false;
+
+/** SHA-256 hex of a session credential. This is the only form written to disk. */
+export function hashMcpSessionCredential(token: string): string {
+    return createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+/**
+ * Install the 0600 hash file under `configDir`. Tests that inject a store keep
+ * it; this never replaces a test-owned port and never writes the raw token.
+ */
+export function installMcpSessionCredentialFilePersistence(configDir: string): void {
+    if (credentialPersistenceTestOwned) return;
+    const dir = trimString(configDir);
+    if (!dir) return;
+    credentialPersistence = new FileMcpSessionCredentialStore(join(dir, 'mcp-session-credentials.json'));
+}
+
+/** @internal Vitest injects a temp store. Production boot uses the file port above. */
+export function __setMcpSessionCredentialPersistenceForTest(port: McpSessionCredentialPersistence | null): void {
+    credentialPersistence = port;
+    credentialPersistenceTestOwned = port !== null;
+}
+
+function persistCredential(entry: McpSessionCredentialRecord): void {
+    if (!credentialPersistence) return;
+    const row: PersistedMcpSessionCredential = {
+        tokenHash: entry.tokenHash,
+        sessionId: entry.sessionId,
+        ...(entry.meshId ? { meshId: entry.meshId } : {}),
+        isCoordinator: entry.isCoordinator,
+        mintedAtMs: entry.mintedAtMs,
+    };
+    try { credentialPersistence.put(row); } catch { /* best-effort: memory stays authoritative */ }
+}
+
+function deletePersistedCredential(sessionId: string): void {
+    if (!credentialPersistence) return;
+    try { credentialPersistence.deleteBySession(sessionId); } catch { /* best-effort */ }
+}
+
+function persistedCredential(sessionId: string): PersistedMcpSessionCredential | null {
+    if (!credentialPersistence) return null;
+    try { return credentialPersistence.getBySession(sessionId); } catch { return null; }
+}
+
+function persistedCredentialByHash(tokenHash: string): PersistedMcpSessionCredential | null {
+    if (!credentialPersistence) return null;
+    try { return credentialPersistence.getByHash(tokenHash); } catch { return null; }
+}
+
+function adoptPersistedCredential(row: PersistedMcpSessionCredential): McpSessionCredentialRecord {
+    const current = credentialStore.bySessionId.get(row.sessionId);
+    if (current && current !== row.tokenHash) {
+        throw new Error('mcp session credential hash does not match the live session binding');
+    }
+    const entry: McpSessionCredentialRecord = {
+        tokenHash: row.tokenHash,
+        sessionId: row.sessionId,
+        ...(row.meshId ? { meshId: row.meshId } : {}),
+        isCoordinator: row.isCoordinator,
+        mintedAtMs: row.mintedAtMs,
+    };
+    credentialStore.byHash.set(entry.tokenHash, entry);
+    credentialStore.bySessionId.set(entry.sessionId, entry.tokenHash);
+    return entry;
+}
+
+function recallCredential(sessionId: string): McpSessionCredentialRecord | null {
+    const hash = credentialStore.bySessionId.get(sessionId);
+    if (hash) {
+        const live = credentialStore.byHash.get(hash);
+        if (live) return live;
+    }
+    const row = persistedCredential(sessionId);
+    if (!row) return null;
+    try { return adoptPersistedCredential(row); } catch { return null; }
+}
+
+function dropCredential(sessionId: string): void {
+    const hash = credentialStore.bySessionId.get(sessionId);
+    if (hash) {
+        const entry = credentialStore.byHash.get(hash);
+        if (entry?.token) credentialStore.byToken.delete(entry.token);
+        credentialStore.byHash.delete(hash);
+        credentialStore.bySessionId.delete(sessionId);
+    }
+    deletePersistedCredential(sessionId);
+}
+
+function applyCredentialScope(entry: McpSessionCredentialRecord, scope: {
+    meshId?: string;
+    isCoordinator?: boolean;
+}): void {
+    const meshId = trimString(scope.meshId) || undefined;
+    if (meshId) entry.meshId = meshId;
+    else delete entry.meshId;
+    if (typeof scope.isCoordinator === 'boolean') entry.isCoordinator = scope.isCoordinator;
+    persistCredential(entry);
+}
 
 function record(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -108,45 +226,43 @@ export function mintMcpSessionCredential(scope: {
     if (!sessionId) {
         throw new Error('mintMcpSessionCredential requires a non-empty sessionId');
     }
-    const previousToken = credentialStore.bySessionId.get(sessionId);
-    if (previousToken) {
-        credentialStore.byToken.delete(previousToken);
-    }
+    dropCredential(sessionId);
     const token = `mcp_sess_${randomBytes(24).toString('base64url')}`;
     const meshId = trimString(scope.meshId) || undefined;
     const entry: McpSessionCredentialRecord = {
+        tokenHash: hashMcpSessionCredential(token),
         token,
         sessionId,
         ...(meshId ? { meshId } : {}),
         isCoordinator: scope.isCoordinator === true,
+        mintedAtMs: Date.now(),
     };
     credentialStore.byToken.set(token, entry);
-    credentialStore.bySessionId.set(sessionId, token);
+    credentialStore.byHash.set(entry.tokenHash, entry);
+    credentialStore.bySessionId.set(sessionId, entry.tokenHash);
+    persistCredential(entry);
     return token;
 }
 
-/** Reuse an existing credential for `sessionId` (updating its scope metadata) or mint a new one. */
+/**
+ * Reuse the session's credential, or mint one when this session has never had one.
+ * A restarted daemon that only has the persisted hash adopts it and returns null:
+ * minting would invalidate the MCP child that still holds the original token.
+ * Explicit {@link mintMcpSessionCredential} still rotates.
+ */
 export function ensureMcpSessionCredential(scope: {
     sessionId: string;
     meshId?: string;
     isCoordinator?: boolean;
-}): string {
+}): string | null {
     const sessionId = trimString(scope.sessionId);
     if (!sessionId) {
         throw new Error('ensureMcpSessionCredential requires a non-empty sessionId');
     }
-    const existingToken = credentialStore.bySessionId.get(sessionId);
-    if (existingToken) {
-        const existing = credentialStore.byToken.get(existingToken);
-        if (existing) {
-            const meshId = trimString(scope.meshId) || undefined;
-            if (meshId) existing.meshId = meshId;
-            else delete existing.meshId;
-            if (typeof scope.isCoordinator === 'boolean') {
-                existing.isCoordinator = scope.isCoordinator;
-            }
-            return existingToken;
-        }
+    const existing = recallCredential(sessionId);
+    if (existing) {
+        applyCredentialScope(existing, scope);
+        return existing.token ?? null;
     }
     return mintMcpSessionCredential(scope);
 }
@@ -154,21 +270,28 @@ export function ensureMcpSessionCredential(scope: {
 export function getMcpSessionCredentialForSession(sessionId: string): string | null {
     const sid = trimString(sessionId);
     if (!sid) return null;
-    return credentialStore.bySessionId.get(sid) ?? null;
+    return recallCredential(sid)?.token ?? null;
 }
 
 export function revokeMcpSessionCredential(sessionId: string): void {
     const sid = trimString(sessionId);
     if (!sid) return;
-    const token = credentialStore.bySessionId.get(sid);
-    if (token) {
-        credentialStore.byToken.delete(token);
-        credentialStore.bySessionId.delete(sid);
-    }
+    dropCredential(sid);
 }
 
 export function __resetMcpSessionCredentialsForTest(): void {
     credentialStore.byToken.clear();
+    credentialStore.byHash.clear();
+    credentialStore.bySessionId.clear();
+    if (credentialPersistenceTestOwned && credentialPersistence) {
+        try { credentialPersistence.deleteAll(); } catch { /* test store */ }
+    }
+}
+
+/** Drop in-memory tokens without deleting the persisted hashes. Simulates a daemon restart. */
+export function __forgetMcpSessionCredentialMemoryForTest(): void {
+    credentialStore.byToken.clear();
+    credentialStore.byHash.clear();
     credentialStore.bySessionId.clear();
 }
 
@@ -176,9 +299,22 @@ export function __resetMcpSessionCredentialsForTest(): void {
 export function verifyMcpSessionCredential(credential: unknown): AuthenticatedMcpScope | null {
     const token = trimString(credential);
     if (!token) return null;
-    const entry = credentialStore.byToken.get(token);
-    if (!entry) return null;
-    if (credentialStore.bySessionId.get(entry.sessionId) !== token) return null;
+    let entry = credentialStore.byToken.get(token);
+    if (!entry) {
+        const tokenHash = hashMcpSessionCredential(token);
+        entry = credentialStore.byHash.get(tokenHash);
+        if (!entry) {
+            const row = persistedCredentialByHash(tokenHash);
+            if (!row) return null;
+            const current = credentialStore.bySessionId.get(row.sessionId);
+            if (current && current !== row.tokenHash) return null;
+            try { entry = adoptPersistedCredential(row); } catch { return null; }
+        }
+        if (!entry) return null;
+        entry.token = token;
+        credentialStore.byToken.set(token, entry);
+    }
+    if (credentialStore.bySessionId.get(entry.sessionId) !== entry.tokenHash) return null;
     if (entry.isCoordinator) {
         const coord = getCoordinatorForSession(entry.sessionId);
         if (!coord) return null;

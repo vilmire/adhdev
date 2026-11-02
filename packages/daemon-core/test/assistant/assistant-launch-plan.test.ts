@@ -144,6 +144,33 @@ describe('planAssistantMcp', () => {
         expect(relaunched).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
     });
 
+    it('codex launch args carry the session credential and the persisted toml omits the raw token', () => {
+        const credential = 'mcp_sess_plan_test_credential';
+        const setup: MeshCoordinatorSetup = { kind: 'cli_command', serverName: 'adhdev-mesh', command: 'codex mcp add adhdev-mesh -- adhdev mcp', requiresRestart: true, instructions: 'x', mcpServer: server };
+        const plan = planAssistantMcp({
+            cliType: 'codex-cli', setup, workspace: WS, configDir: CFG, sessionId: 'sid-123', sessionCredential: credential,
+        });
+        expect(plan.ok && plan.cliArgs).toEqual([
+            '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.command="adhdev"`,
+            '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.args=${JSON.stringify(server.args)}`,
+            '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.env.ADHDEV_ASSISTANT_SESSION_ID="sid-123"`,
+            '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.env.ADHDEV_MCP_SESSION_CREDENTIAL=${JSON.stringify(credential)}`,
+        ]);
+        expect(plan.ok && plan.configWrite && plan.configWrite.server).toEqual(server);
+        expect(JSON.stringify(plan.ok && plan.configWrite)).not.toContain(credential);
+        expect(plan.ok && plan.mcpServer.env).toEqual({
+            ADHDEV_ASSISTANT_SESSION_ID: 'sid-123',
+            ADHDEV_MCP_SESSION_CREDENTIAL: credential,
+        });
+        const toml = mergeAssistantCodexMcpConfigToml('', ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-123', ADHDEV_MCP_SESSION_CREDENTIAL: credential },
+        });
+        expect(toml).not.toContain('ADHDEV_MCP_SESSION_CREDENTIAL');
+        expect(toml).not.toContain(credential);
+        expect(toml).not.toContain('mcp_sess_');
+    });
+
     it('mergeAssistantCodexMcpConfigToml: handles multiline args, quoted headers/keys, custom env, comments, and unrelated tables without corruption', () => {
         const existing = [
             '# Top-level user comment',
@@ -700,6 +727,27 @@ describe('assistant session id reaches the MCP server (every eligible provider)'
         expect(p.cliArgs[i - 1]).toBe('-c');
         expect(p.mcpServer.env).toEqual({ ADHDEV_ASSISTANT_SESSION_ID: SID });
         expect(p.cliArgs.filter((a) => a.includes('.env.'))).toHaveLength(1);
+    });
+
+    it('every eligible provider stamps the current credential into the child env; codex does not persist it', () => {
+        const credential = 'mcp_sess_provider_child_credential';
+        for (const cliType of Object.keys(FIXTURES)) {
+            const provider: any = { meshCoordinator: { supported: true, mcpConfig: FIXTURES[cliType] } };
+            const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace: WS, toolset: { kind: 'assistant' }, adhdevMcpCommand: 'adhdev', adhdevMcpTransport: 'ipc', adhdevMcpPort: 19223 });
+            const p = planAssistantMcp({
+                cliType, setup, workspace: WS, configDir: CFG, sessionId: SID, sessionCredential: credential,
+                declaredMcpConfigPath: FIXTURES[cliType].path,
+            });
+            if (!p.ok) throw new Error(`${cliType}: ${p.code}`);
+            expect(p.mcpServer.env?.ADHDEV_MCP_SESSION_CREDENTIAL, cliType).toBe(credential);
+            expect(p.mcpServer.env?.ADHDEV_ASSISTANT_SESSION_ID, cliType).toBe(SID);
+            if (cliType === 'codex-cli') {
+                expect(p.cliArgs.some((arg) => arg.includes('ADHDEV_MCP_SESSION_CREDENTIAL') && arg.includes(credential))).toBe(true);
+                expect(JSON.stringify(p.configWrite?.server ?? {})).not.toContain(credential);
+            } else {
+                expect(JSON.stringify(p.configWrite?.server.env ?? {})).toContain(credential);
+            }
+        }
     });
 
     it.each(['claude-cli', 'cursor-cli', 'kimi', 'opencode', 'grok-cli', 'antigravity-cli'])('%s: the written config entry carries the env', (cliType) => {

@@ -578,18 +578,20 @@ export async function callAssistantTool(
     return { text: JSON.stringify({ success: false, code: 'assistant_execution_unavailable' }), isError: true };
   }
   const verb = ASSISTANT_TOOL_VERBS[tool];
-  const sessionCred =
-    (verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead
-      || (verb === ASSISTANT_VERB.projectSend && Array.isArray(args.attachments) && args.attachments.length > 0)
-      || verb === ASSISTANT_VERB.decisionAnswer || verb === ASSISTANT_VERB.decisionRequest || verb === ASSISTANT_VERB.fileTransfer
-      || verb === ASSISTANT_VERB.sessionControl)
-      ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL?.trim()
-      : undefined;
-  const result: any = await transport.command(verb, {
-    ...args,
-    ...(assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {}),
-    ...(sessionCred ? { mcpSessionCredential: sessionCred } : {}),
-  });
+  const wantsSessionCredential = verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead
+    || verb === ASSISTANT_VERB.projectSend
+    || verb === ASSISTANT_VERB.decisionAnswer || verb === ASSISTANT_VERB.decisionRequest || verb === ASSISTANT_VERB.fileTransfer
+    || verb === ASSISTANT_VERB.sessionControl;
+  const sessionCred = wantsSessionCredential ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL?.trim() : undefined;
+  // Session id is applied last so tool args cannot override it. For credentialed
+  // verbs the env token wins; a missing env token drops a forged args credential.
+  const forwarded: Record<string, unknown> = { ...args };
+  if (wantsSessionCredential) {
+    if (sessionCred) forwarded.mcpSessionCredential = sessionCred;
+    else delete forwarded.mcpSessionCredential;
+  }
+  if (assistantSessionId) forwarded[ASSISTANT_SESSION_ID_ARG] = assistantSessionId;
+  const result: any = await transport.command(verb, forwarded);
   const text = result && typeof result === 'object' ? JSON.stringify(result) : String(result);
   return result?.success === true ? { text } : { text, isError: true };
 }

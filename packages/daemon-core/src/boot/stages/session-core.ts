@@ -9,7 +9,7 @@ import { maintenanceHeld, withMaintenanceAdmission } from '../../maintenance/coo
  */
 
 import { LOG, getLogLevel } from '../../logging/logger.js';
-import { loadConfig } from '../../config/config.js';
+import { getConfigDir, loadConfig } from '../../config/config.js';
 import { DaemonCdpManager } from '../../cdp/manager.js';
 import { DaemonCdpInitializer } from '../../cdp/initializer.js';
 import { setupIdeInstance, type CdpSetupContext } from '../../cdp/setup.js';
@@ -25,6 +25,7 @@ import { subscribeLifecycleTrace } from '../../sessions/lifecycle-trace.js';
 import { createSessionEventPort } from '../../sessions/session-port.js';
 import { SessionRegistry } from '../../sessions/registry.js';
 import type { DaemonFactsCause } from '../../sessions/lifecycle-events.js';
+import { installMcpSessionCredentialFilePersistence } from '../../commands/mcp-command-ingress.js';
 import { loadMeshCoordinatorRegistry } from '../../mesh/coordinator-registry.js';
 import { subscribeLiveSessions, transcriptClaimOwnerIsLive } from '../live-sessions.js';
 import { SessionOutputFanout } from '../session-output-fanout.js';
@@ -46,6 +47,10 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
     instanceManager.setSessionEventPort(createSessionEventPort(bus, sessionRegistry));
     const cdpManagers = new Map<string, DaemonCdpManager>();
 
+    // Hash-only MCP credential file before coordinator restore calls ensure().
+    // ensure adopts a same-session hash instead of minting a token the live child
+    // cannot learn. Tests that inject a store are left alone.
+    installMcpSessionCredentialFilePersistence(getConfigDir());
     // Persisted coordinator registry: loaded before any session can register.
     loadMeshCoordinatorRegistry();
 

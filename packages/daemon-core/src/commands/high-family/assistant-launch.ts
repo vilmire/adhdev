@@ -164,11 +164,24 @@ const launchAssistantOnce = async (
     const workspace = assistantWorkspaceDir(configDir);
     const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: '', workspace, toolset: { kind: 'assistant' } });
     const assistantSessionKey = randomUUID();
+    // Mint before planning so the MCP child env (Codex `-c` overrides, Claude /
+    // antigravity server env) receives this token. The persisted Codex toml
+    // strips it; only the SHA-256 is stored.
+    const { mintMcpSessionCredential, revokeMcpSessionCredential } = await import('../mcp-command-ingress.js');
+    const { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } = await import('../../standalone-mcp-auth.js');
+    const assistantMcpCredential = mintMcpSessionCredential({
+        sessionId: assistantSessionKey,
+        isCoordinator: false,
+    });
     const mcp = planAssistantMcp({
         cliType, setup, workspace, configDir, sessionId: assistantSessionKey,
+        sessionCredential: assistantMcpCredential,
         declaredMcpConfigPath: provider?.meshCoordinator?.mcpConfig?.path,
     });
-    if (!mcp.ok) return fail(mcp.code, mcp.error, { cliType });
+    if (!mcp.ok) {
+        revokeMcpSessionCredential(assistantSessionKey);
+        return fail(mcp.code, mcp.error, { cliType });
+    }
     const approval = resolveAssistantApprovalSettings(provider, args?.autoApproveMode);
     if (!approval.ok) return fail(approval.code, approval.error, { cliType });
 
@@ -222,13 +235,8 @@ const launchAssistantOnce = async (
 
     const cliArgs: string[] = [];
     // The private HOME env and the plan's own env (claude-cli: auto memory off) first;
-    // the prompt injection may add its own keys.
-    const { ensureMcpSessionCredential } = await import('../mcp-command-ingress.js');
-    const { ADHDEV_MCP_SESSION_CREDENTIAL_ENV } = await import('../../standalone-mcp-auth.js');
-    const assistantMcpCredential = ensureMcpSessionCredential({
-        sessionId: assistantSessionKey,
-        isCoordinator: false,
-    });
+    // the prompt injection may add its own keys. The credential was minted before
+    // planning and is the same value already stamped into the MCP server env.
     const launchEnv: Record<string, string> = {
         ...(mcp.privateHome?.env ?? {}),
         ...(mcp.launchEnv ?? {}),

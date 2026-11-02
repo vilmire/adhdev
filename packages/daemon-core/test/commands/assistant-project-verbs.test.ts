@@ -272,6 +272,17 @@ describe('assistant_project_send', () => {
         expect(relay.openThread).not.toHaveBeenCalled();
     });
 
+    it('treats missing and empty attachments as a text send, and still gates a non-empty list', async () => {
+        live.mesh_a = [{ sessionId: 'human', idle: true, modalParked: false, managedByAssistant: false }];
+        responses.send_chat = () => ({ success: true, queued: true });
+        expect((await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: 'hi', attachments: [] })).success).toBe(true);
+        expect((await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: 'hi' })).success).toBe(true);
+        expect(await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: 'hi', messageId: 'm1', attachments: ['art_a'] })).toMatchObject({
+            success: false,
+            code: 'COMMAND_SOURCE_REJECTED',
+        });
+    });
+
     it('refuses before touching the mesh: missing skill, empty message', async () => {
         expect(await run(ASSISTANT_VERB.projectSend, { project: 'adhdev', message: 'x', skills: ['nope'] })).toMatchObject({ success: false, code: 'skill_not_found' });
         expect(await run(ASSISTANT_VERB.projectSend, { project: 'blog', message: 'x', skills: ['nope'] })).toMatchObject({ success: false, code: 'skill_not_found' });

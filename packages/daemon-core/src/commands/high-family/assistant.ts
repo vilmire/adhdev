@@ -781,7 +781,12 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
     // Owner-uploaded images: the caller must be the bound assistant (artifact-caller auth),
     // and every id must be one of this assistant session's fresh, unbound staged uploads.
     let uploads: LoadedUpload[] = [];
-    if (args.attachments !== undefined) {
+    // Missing or empty attachments are a text send: no attachment capability check.
+    // A non-empty list still requires the bound assistant credential.
+    const attachmentList = args.attachments;
+    const attachmentAuthRequired = attachmentList !== undefined
+        && !(Array.isArray(attachmentList) && attachmentList.length === 0);
+    if (attachmentAuthRequired) {
         const denied = authorizeAssistantArtifactCaller(args, ASSISTANT_VERB.projectSend);
         if (denied) return denied;
         const loaded = loadSendAttachments(args.attachments);
