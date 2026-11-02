@@ -77519,6 +77519,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         ...v.length > 1 ? v.slice(-2, -1) : []
       ])];
     }
+    var STAGE_PARENT_ENDED;
     var SELF_CHECK_LOG_MAX;
     var DIFF_MAX;
     var StagePipelineRuntime;
@@ -77531,6 +77532,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
         init_stage_synthesis();
         init_stage_state();
         init_stage_independence();
+        STAGE_PARENT_ENDED = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
         SELF_CHECK_LOG_MAX = 6e4;
         DIFF_MAX = 15e5;
         StagePipelineRuntime = class {
@@ -77595,6 +77597,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
               const parent = this.ports.queue.get(meshId, parentId);
               if (!parent || !isStageParent(parent)) return;
               await this.releaseReviewerWorkspace(childId);
+              if (STAGE_PARENT_ENDED.has(parent.status) || parent.stageState.released) return;
               const st = parent.stageState;
               if (st.phase !== "reviewing" && st.phase !== "awaiting_review") return;
               if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return;
@@ -77690,7 +77693,7 @@ ${body.replace(/<\/?\s*(untrusted_[a-z_]+)\b[^>]*>/gi, "[tag removed]")}
           }
           async resumeOne(meshId, parentId) {
             const parent = this.ports.queue.get(meshId, parentId);
-            if (!parent || !isStageParent(parent)) return;
+            if (!parent || !isStageParent(parent) || STAGE_PARENT_ENDED.has(parent.status)) return;
             const st = parent.stageState;
             if (st.phase === "self_checking") await this.runEffects(meshId, parentId, [{ kind: "run_self_check" }]);
             else if (st.phase === "awaiting_review" || st.phase === "reviewing") {

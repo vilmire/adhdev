@@ -11,6 +11,8 @@ import { buildFinalReport, buildReviewerMessage, buildRevisionMemo } from './sta
 import { isStageChild, isStageParent } from './stage-state.js';
 import { independenceRefusalExceeded } from './stage-independence.js';
 
+const STAGE_PARENT_ENDED = new Set(['completed', 'failed', 'blocked', 'cancelled']);
+
 const SELF_CHECK_LOG_MAX = 60_000;
 const DIFF_MAX = 1_500_000;
 
@@ -72,6 +74,9 @@ export class StagePipelineRuntime {
             const parent = this.ports.queue.get(meshId, parentId);
             if (!parent || !isStageParent(parent)) return;
             await this.releaseReviewerWorkspace(childId); // the review child ended: its workspace is no longer needed
+            // A parent that already ended (or was released) takes no further rounds: cancelling an orphaned
+            // review child must not start a new review for a finished task.
+            if (STAGE_PARENT_ENDED.has(parent.status) || parent.stageState!.released) return;
             const st = parent.stageState!;
             if (st.phase !== 'reviewing' && st.phase !== 'awaiting_review') return;
             if (!st.reviewTaskIds.includes(childId) || st.reviewTaskIds[st.reviewTaskIds.length - 1] !== childId) return; // a superseded child
@@ -160,7 +165,7 @@ export class StagePipelineRuntime {
 
     private async resumeOne(meshId: string, parentId: string): Promise<void> {
         const parent = this.ports.queue.get(meshId, parentId);
-        if (!parent || !isStageParent(parent)) return;
+        if (!parent || !isStageParent(parent) || STAGE_PARENT_ENDED.has(parent.status)) return;
         const st = parent.stageState!;
         if (st.phase === 'self_checking') await this.runEffects(meshId, parentId, [{ kind: 'run_self_check' }]);
         else if (st.phase === 'awaiting_review' || st.phase === 'reviewing') {

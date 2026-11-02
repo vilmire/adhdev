@@ -73,6 +73,17 @@ function harness(opts: { maxRevisions?: 0 | 1 | 2 | 3; selfChecks?: SelfCheckRes
 beforeEach(() => { __resetStageReportStashForTests(); __resetIndependenceTrackerForTests(); });
 
 describe('stage pipeline runtime', () => {
+    it('a review child ending after its parent already ended starts no new round', async () => {
+        const h = harness();
+        await h.implDone('a1');
+        const before = h.parent().stageState!.reviewTaskIds.length;
+        h.parent().status = 'completed';
+        await h.review({ verdict: 'changes_requested', findings: [h.f('F1')] }, 'cancelled');
+        expect(h.parent().stageState!.reviewTaskIds).toHaveLength(before);
+        expect(h.log.revisions).toEqual([]);
+        expect(h.log.commits).toEqual([]);
+    });
+
     it('approve in round 1 releases the parent once with a verdict line', async () => {
         const h = harness();
         await h.implDone('a1');
