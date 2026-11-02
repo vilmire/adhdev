@@ -161,7 +161,7 @@ export function renderWorkerProtocolFooter(input: WorkerProtocolFooterInput = {}
     if (scope.length) lines.push(`You are a delegated worker (${scope.join(', ')}).`)
     else lines.push('You are a delegated worker.')
     if (input.light) lines.push(...renderLightWorkspaceRules(input.light))
-    else if (input.commitOnCurrentBranch) lines.push(WORKER_CURRENT_BRANCH_RULE)
+    else if (input.commitOnCurrentBranch && input.stage?.role !== 'review') lines.push(WORKER_CURRENT_BRANCH_RULE)
     if (input.workerMcp === false) {
         lines.push(
             'This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, '

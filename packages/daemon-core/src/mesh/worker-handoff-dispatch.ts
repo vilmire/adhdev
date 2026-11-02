@@ -92,6 +92,8 @@ export interface DispatchableTask {
  */
 function commitsOnCurrentBranch(task: DispatchableTask, node: unknown): boolean {
     if (task.light || isTaskReadonly(task)) return false;
+    // A review child never writes, whatever its readonly stamping says.
+    if ((task as { stageRole?: string }).stageRole === 'review') return false;
     const mode = readNonEmpty(task.taskMode);
     if (mode && mode.trim() !== 'code_change') return false;
     const n = node as { worktreeBranch?: unknown; clonedFromNodeId?: unknown } | null;

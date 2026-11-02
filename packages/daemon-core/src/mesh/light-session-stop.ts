@@ -14,11 +14,21 @@ export type LightSessionStopper = (input: { meshId: string; taskId: string; sess
 let lightSessionStopper: LightSessionStopper | null = null;
 export function setLightSessionStopper(fn: LightSessionStopper | null): void { lightSessionStopper = fn; }
 
-/** Best-effort: a failed stop leaves the session to the idle reaper (it can never claim other work anyway). */
-export async function stopLightWorkerSession(meshId: string, taskId: string, sessionIdHint?: string): Promise<boolean> {
+const TERMINAL = new Set(['completed', 'failed', 'blocked', 'cancelled']);
+
+/**
+ * Best-effort: a failed stop leaves the session to the idle reaper (it can never claim other work anyway).
+ * The session to stop comes only from the light row itself (the dispatcher pins `targetSessionId`), never
+ * from a caller-supplied id. With `onlyStatus`, the row's state is checked in the same read that resolves the
+ * session: only a light row in one of those terminal statuses at that moment has its session stopped.
+ */
+export async function stopLightWorkerSession(meshId: string, taskId: string, onlyStatus?: readonly string[]): Promise<boolean> {
     try {
         const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        const sessionId = task?.light ? (task.targetSessionId || task.assignedSessionId || sessionIdHint) : undefined;
+        // The capture path calls this right after its own capture, before the terminal commit lands, so the state
+        // gate applies only when a caller names the statuses it acts on (the cancel path).
+        if (!task?.light || (onlyStatus && !(TERMINAL.has(task.status) && onlyStatus.includes(task.status)))) return false;
+        const sessionId = task.targetSessionId || task.assignedSessionId;
         if (!sessionId || !lightSessionStopper) return false;
         await lightSessionStopper({ meshId, taskId, sessionId });
         return true;
@@ -27,4 +37,3 @@ export async function stopLightWorkerSession(meshId: string, taskId: string, ses
         return false;
     }
 }
-

@@ -23998,6 +23998,7 @@ var require_dist3 = __commonJS({
       VIEWER_TO_SHARED_SESSION_TYPES: () => VIEWER_TO_SHARED_SESSION_TYPES2,
       WORKER_BRANCH_STATES: () => WORKER_BRANCH_STATES2,
       WORKER_COMMITS_MAX: () => WORKER_COMMITS_MAX,
+      WORKER_CURRENT_BRANCH_RULE: () => WORKER_CURRENT_BRANCH_RULE2,
       WORKER_DECISIONS_NEEDED_MAX: () => WORKER_DECISIONS_NEEDED_MAX,
       WORKER_PROTOCOL_FOOTER_MARKER: () => WORKER_PROTOCOL_FOOTER_MARKER2,
       WORKER_REPORT_OUTCOMES: () => WORKER_REPORT_OUTCOMES2,
@@ -25410,6 +25411,7 @@ ${line}` : line;
       if (scope2.length) lines.push(`You are a delegated worker (${scope2.join(", ")}).`);
       else lines.push("You are a delegated worker.");
       if (input.light) lines.push(...renderLightWorkspaceRules2(input.light));
+      else if (input.commitOnCurrentBranch && input.stage?.role !== "review") lines.push(WORKER_CURRENT_BRANCH_RULE2);
       if (input.workerMcp === false) {
         lines.push(
           "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",
@@ -27599,6 +27601,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var WORKER_TOOLS2;
     var WORKER_TOOL_SET2;
     var WORKER_PROTOCOL_FOOTER_MARKER2;
+    var WORKER_CURRENT_BRANCH_RULE2;
     var ASSISTANT_TOOLS2;
     var ASSISTANT_TOOL_SET2;
     var ASSISTANT_VERB2;
@@ -28340,6 +28343,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         ];
         WORKER_TOOL_SET2 = new Set(WORKER_TOOLS2);
         WORKER_PROTOCOL_FOOTER_MARKER2 = "--- adhdev worker protocol ---";
+        WORKER_CURRENT_BRANCH_RULE2 = "Commit your change on the branch that is currently checked out in this workspace. Do not create or switch branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.";
         ASSISTANT_TOOLS2 = [
           "projects",
           "environment",
@@ -51996,6 +52000,33 @@ ${rendered.join("\n\n")}`,
         ENVELOPE_TAG = "mesh_upstream_data";
       }
     });
+    function setLightSessionStopper(fn) {
+      lightSessionStopper = fn;
+    }
+    async function stopLightWorkerSession(meshId, taskId, onlyStatus) {
+      try {
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
+        if (!task?.light || onlyStatus && !(TERMINAL2.has(task.status) && onlyStatus.includes(task.status))) return false;
+        const sessionId = task.targetSessionId || task.assignedSessionId;
+        if (!sessionId || !lightSessionStopper) return false;
+        await lightSessionStopper({ meshId, taskId, sessionId });
+        return true;
+      } catch (e) {
+        LOG.warn("LightTask", `could not stop the light session of ${taskId}: ${e?.message || e}`);
+        return false;
+      }
+    }
+    var lightSessionStopper;
+    var TERMINAL2;
+    var init_light_session_stop = __esm2({
+      "src/mesh/light-session-stop.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_runtime_store();
+        lightSessionStopper = null;
+        TERMINAL2 = /* @__PURE__ */ new Set(["completed", "failed", "blocked", "cancelled"]);
+      }
+    });
     function setStageHookTarget(next) {
       target = next;
     }
@@ -52100,6 +52131,7 @@ ${rendered.join("\n\n")}`,
       } catch {
       }
       notifyStageChildTerminal(meshId, taskId);
+      void stopLightWorkerSession(meshId, taskId, ["cancelled"]);
     }
     function persistOutputVersion(store5, terminal, nowIso, attemptNo) {
       const latest = store5.getLatestTaskOutput(terminal.taskId);
@@ -52151,6 +52183,7 @@ ${rendered.join("\n\n")}`,
         init_mesh_untrusted_evidence();
         init_hash();
         init_stage_state();
+        init_light_session_stop();
         init_stage_hooks();
         terminalFences = /* @__PURE__ */ new Map();
         fenceKey = (meshId, taskId) => `${meshId}\0${taskId}`;
@@ -52609,7 +52642,7 @@ ${rendered.join("\n\n")}`,
       if (from === "none") return false;
       if (from === "any") return true;
       if (from === "nonterminal") return NONTERMINAL.includes(state2);
-      if (from === "terminal") return TERMINAL2.includes(state2);
+      if (from === "terminal") return TERMINAL3.includes(state2);
       return from.includes(state2);
     }
     var A2;
@@ -52625,7 +52658,7 @@ ${rendered.join("\n\n")}`,
     var awaitReport;
     var TRANSITIONS;
     var NONTERMINAL;
-    var TERMINAL2;
+    var TERMINAL3;
     var init_transitions = __esm2({
       "src/mesh/turn-ledger/transitions.ts"() {
         "use strict";
@@ -53058,7 +53091,7 @@ ${rendered.join("\n\n")}`,
           ] }
         ];
         NONTERMINAL = [A2, D, C, G, S, F];
-        TERMINAL2 = ["completed", "blocked", "failed", "cancelled"];
+        TERMINAL3 = ["completed", "blocked", "failed", "cancelled"];
       }
     });
     function isTerminalTurnState(state2) {
@@ -80422,21 +80455,6 @@ ${report}`;
         init_light_git();
       }
     });
-    function setLightSessionStopper(fn) {
-      lightSessionStopper = fn;
-    }
-    async function stopLightWorkerSession(meshId, taskId) {
-      try {
-        const task = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
-        const sessionId = task?.light ? task.targetSessionId || task.assignedSessionId : void 0;
-        if (!sessionId || !lightSessionStopper) return false;
-        await lightSessionStopper({ meshId, taskId, sessionId });
-        return true;
-      } catch (e) {
-        LOG.warn("LightTask", `could not stop the light session of ${taskId}: ${e?.message || e}`);
-        return false;
-      }
-    }
     function captureLightResultInBackground(meshId, taskId, report) {
       void (async () => {
         let isLight = false;
@@ -80682,7 +80700,6 @@ ${report}`;
     var LIGHT_CAPTURE_TIMEOUT_MS;
     var DEP_FILES;
     var DEP_SECTIONS;
-    var lightSessionStopper;
     var init_light_task_result = __esm2({
       "src/mesh/light-task-result.ts"() {
         "use strict";
@@ -80700,12 +80717,13 @@ ${report}`;
         init_light_workspace();
         init_mesh_light_workspace_store();
         init_mesh_runtime_store();
+        init_light_session_stop();
         init_mesh_task_terminal();
         init_mesh_work_queue();
+        init_light_session_stop();
         LIGHT_CAPTURE_TIMEOUT_MS = 6e4;
         DEP_FILES = /* @__PURE__ */ new Set(["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", ".npmrc"]);
         DEP_SECTIONS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies", "overrides", "resolutions", "workspaces"];
-        lightSessionStopper = null;
       }
     });
     function setMissionChangeListener(fn) {
@@ -91200,6 +91218,14 @@ ${preamble ? `${preamble}
     function readNonEmpty2(value) {
       return typeof value === "string" && value.trim() ? value.trim() : void 0;
     }
+    function commitsOnCurrentBranch(task, node) {
+      if (task.light || isTaskReadonly3(task)) return false;
+      if (task.stageRole === "review") return false;
+      const mode = readNonEmpty2(task.taskMode);
+      if (mode && mode.trim() !== "code_change") return false;
+      const n = node;
+      return !readNonEmpty2(n?.worktreeBranch) && !readNonEmpty2(n?.clonedFromNodeId);
+    }
     function resolveDispatchMessage2(task, meshId, node, target2 = {}) {
       const phaseInstruction = task.phase === "source" ? "\n\nSource phase: finish uncommitted and not_mergeable. No commits/hooks, tracked generated/vendor outputs, gitlink changes, publication or restart. Scoped local ignored dependency builds are permitted. Deliver full root/OSS pins, tracked and untracked private patch/hash manifest, exact paths/tests/settled commands. Source-ready is not release-ready; integration, normal hooks/parity/gates and independent review remain dependent work." : "";
       if (hasWorkerProtocolFooter2(task.message)) {
@@ -91283,6 +91309,7 @@ ${manifest}`;
         ...missionBrief ? { missionBrief } : {},
         ...typeof target2.workerMcp === "boolean" ? { workerMcp: target2.workerMcp } : {},
         ...task.light ? { light: resolveLightFooterInput(task) } : {},
+        ...commitsOnCurrentBranch(task, node) ? { commitOnCurrentBranch: true } : {},
         ...stageFooterInput(task) ? { stage: stageFooterInput(task) } : {}
       });
     }
@@ -140390,7 +140417,7 @@ ${grant.exp}`).digest("hex");
       }
     });
     function isTerminalPhase(role, phase) {
-      return TERMINAL3[role].has(phase);
+      return TERMINAL4[role].has(phase);
     }
     function fromRow2(r) {
       return {
@@ -140412,12 +140439,12 @@ ${grant.exp}`).digest("hex");
         ...r.target_public_key ? { targetPublicKey: r.target_public_key } : {}
       };
     }
-    var TERMINAL3;
+    var TERMINAL4;
     var SqliteHandoffJournal;
     var init_journal = __esm2({
       "src/mesh/host-handoff/journal.ts"() {
         "use strict";
-        TERMINAL3 = {
+        TERMINAL4 = {
           source: /* @__PURE__ */ new Set(["committed", "aborted"]),
           target: /* @__PURE__ */ new Set(["active", "discarded"])
         };
@@ -148022,7 +148049,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       if (!inst) return "stopped";
       const state2 = inst.getState?.();
       const status = str18(state2?.status).toLowerCase();
-      if (TERMINAL4.has(status)) return "stopped";
+      if (TERMINAL5.has(status)) return "stopped";
       if (typeof inst.isModalParked === "function" && inst.isModalParked()) return "waiting";
       if (status === "waiting_approval" || status === "waiting_choice") return "waiting";
       const drain = typeof inst.getDrainStatus === "function" ? str18(inst.getDrainStatus()).toLowerCase() : "";
@@ -148259,7 +148286,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
       return (0, import_node_crypto65.randomUUID)();
     }
     var import_node_crypto65;
-    var TERMINAL4;
+    var TERMINAL5;
     var sessionControlVerb;
     var ASSISTANT_QUOTA_FAILOVER_COMMAND;
     var quotaFailoverVerb;
@@ -148290,7 +148317,7 @@ You are replacing the previous coordinator${opts.fromProvider ? ` (${opts.fromPr
         init_new_work_hold();
         init_ports();
         init_validate();
-        TERMINAL4 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
+        TERMINAL5 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
         sessionControlVerb = assistantVerb(ASSISTANT_VERB2.sessionControl, async (projectPorts, args, ctx) => {
           const parsed = parseSessionControlArgs(args);
           if (!parsed.ok) return fail8("invalid_args", parsed.error);
@@ -149526,7 +149553,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             complete = false;
             continue;
           }
-          const open = !!attempt && (!TERMINAL5.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
+          const open = !!attempt && (!TERMINAL6.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
           out.push({
             sessionId,
             meshId,
@@ -149546,7 +149573,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       return complete ? out : Object.assign(out, { complete: false });
     }
     var import_node_crypto66;
-    var TERMINAL5;
+    var TERMINAL6;
     var SESSION_CAP;
     var RELAY_AUDIT_RETENTION_MS;
     var init_assistant_relay_audit = __esm2({
@@ -149560,7 +149587,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_mesh_config();
         init_coordinator_registry();
         init_assistant_relay_format();
-        TERMINAL5 = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
+        TERMINAL6 = /* @__PURE__ */ new Set(["completed", "blocked", "failed", "cancelled"]);
         SESSION_CAP = 20;
         RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }
@@ -235836,6 +235863,7 @@ function renderLightWorkspaceRules(light) {
     light.ownedPaths.length ? `Stay inside \`owned_paths\` (${light.ownedPaths.join(", ")}); if you must touch more, say why in the summary.` : "Stay inside the paths the task names; if you must touch more, say why in the summary."
   ];
 }
+var WORKER_CURRENT_BRANCH_RULE = "Commit your change on the branch that is currently checked out in this workspace. Do not create or switch branches (no `git checkout -b` / `git switch`) unless the task explicitly says to; report the branch you committed on.";
 function hasWorkerProtocolFooter(body) {
   return typeof body === "string" && body.includes(WORKER_PROTOCOL_FOOTER_MARKER);
 }
@@ -235858,6 +235886,7 @@ function renderWorkerProtocolFooter(input = {}) {
   if (scope.length) lines.push(`You are a delegated worker (${scope.join(", ")}).`);
   else lines.push("You are a delegated worker.");
   if (input.light) lines.push(...renderLightWorkspaceRules(input.light));
+  else if (input.commitOnCurrentBranch && input.stage?.role !== "review") lines.push(WORKER_CURRENT_BRANCH_RULE);
   if (input.workerMcp === false) {
     lines.push(
       "This session has NO adhdev worker tools (`report_completion`, `progress_update`, `peer_context_pull`, `git_*`) \u2014 do not look for them. When your work is finished, blocked, or has failed, end your turn with a plain final summary: what you did, what you found, which files you changed, and where you left the branch. That final message is what the coordinator receives.",
