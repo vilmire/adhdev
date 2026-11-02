@@ -4867,6 +4867,7 @@
             "reject": "Reject",
             "loading": "Loading the transfer preview…",
             "gone": "This transfer is no longer waiting.",
+            "approving": "Approving…",
             "failed": "Could not complete: {{code}}",
             "requestedBy": "Requested by {{who}}"
         },
@@ -4938,6 +4939,9 @@
         "dismiss": "Done",
         "recentlyAnswered": "Recently answered",
         "toastAnswered": "Recorded: {{answer}}",
+        "sending": "Sending…",
+        "loadingMachines": "Still loading machines: {{count}} left",
+        "staleMachines": "Could not refresh machines: {{count}}. Showing their last known items.",
         "carryOverTitle": "Carry-over — open items from closed missions",
         "confirm": {
             "question": "Closed as \"owner abandoned\" — correct?",

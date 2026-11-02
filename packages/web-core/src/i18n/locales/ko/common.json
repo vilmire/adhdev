@@ -4867,6 +4867,7 @@
             "reject": "거절",
             "loading": "전송 미리보기를 불러오는 중…",
             "gone": "이 전송은 더 이상 대기 중이 아닙니다.",
+            "approving": "승인 중…",
             "failed": "처리하지 못했습니다: {{code}}",
             "requestedBy": "{{who}} 요청"
         },
@@ -4938,6 +4939,9 @@
         "dismiss": "확인",
         "recentlyAnswered": "최근 답한 결정",
         "toastAnswered": "답변: {{answer}}",
+        "sending": "보내는 중…",
+        "loadingMachines": "기기 불러오는 중: {{count}}대 남음",
+        "staleMachines": "새로고침하지 못한 기기: {{count}}대. 마지막으로 받은 항목을 표시합니다.",
         "carryOverTitle": "이월 — 닫힌 미션에서 넘어온 항목",
         "confirm": {
             "question": "코디가 \"오너 결정으로 중단\"으로 닫았습니다 — 맞나요?",

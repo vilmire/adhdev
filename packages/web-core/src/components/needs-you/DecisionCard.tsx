@@ -193,6 +193,7 @@ export default function DecisionCard({
                     <button type="button" className="min-h-[44px] md:min-h-0 px-2 text-3xs text-text-muted hover:text-text-primary underline decoration-dotted" onClick={onLater}>{t('needsYou.later')}</button>
                 </div>
             )}
+            {busy && <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-sending">{t('needsYou.sending')}</div>}
             {outcome && !outcome.ok && <div className="text-2xs" style={{ color: 'var(--status-error)' }} role="alert">{t('needsYou.answerFailed', { code: outcome.code ?? '' })}</div>}
         </div>
     )
@@ -220,7 +221,9 @@ export function AnsweredCard({ item, busy, nowMs, projectName, onUndo, onChange 
             <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-semibold text-text-primary">{t('needsYou.answeredWith', { answer: summary })}</span>
                 {item.autoApplied && <span className="text-3xs rounded px-1.5 py-0.5 bg-bg-secondary text-text-muted">{t('needsYou.autoApplied')}</span>}
-                {item.deliveryState && <span className="text-3xs text-text-muted" data-testid="needs-you-delivery">{t(`needsYou.delivery.${item.deliveryState}`)}</span>}
+                {item.sending
+                    ? <span className="text-3xs text-text-muted" role="status" data-testid="needs-you-sending">{t('needsYou.sending')}</span>
+                    : item.deliveryState && <span className="text-3xs text-text-muted" data-testid="needs-you-delivery">{t(`needsYou.delivery.${item.deliveryState}`)}</span>}
                 <Button size="sm" variant="ghost" disabled={busy} onClick={onUndo}>{t('needsYou.undo')}</Button>
                 <Button size="sm" variant="ghost" disabled={busy} onClick={() => setChanging(v => !v)}>{t('needsYou.change')}</Button>
             </div>

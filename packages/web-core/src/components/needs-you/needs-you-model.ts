@@ -57,6 +57,8 @@ export interface NeedsYouAnswered {
     answer: { optionId?: string; text?: string; by: string; via: string; at: string }
     revision: number
     deliveryState?: 'pending' | 'queued' | 'sent' | 'acked'
+    /** Optimistic row: the press is shown at once, the daemon has not confirmed yet. */
+    sending?: boolean
     autoApplied: boolean
     options: NeedsYouOption[]
     recommended?: string
@@ -203,6 +205,52 @@ export function mergeNeedsYouSnapshots(parts: NeedsYouSnapshot[]): NeedsYouSnaps
         hostedMeshIds: [...new Set(parts.flatMap(p => p.hostedMeshIds))],
         meshNames: Object.assign({}, ...parts.map(p => p.meshNames)),
     }
+}
+
+// ─── optimistic overlay ─────────────────────────────────────────────────────
+
+/** An owner press shown before the daemon confirms it (cleared on failure, or once a fresh list from the owning daemon arrives). */
+export type PendingOwnerAction =
+    | { kind: 'answer'; daemonId: string; meshId: string; itemId: string; optionId?: string; text?: string; at: string; confirmedAt?: number }
+    | { kind: 'live_check'; daemonId: string; meshId: string; itemId: string; verdict: 'works' | 'doesnt_work'; confirmedAt?: number }
+
+export function pendingActionKey(a: { daemonId: string; meshId: string; itemId: string }): string {
+    return `${a.daemonId}\u0000${a.meshId}\u0000${a.itemId}`
+}
+
+/**
+ * The snapshot with not-yet-confirmed owner presses applied: an answered decision moves to "recently
+ * answered" (flagged `sending` until confirmed), a "Works" live check disappears, "Doesn't work" turns failed.
+ * Pure; unmatched actions are ignored (the list may already carry the truth).
+ */
+export function applyPendingOwnerActions(base: NeedsYouSnapshot, pending: readonly PendingOwnerAction[]): NeedsYouSnapshot {
+    if (pending.length === 0) return base
+    let decisions = base.decisions
+    let liveChecks = base.liveChecks
+    let answered = base.answered
+    const same = (x: { daemonId: string; meshId: string; itemId: string }, a: { daemonId: string; meshId: string; itemId: string }) =>
+        x.daemonId === a.daemonId && x.meshId === a.meshId && x.itemId === a.itemId
+    for (const a of pending) {
+        if (a.kind === 'live_check') {
+            if (a.verdict === 'works') liveChecks = liveChecks.filter(c => !same(c, a))
+            else liveChecks = liveChecks.map(c => (same(c, a) ? { ...c, state: 'failed' as const } : c))
+            continue
+        }
+        const sending = a.confirmedAt === undefined
+        const answer = { ...(a.optionId ? { optionId: a.optionId } : {}), ...(a.text ? { text: a.text } : {}), by: 'owner', via: 'dashboard', at: a.at }
+        const d = decisions.find(x => same(x, a))
+        if (d) {
+            decisions = decisions.filter(x => x !== d)
+            answered = [{
+                daemonId: d.daemonId, meshId: d.meshId, missionId: d.missionId, itemId: d.itemId, question: d.question,
+                answer, revision: 1, deliveryState: 'pending', sending, autoApplied: false,
+                options: d.options, ...(d.recommended ? { recommended: d.recommended } : {}), allowFreeText: d.allowFreeText,
+            }, ...answered]
+        } else if (answered.some(x => same(x, a))) {
+            answered = answered.map(x => (same(x, a) ? { ...x, answer, revision: x.revision + 1, deliveryState: 'pending' as const, sending } : x))
+        }
+    }
+    return { ...base, decisions, liveChecks, answered }
 }
 
 // ─── unified entries ──────────────────────────────────────────────────────

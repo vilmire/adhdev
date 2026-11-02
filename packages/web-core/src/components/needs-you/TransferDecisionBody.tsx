@@ -88,6 +88,7 @@ export function TransferDecisionBody({ decision, busy, onAnswer }: TransferDecis
                 </details>
             ) : ow ? <div className="text-2xs text-text-muted">{t('needsYou.transfer.newOnly', { count: ow.newCount })}</div> : null}
             {tr.excluded.length > 0 && <div className="text-2xs text-text-muted">{t('settings.projectTransfer.excludedTitle', { count: tr.excluded.length })}</div>}
+            {working && <div className="text-2xs text-text-muted" role="status" data-testid="transfer-decision-progress">{t('needsYou.transfer.approving')}</div>}
             {err && <div className="text-2xs" style={{ color: 'var(--status-error)' }} role="alert">{err}</div>}
             <div className="flex gap-2">
                 <Button size="sm" variant="primary" className="min-h-[44px] md:min-h-0" disabled={busy || working} onClick={() => { void approve() }} data-testid="transfer-decision-approve">{t('needsYou.transfer.approve')}</Button>

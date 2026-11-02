@@ -4867,6 +4867,7 @@
             "reject": "拒绝",
             "loading": "正在加载传输预览…",
             "gone": "此传输已不再等待处理。",
+            "approving": "正在批准…",
             "failed": "无法完成：{{code}}",
             "requestedBy": "{{who}}"
         },
@@ -4938,6 +4939,9 @@
         "dismiss": "完成",
         "recentlyAnswered": "最近已答复",
         "toastAnswered": "已答复：{{answer}}",
+        "sending": "正在发送…",
+        "loadingMachines": "仍在加载设备：剩余 {{count}} 台",
+        "staleMachines": "无法刷新的设备：{{count}} 台。显示其最近已知的条目。",
         "carryOverTitle": "结转 — 已关闭任务遗留的未完成项",
         "confirm": {
             "question": "已按“所有者放弃”关闭 — 是否正确？",

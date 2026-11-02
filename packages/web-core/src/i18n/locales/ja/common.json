@@ -4867,6 +4867,7 @@
             "reject": "拒否",
             "loading": "転送プレビューを読み込み中…",
             "gone": "この転送はもう待機中ではありません。",
+            "approving": "承認中…",
             "failed": "完了できませんでした: {{code}}",
             "requestedBy": "{{who}}"
         },
@@ -4938,6 +4939,9 @@
         "dismiss": "閉じる",
         "recentlyAnswered": "最近回答した決定",
         "toastAnswered": "回答: {{answer}}",
+        "sending": "送信中…",
+        "loadingMachines": "マシンを読み込み中: 残り {{count}} 台",
+        "staleMachines": "更新できなかったマシン: {{count}} 台。最後に取得した項目を表示しています。",
         "carryOverTitle": "繰り越し — 閉じたミッションの未完了項目",
         "confirm": {
             "question": "「オーナーが中止」として閉じられました — 合っていますか？",

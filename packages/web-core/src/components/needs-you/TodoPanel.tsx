@@ -135,13 +135,12 @@ export default function TodoPanel() {
         const lines = answerAll.lines
         setAnswerAll({ phase: 'running', lines })
         const results: Array<{ line: RecommendedPlanLine; ok: boolean; code?: string }> = []
-        for (const line of lines) {
-            const o = await state.answer({
-                daemonId: line.decision.daemonId, meshId: line.decision.meshId, missionId: line.decision.missionId,
-                itemId: line.decision.itemId, optionId: line.optionId,
-            })
-            results.push({ line, ok: o.ok, ...(o.ok ? {} : { code: o.code }) })
-        }
+        // All at once: each card moves to "answered" immediately and the machines work in parallel.
+        const outcomes = await Promise.all(lines.map(line => state.answer({
+            daemonId: line.decision.daemonId, meshId: line.decision.meshId, missionId: line.decision.missionId,
+            itemId: line.decision.itemId, optionId: line.optionId,
+        })))
+        lines.forEach((line, i) => results.push({ line, ok: outcomes[i].ok, ...(outcomes[i].ok ? {} : { code: outcomes[i].code }) }))
         setAnswerAll({ phase: 'done', results })
     }
 
@@ -271,6 +270,12 @@ export default function TodoPanel() {
                 </div>
             )}
 
+            {state.loaded && (state.loadingCount ?? 0) > 0 && (
+                <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-loading-machines">{t('needsYou.loadingMachines', { count: state.loadingCount })}</div>
+            )}
+            {(state.staleDaemonIds?.length ?? 0) > 0 && (
+                <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-stale-machines">{t('needsYou.staleMachines', { count: state.staleDaemonIds?.length ?? 0 })}</div>
+            )}
             {!state.loaded ? (
                 <div className="text-xs opacity-60 py-6 text-center">{t('needsYou.loading')}</div>
             ) : (

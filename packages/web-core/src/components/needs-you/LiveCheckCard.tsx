@@ -54,6 +54,7 @@ export default function LiveCheckCard({ check, projectName, busy, outcome, onRes
                     {t('needsYou.liveCheckDoesntWork')}
                 </Button>
             </div>
+            {busy && <div className="text-2xs text-text-muted" role="status" data-testid="needs-you-sending">{t('needsYou.sending')}</div>}
             {outcome && !outcome.ok && (
                 <div role="alert" className="text-xs" style={{ color: 'var(--status-danger)' }}>{t('needsYou.liveCheckResolveFailed', { code: outcome.code ?? 'failed' })}</div>
             )}

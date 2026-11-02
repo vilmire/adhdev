@@ -4870,6 +4870,7 @@
             "reject": "Rechazar",
             "loading": "Cargando la vista previa…",
             "gone": "Esta transferencia ya no está pendiente.",
+            "approving": "Aprobando…",
             "failed": "No se pudo completar: {{code}}",
             "requestedBy": "Solicitado por {{who}}"
         },
@@ -4941,6 +4942,9 @@
         "dismiss": "Listo",
         "recentlyAnswered": "Respondidas recientemente",
         "toastAnswered": "Respondida: {{answer}}",
+        "sending": "Enviando…",
+        "loadingMachines": "Cargando aún equipos: faltan {{count}}",
+        "staleMachines": "No se pudieron actualizar equipos: {{count}}. Se muestran sus últimos elementos conocidos.",
         "carryOverTitle": "Arrastre — elementos abiertos de misiones cerradas",
         "confirm": {
             "question": "Cerrada como \"abandonada por el propietario\" — ¿es correcto?",

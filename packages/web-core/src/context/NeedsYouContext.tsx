@@ -27,12 +27,15 @@ import {
     NEEDS_YOU_ANSWER_COMMAND,
     NEEDS_YOU_LIVE_CHECK_COMMAND,
     NEEDS_YOU_LIST_COMMAND,
+    applyPendingOwnerActions,
     buildNeedsYouEntries,
     mergeNeedsYouSnapshots,
     needsYouCount,
     parseNeedsYouList,
+    pendingActionKey,
     unwrapCommandBody,
     type NeedsYouEntry,
+    type PendingOwnerAction,
     type NeedsYouSnapshot,
 } from '../components/needs-you/needs-you-model'
 
@@ -70,8 +73,12 @@ export interface NeedsYouState {
     entries: NeedsYouEntry[]
     /** Open decisions + approvals (the nav badge). */
     count: number
-    /** False until the first fetch settled (or no daemon to ask). */
+    /** False until the first fetch settled (or no daemon to ask). Daemons answer independently: true as soon as one has data. */
     loaded: boolean
+    /** Machines that have not answered their first list call yet (drives the "still loading N machines" hint). */
+    loadingCount?: number
+    /** Machines whose last list call failed or timed out: their previous items stay on screen, marked stale. */
+    staleDaemonIds?: readonly string[]
     /** Outcome of the last answer per itemId (a failure stays until the next attempt). */
     outcomes: Record<string, NeedsYouOutcome>
     busyIds: ReadonlySet<string>
@@ -86,7 +93,7 @@ const EMPTY_STAGED: AssistantStagedWritesState = {
 }
 
 const EMPTY_STATE: NeedsYouState = {
-    snapshot: EMPTY_NEEDS_YOU_SNAPSHOT, approvals: [], staged: EMPTY_STAGED, entries: [], count: 0, loaded: true, outcomes: {},
+    snapshot: EMPTY_NEEDS_YOU_SNAPSHOT, approvals: [], staged: EMPTY_STAGED, entries: [], count: 0, loaded: true, loadingCount: 0, staleDaemonIds: [], outcomes: {},
     busyIds: new Set(), refresh: async () => {}, answer: async () => ({ ok: false, code: 'unavailable' }), resolveLiveCheck: async () => ({ ok: false, code: 'unavailable' }),
 }
 
@@ -95,6 +102,24 @@ const NeedsYouCtx = createContext<NeedsYouState | null>(null)
 /** Minimum gap between mission-signal refetches. */
 const SIGNAL_MIN_GAP_MS = 3_000
 const SIGNAL_DEBOUNCE_MS = 800
+/** A list call that takes longer is abandoned for this round (the machine keeps its previous items, marked stale). */
+export const LIST_TIMEOUT_MS = 8_000
+
+interface DaemonPart { snapshot: NeedsYouSnapshot; stale: boolean }
+
+const clockMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+/** Dev-visible timing, so the real browser round trip can be measured live (`localStorage.debug`-free: console.debug is hidden by default). */
+function logTiming(event: string, payload: Record<string, unknown>): void {
+    if (typeof console !== 'undefined') console.debug(`[needs-you] ${event}`, payload)
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout')), ms)
+        p.then(v => { clearTimeout(timer); resolve(v) }, e => { clearTimeout(timer); reject(e) })
+    })
+}
 
 export function missionsSignature(status: { missions?: Array<{ id?: string; updatedAt?: string; status?: string }> } | null | undefined): string {
     return (status?.missions ?? []).map(m => `${m.id}:${m.updatedAt ?? ''}:${m.status ?? ''}`).join('|')
@@ -103,16 +128,14 @@ export function missionsSignature(status: { missions?: Array<{ id?: string; upda
 export function NeedsYouProvider({ children }: { children: ReactNode }) {
     const { sendCommand, sendData } = useTransport()
     const { ides, connectionStates, initialLoaded } = useDaemons()
-    const [snapshot, setSnapshot] = useState<NeedsYouSnapshot>(EMPTY_NEEDS_YOU_SNAPSHOT)
-    const [loaded, setLoaded] = useState(false)
+    const [parts, setParts] = useState<Record<string, DaemonPart>>({})
+    const [pending, setPending] = useState<Record<string, PendingOwnerAction>>({})
     const [outcomes, setOutcomes] = useState<Record<string, NeedsYouOutcome>>({})
     const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set())
     const sendRef = useRef(sendCommand)
     sendRef.current = sendCommand
-    const seq = useRef(0)
+    const seqs = useRef(new Map<string, number>())
     const lastFetchAt = useRef(0)
-    const initialLoadedRef = useRef(initialLoaded)
-    initialLoadedRef.current = initialLoaded
 
     const daemonIds = useMemo(
         () => (ides as any[])
@@ -134,24 +157,49 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
     const stagedRefreshRef = useRef(staged.refresh)
     stagedRefreshRef.current = staged.refresh
 
+    /** Fetch one daemon's list. Results land per daemon as they arrive; a stale (superseded) answer is dropped. */
+    const fetchDaemon = useCallback(async (id: string) => {
+        const mine = (seqs.current.get(id) ?? 0) + 1
+        seqs.current.set(id, mine)
+        const startedAt = Date.now()
+        const t0 = clockMs()
+        let next: DaemonPart | null = null
+        try {
+            const raw = await withTimeout(sendRef.current(id, NEEDS_YOU_LIST_COMMAND, { includeAnswered: true, includeLiveChecks: true, includeMissions: true }), LIST_TIMEOUT_MS)
+            next = { snapshot: parseNeedsYouList(raw, id), stale: false }
+            logTiming('list', { daemonId: id, ms: Math.round(clockMs() - t0), ok: true })
+        } catch (e) {
+            logTiming('list', { daemonId: id, ms: Math.round(clockMs() - t0), ok: false, error: e instanceof Error ? e.message : String(e) })
+        }
+        if (seqs.current.get(id) !== mine) return
+        if (next) {
+            const fresh = next
+            setParts(prev => ({ ...prev, [id]: fresh }))
+            // A press the daemon confirmed before this fetch began is now part of the list: drop its overlay.
+            setPending(prev => {
+                let changed = false
+                const out: Record<string, PendingOwnerAction> = {}
+                for (const [k, a] of Object.entries(prev)) {
+                    if (a.daemonId === id && a.confirmedAt !== undefined && a.confirmedAt <= startedAt) changed = true
+                    else out[k] = a
+                }
+                return changed ? out : prev
+            })
+        } else {
+            // Failed or timed out: keep what this machine last reported (never replace it with "nothing"), flagged stale.
+            setParts(prev => ({ ...prev, [id]: { snapshot: prev[id]?.snapshot ?? EMPTY_NEEDS_YOU_SNAPSHOT, stale: true } }))
+        }
+    }, [])
+
+    const refreshDaemons = useCallback(async (ids: readonly string[]) => {
+        lastFetchAt.current = Date.now()
+        await Promise.all(ids.map(fetchDaemon))
+    }, [fetchDaemon])
+
     const refresh = useCallback(async () => {
         void stagedRefreshRef.current()
-        const ids = daemonKey ? daemonKey.split(',') : []
-        const mine = ++seq.current
-        lastFetchAt.current = Date.now()
-        if (ids.length === 0) { setSnapshot(EMPTY_NEEDS_YOU_SNAPSHOT); setLoaded(initialLoadedRef.current); return }
-        const parts = await Promise.all(ids.map(async id => {
-            try {
-                const raw = await sendRef.current(id, NEEDS_YOU_LIST_COMMAND, { includeAnswered: true, includeLiveChecks: true, includeMissions: true })
-                return parseNeedsYouList(raw, id)
-            } catch {
-                return EMPTY_NEEDS_YOU_SNAPSHOT
-            }
-        }))
-        if (mine !== seq.current) return
-        setSnapshot(mergeNeedsYouSnapshots(parts))
-        setLoaded(true)
-    }, [daemonKey])
+        await refreshDaemons(daemonKey ? daemonKey.split(',') : [])
+    }, [daemonKey, refreshDaemons])
 
     useEffect(() => { void refresh() }, [refresh, initialLoaded])
 
@@ -165,22 +213,34 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
 
     // Mission-change signal: ride the hosted meshes' `mesh.status` feed and refetch when the missions
     // signature changes (the daemon flushes that feed from notifyMissionChanged). Debounced and rate-limited.
+    const baseSnapshot = useMemo(
+        () => mergeNeedsYouSnapshots(daemonIds.map(id => parts[id]?.snapshot).filter((x): x is NeedsYouSnapshot => !!x)),
+        [daemonIds, parts],
+    )
+    const snapshot = useMemo(() => applyPendingOwnerActions(baseSnapshot, Object.values(pending)), [baseSnapshot, pending])
+    const settledCount = daemonIds.filter(id => !!parts[id]).length
+    const loadingCount = daemonIds.length - settledCount
+    const anyFresh = daemonIds.some(id => parts[id] && !parts[id].stale)
+    const loaded = daemonIds.length === 0 ? initialLoaded : (anyFresh || loadingCount === 0)
+    const staleDaemonIds = useMemo(() => daemonIds.filter(id => parts[id]?.stale), [daemonIds, parts])
     const hostedKey = useMemo(() => {
         const byMesh = new Map<string, string>()
-        for (const m of snapshot.missions) byMesh.set(m.meshId, m.daemonId)
-        for (const d of snapshot.decisions) byMesh.set(d.meshId, d.daemonId)
+        for (const m of baseSnapshot.missions) byMesh.set(m.meshId, m.daemonId)
+        for (const d of baseSnapshot.decisions) byMesh.set(d.meshId, d.daemonId)
         return JSON.stringify([...byMesh.entries()].sort())
-    }, [snapshot.missions, snapshot.decisions])
+    }, [baseSnapshot.missions, baseSnapshot.decisions])
     const hostedList = useMemo(() => (JSON.parse(hostedKey) as Array<[string, string]>), [hostedKey])
     useEffect(() => {
         if (!sendData || hostedList.length === 0) return
         let timer: ReturnType<typeof setTimeout> | null = null
         const signatures = new Map<string, string>()
-        const schedule = () => {
+        const schedule = (daemonId: string) => {
+            dirty.add(daemonId)
             if (timer) return
             const wait = Math.max(SIGNAL_DEBOUNCE_MS, SIGNAL_MIN_GAP_MS - (Date.now() - lastFetchAt.current))
-            timer = setTimeout(() => { timer = null; void refresh() }, wait)
+            timer = setTimeout(() => { timer = null; const ids = [...dirty]; dirty.clear(); void refreshDaemons(ids) }, wait)
         }
+        const dirty = new Set<string>()
         const unsubs = hostedList.map(([meshId, daemonId]) => subscriptionManager.subscribe<MeshStatusSnapshotUpdate>(
             { sendData },
             daemonId,
@@ -190,17 +250,57 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
                 const sig = missionsSignature(extractRepoMeshStatus(update.status) as any)
                 const prev = signatures.get(meshId)
                 signatures.set(meshId, sig)
-                if (prev !== undefined && prev !== sig) schedule()
+                if (prev !== undefined && prev !== sig) schedule(daemonId)
             },
             { retryIntervalMs: 2_000 },
         ))
         return () => { if (timer) clearTimeout(timer); for (const u of unsubs) u() }
-    }, [hostedList, sendData, refresh])
+    }, [hostedList, sendData, refreshDaemons])
 
-    const answer = useCallback(async (input: NeedsYouAnswerInput): Promise<NeedsYouOutcome> => {
+    /**
+     * Shared press flow: show the result at once (optimistic overlay + busy), run the command, then either
+     * revert with the error or confirm and re-fetch ONLY the owning daemon in the background.
+     */
+    const runPress = useCallback(async (
+        label: string,
+        input: { daemonId: string; meshId: string; itemId: string },
+        optimistic: PendingOwnerAction | null,
+        send: () => Promise<NeedsYouOutcome>,
+    ): Promise<NeedsYouOutcome> => {
+        const key = pendingActionKey(input)
+        const t0 = clockMs()
         setBusyIds(prev => new Set(prev).add(input.itemId))
+        setOutcomes(prev => { if (!(input.itemId in prev)) return prev; const next = { ...prev }; delete next[input.itemId]; return next })
+        if (optimistic) setPending(prev => ({ ...prev, [key]: optimistic }))
         let outcome: NeedsYouOutcome
         try {
+            outcome = await send()
+        } catch (e) {
+            outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
+        }
+        logTiming(label, { daemonId: input.daemonId, ms: Math.round(clockMs() - t0), ok: outcome.ok })
+        setOutcomes(prev => ({ ...prev, [input.itemId]: outcome }))
+        setBusyIds(prev => { const next = new Set(prev); next.delete(input.itemId); return next })
+        if (optimistic) {
+            const confirmedAt = Date.now()   // taken now, not inside the updater: the owner re-fetch below must start at or after it
+            setPending(prev => {
+                const cur = prev[key]
+                if (cur !== optimistic) return prev
+                if (!outcome.ok) { const next = { ...prev }; delete next[key]; return next }
+                return { ...prev, [key]: { ...cur, confirmedAt } }
+            })
+        }
+        // Not awaited: the card already shows the truth; the owning daemon's list catches up on its own.
+        void refreshDaemons([input.daemonId])
+        return outcome
+    }, [refreshDaemons])
+
+    const answer = useCallback((input: NeedsYouAnswerInput): Promise<NeedsYouOutcome> => {
+        const optimistic: PendingOwnerAction | null = input.undo ? null : {
+            kind: 'answer', daemonId: input.daemonId, meshId: input.meshId, itemId: input.itemId,
+            ...(input.optionId ? { optionId: input.optionId } : {}), ...(input.text ? { text: input.text } : {}), at: new Date().toISOString(),
+        }
+        return runPress('answer', input, optimistic, async () => {
             const raw = await sendRef.current(input.daemonId, NEEDS_YOU_ANSWER_COMMAND, {
                 meshId: input.meshId,
                 ...(input.missionId ? { missionId: input.missionId } : {}),
@@ -211,22 +311,15 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
                 via: 'dashboard',
             })
             const body = unwrapCommandBody(raw)
-            outcome = body?.success === true
+            return body?.success === true
                 ? { ok: true, ...(typeof body.action === 'string' ? { action: body.action } : {}), ...(typeof body.delivery === 'string' ? { delivery: body.delivery } : {}) }
                 : { ok: false, code: String(body?.code ?? body?.error ?? 'failed') }
-        } catch (e) {
-            outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
-        }
-        setOutcomes(prev => ({ ...prev, [input.itemId]: outcome }))
-        setBusyIds(prev => { const next = new Set(prev); next.delete(input.itemId); return next })
-        await refresh()
-        return outcome
-    }, [refresh])
+        })
+    }, [runPress])
 
-    const resolveLiveCheck = useCallback(async (input: NeedsYouLiveCheckInput): Promise<NeedsYouOutcome> => {
-        setBusyIds(prev => new Set(prev).add(input.itemId))
-        let outcome: NeedsYouOutcome
-        try {
+    const resolveLiveCheck = useCallback((input: NeedsYouLiveCheckInput): Promise<NeedsYouOutcome> => {
+        const optimistic: PendingOwnerAction = { kind: 'live_check', daemonId: input.daemonId, meshId: input.meshId, itemId: input.itemId, verdict: input.verdict }
+        return runPress('live_check', input, optimistic, async () => {
             const raw = await sendRef.current(input.daemonId, NEEDS_YOU_LIVE_CHECK_COMMAND, {
                 meshId: input.meshId,
                 itemId: input.itemId,
@@ -235,22 +328,16 @@ export function NeedsYouProvider({ children }: { children: ReactNode }) {
                 via: 'dashboard',
             })
             const body = unwrapCommandBody(raw)
-            outcome = body?.success === true
+            return body?.success === true
                 ? { ok: true, ...(typeof body.state === 'string' ? { action: body.state } : {}) }
                 : { ok: false, code: String(body?.code ?? body?.error ?? 'failed') }
-        } catch (e) {
-            outcome = { ok: false, code: e instanceof Error ? e.message : String(e) }
-        }
-        setOutcomes(prev => ({ ...prev, [input.itemId]: outcome }))
-        setBusyIds(prev => { const next = new Set(prev); next.delete(input.itemId); return next })
-        await refresh()
-        return outcome
-    }, [refresh])
+        })
+    }, [runPress])
 
     const entries = useMemo(() => buildNeedsYouEntries(snapshot, approvals, staged.items ?? []), [snapshot, approvals, staged.items])
     const value = useMemo<NeedsYouState>(() => ({
-        snapshot, approvals, staged, entries, count: needsYouCount(entries), loaded, outcomes, busyIds, refresh, answer, resolveLiveCheck,
-    }), [snapshot, approvals, staged, entries, loaded, outcomes, busyIds, refresh, answer, resolveLiveCheck])
+        snapshot, approvals, staged, entries, count: needsYouCount(entries), loaded, loadingCount, staleDaemonIds, outcomes, busyIds, refresh, answer, resolveLiveCheck,
+    }), [snapshot, approvals, staged, entries, loaded, loadingCount, staleDaemonIds, outcomes, busyIds, refresh, answer, resolveLiveCheck])
 
     return <NeedsYouCtx.Provider value={value}>{children}</NeedsYouCtx.Provider>
 }
