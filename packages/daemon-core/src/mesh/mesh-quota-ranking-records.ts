@@ -405,6 +405,8 @@ type QuotaSpreadBonusZeroReason =
     | 'opted-out'
     | 'provider-disabled'
     | 'snapshot-error'
+    /** The snapshot itself recorded an auth failure. A quota-fetch error is not this. */
+    | 'auth-error'
     | 'zero-headroom';
 
 export interface ProviderQuotaBonusDiagnostic {
@@ -422,6 +424,14 @@ export interface ProviderQuotaBonusDiagnostic {
  * Everything is an in-memory facts/cache read through quotaEntryFor — no quota
  * fetch is performed.
  */
+function zeroReasonForIneligibleSnapshot(failureKind: string | undefined): QuotaSpreadBonusZeroReason {
+    if (failureKind === 'no-data') return 'no-data';
+    // Only a failureKind the quota snapshot already recorded as auth. A fetch,
+    // timeout, or other probe error stays `snapshot-error` and is not CLI auth.
+    if (failureKind === 'auth' || failureKind === 'auth_expired') return 'auth-error';
+    return 'snapshot-error';
+}
+
 export function quotaSpreadBonusDiagnosticsByProvider(
     node: any,
     providerTypes: string[],
@@ -429,10 +439,13 @@ export function quotaSpreadBonusDiagnosticsByProvider(
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
     targetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>,
+    /** Bonus values already added to slot scores. Diagnostics report these, not a second reading. */
+    scoredBonusByProvider?: Record<string, number> | null,
 ): ProviderQuotaBonusDiagnostic[] {
     const bonuses = quotaSpreadBonusByProvider(node, policy, now, context, targetsByProvider);
     return [...new Set(providerTypes)].map(providerType => {
-        const value = bonuses[providerType] ?? 0;
+        const scored = scoredBonusByProvider?.[providerType];
+        const value = typeof scored === 'number' ? scored : (bonuses[providerType] ?? 0);
         const entry = quotaEntryFor(node, providerType, context, now);
         if (!entry) {
             const absentReason = classifyAbsentQuotaReason(node, providerType, context);
@@ -459,7 +472,7 @@ export function quotaSpreadBonusDiagnosticsByProvider(
             // mere wall-clock age.
             const windowsEligible = quota.status === 'ok' || (quota as any).metadata?.lastGoodWindows === true;
             if (!windowsEligible) {
-                zeroReason = failureKind === 'no-data' ? 'no-data' : 'snapshot-error';
+                zeroReason = zeroReasonForIneligibleSnapshot(failureKind);
             } else if (!axes.session && !axes.weekly && !axes.monthly) {
                 zeroReason = 'no-data';
             } else if (![axes.session, axes.weekly, axes.monthly].some(window =>

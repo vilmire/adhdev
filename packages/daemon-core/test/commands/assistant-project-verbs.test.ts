@@ -158,7 +158,7 @@ describe('assistant_project_status', () => {
                     },
                     quota: { reordered: false, note: 'SHOULD-NOT-LEAK-PROSE' },
                 },
-                quotaDiagnostics: [{ providerType: 'codex-cli', bonus: { value: 0, zeroReason: 'snapshot-error', snapshotStatus: 'error', failureKind: 'auth_expired' }, gate: { outcome: 'skip', reason: 'provider_quota_weekly_low' } }],
+                quotaDiagnostics: [{ providerType: 'codex-cli', bonus: { value: 0, zeroReason: 'auth-error', snapshotStatus: 'error', failureKind: 'auth_expired' }, gate: { outcome: 'skip', reason: 'provider_quota_weekly_low' } }],
             }],
             limitations: ['SHOULD-NOT-LEAK-PROSE'],
         };
@@ -173,7 +173,7 @@ describe('assistant_project_status', () => {
                 predictedWinner: { providerType: 'claude-cli', model: 'opus', fitnessScore: 7 },
                 admitted: [{ providerType: 'claude-cli', model: 'opus' }],
                 excluded: [{ providerType: 'codex-cli', reason: 'slot_capacity_exhausted' }],
-                quota: [{ providerType: 'codex-cli', snapshotStatus: 'error', failureKind: 'auth_expired', zeroReason: 'snapshot-error', gateOutcome: 'skip', gateReason: 'provider_quota_weekly_low', bonusValue: 0 }],
+                quota: [{ providerType: 'codex-cli', snapshotStatus: 'error', failureKind: 'auth_expired', zeroReason: 'auth-error', gateOutcome: 'skip', gateReason: 'provider_quota_weekly_low', bonusValue: 0 }],
                 reordered: false,
             }],
         });

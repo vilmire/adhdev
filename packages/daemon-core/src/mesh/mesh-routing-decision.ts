@@ -2,7 +2,7 @@ import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
 import { quotaBlockOverridable } from './mesh-quota-override.js';
-import { rankProvidersByQuotaGate, evaluateProviderQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
+import { rankProvidersByQuotaGate, evaluateProviderQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaGateTarget, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
 import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, type ProviderQuotaBonusDiagnostic, type ProviderQuotaRiskSnapshot, type QuotaRankingRationale } from './mesh-quota-ranking-records.js';
 import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotCapacityRemaining, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
@@ -198,6 +198,8 @@ export function buildProviderSelectionDiagnostics(args: {
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null;
     quotaFactsContext?: QuotaFactsContext | null;
     quotaBonusByProvider?: Record<string, number>;
+    /** Targets that produced `quotaBonusByProvider`. Diagnostics classify with this same map. */
+    quotaTargetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>;
     difficultyFloorRequired: boolean;
     usableSlots: ProviderSlotCandidate[];
     candidateSlots: ProviderSlotCandidate[];
@@ -262,6 +264,8 @@ export function buildProviderSelectionDiagnostics(args: {
             args.quotaRouting,
             now,
             args.quotaFactsContext,
+            args.quotaTargetsByProvider,
+            args.quotaBonusByProvider,
         )
         : [];
     const rankedProviders = new Set([
@@ -296,7 +300,8 @@ export function buildProviderSelectionDiagnostics(args: {
             || detail.zeroReason === 'no-data'
             || detail.zeroReason === 'opted-out'
             || detail.zeroReason === 'provider-disabled'
-            || detail.zeroReason === 'snapshot-error';
+            || detail.zeroReason === 'snapshot-error'
+            || detail.zeroReason === 'auth-error';
         return {
             providerType,
             bonus,
@@ -418,6 +423,8 @@ export function selectProviderWithDiagnostics(args: {
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null;
     quotaFactsContext?: QuotaFactsContext | null;
     quotaBonusByProvider?: Record<string, number>;
+    /** Same targets used to build `quotaBonusByProvider`, when the caller had slot pools. */
+    quotaTargetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>;
     difficultyFloorRequired: boolean;
     usableSlots: ProviderSlotCandidate[];
     /** Slots rejected before scoring on THIS call (never reached usableSlots).

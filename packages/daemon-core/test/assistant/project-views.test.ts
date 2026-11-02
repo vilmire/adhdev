@@ -140,7 +140,7 @@ describe('projectRoutingView — routing visibility (A7d)', () => {
                     },
                     {
                         providerType: 'codex-cli',
-                        bonus: { value: 0, zeroReason: 'snapshot-error', snapshotStatus: 'error', failureKind: 'auth_expired' },
+                        bonus: { value: 0, zeroReason: 'auth-error', snapshotStatus: 'error', failureKind: 'auth_expired' },
                         gate: { outcome: 'skip', reason: 'provider_quota_weekly_low' },
                     },
                     {
@@ -201,7 +201,7 @@ describe('projectRoutingView — routing visibility (A7d)', () => {
                 providerType: 'codex-cli',
                 snapshotStatus: 'error',
                 failureKind: 'auth_expired',
-                zeroReason: 'snapshot-error',
+                zeroReason: 'auth-error',
                 gateOutcome: 'skip',
                 gateReason: 'provider_quota_weekly_low',
                 bonusValue: 0,

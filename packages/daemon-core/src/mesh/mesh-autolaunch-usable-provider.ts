@@ -63,7 +63,8 @@ export async function resolveUsableProvider(
     // downstream guard derives from it — is byte-identical to before.
     const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return { reason: 'missing_provider_priority' };
-    const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots(slots)) : undefined;
+    const quotaTargetsByProvider = task ? quotaTargetsFromSlots(slots) : undefined;
+    const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsByProvider) : undefined;
     const orderedSlots = task
         ? orderSlotsForProviderSelection(slots, meshId ?? '', nodeId, node, task, quotaBonusByProvider)
         : slots;
@@ -142,7 +143,7 @@ export async function resolveUsableProvider(
     const selection = selectProviderWithDiagnostics({
         overrideQuotaGate,
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,
-        quotaBonusByProvider, difficultyFloorRequired, usableSlots: preferEligible(usableSlots, task?.routingPreferences?.providers, s => s.providerType), preScoreExclusions,
+        quotaBonusByProvider, quotaTargetsByProvider, difficultyFloorRequired, usableSlots: preferEligible(usableSlots, task?.routingPreferences?.providers, s => s.providerType), preScoreExclusions,
     });
     if (selection.reason) return { reason: selection.reason, preScoreExclusions };
     const { ranked, winner } = selection;

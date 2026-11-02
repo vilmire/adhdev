@@ -354,7 +354,7 @@ export interface RoutingQuotaRow {
     snapshotStatus?: string;
     /** How the last quota read failed, when it did. */
     failureKind?: string;
-    /** Why the spread bonus is 0 — `no-data`, `stale`, `opted-out`, `provider-disabled`, `snapshot-error`. */
+    /** Why the spread bonus is 0 — `no-data`, `stale`, `opted-out`, `provider-disabled`, `snapshot-error`, `auth-error`, `zero-headroom`. `auth-error` is only the snapshot's own auth failureKind. */
     zeroReason?: string;
     /** `clear` | `skip` | `hard-block` | `fail-open` | `not-evaluated-floor`. */
     gateOutcome: string;

@@ -72104,10 +72104,16 @@ ${mergeTreeErr?.stderr || ""}`;
       }
       return out;
     }
-    function quotaSpreadBonusDiagnosticsByProvider(node, providerTypes, policy, now = Date.now(), context2, targetsByProvider) {
+    function zeroReasonForIneligibleSnapshot(failureKind) {
+      if (failureKind === "no-data") return "no-data";
+      if (failureKind === "auth" || failureKind === "auth_expired") return "auth-error";
+      return "snapshot-error";
+    }
+    function quotaSpreadBonusDiagnosticsByProvider(node, providerTypes, policy, now = Date.now(), context2, targetsByProvider, scoredBonusByProvider) {
       const bonuses = quotaSpreadBonusByProvider(node, policy, now, context2, targetsByProvider);
       return [...new Set(providerTypes)].map((providerType) => {
-        const value = bonuses[providerType] ?? 0;
+        const scored = scoredBonusByProvider?.[providerType];
+        const value = typeof scored === "number" ? scored : bonuses[providerType] ?? 0;
         const entry = quotaEntryFor(node, providerType, context2, now);
         if (!entry) {
           const absentReason = classifyAbsentQuotaReason(node, providerType, context2);
@@ -72122,7 +72128,7 @@ ${mergeTreeErr?.stderr || ""}`;
         if (value === 0) {
           const windowsEligible = quota.status === "ok" || quota.metadata?.lastGoodWindows === true;
           if (!windowsEligible) {
-            zeroReason = failureKind === "no-data" ? "no-data" : "snapshot-error";
+            zeroReason = zeroReasonForIneligibleSnapshot(failureKind);
           } else if (!axes.session && !axes.weekly && !axes.monthly) {
             zeroReason = "no-data";
           } else if (![axes.session, axes.weekly, axes.monthly].some((window) => window && isWindowTrustworthy(window, facts, quota, policy, now))) {
@@ -92934,7 +92940,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         args.usableSlots.map((candidate) => candidate.providerType),
         args.quotaRouting,
         now,
-        args.quotaFactsContext
+        args.quotaFactsContext,
+        args.quotaTargetsByProvider,
+        args.quotaBonusByProvider
       ) : [];
       const rankedProviders = /* @__PURE__ */ new Set([
         ...args.ranked.clear,
@@ -92964,7 +92972,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             }
           };
         }
-        const failOpen = detail.zeroReason === "stale" || detail.zeroReason === "no-data" || detail.zeroReason === "opted-out" || detail.zeroReason === "provider-disabled" || detail.zeroReason === "snapshot-error";
+        const failOpen = detail.zeroReason === "stale" || detail.zeroReason === "no-data" || detail.zeroReason === "opted-out" || detail.zeroReason === "provider-disabled" || detail.zeroReason === "snapshot-error" || detail.zeroReason === "auth-error";
         return {
           providerType,
           bonus,
@@ -93333,7 +93341,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
       const slots2 = resolveNodeCapabilitySlots(node, meshId);
       if (!slots2.length) return { reason: "missing_provider_priority" };
-      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots3(slots2)) : void 0;
+      const quotaTargetsByProvider = task ? quotaTargetsFromSlots3(slots2) : void 0;
+      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsByProvider) : void 0;
       const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
       const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
       if (difficultyFloorRequired && !orderedSlots.length) {
@@ -93384,6 +93393,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         quotaRouting,
         quotaFactsContext,
         quotaBonusByProvider,
+        quotaTargetsByProvider,
         difficultyFloorRequired,
         usableSlots: preferEligible2(usableSlots, task?.routingPreferences?.providers, (s2) => s2.providerType),
         preScoreExclusions
@@ -162388,12 +162398,13 @@ ${defangRelayBody(text9)}`;
         suppressObservabilityLogs: true
       };
       const slots2 = resolveNodeCapabilitySlots(args.node, args.meshId);
+      const quotaTargetsByProvider = quotaTargetsFromSlots3(slots2);
       const quotaBonusByProvider = quotaSpreadBonusByProvider(
         args.node,
         args.quotaRouting,
         now,
         quotaFactsContext,
-        quotaTargetsFromSlots3(slots2)
+        quotaTargetsByProvider
       );
       const orderedSlots = orderSlotsForProviderSelection(
         slots2,
@@ -162439,6 +162450,7 @@ ${defangRelayBody(text9)}`;
         quotaRouting: args.quotaRouting,
         quotaFactsContext,
         quotaBonusByProvider,
+        quotaTargetsByProvider,
         difficultyFloorRequired,
         usableSlots,
         unbounded: true,

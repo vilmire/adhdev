@@ -7,6 +7,7 @@ import {
 } from '../../src/mesh/mesh-quota-routing.js'
 import {
   quotaSpreadBonusByProvider,
+  quotaSpreadBonusDiagnosticsByProvider,
   quotaTargetsFromSlots,
   resolveRecoveryRelaunchProvider,
 } from '../../src/mesh/mesh-quota-ranking-records.js'
@@ -134,6 +135,46 @@ describe('finding 4 — ranking and spread bonus read the target group, not the 
     const geminiBonus = quotaSpreadBonusByProvider(n, null, NOW, null, new Map([['antigravity-cli', { model: GEMINI }]]))
     expect(claudeBonus['antigravity-cli']).toBeGreaterThan(0)
     expect(geminiBonus['antigravity-cli']).toBe(0)
+  })
+
+  it('diagnostics report the same model-pool bonus the score added, not the blended 0% headline', () => {
+    const n = node()
+    const targets = quotaTargetsFromSlots([{ provider: 'antigravity-cli', model: CLAUDE }])
+    const scored = quotaSpreadBonusByProvider(n, null, NOW, null, targets)
+    const headline = quotaSpreadBonusDiagnosticsByProvider(n, ['antigravity-cli'], null, NOW, null)
+    const matched = quotaSpreadBonusDiagnosticsByProvider(n, ['antigravity-cli'], null, NOW, null, targets, scored)
+    expect(scored['antigravity-cli']).toBeGreaterThan(0)
+    expect(headline[0]).toMatchObject({ value: 0, zeroReason: 'zero-headroom', snapshotStatus: 'ok' })
+    expect(matched[0]).toMatchObject({ value: scored['antigravity-cli'], snapshotStatus: 'ok' })
+    expect(matched[0]?.zeroReason).toBeUndefined()
+    const preview = selectProviderWithDiagnostics({
+      node: n,
+      nodeId: 'node_a',
+      task: { difficulty: 'difficult', taskMode: 'code_change' } as any,
+      quotaRouting: null,
+      difficultyFloorRequired: false,
+      usableSlots: [{ providerType: 'antigravity-cli', slot: { provider: 'antigravity-cli', model: CLAUDE, difficulty: ['difficult'] } as any }],
+      quotaBonusByProvider: scored,
+      quotaTargetsByProvider: targets,
+      unbounded: true,
+      now: NOW,
+    } as any)
+    const row = preview.diagnostics.quotaDiagnostics?.find(entry => entry.providerType === 'antigravity-cli')
+    const fitness = preview.diagnostics.previewScores?.find(entry => entry.providerType === 'antigravity-cli')
+    expect(row?.bonus.value).toBe(scored['antigravity-cli'])
+    expect(row?.bonus.zeroReason).toBeUndefined()
+    expect(fitness?.quotaBonus).toBe(scored['antigravity-cli'])
+  })
+
+  it('a quota-fetch error stays snapshot-error; only a recorded auth failureKind is auth-error', () => {
+    const fetchError = node({ status: 'error', metadata: { failureKind: 'network' }, session: null, weekly: null })
+    const authError = node({ status: 'error', metadata: { failureKind: 'auth_expired' }, session: null, weekly: null })
+    expect(quotaSpreadBonusDiagnosticsByProvider(fetchError, ['antigravity-cli'], null, NOW)[0]).toMatchObject({
+      value: 0, zeroReason: 'snapshot-error', failureKind: 'network',
+    })
+    expect(quotaSpreadBonusDiagnosticsByProvider(authError, ['antigravity-cli'], null, NOW)[0]).toMatchObject({
+      value: 0, zeroReason: 'auth-error', failureKind: 'auth_expired',
+    })
   })
 
   it('quotaTargetsFromSlots targets a provider only when its slots agree on one pool', () => {

@@ -126,8 +126,9 @@ export function buildNodeRoutePreview(args: {
         suppressObservabilityLogs: true,
     };
     const slots = resolveNodeCapabilitySlots(args.node, args.meshId);
+    const quotaTargetsByProvider = quotaTargetsFromSlots(slots);
     const quotaBonusByProvider = quotaSpreadBonusByProvider(
-        args.node, args.quotaRouting, now, quotaFactsContext, quotaTargetsFromSlots(slots),
+        args.node, args.quotaRouting, now, quotaFactsContext, quotaTargetsByProvider,
     );
     const orderedSlots = orderSlotsForProviderSelection(
         slots,
@@ -175,6 +176,7 @@ export function buildNodeRoutePreview(args: {
         quotaRouting: args.quotaRouting,
         quotaFactsContext,
         quotaBonusByProvider,
+        quotaTargetsByProvider,
         difficultyFloorRequired,
         usableSlots,
         unbounded: true,
