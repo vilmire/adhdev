@@ -12,6 +12,7 @@ import {
     syncCoordinatorDaemonMeshCache,
 } from './mesh-tools-internal.js';
 import { supportsMeshRelay } from '../transports/mode.js';
+import { isLocalControlPlaneNode } from './mesh-node-identity.js';
 import { buildCoordinatorP2pRelayFailure } from './mesh-remote-dispatch.js';
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/daemon-core';
 import {
@@ -630,6 +631,20 @@ export async function meshRemoveNode(
             }, null, 2);
         }
     }
+    // The coordinator daemon is the roster authority. A remote owner only drops its own copy,
+    // so the coordinator's membership must be removed too or the node stays listed.
+    let hostMembership: Record<string, unknown> | undefined;
+    if (result?.success && result.removed !== false && !transportFallback && !isLocalControlPlaneNode(ctx, node)) {
+        try {
+            const local: any = await ctx.transport.command('remove_mesh_node', removeArgs);
+            hostMembership = { removed: local?.success === true && local.removed !== false, ...(local?.error ? { error: local.error } : {}) };
+        } catch (e: any) {
+            hostMembership = { removed: false, error: e?.message || String(e) };
+        }
+        if (hostMembership.removed !== true) {
+            return JSON.stringify({ ...result, success: false, removed: false, code: 'mesh_remove_node_host_membership_failed', hostMembership }, null, 2);
+        }
+    }
     if (result?.success && result.removed !== false) {
         const idx = ctx.mesh.nodes.findIndex(n => n.id === args.node_id);
         if (idx >= 0) {
@@ -637,7 +652,7 @@ export async function meshRemoveNode(
             ctx.mesh.updatedAt = new Date().toISOString();
         }
     }
-    return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}) }, null, 2);
+    return JSON.stringify({ ...(result || {}), ...(transportFallback ? { transportFallback } : {}), ...(hostMembership ? { hostMembership } : {}) }, null, 2);
 }
 
 /**

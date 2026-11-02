@@ -250419,6 +250419,18 @@ async function meshRemoveNode(ctx, args) {
       }, null, 2);
     }
   }
+  let hostMembership;
+  if (result?.success && result.removed !== false && !transportFallback && !isLocalControlPlaneNode(ctx, node)) {
+    try {
+      const local = await ctx.transport.command("remove_mesh_node", removeArgs);
+      hostMembership = { removed: local?.success === true && local.removed !== false, ...local?.error ? { error: local.error } : {} };
+    } catch (e) {
+      hostMembership = { removed: false, error: e?.message || String(e) };
+    }
+    if (hostMembership.removed !== true) {
+      return JSON.stringify({ ...result, success: false, removed: false, code: "mesh_remove_node_host_membership_failed", hostMembership }, null, 2);
+    }
+  }
   if (result?.success && result.removed !== false) {
     const idx = ctx.mesh.nodes.findIndex((n) => n.id === args.node_id);
     if (idx >= 0) {
@@ -250426,7 +250438,7 @@ async function meshRemoveNode(ctx, args) {
       ctx.mesh.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     }
   }
-  return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {} }, null, 2);
+  return JSON.stringify({ ...result || {}, ...transportFallback ? { transportFallback } : {}, ...hostMembership ? { hostMembership } : {} }, null, 2);
 }
 async function meshCleanupWorktreeNodes(ctx, args) {
   const dryRun = args?.dry_run !== false;
