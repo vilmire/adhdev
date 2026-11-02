@@ -65,7 +65,7 @@ import { scheduleBackgroundDirectReconcile } from './mesh-status-background.js';
 // §8 unit 6 ("mesh_read_chat remote display cutover") — the FIRST hop of the
 // fixed `replica → live P2P read_chat → cached summary` order.
 import { readTranscriptReplicaForDisplay } from './mesh-transcript-replica-read.js';
-import { normalizeNodeCapabilitySlots, readString, isLightWorkerSession } from '@adhdev/mesh-shared';
+import { normalizeNodeCapabilitySlot, normalizeNodeCapabilitySlots, readString, isLightWorkerSession } from '@adhdev/mesh-shared';
 // QUOTA GATE for the manual launch path. Same judgement module the auto-launch /
 // queue-drain path uses (daemon-core resolveUsableProvider) — deliberately shared
 // rather than reimplemented, so the two dispatch paths can never disagree about
@@ -685,11 +685,19 @@ async function resolveLaunchProviderViaDaemon(
         const payload = unwrapCommandPayload(await ctx.transport.command('mesh_resolve_launch_provider', { meshId: ctx.mesh.id, nodeId }));
         if (payload?.success === true && typeof payload.providerType === 'string' && payload.providerType.trim()) {
             const providerType = payload.providerType.trim();
-            const model = typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim() : undefined;
-            const thinkingLevel = typeof payload.thinkingLevel === 'string' && payload.thinkingLevel.trim() ? payload.thinkingLevel.trim() : undefined;
+            // Routed values reach launch_cli as initial model / thinking level: accept only plain identifier shapes.
+            const SAFE_LAUNCH_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,79}$/;
+            const safe = (v: unknown) => (typeof v === 'string' && SAFE_LAUNCH_VALUE.test(v.trim()) ? v.trim() : undefined);
+            const model = safe(payload.model);
+            const thinkingLevel = safe(payload.thinkingLevel);
             return {
                 providerType,
-                ...(model || thinkingLevel ? { slot: { provider: providerType, ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) } as NodeCapabilitySlot } : {}),
+                ...((() => {
+                    if (!model && !thinkingLevel) return {};
+                    // Same normalizer as configured slots: the routed model/thinking level go through the slot schema.
+                    const slot = normalizeNodeCapabilitySlot({ provider: providerType, ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel } : {}) });
+                    return slot ? { slot } : {};
+                })()),
             };
         }
         return { reason: typeof payload?.reason === 'string' ? payload.reason : undefined };

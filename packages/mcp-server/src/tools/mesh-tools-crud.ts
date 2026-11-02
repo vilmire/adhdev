@@ -37,10 +37,14 @@ const ALLOW_CONFIG_MISMATCH_ENV = 'ADHDEV_MCP_ALLOW_CONFIG_DIR_MISMATCH';
  */
 function configDirMismatchFailure(planPayload: any): Record<string, unknown> | null {
     const daemonIdentity = typeof planPayload?.daemonConfigIdentity === 'string' ? planPayload.daemonConfigIdentity : '';
-    if (!daemonIdentity) return null;
     if (/^(1|true|yes)$/i.test(String(process.env[ALLOW_CONFIG_MISMATCH_ENV] ?? '').trim())) return null;
+    // A daemon that predates the identity stamp reports none; it cannot be checked, so it is let through
+    // (mixed-version fleets). Everything else that cannot be verified refuses.
+    if (!daemonIdentity) return null;
     let own = '';
-    try { own = configDirIdentity(); } catch { return null; }
+    try { own = configDirIdentity(); } catch {
+        return { success: false, code: 'mesh_config_identity_unverified', error: 'Could not read this MCP process\'s own config-dir identity, so the mesh write cannot be checked against the daemon. Refusing to write.', action: `Fix the MCP config dir (ADHDEV_CONFIG_DIR), or set ${ALLOW_CONFIG_MISMATCH_ENV}=1 for a deliberate cross-config setup.` };
+    }
     if (own === daemonIdentity) return null;
     return {
         success: false,
@@ -152,7 +156,9 @@ export async function meshCreate(
     if (!discovery) {
         // Identity given explicitly: no planner ran, so ask the daemon who it is (read-only).
         let probe: any;
-        try { probe = unwrapCommandPayload(await transport.command('plan_mesh_onboarding', { operation: 'create_mesh', ...(typeof args?.workspace === 'string' && args.workspace.trim() ? { workspace: args.workspace.trim() } : {}) })); } catch { probe = null; }
+        try { probe = unwrapCommandPayload(await transport.command('plan_mesh_onboarding', { operation: 'create_mesh', ...(typeof args?.workspace === 'string' && args.workspace.trim() ? { workspace: args.workspace.trim() } : {}) })); } catch (e: any) {
+            return JSON.stringify({ success: false, code: 'mesh_config_identity_unverified', error: `The daemon identity probe failed (${e?.message || e}); refusing to write the mesh without checking which config it lands in.` }, null, 2);
+        }
         const mismatch = configDirMismatchFailure(probe);
         if (mismatch) return JSON.stringify(mismatch, null, 2);
     }

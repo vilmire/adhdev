@@ -244,11 +244,15 @@ export const meshStatusViewHandlers: Record<string, HighFamilyHandler> = {
         const meshId = readText(args?.meshId);
         const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: 'meshId and nodeId required' };
+        const callerDaemonId = readText(args?.callerDaemonId);
+        const selfId = readText(ctx.deps.statusInstanceId);
+        if (callerDaemonId && selfId && !daemonIdsEquivalent(callerDaemonId, selfId)) {
+            return { success: false, code: 'mesh_status_view_wrong_daemon', error: `This is daemon ${selfId}, not ${callerDaemonId}` };
+        }
         const record = await ctx.getMeshForCommand(meshId, undefined, { preferInline: true });
         const mesh = record?.mesh;
-        const rostered = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId)) : undefined;
-        const described = readOptionalRecord(args?.node);
-        const node = rostered ?? (described && meshNodeIdMatches(described, nodeId) ? described : undefined);
+        // Routing is decided from the daemon's own roster record only; a caller-described node is never trusted.
+        const node = Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, nodeId)) : undefined;
         if (!node) return { success: false, code: 'mesh_node_unknown', error: `Node ${nodeId} is not on mesh ${meshId}` };
         const components = ctx.components();
         const resolved = await resolveUsableProvider(
