@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useBaseDaemons } from '../../context/BaseDaemonContext'
 import { useTransport } from '../../context/TransportContext'
+import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { AlertBanner } from '../ui/AlertBanner'
 import Button from '../ui/Button'
@@ -59,6 +60,16 @@ export function ProjectTransferSection({ machines: machinesProp, sendCommand: se
     const [error, setError] = useState('')
     const [caps, setCaps] = useState<Record<string, { supported: boolean; reasons: string[] }>>({})
     const [transfers, setTransfers] = useState<TransferView[]>([])
+
+    // The daemon entry only carries `workspaces` once its `daemon.metadata` lane is
+    // subscribed (the machine detail page does this on open). Subscribe the chosen
+    // machines here too, over the same P2P data lane, so the project pickers fill
+    // without visiting each machine page first.
+    const loadMetadata = useDaemonMetadataLoader()
+    useEffect(() => {
+        if (machinesProp) return
+        for (const id of [fromId, toId]) if (id) void loadMetadata(id).catch(() => undefined)
+    }, [machinesProp, fromId, toId, loadMetadata])
 
     const fromMachine = byId.get(fromId)
     const toMachine = byId.get(toId)

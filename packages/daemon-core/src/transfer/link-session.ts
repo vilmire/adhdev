@@ -36,6 +36,7 @@ abstract class BaseSession {
   protected promise: Promise<void>;
   private idle?: NodeJS.Timeout;
   private helloTimer?: NodeJS.Timeout;
+  private established?: () => void;
 
   constructor(
     protected readonly link: TransferLink,
@@ -125,6 +126,7 @@ abstract class BaseSession {
         }
         this.helloOk = true;
         clearTimeout(this.helloTimer);
+        this.established?.();
         this.onHelloOk();
         return;
       }
@@ -135,6 +137,9 @@ abstract class BaseSession {
       else this.abort('IO_ERROR');
     }
   }
+
+  /** Called once the peer's channel-binding HELLO verified: the link is usable for the data phase. */
+  onEstablished(cb: () => void): void { this.established = cb; }
 
   protected abstract onHelloOk(): void;
   protected abstract onFrame(f: Frame): void;

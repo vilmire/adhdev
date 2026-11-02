@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { LOG } from '../logging/logger.js';
 import { getBindingInfo, probeRoot, TransferFsError } from '../transfer-fs/index.js';
 import { TRANSFER_LIMITS, TRANSFER_RETENTION_MS } from './limits.js';
 import {
@@ -56,8 +57,18 @@ interface RunCtx {
   starting: boolean;
 }
 
+/**
+ * Transfer log lines carry ONLY the transfer id prefix, role, state/event names, counters and
+ * error CODES. Never keys, SDP, ICE candidates, DTLS fingerprints, file names or paths (IG02).
+ */
+const LOG_TAG = 'Transfer';
+const idTag = (rec: { id: string; role: string }): string => `${rec.id.slice(0, 8)}/${rec.role}`;
+
 /** Non-terminal transfer records a daemon keeps (owner-created and peer-offered alike). */
 const MAX_OPEN_TRANSFERS = 10;
+
+/** Terminal events are logged once, with their code, by terminate(). */
+const LOG_SKIP_EVENTS: ReadonlySet<string> = new Set(['failed', 'cancelled', 'expired', 'revoked']);
 
 const fail = (code: string, detail?: string): TransferFailure => ({ ok: false, code, ...(detail ? { detail } : {}) });
 
@@ -135,6 +146,7 @@ export class ProjectTransferEngine {
     rec.activityAt = rec.updatedAt;
     this.records.set(rec.id, rec);
     this.store.save(rec);
+    if (event && !LOG_SKIP_EVENTS.has(event)) LOG.info(LOG_TAG, `${idTag(rec)} ${event} state=${rec.state} linkGen=${rec.linkGen} files=${rec.selection.entries.filter((e) => e.kind === 'file').length} bytes=${rec.bytesDone}/${rec.totalBytes}`);
     if (event) this.store.audit({ id: rec.id, role: rec.role, event, ...(rec.errorCode ? { code: rec.errorCode } : {}), files: rec.selection.entries.filter((e) => e.kind === 'file').length, bytes: rec.totalBytes }, this.now());
   }
 
@@ -158,6 +170,7 @@ export class ProjectTransferEngine {
     rec.state = state;
     delete rec.localApproval;
     this.persist(rec, state);
+    (state === 'failed' ? LOG.warn : LOG.info).call(LOG, LOG_TAG, `${idTag(rec)} terminal state=${state} code=${code} linkGen=${rec.linkGen} bytes=${rec.bytesDone}/${rec.totalBytes}`);
     this.store.removeSpool(rec.id);
     this.store.writeReceipt({
       id: rec.id, role: rec.role, outcome: state, errorCode: code, finishedAt: this.now(),
@@ -328,11 +341,12 @@ export class ProjectTransferEngine {
     if (!factory) throw new SessionError('LINK_UNAVAILABLE', 'no link factory');
     run.linkKey = randomBytes(32);
     rec.linkGen += 1;
+    LOG.info(LOG_TAG, `${idTag(rec)} link attempt ${rec.linkGen} started (retries=${run.retries})`);
     this.setState(rec, 'linking');
     const reply = await this.ports.dispatchPeer(rec.peerDaemonId, {
       op: 'content', transferId: rec.id, selectionDigest: rec.selectionDigest, content: rec.content, linkGen: rec.linkGen, linkKeyB64: run.linkKey.toString('base64'),
     });
-    if (!reply?.ok) throw new SessionError(String(reply?.code ?? 'PEER_REFUSED'), 'peer refused content');
+    if (!reply?.ok) { LOG.warn(LOG_TAG, `${idTag(rec)} peer refused content for link ${rec.linkGen} code=${String(reply?.code ?? 'PEER_REFUSED')}`); throw new SessionError(String(reply?.code ?? 'PEER_REFUSED'), 'peer refused content'); }
     const link = factory.create({ transferId: rec.id, role: 'initiator', linkGen: rec.linkGen });
     run.link = link;
     link.onSignalOut((s) => { void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'signal', transferId: rec.id, linkGen: rec.linkGen, signal: s }).catch(() => {}); });
@@ -342,12 +356,27 @@ export class ProjectTransferEngine {
       rec.activityAt = this.now();
     });
     run.session = session;
-    this.setState(rec, 'transferring');
+    this.bindEstablished(rec, session);
     this.armWatchdog(rec, run);
     session.wait().then(() => {
       // All blocks acknowledged: the target now verifies and publishes; its `state` op finalises us.
       if (!TERMINAL_STATES.has(rec.state)) this.setState(rec, 'verifying');
     }, (e: Error) => this.onSessionFailure(rec, run, e));
+  }
+
+  /**
+   * A record is `transferring` only once the link is up AND the session's channel binding is
+   * verified (HELLO ok) — i.e. the data phase can start. Until then it stays `linking`, so a link
+   * that never connects does not flicker between "transferring" and "connecting" (bug 3: the state
+   * used to flip to `transferring` the moment the session object was created, before any link).
+   */
+  private bindEstablished(rec: TransferRecord, session: SenderSession | ReceiverSession): void {
+    const gen = rec.linkGen;
+    session.onEstablished(() => {
+      if (TERMINAL_STATES.has(rec.state) || rec.linkGen !== gen) return;
+      LOG.info(LOG_TAG, `${idTag(rec)} link ${gen} connected (direct)`);
+      if (rec.state === 'linking') this.setState(rec, 'transferring');
+    });
   }
 
   private armWatchdog(rec: TransferRecord, run: RunCtx): void {
@@ -363,6 +392,7 @@ export class ProjectTransferEngine {
   private onSessionFailure(rec: TransferRecord, run: RunCtx, err: Error): void {
     if (TERMINAL_STATES.has(rec.state) || run.cancelled) return;
     const code = err instanceof SessionError ? err.code : 'INTERNAL_ERROR';
+    LOG.warn(LOG_TAG, `${idTag(rec)} link ${rec.linkGen} failed code=${code}`);
     if (code === 'LINK_LOST' || code === 'PEER_ABORT') {
       this.setState(rec, 'paused', 'paused');
       try { run.link?.close(); } catch { /* ignore */ }
@@ -376,6 +406,7 @@ export class ProjectTransferEngine {
   private scheduleRetry(rec: TransferRecord, run: RunCtx): void {
     if (run.retries >= 5) { this.terminate(rec, 'failed', 'DIRECT_UNAVAILABLE', true); return; }
     const delay = Math.min(30_000, 1000 * 2 ** run.retries++);
+    LOG.info(LOG_TAG, `${idTag(rec)} retry ${run.retries}/5 scheduled in ${delay}ms`);
     run.retryTimer = setTimeout(() => {
       if (TERMINAL_STATES.has(rec.state)) return;
       this.openSourceLink(rec, run).catch((e) => this.onSessionFailure(rec, run, e instanceof Error ? e : new SessionError('INTERNAL_ERROR', String(e))));
@@ -470,13 +501,14 @@ export class ProjectTransferEngine {
     run.receiver = receiver;
     this.runs.set(rec.id, run);
     this.setState(rec, 'linking');
+    LOG.info(LOG_TAG, `${idTag(rec)} link attempt ${rec.linkGen} started (responder)`);
     const link = factory.create({ transferId: rec.id, role: 'responder', linkGen: rec.linkGen });
     run.link = link;
     link.onSignalOut((s) => { void this.ports.dispatchPeer(rec.peerDaemonId, { op: 'signal', transferId: rec.id, linkGen: rec.linkGen, signal: s }).catch(() => {}); });
     const session = new ReceiverSession(link, rec.id, rec.linkGen, key, receiver, resume);
     run.session = session;
     this.armWatchdog(rec, run);
-    this.setState(rec, 'transferring');
+    this.bindEstablished(rec, session);
     session.wait().then(() => this.finishTarget(rec, run), (e: Error) => this.onSessionFailure(rec, run, e));
     return { ok: true };
   }
