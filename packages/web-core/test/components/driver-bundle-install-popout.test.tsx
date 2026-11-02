@@ -15,6 +15,8 @@ import {
     isArtifactPopoutWirePayload,
     openArtifactInNewWindow,
 } from '../../src/components/attachments/artifact-popout'
+import { setArtifactHandoffStore } from '../../src/components/attachments/artifact-handoff'
+import { memoryStore } from './artifact-handoff-memory-store'
 import { DriverBundleInstallPopout } from '../../src/components/attachments/DriverBundleInstall'
 import type { ArtifactViewerItem } from '../../src/components/attachments/artifact-viewer-item'
 
@@ -23,20 +25,21 @@ const bundle = JSON.stringify({ format: 'adhdev-driver-bundle', version: 1, type
 const item = (over: Partial<ArtifactViewerItem> = {}): ArtifactViewerItem => ({ title: 't', filename: 'fake-tool.driver-bundle.json', kind: 'json',
     mime: 'application/json', sizeBytes: bundle.length, text: bundle, blob: null, ...over })
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); setArtifactHandoffStore(null) })
 
 describe('opener side of the pop-out driver install', () => {
-    function openWith(install: (id: string) => Promise<{ ok: boolean; code?: string }>) {
+    async function openWith(install: (id: string) => Promise<{ ok: boolean; code?: string }>) {
+        setArtifactHandoffStore(memoryStore())
         const win = { postMessage: vi.fn(), closed: false } as unknown as Window
         vi.spyOn(window, 'open').mockReturnValue(win)
-        expect(openArtifactInNewWindow(item(), { driverInstall: { machines: [{ id: 'dA', label: 'Mac' }], install } })).toBe(true)
+        expect(await openArtifactInNewWindow(item(), { driverInstall: { machines: [{ id: 'dA', label: 'Mac' }], install } })).toBe('opened')
         const send = (data: unknown) => window.dispatchEvent(new MessageEvent('message', { data, origin: window.location.origin, source: win }))
         return { win: win as unknown as { postMessage: ReturnType<typeof vi.fn> }, send }
     }
 
-    it('serves the machine list with the payload and validates it on the wire', () => {
-        const { win, send } = openWith(async () => ({ ok: true }))
-        expect(window.open).toHaveBeenCalledWith(ARTIFACT_VIEWER_PATH, '_blank', expect.any(String))
+    it('serves the machine list with the payload and validates it on the wire', async () => {
+        const { win, send } = await openWith(async () => ({ ok: true }))
+        expect(window.open).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`^${ARTIFACT_VIEWER_PATH}\\?h=`)), '_blank', expect.any(String))
         send({ type: ARTIFACT_VIEWER_READY })
         const payload = win.postMessage.mock.calls[0][0].payload
         expect(payload.driverMachines).toEqual([{ id: 'dA', label: 'Mac' }])
@@ -46,7 +49,7 @@ describe('opener side of the pop-out driver install', () => {
 
     it('runs the install for a listed machine and answers the request, refusing unlisted targets', async () => {
         const install = vi.fn(async () => ({ ok: false, code: 'type_conflict' }))
-        const { win, send } = openWith(install)
+        const { win, send } = await openWith(install)
         await act(async () => { send({ type: ARTIFACT_VIEWER_DRIVER_INSTALL, requestId: 'r1', targetId: 'dA' }); await Promise.resolve() })
         expect(install).toHaveBeenCalledWith('dA')
         expect(win.postMessage).toHaveBeenCalledWith({ type: ARTIFACT_VIEWER_DRIVER_RESULT, requestId: 'r1', ok: false, code: 'type_conflict' }, window.location.origin)

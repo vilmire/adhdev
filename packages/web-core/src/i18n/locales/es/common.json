@@ -5111,6 +5111,7 @@
         "popoutWaiting": "Esperando el artefacto…",
         "popoutNoPayload": "Vuelve a abrir este artefacto desde el panel.",
         "popoutBlocked": "Se bloqueó la ventana nueva. Permite las ventanas emergentes de este sitio e inténtalo de nuevo.",
+        "backToDashboard": "Volver al panel",
         "fit": "Ajustar",
         "hashChangedWarning": "Archivo modificado tras el registro",
         "hashChangedDetail": "El hash SHA-256 del archivo en el espacio de trabajo cambió después de registrar este artefacto.",

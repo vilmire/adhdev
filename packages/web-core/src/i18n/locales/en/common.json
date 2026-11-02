@@ -5108,6 +5108,7 @@
         "popoutWaiting": "Waiting for artifact…",
         "popoutNoPayload": "Open this artifact again from the dashboard.",
         "popoutBlocked": "The new window was blocked. Allow pop-ups for this site and try again.",
+        "backToDashboard": "Back to dashboard",
         "fit": "Fit",
         "hashChangedWarning": "File modified since registration",
         "hashChangedDetail": "The workspace file SHA-256 hash changed after this artifact was registered.",

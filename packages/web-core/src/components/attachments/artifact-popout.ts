@@ -1,6 +1,7 @@
 import type { ArtifactKind } from '@adhdev/daemon-core'
 import { toArtifactViewerItem, type ArtifactViewerItem } from './artifact-viewer-item'
 import type { ArtifactResolvedPayload } from '../../hooks/useArtifactRead'
+import { ARTIFACT_HANDOFF_PARAM, discardArtifactHandoff, putArtifactHandoff } from './artifact-handoff'
 
 /**
  * Pop-out handshake. The new window never talks to a daemon (a cloud tab costs a P2P
@@ -70,15 +71,31 @@ export function artifactItemFromPayload(payload: ArtifactResolvedPayload | Artif
     return 'bytes' in payload ? toArtifactViewerItem(payload) : payload
 }
 
+/** `opened`; `blocked` = the browser refused the window; `unavailable` = the content could not be parked (keep it in-page). */
+export type ArtifactPopoutResult = 'opened' | 'blocked' | 'unavailable'
+
+/** Drop fields that must not be parked at rest: the driver-install machine list only makes sense with a live opener. */
+function toHandoffItem(item: ArtifactViewerItem): ArtifactViewerItem {
+    const rest: ArtifactViewerItem = { ...item }
+    delete rest.driverMachines
+    return rest
+}
+
 /**
- * Open `/artifact-view` in a pop-up window and serve the content to it.
- * Returns false when the browser blocked the window.
+ * Open `/artifact-view?h=<handle>` in a pop-up window and serve the content to it.
+ *
+ * The content is first parked in same-origin IndexedDB because the window may replace this very
+ * tab or lose its opener (embedded browsers, webviews, installed PWAs); the write completes
+ * BEFORE `window.open`, since a same-tab navigation kills this page. If it cannot be parked
+ * the result is `unavailable` and no window is opened, so the caller keeps its in-page viewer.
  */
-export function openArtifactInNewWindow(payload: ArtifactResolvedPayload | ArtifactViewerItem, options?: { driverInstall?: PopoutDriverInstall }): boolean {
-    if (typeof window === 'undefined') return false
+export async function openArtifactInNewWindow(payload: ArtifactResolvedPayload | ArtifactViewerItem, options?: { driverInstall?: PopoutDriverInstall }): Promise<ArtifactPopoutResult> {
+    if (typeof window === 'undefined') return 'unavailable'
     const item = artifactItemFromPayload(payload)
-    const win = window.open(ARTIFACT_VIEWER_PATH, '_blank', 'popup,width=1100,height=860')
-    if (!win) return false
+    let handle: string
+    try { handle = await putArtifactHandoff(toHandoffItem(item)) } catch { return 'unavailable' }
+    const win = window.open(`${ARTIFACT_VIEWER_PATH}?${ARTIFACT_HANDOFF_PARAM}=${handle}`, '_blank', 'popup,width=1100,height=860')
+    if (!win) { void discardArtifactHandoff(handle); return 'blocked' }
     const origin = window.location.origin
     let timer: ReturnType<typeof setInterval> | null = null
     const stop = () => {
@@ -105,7 +122,16 @@ export function openArtifactInNewWindow(payload: ArtifactResolvedPayload | Artif
     window.addEventListener('message', onMessage)
     // Keep answering (the child may reload) until the window is closed.
     timer = setInterval(() => { if (win.closed) stop() }, 2000)
-    return true
+    return 'opened'
+}
+
+/** Leave the standalone viewer page: back in history when there is any, else the dashboard root. */
+export function goBackToDashboard(
+    history: Pick<History, 'length' | 'back'> = window.history,
+    location: Pick<Location, 'assign'> = window.location,
+): void {
+    if (history.length > 1) history.back()
+    else location.assign('/')
 }
 
 /** Pop-out side: ask the opener (which holds the daemon connection) to install the served bundle. */

@@ -5108,6 +5108,7 @@
         "popoutWaiting": "正在等待产物…",
         "popoutNoPayload": "请从仪表板重新打开此产物。",
         "popoutBlocked": "新窗口被拦截。请允许此网站的弹出窗口后重试。",
+        "backToDashboard": "返回仪表板",
         "fit": "适应",
         "hashChangedWarning": "文件在注册后已更改",
         "hashChangedDetail": "此产物注册后，工作区文件的 SHA-256 哈希值已发生更改。",

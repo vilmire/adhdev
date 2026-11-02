@@ -5108,6 +5108,7 @@
         "popoutWaiting": "산출물을 기다리는 중…",
         "popoutNoPayload": "대시보드에서 이 산출물을 다시 열어 주세요.",
         "popoutBlocked": "새 창이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.",
+        "backToDashboard": "대시보드로 돌아가기",
         "fit": "맞춤",
         "hashChangedWarning": "등록 이후 파일이 변경됨",
         "hashChangedDetail": "이 산출물이 등록된 이후 작업 공간 파일의 SHA-256 해시가 변경되었습니다.",

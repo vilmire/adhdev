@@ -9,6 +9,8 @@ import {
     ARTIFACT_VIEWER_READY,
     openArtifactInNewWindow,
 } from '../../src/components/attachments/artifact-popout'
+import { setArtifactHandoffStore } from '../../src/components/attachments/artifact-handoff'
+import { memoryStore } from './artifact-handoff-memory-store'
 import ArtifactViewerPage from '../../src/pages/ArtifactViewerPage'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -154,10 +156,11 @@ describe('viewer review fixes', () => {
 
 describe('pop-out handshake', () => {
     it('opener replies to a ready message from the child window only', async () => {
+        setArtifactHandoffStore(memoryStore())
         const child = { postMessage: vi.fn(), closed: false } as unknown as Window
         vi.spyOn(window, 'open').mockReturnValue(child)
-        expect(openArtifactInNewWindow(item())).toBe(true)
-        expect(window.open).toHaveBeenCalledWith('/artifact-view', '_blank', expect.stringContaining('popup'))
+        expect(await openArtifactInNewWindow(item())).toBe('opened')
+        expect(window.open).toHaveBeenCalledWith(expect.stringMatching(/^\/artifact-view\?h=[0-9a-f]{32}$/), '_blank', expect.stringContaining('popup'))
         const ready = { type: ARTIFACT_VIEWER_READY }
         // wrong origin
         window.dispatchEvent(new MessageEvent('message', { data: ready, origin: 'https://evil.example', source: child }))
@@ -172,9 +175,10 @@ describe('pop-out handshake', () => {
         expect(msg.payload.title).toBe('Doc')
     })
 
-    it('reports a blocked window', () => {
+    it('reports a blocked window', async () => {
+        setArtifactHandoffStore(memoryStore())
         vi.spyOn(window, 'open').mockReturnValue(null)
-        expect(openArtifactInNewWindow(item())).toBe(false)
+        expect(await openArtifactInNewWindow(item())).toBe('blocked')
     })
 
     it('child asks the opener, renders the payload, and ignores foreign origins', async () => {

@@ -28,6 +28,7 @@ export type ArtifactTranslationKey =
     | 'artifact.popoutWaiting'
     | 'artifact.popoutNoPayload'
     | 'artifact.popoutBlocked'
+    | 'artifact.backToDashboard'
     | 'artifact.fit'
     | 'artifact.hashChangedWarning'
     | 'artifact.hashChangedDetail'
@@ -84,6 +85,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.popoutWaiting': 'Waiting for artifact…',
         'artifact.popoutNoPayload': 'Open this artifact again from the dashboard.',
         'artifact.popoutBlocked': 'The new window was blocked. Allow pop-ups for this site and try again.',
+        'artifact.backToDashboard': 'Back to dashboard',
         'artifact.fit': 'Fit',
         'artifact.hashChangedWarning': 'File modified since registration',
         'artifact.hashChangedDetail': 'The workspace file SHA-256 hash changed after this artifact was registered.',
@@ -137,6 +139,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.popoutWaiting': '산출물을 기다리는 중…',
         'artifact.popoutNoPayload': '대시보드에서 이 산출물을 다시 열어 주세요.',
         'artifact.popoutBlocked': '새 창이 차단되었습니다. 이 사이트의 팝업을 허용한 뒤 다시 시도하세요.',
+        'artifact.backToDashboard': '대시보드로 돌아가기',
         'artifact.fit': '맞춤',
         'artifact.hashChangedWarning': '등록 이후 파일이 변경됨',
         'artifact.hashChangedDetail': '이 산출물이 등록된 이후 작업 공간 파일의 SHA-256 해시가 변경되었습니다.',
@@ -190,6 +193,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.popoutWaiting': 'アーティファクトを待機中…',
         'artifact.popoutNoPayload': 'ダッシュボードからこのアーティファクトをもう一度開いてください。',
         'artifact.popoutBlocked': '新しいウィンドウがブロックされました。このサイトのポップアップを許可して再試行してください。',
+        'artifact.backToDashboard': 'ダッシュボードに戻る',
         'artifact.fit': '全体表示',
         'artifact.hashChangedWarning': '登録後にファイルが変更されました',
         'artifact.hashChangedDetail': 'このアーティファクトの登録後にワークスペースファイルの SHA-256 ハッシュが変更されました。',
@@ -243,6 +247,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.popoutWaiting': '正在等待产物…',
         'artifact.popoutNoPayload': '请从仪表板重新打开此产物。',
         'artifact.popoutBlocked': '新窗口被拦截。请允许此网站的弹出窗口后重试。',
+        'artifact.backToDashboard': '返回仪表板',
         'artifact.fit': '适应',
         'artifact.hashChangedWarning': '文件在注册后已更改',
         'artifact.hashChangedDetail': '此产物注册后，工作区文件的 SHA-256 哈希值已发生更改。',
@@ -296,6 +301,7 @@ export const ARTIFACT_FALLBACK_TRANSLATIONS: Readonly<
         'artifact.popoutWaiting': 'Esperando el artefacto…',
         'artifact.popoutNoPayload': 'Vuelve a abrir este artefacto desde el panel.',
         'artifact.popoutBlocked': 'Se bloqueó la ventana nueva. Permite las ventanas emergentes de este sitio e inténtalo de nuevo.',
+        'artifact.backToDashboard': 'Volver al panel',
         'artifact.fit': 'Ajustar',
         'artifact.hashChangedWarning': 'Archivo modificado tras el registro',
         'artifact.hashChangedDetail': 'El hash SHA-256 del archivo en el espacio de trabajo cambió después de registrar este artefacto.',

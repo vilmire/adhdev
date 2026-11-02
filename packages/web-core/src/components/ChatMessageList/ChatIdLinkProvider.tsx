@@ -240,7 +240,7 @@ function Core({ children, contextKey, daemonId, sessionId, meshCoordinatorDaemon
             if (!hit) { setNotice(st.t('chat.idLink.artifactNotFound', { id: artifactId })); return }
             const payload = await fetchMeshArtifactPayload({ sendCommand: st.sendCommand, hostDaemonId: hit.hostDaemonId, attachment: hit.attachment })
             const item = toArtifactViewerItem(payload)
-            if (newWindow) { if (!openArtifactInNewWindow(item)) setViewer(item) } else setViewer(item)
+            if (newWindow) { if (await openArtifactInNewWindow(item) !== 'opened') setViewer(item) } else setViewer(item)
         } catch (e) {
             setNotice(st.t('chat.idLink.artifactFailed', { id: artifactId, reason: e instanceof Error ? e.message : String(e) }))
         }

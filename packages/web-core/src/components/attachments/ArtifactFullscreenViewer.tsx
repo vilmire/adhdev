@@ -32,6 +32,8 @@ export interface ArtifactFullscreenViewerProps {
     /** Optional prev/next across artifacts of the same chat (arrow keys). */
     position?: { index: number; total: number; /** More artifacts exist beyond the loaded `total` (shown as "N+"). */ more?: boolean }
     onNavigate?: (delta: -1 | 1) => void
+    /** `page` mode, opener-less window: a way back to the dashboard (history back, else `/`). */
+    onBack?: () => void
     /** Hide the "open in new window" button (it is always hidden in `page` mode). */
     disablePopOut?: boolean
     /** Full payload for the pop-out; defaults to the item itself. */
@@ -123,6 +125,7 @@ export function ArtifactFullscreenViewer({
     mode = 'modal',
     position,
     onNavigate,
+    onBack,
     disablePopOut,
     popOutPayload,
     resolveLink,
@@ -265,8 +268,9 @@ export function ArtifactFullscreenViewer({
 
     const driverInstaller = useDriverBundleInstaller(item)
     const handlePopOut = () => {
-        const ok = openArtifactInNewWindow(popOutPayload ?? item, isDriverBundleItem(item) ? { driverInstall: driverInstaller } : undefined)
-        setPopOutBlocked(!ok)
+        // 'unavailable' (content could not be parked): this modal already is the in-page viewer, so stay put.
+        void openArtifactInNewWindow(popOutPayload ?? item, isDriverBundleItem(item) ? { driverInstall: driverInstaller } : undefined)
+            .then(result => setPopOutBlocked(result === 'blocked'))
     }
 
     const sizeLabel = formatBytes(item.sizeBytes)
@@ -302,6 +306,7 @@ export function ArtifactFullscreenViewer({
                     </div>
                 </div>
                 <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto">
+                    {onBack && <ToolbarButton label={tr('artifact.backToDashboard')} onClick={onBack} testId="artifact-fullscreen-back">←</ToolbarButton>}
                     {onNavigate && position && position.total > 1 && (
                         <>
                             <ToolbarButton label={tr('artifact.previous')} onClick={() => onNavigate(-1)} disabled={position.index <= 0} testId="artifact-fullscreen-prev">‹</ToolbarButton>

@@ -62,7 +62,8 @@ export default function DriverBundleInstall({ item }: { item: ArtifactViewerItem
 /** Pop-out viewer: no transport here — machines came with the payload and installs are relayed to the opener. */
 export function DriverBundleInstallPopout({ item }: { item: ArtifactViewerItem }) {
     const machines = item.driverMachines ?? []
-    if (machines.length === 0) return null
+    // The install is relayed to the opener; with no opener it could only fail with `opener_closed`.
+    if (machines.length === 0 || typeof window === 'undefined' || !window.opener) return null
     return <DriverBundleInstallBar item={item} machines={machines} install={requestDriverInstallViaOpener} />
 }
 
