@@ -79333,7 +79333,6 @@ ${asText(streams.stderr)}
         else minFreeBytes = obj.minFreeBytes;
       }
       const linkNodeModules = relPatternList(obj.linkNodeModules, "linkNodeModules", errors);
-      if (!linkNodeModules.length && !errors.length) errors.push("linkNodeModules must list at least one directory");
       const config = {
         version: 1,
         ...baseDir ? { baseDir } : {},
@@ -92011,7 +92010,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     });
     function admitLightBaseNode(mesh, selfDaemonId, requestedBaseNodeId) {
       const nodes = (mesh?.nodes ?? []).filter((n) => typeof n?.workspace === "string" && n.workspace.trim());
-      const isLocal2 = (n) => !!selfDaemonId && !!n.daemonId && daemonIdsEquivalent4(n.daemonId, selfDaemonId);
+      const isLocal2 = (n) => !n.daemonId || !!selfDaemonId && daemonIdsEquivalent4(n.daemonId, selfDaemonId);
       let node;
       if (requestedBaseNodeId) {
         node = nodes.find((n) => meshNodeIdMatches7(n, requestedBaseNodeId));

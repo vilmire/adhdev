@@ -21,7 +21,9 @@ export function admitLightBaseNode(
     requestedBaseNodeId?: string,
 ): LightAdmission {
     const nodes = (mesh?.nodes ?? []).filter(n => typeof n?.workspace === 'string' && n.workspace.trim());
-    const isLocal = (n: MeshNodeLike) => !!selfDaemonId && !!n.daemonId && daemonIdsEquivalent(n.daemonId, selfDaemonId);
+    // A node with no daemonId is the mesh host's own node (standalone-created nodes carry none);
+    // same rule as mission-git-env / isLocalAutoLaunchNode.
+    const isLocal = (n: MeshNodeLike) => !n.daemonId || (!!selfDaemonId && daemonIdsEquivalent(n.daemonId, selfDaemonId));
     let node: MeshNodeLike | undefined;
     if (requestedBaseNodeId) {
         node = nodes.find(n => meshNodeIdMatches(n as { id: string }, requestedBaseNodeId));

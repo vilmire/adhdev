@@ -74,7 +74,7 @@ export function validateLightWorkspaceConfig(raw: unknown): { ok: true; config: 
         else minFreeBytes = obj.minFreeBytes;
     }
     const linkNodeModules = relPatternList(obj.linkNodeModules, 'linkNodeModules', errors);
-    if (!linkNodeModules.length && !errors.length) errors.push('linkNodeModules must list at least one directory');
+    // An empty list is valid: a repo without node_modules (or any dependency dir) needs no link farm.
     const config: LightWorkspaceConfig = {
         version: 1,
         ...(baseDir ? { baseDir } : {}),

@@ -126,9 +126,10 @@ describe('light workspace (real git)', () => {
         expect(await resolveLightBaseSha(checkout)).toMatchObject({ sha: next, source: 'remote_tracking', head });
     });
 
-    it('rejects unknown config keys and empty link lists', () => {
+    it('rejects unknown config keys and escaping paths; an empty link list is valid', () => {
         expect(validateLightWorkspaceConfig({ version: 1, linkNodeModules: ['node_modules'], bogus: 1 })).toMatchObject({ ok: false });
-        expect(validateLightWorkspaceConfig({ version: 1, linkNodeModules: [] })).toMatchObject({ ok: false });
+        // A repo without node_modules needs no link farm.
+        expect(validateLightWorkspaceConfig({ version: 1, linkNodeModules: [] })).toMatchObject({ ok: true });
         expect(validateLightWorkspaceConfig({ version: 1, linkNodeModules: ['../x'] })).toMatchObject({ ok: false });
     });
 });
